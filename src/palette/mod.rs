@@ -31,6 +31,66 @@ pub struct RecentProject {
     pub path: PathBuf,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActivePalette {
+    pub kind: PaletteKind,
+    pub query: String,
+    pub selected_index: usize,
+}
+
+impl ActivePalette {
+    pub fn new(kind: PaletteKind) -> Self {
+        Self {
+            kind,
+            query: String::new(),
+            selected_index: 0,
+        }
+    }
+
+    pub fn filtered_items<'a>(&self, items: &'a [PaletteItem]) -> Vec<&'a PaletteItem> {
+        let query = self.query.trim().to_lowercase();
+        if query.is_empty() {
+            return items.iter().collect();
+        }
+
+        items
+            .iter()
+            .filter(|item| item_matches_query(item, &query))
+            .collect()
+    }
+
+    pub fn selected_item<'a>(&self, items: &'a [PaletteItem]) -> Option<&'a PaletteItem> {
+        let filtered_items = self.filtered_items(items);
+        filtered_items
+            .get(self.selected_index.min(filtered_items.len().saturating_sub(1)))
+            .copied()
+    }
+
+    pub fn select_next(&mut self, items: &[PaletteItem]) {
+        let item_count = self.filtered_items(items).len();
+        if item_count == 0 {
+            self.selected_index = 0;
+            return;
+        }
+
+        self.selected_index = (self.selected_index + 1) % item_count;
+    }
+
+    pub fn select_prev(&mut self, items: &[PaletteItem]) {
+        let item_count = self.filtered_items(items).len();
+        if item_count == 0 {
+            self.selected_index = 0;
+            return;
+        }
+
+        self.selected_index = if self.selected_index == 0 {
+            item_count - 1
+        } else {
+            self.selected_index - 1
+        };
+    }
+}
+
 pub fn command_palette_items(registry: &CommandRegistry) -> Vec<PaletteItem> {
     registry
         .commands()
@@ -145,4 +205,19 @@ fn process_status_label(state: PaneProcessState) -> &'static str {
         PaneProcessState::Running => "running",
         PaneProcessState::Exited => "exited",
     }
+}
+
+fn item_matches_query(item: &PaletteItem, query: &str) -> bool {
+    item.id.to_lowercase().contains(query)
+        || item.title.to_lowercase().contains(query)
+        || item
+            .subtitle
+            .as_deref()
+            .map(|subtitle| subtitle.to_lowercase().contains(query))
+            .unwrap_or(false)
+        || item
+            .status
+            .as_deref()
+            .map(|status| status.to_lowercase().contains(query))
+            .unwrap_or(false)
 }

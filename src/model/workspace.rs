@@ -86,6 +86,56 @@ impl Workspace {
         Ok(())
     }
 
+    pub fn select_tab(&mut self, tab_id: &str) -> Result<(), WorkspaceError> {
+        let project = self.selected_project_mut()?;
+        if project.layout.tab(tab_id).is_none() {
+            return Err(WorkspaceError::TabNotFound(tab_id.to_string()));
+        }
+
+        project.selected_tab_id = tab_id.to_string();
+        let tab_state = project
+            .tab_state_mut(tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(tab_id.to_string()))?;
+        tab_state.start_state = TabStartState::Started;
+        if tab_state.focused_pane_id.is_none() {
+            tab_state.focused_pane_id = tab_state
+                .pane_states
+                .first()
+                .map(|pane| pane.pane_id.clone());
+        }
+
+        Ok(())
+    }
+
+    pub fn focus_pane(&mut self, pane_id: &str) -> Result<(), WorkspaceError> {
+        let project = self.selected_project_mut()?;
+        let selected_tab_id = project.selected_tab_id.clone();
+        let tab = project
+            .layout
+            .tabs
+            .iter()
+            .find(|tab| tab.id == selected_tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
+
+        if tab.layout.find_pane(pane_id).is_none() {
+            return Err(WorkspaceError::PaneNotFound(pane_id.to_string()));
+        }
+
+        let tab_state = project
+            .tab_state_mut(&selected_tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
+        if !tab_state
+            .pane_states
+            .iter()
+            .any(|pane| pane.pane_id == pane_id)
+        {
+            return Err(WorkspaceError::PaneNotFound(pane_id.to_string()));
+        }
+
+        tab_state.focused_pane_id = Some(pane_id.to_string());
+        Ok(())
+    }
+
     pub fn select_next_tab(&mut self) -> Result<(), WorkspaceError> {
         self.select_relative_tab(1)
     }

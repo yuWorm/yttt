@@ -1,9 +1,11 @@
-use gpui::{px, size, App, AppContext, Application, Bounds, WindowBounds, WindowOptions};
+use gpui::{App, AppContext, Application, Bounds, WindowBounds, WindowOptions, px, size};
 
-use crate::ui::root::RootView;
+use crate::ui::{actions::default_ui_keybindings, root::RootView};
 
 pub fn run() {
     Application::new().run(|cx: &mut App| {
+        cx.bind_keys(default_ui_keybindings());
+
         let bounds = Bounds::centered(None, size(px(960.0), px(640.0)), cx);
         cx.open_window(
             WindowOptions {
