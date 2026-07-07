@@ -37,19 +37,19 @@ fn palette_header(active_palette: &ActivePalette) -> Div {
         .border_b_1()
         .border_color(rgb(0x2a2a2a))
         .p_3()
-        .child(div().text_sm().text_color(rgb(0xd4d4d4)).child(palette_title(
-            active_palette.kind,
-        )))
         .child(
             div()
                 .text_sm()
-                .text_color(rgb(0x737373))
-                .child(if active_palette.query.is_empty() {
-                    "Type to filter".to_string()
-                } else {
-                    active_palette.query.clone()
-                }),
+                .text_color(rgb(0xd4d4d4))
+                .child(palette_title(active_palette.kind)),
         )
+        .child(div().text_sm().text_color(rgb(0x737373)).child(
+            if active_palette.query.is_empty() {
+                "Type to filter".to_string()
+            } else {
+                active_palette.query.clone()
+            },
+        ))
 }
 
 fn palette_items(items: Vec<&PaletteItem>, selected_index: usize) -> Div {
@@ -78,7 +78,11 @@ fn palette_item(item: &PaletteItem, selected: bool) -> Div {
         .rounded_sm()
         .px_2()
         .py_2()
-        .bg(if selected { rgb(0x263238) } else { rgb(0x151515) })
+        .bg(if selected {
+            rgb(0x263238)
+        } else {
+            rgb(0x151515)
+        })
         .child(
             div()
                 .flex()

@@ -62,7 +62,10 @@ impl ActivePalette {
     pub fn selected_item<'a>(&self, items: &'a [PaletteItem]) -> Option<&'a PaletteItem> {
         let filtered_items = self.filtered_items(items);
         filtered_items
-            .get(self.selected_index.min(filtered_items.len().saturating_sub(1)))
+            .get(
+                self.selected_index
+                    .min(filtered_items.len().saturating_sub(1)),
+            )
             .copied()
     }
 

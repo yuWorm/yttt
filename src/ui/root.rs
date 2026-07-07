@@ -69,6 +69,14 @@ pub struct RootView {
 const CLOSE_PROJECT_DIALOG_TEXT: &str =
     "Close project?\nRunning terminal processes will be stopped.";
 
+struct RenderTerminalPaneInput<'a> {
+    project_id: &'a str,
+    project_title: &'a str,
+    pane: &'a PaneConfig,
+    tab_id: &'a str,
+    tab_title: &'a str,
+}
+
 impl RootView {
     pub fn new() -> Self {
         Self::with_config_paths(AppConfigPaths::for_app())
@@ -304,7 +312,7 @@ impl RootView {
             }
             Err(error) => {
                 self.load_error = Some(error.to_string());
-                Err(RootViewError::ProjectOpen(error))
+                Err(RootViewError::from(error))
             }
         }
     }
@@ -449,11 +457,13 @@ impl RootView {
 
         let mut render_pane = |pane: &PaneConfig, tab_id: &str| {
             self.render_terminal_pane(
-                &project_id,
-                &project_title,
-                pane,
-                tab_id,
-                &tab_title,
+                RenderTerminalPaneInput {
+                    project_id: &project_id,
+                    project_title: &project_title,
+                    pane,
+                    tab_id,
+                    tab_title: &tab_title,
+                },
                 window,
                 cx,
             )
@@ -488,22 +498,18 @@ impl RootView {
 
     fn render_terminal_pane(
         &mut self,
-        project_id: &str,
-        project_title: &str,
-        pane: &PaneConfig,
-        tab_id: &str,
-        tab_title: &str,
+        input: RenderTerminalPaneInput<'_>,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        let key = terminal_pane_key(project_id, tab_id, &pane.id);
+        let key = terminal_pane_key(input.project_id, input.tab_id, &input.pane.id);
         let pane_view = if let Some(pane_view) = self.terminal_panes.get(&key) {
             pane_view.clone()
         } else {
             let context = TerminalPaneContext {
-                project_title: project_title.to_string(),
-                tab_title: tab_title.to_string(),
-                pane: pane.clone(),
+                project_title: input.project_title.to_string(),
+                tab_title: input.tab_title.to_string(),
+                pane: input.pane.clone(),
             };
             let pane_view = cx.new(|cx| TerminalPaneView::new(context, cx));
             let subscription = cx.subscribe_in(&pane_view, window, Self::on_terminal_pane_event);
@@ -755,9 +761,21 @@ pub enum RootViewError {
     #[error("{0}")]
     CloseProject(#[from] CloseProjectError),
     #[error("{0}")]
-    ProjectOpen(#[from] ProjectOpenError),
+    ProjectOpen(Box<ProjectOpenError>),
     #[error("{0}")]
-    Keybindings(#[from] KeybindingsLoadError),
+    Keybindings(Box<KeybindingsLoadError>),
+}
+
+impl From<ProjectOpenError> for RootViewError {
+    fn from(error: ProjectOpenError) -> Self {
+        Self::ProjectOpen(Box::new(error))
+    }
+}
+
+impl From<KeybindingsLoadError> for RootViewError {
+    fn from(error: KeybindingsLoadError) -> Self {
+        Self::Keybindings(Box::new(error))
+    }
 }
 
 impl Default for RootView {

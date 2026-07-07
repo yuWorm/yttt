@@ -19,10 +19,10 @@ impl ProjectLayout {
             tab.layout.validate()?;
         }
 
-        if let Some(default_tab) = &self.project.default_tab {
-            if !tab_ids.contains(default_tab) {
-                return Err(LayoutError::MissingDefaultTab(default_tab.clone()));
-            }
+        if let Some(default_tab) = &self.project.default_tab
+            && !tab_ids.contains(default_tab)
+        {
+            return Err(LayoutError::MissingDefaultTab(default_tab.clone()));
         }
 
         Ok(())

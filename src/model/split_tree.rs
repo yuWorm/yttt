@@ -42,7 +42,10 @@ impl SplitTree {
         };
         let new_pane_id = new_pane_id.into();
 
-        if !self.root.split_pane(&focused_pane_id, direction, &new_pane_id) {
+        if !self
+            .root
+            .split_pane(&focused_pane_id, direction, &new_pane_id)
+        {
             return Err(SplitTreeError::PaneNotFound(focused_pane_id));
         }
 
@@ -88,12 +91,7 @@ impl SplitNode {
     ) -> bool {
         match self {
             Self::Pane { id } if id == target_id => {
-                let existing = std::mem::replace(
-                    self,
-                    Self::Pane {
-                        id: String::new(),
-                    },
-                );
+                let existing = std::mem::replace(self, Self::Pane { id: String::new() });
                 *self = Self::Split {
                     direction,
                     ratio: 0.5,

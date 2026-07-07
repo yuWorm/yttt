@@ -247,12 +247,12 @@ impl PortablePtySession {
     }
 
     pub fn status(&mut self) -> ProcessStatus {
-        if matches!(self.status, ProcessStatus::Running) {
-            if let Ok(Some(status)) = self.child.try_wait() {
-                self.status = ProcessStatus::Exited {
-                    code: Some(exit_status_code(status)),
-                };
-            }
+        if matches!(self.status, ProcessStatus::Running)
+            && let Ok(Some(status)) = self.child.try_wait()
+        {
+            self.status = ProcessStatus::Exited {
+                code: Some(exit_status_code(status)),
+            };
         }
 
         self.status

@@ -1,4 +1,4 @@
-use gpui::{div, prelude::*, px, rgb, IntoElement};
+use gpui::{IntoElement, div, prelude::*, px, rgb};
 
 use crate::model::workspace::Workspace;
 
