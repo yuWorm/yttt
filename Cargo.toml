@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1"
 directories = "6"
+portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 toml = "0.8"
