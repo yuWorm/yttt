@@ -15,7 +15,8 @@ use crate::{
     },
     config::{
         layout_loader::{
-            ProjectOpenError, RecentProjectsConfig, load_recent_projects, open_project_config,
+            ProjectOpenError, RecentProjectsConfig, export_project_layout, load_recent_projects,
+            open_project_config, save_local_layout,
         },
         paths::AppConfigPaths,
     },
@@ -50,6 +51,7 @@ pub struct RootView {
     command_registry: CommandRegistry,
     recent_projects: Vec<RecentProject>,
     load_error: Option<String>,
+    last_opened_layout_file: Option<PathBuf>,
     focus_handle: Option<FocusHandle>,
     terminal_panes: HashMap<String, Entity<TerminalPaneView>>,
     terminal_pane_subscriptions: HashMap<String, Subscription>,
@@ -87,6 +89,7 @@ impl RootView {
             command_registry: default_registry(),
             recent_projects,
             load_error: None,
+            last_opened_layout_file: None,
             focus_handle: None,
             terminal_panes: HashMap::new(),
             terminal_pane_subscriptions: HashMap::new(),
@@ -130,7 +133,7 @@ impl RootView {
 
         match active_palette.kind {
             PaletteKind::Command => {
-                dispatch_workspace_command(&mut self.workspace, item.command)?;
+                self.run_command(item.command)?;
             }
             PaletteKind::Project => {
                 let project_id = self
@@ -195,6 +198,43 @@ impl RootView {
         self.load_error.as_deref()
     }
 
+    pub fn last_opened_layout_file(&self) -> Option<&Path> {
+        self.last_opened_layout_file.as_deref()
+    }
+
+    pub fn run_command(&mut self, command_id: CommandId) -> Result<(), RootViewError> {
+        match command_id {
+            CommandId::LayoutSaveCurrent => {
+                let (project_path, layout) = self.selected_project_layout_snapshot()?;
+                save_local_layout(&self.config_paths, &project_path, &layout)?;
+                Ok(())
+            }
+            CommandId::LayoutExportProjectConfig => {
+                let (project_path, layout) = self.selected_project_layout_snapshot()?;
+                export_project_layout(&self.config_paths, &project_path, &layout)?;
+                Ok(())
+            }
+            CommandId::LayoutOpenFile => {
+                let (project_path, _layout) = self.selected_project_layout_snapshot()?;
+                let path = self.config_paths.project_layout_file(&project_path);
+                if path.exists() {
+                    self.last_opened_layout_file = Some(path);
+                    self.load_error = None;
+                } else {
+                    self.load_error = Some(format!(
+                        "Project layout file does not exist: {}",
+                        path.display()
+                    ));
+                }
+                Ok(())
+            }
+            _ => {
+                dispatch_workspace_command(&mut self.workspace, command_id)?;
+                Ok(())
+            }
+        }
+    }
+
     pub fn open_project_path(
         &mut self,
         project_path: impl AsRef<Path>,
@@ -243,6 +283,19 @@ impl RootView {
             PaletteKind::Tab => tab_palette_items(&self.workspace).unwrap_or_default(),
             PaletteKind::Pane => pane_palette_items(&self.workspace).unwrap_or_default(),
         }
+    }
+
+    fn selected_project_layout_snapshot(&self) -> Result<(PathBuf, ProjectLayout), RootViewError> {
+        let project_id = self
+            .workspace
+            .selected_project_id()
+            .ok_or(WorkspaceError::NoSelectedProject)?;
+        let project = self
+            .workspace
+            .project(project_id)
+            .ok_or_else(|| WorkspaceError::ProjectNotFound(project_id.as_str().to_string()))?;
+
+        Ok((project.path.clone(), project.layout.clone()))
     }
 
     fn select_next_palette_item(&mut self) -> bool {
@@ -553,7 +606,7 @@ impl RootView {
             return;
         }
 
-        let _ = dispatch_workspace_command(&mut self.workspace, command_id);
+        let _ = self.run_command(command_id);
         cx.notify();
     }
 

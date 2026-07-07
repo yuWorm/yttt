@@ -112,6 +112,16 @@ pub enum ProjectOpenError {
         path: PathBuf,
         source: std::io::Error,
     },
+    #[error("failed to serialize project layout at {path}: {source}")]
+    SerializeProjectLayout {
+        path: PathBuf,
+        source: toml::ser::Error,
+    },
+    #[error("failed to write project layout at {path}: {source}")]
+    WriteProjectLayout {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     #[error("failed to read recent projects at {path}: {source}")]
     ReadRecentProjects {
         path: PathBuf,
@@ -173,6 +183,26 @@ pub fn load_recent_projects(
             source,
         })?;
     toml::from_str(&source).map_err(|source| ProjectOpenError::ParseRecentProjects { path, source })
+}
+
+pub fn save_local_layout(
+    paths: &AppConfigPaths,
+    project_path: &Path,
+    layout: &ProjectLayout,
+) -> Result<PathBuf, ProjectOpenError> {
+    let path = paths.local_layout_file(project_path);
+    write_project_layout(&path, layout)?;
+    Ok(path)
+}
+
+pub fn export_project_layout(
+    paths: &AppConfigPaths,
+    project_path: &Path,
+    layout: &ProjectLayout,
+) -> Result<PathBuf, ProjectOpenError> {
+    let path = paths.project_layout_file(project_path);
+    write_project_layout(&path, layout)?;
+    Ok(path)
 }
 
 pub fn merge_layouts(
@@ -296,6 +326,26 @@ fn write_default_layout(path: &Path, layout: &ProjectLayout) -> Result<(), Proje
         }
     })?;
     fs::write(path, source).map_err(|source| ProjectOpenError::WriteDefaultLayout {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+fn write_project_layout(path: &Path, layout: &ProjectLayout) -> Result<(), ProjectOpenError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| ProjectOpenError::CreateConfigDirectory {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+
+    let source = toml::to_string_pretty(layout).map_err(|source| {
+        ProjectOpenError::SerializeProjectLayout {
+            path: path.to_path_buf(),
+            source,
+        }
+    })?;
+    fs::write(path, source).map_err(|source| ProjectOpenError::WriteProjectLayout {
         path: path.to_path_buf(),
         source,
     })

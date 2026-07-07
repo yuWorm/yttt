@@ -2,6 +2,7 @@ use std::{fs, path::PathBuf};
 
 use tempfile::tempdir;
 use yttt::{
+    commands::CommandId,
     config::paths::AppConfigPaths,
     model::{layout::PaneKind, workspace::Workspace},
     palette::PaletteKind,
@@ -50,6 +51,29 @@ fn root_view_open_project_path_records_visible_load_error() {
             .unwrap()
             .contains("failed to parse project layout")
     );
+}
+
+#[test]
+fn root_view_layout_commands_write_current_project_files() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("layout-command-project");
+    let project_config_dir = project_dir.join(".yttt");
+    fs::create_dir_all(&project_config_dir).unwrap();
+    fs::write(
+        project_config_dir.join("layout.toml"),
+        toml::to_string_pretty(&sample_layout()).unwrap(),
+    )
+    .unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths.clone());
+    root.open_project_path(&project_dir).unwrap();
+
+    root.run_command(CommandId::LayoutSaveCurrent).unwrap();
+    root.run_command(CommandId::LayoutExportProjectConfig)
+        .unwrap();
+
+    assert!(paths.local_layout_file(&project_dir).exists());
+    assert!(project_config_dir.join("layout.toml").exists());
 }
 
 #[test]

@@ -4,7 +4,8 @@ use tempfile::tempdir;
 use yttt::config::{
     layout_loader::{
         LayoutNodeOverride, LayoutOverride, MergeWarning, PaneOverride, TabOverride,
-        load_recent_projects, merge_layouts, open_project_config,
+        export_project_layout, load_recent_projects, merge_layouts, open_project_config,
+        save_local_layout,
     },
     paths::AppConfigPaths,
 };
@@ -204,6 +205,48 @@ fn config_recent_projects_are_stored_in_app_config() {
     assert_eq!(recent.projects[0].title, "recent-project");
     assert_eq!(recent.projects[0].path, project_dir.canonicalize().unwrap());
     assert!(paths.recent_projects_file().exists());
+}
+
+#[test]
+fn save_current_layout_writes_app_local_override() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("save-project");
+    fs::create_dir(&project_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let layout = sample_layout();
+
+    let path = save_local_layout(&paths, &project_dir, &layout).unwrap();
+    let saved: ProjectLayout = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+
+    assert_eq!(path, paths.local_layout_file(&project_dir));
+    assert_eq!(saved, layout);
+}
+
+#[test]
+fn export_project_config_writes_project_layout_toml() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("export-project");
+    fs::create_dir(&project_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let layout = sample_layout();
+
+    let path = export_project_layout(&paths, &project_dir, &layout).unwrap();
+    let saved: ProjectLayout = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+
+    assert_eq!(path, project_dir.join(".yttt/layout.toml"));
+    assert_eq!(saved, layout);
+}
+
+#[test]
+fn save_layout_creates_parent_directories() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("nested").join("save-project");
+    fs::create_dir_all(&project_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("missing").join("config"));
+
+    let path = save_local_layout(&paths, &project_dir, &sample_layout()).unwrap();
+
+    assert!(path.parent().unwrap().exists());
 }
 
 fn sample_layout() -> ProjectLayout {
