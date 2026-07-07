@@ -1,1 +1,2 @@
+pub mod keybindings;
 pub mod layout_loader;
