@@ -10,7 +10,15 @@ pub fn run() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(|_| RootView::new()),
+            |_, cx| {
+                cx.new(|_| {
+                    if std::env::var("YTTT_DEV_FIXTURE").as_deref() == Ok("1") {
+                        RootView::dev_fixture()
+                    } else {
+                        RootView::new()
+                    }
+                })
+            },
         )
         .expect("failed to open yttt window");
     });

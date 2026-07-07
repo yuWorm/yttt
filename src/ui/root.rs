@@ -1,6 +1,11 @@
 use gpui::{div, prelude::*, rgb, Context, Div, IntoElement, Render, Window};
 
-use crate::{model::workspace::Workspace, ui::sidebar::project_sidebar};
+use std::path::PathBuf;
+
+use crate::{
+    model::{layout::ProjectLayout, workspace::Workspace},
+    ui::{sidebar::project_sidebar, split_view::active_split_view, tabs::project_tabs},
+};
 
 pub struct RootView {
     workspace: Workspace,
@@ -15,6 +20,14 @@ impl RootView {
 
     pub fn workspace(&self) -> &Workspace {
         &self.workspace
+    }
+
+    pub fn dev_fixture() -> Self {
+        let mut workspace = Workspace::new();
+        workspace
+            .open_project(PathBuf::from("/tmp/yttt"), dev_fixture_layout())
+            .expect("dev fixture layout should be valid");
+        Self { workspace }
     }
 }
 
@@ -40,9 +53,8 @@ impl Render for RootView {
                         .flex()
                         .flex_col()
                         .flex_1()
-                        .gap_3()
-                        .p_4()
-                        .child("Project content"),
+                        .child(project_tabs(&self.workspace))
+                        .child(active_split_view(&self.workspace)),
                 )
         }
     }
@@ -61,4 +73,31 @@ fn empty_workspace() -> Div {
         .child(div().text_xl().child("yttt"))
         .child("Open a directory or choose a recent project.")
         .child("Command Palette: Cmd/Ctrl+P")
+}
+
+fn dev_fixture_layout() -> ProjectLayout {
+    toml::from_str(
+        r#"
+        [project]
+        name = "yttt"
+        default_tab = "dev"
+
+        [[tabs]]
+        id = "dev"
+        title = "Dev"
+
+        [tabs.layout]
+        type = "split"
+        direction = "horizontal"
+        ratio = 0.65
+        left = { type = "pane", id = "server", title = "server", command = "npm run dev" }
+        right = { type = "pane", id = "shell", title = "shell", command = "$SHELL" }
+
+        [[tabs]]
+        id = "agent"
+        title = "Agent"
+        layout = { type = "pane", id = "codex", title = "Codex", command = "codex", kind = "agent", notify_on_exit = true }
+    "#,
+    )
+    .expect("static dev fixture TOML should parse")
 }
