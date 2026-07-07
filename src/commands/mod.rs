@@ -117,6 +117,12 @@ impl CommandRegistry {
         self.commands.iter().any(|command| command.id == command_id)
     }
 
+    pub fn contains_str(&self, command_id: &str) -> bool {
+        self.commands
+            .iter()
+            .any(|command| command.id.as_str() == command_id)
+    }
+
     pub fn commands(&self) -> &[Command] {
         &self.commands
     }

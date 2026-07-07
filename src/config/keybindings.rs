@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fs, path::PathBuf};
+
+use crate::{commands::CommandRegistry, config::paths::AppConfigPaths};
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub struct Keybinding {
@@ -35,12 +37,115 @@ impl KeybindingsConfig {
         conflicts.sort_by(|left, right| left.keys.cmp(&right.keys));
         conflicts
     }
+
+    pub fn invalid_commands(&self, registry: &CommandRegistry) -> Vec<String> {
+        let mut invalid: Vec<_> = self
+            .bindings
+            .iter()
+            .filter(|binding| !registry.contains_str(&binding.command))
+            .map(|binding| binding.command.clone())
+            .collect();
+        invalid.sort();
+        invalid.dedup();
+        invalid
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeybindingConflict {
     pub keys: String,
     pub commands: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoadedKeybindings {
+    pub config: KeybindingsConfig,
+    pub warnings: Vec<KeybindingLoadWarning>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KeybindingLoadWarning {
+    Conflict(KeybindingConflict),
+    InvalidCommand(String),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum KeybindingsLoadError {
+    #[error("failed to create keybindings config directory {path}: {source}")]
+    CreateConfigDirectory {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("failed to read keybindings file at {path}: {source}")]
+    Read {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("failed to parse keybindings file at {path}: {source}")]
+    Parse {
+        path: PathBuf,
+        source: toml::de::Error,
+    },
+    #[error("failed to serialize default keybindings at {path}: {source}")]
+    SerializeDefaults {
+        path: PathBuf,
+        source: toml::ser::Error,
+    },
+    #[error("failed to write default keybindings at {path}: {source}")]
+    WriteDefaults {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+}
+
+pub fn load_keybindings(
+    paths: &AppConfigPaths,
+    registry: &CommandRegistry,
+) -> Result<LoadedKeybindings, KeybindingsLoadError> {
+    let path = ensure_keybindings_file(paths)?;
+    let source = fs::read_to_string(&path).map_err(|source| KeybindingsLoadError::Read {
+        path: path.clone(),
+        source,
+    })?;
+    let config: KeybindingsConfig =
+        toml::from_str(&source).map_err(|source| KeybindingsLoadError::Parse {
+            path: path.clone(),
+            source,
+        })?;
+
+    Ok(LoadedKeybindings {
+        warnings: keybinding_warnings(&config, registry),
+        config,
+    })
+}
+
+pub fn ensure_keybindings_file(paths: &AppConfigPaths) -> Result<PathBuf, KeybindingsLoadError> {
+    let path = paths.keybindings_file();
+    if path.exists() {
+        return Ok(path);
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| {
+            KeybindingsLoadError::CreateConfigDirectory {
+                path: parent.to_path_buf(),
+                source,
+            }
+        })?;
+    }
+
+    let source = toml::to_string_pretty(&default_keybindings()).map_err(|source| {
+        KeybindingsLoadError::SerializeDefaults {
+            path: path.clone(),
+            source,
+        }
+    })?;
+    fs::write(&path, source).map_err(|source| KeybindingsLoadError::WriteDefaults {
+        path: path.clone(),
+        source,
+    })?;
+
+    Ok(path)
 }
 
 pub fn default_keybindings() -> KeybindingsConfig {
@@ -75,4 +180,22 @@ fn binding(keys: &str, command: &str) -> Keybinding {
 
 fn normalize_keys(keys: &str) -> String {
     keys.trim().to_ascii_lowercase()
+}
+
+fn keybinding_warnings(
+    config: &KeybindingsConfig,
+    registry: &CommandRegistry,
+) -> Vec<KeybindingLoadWarning> {
+    let mut warnings: Vec<_> = config
+        .conflicts()
+        .into_iter()
+        .map(KeybindingLoadWarning::Conflict)
+        .collect();
+    warnings.extend(
+        config
+            .invalid_commands(registry)
+            .into_iter()
+            .map(KeybindingLoadWarning::InvalidCommand),
+    );
+    warnings
 }

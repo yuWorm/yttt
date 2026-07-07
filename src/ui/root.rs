@@ -14,6 +14,9 @@ use crate::{
         dispatch_workspace_command,
     },
     config::{
+        keybindings::{
+            KeybindingLoadWarning, KeybindingsLoadError, ensure_keybindings_file, load_keybindings,
+        },
         layout_loader::{
             ProjectOpenError, RecentProjectsConfig, export_project_layout, load_recent_projects,
             open_project_config, save_local_layout,
@@ -53,6 +56,7 @@ pub struct RootView {
     recent_projects: Vec<RecentProject>,
     load_error: Option<String>,
     last_opened_layout_file: Option<PathBuf>,
+    last_opened_keybindings_file: Option<PathBuf>,
     pending_close_project_id: Option<ProjectId>,
     focus_handle: Option<FocusHandle>,
     terminal_panes: HashMap<String, Entity<TerminalPaneView>>,
@@ -83,18 +87,21 @@ impl RootView {
     }
 
     fn with_workspace_and_config_paths(workspace: Workspace, config_paths: AppConfigPaths) -> Self {
+        let command_registry = default_registry();
         let recent_projects = load_recent_projects(&config_paths)
             .map(recent_projects_for_palette)
             .unwrap_or_default();
+        let load_error = load_keybindings_message(&config_paths, &command_registry);
 
         Self {
             workspace,
             config_paths,
             active_palette: None,
-            command_registry: default_registry(),
+            command_registry,
             recent_projects,
-            load_error: None,
+            load_error,
             last_opened_layout_file: None,
+            last_opened_keybindings_file: None,
             pending_close_project_id: None,
             focus_handle: None,
             terminal_panes: HashMap::new(),
@@ -212,10 +219,20 @@ impl RootView {
         self.last_opened_layout_file.as_deref()
     }
 
+    pub fn last_opened_keybindings_file(&self) -> Option<&Path> {
+        self.last_opened_keybindings_file.as_deref()
+    }
+
     pub fn run_command(&mut self, command_id: CommandId) -> Result<(), RootViewError> {
         match command_id {
             CommandId::ProjectClose => {
                 self.request_close_selected_project()?;
+                Ok(())
+            }
+            CommandId::SettingsKeybindings => {
+                let path = ensure_keybindings_file(&self.config_paths)?;
+                self.last_opened_keybindings_file = Some(path.clone());
+                self.load_error = Some(format!("Keybindings file: {}", path.display()));
                 Ok(())
             }
             CommandId::LayoutSaveCurrent => {
@@ -739,6 +756,8 @@ pub enum RootViewError {
     CloseProject(#[from] CloseProjectError),
     #[error("{0}")]
     ProjectOpen(#[from] ProjectOpenError),
+    #[error("{0}")]
+    Keybindings(#[from] KeybindingsLoadError),
 }
 
 impl Default for RootView {
@@ -839,6 +858,30 @@ fn recent_projects_for_palette(config: RecentProjectsConfig) -> Vec<RecentProjec
             path: project.path,
         })
         .collect()
+}
+
+fn load_keybindings_message(paths: &AppConfigPaths, registry: &CommandRegistry) -> Option<String> {
+    match load_keybindings(paths, registry) {
+        Ok(loaded) if loaded.warnings.is_empty() => None,
+        Ok(loaded) => Some(format_keybinding_warnings(&loaded.warnings)),
+        Err(error) => Some(error.to_string()),
+    }
+}
+
+fn format_keybinding_warnings(warnings: &[KeybindingLoadWarning]) -> String {
+    let parts: Vec<_> = warnings
+        .iter()
+        .map(|warning| match warning {
+            KeybindingLoadWarning::Conflict(conflict) => {
+                format!("conflicting keybinding: {}", conflict.keys)
+            }
+            KeybindingLoadWarning::InvalidCommand(command) => {
+                format!("invalid command id: {command}")
+            }
+        })
+        .collect();
+
+    format!("Keybindings: {}", parts.join("; "))
 }
 
 fn error_banner(message: &str) -> Div {

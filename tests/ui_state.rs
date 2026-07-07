@@ -99,6 +99,26 @@ fn root_view_project_close_command_requires_confirmation_for_running_project() {
 }
 
 #[test]
+fn root_view_settings_keybindings_reveals_keybindings_file_path() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths.clone());
+
+    root.run_command(CommandId::SettingsKeybindings).unwrap();
+
+    assert_eq!(
+        root.last_opened_keybindings_file(),
+        Some(paths.keybindings_file().as_path())
+    );
+    assert!(
+        root.visible_error_message()
+            .unwrap()
+            .contains("keybindings.toml")
+    );
+    assert!(paths.keybindings_file().exists());
+}
+
+#[test]
 fn visible_tab_titles_come_from_selected_project() {
     let workspace = workspace_with_sample_project();
 

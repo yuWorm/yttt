@@ -44,6 +44,10 @@ impl AppConfigPaths {
     pub fn recent_projects_file(&self) -> PathBuf {
         self.config_dir.join("recent-projects.toml")
     }
+
+    pub fn keybindings_file(&self) -> PathBuf {
+        self.config_dir.join("keybindings.toml")
+    }
 }
 
 fn fallback_config_dir() -> PathBuf {

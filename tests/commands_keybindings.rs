@@ -1,7 +1,13 @@
 use std::path::PathBuf;
 
+use tempfile::tempdir;
 use yttt::commands::{CommandId, default_registry, dispatch_workspace_command};
-use yttt::config::keybindings::{KeybindingsConfig, default_keybindings};
+use yttt::config::{
+    keybindings::{
+        KeybindingLoadWarning, KeybindingsConfig, default_keybindings, load_keybindings,
+    },
+    paths::AppConfigPaths,
+};
 use yttt::model::workspace::{TabStartState, Workspace};
 use yttt::ui::split_view::visible_pane_titles;
 
@@ -63,6 +69,71 @@ fn default_keybindings_include_palette_shortcuts() {
             .bindings
             .iter()
             .any(|binding| binding.keys == "ctrl-k" && binding.command == "pane.palette")
+    );
+}
+
+#[test]
+fn missing_keybindings_file_writes_defaults() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+
+    let loaded = load_keybindings(&paths, &default_registry()).unwrap();
+
+    assert_eq!(loaded.config, default_keybindings());
+    assert!(loaded.warnings.is_empty());
+    assert!(paths.keybindings_file().exists());
+}
+
+#[test]
+fn conflicting_user_bindings_are_reported() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(
+        paths.keybindings_file(),
+        r#"
+        [[bindings]]
+        keys = "cmd-p"
+        command = "command_palette.open"
+
+        [[bindings]]
+        keys = "CMD-P"
+        command = "project.palette"
+    "#,
+    )
+    .unwrap();
+
+    let loaded = load_keybindings(&paths, &default_registry()).unwrap();
+
+    assert_eq!(loaded.warnings.len(), 1);
+    assert!(matches!(
+        &loaded.warnings[0],
+        KeybindingLoadWarning::Conflict(conflict) if conflict.keys == "cmd-p"
+    ));
+}
+
+#[test]
+fn invalid_command_id_is_reported() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(
+        paths.keybindings_file(),
+        r#"
+        [[bindings]]
+        keys = "cmd-x"
+        command = "missing.command"
+    "#,
+    )
+    .unwrap();
+
+    let loaded = load_keybindings(&paths, &default_registry()).unwrap();
+
+    assert_eq!(
+        loaded.warnings,
+        vec![KeybindingLoadWarning::InvalidCommand(
+            "missing.command".to_string()
+        )]
     );
 }
 
