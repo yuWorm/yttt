@@ -1,0 +1,45 @@
+use crate::runtime::terminal::ExitReason;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotificationKind {
+    AgentCompleted,
+    AgentFailed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NotificationEvent {
+    pub kind: NotificationKind,
+    pub project_title: String,
+    pub tab_title: String,
+    pub pane_title: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExitNotificationInput {
+    pub is_agent: bool,
+    pub notify_on_exit: bool,
+    pub exit_code: Option<i32>,
+    pub exit_reason: ExitReason,
+    pub project_title: String,
+    pub tab_title: String,
+    pub pane_title: String,
+}
+
+pub fn notification_for_exit(input: ExitNotificationInput) -> Option<NotificationEvent> {
+    if !input.is_agent || !input.notify_on_exit || input.exit_reason == ExitReason::KilledByUser {
+        return None;
+    }
+
+    let kind = if input.exit_code == Some(0) {
+        NotificationKind::AgentCompleted
+    } else {
+        NotificationKind::AgentFailed
+    };
+
+    Some(NotificationEvent {
+        kind,
+        project_title: input.project_title,
+        tab_title: input.tab_title,
+        pane_title: input.pane_title,
+    })
+}
