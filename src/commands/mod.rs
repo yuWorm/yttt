@@ -1,3 +1,8 @@
+use crate::model::{
+    layout::SplitDirection,
+    workspace::{Workspace, WorkspaceError},
+};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CommandId {
     ProjectOpen,
@@ -127,5 +132,49 @@ pub fn default_registry() -> CommandRegistry {
                 title: id.as_str(),
             })
             .collect(),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CommandOutcome {
+    None,
+    PaneSplit(String),
+    PaneClosed(String),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CommandDispatchError {
+    #[error("{0}")]
+    Workspace(#[from] WorkspaceError),
+    #[error("command is not handled by workspace dispatcher: {0:?}")]
+    Unsupported(CommandId),
+}
+
+pub fn dispatch_workspace_command(
+    workspace: &mut Workspace,
+    command_id: CommandId,
+) -> Result<CommandOutcome, CommandDispatchError> {
+    match command_id {
+        CommandId::TabNext => {
+            workspace.select_next_tab()?;
+            Ok(CommandOutcome::None)
+        }
+        CommandId::TabPrev => {
+            workspace.select_prev_tab()?;
+            Ok(CommandOutcome::None)
+        }
+        CommandId::PaneSplitHorizontal => workspace
+            .split_focused_pane(SplitDirection::Horizontal)
+            .map(CommandOutcome::PaneSplit)
+            .map_err(CommandDispatchError::from),
+        CommandId::PaneSplitVertical => workspace
+            .split_focused_pane(SplitDirection::Vertical)
+            .map(CommandOutcome::PaneSplit)
+            .map_err(CommandDispatchError::from),
+        CommandId::PaneClose => workspace
+            .close_focused_pane()
+            .map(CommandOutcome::PaneClosed)
+            .map_err(CommandDispatchError::from),
+        _ => Err(CommandDispatchError::Unsupported(command_id)),
     }
 }
