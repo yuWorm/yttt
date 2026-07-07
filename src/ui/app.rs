@@ -16,7 +16,7 @@ pub fn run() {
                 cx.new(|_| match std::env::var("YTTT_DEV_FIXTURE").as_deref() {
                     Ok("1") => RootView::dev_fixture(),
                     Ok("agent-exit") => RootView::agent_exit_fixture(),
-                    _ => RootView::new(),
+                    _ => RootView::from_startup_env(),
                 })
             },
         )

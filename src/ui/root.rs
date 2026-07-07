@@ -1,17 +1,23 @@
 use gpui::{
     Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent, Render,
-    Subscription, Window, div, prelude::*, rgb,
+    Subscription, Window, div, prelude::*, rgb, rgba,
 };
 
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use crate::{
     commands::{
         CommandDispatchError, CommandId, CommandRegistry, default_registry,
         dispatch_workspace_command,
+    },
+    config::{
+        layout_loader::{
+            ProjectOpenError, RecentProjectsConfig, load_recent_projects, open_project_config,
+        },
+        paths::AppConfigPaths,
     },
     model::{
         layout::{LayoutNode, PaneConfig, ProjectLayout},
@@ -24,9 +30,9 @@ use crate::{
     runtime::notification::{NoopSystemNotifier, NotificationEvent, maybe_notify_system},
     ui::{
         actions::{
-            OpenCommandPalette, OpenPanePalette, OpenProjectPalette, OpenTabPalette, PaletteCancel,
-            PaletteConfirm, PaletteSelectNext, PaletteSelectPrev, PaneClose, PaneSplitHorizontal,
-            PaneSplitVertical, TabNext, TabPrev, WORKSPACE_CONTEXT,
+            OpenCommandPalette, OpenPanePalette, OpenProject, OpenProjectPalette, OpenTabPalette,
+            PaletteCancel, PaletteConfirm, PaletteSelectNext, PaletteSelectPrev, PaneClose,
+            PaneSplitHorizontal, PaneSplitVertical, TabNext, TabPrev, WORKSPACE_CONTEXT,
         },
         palette::palette_overlay,
         sidebar::project_sidebar,
@@ -39,9 +45,11 @@ use crate::{
 
 pub struct RootView {
     workspace: Workspace,
+    config_paths: AppConfigPaths,
     active_palette: Option<ActivePalette>,
     command_registry: CommandRegistry,
     recent_projects: Vec<RecentProject>,
+    load_error: Option<String>,
     focus_handle: Option<FocusHandle>,
     terminal_panes: HashMap<String, Entity<TerminalPaneView>>,
     terminal_pane_subscriptions: HashMap<String, Subscription>,
@@ -52,11 +60,33 @@ pub struct RootView {
 
 impl RootView {
     pub fn new() -> Self {
+        Self::with_config_paths(AppConfigPaths::for_app())
+    }
+
+    pub fn with_config_paths(config_paths: AppConfigPaths) -> Self {
+        Self::with_workspace_and_config_paths(Workspace::new(), config_paths)
+    }
+
+    pub fn from_startup_env() -> Self {
+        let mut root = Self::new();
+        if let Some(project_path) = std::env::var_os("YTTT_OPEN_PROJECT") {
+            let _ = root.open_project_path(PathBuf::from(project_path));
+        }
+        root
+    }
+
+    fn with_workspace_and_config_paths(workspace: Workspace, config_paths: AppConfigPaths) -> Self {
+        let recent_projects = load_recent_projects(&config_paths)
+            .map(recent_projects_for_palette)
+            .unwrap_or_default();
+
         Self {
-            workspace: Workspace::new(),
+            workspace,
+            config_paths,
             active_palette: None,
             command_registry: default_registry(),
-            recent_projects: Vec::new(),
+            recent_projects,
+            load_error: None,
             focus_handle: None,
             terminal_panes: HashMap::new(),
             terminal_pane_subscriptions: HashMap::new(),
@@ -111,6 +141,8 @@ impl RootView {
                     .map(|project| project.id.clone());
                 if let Some(project_id) = project_id {
                     self.workspace.select_project(&project_id)?;
+                } else if item.command == CommandId::ProjectOpenRecent {
+                    self.open_project_path(PathBuf::from(&item.id))?;
                 }
             }
             PaletteKind::Tab => {
@@ -159,6 +191,28 @@ impl RootView {
         self.toast_queue.titles()
     }
 
+    pub fn visible_error_message(&self) -> Option<&str> {
+        self.load_error.as_deref()
+    }
+
+    pub fn open_project_path(
+        &mut self,
+        project_path: impl AsRef<Path>,
+    ) -> Result<(), RootViewError> {
+        match open_project_config(&self.config_paths, project_path.as_ref()) {
+            Ok(opened) => {
+                self.workspace.open_project(opened.path, opened.layout)?;
+                self.recent_projects = recent_projects_for_palette(opened.recent_projects);
+                self.load_error = None;
+                Ok(())
+            }
+            Err(error) => {
+                self.load_error = Some(error.to_string());
+                Err(RootViewError::ProjectOpen(error))
+            }
+        }
+    }
+
     pub fn dev_fixture() -> Self {
         let mut workspace = Workspace::new();
         workspace
@@ -179,18 +233,7 @@ impl RootView {
     }
 
     fn with_workspace(workspace: Workspace) -> Self {
-        Self {
-            workspace,
-            active_palette: None,
-            command_registry: default_registry(),
-            recent_projects: Vec::new(),
-            focus_handle: None,
-            terminal_panes: HashMap::new(),
-            terminal_pane_subscriptions: HashMap::new(),
-            toast_queue: ToastQueue::default(),
-            system_notifier: NoopSystemNotifier,
-            system_notifications_enabled: false,
-        }
+        Self::with_workspace_and_config_paths(workspace, AppConfigPaths::for_app())
     }
 
     fn palette_items(&self, kind: PaletteKind) -> Vec<PaletteItem> {
@@ -390,6 +433,16 @@ impl RootView {
         cx.notify();
     }
 
+    fn on_open_project(&mut self, _: &OpenProject, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(project_path) = std::env::var_os("YTTT_OPEN_PROJECT") {
+            let _ = self.open_project_path(PathBuf::from(project_path));
+        } else {
+            self.load_error =
+                Some("Set YTTT_OPEN_PROJECT=/path to open a directory in this MVP.".to_string());
+        }
+        cx.notify();
+    }
+
     fn on_open_tab_palette(
         &mut self,
         _: &OpenTabPalette,
@@ -550,6 +603,8 @@ pub enum RootViewError {
     Command(#[from] CommandDispatchError),
     #[error("{0}")]
     Workspace(#[from] WorkspaceError),
+    #[error("{0}")]
+    ProjectOpen(#[from] ProjectOpenError),
 }
 
 impl Default for RootView {
@@ -588,6 +643,9 @@ impl Render for RootView {
             let items = self.palette_items(active_palette.kind);
             root = root.child(palette_overlay(active_palette, &items));
         }
+        if let Some(load_error) = &self.load_error {
+            root = root.child(error_banner(load_error));
+        }
         root = root.child(toast_overlay(&self.toast_queue));
 
         if !focus_handle.contains_focused(window, cx) {
@@ -597,6 +655,7 @@ impl Render for RootView {
         root.track_focus(&focus_handle)
             .key_context(WORKSPACE_CONTEXT)
             .on_key_down(cx.listener(Self::on_key_down))
+            .on_action(cx.listener(Self::on_open_project))
             .on_action(cx.listener(Self::on_open_command_palette))
             .on_action(cx.listener(Self::on_open_project_palette))
             .on_action(cx.listener(Self::on_open_tab_palette))
@@ -632,6 +691,33 @@ fn collect_terminal_pane_keys(
             collect_terminal_pane_keys(project_id, tab_id, &split.right, keys);
         }
     }
+}
+
+fn recent_projects_for_palette(config: RecentProjectsConfig) -> Vec<RecentProject> {
+    config
+        .projects
+        .into_iter()
+        .map(|project| RecentProject {
+            title: project.title,
+            path: project.path,
+        })
+        .collect()
+}
+
+fn error_banner(message: &str) -> Div {
+    div()
+        .absolute()
+        .top_4()
+        .left_4()
+        .right_4()
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(0x7f1d1d))
+        .bg(rgba(0x2a1010ee))
+        .p_3()
+        .text_sm()
+        .text_color(rgb(0xfecaca))
+        .child(message.to_string())
 }
 
 fn empty_workspace() -> Div {

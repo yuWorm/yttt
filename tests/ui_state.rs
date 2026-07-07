@@ -1,6 +1,8 @@
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
+use tempfile::tempdir;
 use yttt::{
+    config::paths::AppConfigPaths,
     model::{layout::PaneKind, workspace::Workspace},
     palette::PaletteKind,
     runtime::notification::{NotificationEvent, NotificationKind},
@@ -28,6 +30,26 @@ fn root_view_agent_exit_fixture_contains_sample_project() {
     let root = RootView::agent_exit_fixture();
 
     assert_eq!(root.workspace().opened_projects().len(), 1);
+}
+
+#[test]
+fn root_view_open_project_path_records_visible_load_error() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("broken-project");
+    let project_config_dir = project_dir.join(".yttt");
+    fs::create_dir_all(&project_config_dir).unwrap();
+    fs::write(project_config_dir.join("layout.toml"), "[project\n").unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths);
+
+    let err = root.open_project_path(&project_dir).unwrap_err();
+
+    assert!(err.to_string().contains("failed to parse project layout"));
+    assert!(
+        root.visible_error_message()
+            .unwrap()
+            .contains("failed to parse project layout")
+    );
 }
 
 #[test]

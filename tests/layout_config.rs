@@ -1,5 +1,12 @@
-use yttt::config::layout_loader::{
-    merge_layouts, LayoutNodeOverride, LayoutOverride, MergeWarning, PaneOverride, TabOverride,
+use std::fs;
+
+use tempfile::tempdir;
+use yttt::config::{
+    layout_loader::{
+        LayoutNodeOverride, LayoutOverride, MergeWarning, PaneOverride, TabOverride,
+        load_recent_projects, merge_layouts, open_project_config,
+    },
+    paths::AppConfigPaths,
 };
 use yttt::model::layout::ProjectLayout;
 
@@ -129,10 +136,7 @@ fn local_override_renames_tab_and_command_by_id() {
     let dev = result.layout.tab("dev").unwrap();
 
     assert_eq!(dev.title, "Development");
-    assert_eq!(
-        dev.layout.find_pane("server").unwrap().command,
-        "pnpm dev"
-    );
+    assert_eq!(dev.layout.find_pane("server").unwrap().command, "pnpm dev");
     assert!(result.warnings.is_empty());
 }
 
@@ -155,6 +159,51 @@ fn stale_override_ids_are_reported_and_ignored() {
         result.warnings,
         vec![MergeWarning::StaleTabOverride("missing".to_string())]
     );
+}
+
+#[test]
+fn config_missing_project_layout_creates_default_layout_in_app_config() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("sample-project");
+    fs::create_dir(&project_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+
+    let opened = open_project_config(&paths, &project_dir).unwrap();
+
+    assert_eq!(opened.layout.project.name, "sample-project");
+    assert!(paths.local_layout_file(&project_dir).exists());
+    assert!(!project_dir.join(".yttt/layout.toml").exists());
+}
+
+#[test]
+fn config_invalid_project_toml_returns_visible_load_error() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("broken-project");
+    let project_config_dir = project_dir.join(".yttt");
+    fs::create_dir_all(&project_config_dir).unwrap();
+    fs::write(project_config_dir.join("layout.toml"), "[project\n").unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+
+    let err = open_project_config(&paths, &project_dir).unwrap_err();
+
+    assert!(err.to_string().contains("failed to parse project layout"));
+    assert!(err.to_string().contains("layout.toml"));
+}
+
+#[test]
+fn config_recent_projects_are_stored_in_app_config() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("recent-project");
+    fs::create_dir(&project_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+
+    open_project_config(&paths, &project_dir).unwrap();
+    let recent = load_recent_projects(&paths).unwrap();
+
+    assert_eq!(recent.projects.len(), 1);
+    assert_eq!(recent.projects[0].title, "recent-project");
+    assert_eq!(recent.projects[0].path, project_dir.canonicalize().unwrap());
+    assert!(paths.recent_projects_file().exists());
 }
 
 fn sample_layout() -> ProjectLayout {

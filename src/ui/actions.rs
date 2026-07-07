@@ -6,6 +6,7 @@ actions!(
     yttt,
     [
         OpenCommandPalette,
+        OpenProject,
         OpenProjectPalette,
         OpenTabPalette,
         OpenPanePalette,
@@ -23,6 +24,8 @@ actions!(
 
 pub fn default_ui_keybindings() -> Vec<KeyBinding> {
     vec![
+        KeyBinding::new("cmd-o", OpenProject, Some(WORKSPACE_CONTEXT)),
+        KeyBinding::new("ctrl-o", OpenProject, Some(WORKSPACE_CONTEXT)),
         KeyBinding::new("cmd-p", OpenCommandPalette, Some(WORKSPACE_CONTEXT)),
         KeyBinding::new("ctrl-p", OpenCommandPalette, Some(WORKSPACE_CONTEXT)),
         KeyBinding::new("cmd-shift-o", OpenProjectPalette, Some(WORKSPACE_CONTEXT)),
