@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ProcessHandle(u64);
@@ -30,6 +32,27 @@ pub trait TerminalRuntime {
     fn kill(&mut self, handle: ProcessHandle) -> anyhow::Result<()>;
     fn status(&self, handle: ProcessHandle) -> Option<ProcessStatus>;
 }
+
+pub struct PortablePtyIo {
+    pub writer: Box<dyn Write + Send>,
+    pub reader: Box<dyn Read + Send>,
+}
+
+pub struct PortablePtySession {
+    _pane_id: String,
+    _command: String,
+    master: PortablePtyMaster,
+    child: Box<dyn Child + Send + Sync>,
+    io: Option<PortablePtyIo>,
+    status: ProcessStatus,
+}
+
+#[derive(Clone)]
+pub struct PortablePtyResizeHandle {
+    master: PortablePtyMaster,
+}
+
+type PortablePtyMaster = Arc<Mutex<Box<dyn MasterPty + Send>>>;
 
 #[derive(Default)]
 pub struct FakeTerminalRuntime {
@@ -165,6 +188,90 @@ impl TerminalRuntime for FakeTerminalRuntime {
 
     fn status(&self, handle: ProcessHandle) -> Option<ProcessStatus> {
         self.processes.get(&handle).map(|process| process.status)
+    }
+}
+
+pub fn spawn_portable_pty_session(
+    pane_id: &str,
+    command: &str,
+    cols: u16,
+    rows: u16,
+) -> anyhow::Result<PortablePtySession> {
+    let pty_system = native_pty_system();
+    let pair = pty_system.openpty(PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    })?;
+    let portable_pty::PtyPair { slave, master } = pair;
+    let command_builder = shell_command(command);
+    let child = slave.spawn_command(command_builder)?;
+    drop(slave);
+
+    let reader = master.try_clone_reader()?;
+    let writer = master.take_writer()?;
+    let master = Arc::new(Mutex::new(master));
+
+    Ok(PortablePtySession {
+        _pane_id: pane_id.to_string(),
+        _command: command.to_string(),
+        master,
+        child,
+        io: Some(PortablePtyIo { writer, reader }),
+        status: ProcessStatus::Running,
+    })
+}
+
+impl PortablePtySession {
+    pub fn take_io(&mut self) -> Option<PortablePtyIo> {
+        self.io.take()
+    }
+
+    pub fn resize_handle(&self) -> PortablePtyResizeHandle {
+        PortablePtyResizeHandle {
+            master: self.master.clone(),
+        }
+    }
+
+    pub fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
+        self.resize_handle().resize(cols as usize, rows as usize)
+    }
+
+    pub fn kill(&mut self) -> anyhow::Result<()> {
+        if matches!(self.status, ProcessStatus::Running) {
+            self.child.kill()?;
+            self.status = ProcessStatus::Exited { code: None };
+        }
+        Ok(())
+    }
+
+    pub fn status(&mut self) -> ProcessStatus {
+        if matches!(self.status, ProcessStatus::Running) {
+            if let Ok(Some(status)) = self.child.try_wait() {
+                self.status = ProcessStatus::Exited {
+                    code: Some(exit_status_code(status)),
+                };
+            }
+        }
+
+        self.status
+    }
+}
+
+impl PortablePtyResizeHandle {
+    pub fn resize(&self, cols: usize, rows: usize) -> anyhow::Result<()> {
+        let master = self
+            .master
+            .lock()
+            .map_err(|_| anyhow::anyhow!("pty master lock poisoned"))?;
+        master.resize(PtySize {
+            cols: cols as u16,
+            rows: rows as u16,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
+        Ok(())
     }
 }
 

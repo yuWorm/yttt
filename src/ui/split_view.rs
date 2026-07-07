@@ -1,7 +1,7 @@
-use gpui::{div, prelude::*, rgb, Div, IntoElement};
+use gpui::{Div, IntoElement, div, prelude::*, rgb};
 
 use crate::model::{
-    layout::{LayoutNode, SplitDirection},
+    layout::{LayoutNode, PaneConfig, SplitDirection},
     workspace::Workspace,
 };
 
@@ -26,7 +26,11 @@ pub fn active_split_view(workspace: &Workspace) -> impl IntoElement {
         .bg(rgb(0x0a0a0a))
         .text_color(rgb(0xf5f5f5))
         .p_2()
-        .child(render_layout(layout, &project.selected_tab_id))
+        .child(split_view_for_layout(
+            layout,
+            &project.selected_tab_id,
+            &mut render_mock_pane,
+        ))
 }
 
 fn selected_tab_layout(
@@ -42,31 +46,41 @@ fn selected_tab_layout(
     Some((project, &tab.layout))
 }
 
-fn render_layout(layout: &LayoutNode, tab_id: &str) -> Div {
+pub fn split_view_for_layout(
+    layout: &LayoutNode,
+    tab_id: &str,
+    render_pane: &mut impl FnMut(&PaneConfig, &str) -> Div,
+) -> Div {
     match layout {
-        LayoutNode::Pane(pane) => div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .gap_2()
-            .bg(rgb(0x111111))
-            .text_color(rgb(0xf5f5f5))
-            .p_3()
-            .child(pane.title.clone())
-            .child(div().text_xs().text_color(rgb(0xa3a3a3)).child(format!(
-                "{tab_id} · {}",
-                pane.command
-            ))),
+        LayoutNode::Pane(pane) => render_pane(pane, tab_id),
         LayoutNode::Split(split) => {
             let mut container = div().flex().flex_1().gap_1();
             if split.direction == SplitDirection::Vertical {
                 container = container.flex_col();
             }
             container
-                .child(render_layout(&split.left, tab_id))
-                .child(render_layout(&split.right, tab_id))
+                .child(split_view_for_layout(&split.left, tab_id, render_pane))
+                .child(split_view_for_layout(&split.right, tab_id, render_pane))
         }
     }
+}
+
+fn render_mock_pane(pane: &PaneConfig, tab_id: &str) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .gap_2()
+        .bg(rgb(0x111111))
+        .text_color(rgb(0xf5f5f5))
+        .p_3()
+        .child(pane.title.clone())
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(0xa3a3a3))
+                .child(format!("{tab_id} · {}", pane.command)),
+        )
 }
 
 fn collect_pane_titles(layout: &LayoutNode, titles: &mut Vec<String>) {

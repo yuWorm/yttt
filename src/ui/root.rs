@@ -1,9 +1,12 @@
 use gpui::{
-    Context, Div, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent, Render, Window,
-    div, prelude::*, rgb,
+    Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent, Render,
+    Window, div, prelude::*, rgb,
 };
 
-use std::path::PathBuf;
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 use crate::{
     commands::{
@@ -11,7 +14,7 @@ use crate::{
         dispatch_workspace_command,
     },
     model::{
-        layout::ProjectLayout,
+        layout::{LayoutNode, PaneConfig, ProjectLayout},
         workspace::{Workspace, WorkspaceError},
     },
     palette::{
@@ -20,14 +23,15 @@ use crate::{
     },
     ui::{
         actions::{
-            OpenCommandPalette, OpenPanePalette, OpenProjectPalette, OpenTabPalette,
-            PaletteCancel, PaletteConfirm, PaletteSelectNext, PaletteSelectPrev, PaneClose,
-            PaneSplitHorizontal, PaneSplitVertical, TabNext, TabPrev, WORKSPACE_CONTEXT,
+            OpenCommandPalette, OpenPanePalette, OpenProjectPalette, OpenTabPalette, PaletteCancel,
+            PaletteConfirm, PaletteSelectNext, PaletteSelectPrev, PaneClose, PaneSplitHorizontal,
+            PaneSplitVertical, TabNext, TabPrev, WORKSPACE_CONTEXT,
         },
         palette::palette_overlay,
         sidebar::project_sidebar,
-        split_view::active_split_view,
+        split_view::split_view_for_layout,
         tabs::project_tabs,
+        terminal_pane::TerminalPaneView,
     },
 };
 
@@ -37,6 +41,7 @@ pub struct RootView {
     command_registry: CommandRegistry,
     recent_projects: Vec<RecentProject>,
     focus_handle: Option<FocusHandle>,
+    terminal_panes: HashMap<String, Entity<TerminalPaneView>>,
 }
 
 impl RootView {
@@ -47,6 +52,7 @@ impl RootView {
             command_registry: default_registry(),
             recent_projects: Vec::new(),
             focus_handle: None,
+            terminal_panes: HashMap::new(),
         }
     }
 
@@ -141,6 +147,7 @@ impl RootView {
             command_registry: default_registry(),
             recent_projects: Vec::new(),
             focus_handle: None,
+            terminal_panes: HashMap::new(),
         }
     }
 
@@ -207,6 +214,76 @@ impl RootView {
         let focus_handle = cx.focus_handle();
         self.focus_handle = Some(focus_handle.clone());
         focus_handle
+    }
+
+    fn active_terminal_split_view(&mut self, cx: &mut Context<Self>) -> Div {
+        self.prune_terminal_panes();
+
+        let Some((project_id, tab_id, layout)) = self.selected_tab_layout_clone() else {
+            return div();
+        };
+
+        let mut render_pane = |pane: &PaneConfig, tab_id: &str| {
+            self.render_terminal_pane(&project_id, pane, tab_id, cx)
+        };
+
+        div()
+            .flex()
+            .flex_1()
+            .bg(rgb(0x0a0a0a))
+            .text_color(rgb(0xf5f5f5))
+            .p_2()
+            .child(split_view_for_layout(&layout, &tab_id, &mut render_pane))
+    }
+
+    fn selected_tab_layout_clone(&self) -> Option<(String, String, LayoutNode)> {
+        let selected_project_id = self.workspace.selected_project_id()?;
+        let project = self.workspace.project(selected_project_id)?;
+        let tab = project
+            .layout
+            .tabs
+            .iter()
+            .find(|tab| tab.id == project.selected_tab_id)?;
+
+        Some((
+            selected_project_id.as_str().to_string(),
+            project.selected_tab_id.clone(),
+            tab.layout.clone(),
+        ))
+    }
+
+    fn render_terminal_pane(
+        &mut self,
+        project_id: &str,
+        pane: &PaneConfig,
+        tab_id: &str,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let key = terminal_pane_key(project_id, tab_id, &pane.id);
+        let pane_view = self
+            .terminal_panes
+            .entry(key)
+            .or_insert_with(|| cx.new(|cx| TerminalPaneView::new(pane.clone(), cx)))
+            .clone();
+
+        div().flex().flex_1().child(pane_view)
+    }
+
+    fn prune_terminal_panes(&mut self) {
+        let mut live_keys = HashSet::new();
+        for project in self.workspace.opened_projects() {
+            for tab in &project.layout.tabs {
+                collect_terminal_pane_keys(
+                    project.id.as_str(),
+                    &tab.id,
+                    &tab.layout,
+                    &mut live_keys,
+                );
+            }
+        }
+
+        self.terminal_panes
+            .retain(|key, _pane| live_keys.contains(key));
     }
 
     fn on_open_command_palette(
@@ -343,12 +420,7 @@ impl RootView {
         cx.notify();
     }
 
-    fn on_key_down(
-        &mut self,
-        event: &KeyDownEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if self.active_palette.is_none() {
             cx.propagate();
             return;
@@ -409,6 +481,8 @@ impl Render for RootView {
         let mut root = if self.workspace.opened_projects().is_empty() {
             empty_workspace()
         } else {
+            let split_view = self.active_terminal_split_view(cx);
+
             div()
                 .flex()
                 .size_full()
@@ -422,7 +496,7 @@ impl Render for RootView {
                         .flex_col()
                         .flex_1()
                         .child(project_tabs(&self.workspace))
-                        .child(active_split_view(&self.workspace)),
+                        .child(split_view),
                 )
         };
 
@@ -451,6 +525,27 @@ impl Render for RootView {
             .on_action(cx.listener(Self::on_pane_split_vertical))
             .on_action(cx.listener(Self::on_pane_split_horizontal))
             .on_action(cx.listener(Self::on_pane_close))
+    }
+}
+
+fn terminal_pane_key(project_id: &str, tab_id: &str, pane_id: &str) -> String {
+    format!("{project_id}:{tab_id}:{pane_id}")
+}
+
+fn collect_terminal_pane_keys(
+    project_id: &str,
+    tab_id: &str,
+    layout: &LayoutNode,
+    keys: &mut HashSet<String>,
+) {
+    match layout {
+        LayoutNode::Pane(pane) => {
+            keys.insert(terminal_pane_key(project_id, tab_id, &pane.id));
+        }
+        LayoutNode::Split(split) => {
+            collect_terminal_pane_keys(project_id, tab_id, &split.left, keys);
+            collect_terminal_pane_keys(project_id, tab_id, &split.right, keys);
+        }
     }
 }
 
@@ -485,7 +580,7 @@ fn dev_fixture_layout() -> ProjectLayout {
         type = "split"
         direction = "horizontal"
         ratio = 0.65
-        left = { type = "pane", id = "server", title = "server", command = "npm run dev" }
+        left = { type = "pane", id = "server", title = "server", command = "$SHELL" }
         right = { type = "pane", id = "shell", title = "shell", command = "$SHELL" }
 
         [[tabs]]
