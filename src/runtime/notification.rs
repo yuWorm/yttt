@@ -14,6 +14,32 @@ pub struct NotificationEvent {
     pub pane_title: String,
 }
 
+pub trait SystemNotifier {
+    fn notify(&self, event: &NotificationEvent) -> anyhow::Result<()>;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoopSystemNotifier;
+
+impl SystemNotifier for NoopSystemNotifier {
+    fn notify(&self, _event: &NotificationEvent) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+pub fn maybe_notify_system(
+    notifier: &dyn SystemNotifier,
+    enabled: bool,
+    event: &NotificationEvent,
+) -> anyhow::Result<bool> {
+    if !enabled {
+        return Ok(false);
+    }
+
+    notifier.notify(event)?;
+    Ok(true)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExitNotificationInput {
     pub is_agent: bool,

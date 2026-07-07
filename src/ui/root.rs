@@ -1,6 +1,6 @@
 use gpui::{
     Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent, Render,
-    Window, div, prelude::*, rgb,
+    Subscription, Window, div, prelude::*, rgb,
 };
 
 use std::{
@@ -21,6 +21,7 @@ use crate::{
         ActivePalette, PaletteItem, PaletteKind, RecentProject, command_palette_items,
         pane_palette_items, project_palette_items, tab_palette_items,
     },
+    runtime::notification::{NoopSystemNotifier, NotificationEvent, maybe_notify_system},
     ui::{
         actions::{
             OpenCommandPalette, OpenPanePalette, OpenProjectPalette, OpenTabPalette, PaletteCancel,
@@ -31,7 +32,8 @@ use crate::{
         sidebar::project_sidebar,
         split_view::split_view_for_layout,
         tabs::project_tabs,
-        terminal_pane::TerminalPaneView,
+        terminal_pane::{TerminalPaneContext, TerminalPaneEvent, TerminalPaneView},
+        toast::{ToastQueue, toast_overlay},
     },
 };
 
@@ -42,6 +44,10 @@ pub struct RootView {
     recent_projects: Vec<RecentProject>,
     focus_handle: Option<FocusHandle>,
     terminal_panes: HashMap<String, Entity<TerminalPaneView>>,
+    terminal_pane_subscriptions: HashMap<String, Subscription>,
+    toast_queue: ToastQueue,
+    system_notifier: NoopSystemNotifier,
+    system_notifications_enabled: bool,
 }
 
 impl RootView {
@@ -53,6 +59,10 @@ impl RootView {
             recent_projects: Vec::new(),
             focus_handle: None,
             terminal_panes: HashMap::new(),
+            terminal_pane_subscriptions: HashMap::new(),
+            toast_queue: ToastQueue::default(),
+            system_notifier: NoopSystemNotifier,
+            system_notifications_enabled: false,
         }
     }
 
@@ -136,11 +146,39 @@ impl RootView {
             .collect()
     }
 
+    pub fn handle_terminal_notification(&mut self, event: NotificationEvent) {
+        let _ = maybe_notify_system(
+            &self.system_notifier,
+            self.system_notifications_enabled,
+            &event,
+        );
+        self.toast_queue.push(event);
+    }
+
+    pub fn visible_toast_titles(&self) -> Vec<String> {
+        self.toast_queue.titles()
+    }
+
     pub fn dev_fixture() -> Self {
         let mut workspace = Workspace::new();
         workspace
             .open_project(PathBuf::from("/tmp/yttt"), dev_fixture_layout())
             .expect("dev fixture layout should be valid");
+        Self::with_workspace(workspace)
+    }
+
+    pub fn agent_exit_fixture() -> Self {
+        let mut workspace = Workspace::new();
+        workspace
+            .open_project(
+                PathBuf::from("/tmp/yttt-agent-exit"),
+                agent_exit_fixture_layout(),
+            )
+            .expect("agent exit fixture layout should be valid");
+        Self::with_workspace(workspace)
+    }
+
+    fn with_workspace(workspace: Workspace) -> Self {
         Self {
             workspace,
             active_palette: None,
@@ -148,6 +186,10 @@ impl RootView {
             recent_projects: Vec::new(),
             focus_handle: None,
             terminal_panes: HashMap::new(),
+            terminal_pane_subscriptions: HashMap::new(),
+            toast_queue: ToastQueue::default(),
+            system_notifier: NoopSystemNotifier,
+            system_notifications_enabled: false,
         }
     }
 
@@ -216,15 +258,25 @@ impl RootView {
         focus_handle
     }
 
-    fn active_terminal_split_view(&mut self, cx: &mut Context<Self>) -> Div {
+    fn active_terminal_split_view(&mut self, window: &Window, cx: &mut Context<Self>) -> Div {
         self.prune_terminal_panes();
 
-        let Some((project_id, tab_id, layout)) = self.selected_tab_layout_clone() else {
+        let Some((project_id, project_title, tab_id, tab_title, layout)) =
+            self.selected_tab_layout_clone()
+        else {
             return div();
         };
 
         let mut render_pane = |pane: &PaneConfig, tab_id: &str| {
-            self.render_terminal_pane(&project_id, pane, tab_id, cx)
+            self.render_terminal_pane(
+                &project_id,
+                &project_title,
+                pane,
+                tab_id,
+                &tab_title,
+                window,
+                cx,
+            )
         };
 
         div()
@@ -236,7 +288,7 @@ impl RootView {
             .child(split_view_for_layout(&layout, &tab_id, &mut render_pane))
     }
 
-    fn selected_tab_layout_clone(&self) -> Option<(String, String, LayoutNode)> {
+    fn selected_tab_layout_clone(&self) -> Option<(String, String, String, String, LayoutNode)> {
         let selected_project_id = self.workspace.selected_project_id()?;
         let project = self.workspace.project(selected_project_id)?;
         let tab = project
@@ -247,7 +299,9 @@ impl RootView {
 
         Some((
             selected_project_id.as_str().to_string(),
+            project.layout.project.name.clone(),
             project.selected_tab_id.clone(),
+            tab.title.clone(),
             tab.layout.clone(),
         ))
     }
@@ -255,16 +309,29 @@ impl RootView {
     fn render_terminal_pane(
         &mut self,
         project_id: &str,
+        project_title: &str,
         pane: &PaneConfig,
         tab_id: &str,
+        tab_title: &str,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let key = terminal_pane_key(project_id, tab_id, &pane.id);
-        let pane_view = self
-            .terminal_panes
-            .entry(key)
-            .or_insert_with(|| cx.new(|cx| TerminalPaneView::new(pane.clone(), cx)))
-            .clone();
+        let pane_view = if let Some(pane_view) = self.terminal_panes.get(&key) {
+            pane_view.clone()
+        } else {
+            let context = TerminalPaneContext {
+                project_title: project_title.to_string(),
+                tab_title: tab_title.to_string(),
+                pane: pane.clone(),
+            };
+            let pane_view = cx.new(|cx| TerminalPaneView::new(context, cx));
+            let subscription = cx.subscribe_in(&pane_view, window, Self::on_terminal_pane_event);
+            self.terminal_pane_subscriptions
+                .insert(key.clone(), subscription);
+            self.terminal_panes.insert(key, pane_view.clone());
+            pane_view
+        };
 
         div().flex().flex_1().child(pane_view)
     }
@@ -284,6 +351,23 @@ impl RootView {
 
         self.terminal_panes
             .retain(|key, _pane| live_keys.contains(key));
+        self.terminal_pane_subscriptions
+            .retain(|key, _subscription| live_keys.contains(key));
+    }
+
+    fn on_terminal_pane_event(
+        &mut self,
+        _pane: &Entity<TerminalPaneView>,
+        event: &TerminalPaneEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            TerminalPaneEvent::Notification(event) => {
+                self.handle_terminal_notification(event.clone());
+                cx.notify();
+            }
+        }
     }
 
     fn on_open_command_palette(
@@ -481,7 +565,7 @@ impl Render for RootView {
         let mut root = if self.workspace.opened_projects().is_empty() {
             empty_workspace()
         } else {
-            let split_view = self.active_terminal_split_view(cx);
+            let split_view = self.active_terminal_split_view(window, cx);
 
             div()
                 .flex()
@@ -504,6 +588,7 @@ impl Render for RootView {
             let items = self.palette_items(active_palette.kind);
             root = root.child(palette_overlay(active_palette, &items));
         }
+        root = root.child(toast_overlay(&self.toast_queue));
 
         if !focus_handle.contains_focused(window, cx) {
             focus_handle.focus(window);
@@ -590,4 +675,20 @@ fn dev_fixture_layout() -> ProjectLayout {
     "#,
     )
     .expect("static dev fixture TOML should parse")
+}
+
+fn agent_exit_fixture_layout() -> ProjectLayout {
+    toml::from_str(
+        r#"
+        [project]
+        name = "yttt-agent-exit"
+        default_tab = "agent"
+
+        [[tabs]]
+        id = "agent"
+        title = "Agent"
+        layout = { type = "pane", id = "codex", title = "Codex", command = "sh -c 'sleep 1; exit 0'", kind = "agent", notify_on_exit = true }
+    "#,
+    )
+    .expect("static agent exit fixture TOML should parse")
 }

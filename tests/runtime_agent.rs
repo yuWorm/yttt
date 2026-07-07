@@ -1,11 +1,10 @@
 use yttt::model::layout::PaneKind;
 use yttt::runtime::agent::classify_agent;
 use yttt::runtime::notification::{
-    notification_for_exit, ExitNotificationInput, NotificationKind,
+    ExitNotificationInput, NoopSystemNotifier, NotificationEvent, NotificationKind, SystemNotifier,
+    maybe_notify_system, notification_for_exit,
 };
-use yttt::runtime::terminal::{
-    ExitReason, FakeTerminalRuntime, ProcessStatus, TerminalRuntime,
-};
+use yttt::runtime::terminal::{ExitReason, FakeTerminalRuntime, ProcessStatus, TerminalRuntime};
 
 #[test]
 fn fake_runtime_marks_process_running_then_exited() {
@@ -68,6 +67,46 @@ fn normal_shell_exit_emits_no_agent_notification() {
     let event = notification_for_exit(exit_input(false, Some(0), ExitReason::Completed));
 
     assert!(event.is_none());
+}
+
+#[test]
+fn noop_system_notifier_accepts_notification_events() {
+    let notifier = NoopSystemNotifier;
+
+    notifier.notify(&notification_event()).unwrap();
+}
+
+#[test]
+fn system_notification_is_sent_only_when_enabled() {
+    let notifier = CountingNotifier::default();
+    let event = notification_event();
+
+    assert!(!maybe_notify_system(&notifier, false, &event).unwrap());
+    assert_eq!(notifier.count.get(), 0);
+
+    assert!(maybe_notify_system(&notifier, true, &event).unwrap());
+    assert_eq!(notifier.count.get(), 1);
+}
+
+#[derive(Default)]
+struct CountingNotifier {
+    count: std::cell::Cell<usize>,
+}
+
+impl SystemNotifier for CountingNotifier {
+    fn notify(&self, _event: &NotificationEvent) -> anyhow::Result<()> {
+        self.count.set(self.count.get() + 1);
+        Ok(())
+    }
+}
+
+fn notification_event() -> NotificationEvent {
+    NotificationEvent {
+        kind: NotificationKind::AgentCompleted,
+        project_title: "yttt".to_string(),
+        tab_title: "Agent".to_string(),
+        pane_title: "Codex".to_string(),
+    }
 }
 
 fn exit_input(

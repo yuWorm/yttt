@@ -1,8 +1,11 @@
 use std::path::PathBuf;
 
 use yttt::{
-    model::workspace::Workspace,
+    model::{layout::PaneKind, workspace::Workspace},
     palette::PaletteKind,
+    runtime::notification::{NotificationEvent, NotificationKind},
+    runtime::terminal::{ExitReason, ProcessStatus},
+    ui::terminal_pane::{TerminalPaneExitInput, notification_for_terminal_pane_exit},
     ui::{root::RootView, split_view::visible_pane_titles, tabs::visible_tab_titles},
 };
 
@@ -16,6 +19,13 @@ fn root_view_starts_with_empty_workspace() {
 #[test]
 fn root_view_dev_fixture_contains_sample_project() {
     let root = RootView::dev_fixture();
+
+    assert_eq!(root.workspace().opened_projects().len(), 1);
+}
+
+#[test]
+fn root_view_agent_exit_fixture_contains_sample_project() {
+    let root = RootView::agent_exit_fixture();
 
     assert_eq!(root.workspace().opened_projects().len(), 1);
 }
@@ -77,6 +87,75 @@ fn root_view_confirming_pane_palette_selection_focuses_pane() {
     let project = root.workspace().project(&project_id).unwrap();
     let tab = project.tab_state("dev").unwrap();
     assert_eq!(tab.focused_pane_id.as_deref(), Some("shell"));
+}
+
+#[test]
+fn root_view_enqueues_agent_toast_notifications() {
+    let mut root = RootView::new();
+
+    root.handle_terminal_notification(notification_event());
+
+    assert_eq!(root.visible_toast_titles(), vec!["Codex completed"]);
+}
+
+#[test]
+fn root_view_formats_failed_agent_toast_notifications() {
+    let mut root = RootView::new();
+    let mut event = notification_event();
+    event.kind = NotificationKind::AgentFailed;
+
+    root.handle_terminal_notification(event);
+
+    assert_eq!(root.visible_toast_titles(), vec!["Codex failed"]);
+}
+
+#[test]
+fn terminal_pane_agent_exit_builds_notification_event() {
+    let event = notification_for_terminal_pane_exit(terminal_pane_exit_input(
+        ProcessStatus::Exited { code: Some(0) },
+        ExitReason::Completed,
+    ))
+    .unwrap();
+
+    assert_eq!(event.kind, NotificationKind::AgentCompleted);
+    assert_eq!(event.project_title, "yttt");
+    assert_eq!(event.tab_title, "Agent");
+    assert_eq!(event.pane_title, "Codex");
+}
+
+#[test]
+fn terminal_pane_user_kill_emits_no_notification_event() {
+    let event = notification_for_terminal_pane_exit(terminal_pane_exit_input(
+        ProcessStatus::Exited { code: None },
+        ExitReason::KilledByUser,
+    ));
+
+    assert!(event.is_none());
+}
+
+fn terminal_pane_exit_input(
+    status: ProcessStatus,
+    exit_reason: ExitReason,
+) -> TerminalPaneExitInput {
+    TerminalPaneExitInput {
+        project_title: "yttt".to_string(),
+        tab_title: "Agent".to_string(),
+        pane_title: "Codex".to_string(),
+        command: "codex".to_string(),
+        kind: PaneKind::Agent,
+        notify_on_exit: true,
+        status,
+        exit_reason,
+    }
+}
+
+fn notification_event() -> NotificationEvent {
+    NotificationEvent {
+        kind: NotificationKind::AgentCompleted,
+        project_title: "yttt".to_string(),
+        tab_title: "Agent".to_string(),
+        pane_title: "Codex".to_string(),
+    }
 }
 
 fn workspace_with_sample_project() -> Workspace {
