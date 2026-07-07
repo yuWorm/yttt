@@ -27,6 +27,10 @@ impl ProjectLayout {
 
         Ok(())
     }
+
+    pub fn tab(&self, id: &str) -> Option<&TabConfig> {
+        self.tabs.iter().find(|tab| tab.id == id)
+    }
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq)]
@@ -67,6 +71,31 @@ impl LayoutNode {
 
                 split.left.validate()?;
                 split.right.validate()
+            }
+        }
+    }
+
+    pub fn find_pane(&self, id: &str) -> Option<&PaneConfig> {
+        match self {
+            Self::Pane(pane) if pane.id == id => Some(pane),
+            Self::Pane(_) => None,
+            Self::Split(split) => split
+                .left
+                .find_pane(id)
+                .or_else(|| split.right.find_pane(id)),
+        }
+    }
+
+    pub(crate) fn find_pane_mut(&mut self, id: &str) -> Option<&mut PaneConfig> {
+        match self {
+            Self::Pane(pane) if pane.id == id => Some(pane),
+            Self::Pane(_) => None,
+            Self::Split(split) => {
+                if let Some(pane) = split.left.find_pane_mut(id) {
+                    Some(pane)
+                } else {
+                    split.right.find_pane_mut(id)
+                }
             }
         }
     }
