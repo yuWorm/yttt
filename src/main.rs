@@ -1,3 +1,3 @@
 fn main() {
-    println!("yttt core scaffold");
+    yttt::ui::app::run();
 }
