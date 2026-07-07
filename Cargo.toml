@@ -1,0 +1,15 @@
+[package]
+name = "yttt"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+directories = "6"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+toml = "0.8"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"
