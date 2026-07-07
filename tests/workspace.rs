@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use yttt::model::workspace::{CloseProjectError, TabStartState, Workspace};
+use yttt::model::workspace::{
+    CloseProjectDecision, CloseProjectError, ClosedProject, TabStartState, Workspace,
+};
 
 #[test]
 fn new_workspace_starts_empty() {
@@ -15,7 +17,9 @@ fn opening_project_adds_it_to_sidebar_state_and_selects_it() {
     let mut workspace = Workspace::new();
     let path = PathBuf::from("/tmp/yttt");
 
-    let project_id = workspace.open_project(path.clone(), sample_layout()).unwrap();
+    let project_id = workspace
+        .open_project(path.clone(), sample_layout())
+        .unwrap();
 
     assert_eq!(workspace.opened_projects().len(), 1);
     assert_eq!(workspace.opened_projects()[0].path, path);
@@ -71,6 +75,63 @@ fn closing_project_with_running_panes_is_blocked() {
 
     assert_eq!(err, CloseProjectError::RunningProcesses);
     assert_eq!(workspace.opened_projects().len(), 1);
+}
+
+#[test]
+fn closing_project_with_no_running_panes_succeeds() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+
+    let decision = workspace.request_close_project(&project_id).unwrap();
+
+    assert_eq!(
+        decision,
+        CloseProjectDecision::Closed(ClosedProject {
+            project_id: project_id.clone()
+        })
+    );
+    assert!(workspace.opened_projects().is_empty());
+}
+
+#[test]
+fn closing_project_with_running_panes_returns_confirmation_requirement() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+    workspace
+        .mark_pane_running(&project_id, "dev", "server")
+        .unwrap();
+
+    let decision = workspace.request_close_project(&project_id).unwrap();
+
+    assert_eq!(
+        decision,
+        CloseProjectDecision::NeedsConfirmation {
+            project_id: project_id.clone(),
+            running_pane_count: 1,
+        }
+    );
+    assert_eq!(workspace.opened_projects().len(), 1);
+}
+
+#[test]
+fn confirmed_close_removes_project_with_running_panes() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+    workspace
+        .mark_pane_running(&project_id, "dev", "server")
+        .unwrap();
+
+    let closed = workspace.confirm_close_project(&project_id).unwrap();
+
+    assert_eq!(closed.project_id, project_id);
+    assert!(workspace.opened_projects().is_empty());
+    assert!(workspace.selected_project_id().is_none());
 }
 
 fn sample_layout() -> yttt::model::layout::ProjectLayout {

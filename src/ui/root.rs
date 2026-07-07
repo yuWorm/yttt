@@ -21,8 +21,9 @@ use crate::{
         paths::AppConfigPaths,
     },
     model::{
+        ids::ProjectId,
         layout::{LayoutNode, PaneConfig, ProjectLayout},
-        workspace::{Workspace, WorkspaceError},
+        workspace::{CloseProjectDecision, CloseProjectError, Workspace, WorkspaceError},
     },
     palette::{
         ActivePalette, PaletteItem, PaletteKind, RecentProject, command_palette_items,
@@ -52,6 +53,7 @@ pub struct RootView {
     recent_projects: Vec<RecentProject>,
     load_error: Option<String>,
     last_opened_layout_file: Option<PathBuf>,
+    pending_close_project_id: Option<ProjectId>,
     focus_handle: Option<FocusHandle>,
     terminal_panes: HashMap<String, Entity<TerminalPaneView>>,
     terminal_pane_subscriptions: HashMap<String, Subscription>,
@@ -59,6 +61,9 @@ pub struct RootView {
     system_notifier: NoopSystemNotifier,
     system_notifications_enabled: bool,
 }
+
+const CLOSE_PROJECT_DIALOG_TEXT: &str =
+    "Close project?\nRunning terminal processes will be stopped.";
 
 impl RootView {
     pub fn new() -> Self {
@@ -90,6 +95,7 @@ impl RootView {
             recent_projects,
             load_error: None,
             last_opened_layout_file: None,
+            pending_close_project_id: None,
             focus_handle: None,
             terminal_panes: HashMap::new(),
             terminal_pane_subscriptions: HashMap::new(),
@@ -101,6 +107,10 @@ impl RootView {
 
     pub fn workspace(&self) -> &Workspace {
         &self.workspace
+    }
+
+    pub fn workspace_mut(&mut self) -> &mut Workspace {
+        &mut self.workspace
     }
 
     pub fn active_palette(&self) -> Option<&ActivePalette> {
@@ -204,6 +214,10 @@ impl RootView {
 
     pub fn run_command(&mut self, command_id: CommandId) -> Result<(), RootViewError> {
         match command_id {
+            CommandId::ProjectClose => {
+                self.request_close_selected_project()?;
+                Ok(())
+            }
             CommandId::LayoutSaveCurrent => {
                 let (project_path, layout) = self.selected_project_layout_snapshot()?;
                 save_local_layout(&self.config_paths, &project_path, &layout)?;
@@ -233,6 +247,31 @@ impl RootView {
                 Ok(())
             }
         }
+    }
+
+    pub fn has_pending_project_close(&self) -> bool {
+        self.pending_close_project_id.is_some()
+    }
+
+    pub fn visible_close_project_dialog_text(&self) -> Option<&'static str> {
+        self.pending_close_project_id
+            .as_ref()
+            .map(|_| CLOSE_PROJECT_DIALOG_TEXT)
+    }
+
+    pub fn confirm_pending_project_close(&mut self) -> Result<(), RootViewError> {
+        let project_id = self
+            .pending_close_project_id
+            .clone()
+            .ok_or(WorkspaceError::NoSelectedProject)?;
+        let closed = self.workspace.confirm_close_project(&project_id)?;
+        self.pending_close_project_id = None;
+        self.remove_terminal_panes_for_project(closed.project_id.as_str());
+        Ok(())
+    }
+
+    pub fn cancel_pending_project_close(&mut self) {
+        self.pending_close_project_id = None;
     }
 
     pub fn open_project_path(
@@ -283,6 +322,34 @@ impl RootView {
             PaletteKind::Tab => tab_palette_items(&self.workspace).unwrap_or_default(),
             PaletteKind::Pane => pane_palette_items(&self.workspace).unwrap_or_default(),
         }
+    }
+
+    fn request_close_selected_project(&mut self) -> Result<CloseProjectDecision, RootViewError> {
+        let project_id = self
+            .workspace
+            .selected_project_id()
+            .cloned()
+            .ok_or(WorkspaceError::NoSelectedProject)?;
+        let decision = self.workspace.request_close_project(&project_id)?;
+        match &decision {
+            CloseProjectDecision::Closed(closed) => {
+                self.pending_close_project_id = None;
+                self.remove_terminal_panes_for_project(closed.project_id.as_str());
+            }
+            CloseProjectDecision::NeedsConfirmation { project_id, .. } => {
+                self.pending_close_project_id = Some(project_id.clone());
+            }
+        }
+
+        Ok(decision)
+    }
+
+    fn remove_terminal_panes_for_project(&mut self, project_id: &str) {
+        let prefix = format!("{project_id}:");
+        self.terminal_panes
+            .retain(|key, _pane| !key.starts_with(&prefix));
+        self.terminal_pane_subscriptions
+            .retain(|key, _subscription| !key.starts_with(&prefix));
     }
 
     fn selected_project_layout_snapshot(&self) -> Result<(PathBuf, ProjectLayout), RootViewError> {
@@ -548,6 +615,12 @@ impl RootView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.pending_close_project_id.is_some() {
+            let _ = self.confirm_pending_project_close();
+            cx.notify();
+            return;
+        }
+
         if self.active_palette.is_some() {
             let _ = self.confirm_palette_selection();
             cx.notify();
@@ -562,6 +635,12 @@ impl RootView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.pending_close_project_id.is_some() {
+            self.cancel_pending_project_close();
+            cx.notify();
+            return;
+        }
+
         if self.active_palette.is_some() {
             self.close_palette();
             cx.notify();
@@ -657,6 +736,8 @@ pub enum RootViewError {
     #[error("{0}")]
     Workspace(#[from] WorkspaceError),
     #[error("{0}")]
+    CloseProject(#[from] CloseProjectError),
+    #[error("{0}")]
     ProjectOpen(#[from] ProjectOpenError),
 }
 
@@ -698,6 +779,9 @@ impl Render for RootView {
         }
         if let Some(load_error) = &self.load_error {
             root = root.child(error_banner(load_error));
+        }
+        if self.pending_close_project_id.is_some() {
+            root = root.child(close_project_dialog());
         }
         root = root.child(toast_overlay(&self.toast_queue));
 
@@ -771,6 +855,45 @@ fn error_banner(message: &str) -> Div {
         .text_sm()
         .text_color(rgb(0xfecaca))
         .child(message.to_string())
+}
+
+fn close_project_dialog() -> Div {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
+        .bottom_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(rgba(0x00000099))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .w_96()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(0x3a3a3a))
+                .bg(rgb(0x151515))
+                .p_4()
+                .text_color(rgb(0xf5f5f5))
+                .child(div().text_lg().child("Close project?"))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(0xa3a3a3))
+                        .child("Running terminal processes will be stopped."),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0x737373))
+                        .child("Enter to close, Escape to cancel"),
+                ),
+        )
 }
 
 fn empty_workspace() -> Div {

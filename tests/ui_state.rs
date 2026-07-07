@@ -77,6 +77,28 @@ fn root_view_layout_commands_write_current_project_files() {
 }
 
 #[test]
+fn root_view_project_close_command_requires_confirmation_for_running_project() {
+    let mut root = RootView::dev_fixture();
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    root.workspace_mut()
+        .mark_pane_running(&project_id, "dev", "server")
+        .unwrap();
+
+    root.run_command(CommandId::ProjectClose).unwrap();
+
+    assert!(root.has_pending_project_close());
+    assert_eq!(
+        root.visible_close_project_dialog_text(),
+        Some("Close project?\nRunning terminal processes will be stopped.")
+    );
+
+    root.confirm_pending_project_close().unwrap();
+
+    assert!(root.workspace().opened_projects().is_empty());
+    assert!(!root.has_pending_project_close());
+}
+
+#[test]
 fn visible_tab_titles_come_from_selected_project() {
     let workspace = workspace_with_sample_project();
 

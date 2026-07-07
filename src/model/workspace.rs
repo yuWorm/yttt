@@ -262,27 +262,38 @@ impl Workspace {
         &mut self,
         project_id: &ProjectId,
     ) -> Result<ClosedProject, CloseProjectError> {
-        let index = self
-            .opened_projects
-            .iter()
-            .position(|project| &project.id == project_id)
-            .ok_or_else(|| CloseProjectError::ProjectNotFound(project_id.as_str().to_string()))?;
+        let index = self.project_index(project_id)?;
 
         if self.opened_projects[index].has_running_panes() {
             return Err(CloseProjectError::RunningProcesses);
         }
 
-        let project = self.opened_projects.remove(index);
-        if self.selected_project_id.as_ref() == Some(project_id) {
-            self.selected_project_id = self
-                .opened_projects
-                .first()
-                .map(|project| project.id.clone());
+        Ok(self.remove_project_at(index))
+    }
+
+    pub fn request_close_project(
+        &mut self,
+        project_id: &ProjectId,
+    ) -> Result<CloseProjectDecision, CloseProjectError> {
+        let index = self.project_index(project_id)?;
+        let running_pane_count = self.opened_projects[index].running_pane_count();
+        if running_pane_count > 0 {
+            return Ok(CloseProjectDecision::NeedsConfirmation {
+                project_id: project_id.clone(),
+                running_pane_count,
+            });
         }
 
-        Ok(ClosedProject {
-            project_id: project.id,
-        })
+        Ok(CloseProjectDecision::Closed(self.remove_project_at(index)))
+    }
+
+    pub fn confirm_close_project(
+        &mut self,
+        project_id: &ProjectId,
+    ) -> Result<ClosedProject, CloseProjectError> {
+        let index = self.project_index(project_id)?;
+
+        Ok(self.remove_project_at(index))
     }
 
     fn select_relative_tab(&mut self, offset: isize) -> Result<(), WorkspaceError> {
@@ -327,6 +338,27 @@ impl Workspace {
             .find(|project| project.id == project_id)
             .ok_or_else(|| WorkspaceError::ProjectNotFound(project_id.as_str().to_string()))
     }
+
+    fn project_index(&self, project_id: &ProjectId) -> Result<usize, CloseProjectError> {
+        self.opened_projects
+            .iter()
+            .position(|project| &project.id == project_id)
+            .ok_or_else(|| CloseProjectError::ProjectNotFound(project_id.as_str().to_string()))
+    }
+
+    fn remove_project_at(&mut self, index: usize) -> ClosedProject {
+        let project = self.opened_projects.remove(index);
+        if self.selected_project_id.as_ref() == Some(&project.id) {
+            self.selected_project_id = self
+                .opened_projects
+                .first()
+                .map(|project| project.id.clone());
+        }
+
+        ClosedProject {
+            project_id: project.id,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -348,12 +380,29 @@ impl OpenedProject {
     }
 
     fn has_running_panes(&self) -> bool {
-        self.tab_states.iter().any(|tab| {
-            tab.pane_states
-                .iter()
-                .any(|pane| pane.process_state == PaneProcessState::Running)
-        })
+        self.running_pane_count() > 0
     }
+
+    fn running_pane_count(&self) -> usize {
+        self.tab_states
+            .iter()
+            .map(|tab| {
+                tab.pane_states
+                    .iter()
+                    .filter(|pane| pane.process_state == PaneProcessState::Running)
+                    .count()
+            })
+            .sum()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CloseProjectDecision {
+    Closed(ClosedProject),
+    NeedsConfirmation {
+        project_id: ProjectId,
+        running_pane_count: usize,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
