@@ -110,6 +110,8 @@ pub struct PaneConfig {
     pub kind: PaneKind,
     #[serde(default)]
     pub notify_on_exit: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detector: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq)]

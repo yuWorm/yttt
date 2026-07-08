@@ -43,6 +43,7 @@ pub struct PaneOverride {
     pub command: Option<String>,
     pub kind: Option<PaneKind>,
     pub notify_on_exit: Option<bool>,
+    pub detector: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -269,6 +270,9 @@ fn merge_pane(pane: &mut PaneConfig, pane_override: &PaneOverride) {
     if let Some(notify_on_exit) = pane_override.notify_on_exit {
         pane.notify_on_exit = notify_on_exit;
     }
+    if let Some(detector) = &pane_override.detector {
+        pane.detector = Some(detector.clone());
+    }
 }
 
 fn load_project_layout(
@@ -416,6 +420,7 @@ fn default_project_layout(project_path: &Path) -> ProjectLayout {
                 command: "$SHELL".to_string(),
                 kind: PaneKind::Shell,
                 notify_on_exit: false,
+                detector: None,
             }),
         }],
     }

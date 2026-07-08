@@ -228,6 +228,7 @@ impl Workspace {
                 command: "$SHELL".to_string(),
                 kind: PaneKind::Shell,
                 notify_on_exit: false,
+                detector: None,
             }),
         });
         project.selected_tab_id = tab_id.clone();
@@ -273,6 +274,7 @@ impl Workspace {
             command: "$SHELL".to_string(),
             kind: PaneKind::Shell,
             notify_on_exit: false,
+            detector: None,
         };
 
         if !split_pane_node(

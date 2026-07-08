@@ -51,6 +51,32 @@ fn parses_project_layout_with_split_and_agent_pane() {
 }
 
 #[test]
+fn parses_optional_pane_detector_field() {
+    let source = r#"
+        [project]
+        name = "yttt"
+        default_tab = "agent"
+
+        [[tabs]]
+        id = "agent"
+        title = "Agent"
+        layout = { type = "pane", id = "codex", title = "Codex", command = "codex", kind = "agent", detector = "codex" }
+    "#;
+
+    let layout: ProjectLayout = toml::from_str(source).unwrap();
+
+    assert_eq!(
+        layout.tabs[0]
+            .layout
+            .find_pane("codex")
+            .unwrap()
+            .detector
+            .as_deref(),
+        Some("codex")
+    );
+}
+
+#[test]
 fn rejects_duplicate_tab_ids() {
     let source = r#"
         [project]
@@ -128,6 +154,7 @@ fn local_override_renames_tab_and_command_by_id() {
                 command: Some("pnpm dev".to_string()),
                 kind: None,
                 notify_on_exit: None,
+                detector: Some("codex".to_string()),
             })),
         }],
         ..Default::default()
@@ -138,6 +165,10 @@ fn local_override_renames_tab_and_command_by_id() {
 
     assert_eq!(dev.title, "Development");
     assert_eq!(dev.layout.find_pane("server").unwrap().command, "pnpm dev");
+    assert_eq!(
+        dev.layout.find_pane("server").unwrap().detector.as_deref(),
+        Some("codex")
+    );
     assert!(result.warnings.is_empty());
 }
 
