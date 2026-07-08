@@ -61,6 +61,7 @@ use crate::{
         components::{ActionEmphasis, workbench_action_button},
         i18n::{UiText, UiTextKey},
         palette::palette_overlay,
+        palette_surface::palette_input_placeholder,
         sidebar::project_sidebar,
         split_view::{pointer_resize_for_drag_delta, split_child_basis},
         tabs::project_tabs,
@@ -842,7 +843,7 @@ impl RootView {
         let input = if let Some(input) = &self.palette_input {
             input.clone()
         } else {
-            let placeholder = self.ui_text.get(UiTextKey::TypeToFilter);
+            let placeholder = palette_input_placeholder(active_palette.kind);
             let query = active_palette.query.clone();
             let input = cx.new(|cx| {
                 InputState::new(window, cx)
@@ -885,9 +886,8 @@ impl RootView {
         div()
             .flex()
             .flex_1()
-            .bg(rgb(0x0a0a0a))
-            .text_color(rgb(0xf5f5f5))
-            .p_2()
+            .bg(self.theme.terminal_background)
+            .text_color(self.theme.text)
             .child(self.terminal_split_view_for_layout(&layout, &tree_input, window, cx))
     }
 
@@ -914,7 +914,7 @@ impl RootView {
             ),
             LayoutNode::Split(split) => {
                 let basis = split_child_basis(split.ratio);
-                let mut container = div().flex().flex_1().gap_1();
+                let mut container = div().flex().flex_1();
                 if split.direction == SplitDirection::Vertical {
                     container = container.flex_col();
                 }
@@ -1045,6 +1045,7 @@ impl RootView {
 
     fn split_resize_handle(direction: SplitDirection, cx: &mut Context<Self>) -> AnyElement {
         let style = Self::visible_split_handle_style(direction);
+        let theme = WorkbenchTheme::dark();
         let mut handle = div()
             .id(match direction {
                 SplitDirection::Horizontal => "horizontal-split-resize-handle",
@@ -1064,14 +1065,18 @@ impl RootView {
             );
 
         handle = match direction {
-            SplitDirection::Horizontal => handle
-                .w(style.hit_area_width)
-                .cursor_ew_resize()
-                .child(div().w(style.visible_line_width).h_full().bg(rgb(0x343b46))),
-            SplitDirection::Vertical => handle
-                .h(style.hit_area_width)
-                .cursor_ns_resize()
-                .child(div().h(style.visible_line_width).w_full().bg(rgb(0x343b46))),
+            SplitDirection::Horizontal => handle.w(style.hit_area_width).cursor_ew_resize().child(
+                div()
+                    .w(style.visible_line_width)
+                    .h_full()
+                    .bg(theme.split_line),
+            ),
+            SplitDirection::Vertical => handle.h(style.hit_area_width).cursor_ns_resize().child(
+                div()
+                    .h(style.visible_line_width)
+                    .w_full()
+                    .bg(theme.split_line),
+            ),
         };
 
         handle.into_any_element()
@@ -1589,8 +1594,8 @@ impl Render for RootView {
                 .flex()
                 .flex_1()
                 .relative()
-                .bg(rgb(0x101010))
-                .text_color(rgb(0xf5f5f5))
+                .bg(self.theme.app_background)
+                .text_color(self.theme.text)
                 .child(project_sidebar(&self.workspace, |project_id| {
                     let project_id = ProjectId::new(project_id);
                     cx.listener(move |this, _, _window, cx| {
@@ -1604,12 +1609,35 @@ impl Render for RootView {
                         .flex()
                         .flex_col()
                         .flex_1()
-                        .child(project_tabs(&self.workspace, |tab_id| {
-                            cx.listener(move |this, _, _window, cx| {
-                                let _ = this.workspace.select_tab(&tab_id);
+                        .child(project_tabs(
+                            &self.workspace,
+                            |tab_id| {
+                                cx.listener(move |this, _, _window, cx| {
+                                    let _ = this.workspace.select_tab(&tab_id);
+                                    this.queue_selected_terminal_focus();
+                                    cx.notify();
+                                })
+                            },
+                            |tab_id| {
+                                cx.listener(move |this, _, _window, cx| {
+                                    let _ = this.workspace.select_tab(&tab_id);
+                                    let _ = this.run_command(CommandId::TabClose);
+                                    cx.notify();
+                                })
+                            },
+                            cx.listener(|this, _, _window, cx| {
+                                let _ = this.run_command(CommandId::TabNew);
                                 cx.notify();
-                            })
-                        }))
+                            }),
+                            cx.listener(|this, _, _window, cx| {
+                                let _ = this.run_command(CommandId::PaneSplitVertical);
+                                cx.notify();
+                            }),
+                            cx.listener(|this, _, _window, cx| {
+                                let _ = this.run_command(CommandId::PaneSplitHorizontal);
+                                cx.notify();
+                            }),
+                        ))
                         .child(split_view),
                 )
         };
@@ -1632,6 +1660,7 @@ impl Render for RootView {
                     &items,
                     &self.ui_text,
                     &query_input,
+                    self.theme,
                     |selected_index| {
                         cx.listener(move |this, _, _window, cx| {
                             if let Some(active_palette) = &mut this.active_palette {

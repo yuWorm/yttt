@@ -44,30 +44,33 @@ pub fn compact_path_for_titlebar(path: &str) -> String {
 }
 
 pub fn workbench_titlebar(info: TitlebarInfo, theme: WorkbenchTheme) -> impl IntoElement {
-    TitleBar::new().child(
-        div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .size_full()
-            .px_3()
-            .text_sm()
-            .text_color(theme.text)
-            .bg(theme.titlebar_background)
-            .child(div().font_semibold().child(info.project_name))
-            .children(info.compact_path.map(|path| titlebar_meta(path, theme)))
-            .children(info.git_branch.map(|branch| titlebar_meta(branch, theme)))
-            .children(info.git_counters.map(|counters| {
-                div()
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(theme.border)
-                    .px_1()
-                    .text_xs()
-                    .text_color(rgb(0xc8d3df))
-                    .child(counters)
-            })),
-    )
+    TitleBar::new()
+        .bg(theme.titlebar_background)
+        .border_color(theme.border)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .size_full()
+                .px_3()
+                .text_sm()
+                .text_color(theme.text)
+                .bg(theme.titlebar_background)
+                .child(div().font_semibold().child(info.project_name))
+                .children(info.compact_path.map(|path| titlebar_meta(path, theme)))
+                .children(info.git_branch.map(|branch| titlebar_meta(branch, theme)))
+                .children(info.git_counters.map(|counters| {
+                    div()
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(theme.border)
+                        .px_1()
+                        .text_xs()
+                        .text_color(rgb(0xc8d3df))
+                        .child(counters)
+                })),
+        )
 }
 
 fn titlebar_meta(value: String, theme: WorkbenchTheme) -> impl IntoElement {

@@ -1,15 +1,19 @@
 use gpui::{
-    App, ClickEvent, Div, Entity, IntoElement, Pixels, Window, div, prelude::*, px, rgb, rgba,
+    AnyElement, App, ClickEvent, Div, Entity, InteractiveElement as _, IntoElement,
+    StatefulInteractiveElement as _, Window, div, prelude::*, rgba,
 };
 use gpui_component::{
     IconName,
     input::{Input, InputState},
-    list::ListItem,
 };
 
-use crate::palette::{ActivePalette, PaletteItem, PaletteKind};
+use crate::palette::{ActivePalette, PaletteItem};
 use crate::ui::components::SelectableState;
 use crate::ui::i18n::{UiText, UiTextKey};
+use crate::ui::palette_surface::{
+    PaletteFooterAction, palette_footer_actions, palette_panel_style, palette_row_style,
+};
+use crate::ui::theme::WorkbenchTheme;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PaletteRow {
@@ -20,19 +24,6 @@ pub struct PaletteRow {
     pub state: SelectableState,
     pub enabled: bool,
     pub disabled_reason: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PaletteSurfaceStyle {
-    pub width: Pixels,
-    pub max_width: Pixels,
-}
-
-pub fn palette_surface_style() -> PaletteSurfaceStyle {
-    PaletteSurfaceStyle {
-        width: px(760.0),
-        max_width: px(900.0),
-    }
 }
 
 pub fn visible_palette_rows(
@@ -68,6 +59,7 @@ pub fn palette_overlay<H, F>(
     items: &[PaletteItem],
     ui_text: &UiText,
     query_input: &Entity<InputState>,
+    theme: WorkbenchTheme,
     on_confirm_item: F,
 ) -> impl IntoElement
 where
@@ -75,7 +67,7 @@ where
     F: FnMut(usize) -> H,
 {
     let rows = visible_palette_rows(active_palette, items);
-    let style = palette_surface_style();
+    let style = palette_panel_style();
 
     div()
         .absolute()
@@ -91,30 +83,27 @@ where
                 .flex_col()
                 .w(style.width)
                 .max_w(style.max_width)
+                .max_h(style.max_height)
                 .rounded_md()
                 .border_1()
-                .border_color(rgb(0x46505f))
-                .bg(rgb(0x252b34))
-                .text_color(rgb(0xe7edf4))
-                .child(palette_header(active_palette, query_input))
-                .child(palette_items(rows, ui_text, on_confirm_item)),
+                .border_color(theme.border_strong)
+                .bg(theme.surface)
+                .text_color(theme.text)
+                .overflow_hidden()
+                .child(palette_header(query_input, theme))
+                .child(palette_items(rows, ui_text, theme, on_confirm_item))
+                .child(palette_footer(theme)),
         )
 }
 
-fn palette_header(active_palette: &ActivePalette, query_input: &Entity<InputState>) -> Div {
+fn palette_header(query_input: &Entity<InputState>, theme: WorkbenchTheme) -> Div {
     div()
         .flex()
-        .flex_col()
-        .gap_1()
+        .items_center()
         .border_b_1()
-        .border_color(rgb(0x343b46))
-        .p_3()
-        .child(
-            div()
-                .text_sm()
-                .text_color(rgb(0xaab4c0))
-                .child(palette_title(active_palette.kind)),
-        )
+        .border_color(theme.border)
+        .px_3()
+        .py_2()
         .child(
             Input::new(query_input)
                 .prefix(IconName::Search)
@@ -123,26 +112,53 @@ fn palette_header(active_palette: &ActivePalette, query_input: &Entity<InputStat
         )
 }
 
-fn palette_items<H, F>(rows: Vec<PaletteRow>, ui_text: &UiText, mut on_confirm_item: F) -> Div
+fn palette_items<H, F>(
+    rows: Vec<PaletteRow>,
+    ui_text: &UiText,
+    theme: WorkbenchTheme,
+    mut on_confirm_item: F,
+) -> AnyElement
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     F: FnMut(usize) -> H,
 {
+    let panel_style = palette_panel_style();
+
     if rows.is_empty() {
         return div()
+            .id("palette-empty")
+            .min_h(panel_style.row_height)
             .p_4()
             .text_sm()
-            .text_color(rgb(0x778391))
-            .child(palette_empty_label(ui_text));
+            .text_color(theme.text_subtle)
+            .child(palette_empty_label(ui_text))
+            .into_any_element();
     }
 
-    rows.into_iter().enumerate().fold(
-        div().flex().flex_col().gap_1().p_2(),
-        |list, (index, row)| list.child(palette_item(row, index, on_confirm_item(index))),
-    )
+    rows.into_iter()
+        .enumerate()
+        .fold(
+            div()
+                .id("palette-list")
+                .flex()
+                .flex_col()
+                .gap_1()
+                .p_2()
+                .max_h(panel_style.list_max_height)
+                .overflow_y_scroll(),
+            |list, (index, row)| {
+                list.child(palette_item(row, index, theme, on_confirm_item(index)))
+            },
+        )
+        .into_any_element()
 }
 
-fn palette_item<H>(row: PaletteRow, index: usize, on_click: H) -> ListItem
+fn palette_item<H>(
+    row: PaletteRow,
+    index: usize,
+    theme: WorkbenchTheme,
+    on_click: H,
+) -> impl IntoElement
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
@@ -151,10 +167,22 @@ where
     } else {
         row.disabled_reason.clone().unwrap_or_default()
     };
-    let title_color = if row.enabled { 0xe7edf4 } else { 0x778391 };
+    let style = palette_row_style(row.state, row.enabled, theme);
+    let panel_style = palette_panel_style();
 
-    ListItem::new(("palette-item", index))
-        .selected(row.state == SelectableState::Active)
+    div()
+        .id(("palette-item", index))
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_4()
+        .h(panel_style.row_height)
+        .rounded_sm()
+        .border_1()
+        .border_color(style.border)
+        .bg(style.background)
+        .px_3()
+        .hover(move |this| this.bg(style.hover_background))
         .on_click(on_click)
         .child(
             div()
@@ -165,35 +193,63 @@ where
                 .child(
                     div()
                         .text_sm()
-                        .text_color(rgb(title_color))
+                        .text_color(style.title)
                         .truncate()
                         .child(row.title),
                 )
                 .child(
                     div()
                         .text_xs()
-                        .text_color(rgb(0x778391))
+                        .text_color(style.subtitle)
                         .truncate()
                         .child(row.subtitle.unwrap_or_default()),
                 ),
         )
-        .suffix(move |_, _| {
+        .child(
             div()
+                .flex_none()
                 .text_xs()
-                .text_color(rgb(0xaab4c0))
-                .child(status.clone())
-        })
+                .text_color(style.status)
+                .child(status),
+        )
 }
 
 pub fn palette_empty_label(ui_text: &UiText) -> &'static str {
     ui_text.get(UiTextKey::NoResults)
 }
 
-fn palette_title(kind: PaletteKind) -> &'static str {
-    match kind {
-        PaletteKind::Command => "Command Palette",
-        PaletteKind::Project => "Project Palette",
-        PaletteKind::Tab => "Tab Palette",
-        PaletteKind::Pane => "Pane Palette",
-    }
+fn palette_footer(theme: WorkbenchTheme) -> Div {
+    let style = palette_panel_style();
+
+    palette_footer_actions().into_iter().fold(
+        div()
+            .flex()
+            .items_center()
+            .justify_end()
+            .gap_4()
+            .h(style.footer_height)
+            .border_t_1()
+            .border_color(theme.border)
+            .px_3()
+            .text_xs()
+            .text_color(theme.text_muted),
+        |footer, action| footer.child(palette_footer_action(action, theme)),
+    )
+}
+
+fn palette_footer_action(action: PaletteFooterAction, theme: WorkbenchTheme) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(div().child(action.label))
+        .child(
+            div()
+                .rounded_sm()
+                .border_1()
+                .border_color(theme.border)
+                .px_1()
+                .text_color(theme.text_subtle)
+                .child(action.key),
+        )
 }

@@ -1,11 +1,15 @@
-use gpui::{App, ClickEvent, IntoElement, Pixels, SharedString, Window, div, prelude::*, px, rgb};
-use gpui_component::tab::{Tab, TabBar};
+use gpui::{
+    App, ClickEvent, InteractiveElement as _, IntoElement, Pixels, Rgba,
+    StatefulInteractiveElement as _, Window, div, prelude::*, px, rgba,
+};
+use gpui_component::{Icon, IconName};
 
 use crate::{
     model::workspace::{TabStartState, Workspace},
     ui::{
         agent_status::{agent_status_label, tab_agent_status},
         components::SelectableState,
+        theme::WorkbenchTheme,
     },
 };
 
@@ -20,13 +24,37 @@ pub struct ProjectTabItem {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProjectTabsStyle {
     pub height: Pixels,
+    pub item_height: Pixels,
     pub border_width: Pixels,
+    pub active_background: Rgba,
+    pub inactive_background: Rgba,
+    pub hover_background: Rgba,
+    pub close_button_visibility: ProjectTabCloseButtonVisibility,
+    pub leading_icon: ProjectTabLeadingIcon,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectTabCloseButtonVisibility {
+    Hover,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectTabLeadingIcon {
+    Terminal,
 }
 
 pub fn project_tabs_style() -> ProjectTabsStyle {
+    let theme = WorkbenchTheme::dark();
+
     ProjectTabsStyle {
         height: px(32.0),
+        item_height: px(32.0),
         border_width: px(1.0),
+        active_background: theme.surface,
+        inactive_background: theme.app_background,
+        hover_background: theme.hover_surface,
+        close_button_visibility: ProjectTabCloseButtonVisibility::Hover,
+        leading_icon: ProjectTabLeadingIcon::Terminal,
     }
 }
 
@@ -68,45 +96,213 @@ pub fn visible_tab_items(workspace: &Workspace) -> Vec<ProjectTabItem> {
         .collect()
 }
 
-pub fn project_tabs<H, F>(workspace: &Workspace, mut on_select_tab: F) -> impl IntoElement
+pub fn project_tabs<SelectH, SelectF, CloseH, CloseF, NewH, SplitVH, SplitHH>(
+    workspace: &Workspace,
+    mut on_select_tab: SelectF,
+    mut on_close_tab: CloseF,
+    on_new_tab: NewH,
+    on_split_vertical: SplitVH,
+    on_split_horizontal: SplitHH,
+) -> impl IntoElement
 where
-    H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    F: FnMut(String) -> H,
+    SelectH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    SelectF: FnMut(String) -> SelectH,
+    CloseH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    CloseF: FnMut(String) -> CloseH,
+    NewH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    SplitVH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    SplitHH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
     let style = project_tabs_style();
+    let theme = WorkbenchTheme::dark();
     let items = visible_tab_items(workspace);
     if items.is_empty() {
         return div().into_any_element();
     }
 
-    let selected_index = items
-        .iter()
-        .position(|tab| tab.state == SelectableState::Active)
-        .unwrap_or(0);
-
-    let mut tabs = Vec::new();
-    for item in items {
-        let mut tab = Tab::new()
-            .label(SharedString::from(item.title.clone()))
-            .on_click(on_select_tab(item.id.clone()));
-
-        if let Some(status) = item.status {
-            tab = tab.suffix(div().text_xs().text_color(rgb(0xa3a3a3)).child(status));
-        }
-
-        tabs.push(tab);
+    let mut tab_row = div()
+        .id("project-tab-row")
+        .flex()
+        .items_center()
+        .h_full()
+        .overflow_x_scroll();
+    for (index, item) in items.into_iter().enumerate() {
+        let select_tab_id = item.id.clone();
+        let close_tab_id = item.id.clone();
+        tab_row = tab_row.child(project_tab(
+            index,
+            item,
+            style,
+            theme,
+            on_select_tab(select_tab_id),
+            on_close_tab(close_tab_id),
+        ));
     }
 
-    TabBar::new("project-tabs")
-        .underline()
-        .selected_index(selected_index)
-        .children(tabs)
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
         .h(style.height)
-        .bg(rgb(0x242a34))
+        .bg(theme.tabbar_background)
         .border_b_1()
-        .border_color(rgb(0x343b46))
-        .px_2()
+        .border_color(theme.border)
+        .child(tab_row.flex_1())
+        .child(tab_toolbar(
+            theme,
+            on_new_tab,
+            on_split_vertical,
+            on_split_horizontal,
+        ))
         .into_any_element()
+}
+
+fn project_tab<SelectH, CloseH>(
+    index: usize,
+    item: ProjectTabItem,
+    style: ProjectTabsStyle,
+    theme: WorkbenchTheme,
+    on_select_tab: SelectH,
+    on_close_tab: CloseH,
+) -> impl IntoElement
+where
+    SelectH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    CloseH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+{
+    let is_active = item.state == SelectableState::Active;
+    let background = if is_active {
+        style.active_background
+    } else {
+        style.inactive_background
+    };
+    let text_color = if is_active {
+        theme.text
+    } else {
+        theme.text_muted
+    };
+    let group_name = format!("project-tab-{}", item.id);
+
+    div()
+        .id(("project-tab", index))
+        .group(group_name.clone())
+        .flex()
+        .items_center()
+        .gap_2()
+        .h(style.item_height)
+        .min_w(px(128.0))
+        .max_w(px(220.0))
+        .border_r_1()
+        .border_color(theme.border)
+        .bg(background)
+        .px_2()
+        .text_xs()
+        .hover(move |this| this.bg(style.hover_background))
+        .on_click(on_select_tab)
+        .child(
+            Icon::new(IconName::SquareTerminal)
+                .size_3()
+                .text_color(theme.text_subtle),
+        )
+        .child(
+            div()
+                .flex_1()
+                .truncate()
+                .text_color(text_color)
+                .child(item.title),
+        )
+        .children(item.status.map(|status| {
+            div()
+                .flex_none()
+                .truncate()
+                .text_color(theme.text_subtle)
+                .child(status)
+        }))
+        .child(tab_close_button(index, group_name, theme, on_close_tab))
+}
+
+fn tab_close_button<CloseH>(
+    index: usize,
+    group_name: String,
+    theme: WorkbenchTheme,
+    on_close_tab: CloseH,
+) -> impl IntoElement
+where
+    CloseH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+{
+    div()
+        .id(("project-tab-close", index))
+        .flex()
+        .items_center()
+        .justify_center()
+        .size_4()
+        .rounded_sm()
+        .text_color(theme.text_subtle)
+        .invisible()
+        .group_hover(group_name, |this| this.visible())
+        .hover(move |this| this.bg(theme.hover_surface).text_color(theme.text))
+        .on_click(on_close_tab)
+        .child(Icon::new(IconName::Close).size_3())
+}
+
+fn tab_toolbar<NewH, SplitVH, SplitHH>(
+    theme: WorkbenchTheme,
+    on_new_tab: NewH,
+    on_split_vertical: SplitVH,
+    on_split_horizontal: SplitHH,
+) -> impl IntoElement
+where
+    NewH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    SplitVH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    SplitHH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+{
+    div()
+        .flex()
+        .items_center()
+        .h_full()
+        .border_l_1()
+        .border_color(theme.border)
+        .bg(rgba(0x00000000))
+        .child(tab_toolbar_button(
+            "tab-new",
+            IconName::Plus,
+            theme,
+            on_new_tab,
+        ))
+        .child(tab_toolbar_button(
+            "pane-split-vertical",
+            IconName::PanelRight,
+            theme,
+            on_split_vertical,
+        ))
+        .child(tab_toolbar_button(
+            "pane-split-horizontal",
+            IconName::PanelBottom,
+            theme,
+            on_split_horizontal,
+        ))
+}
+
+fn tab_toolbar_button<H>(
+    id: &'static str,
+    icon: IconName,
+    theme: WorkbenchTheme,
+    on_click: H,
+) -> impl IntoElement
+where
+    H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+{
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .justify_center()
+        .size_7()
+        .border_l_1()
+        .border_color(theme.border)
+        .text_color(theme.text_muted)
+        .hover(move |this| this.bg(theme.hover_surface).text_color(theme.text))
+        .on_click(on_click)
+        .child(Icon::new(icon).size_3())
 }
 
 fn tab_start_state_label(state: TabStartState) -> &'static str {

@@ -7,6 +7,7 @@ pub mod i18n;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod palette;
+pub mod palette_surface;
 pub mod root;
 pub mod sidebar;
 pub mod split_view;
