@@ -349,6 +349,13 @@ fn terminal_pane_lifecycle_labels_are_visible() {
         }),
         "spawn failed"
     );
+    assert_eq!(
+        pane_lifecycle_label(&PaneLifecycle::Exited {
+            code: None,
+            reason: ExitReason::KilledByUser,
+        }),
+        "killed"
+    );
 }
 
 #[test]

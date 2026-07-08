@@ -283,6 +283,10 @@ pub fn pane_lifecycle_label(lifecycle: &PaneLifecycle) -> String {
         PaneLifecycle::Exited {
             code: Some(code), ..
         } => format!("exited {code}"),
+        PaneLifecycle::Exited {
+            code: None,
+            reason: ExitReason::KilledByUser,
+        } => "killed".to_string(),
         PaneLifecycle::Exited { code: None, .. } => "exited".to_string(),
         PaneLifecycle::SpawnFailed { .. } => "spawn failed".to_string(),
     }
@@ -310,6 +314,10 @@ fn lifecycle_color(lifecycle: &PaneLifecycle) -> gpui::Rgba {
     match lifecycle {
         PaneLifecycle::Running => rgb(0x22c55e),
         PaneLifecycle::Exited { code: Some(0), .. } => rgb(0xa3a3a3),
+        PaneLifecycle::Exited {
+            reason: ExitReason::KilledByUser,
+            ..
+        } => rgb(0xa3a3a3),
         PaneLifecycle::Exited { .. } | PaneLifecycle::SpawnFailed { .. } => rgb(0xef4444),
         PaneLifecycle::Idle | PaneLifecycle::Starting => rgb(0xf59e0b),
     }
