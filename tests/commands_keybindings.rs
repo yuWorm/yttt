@@ -23,6 +23,14 @@ fn default_registry_contains_core_commands() {
 }
 
 #[test]
+fn notification_settings_command_is_available_without_project() {
+    let availability = CommandId::SettingsNotifications.availability(false);
+
+    assert!(availability.enabled);
+    assert!(availability.disabled_reason.is_none());
+}
+
+#[test]
 fn parses_keybinding_toml() {
     let source = r#"
         [[bindings]]

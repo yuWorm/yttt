@@ -288,6 +288,18 @@ impl RootView {
             .map(String::as_str)
     }
 
+    pub fn system_notifications_enabled(&self) -> bool {
+        self.system_notifications_enabled
+    }
+
+    pub fn visible_notification_settings_message(&self) -> &'static str {
+        if self.system_notifications_enabled {
+            "System notifications: enabled"
+        } else {
+            "System notifications: disabled"
+        }
+    }
+
     pub fn visible_keybinding_warning_lines(&self) -> Vec<&str> {
         self.keybinding_warning_lines
             .iter()
@@ -361,6 +373,11 @@ impl RootView {
                 let path = ensure_keybindings_file(&self.config_paths)?;
                 self.last_opened_keybindings_file = Some(path.clone());
                 self.load_error = Some(format!("Keybindings file: {}", path.display()));
+                Ok(())
+            }
+            CommandId::SettingsNotifications => {
+                self.system_notifications_enabled = !self.system_notifications_enabled;
+                self.load_error = Some(self.visible_notification_settings_message().to_string());
                 Ok(())
             }
             CommandId::LayoutSaveCurrent => {

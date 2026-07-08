@@ -180,6 +180,33 @@ fn root_view_settings_keybindings_reveals_keybindings_file_path() {
 }
 
 #[test]
+fn root_view_toggles_system_notifications() {
+    let mut root = RootView::new();
+
+    assert!(!root.system_notifications_enabled());
+    assert_eq!(
+        root.visible_notification_settings_message(),
+        "System notifications: disabled"
+    );
+
+    root.run_command(CommandId::SettingsNotifications).unwrap();
+
+    assert!(root.system_notifications_enabled());
+    assert_eq!(
+        root.visible_notification_settings_message(),
+        "System notifications: enabled"
+    );
+
+    root.run_command(CommandId::SettingsNotifications).unwrap();
+
+    assert!(!root.system_notifications_enabled());
+    assert_eq!(
+        root.visible_notification_settings_message(),
+        "System notifications: disabled"
+    );
+}
+
+#[test]
 fn root_view_exposes_keybinding_warning_lines() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));

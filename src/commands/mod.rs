@@ -184,12 +184,11 @@ impl CommandId {
             Self::ProjectOpen | Self::ProjectOpenRecent => {
                 disabled("Use the visible project actions")
             }
-            Self::CommandPaletteOpen | Self::ProjectPalette | Self::SettingsKeybindings => {
-                enabled()
-            }
-            Self::TabClose | Self::PaneRename | Self::SettingsNotifications => {
-                disabled("Not implemented yet")
-            }
+            Self::CommandPaletteOpen
+            | Self::ProjectPalette
+            | Self::SettingsKeybindings
+            | Self::SettingsNotifications => enabled(),
+            Self::TabClose | Self::PaneRename => disabled("Not implemented yet"),
             Self::ProjectClose
             | Self::TabNew
             | Self::TabNext
