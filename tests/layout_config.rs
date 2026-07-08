@@ -3,7 +3,7 @@ use std::fs;
 use tempfile::tempdir;
 use yttt::config::{
     layout_loader::{
-        LayoutNodeOverride, LayoutOverride, MergeWarning, PaneOverride, TabOverride,
+        LayoutNodeOverride, LayoutOverride, LayoutSource, MergeWarning, PaneOverride, TabOverride,
         export_project_layout, load_recent_projects, merge_layouts, open_project_config,
         save_local_layout,
     },
@@ -203,8 +203,50 @@ fn config_missing_project_layout_creates_default_layout_in_app_config() {
     let opened = open_project_config(&paths, &project_dir).unwrap();
 
     assert_eq!(opened.layout.project.name, "sample-project");
+    assert_eq!(
+        opened.layout_source,
+        LayoutSource::CreatedAppLocalDefault(paths.local_layout_file(&project_dir))
+    );
     assert!(paths.local_layout_file(&project_dir).exists());
     assert!(!project_dir.join(".yttt/layout.toml").exists());
+}
+
+#[test]
+fn config_project_layout_reports_project_config_source() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("project-source");
+    let project_config_dir = project_dir.join(".yttt");
+    fs::create_dir_all(&project_config_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let project_layout_file = project_config_dir.join("layout.toml");
+    fs::write(
+        &project_layout_file,
+        toml::to_string_pretty(&sample_layout()).unwrap(),
+    )
+    .unwrap();
+
+    let opened = open_project_config(&paths, &project_dir).unwrap();
+
+    assert_eq!(
+        opened.layout_source,
+        LayoutSource::ProjectConfig(paths.project_layout_file(&opened.path))
+    );
+}
+
+#[test]
+fn config_local_layout_reports_app_local_source() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("local-source");
+    fs::create_dir(&project_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let local_layout_file = save_local_layout(&paths, &project_dir, &sample_layout()).unwrap();
+
+    let opened = open_project_config(&paths, &project_dir).unwrap();
+
+    assert_eq!(
+        opened.layout_source,
+        LayoutSource::AppLocalConfig(local_layout_file)
+    );
 }
 
 #[test]

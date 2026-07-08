@@ -58,10 +58,18 @@ pub struct LayoutMerge {
     pub warnings: Vec<MergeWarning>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LayoutSource {
+    ProjectConfig(PathBuf),
+    AppLocalConfig(PathBuf),
+    CreatedAppLocalDefault(PathBuf),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectOpenConfig {
     pub path: PathBuf,
     pub layout: ProjectLayout,
+    pub layout_source: LayoutSource,
     pub recent_projects: RecentProjectsConfig,
 }
 
@@ -160,12 +168,13 @@ pub fn open_project_config(
         return Err(ProjectOpenError::NotDirectory(project_path));
     }
 
-    let layout = load_project_layout(paths, &project_path)?;
+    let (layout, layout_source) = load_project_layout(paths, &project_path)?;
     let recent_projects = record_recent_project(paths, &project_path, &layout.project.name)?;
 
     Ok(ProjectOpenConfig {
         path: project_path,
         layout,
+        layout_source,
         recent_projects,
     })
 }
@@ -278,20 +287,25 @@ fn merge_pane(pane: &mut PaneConfig, pane_override: &PaneOverride) {
 fn load_project_layout(
     paths: &AppConfigPaths,
     project_path: &Path,
-) -> Result<ProjectLayout, ProjectOpenError> {
+) -> Result<(ProjectLayout, LayoutSource), ProjectOpenError> {
     let project_layout_file = paths.project_layout_file(project_path);
     if project_layout_file.exists() {
-        return read_project_layout(&project_layout_file);
+        let layout = read_project_layout(&project_layout_file)?;
+        return Ok((layout, LayoutSource::ProjectConfig(project_layout_file)));
     }
 
     let local_layout_file = paths.local_layout_file(project_path);
     if local_layout_file.exists() {
-        return read_project_layout(&local_layout_file);
+        let layout = read_project_layout(&local_layout_file)?;
+        return Ok((layout, LayoutSource::AppLocalConfig(local_layout_file)));
     }
 
     let layout = default_project_layout(project_path);
     write_default_layout(&local_layout_file, &layout)?;
-    Ok(layout)
+    Ok((
+        layout,
+        LayoutSource::CreatedAppLocalDefault(local_layout_file),
+    ))
 }
 
 fn read_project_layout(path: &Path) -> Result<ProjectLayout, ProjectOpenError> {
