@@ -59,9 +59,7 @@ pub enum ProjectTabStatusTone {
     AgentFailed,
 }
 
-pub fn project_tabs_style() -> ProjectTabsStyle {
-    let theme = WorkbenchTheme::dark();
-
+pub fn project_tabs_style(theme: WorkbenchTheme) -> ProjectTabsStyle {
     ProjectTabsStyle {
         height: px(32.0),
         item_height: px(32.0),
@@ -119,6 +117,7 @@ pub fn visible_tab_items(workspace: &Workspace) -> Vec<ProjectTabItem> {
 
 pub fn project_tabs<SelectH, SelectF, CloseH, CloseF, NewH, SplitVH, SplitHH>(
     workspace: &Workspace,
+    theme: WorkbenchTheme,
     mut on_select_tab: SelectF,
     mut on_close_tab: CloseF,
     on_new_tab: NewH,
@@ -134,8 +133,7 @@ where
     SplitVH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     SplitHH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    let style = project_tabs_style();
-    let theme = WorkbenchTheme::dark();
+    let style = project_tabs_style(theme);
     let items = visible_tab_items(workspace);
     if items.is_empty() {
         return div().into_any_element();

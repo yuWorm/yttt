@@ -1,9 +1,15 @@
 use std::mem::discriminant;
+use yttt::config::{paths::AppConfigPaths, settings::TerminalSettings};
 use yttt::ui::app::workbench_window_options;
 use yttt::ui::components::{SelectableState, selectable_state_classes};
 use yttt::ui::palette_surface::{
     PaletteFooterAction, PaletteRowTone, palette_footer_actions, palette_panel_style,
     palette_row_style, palette_scroll_anchor_index,
+};
+use yttt::ui::primitives::{
+    button::{YtttButtonVariant, yttt_button_style},
+    dialog::yttt_dialog_style,
+    input::{YtttInputKind, yttt_input_style},
 };
 use yttt::ui::sidebar::project_sidebar_style;
 use yttt::ui::tabs::{
@@ -18,10 +24,33 @@ use yttt::{model::layout::SplitDirection, ui::root::RootView};
 #[test]
 fn workbench_theme_exposes_terminal_first_tokens() {
     let theme = WorkbenchTheme::dark();
+    let terminal = TerminalSettings::default();
 
     assert_ne!(theme.app_background, theme.surface);
     assert_ne!(theme.text, theme.text_muted);
-    assert_eq!(theme.terminal_font_size, gpui::px(13.0));
+    assert_eq!(terminal.font_size, 13.0);
+}
+
+#[test]
+fn root_view_uses_loaded_theme_runtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(
+        paths.settings_file(),
+        r#"
+[theme]
+name = "yttt-dark"
+
+[terminal]
+font_size = 15
+"#,
+    )
+    .unwrap();
+
+    let root = RootView::with_config_paths(paths);
+
+    assert_eq!(root.theme_runtime().terminal_settings.font_size, 15.0);
 }
 
 #[test]
@@ -98,15 +127,16 @@ fn terminal_pane_default_chrome_has_no_header() {
 
 #[test]
 fn sidebar_and_tabs_use_compact_zed_like_density() {
-    let sidebar = project_sidebar_style();
-    let tabs = project_tabs_style();
+    let theme = WorkbenchTheme::dark();
+    let sidebar = project_sidebar_style(theme);
+    let tabs = project_tabs_style(theme);
 
     assert!(sidebar.width <= gpui::px(220.0));
     assert!(sidebar.collapsed_width < sidebar.width);
     assert_eq!(sidebar.border_width, gpui::px(1.0));
     assert_eq!(sidebar.item_height, gpui::px(28.0));
     assert_eq!(sidebar.item_padding_x, gpui::px(8.0));
-    assert_eq!(sidebar.background, WorkbenchTheme::dark().app_background);
+    assert_eq!(sidebar.background, theme.app_background);
     assert!(tabs.height <= gpui::px(34.0));
     assert_eq!(tabs.border_width, gpui::px(1.0));
     assert_eq!(
@@ -116,6 +146,26 @@ fn sidebar_and_tabs_use_compact_zed_like_density() {
     assert_eq!(tabs.leading_icon, ProjectTabLeadingIcon::Terminal);
     assert_eq!(tabs.status_indicator, ProjectTabStatusIndicator::Dot);
     assert_ne!(tabs.active_background, tabs.inactive_background);
+}
+
+#[test]
+fn sidebar_style_uses_passed_theme() {
+    let mut theme = WorkbenchTheme::dark();
+    theme.active_surface = gpui::rgb(0x123456);
+
+    let style = project_sidebar_style(theme);
+
+    assert_eq!(style.active_background, gpui::rgb(0x123456));
+}
+
+#[test]
+fn project_tabs_style_uses_passed_theme() {
+    let mut theme = WorkbenchTheme::dark();
+    theme.surface = gpui::rgb(0x222244);
+
+    let style = project_tabs_style(theme);
+
+    assert_eq!(style.active_background, gpui::rgb(0x222244));
 }
 
 #[test]
@@ -179,4 +229,37 @@ fn palette_footer_exposes_keyboard_actions() {
             },
         ]
     );
+}
+
+#[test]
+fn yttt_button_style_keeps_primary_muted_and_compact() {
+    let theme = WorkbenchTheme::dark();
+    let style = yttt_button_style(YtttButtonVariant::Primary, theme);
+
+    assert_eq!(style.height, gpui::px(28.0));
+    assert_eq!(style.radius, gpui::px(6.0));
+    assert_eq!(style.background, theme.active_surface);
+    assert_ne!(style.background, gpui::rgb(0xffffff));
+}
+
+#[test]
+fn yttt_input_style_makes_dialog_input_visible() {
+    let theme = WorkbenchTheme::dark();
+    let style = yttt_input_style(YtttInputKind::Dialog, theme);
+
+    assert_eq!(style.height, gpui::px(34.0));
+    assert_eq!(style.background, theme.surface_elevated);
+    assert_eq!(style.border, theme.border);
+    assert_eq!(style.focused_border, theme.border_strong);
+}
+
+#[test]
+fn yttt_dialog_style_uses_bounded_panel_surface() {
+    let theme = WorkbenchTheme::dark();
+    let style = yttt_dialog_style(theme);
+
+    assert_eq!(style.max_width, gpui::px(420.0));
+    assert_eq!(style.radius, gpui::px(8.0));
+    assert_eq!(style.background, theme.surface);
+    assert_eq!(style.border, theme.border_strong);
 }

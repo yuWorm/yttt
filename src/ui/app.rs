@@ -1,13 +1,20 @@
+use std::rc::Rc;
+
 use gpui::{App, AppContext, Application, Bounds, Pixels, WindowBounds, WindowOptions, px, size};
-use gpui_component::{Root as ComponentRoot, TitleBar};
+use gpui_component::{Root as ComponentRoot, Theme, TitleBar};
 
 use crate::{
     commands::default_registry,
-    config::paths::AppConfigPaths,
+    config::{
+        paths::AppConfigPaths,
+        settings::{AppSettings, load_or_create_settings},
+        theme::{ThemeStore, load_theme_store},
+    },
     ui::{
         actions::load_app_keybindings,
         root::RootView,
         startup::{StartupMode, startup_mode_from_fixture},
+        theme::ThemeRuntime,
     },
 };
 
@@ -20,6 +27,9 @@ pub fn run() {
 
             gpui_component::init(cx);
             let config_paths = AppConfigPaths::for_app();
+            let theme_runtime = load_app_theme_runtime(&config_paths);
+            Theme::global_mut(cx)
+                .apply_config(&Rc::new(theme_runtime.to_gpui_component_theme_config()));
             let command_registry = default_registry();
             cx.bind_keys(load_app_keybindings(&config_paths, &command_registry));
 
@@ -38,6 +48,17 @@ pub fn run() {
             })
             .expect("failed to open yttt window");
         });
+}
+
+fn load_app_theme_runtime(config_paths: &AppConfigPaths) -> ThemeRuntime {
+    let settings = load_or_create_settings(config_paths)
+        .map(|loaded| loaded.settings)
+        .unwrap_or_else(|_| AppSettings::default());
+    let theme_store = load_theme_store(config_paths)
+        .map(|loaded| loaded.store)
+        .unwrap_or_else(|_| ThemeStore::builtin());
+
+    ThemeRuntime::resolve(&settings, &theme_store)
 }
 
 pub fn workbench_window_options(bounds: Bounds<Pixels>) -> WindowOptions {

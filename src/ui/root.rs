@@ -2,12 +2,12 @@ use gpui::{
     AnyElement, ClickEvent, Context, Div, Entity, FocusHandle, InteractiveElement as _,
     IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     PathPromptOptions, Pixels, Point, Render, ScrollHandle, Subscription, Window, div, prelude::*,
-    relative, rgb, rgba,
+    relative, rgba,
 };
 use gpui_component::{
     Root as ComponentRoot, WindowExt as _,
     alert::Alert,
-    button::{Button, ButtonVariants as _},
+    button::{Button, ButtonCustomVariant, ButtonVariants as _},
     input::{Input, InputEvent, InputState},
     notification::{Notification, NotificationType},
 };
@@ -31,6 +31,8 @@ use crate::{
             load_recent_projects, open_project_config, save_local_layout,
         },
         paths::AppConfigPaths,
+        settings::{AppSettings, SettingsLoadWarning, load_or_create_settings},
+        theme::{ThemeLoadWarning, ThemeStore, load_theme_store},
     },
     model::{
         ids::ProjectId,
@@ -64,13 +66,18 @@ use crate::{
         i18n::{UiText, UiTextKey},
         palette::palette_overlay,
         palette_surface::palette_input_placeholder,
+        primitives::{
+            button::{YtttButtonVariant, yttt_button_style},
+            dialog::yttt_dialog_style,
+            input::{YtttInputKind, yttt_input_style},
+        },
         sidebar::project_sidebar,
         split_view::{pointer_resize_for_drag_delta, split_child_basis},
         tabs::project_tabs,
         terminal_pane::{
             TerminalPaneContext, TerminalPaneEvent, TerminalPaneExitedEvent, TerminalPaneView,
         },
-        theme::WorkbenchTheme,
+        theme::{ThemeRuntime, WorkbenchTheme},
         titlebar::{TitlebarInfo, compact_path_for_titlebar, workbench_titlebar},
         toast::{ToastQueue, ToastTone, toast_item_for_event},
     },
@@ -107,7 +114,7 @@ pub struct RootView {
     system_notifier: NoopSystemNotifier,
     system_notifications_enabled: bool,
     ui_text: UiText,
-    theme: WorkbenchTheme,
+    theme_runtime: ThemeRuntime,
 }
 
 const EMPTY_WORKSPACE_ACTIONS: [UiTextKey; 3] = [
@@ -177,6 +184,13 @@ impl RootView {
             .unwrap_or_default();
         let (load_error, keybinding_warning_lines) =
             load_keybindings_messages(&config_paths, &command_registry);
+        let (theme_runtime, theme_warning_lines) = load_theme_runtime_messages(&config_paths);
+        let load_error = combine_load_messages(
+            load_error,
+            theme_warning_lines
+                .first()
+                .map(|_| theme_warning_lines.join("; ")),
+        );
 
         Self {
             workspace,
@@ -209,7 +223,7 @@ impl RootView {
             system_notifier: NoopSystemNotifier,
             system_notifications_enabled: false,
             ui_text: UiText::english(),
-            theme: WorkbenchTheme::dark(),
+            theme_runtime,
         }
     }
 
@@ -227,6 +241,10 @@ impl RootView {
 
     pub fn toggle_sidebar(&mut self) {
         self.sidebar_collapsed = !self.sidebar_collapsed;
+    }
+
+    pub fn theme_runtime(&self) -> &ThemeRuntime {
+        &self.theme_runtime
     }
 
     pub fn active_palette(&self) -> Option<&ActivePalette> {
@@ -1056,7 +1074,7 @@ impl RootView {
         let Some((project_id, project_path, project_title, tab_id, tab_title, layout)) =
             self.selected_tab_layout_clone()
         else {
-            return project_empty_terminal_state(cx, &self.ui_text, &self.theme);
+            return project_empty_terminal_state(cx, &self.ui_text, &self.theme_runtime.ui);
         };
 
         let focused_pane_id = self.selected_focused_pane_id().map(ToOwned::to_owned);
@@ -1072,8 +1090,8 @@ impl RootView {
         div()
             .flex()
             .flex_1()
-            .bg(self.theme.terminal_background)
-            .text_color(self.theme.text)
+            .bg(self.theme_runtime.ui.terminal_background)
+            .text_color(self.theme_runtime.ui.text)
             .child(self.terminal_split_view_for_layout(&layout, &tree_input, window, cx))
     }
 
@@ -1111,7 +1129,7 @@ impl RootView {
 
                 container
                     .child(split_child(left, basis.left))
-                    .child(Self::split_resize_handle(split.direction, cx))
+                    .child(self.split_resize_handle(split.direction, cx))
                     .child(split_child(right, basis.right))
             }
         }
@@ -1157,7 +1175,9 @@ impl RootView {
                 pane: input.pane.clone(),
                 is_focused: input.is_focused,
             };
-            let pane_view = cx.new(|cx| TerminalPaneView::new(context, cx));
+            let terminal_config = self.theme_runtime.to_terminal_config();
+            let theme = self.theme_runtime.ui;
+            let pane_view = cx.new(|cx| TerminalPaneView::new(context, terminal_config, theme, cx));
             let subscription = cx.subscribe_in(&pane_view, window, Self::on_terminal_pane_event);
             self.terminal_pane_subscriptions
                 .insert(key.clone(), subscription);
@@ -1173,7 +1193,7 @@ impl RootView {
         }
 
         let border_color = if input.is_focused {
-            self.theme.focused_pane_border
+            self.theme_runtime.ui.focused_pane_border
         } else {
             rgba(0x00000000)
         };
@@ -1182,7 +1202,7 @@ impl RootView {
             .flex_1()
             .border_1()
             .border_color(border_color)
-            .bg(self.theme.terminal_background);
+            .bg(self.theme_runtime.ui.terminal_background);
         wrapper
             .interactivity()
             .on_click(cx.listener(move |this, _, _window, cx| {
@@ -1235,9 +1255,9 @@ impl RootView {
         }
     }
 
-    fn split_resize_handle(direction: SplitDirection, cx: &mut Context<Self>) -> AnyElement {
+    fn split_resize_handle(&self, direction: SplitDirection, cx: &mut Context<Self>) -> AnyElement {
         let style = Self::visible_split_handle_style(direction);
-        let theme = WorkbenchTheme::dark();
+        let theme = self.theme_runtime.ui;
         let mut handle = div()
             .id(match direction {
                 SplitDirection::Horizontal => "horizontal-split-resize-handle",
@@ -1826,7 +1846,7 @@ impl Render for RootView {
         let focus_handle = self.root_focus_handle(cx);
 
         let body = if self.workspace.opened_projects().is_empty() {
-            empty_workspace(cx, &self.ui_text, &self.theme)
+            empty_workspace(cx, &self.ui_text, &self.theme_runtime.ui)
         } else {
             let split_view = self.active_terminal_split_view(window, cx);
 
@@ -1834,10 +1854,11 @@ impl Render for RootView {
                 .flex()
                 .flex_1()
                 .relative()
-                .bg(self.theme.app_background)
-                .text_color(self.theme.text)
+                .bg(self.theme_runtime.ui.app_background)
+                .text_color(self.theme_runtime.ui.text)
                 .child(project_sidebar(
                     &self.workspace,
+                    self.theme_runtime.ui,
                     self.sidebar_collapsed,
                     cx.listener(|this, _, _window, cx| {
                         this.toggle_sidebar();
@@ -1859,6 +1880,7 @@ impl Render for RootView {
                         .flex_1()
                         .child(project_tabs(
                             &self.workspace,
+                            self.theme_runtime.ui,
                             |tab_id| {
                                 cx.listener(move |this, event: &ClickEvent, _window, cx| {
                                     let _ =
@@ -1895,9 +1917,12 @@ impl Render for RootView {
             .flex_col()
             .size_full()
             .relative()
-            .bg(self.theme.app_background)
-            .text_color(self.theme.text)
-            .child(workbench_titlebar(self.visible_titlebar_info(), self.theme))
+            .bg(self.theme_runtime.ui.app_background)
+            .text_color(self.theme_runtime.ui.text)
+            .child(workbench_titlebar(
+                self.visible_titlebar_info(),
+                self.theme_runtime.ui,
+            ))
             .child(body);
 
         if let Some(active_palette) = self.active_palette.clone() {
@@ -1909,7 +1934,7 @@ impl Render for RootView {
                     &self.ui_text,
                     &query_input,
                     &self.palette_scroll_handle,
-                    self.theme,
+                    self.theme_runtime.ui,
                     |selected_index| {
                         cx.listener(move |this, _, _window, cx| {
                             if let Some(active_palette) = &mut this.active_palette {
@@ -1927,11 +1952,20 @@ impl Render for RootView {
         }
         if self.pending_tab_rename.is_some() {
             if let Some(input) = self.tab_rename_input(window, cx) {
-                root = root.child(tab_rename_dialog(cx, &self.ui_text, &input, self.theme));
+                root = root.child(tab_rename_dialog(
+                    cx,
+                    &self.ui_text,
+                    &input,
+                    self.theme_runtime.ui,
+                ));
             }
         }
         if self.pending_close_project_id.is_some() {
-            root = root.child(close_project_dialog(cx, &self.ui_text));
+            root = root.child(close_project_dialog(
+                cx,
+                &self.ui_text,
+                self.theme_runtime.ui,
+            ));
         }
         if let Some(notification_layer) = ComponentRoot::render_notification_layer(window, cx) {
             root = root.child(notification_layer);
@@ -2129,6 +2163,70 @@ fn load_keybindings_messages(
     }
 }
 
+fn load_theme_runtime_messages(paths: &AppConfigPaths) -> (ThemeRuntime, Vec<String>) {
+    let mut warnings = Vec::new();
+    let settings = match load_or_create_settings(paths) {
+        Ok(loaded) => {
+            warnings.extend(loaded.warnings.iter().map(format_settings_warning_line));
+            loaded.settings
+        }
+        Err(error) => {
+            warnings.push(error.to_string());
+            AppSettings::default()
+        }
+    };
+
+    let theme_store = match load_theme_store(paths) {
+        Ok(loaded) => {
+            warnings.extend(loaded.warnings.iter().map(format_theme_warning_line));
+            loaded.store
+        }
+        Err(error) => {
+            warnings.push(error.to_string());
+            ThemeStore::builtin()
+        }
+    };
+
+    (ThemeRuntime::resolve(&settings, &theme_store), warnings)
+}
+
+fn combine_load_messages(left: Option<String>, right: Option<String>) -> Option<String> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(format!("{left}; {right}")),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    }
+}
+
+fn format_settings_warning_line(warning: &SettingsLoadWarning) -> String {
+    match warning {
+        SettingsLoadWarning::InvalidToml { path, message } => {
+            format!("Settings {}: {message}", path.display())
+        }
+        SettingsLoadWarning::InvalidTerminalValue { field } => {
+            format!("Settings terminal.{field} is invalid; using default")
+        }
+    }
+}
+
+fn format_theme_warning_line(warning: &ThemeLoadWarning) -> String {
+    match warning {
+        ThemeLoadWarning::ReadDir { path, message } => {
+            format!("Themes {}: {message}", path.display())
+        }
+        ThemeLoadWarning::ReadFile { path, message } => {
+            format!("Theme {}: {message}", path.display())
+        }
+        ThemeLoadWarning::ParseFile { path, message } => {
+            format!("Theme {}: {message}", path.display())
+        }
+        ThemeLoadWarning::InvalidColor { theme, field } => {
+            format!("Theme {theme} has invalid color {field}; using fallback")
+        }
+    }
+}
+
 fn format_keybinding_warning_lines(warnings: &[KeybindingLoadWarning]) -> Vec<String> {
     warnings
         .iter()
@@ -2186,6 +2284,7 @@ fn tab_rename_dialog(
     input: &Entity<InputState>,
     theme: WorkbenchTheme,
 ) -> Div {
+    let dialog = yttt_dialog_style(theme);
     div()
         .absolute()
         .top_0()
@@ -2196,31 +2295,30 @@ fn tab_rename_dialog(
         .items_start()
         .justify_center()
         .pt_16()
-        .bg(rgba(0x00000066))
+        .bg(dialog.overlay)
         .child(
             div()
                 .flex()
                 .flex_col()
                 .gap_3()
-                .w_96()
-                .rounded_md()
+                .w(dialog.max_width)
+                .rounded(dialog.radius)
                 .border_1()
-                .border_color(theme.border_strong)
-                .bg(theme.surface)
-                .p_4()
-                .text_color(theme.text)
-                .shadow_lg()
+                .border_color(dialog.border)
+                .bg(dialog.background)
+                .p(dialog.padding)
+                .text_color(dialog.text)
                 .child(
                     div()
                         .text_sm()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(ui_text.get(UiTextKey::RenameTabTitle)),
                 )
-                .child(Input::new(input).cleanable(false).appearance(false))
+                .child(yttt_dialog_input(input, theme))
                 .child(
                     div()
                         .text_xs()
-                        .text_color(theme.text_subtle)
+                        .text_color(dialog.hint)
                         .child(ui_text.get(UiTextKey::RenameTabHint)),
                 )
                 .child(
@@ -2228,29 +2326,38 @@ fn tab_rename_dialog(
                         .flex()
                         .justify_end()
                         .gap_2()
-                        .child(
-                            Button::new("cancel-tab-rename")
-                                .label(ui_text.get(UiTextKey::Cancel))
-                                .outline()
-                                .on_click(cx.listener(|this, _, _window, cx| {
-                                    this.cancel_tab_rename_dialog();
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            Button::new("confirm-tab-rename")
-                                .label(ui_text.get(UiTextKey::RenameTabAction))
-                                .primary()
-                                .on_click(cx.listener(|this, _, _window, cx| {
-                                    let _ = this.confirm_tab_rename_dialog_from_input(cx);
-                                    cx.notify();
-                                })),
-                        ),
+                        .child(yttt_dialog_button(
+                            cx,
+                            "cancel-tab-rename",
+                            ui_text.get(UiTextKey::Cancel),
+                            YtttButtonVariant::Secondary,
+                            theme,
+                            cx.listener(|this, _, _window, cx| {
+                                this.cancel_tab_rename_dialog();
+                                cx.notify();
+                            }),
+                        ))
+                        .child(yttt_dialog_button(
+                            cx,
+                            "confirm-tab-rename",
+                            ui_text.get(UiTextKey::RenameTabAction),
+                            YtttButtonVariant::Primary,
+                            theme,
+                            cx.listener(|this, _, _window, cx| {
+                                let _ = this.confirm_tab_rename_dialog_from_input(cx);
+                                cx.notify();
+                            }),
+                        )),
                 ),
         )
 }
 
-fn close_project_dialog(cx: &mut Context<RootView>, ui_text: &UiText) -> Div {
+fn close_project_dialog(
+    cx: &mut Context<RootView>,
+    ui_text: &UiText,
+    theme: WorkbenchTheme,
+) -> Div {
+    let dialog = yttt_dialog_style(theme);
     div()
         .absolute()
         .top_0()
@@ -2260,22 +2367,23 @@ fn close_project_dialog(cx: &mut Context<RootView>, ui_text: &UiText) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .bg(rgba(0x00000099))
+        .bg(dialog.overlay)
         .child(
             div()
                 .flex()
                 .flex_col()
                 .gap_3()
-                .w_96()
-                .rounded_md()
+                .w(dialog.max_width)
+                .rounded(dialog.radius)
                 .border_1()
-                .border_color(rgb(0x3a3a3a))
-                .bg(rgb(0x151515))
-                .p_4()
-                .text_color(rgb(0xf5f5f5))
+                .border_color(dialog.border)
+                .bg(dialog.background)
+                .p(dialog.padding)
+                .text_color(dialog.text)
                 .child(
                     div()
-                        .text_lg()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(ui_text.get(UiTextKey::CloseProjectTitle)),
                 )
                 .child(
@@ -2288,7 +2396,7 @@ fn close_project_dialog(cx: &mut Context<RootView>, ui_text: &UiText) -> Div {
                 .child(
                     div()
                         .text_xs()
-                        .text_color(rgb(0x737373))
+                        .text_color(dialog.hint)
                         .child("Enter to close, Escape to cancel"),
                 )
                 .child(
@@ -2296,26 +2404,73 @@ fn close_project_dialog(cx: &mut Context<RootView>, ui_text: &UiText) -> Div {
                         .flex()
                         .justify_end()
                         .gap_2()
-                        .child(
-                            Button::new("cancel-close-project")
-                                .label(ui_text.get(UiTextKey::Cancel))
-                                .outline()
-                                .on_click(cx.listener(|this, _, _window, cx| {
-                                    this.cancel_pending_project_close();
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            Button::new("confirm-close-project")
-                                .label(ui_text.get(UiTextKey::CloseProjectAction))
-                                .danger()
-                                .on_click(cx.listener(|this, _, _window, cx| {
-                                    let _ = this.confirm_pending_project_close();
-                                    cx.notify();
-                                })),
-                        ),
+                        .child(yttt_dialog_button(
+                            cx,
+                            "cancel-close-project",
+                            ui_text.get(UiTextKey::Cancel),
+                            YtttButtonVariant::Secondary,
+                            theme,
+                            cx.listener(|this, _, _window, cx| {
+                                this.cancel_pending_project_close();
+                                cx.notify();
+                            }),
+                        ))
+                        .child(yttt_dialog_button(
+                            cx,
+                            "confirm-close-project",
+                            ui_text.get(UiTextKey::CloseProjectAction),
+                            YtttButtonVariant::Danger,
+                            theme,
+                            cx.listener(|this, _, _window, cx| {
+                                let _ = this.confirm_pending_project_close();
+                                cx.notify();
+                            }),
+                        )),
                 ),
         )
+}
+
+fn yttt_dialog_input(input: &Entity<InputState>, theme: WorkbenchTheme) -> Div {
+    let style = yttt_input_style(YtttInputKind::Dialog, theme);
+    div()
+        .flex()
+        .items_center()
+        .h(style.height)
+        .rounded(style.radius)
+        .border_1()
+        .border_color(style.border)
+        .bg(style.background)
+        .px_2()
+        .text_color(style.text)
+        .child(Input::new(input).cleanable(false).appearance(false))
+}
+
+fn yttt_dialog_button<H>(
+    cx: &mut Context<RootView>,
+    id: &'static str,
+    label: &'static str,
+    variant: YtttButtonVariant,
+    theme: WorkbenchTheme,
+    on_click: H,
+) -> Button
+where
+    H: Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
+{
+    let style = yttt_button_style(variant, theme);
+    let variant = ButtonCustomVariant::new(cx)
+        .color(style.background.into())
+        .foreground(style.text.into())
+        .border(style.border.into())
+        .hover(style.hover_background.into())
+        .active(style.background.into())
+        .shadow(false);
+
+    Button::new(id)
+        .label(label)
+        .compact()
+        .rounded(style.radius)
+        .custom(variant)
+        .on_click(on_click)
 }
 
 fn empty_workspace(cx: &mut Context<RootView>, ui_text: &UiText, theme: &WorkbenchTheme) -> Div {

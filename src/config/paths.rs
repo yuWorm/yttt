@@ -48,6 +48,14 @@ impl AppConfigPaths {
     pub fn keybindings_file(&self) -> PathBuf {
         self.config_dir.join("keybindings.toml")
     }
+
+    pub fn settings_file(&self) -> PathBuf {
+        self.config_dir.join("settings.toml")
+    }
+
+    pub fn themes_dir(&self) -> PathBuf {
+        self.config_dir.join("themes")
+    }
 }
 
 fn fallback_config_dir() -> PathBuf {

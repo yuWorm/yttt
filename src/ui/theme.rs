@@ -1,6 +1,13 @@
-use gpui::{Pixels, Rgba, px, rgb};
+use gpui::{Edges, Pixels, Rgba, px, rgb};
+use gpui_component::{ThemeConfig, ThemeConfigColors, ThemeMode};
+use gpui_terminal::{ColorPalette, TerminalConfig};
 
-#[derive(Clone, Copy, Debug)]
+use crate::config::{
+    settings::{AppSettings, TerminalSettings},
+    theme::ThemeStore,
+};
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WorkbenchTheme {
     pub app_background: Rgba,
     pub surface: Rgba,
@@ -26,7 +33,6 @@ pub struct WorkbenchTheme {
     pub focused_pane_border: Rgba,
     pub split_line_width: Pixels,
     pub split_hit_area_width: Pixels,
-    pub terminal_font_size: Pixels,
 }
 
 impl WorkbenchTheme {
@@ -56,7 +62,263 @@ impl WorkbenchTheme {
             focused_pane_border: rgb(0x6f7785),
             split_line_width: px(1.0),
             split_hit_area_width: px(7.0),
-            terminal_font_size: px(13.0),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AppTheme {
+    pub name: String,
+    pub mode: ThemeMode,
+    pub ui: WorkbenchTheme,
+    pub terminal: TerminalTheme,
+}
+
+impl AppTheme {
+    pub fn builtin_dark() -> Self {
+        let ui = WorkbenchTheme::dark();
+        Self {
+            name: "yttt-dark".to_string(),
+            mode: ThemeMode::Dark,
+            terminal: TerminalTheme::from_workbench_theme(ui),
+            ui,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ThemeRuntime {
+    pub theme_name: String,
+    pub mode: ThemeMode,
+    pub ui: WorkbenchTheme,
+    pub terminal: TerminalTheme,
+    pub terminal_settings: TerminalSettings,
+}
+
+impl ThemeRuntime {
+    pub fn resolve(settings: &AppSettings, store: &ThemeStore) -> Self {
+        let selected = store
+            .theme(&settings.theme.name)
+            .or_else(|| store.theme("yttt-dark"))
+            .cloned()
+            .unwrap_or_else(AppTheme::builtin_dark);
+        let terminal = settings
+            .theme
+            .terminal
+            .as_deref()
+            .and_then(|terminal_theme| store.theme(terminal_theme))
+            .map(|theme| theme.terminal.clone())
+            .unwrap_or_else(|| selected.terminal.clone());
+
+        Self {
+            theme_name: selected.name,
+            mode: selected.mode,
+            ui: selected.ui,
+            terminal,
+            terminal_settings: settings.terminal.clone(),
+        }
+    }
+
+    pub fn to_gpui_component_theme_config(&self) -> ThemeConfig {
+        let theme = self.ui;
+        let mut colors = ThemeConfigColors::default();
+        colors.background = Some(color_hex(theme.app_background).into());
+        colors.foreground = Some(color_hex(theme.text).into());
+        colors.border = Some(color_hex(theme.border).into());
+        colors.input = Some(color_hex(theme.border).into());
+        colors.muted = Some(color_hex(theme.surface).into());
+        colors.muted_foreground = Some(color_hex(theme.text_subtle).into());
+        colors.primary = Some(color_hex(theme.active_surface).into());
+        colors.primary_foreground = Some(color_hex(theme.text).into());
+        colors.primary_hover = Some(color_hex(theme.hover_surface).into());
+        colors.primary_active = Some(color_hex(theme.active_surface).into());
+        colors.secondary = Some(color_hex(theme.surface_elevated).into());
+        colors.secondary_foreground = Some(color_hex(theme.text_muted).into());
+        colors.secondary_hover = Some(color_hex(theme.hover_surface).into());
+        colors.secondary_active = Some(color_hex(theme.active_surface).into());
+        colors.accent = Some(color_hex(theme.hover_surface).into());
+        colors.caret = Some(color_hex(theme.accent).into());
+        colors.list = Some(color_hex(theme.surface_elevated).into());
+        colors.list_active = Some(color_hex(theme.active_surface).into());
+        colors.list_active_border = Some(color_hex(theme.active_surface).into());
+        colors.list_hover = Some(color_hex(theme.hover_surface).into());
+        colors.popover = Some(color_hex(theme.surface).into());
+        colors.popover_foreground = Some(color_hex(theme.text).into());
+        colors.selection = Some(color_hex(theme.active_surface).into());
+        colors.sidebar = Some(color_hex(theme.sidebar_background).into());
+        colors.sidebar_foreground = Some(color_hex(theme.text_muted).into());
+        colors.sidebar_primary = Some(color_hex(theme.active_surface).into());
+        colors.sidebar_primary_foreground = Some(color_hex(theme.text).into());
+        colors.success = Some(color_hex(theme.success).into());
+        colors.success_foreground = Some(color_hex(theme.text).into());
+        colors.warning = Some(color_hex(theme.warning).into());
+        colors.warning_foreground = Some(color_hex(theme.text).into());
+        colors.danger = Some(color_hex(theme.danger).into());
+        colors.danger_foreground = Some(color_hex(theme.text).into());
+        colors.title_bar = Some(color_hex(theme.titlebar_background).into());
+        colors.title_bar_border = Some(color_hex(theme.border).into());
+        colors.window_border = Some(color_hex(theme.border).into());
+
+        let mut config = ThemeConfig::default();
+        config.name = self.theme_name.clone().into();
+        config.mode = self.mode;
+        config.radius = Some(6);
+        config.radius_lg = Some(8);
+        config.shadow = Some(false);
+        config.colors = colors;
+        config
+    }
+
+    pub fn to_terminal_config(&self) -> TerminalConfig {
+        TerminalConfig {
+            cols: 80,
+            rows: 24,
+            font_family: self.terminal_settings.font_family.clone(),
+            font_size: px(self.terminal_settings.font_size),
+            scrollback: self.terminal_settings.scrollback,
+            line_height_multiplier: self.terminal_settings.line_height,
+            padding: Edges::all(px(self.terminal_settings.padding)),
+            colors: self.terminal.to_color_palette(),
+        }
+    }
+}
+
+impl Default for ThemeRuntime {
+    fn default() -> Self {
+        Self::resolve(&AppSettings::default(), &ThemeStore::builtin())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerminalTheme {
+    pub background: Rgba,
+    pub foreground: Rgba,
+    pub cursor: Option<Rgba>,
+    pub selection_background: Option<Rgba>,
+    pub normal: AnsiColors,
+    pub bright: AnsiColors,
+    pub indexed_colors: Vec<IndexedColor>,
+}
+
+impl TerminalTheme {
+    pub fn from_workbench_theme(theme: WorkbenchTheme) -> Self {
+        Self {
+            background: theme.terminal_background,
+            foreground: theme.text,
+            cursor: Some(theme.text),
+            selection_background: Some(theme.active_surface),
+            normal: AnsiColors::default_normal(),
+            bright: AnsiColors::default_bright(),
+            indexed_colors: Vec::new(),
+        }
+    }
+
+    pub fn to_color_palette(&self) -> ColorPalette {
+        let (background_r, background_g, background_b) = color_bytes(self.background);
+        let (foreground_r, foreground_g, foreground_b) = color_bytes(self.foreground);
+        let cursor = self.cursor.unwrap_or(self.foreground);
+        let (cursor_r, cursor_g, cursor_b) = color_bytes(cursor);
+
+        let mut builder = ColorPalette::builder()
+            .background(background_r, background_g, background_b)
+            .foreground(foreground_r, foreground_g, foreground_b)
+            .cursor(cursor_r, cursor_g, cursor_b);
+
+        let (r, g, b) = color_bytes(self.normal.black);
+        builder = builder.black(r, g, b);
+        let (r, g, b) = color_bytes(self.normal.red);
+        builder = builder.red(r, g, b);
+        let (r, g, b) = color_bytes(self.normal.green);
+        builder = builder.green(r, g, b);
+        let (r, g, b) = color_bytes(self.normal.yellow);
+        builder = builder.yellow(r, g, b);
+        let (r, g, b) = color_bytes(self.normal.blue);
+        builder = builder.blue(r, g, b);
+        let (r, g, b) = color_bytes(self.normal.magenta);
+        builder = builder.magenta(r, g, b);
+        let (r, g, b) = color_bytes(self.normal.cyan);
+        builder = builder.cyan(r, g, b);
+        let (r, g, b) = color_bytes(self.normal.white);
+        builder = builder.white(r, g, b);
+
+        let (r, g, b) = color_bytes(self.bright.black);
+        builder = builder.bright_black(r, g, b);
+        let (r, g, b) = color_bytes(self.bright.red);
+        builder = builder.bright_red(r, g, b);
+        let (r, g, b) = color_bytes(self.bright.green);
+        builder = builder.bright_green(r, g, b);
+        let (r, g, b) = color_bytes(self.bright.yellow);
+        builder = builder.bright_yellow(r, g, b);
+        let (r, g, b) = color_bytes(self.bright.blue);
+        builder = builder.bright_blue(r, g, b);
+        let (r, g, b) = color_bytes(self.bright.magenta);
+        builder = builder.bright_magenta(r, g, b);
+        let (r, g, b) = color_bytes(self.bright.cyan);
+        builder = builder.bright_cyan(r, g, b);
+        let (r, g, b) = color_bytes(self.bright.white);
+        builder = builder.bright_white(r, g, b);
+
+        builder.build()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AnsiColors {
+    pub black: Rgba,
+    pub red: Rgba,
+    pub green: Rgba,
+    pub yellow: Rgba,
+    pub blue: Rgba,
+    pub magenta: Rgba,
+    pub cyan: Rgba,
+    pub white: Rgba,
+}
+
+impl AnsiColors {
+    pub fn default_normal() -> Self {
+        Self {
+            black: rgb(0x000000),
+            red: rgb(0xcc0000),
+            green: rgb(0x4e9a06),
+            yellow: rgb(0xc4a000),
+            blue: rgb(0x3465a4),
+            magenta: rgb(0x75507b),
+            cyan: rgb(0x06989a),
+            white: rgb(0xd3d7cf),
+        }
+    }
+
+    pub fn default_bright() -> Self {
+        Self {
+            black: rgb(0x555753),
+            red: rgb(0xef2929),
+            green: rgb(0x8ae234),
+            yellow: rgb(0xfce94f),
+            blue: rgb(0x729fcf),
+            magenta: rgb(0xad7fa8),
+            cyan: rgb(0x34e2e2),
+            white: rgb(0xeeeeec),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IndexedColor {
+    pub index: u8,
+    pub color: Rgba,
+}
+
+fn color_hex(color: Rgba) -> String {
+    let r = (color.r.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let g = (color.g.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let b = (color.b.clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!("#{r:02x}{g:02x}{b:02x}")
+}
+
+fn color_bytes(color: Rgba) -> (u8, u8, u8) {
+    (
+        (color.r.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (color.g.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (color.b.clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
 }

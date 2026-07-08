@@ -1,9 +1,7 @@
 use std::path::PathBuf;
 
-use gpui::{
-    Context, Edges, Entity, EventEmitter, IntoElement, Render, Window, div, prelude::*, px, rgb,
-};
-use gpui_terminal::{ColorPalette, TerminalConfig, TerminalView};
+use gpui::{Context, Entity, EventEmitter, IntoElement, Render, Window, div, prelude::*};
+use gpui_terminal::{TerminalConfig, TerminalView};
 
 use crate::{
     model::layout::{PaneConfig, PaneKind},
@@ -15,6 +13,7 @@ use crate::{
             spawn_portable_pty_session,
         },
     },
+    ui::theme::WorkbenchTheme,
 };
 
 #[derive(Clone, Debug)]
@@ -91,6 +90,8 @@ pub struct TerminalPaneView {
     kind: PaneKind,
     notify_on_exit: bool,
     terminal: Option<Entity<TerminalView>>,
+    terminal_config: TerminalConfig,
+    theme: WorkbenchTheme,
     session: Option<PortablePtySession>,
     lifecycle: PaneLifecycle,
     launch_error: Option<String>,
@@ -103,7 +104,12 @@ pub struct TerminalPaneChrome {
 }
 
 impl TerminalPaneView {
-    pub fn new(context: TerminalPaneContext, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        context: TerminalPaneContext,
+        terminal_config: TerminalConfig,
+        theme: WorkbenchTheme,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let TerminalPaneContext {
             project_id,
             project_path,
@@ -131,6 +137,8 @@ impl TerminalPaneView {
                     kind: pane.kind,
                     notify_on_exit: pane.notify_on_exit,
                     terminal: None,
+                    terminal_config,
+                    theme,
                     session: None,
                     lifecycle: PaneLifecycle::SpawnFailed {
                         message: message.clone(),
@@ -155,6 +163,8 @@ impl TerminalPaneView {
                 kind: pane.kind,
                 notify_on_exit: pane.notify_on_exit,
                 terminal: None,
+                terminal_config,
+                theme,
                 session: Some(session),
                 lifecycle: PaneLifecycle::SpawnFailed {
                     message: message.clone(),
@@ -166,8 +176,9 @@ impl TerminalPaneView {
 
         let resize_handle = session.resize_handle();
         let parent = cx.weak_entity();
+        let initial_config = terminal_config.clone();
         let terminal = cx.new(|cx| {
-            TerminalView::new(io.writer, io.reader, terminal_config(), cx)
+            TerminalView::new(io.writer, io.reader, initial_config, cx)
                 .with_resize_callback(move |cols, rows| {
                     let _ = resize_handle.resize(cols, rows);
                 })
@@ -190,6 +201,8 @@ impl TerminalPaneView {
             kind: pane.kind,
             notify_on_exit: pane.notify_on_exit,
             terminal: Some(terminal),
+            terminal_config,
+            theme,
             session: Some(session),
             lifecycle: PaneLifecycle::Running,
             launch_error: None,
@@ -259,6 +272,15 @@ impl TerminalPaneView {
             shows_header: false,
         }
     }
+
+    pub fn update_terminal_config(&mut self, config: TerminalConfig, cx: &mut Context<Self>) {
+        if let Some(terminal) = &self.terminal {
+            terminal.update(cx, |terminal, cx| {
+                terminal.update_config(config.clone(), cx);
+            });
+        }
+        self.terminal_config = config;
+    }
 }
 
 impl EventEmitter<TerminalPaneEvent> for TerminalPaneView {}
@@ -289,8 +311,8 @@ impl Render for TerminalPaneView {
                 .flex_1()
                 .items_center()
                 .justify_center()
-                .bg(rgb(0x111111))
-                .text_color(rgb(0xef4444))
+                .bg(self.theme.terminal_background)
+                .text_color(self.theme.danger)
                 .children(spawn_failure_lines(&failure))
         };
 
@@ -298,7 +320,7 @@ impl Render for TerminalPaneView {
             .flex()
             .flex_col()
             .flex_1()
-            .bg(rgb(0x111111))
+            .bg(self.theme.terminal_background)
             .child(body)
     }
 }
@@ -359,17 +381,4 @@ pub fn notification_for_terminal_pane_exit(
         tab_title: input.tab_title,
         pane_title: input.pane_title,
     })
-}
-
-fn terminal_config() -> TerminalConfig {
-    TerminalConfig {
-        font_family: "monospace".into(),
-        font_size: px(13.0),
-        cols: 80,
-        rows: 24,
-        scrollback: 10000,
-        line_height_multiplier: 1.15,
-        padding: Edges::all(px(6.0)),
-        colors: ColorPalette::default(),
-    }
 }

@@ -8,6 +8,7 @@ pub mod i18n;
 pub mod macos;
 pub mod palette;
 pub mod palette_surface;
+pub mod primitives;
 pub mod root;
 pub mod sidebar;
 pub mod split_view;

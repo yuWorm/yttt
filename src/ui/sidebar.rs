@@ -30,9 +30,7 @@ pub struct ProjectSidebarStyle {
     pub hover_background: Rgba,
 }
 
-pub fn project_sidebar_style() -> ProjectSidebarStyle {
-    let theme = WorkbenchTheme::dark();
-
+pub fn project_sidebar_style(theme: WorkbenchTheme) -> ProjectSidebarStyle {
     ProjectSidebarStyle {
         width: px(216.0),
         collapsed_width: px(46.0),
@@ -69,6 +67,7 @@ pub fn visible_project_items(workspace: &Workspace) -> Vec<ProjectSidebarItem> {
 
 pub fn project_sidebar<SelectH, SelectF, ToggleH>(
     workspace: &Workspace,
+    theme: WorkbenchTheme,
     collapsed: bool,
     on_toggle_sidebar: ToggleH,
     mut on_select_project: SelectF,
@@ -78,8 +77,7 @@ where
     SelectF: FnMut(String) -> SelectH,
     ToggleH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    let style = project_sidebar_style();
-    let theme = WorkbenchTheme::dark();
+    let style = project_sidebar_style(theme);
     let width = if collapsed {
         style.collapsed_width
     } else {
