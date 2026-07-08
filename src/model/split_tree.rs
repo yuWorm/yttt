@@ -12,6 +12,14 @@ pub enum FocusDirection {
     Down,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResizeDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum SplitNode {
     Pane {
@@ -92,8 +100,31 @@ impl SplitTree {
         Ok(())
     }
 
+    pub fn resize_focused(
+        &mut self,
+        direction: ResizeDirection,
+        delta: f32,
+    ) -> Result<(), SplitTreeError> {
+        let Some(focused_pane_id) = self.focused_pane_id.clone() else {
+            return Err(SplitTreeError::NoFocusedPane);
+        };
+
+        if self.root.resize_pane(&focused_pane_id, direction, delta) {
+            Ok(())
+        } else {
+            Err(SplitTreeError::NoResizableSplit)
+        }
+    }
+
     pub fn focused_pane_id(&self) -> Option<&str> {
         self.focused_pane_id.as_deref()
+    }
+
+    pub fn root_ratio(&self) -> Option<f32> {
+        match &self.root {
+            SplitNode::Pane { .. } => None,
+            SplitNode::Split { ratio, .. } => Some(*ratio),
+        }
     }
 
     pub fn pane_ids(&self) -> Vec<&str> {
@@ -197,6 +228,45 @@ impl SplitNode {
         }
     }
 
+    fn resize_pane(
+        &mut self,
+        target_id: &str,
+        resize_direction: ResizeDirection,
+        delta: f32,
+    ) -> bool {
+        match self {
+            Self::Pane { .. } => false,
+            Self::Split {
+                direction,
+                ratio,
+                first,
+                second,
+            } => {
+                if first.resize_pane(target_id, resize_direction, delta)
+                    || second.resize_pane(target_id, resize_direction, delta)
+                {
+                    return true;
+                }
+
+                let target_in_first = first.contains_pane(target_id);
+                let target_in_second = second.contains_pane(target_id);
+                if !target_in_first && !target_in_second {
+                    return false;
+                }
+
+                let adjustment = match (*direction, resize_direction) {
+                    (SplitDirection::Horizontal, ResizeDirection::Right)
+                    | (SplitDirection::Vertical, ResizeDirection::Down) => delta,
+                    (SplitDirection::Horizontal, ResizeDirection::Left)
+                    | (SplitDirection::Vertical, ResizeDirection::Up) => -delta,
+                    _ => return false,
+                };
+                *ratio = (*ratio + adjustment).clamp(0.1, 0.9);
+                true
+            }
+        }
+    }
+
     fn first_pane_id(&self) -> Option<&str> {
         match self {
             Self::Pane { id } => Some(id),
@@ -232,4 +302,6 @@ pub enum SplitTreeError {
     CannotCloseLastPane,
     #[error("no adjacent pane in that direction")]
     NoAdjacentPane,
+    #[error("no resizable split in that direction")]
+    NoResizableSplit,
 }

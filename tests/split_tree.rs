@@ -1,4 +1,4 @@
-use yttt::model::split_tree::{FocusDirection, SplitDirection, SplitTree};
+use yttt::model::split_tree::{FocusDirection, ResizeDirection, SplitDirection, SplitTree};
 
 #[test]
 fn splits_focused_pane_vertically() {
@@ -47,4 +47,40 @@ fn focuses_up_and_down_across_vertical_split() {
 
     tree.focus_direction(FocusDirection::Down).unwrap();
     assert_eq!(tree.focused_pane_id(), Some("bottom"));
+}
+
+#[test]
+fn resizes_focused_pane_across_horizontal_split() {
+    let mut tree = SplitTree::single("left");
+    tree.split_focused(SplitDirection::Horizontal, "right")
+        .unwrap();
+    tree.focus_direction(FocusDirection::Left).unwrap();
+
+    tree.resize_focused(ResizeDirection::Right, 0.1).unwrap();
+    assert_ratio(tree.root_ratio(), 0.6);
+
+    tree.resize_focused(ResizeDirection::Left, 0.2).unwrap();
+    assert_ratio(tree.root_ratio(), 0.4);
+}
+
+#[test]
+fn clamps_split_resize_ratio() {
+    let mut tree = SplitTree::single("left");
+    tree.split_focused(SplitDirection::Horizontal, "right")
+        .unwrap();
+    tree.focus_direction(FocusDirection::Left).unwrap();
+
+    tree.resize_focused(ResizeDirection::Right, 2.0).unwrap();
+    assert_ratio(tree.root_ratio(), 0.9);
+
+    tree.resize_focused(ResizeDirection::Left, 2.0).unwrap();
+    assert_ratio(tree.root_ratio(), 0.1);
+}
+
+fn assert_ratio(actual: Option<f32>, expected: f32) {
+    let actual = actual.unwrap();
+    assert!(
+        (actual - expected).abs() < 0.001,
+        "expected ratio {expected}, got {actual}"
+    );
 }
