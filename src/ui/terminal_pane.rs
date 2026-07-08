@@ -31,6 +31,20 @@ pub enum TerminalPaneEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PaneLifecycle {
+    Idle,
+    Starting,
+    Running,
+    Exited {
+        code: Option<i32>,
+        reason: ExitReason,
+    },
+    SpawnFailed {
+        message: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalPaneExitInput {
     pub project_title: String,
     pub tab_title: String,
@@ -52,6 +66,7 @@ pub struct TerminalPaneView {
     notify_on_exit: bool,
     terminal: Option<Entity<TerminalView>>,
     session: Option<PortablePtySession>,
+    lifecycle: PaneLifecycle,
     launch_error: Option<String>,
     exit_emitted: bool,
 }
@@ -69,6 +84,7 @@ impl TerminalPaneView {
         ) {
             Ok(session) => session,
             Err(error) => {
+                let message = error.to_string();
                 return Self {
                     project_title,
                     tab_title,
@@ -79,13 +95,17 @@ impl TerminalPaneView {
                     notify_on_exit: pane.notify_on_exit,
                     terminal: None,
                     session: None,
-                    launch_error: Some(error.to_string()),
+                    lifecycle: PaneLifecycle::SpawnFailed {
+                        message: message.clone(),
+                    },
+                    launch_error: Some(message),
                     exit_emitted: false,
                 };
             }
         };
 
         let Some(io) = session.take_io() else {
+            let message = "pty session I/O was already taken".to_string();
             return Self {
                 project_title,
                 tab_title,
@@ -96,7 +116,10 @@ impl TerminalPaneView {
                 notify_on_exit: pane.notify_on_exit,
                 terminal: None,
                 session: Some(session),
-                launch_error: Some("pty session I/O was already taken".to_string()),
+                lifecycle: PaneLifecycle::SpawnFailed {
+                    message: message.clone(),
+                },
+                launch_error: Some(message),
                 exit_emitted: false,
             };
         };
@@ -125,6 +148,7 @@ impl TerminalPaneView {
             notify_on_exit: pane.notify_on_exit,
             terminal: Some(terminal),
             session: Some(session),
+            lifecycle: PaneLifecycle::Running,
             launch_error: None,
             exit_emitted: false,
         }
@@ -141,6 +165,14 @@ impl TerminalPaneView {
             .as_mut()
             .map(|session| session.status())
             .unwrap_or(ProcessStatus::Exited { code: None });
+        let code = match status {
+            ProcessStatus::Running => None,
+            ProcessStatus::Exited { code } => code,
+        };
+        self.lifecycle = PaneLifecycle::Exited {
+            code,
+            reason: exit_reason,
+        };
         let event = notification_for_terminal_pane_exit(TerminalPaneExitInput {
             project_title: self.project_title.clone(),
             tab_title: self.tab_title.clone(),
@@ -193,6 +225,12 @@ impl Render for TerminalPaneView {
                     .truncate()
                     .text_color(rgb(0x737373))
                     .child(self.command.clone()),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(lifecycle_color(&self.lifecycle))
+                    .child(pane_lifecycle_label(&self.lifecycle)),
             );
 
         let body = if let Some(terminal) = &self.terminal {
@@ -205,11 +243,7 @@ impl Render for TerminalPaneView {
                 .justify_center()
                 .bg(rgb(0x111111))
                 .text_color(rgb(0xef4444))
-                .child(
-                    self.launch_error
-                        .clone()
-                        .unwrap_or_else(|| "terminal did not start".to_string()),
-                )
+                .child(terminal_start_error(&self.lifecycle, &self.launch_error))
         };
 
         div()
@@ -219,6 +253,37 @@ impl Render for TerminalPaneView {
             .bg(rgb(0x111111))
             .child(header)
             .child(body)
+    }
+}
+
+pub fn pane_lifecycle_label(lifecycle: &PaneLifecycle) -> String {
+    match lifecycle {
+        PaneLifecycle::Idle => "idle".to_string(),
+        PaneLifecycle::Starting => "starting".to_string(),
+        PaneLifecycle::Running => "running".to_string(),
+        PaneLifecycle::Exited {
+            code: Some(code), ..
+        } => format!("exited {code}"),
+        PaneLifecycle::Exited { code: None, .. } => "exited".to_string(),
+        PaneLifecycle::SpawnFailed { .. } => "spawn failed".to_string(),
+    }
+}
+
+fn terminal_start_error(lifecycle: &PaneLifecycle, launch_error: &Option<String>) -> String {
+    match lifecycle {
+        PaneLifecycle::SpawnFailed { message } => message.clone(),
+        _ => launch_error
+            .clone()
+            .unwrap_or_else(|| "terminal did not start".to_string()),
+    }
+}
+
+fn lifecycle_color(lifecycle: &PaneLifecycle) -> gpui::Rgba {
+    match lifecycle {
+        PaneLifecycle::Running => rgb(0x22c55e),
+        PaneLifecycle::Exited { code: Some(0), .. } => rgb(0xa3a3a3),
+        PaneLifecycle::Exited { .. } | PaneLifecycle::SpawnFailed { .. } => rgb(0xef4444),
+        PaneLifecycle::Idle | PaneLifecycle::Starting => rgb(0xf59e0b),
     }
 }
 

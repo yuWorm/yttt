@@ -11,7 +11,10 @@ use yttt::{
     ui::components::SelectableState,
     ui::palette::visible_palette_rows,
     ui::sidebar::visible_project_items,
-    ui::terminal_pane::{TerminalPaneExitInput, notification_for_terminal_pane_exit},
+    ui::terminal_pane::{
+        PaneLifecycle, TerminalPaneExitInput, notification_for_terminal_pane_exit,
+        pane_lifecycle_label,
+    },
     ui::toast::{ToastTone, visible_toast_items},
     ui::{
         root::RootView,
@@ -328,6 +331,24 @@ fn terminal_pane_agent_exit_builds_notification_event() {
     assert_eq!(event.project_title, "yttt");
     assert_eq!(event.tab_title, "Agent");
     assert_eq!(event.pane_title, "Codex");
+}
+
+#[test]
+fn terminal_pane_lifecycle_labels_are_visible() {
+    assert_eq!(pane_lifecycle_label(&PaneLifecycle::Running), "running");
+    assert_eq!(
+        pane_lifecycle_label(&PaneLifecycle::Exited {
+            code: Some(0),
+            reason: ExitReason::Completed,
+        }),
+        "exited 0"
+    );
+    assert_eq!(
+        pane_lifecycle_label(&PaneLifecycle::SpawnFailed {
+            message: "no such command".to_string(),
+        }),
+        "spawn failed"
+    );
 }
 
 #[test]
