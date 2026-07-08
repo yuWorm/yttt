@@ -1,4 +1,6 @@
-use gpui::{App, ClickEvent, Div, Entity, IntoElement, Window, div, prelude::*, px, rgb, rgba};
+use gpui::{
+    App, ClickEvent, Div, Entity, IntoElement, Pixels, Window, div, prelude::*, px, rgb, rgba,
+};
 use gpui_component::{
     IconName,
     input::{Input, InputState},
@@ -18,6 +20,19 @@ pub struct PaletteRow {
     pub state: SelectableState,
     pub enabled: bool,
     pub disabled_reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaletteSurfaceStyle {
+    pub width: Pixels,
+    pub max_width: Pixels,
+}
+
+pub fn palette_surface_style() -> PaletteSurfaceStyle {
+    PaletteSurfaceStyle {
+        width: px(760.0),
+        max_width: px(900.0),
+    }
 }
 
 pub fn visible_palette_rows(
@@ -60,6 +75,7 @@ where
     F: FnMut(usize) -> H,
 {
     let rows = visible_palette_rows(active_palette, items);
+    let style = palette_surface_style();
 
     div()
         .absolute()
@@ -68,18 +84,18 @@ where
         .items_start()
         .justify_center()
         .pt_16()
-        .bg(rgba(0x00000099))
+        .bg(rgba(0x00000066))
         .child(
             div()
                 .flex()
                 .flex_col()
-                .w(px(560.0))
-                .max_w_full()
+                .w(style.width)
+                .max_w(style.max_width)
                 .rounded_md()
                 .border_1()
-                .border_color(rgb(0x2a2a2a))
-                .bg(rgb(0x151515))
-                .text_color(rgb(0xf5f5f5))
+                .border_color(rgb(0x46505f))
+                .bg(rgb(0x252b34))
+                .text_color(rgb(0xe7edf4))
                 .child(palette_header(active_palette, query_input))
                 .child(palette_items(rows, ui_text, on_confirm_item)),
         )
@@ -91,12 +107,12 @@ fn palette_header(active_palette: &ActivePalette, query_input: &Entity<InputStat
         .flex_col()
         .gap_1()
         .border_b_1()
-        .border_color(rgb(0x2a2a2a))
+        .border_color(rgb(0x343b46))
         .p_3()
         .child(
             div()
                 .text_sm()
-                .text_color(rgb(0xd4d4d4))
+                .text_color(rgb(0xaab4c0))
                 .child(palette_title(active_palette.kind)),
         )
         .child(
@@ -116,7 +132,7 @@ where
         return div()
             .p_4()
             .text_sm()
-            .text_color(rgb(0x737373))
+            .text_color(rgb(0x778391))
             .child(palette_empty_label(ui_text));
     }
 
@@ -135,7 +151,7 @@ where
     } else {
         row.disabled_reason.clone().unwrap_or_default()
     };
-    let title_color = if row.enabled { 0xf5f5f5 } else { 0x737373 };
+    let title_color = if row.enabled { 0xe7edf4 } else { 0x778391 };
 
     ListItem::new(("palette-item", index))
         .selected(row.state == SelectableState::Active)
@@ -156,7 +172,7 @@ where
                 .child(
                     div()
                         .text_xs()
-                        .text_color(rgb(0x8a8a8a))
+                        .text_color(rgb(0x778391))
                         .truncate()
                         .child(row.subtitle.unwrap_or_default()),
                 ),
@@ -164,7 +180,7 @@ where
         .suffix(move |_, _| {
             div()
                 .text_xs()
-                .text_color(rgb(0xa3a3a3))
+                .text_color(rgb(0xaab4c0))
                 .child(status.clone())
         })
 }

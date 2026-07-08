@@ -1,7 +1,7 @@
 use gpui::{
     AnyElement, Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathPromptOptions,
-    Pixels, Point, Render, Subscription, Window, div, prelude::*, px, relative, rgb, rgba,
+    Pixels, Point, Render, Subscription, Window, div, prelude::*, relative, rgb, rgba,
 };
 use gpui_component::{
     Root as ComponentRoot, WindowExt as _,
@@ -42,8 +42,11 @@ use crate::{
         ActivePalette, CommandPaletteContext, PaletteItem, PaletteKind, RecentProject,
         command_palette_items, pane_palette_items, project_palette_items, tab_palette_items,
     },
-    runtime::notification::{
-        NoopSystemNotifier, NotificationEvent, NotificationKind, maybe_notify_system,
+    runtime::{
+        git_status::{ProjectGitStatus, read_project_git_status},
+        notification::{
+            NoopSystemNotifier, NotificationEvent, NotificationKind, maybe_notify_system,
+        },
     },
     ui::{
         actions::{
@@ -63,6 +66,7 @@ use crate::{
         tabs::project_tabs,
         terminal_pane::{TerminalPaneContext, TerminalPaneEvent, TerminalPaneView},
         theme::WorkbenchTheme,
+        titlebar::{TitlebarInfo, compact_path_for_titlebar, workbench_titlebar},
         toast::{ToastQueue, ToastTone, toast_item_for_event},
     },
 };
@@ -87,6 +91,7 @@ pub struct RootView {
     pending_terminal_focus_pane_id: Option<String>,
     terminal_panes: HashMap<String, Entity<TerminalPaneView>>,
     terminal_pane_subscriptions: HashMap<String, Subscription>,
+    project_git_statuses: HashMap<ProjectId, ProjectGitStatus>,
     toast_queue: ToastQueue,
     system_notifier: NoopSystemNotifier,
     system_notifications_enabled: bool,
@@ -107,6 +112,7 @@ struct RenderTerminalPaneInput<'a> {
     pane: &'a PaneConfig,
     tab_id: &'a str,
     tab_title: &'a str,
+    is_focused: bool,
 }
 
 struct RenderTerminalTreeInput<'a> {
@@ -115,12 +121,19 @@ struct RenderTerminalTreeInput<'a> {
     project_title: &'a str,
     tab_id: &'a str,
     tab_title: &'a str,
+    focused_pane_id: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct ActiveSplitResizeDrag {
     direction: SplitDirection,
     last_position: Point<Pixels>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SplitHandleStyle {
+    pub visible_line_width: Pixels,
+    pub hit_area_width: Pixels,
 }
 
 impl RootView {
@@ -168,6 +181,7 @@ impl RootView {
             pending_terminal_focus_pane_id: None,
             terminal_panes: HashMap::new(),
             terminal_pane_subscriptions: HashMap::new(),
+            project_git_statuses: HashMap::new(),
             toast_queue: ToastQueue::default(),
             system_notifier: NoopSystemNotifier,
             system_notifications_enabled: false,
@@ -255,6 +269,7 @@ impl RootView {
                     .map(|project| project.id.clone());
                 if let Some(project_id) = project_id {
                     self.workspace.select_project(&project_id)?;
+                    self.refresh_selected_project_git_status();
                     self.queue_selected_terminal_focus();
                 } else if item.command == CommandId::ProjectOpenRecent {
                     self.open_project_path(PathBuf::from(&item.id))?;
@@ -398,6 +413,35 @@ impl RootView {
             .collect()
     }
 
+    pub fn visible_titlebar_info(&self) -> TitlebarInfo {
+        let Some(selected_project_id) = self.workspace.selected_project_id() else {
+            return TitlebarInfo {
+                project_name: self.ui_text.get(UiTextKey::AppName).to_string(),
+                compact_path: None,
+                git_branch: None,
+                git_counters: None,
+            };
+        };
+        let Some(project) = self.workspace.project(selected_project_id) else {
+            return TitlebarInfo {
+                project_name: self.ui_text.get(UiTextKey::AppName).to_string(),
+                compact_path: None,
+                git_branch: None,
+                git_counters: None,
+            };
+        };
+        let git_status = self.project_git_statuses.get(selected_project_id);
+
+        TitlebarInfo {
+            project_name: project.layout.project.name.clone(),
+            compact_path: Some(compact_path_for_titlebar(
+                &project.path.display().to_string(),
+            )),
+            git_branch: git_status.and_then(|status| status.branch.clone()),
+            git_counters: git_status.and_then(|status| status.summary.compact_counters()),
+        }
+    }
+
     pub fn visible_terminal_pane_contexts(&self) -> Vec<TerminalPaneContext> {
         let Some((project_id, project_path, project_title, tab_id, tab_title, layout)) =
             self.selected_tab_layout_clone()
@@ -406,6 +450,7 @@ impl RootView {
         };
 
         let mut contexts = Vec::new();
+        let focused_pane_id = self.selected_focused_pane_id().map(ToOwned::to_owned);
         collect_terminal_pane_contexts(
             &project_id,
             &project_path,
@@ -413,6 +458,7 @@ impl RootView {
             &tab_id,
             &tab_title,
             &layout,
+            focused_pane_id.as_deref(),
             &mut contexts,
         );
         contexts
@@ -568,6 +614,7 @@ impl RootView {
         let closed = self.workspace.confirm_close_project(&project_id)?;
         self.pending_close_project_id = None;
         self.layout_source_messages.remove(&closed.project_id);
+        self.project_git_statuses.remove(&closed.project_id);
         self.remove_terminal_panes_for_project(closed.project_id.as_str());
         Ok(())
     }
@@ -583,7 +630,9 @@ impl RootView {
         match open_project_config(&self.config_paths, project_path.as_ref()) {
             Ok(opened) => {
                 let source_message = layout_source_message(&opened.layout_source);
+                let opened_path = opened.path.clone();
                 let project_id = self.workspace.open_project(opened.path, opened.layout)?;
+                self.refresh_project_git_status(&project_id, &opened_path);
                 self.queue_selected_terminal_focus();
                 self.layout_source_messages
                     .insert(project_id, source_message);
@@ -644,6 +693,7 @@ impl RootView {
             CloseProjectDecision::Closed(closed) => {
                 self.pending_close_project_id = None;
                 self.layout_source_messages.remove(&closed.project_id);
+                self.project_git_statuses.remove(&closed.project_id);
                 self.remove_terminal_panes_for_project(closed.project_id.as_str());
             }
             CloseProjectDecision::NeedsConfirmation { project_id, .. } => {
@@ -752,6 +802,29 @@ impl RootView {
         }
     }
 
+    fn refresh_project_git_status(&mut self, project_id: &ProjectId, project_path: &Path) {
+        if let Some(status) = read_project_git_status(project_path) {
+            self.project_git_statuses.insert(project_id.clone(), status);
+        } else {
+            self.project_git_statuses.remove(project_id);
+        }
+    }
+
+    fn refresh_selected_project_git_status(&mut self) {
+        let Some(project_id) = self.workspace.selected_project_id().cloned() else {
+            return;
+        };
+        let Some(project_path) = self
+            .workspace
+            .project(&project_id)
+            .map(|project| project.path.clone())
+        else {
+            return;
+        };
+
+        self.refresh_project_git_status(&project_id, &project_path);
+    }
+
     fn selected_focused_pane_id(&self) -> Option<&str> {
         let project_id = self.workspace.selected_project_id()?;
         let project = self.workspace.project(project_id)?;
@@ -799,12 +872,14 @@ impl RootView {
             return div();
         };
 
+        let focused_pane_id = self.selected_focused_pane_id().map(ToOwned::to_owned);
         let tree_input = RenderTerminalTreeInput {
             project_id: &project_id,
             project_path: &project_path,
             project_title: &project_title,
             tab_id: &tab_id,
             tab_title: &tab_title,
+            focused_pane_id: focused_pane_id.as_deref(),
         };
 
         div()
@@ -832,6 +907,7 @@ impl RootView {
                     pane,
                     tab_id: tree_input.tab_id,
                     tab_title: tree_input.tab_title,
+                    is_focused: tree_input.focused_pane_id == Some(pane.id.as_str()),
                 },
                 window,
                 cx,
@@ -893,6 +969,7 @@ impl RootView {
                 tab_id: input.tab_id.to_string(),
                 tab_title: input.tab_title.to_string(),
                 pane: input.pane.clone(),
+                is_focused: input.is_focused,
             };
             let pane_view = cx.new(|cx| TerminalPaneView::new(context, cx));
             let subscription = cx.subscribe_in(&pane_view, window, Self::on_terminal_pane_event);
@@ -909,7 +986,17 @@ impl RootView {
             }
         }
 
-        let mut wrapper = div().flex().flex_1();
+        let border_color = if input.is_focused {
+            self.theme.focused_pane_border
+        } else {
+            rgba(0x00000000)
+        };
+        let mut wrapper = div()
+            .flex()
+            .flex_1()
+            .border_1()
+            .border_color(border_color)
+            .bg(self.theme.terminal_background);
         wrapper
             .interactivity()
             .on_click(cx.listener(move |this, _, _window, cx| {
@@ -957,13 +1044,17 @@ impl RootView {
     }
 
     fn split_resize_handle(direction: SplitDirection, cx: &mut Context<Self>) -> AnyElement {
+        let style = Self::visible_split_handle_style(direction);
         let mut handle = div()
             .id(match direction {
                 SplitDirection::Horizontal => "horizontal-split-resize-handle",
                 SplitDirection::Vertical => "vertical-split-resize-handle",
             })
+            .flex()
+            .items_center()
+            .justify_center()
             .flex_none()
-            .bg(rgb(0x262626))
+            .bg(rgba(0x00000000))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
@@ -973,11 +1064,25 @@ impl RootView {
             );
 
         handle = match direction {
-            SplitDirection::Horizontal => handle.w(px(9.0)).cursor_ew_resize(),
-            SplitDirection::Vertical => handle.h(px(9.0)).cursor_ns_resize(),
+            SplitDirection::Horizontal => handle
+                .w(style.hit_area_width)
+                .cursor_ew_resize()
+                .child(div().w(style.visible_line_width).h_full().bg(rgb(0x343b46))),
+            SplitDirection::Vertical => handle
+                .h(style.hit_area_width)
+                .cursor_ns_resize()
+                .child(div().h(style.visible_line_width).w_full().bg(rgb(0x343b46))),
         };
 
         handle.into_any_element()
+    }
+
+    pub fn visible_split_handle_style(_direction: SplitDirection) -> SplitHandleStyle {
+        let theme = WorkbenchTheme::dark();
+        SplitHandleStyle {
+            visible_line_width: theme.split_line_width,
+            hit_area_width: theme.split_hit_area_width,
+        }
     }
 
     fn begin_split_resize_drag(&mut self, direction: SplitDirection, position: Point<Pixels>) {
@@ -1475,14 +1580,14 @@ impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus_handle = self.root_focus_handle(cx);
 
-        let mut root = if self.workspace.opened_projects().is_empty() {
+        let body = if self.workspace.opened_projects().is_empty() {
             empty_workspace(cx, &self.ui_text, &self.theme)
         } else {
             let split_view = self.active_terminal_split_view(window, cx);
 
             div()
                 .flex()
-                .size_full()
+                .flex_1()
                 .relative()
                 .bg(rgb(0x101010))
                 .text_color(rgb(0xf5f5f5))
@@ -1490,6 +1595,7 @@ impl Render for RootView {
                     let project_id = ProjectId::new(project_id);
                     cx.listener(move |this, _, _window, cx| {
                         let _ = this.workspace.select_project(&project_id);
+                        this.refresh_selected_project_git_status();
                         cx.notify();
                     })
                 }))
@@ -1507,6 +1613,16 @@ impl Render for RootView {
                         .child(split_view),
                 )
         };
+
+        let mut root = div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .relative()
+            .bg(self.theme.app_background)
+            .text_color(self.theme.text)
+            .child(workbench_titlebar(self.visible_titlebar_info(), self.theme))
+            .child(body);
 
         if let Some(active_palette) = self.active_palette.clone() {
             let items = self.palette_items(active_palette.kind);
@@ -1639,6 +1755,7 @@ fn collect_terminal_pane_contexts(
     tab_id: &str,
     tab_title: &str,
     layout: &LayoutNode,
+    focused_pane_id: Option<&str>,
     contexts: &mut Vec<TerminalPaneContext>,
 ) {
     match layout {
@@ -1649,6 +1766,7 @@ fn collect_terminal_pane_contexts(
             tab_id: tab_id.to_string(),
             tab_title: tab_title.to_string(),
             pane: pane.clone(),
+            is_focused: focused_pane_id == Some(pane.id.as_str()),
         }),
         LayoutNode::Split(split) => {
             collect_terminal_pane_contexts(
@@ -1658,6 +1776,7 @@ fn collect_terminal_pane_contexts(
                 tab_id,
                 tab_title,
                 &split.left,
+                focused_pane_id,
                 contexts,
             );
             collect_terminal_pane_contexts(
@@ -1667,6 +1786,7 @@ fn collect_terminal_pane_contexts(
                 tab_id,
                 tab_title,
                 &split.right,
+                focused_pane_id,
                 contexts,
             );
         }
@@ -1850,7 +1970,8 @@ fn empty_workspace(cx: &mut Context<RootView>, ui_text: &UiText, theme: &Workben
         .flex()
         .flex_col()
         .gap_5()
-        .size_full()
+        .flex_1()
+        .w_full()
         .relative()
         .justify_center()
         .items_center()

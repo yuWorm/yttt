@@ -25,6 +25,7 @@ pub struct TerminalPaneContext {
     pub tab_id: String,
     pub tab_title: String,
     pub pane: PaneConfig,
+    pub is_focused: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -86,6 +87,11 @@ pub struct TerminalPaneView {
     exit_emitted: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerminalPaneChrome {
+    pub shows_header: bool,
+}
+
 impl TerminalPaneView {
     pub fn new(context: TerminalPaneContext, cx: &mut Context<Self>) -> Self {
         let TerminalPaneContext {
@@ -95,6 +101,7 @@ impl TerminalPaneView {
             tab_id,
             tab_title,
             pane,
+            is_focused: _,
         } = context;
         let mut session = match spawn_portable_pty_session(
             TerminalSpawnRequest::for_shell(&pane.id, &pane.command).cwd(project_path.clone()),
@@ -228,6 +235,12 @@ impl TerminalPaneView {
         });
         true
     }
+
+    pub fn default_chrome() -> TerminalPaneChrome {
+        TerminalPaneChrome {
+            shows_header: false,
+        }
+    }
 }
 
 impl EventEmitter<TerminalPaneEvent> for TerminalPaneView {}
@@ -242,37 +255,6 @@ impl Drop for TerminalPaneView {
 
 impl Render for TerminalPaneView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let header = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_2()
-            .flex_none()
-            .border_b_1()
-            .border_color(rgb(0x2a2a2a))
-            .bg(rgb(0x171717))
-            .px_2()
-            .py_1()
-            .text_xs()
-            .text_color(rgb(0xd4d4d4))
-            .child(
-                div()
-                    .truncate()
-                    .child(format!("{} · {}", self.title, self.pane_id)),
-            )
-            .child(
-                div()
-                    .truncate()
-                    .text_color(rgb(0x737373))
-                    .child(self.command.clone()),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(lifecycle_color(&self.lifecycle))
-                    .child(pane_lifecycle_label(&self.lifecycle)),
-            );
-
         let body = if let Some(terminal) = &self.terminal {
             div().flex().flex_1().child(terminal.clone())
         } else {
@@ -299,7 +281,6 @@ impl Render for TerminalPaneView {
             .flex_col()
             .flex_1()
             .bg(rgb(0x111111))
-            .child(header)
             .child(body)
     }
 }
@@ -336,19 +317,6 @@ fn terminal_start_error(lifecycle: &PaneLifecycle, launch_error: &Option<String>
         _ => launch_error
             .clone()
             .unwrap_or_else(|| "terminal did not start".to_string()),
-    }
-}
-
-fn lifecycle_color(lifecycle: &PaneLifecycle) -> gpui::Rgba {
-    match lifecycle {
-        PaneLifecycle::Running => rgb(0x22c55e),
-        PaneLifecycle::Exited { code: Some(0), .. } => rgb(0xa3a3a3),
-        PaneLifecycle::Exited {
-            reason: ExitReason::KilledByUser,
-            ..
-        } => rgb(0xa3a3a3),
-        PaneLifecycle::Exited { .. } | PaneLifecycle::SpawnFailed { .. } => rgb(0xef4444),
-        PaneLifecycle::Idle | PaneLifecycle::Starting => rgb(0xf59e0b),
     }
 }
 

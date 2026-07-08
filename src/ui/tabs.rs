@@ -1,4 +1,4 @@
-use gpui::{App, ClickEvent, IntoElement, SharedString, Window, div, prelude::*, rgb};
+use gpui::{App, ClickEvent, IntoElement, Pixels, SharedString, Window, div, prelude::*, px, rgb};
 use gpui_component::tab::{Tab, TabBar};
 
 use crate::{
@@ -15,6 +15,19 @@ pub struct ProjectTabItem {
     pub title: String,
     pub status: Option<String>,
     pub state: SelectableState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProjectTabsStyle {
+    pub height: Pixels,
+    pub border_width: Pixels,
+}
+
+pub fn project_tabs_style() -> ProjectTabsStyle {
+    ProjectTabsStyle {
+        height: px(32.0),
+        border_width: px(1.0),
+    }
 }
 
 pub fn visible_tab_titles(workspace: &Workspace) -> Vec<String> {
@@ -60,6 +73,7 @@ where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     F: FnMut(String) -> H,
 {
+    let style = project_tabs_style();
     let items = visible_tab_items(workspace);
     if items.is_empty() {
         return div().into_any_element();
@@ -87,8 +101,11 @@ where
         .underline()
         .selected_index(selected_index)
         .children(tabs)
-        .bg(rgb(0x171717))
-        .p_2()
+        .h(style.height)
+        .bg(rgb(0x242a34))
+        .border_b_1()
+        .border_color(rgb(0x343b46))
+        .px_2()
         .into_any_element()
 }
 

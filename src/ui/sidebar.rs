@@ -1,4 +1,4 @@
-use gpui::{App, ClickEvent, IntoElement, SharedString, Window, div, prelude::*, px, rgb};
+use gpui::{App, ClickEvent, IntoElement, Pixels, SharedString, Window, div, prelude::*, px, rgb};
 use gpui_component::sidebar::{Sidebar, SidebarMenu, SidebarMenuItem};
 
 use crate::model::workspace::Workspace;
@@ -12,6 +12,19 @@ pub struct ProjectSidebarItem {
     pub path: String,
     pub agent_status: Option<String>,
     pub state: SelectableState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProjectSidebarStyle {
+    pub width: Pixels,
+    pub border_width: Pixels,
+}
+
+pub fn project_sidebar_style() -> ProjectSidebarStyle {
+    ProjectSidebarStyle {
+        width: px(216.0),
+        border_width: px(1.0),
+    }
 }
 
 pub fn visible_project_items(workspace: &Workspace) -> Vec<ProjectSidebarItem> {
@@ -41,6 +54,7 @@ where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     F: FnMut(String) -> H,
 {
+    let style = project_sidebar_style();
     let mut menu = SidebarMenu::new();
 
     for item in visible_project_items(workspace) {
@@ -58,8 +72,10 @@ where
 
     Sidebar::left()
         .collapsible(false)
-        .w(px(220.0))
-        .header(div().text_sm().child("Projects"))
+        .w(style.width)
+        .bg(rgb(0x222832))
+        .border_color(rgb(0x343b46))
+        .header(div().text_xs().text_color(rgb(0x778391)).child("Projects"))
         .child(menu)
 }
 

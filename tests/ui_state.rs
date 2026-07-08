@@ -11,6 +11,7 @@ use yttt::{
         workspace::{AgentStatus, Workspace},
     },
     palette::{ActivePalette, PaletteItem, PaletteKind},
+    runtime::git_status::{GitStatusSummary, parse_git_status_porcelain},
     runtime::notification::{NotificationEvent, NotificationKind},
     runtime::terminal::{ExitReason, ProcessStatus},
     ui::components::SelectableState,
@@ -31,6 +32,59 @@ use yttt::{
         tabs::{visible_tab_items, visible_tab_titles},
     },
 };
+
+#[test]
+fn git_status_summary_parses_branch_and_dirty_counts() {
+    let parsed = parse_git_status_porcelain(
+        "## main...origin/main\n M src/main.rs\nA  src/lib.rs\n D old.rs\n?? new.rs\n",
+    );
+
+    assert_eq!(parsed.branch.as_deref(), Some("main"));
+    assert_eq!(parsed.summary.added, 2);
+    assert_eq!(parsed.summary.modified, 1);
+    assert_eq!(parsed.summary.deleted, 1);
+}
+
+#[test]
+fn git_status_summary_formats_compact_counters() {
+    let summary = GitStatusSummary {
+        added: 2,
+        modified: 4,
+        deleted: 1,
+        untracked: 0,
+    };
+
+    assert_eq!(summary.compact_counters(), Some("+2 ~4 -1".to_string()));
+}
+
+#[test]
+fn git_status_summary_counts_each_dirty_file_once() {
+    let parsed = parse_git_status_porcelain("## main\nMM src/main.rs\nAM src/new.rs\n");
+
+    assert_eq!(parsed.summary.added, 1);
+    assert_eq!(parsed.summary.modified, 1);
+}
+
+#[test]
+fn root_view_titlebar_info_describes_empty_workspace() {
+    let root = RootView::new();
+
+    let info = root.visible_titlebar_info();
+
+    assert_eq!(info.project_name, "yttt");
+    assert!(info.compact_path.is_none());
+    assert!(info.git_branch.is_none());
+}
+
+#[test]
+fn root_view_titlebar_info_describes_selected_project() {
+    let root = RootView::dev_fixture();
+
+    let info = root.visible_titlebar_info();
+
+    assert_eq!(info.project_name, "yttt");
+    assert_eq!(info.compact_path.as_deref(), Some("/tmp/yttt"));
+}
 
 #[test]
 fn root_view_starts_with_empty_workspace() {
@@ -596,6 +650,20 @@ fn root_view_focus_visible_terminal_pane_updates_focused_pane() {
     let project = root.workspace().project(&project_id).unwrap();
     let tab = project.tab_state("dev").unwrap();
     assert_eq!(tab.focused_pane_id.as_deref(), Some("shell"));
+}
+
+#[test]
+fn root_view_marks_focused_terminal_pane_context() {
+    let mut root = RootView::dev_fixture();
+
+    root.focus_visible_terminal_pane("shell").unwrap();
+    let contexts = root.visible_terminal_pane_contexts();
+
+    assert!(
+        contexts
+            .iter()
+            .any(|context| context.pane.id == "shell" && context.is_focused)
+    );
 }
 
 #[test]

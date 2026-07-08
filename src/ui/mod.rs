@@ -14,4 +14,5 @@ pub mod startup;
 pub mod tabs;
 pub mod terminal_pane;
 pub mod theme;
+pub mod titlebar;
 pub mod toast;
