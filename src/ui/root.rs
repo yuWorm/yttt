@@ -38,7 +38,9 @@ use crate::{
         actions::{
             OpenCommandPalette, OpenPanePalette, OpenProject, OpenProjectPalette, OpenTabPalette,
             PaletteCancel, PaletteConfirm, PaletteSelectNext, PaletteSelectPrev, PaneClose,
-            PaneSplitHorizontal, PaneSplitVertical, TabNext, TabPrev, WORKSPACE_CONTEXT,
+            PaneFocusDown, PaneFocusLeft, PaneFocusRight, PaneFocusUp, PaneResizeDown,
+            PaneResizeLeft, PaneResizeRight, PaneResizeUp, PaneSplitHorizontal, PaneSplitVertical,
+            TabNext, TabPrev, WORKSPACE_CONTEXT,
         },
         components::{ActionEmphasis, workbench_action_button},
         i18n::{UiText, UiTextKey},
@@ -792,6 +794,73 @@ impl RootView {
         self.dispatch_workspace_action(CommandId::PaneClose, cx);
     }
 
+    fn on_pane_focus_left(
+        &mut self,
+        _: &PaneFocusLeft,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_workspace_action(CommandId::PaneFocusLeft, cx);
+    }
+
+    fn on_pane_focus_right(
+        &mut self,
+        _: &PaneFocusRight,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_workspace_action(CommandId::PaneFocusRight, cx);
+    }
+
+    fn on_pane_focus_up(&mut self, _: &PaneFocusUp, _window: &mut Window, cx: &mut Context<Self>) {
+        self.dispatch_workspace_action(CommandId::PaneFocusUp, cx);
+    }
+
+    fn on_pane_focus_down(
+        &mut self,
+        _: &PaneFocusDown,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_workspace_action(CommandId::PaneFocusDown, cx);
+    }
+
+    fn on_pane_resize_left(
+        &mut self,
+        _: &PaneResizeLeft,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_workspace_action(CommandId::PaneResizeLeft, cx);
+    }
+
+    fn on_pane_resize_right(
+        &mut self,
+        _: &PaneResizeRight,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_workspace_action(CommandId::PaneResizeRight, cx);
+    }
+
+    fn on_pane_resize_up(
+        &mut self,
+        _: &PaneResizeUp,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_workspace_action(CommandId::PaneResizeUp, cx);
+    }
+
+    fn on_pane_resize_down(
+        &mut self,
+        _: &PaneResizeDown,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_workspace_action(CommandId::PaneResizeDown, cx);
+    }
+
     fn dispatch_workspace_action(&mut self, command_id: CommandId, cx: &mut Context<Self>) {
         if self.active_palette.is_some() {
             cx.propagate();
@@ -952,6 +1021,14 @@ impl Render for RootView {
             .on_action(cx.listener(Self::on_pane_split_vertical))
             .on_action(cx.listener(Self::on_pane_split_horizontal))
             .on_action(cx.listener(Self::on_pane_close))
+            .on_action(cx.listener(Self::on_pane_focus_left))
+            .on_action(cx.listener(Self::on_pane_focus_right))
+            .on_action(cx.listener(Self::on_pane_focus_up))
+            .on_action(cx.listener(Self::on_pane_focus_down))
+            .on_action(cx.listener(Self::on_pane_resize_left))
+            .on_action(cx.listener(Self::on_pane_resize_right))
+            .on_action(cx.listener(Self::on_pane_resize_up))
+            .on_action(cx.listener(Self::on_pane_resize_down))
     }
 }
 

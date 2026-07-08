@@ -10,6 +10,7 @@ use yttt::config::{
 };
 use yttt::model::layout::LayoutNode;
 use yttt::model::workspace::{TabStartState, Workspace};
+use yttt::ui::actions::default_ui_keybinding_specs;
 use yttt::ui::split_view::visible_pane_titles;
 
 #[test]
@@ -59,18 +60,35 @@ fn detects_duplicate_keybindings() {
 fn default_keybindings_include_palette_shortcuts() {
     let config = default_keybindings();
 
-    assert!(
-        config
-            .bindings
-            .iter()
-            .any(|binding| binding.keys == "cmd-p" && binding.command == "command_palette.open")
-    );
-    assert!(
-        config
-            .bindings
-            .iter()
-            .any(|binding| binding.keys == "ctrl-k" && binding.command == "pane.palette")
-    );
+    assert_has_config_binding(&config, "cmd-p", "command_palette.open");
+    assert_has_config_binding(&config, "ctrl-k", "pane.palette");
+}
+
+#[test]
+fn default_keybindings_include_pane_navigation_shortcuts() {
+    let config = default_keybindings();
+
+    for (keys, command) in [
+        ("cmd-alt-left", "pane.focus_left"),
+        ("cmd-alt-right", "pane.focus_right"),
+        ("cmd-alt-up", "pane.focus_up"),
+        ("cmd-alt-down", "pane.focus_down"),
+        ("ctrl-alt-left", "pane.focus_left"),
+        ("ctrl-alt-right", "pane.focus_right"),
+        ("ctrl-alt-up", "pane.focus_up"),
+        ("ctrl-alt-down", "pane.focus_down"),
+        ("cmd-alt-shift-left", "pane.resize_left"),
+        ("cmd-alt-shift-right", "pane.resize_right"),
+        ("cmd-alt-shift-up", "pane.resize_up"),
+        ("cmd-alt-shift-down", "pane.resize_down"),
+        ("ctrl-alt-shift-left", "pane.resize_left"),
+        ("ctrl-alt-shift-right", "pane.resize_right"),
+        ("ctrl-alt-shift-up", "pane.resize_up"),
+        ("ctrl-alt-shift-down", "pane.resize_down"),
+    ] {
+        assert_has_config_binding(&config, keys, command);
+        assert_has_ui_binding(keys, command);
+    }
 }
 
 #[test]
@@ -221,6 +239,25 @@ fn assert_ratio(actual: f32, expected: f32) {
     assert!(
         (actual - expected).abs() < 0.001,
         "expected ratio {expected}, got {actual}"
+    );
+}
+
+fn assert_has_config_binding(config: &KeybindingsConfig, keys: &str, command: &str) {
+    assert!(
+        config
+            .bindings
+            .iter()
+            .any(|binding| binding.keys == keys && binding.command == command),
+        "expected default keybindings to include {keys} -> {command}"
+    );
+}
+
+fn assert_has_ui_binding(keys: &str, command: &str) {
+    assert!(
+        default_ui_keybinding_specs()
+            .iter()
+            .any(|binding| binding.keys == keys && binding.command.as_str() == command),
+        "expected GPUI keybindings to include {keys} -> {command}"
     );
 }
 
