@@ -7,6 +7,7 @@ pub mod palette;
 pub mod root;
 pub mod sidebar;
 pub mod split_view;
+pub mod startup;
 pub mod tabs;
 pub mod terminal_pane;
 pub mod theme;
