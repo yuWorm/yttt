@@ -4,7 +4,10 @@ use tempfile::tempdir;
 use yttt::{
     commands::CommandId,
     config::paths::AppConfigPaths,
-    model::{layout::PaneKind, workspace::Workspace},
+    model::{
+        layout::PaneKind,
+        workspace::{AgentStatus, Workspace},
+    },
     palette::{ActivePalette, PaletteItem, PaletteKind},
     runtime::notification::{NotificationEvent, NotificationKind},
     runtime::terminal::{ExitReason, ProcessStatus},
@@ -268,6 +271,37 @@ fn visible_project_items_mark_selected_project() {
 }
 
 #[test]
+fn visible_project_items_show_agent_running_status() {
+    let mut workspace = workspace_with_sample_project();
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    workspace
+        .mark_pane_running(&project_id, "agent", "codex")
+        .unwrap();
+
+    let items = visible_project_items(&workspace);
+
+    assert_eq!(items[0].agent_status.as_deref(), Some("agent running"));
+}
+
+#[test]
+fn visible_project_items_prioritize_failed_agent_status() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(PathBuf::from("/tmp/multi-agent"), multi_agent_layout())
+        .unwrap();
+    workspace
+        .mark_pane_running(&project_id, "agent", "codex")
+        .unwrap();
+    workspace
+        .record_agent_status(&project_id, "agent", "claude", AgentStatus::Failed)
+        .unwrap();
+
+    let items = visible_project_items(&workspace);
+
+    assert_eq!(items[0].agent_status.as_deref(), Some("agent failed"));
+}
+
+#[test]
 fn visible_tab_items_mark_selected_tab() {
     let mut workspace = workspace_with_sample_project();
     workspace.select_tab("agent").unwrap();
@@ -278,6 +312,21 @@ fn visible_tab_items_mark_selected_tab() {
     assert_eq!(items[0].state, SelectableState::Inactive);
     assert_eq!(items[1].id, "agent");
     assert_eq!(items[1].state, SelectableState::Active);
+}
+
+#[test]
+fn visible_tab_items_show_agent_completed_status() {
+    let mut workspace = workspace_with_sample_project();
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    workspace.select_tab("agent").unwrap();
+    workspace
+        .record_agent_status(&project_id, "agent", "codex", AgentStatus::Completed)
+        .unwrap();
+
+    let items = visible_tab_items(&workspace);
+    let agent = items.iter().find(|item| item.id == "agent").unwrap();
+
+    assert_eq!(agent.status.as_deref(), Some("started · agent completed"));
 }
 
 #[test]
@@ -453,6 +502,26 @@ fn root_view_enqueues_agent_toast_notifications() {
     root.handle_terminal_notification(notification_event());
 
     assert_eq!(root.visible_toast_titles(), vec!["Codex completed"]);
+}
+
+#[test]
+fn root_view_records_agent_status_from_notification() {
+    let mut root = RootView::dev_fixture();
+
+    root.handle_terminal_notification(notification_event());
+
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let pane = root
+        .workspace()
+        .project(&project_id)
+        .unwrap()
+        .tab_state("agent")
+        .unwrap()
+        .pane_states
+        .iter()
+        .find(|pane| pane.pane_id == "codex")
+        .unwrap();
+    assert_eq!(pane.agent_status, Some(AgentStatus::Completed));
 }
 
 #[test]
@@ -682,6 +751,28 @@ fn sample_layout() -> yttt::model::layout::ProjectLayout {
         id = "agent"
         title = "Agent"
         layout = { type = "pane", id = "codex", title = "Codex", command = "codex", kind = "agent", notify_on_exit = true }
+    "#,
+    )
+    .unwrap()
+}
+
+fn multi_agent_layout() -> yttt::model::layout::ProjectLayout {
+    toml::from_str(
+        r#"
+        [project]
+        name = "multi-agent"
+        default_tab = "agent"
+
+        [[tabs]]
+        id = "agent"
+        title = "Agent"
+
+        [tabs.layout]
+        type = "split"
+        direction = "horizontal"
+        ratio = 0.5
+        left = { type = "pane", id = "codex", title = "Codex", command = "codex", kind = "agent", notify_on_exit = true }
+        right = { type = "pane", id = "claude", title = "Claude", command = "claude", notify_on_exit = true }
     "#,
     )
     .unwrap()

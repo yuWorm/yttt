@@ -59,6 +59,7 @@ impl Workspace {
                         .map(|pane_id| PaneState {
                             pane_id,
                             process_state: PaneProcessState::Idle,
+                            agent_status: None,
                         })
                         .collect(),
                 }
@@ -239,6 +240,7 @@ impl Workspace {
             pane_states: vec![PaneState {
                 pane_id,
                 process_state: PaneProcessState::Idle,
+                agent_status: None,
             }],
         });
 
@@ -292,6 +294,7 @@ impl Workspace {
         tab_state.pane_states.push(PaneState {
             pane_id: new_pane_id.clone(),
             process_state: PaneProcessState::Idle,
+            agent_status: None,
         });
         tab_state.focused_pane_id = Some(new_pane_id.clone());
 
@@ -357,6 +360,31 @@ impl Workspace {
             .ok_or_else(|| WorkspaceError::PaneNotFound(pane_id.to_string()))?;
 
         pane.process_state = PaneProcessState::Running;
+        pane.agent_status = None;
+        Ok(())
+    }
+
+    pub fn record_agent_status(
+        &mut self,
+        project_id: &ProjectId,
+        tab_id: &str,
+        pane_id: &str,
+        status: AgentStatus,
+    ) -> Result<(), WorkspaceError> {
+        let project = self
+            .opened_projects
+            .iter_mut()
+            .find(|project| &project.id == project_id)
+            .ok_or_else(|| WorkspaceError::ProjectNotFound(project_id.as_str().to_string()))?;
+        let tab = project
+            .tab_state_mut(tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(tab_id.to_string()))?;
+        let pane = tab
+            .pane_state_mut(pane_id)
+            .ok_or_else(|| WorkspaceError::PaneNotFound(pane_id.to_string()))?;
+
+        pane.process_state = PaneProcessState::Exited;
+        pane.agent_status = Some(status);
         Ok(())
     }
 
@@ -527,6 +555,14 @@ impl TabState {
 pub struct PaneState {
     pub pane_id: String,
     pub process_state: PaneProcessState,
+    pub agent_status: Option<AgentStatus>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentStatus {
+    Running,
+    Completed,
+    Failed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

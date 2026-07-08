@@ -3,8 +3,12 @@ use std::path::PathBuf;
 use crate::{
     commands::{CommandId, CommandRegistry},
     model::{
-        layout::{LayoutNode, PaneKind},
-        workspace::{PaneProcessState, TabStartState, Workspace},
+        layout::LayoutNode,
+        workspace::{AgentStatus, OpenedProject, PaneProcessState, TabStartState, Workspace},
+    },
+    ui::agent_status::{
+        agent_status_label, is_agent_pane, pane_agent_status, project_agent_status,
+        tab_agent_status,
     },
 };
 
@@ -143,7 +147,7 @@ pub fn project_palette_items(
             id: project.id.as_str().to_string(),
             title: project.layout.project.name.clone(),
             subtitle: Some(project.path.display().to_string()),
-            status: Some("open".to_string()),
+            status: Some(open_project_status(project)),
             command: CommandId::ProjectPalette,
             enabled: true,
             disabled_reason: None,
@@ -177,13 +181,13 @@ pub fn tab_palette_items(workspace: &Workspace) -> Option<Vec<PaletteItem>> {
                 let pane_count = tab_state
                     .map(|state| state.pane_states.len())
                     .unwrap_or_else(|| pane_count(&tab.layout));
-                let status = tab_state.map(|state| match state.start_state {
-                    TabStartState::Lazy => {
-                        tab_status(tab.id == project.selected_tab_id, TabStartState::Lazy)
-                    }
-                    TabStartState::Started => {
-                        tab_status(tab.id == project.selected_tab_id, TabStartState::Started)
-                    }
+                let agent_status = tab_agent_status(project, &tab.id);
+                let status = tab_state.map(|state| {
+                    tab_status(
+                        tab.id == project.selected_tab_id,
+                        state.start_state,
+                        agent_status,
+                    )
                 });
 
                 PaletteItem {
@@ -220,15 +224,20 @@ pub fn pane_palette_items(workspace: &Workspace) -> Option<Vec<PaletteItem>> {
                     .map(|pane_config| pane_config.title.clone())
                     .unwrap_or_else(|| pane.pane_id.clone());
                 let is_active = tab_state.focused_pane_id.as_deref() == Some(&pane.pane_id);
-                let is_agent = pane_config
-                    .map(|pane_config| pane_config.kind == PaneKind::Agent)
-                    .unwrap_or(false);
+                let is_agent = pane_config.map(is_agent_pane).unwrap_or(false);
+                let agent_status =
+                    pane_config.and_then(|pane_config| pane_agent_status(pane_config, pane));
 
                 PaletteItem {
                     id: pane.pane_id.clone(),
                     title,
                     subtitle: Some(tab.title.clone()),
-                    status: Some(pane_status(pane.process_state, is_active, is_agent)),
+                    status: Some(pane_status(
+                        pane.process_state,
+                        is_active,
+                        is_agent,
+                        agent_status,
+                    )),
                     command: CommandId::PanePalette,
                     enabled: true,
                     disabled_reason: None,
@@ -236,6 +245,14 @@ pub fn pane_palette_items(workspace: &Workspace) -> Option<Vec<PaletteItem>> {
             })
             .collect(),
     )
+}
+
+fn open_project_status(project: &OpenedProject) -> String {
+    let mut parts = vec!["open".to_string()];
+    if let Some(agent_status) = project_agent_status(project) {
+        parts.push(agent_status_label(agent_status).to_string());
+    }
+    parts.join(" · ")
 }
 
 fn pane_count_label(pane_count: usize) -> String {
@@ -246,7 +263,7 @@ fn pane_count_label(pane_count: usize) -> String {
     }
 }
 
-fn tab_status(is_active: bool, state: TabStartState) -> String {
+fn tab_status(is_active: bool, state: TabStartState, agent_status: Option<AgentStatus>) -> String {
     let mut parts = Vec::new();
     if is_active {
         parts.push("active");
@@ -255,16 +272,26 @@ fn tab_status(is_active: bool, state: TabStartState) -> String {
         TabStartState::Lazy => "lazy",
         TabStartState::Started => "started",
     });
+    if let Some(agent_status) = agent_status {
+        parts.push(agent_status_label(agent_status));
+    }
     parts.join(" · ")
 }
 
-fn pane_status(state: PaneProcessState, is_active: bool, is_agent: bool) -> String {
+fn pane_status(
+    state: PaneProcessState,
+    is_active: bool,
+    is_agent: bool,
+    agent_status: Option<AgentStatus>,
+) -> String {
     let mut parts = Vec::new();
     if is_active {
         parts.push("active");
     }
     parts.push(process_status_label(state));
-    if is_agent {
+    if let Some(agent_status) = agent_status {
+        parts.push(agent_status_label(agent_status));
+    } else if is_agent {
         parts.push("agent");
     }
     parts.join(" · ")

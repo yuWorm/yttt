@@ -1,4 +1,5 @@
 pub mod actions;
+pub mod agent_status;
 pub mod app;
 pub mod components;
 pub mod i18n;

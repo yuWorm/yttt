@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use yttt::model::workspace::{
-    CloseProjectDecision, CloseProjectError, ClosedProject, TabStartState, Workspace,
+    AgentStatus, CloseProjectDecision, CloseProjectError, ClosedProject, PaneProcessState,
+    TabStartState, Workspace,
 };
 
 #[test]
@@ -132,6 +133,29 @@ fn confirmed_close_removes_project_with_running_panes() {
     assert_eq!(closed.project_id, project_id);
     assert!(workspace.opened_projects().is_empty());
     assert!(workspace.selected_project_id().is_none());
+}
+
+#[test]
+fn recording_agent_status_marks_pane_exited_with_result() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+
+    workspace
+        .record_agent_status(&project_id, "agent", "codex", AgentStatus::Completed)
+        .unwrap();
+
+    let project = workspace.project(&project_id).unwrap();
+    let pane = project
+        .tab_state("agent")
+        .unwrap()
+        .pane_states
+        .iter()
+        .find(|pane| pane.pane_id == "codex")
+        .unwrap();
+    assert_eq!(pane.process_state, PaneProcessState::Exited);
+    assert_eq!(pane.agent_status, Some(AgentStatus::Completed));
 }
 
 fn sample_layout() -> yttt::model::layout::ProjectLayout {

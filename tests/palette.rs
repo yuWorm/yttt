@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use yttt::{
     commands::{CommandId, default_registry},
-    model::workspace::Workspace,
+    model::workspace::{AgentStatus, Workspace},
     palette::{
         ActivePalette, CommandPaletteContext, PaletteItem, PaletteKind, RecentProject,
         command_palette_items, pane_palette_items, project_palette_items, tab_palette_items,
@@ -85,6 +85,23 @@ fn project_palette_contains_opened_and_recent_projects() {
 }
 
 #[test]
+fn project_palette_shows_open_project_agent_status() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+    workspace
+        .record_agent_status(&project_id, "agent", "codex", AgentStatus::Failed)
+        .unwrap();
+
+    let items = project_palette_items(&workspace, &[]);
+
+    assert!(items.iter().any(|item| {
+        item.title == "yttt" && item.status.as_deref() == Some("open · agent failed")
+    }));
+}
+
+#[test]
 fn tab_palette_contains_current_project_tabs() {
     let mut workspace = Workspace::new();
     workspace
@@ -99,6 +116,23 @@ fn tab_palette_contains_current_project_tabs() {
     assert!(items.iter().any(|item| item.title == "Agent"
         && item.subtitle.as_deref() == Some("1 pane")
         && item.status.as_deref() == Some("lazy")));
+}
+
+#[test]
+fn tab_palette_shows_agent_status() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+    workspace.select_tab("agent").unwrap();
+    workspace
+        .record_agent_status(&project_id, "agent", "codex", AgentStatus::Completed)
+        .unwrap();
+
+    let items = tab_palette_items(&workspace).unwrap();
+
+    assert!(items.iter().any(|item| item.title == "Agent"
+        && item.status.as_deref() == Some("active · started · agent completed")));
 }
 
 #[test]
@@ -135,6 +169,24 @@ fn pane_palette_marks_agent_panes() {
     assert!(items.iter().any(
         |item| item.title == "Codex" && item.status.as_deref() == Some("active · idle · agent")
     ));
+}
+
+#[test]
+fn pane_palette_shows_agent_exit_result() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+    workspace.select_tab("agent").unwrap();
+    workspace
+        .record_agent_status(&project_id, "agent", "codex", AgentStatus::Failed)
+        .unwrap();
+
+    let items = pane_palette_items(&workspace).unwrap();
+
+    assert!(items.iter().any(|item| {
+        item.title == "Codex" && item.status.as_deref() == Some("active · exited · agent failed")
+    }));
 }
 
 #[test]

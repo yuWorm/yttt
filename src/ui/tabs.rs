@@ -1,7 +1,13 @@
 use gpui::{App, ClickEvent, IntoElement, SharedString, Window, div, prelude::*, rgb};
 use gpui_component::tab::{Tab, TabBar};
 
-use crate::{model::workspace::Workspace, ui::components::SelectableState};
+use crate::{
+    model::workspace::{TabStartState, Workspace},
+    ui::{
+        agent_status::{agent_status_label, tab_agent_status},
+        components::SelectableState,
+    },
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectTabItem {
@@ -33,9 +39,13 @@ pub fn visible_tab_items(workspace: &Workspace) -> Vec<ProjectTabItem> {
         .map(|tab| ProjectTabItem {
             id: tab.id.clone(),
             title: tab.title.clone(),
-            status: project
-                .tab_state(&tab.id)
-                .map(|state| format!("{:?}", state.start_state).to_ascii_lowercase()),
+            status: project.tab_state(&tab.id).map(|state| {
+                let mut parts = vec![tab_start_state_label(state.start_state).to_string()];
+                if let Some(agent_status) = tab_agent_status(project, &tab.id) {
+                    parts.push(agent_status_label(agent_status).to_string());
+                }
+                parts.join(" · ")
+            }),
             state: if tab.id == project.selected_tab_id {
                 SelectableState::Active
             } else {
@@ -80,4 +90,11 @@ where
         .bg(rgb(0x171717))
         .p_2()
         .into_any_element()
+}
+
+fn tab_start_state_label(state: TabStartState) -> &'static str {
+    match state {
+        TabStartState::Lazy => "lazy",
+        TabStartState::Started => "started",
+    }
 }

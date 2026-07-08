@@ -27,13 +27,17 @@ use crate::{
     model::{
         ids::ProjectId,
         layout::{LayoutNode, PaneConfig, ProjectLayout},
-        workspace::{CloseProjectDecision, CloseProjectError, Workspace, WorkspaceError},
+        workspace::{
+            AgentStatus, CloseProjectDecision, CloseProjectError, Workspace, WorkspaceError,
+        },
     },
     palette::{
         ActivePalette, CommandPaletteContext, PaletteItem, PaletteKind, RecentProject,
         command_palette_items, pane_palette_items, project_palette_items, tab_palette_items,
     },
-    runtime::notification::{NoopSystemNotifier, NotificationEvent, maybe_notify_system},
+    runtime::notification::{
+        NoopSystemNotifier, NotificationEvent, NotificationKind, maybe_notify_system,
+    },
     ui::{
         actions::{
             OpenCommandPalette, OpenPanePalette, OpenProject, OpenProjectPalette, OpenTabPalette,
@@ -242,6 +246,20 @@ impl RootView {
     }
 
     pub fn handle_terminal_notification(&mut self, event: NotificationEvent) {
+        let project_id = ProjectId::new(event.project_id.clone());
+        let agent_status = match event.kind {
+            NotificationKind::AgentCompleted => AgentStatus::Completed,
+            NotificationKind::AgentFailed => AgentStatus::Failed,
+        };
+        if let Err(error) = self.workspace.record_agent_status(
+            &project_id,
+            &event.tab_id,
+            &event.pane_id,
+            agent_status,
+        ) {
+            self.load_error = Some(error.to_string());
+        }
+
         let _ = maybe_notify_system(
             &self.system_notifier,
             self.system_notifications_enabled,
