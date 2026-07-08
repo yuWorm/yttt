@@ -39,6 +39,7 @@ use crate::{
             PaletteCancel, PaletteConfirm, PaletteSelectNext, PaletteSelectPrev, PaneClose,
             PaneSplitHorizontal, PaneSplitVertical, TabNext, TabPrev, WORKSPACE_CONTEXT,
         },
+        i18n::{UiText, UiTextKey},
         palette::palette_overlay,
         sidebar::project_sidebar,
         split_view::split_view_for_layout,
@@ -64,11 +65,16 @@ pub struct RootView {
     toast_queue: ToastQueue,
     system_notifier: NoopSystemNotifier,
     system_notifications_enabled: bool,
+    ui_text: UiText,
 }
 
 const CLOSE_PROJECT_DIALOG_TEXT: &str =
     "Close project?\nRunning terminal processes will be stopped.";
-const EMPTY_WORKSPACE_ACTIONS: [&str; 3] = ["Open Directory", "Open Recent", "Command Palette"];
+const EMPTY_WORKSPACE_ACTIONS: [UiTextKey; 3] = [
+    UiTextKey::OpenDirectory,
+    UiTextKey::OpenRecent,
+    UiTextKey::CommandPalette,
+];
 
 struct RenderTerminalPaneInput<'a> {
     project_id: &'a str,
@@ -118,6 +124,7 @@ impl RootView {
             toast_queue: ToastQueue::default(),
             system_notifier: NoopSystemNotifier,
             system_notifications_enabled: false,
+            ui_text: UiText::english(),
         }
     }
 
@@ -225,7 +232,10 @@ impl RootView {
     }
 
     pub fn visible_empty_workspace_actions(&self) -> Vec<&'static str> {
-        EMPTY_WORKSPACE_ACTIONS.to_vec()
+        EMPTY_WORKSPACE_ACTIONS
+            .iter()
+            .map(|key| self.ui_text.get(*key))
+            .collect()
     }
 
     pub fn last_opened_layout_file(&self) -> Option<&Path> {
@@ -827,7 +837,7 @@ impl Render for RootView {
         let focus_handle = self.root_focus_handle(cx);
 
         let mut root = if self.workspace.opened_projects().is_empty() {
-            empty_workspace(cx)
+            empty_workspace(cx, &self.ui_text)
         } else {
             let split_view = self.active_terminal_split_view(window, cx);
 
@@ -995,7 +1005,7 @@ fn close_project_dialog() -> Div {
         )
 }
 
-fn empty_workspace(cx: &mut Context<RootView>) -> Div {
+fn empty_workspace(cx: &mut Context<RootView>, ui_text: &UiText) -> Div {
     div()
         .flex()
         .flex_col()
@@ -1006,7 +1016,7 @@ fn empty_workspace(cx: &mut Context<RootView>) -> Div {
         .items_center()
         .bg(rgb(0x101010))
         .text_color(rgb(0xf5f5f5))
-        .child(div().text_xl().child("yttt"))
+        .child(div().text_xl().child(ui_text.get(UiTextKey::AppName)))
         .child(
             div()
                 .flex()
@@ -1018,13 +1028,13 @@ fn empty_workspace(cx: &mut Context<RootView>) -> Div {
                     div()
                         .text_sm()
                         .text_color(rgb(0xd4d4d4))
-                        .child("Open a directory or choose a recent project."),
+                        .child(ui_text.get(UiTextKey::EmptySubtitle)),
                 )
                 .child(
                     div()
                         .text_xs()
                         .text_color(rgb(0x737373))
-                        .child("Sidebar shows opened projects only."),
+                        .child(ui_text.get(UiTextKey::EmptySidebarNote)),
                 ),
         )
         .child(
@@ -1034,7 +1044,12 @@ fn empty_workspace(cx: &mut Context<RootView>) -> Div {
                 .gap_2()
                 .justify_center()
                 .child(
-                    empty_workspace_action("Open Directory", "Cmd/Ctrl+O", true).on_mouse_down(
+                    empty_workspace_action(
+                        ui_text.get(UiTextKey::OpenDirectory),
+                        "Cmd/Ctrl+O",
+                        true,
+                    )
+                    .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, window, cx| {
                             this.on_open_project(&OpenProject, window, cx);
@@ -1042,7 +1057,12 @@ fn empty_workspace(cx: &mut Context<RootView>) -> Div {
                     ),
                 )
                 .child(
-                    empty_workspace_action("Open Recent", "Cmd/Ctrl+Shift+O", false).on_mouse_down(
+                    empty_workspace_action(
+                        ui_text.get(UiTextKey::OpenRecent),
+                        "Cmd/Ctrl+Shift+O",
+                        false,
+                    )
+                    .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, window, cx| {
                             this.on_open_project_palette(&OpenProjectPalette, window, cx);
@@ -1050,7 +1070,12 @@ fn empty_workspace(cx: &mut Context<RootView>) -> Div {
                     ),
                 )
                 .child(
-                    empty_workspace_action("Command Palette", "Cmd/Ctrl+P", false).on_mouse_down(
+                    empty_workspace_action(
+                        ui_text.get(UiTextKey::CommandPalette),
+                        "Cmd/Ctrl+P",
+                        false,
+                    )
+                    .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, window, cx| {
                             this.on_open_command_palette(&OpenCommandPalette, window, cx);

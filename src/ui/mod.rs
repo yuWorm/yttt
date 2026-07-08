@@ -1,5 +1,6 @@
 pub mod actions;
 pub mod app;
+pub mod i18n;
 pub mod palette;
 pub mod root;
 pub mod sidebar;
