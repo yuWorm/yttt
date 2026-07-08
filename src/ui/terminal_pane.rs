@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use gpui::{
     Context, Edges, Entity, EventEmitter, IntoElement, Render, Window, div, prelude::*, px, rgb,
 };
@@ -17,6 +19,7 @@ use crate::{
 
 #[derive(Clone, Debug)]
 pub struct TerminalPaneContext {
+    pub project_path: PathBuf,
     pub project_title: String,
     pub tab_title: String,
     pub pane: PaneConfig,
@@ -56,14 +59,14 @@ pub struct TerminalPaneView {
 impl TerminalPaneView {
     pub fn new(context: TerminalPaneContext, cx: &mut Context<Self>) -> Self {
         let TerminalPaneContext {
+            project_path,
             project_title,
             tab_title,
             pane,
         } = context;
-        let mut session = match spawn_portable_pty_session(TerminalSpawnRequest::for_shell(
-            &pane.id,
-            &pane.command,
-        )) {
+        let mut session = match spawn_portable_pty_session(
+            TerminalSpawnRequest::for_shell(&pane.id, &pane.command).cwd(project_path.clone()),
+        ) {
             Ok(session) => session,
             Err(error) => {
                 return Self {

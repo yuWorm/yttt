@@ -188,6 +188,20 @@ fn visible_pane_titles_come_from_selected_tab() {
 }
 
 #[test]
+fn root_view_terminal_pane_contexts_include_project_path() {
+    let root = RootView::dev_fixture();
+
+    let contexts = root.visible_terminal_pane_contexts();
+
+    assert_eq!(contexts.len(), 2);
+    assert!(
+        contexts
+            .iter()
+            .all(|context| context.project_path == PathBuf::from("/tmp/yttt"))
+    );
+}
+
+#[test]
 fn root_view_tab_palette_scopes_to_current_project_tabs() {
     let mut root = RootView::dev_fixture();
 

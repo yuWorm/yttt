@@ -83,6 +83,7 @@ const EMPTY_WORKSPACE_ACTIONS: [UiTextKey; 3] = [
 
 struct RenderTerminalPaneInput<'a> {
     project_id: &'a str,
+    project_path: &'a Path,
     project_title: &'a str,
     pane: &'a PaneConfig,
     tab_id: &'a str,
@@ -242,6 +243,24 @@ impl RootView {
             .iter()
             .map(|key| self.ui_text.get(*key))
             .collect()
+    }
+
+    pub fn visible_terminal_pane_contexts(&self) -> Vec<TerminalPaneContext> {
+        let Some((_project_id, project_path, project_title, _tab_id, tab_title, layout)) =
+            self.selected_tab_layout_clone()
+        else {
+            return Vec::new();
+        };
+
+        let mut contexts = Vec::new();
+        collect_terminal_pane_contexts(
+            &project_path,
+            &project_title,
+            &tab_title,
+            &layout,
+            &mut contexts,
+        );
+        contexts
     }
 
     pub fn last_opened_layout_file(&self) -> Option<&Path> {
@@ -482,7 +501,7 @@ impl RootView {
     fn active_terminal_split_view(&mut self, window: &Window, cx: &mut Context<Self>) -> Div {
         self.prune_terminal_panes();
 
-        let Some((project_id, project_title, tab_id, tab_title, layout)) =
+        let Some((project_id, project_path, project_title, tab_id, tab_title, layout)) =
             self.selected_tab_layout_clone()
         else {
             return div();
@@ -492,6 +511,7 @@ impl RootView {
             self.render_terminal_pane(
                 RenderTerminalPaneInput {
                     project_id: &project_id,
+                    project_path: &project_path,
                     project_title: &project_title,
                     pane,
                     tab_id,
@@ -511,7 +531,9 @@ impl RootView {
             .child(split_view_for_layout(&layout, &tab_id, &mut render_pane))
     }
 
-    fn selected_tab_layout_clone(&self) -> Option<(String, String, String, String, LayoutNode)> {
+    fn selected_tab_layout_clone(
+        &self,
+    ) -> Option<(String, PathBuf, String, String, String, LayoutNode)> {
         let selected_project_id = self.workspace.selected_project_id()?;
         let project = self.workspace.project(selected_project_id)?;
         let tab = project
@@ -522,6 +544,7 @@ impl RootView {
 
         Some((
             selected_project_id.as_str().to_string(),
+            project.path.clone(),
             project.layout.project.name.clone(),
             project.selected_tab_id.clone(),
             tab.title.clone(),
@@ -540,6 +563,7 @@ impl RootView {
             pane_view.clone()
         } else {
             let context = TerminalPaneContext {
+                project_path: input.project_path.to_path_buf(),
                 project_title: input.project_title.to_string(),
                 tab_title: input.tab_title.to_string(),
                 pane: input.pane.clone(),
@@ -948,6 +972,39 @@ fn collect_terminal_pane_keys(
         LayoutNode::Split(split) => {
             collect_terminal_pane_keys(project_id, tab_id, &split.left, keys);
             collect_terminal_pane_keys(project_id, tab_id, &split.right, keys);
+        }
+    }
+}
+
+fn collect_terminal_pane_contexts(
+    project_path: &Path,
+    project_title: &str,
+    tab_title: &str,
+    layout: &LayoutNode,
+    contexts: &mut Vec<TerminalPaneContext>,
+) {
+    match layout {
+        LayoutNode::Pane(pane) => contexts.push(TerminalPaneContext {
+            project_path: project_path.to_path_buf(),
+            project_title: project_title.to_string(),
+            tab_title: tab_title.to_string(),
+            pane: pane.clone(),
+        }),
+        LayoutNode::Split(split) => {
+            collect_terminal_pane_contexts(
+                project_path,
+                project_title,
+                tab_title,
+                &split.left,
+                contexts,
+            );
+            collect_terminal_pane_contexts(
+                project_path,
+                project_title,
+                tab_title,
+                &split.right,
+                contexts,
+            );
         }
     }
 }
