@@ -173,9 +173,22 @@ impl RootView {
             return Ok(());
         };
 
+        if !item.enabled {
+            let reason = item
+                .disabled_reason
+                .as_deref()
+                .unwrap_or("Command is unavailable");
+            self.load_error = Some(format!("Command unavailable: {reason}"));
+            return Ok(());
+        }
+
         match active_palette.kind {
             PaletteKind::Command => {
+                let opens_palette = opens_palette_command(item.command);
                 self.run_command(item.command)?;
+                if opens_palette {
+                    return Ok(());
+                }
             }
             PaletteKind::Project => {
                 let project_id = self
@@ -280,6 +293,22 @@ impl RootView {
 
     pub fn run_command(&mut self, command_id: CommandId) -> Result<(), RootViewError> {
         match command_id {
+            CommandId::CommandPaletteOpen => {
+                self.open_palette(PaletteKind::Command);
+                Ok(())
+            }
+            CommandId::ProjectPalette => {
+                self.open_palette(PaletteKind::Project);
+                Ok(())
+            }
+            CommandId::TabPalette => {
+                self.open_palette(PaletteKind::Tab);
+                Ok(())
+            }
+            CommandId::PanePalette => {
+                self.open_palette(PaletteKind::Pane);
+                Ok(())
+            }
             CommandId::ProjectClose => {
                 self.request_close_selected_project()?;
                 Ok(())
@@ -1072,6 +1101,16 @@ fn collect_terminal_pane_keys(
             collect_terminal_pane_keys(project_id, tab_id, &split.right, keys);
         }
     }
+}
+
+fn opens_palette_command(command_id: CommandId) -> bool {
+    matches!(
+        command_id,
+        CommandId::CommandPaletteOpen
+            | CommandId::ProjectPalette
+            | CommandId::TabPalette
+            | CommandId::PanePalette
+    )
 }
 
 fn collect_terminal_pane_contexts(

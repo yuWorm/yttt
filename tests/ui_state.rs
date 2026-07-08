@@ -280,6 +280,35 @@ fn root_view_confirming_pane_palette_selection_focuses_pane() {
 }
 
 #[test]
+fn root_view_confirming_disabled_command_palette_item_keeps_palette_open() {
+    let mut root = RootView::new();
+
+    root.open_palette(PaletteKind::Command);
+    root.set_palette_query("Split Pane Vertically");
+    root.confirm_palette_selection().unwrap();
+
+    assert!(root.active_palette().is_some());
+    assert_eq!(
+        root.visible_error_message(),
+        Some("Command unavailable: Open a project first")
+    );
+}
+
+#[test]
+fn root_view_command_palette_can_open_project_palette() {
+    let mut root = RootView::new();
+
+    root.open_palette(PaletteKind::Command);
+    root.set_palette_query("Open Project Palette");
+    root.confirm_palette_selection().unwrap();
+
+    assert!(matches!(
+        root.active_palette().map(|palette| palette.kind),
+        Some(PaletteKind::Project)
+    ));
+}
+
+#[test]
 fn root_view_focus_visible_terminal_pane_updates_focused_pane() {
     let mut root = RootView::dev_fixture();
 
