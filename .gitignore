@@ -1,4 +1,5 @@
 /target
+.worktrees/
 .superpowers/
 docs/superpowers
 docs/zed-screenshots
