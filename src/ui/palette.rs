@@ -1,5 +1,9 @@
-use gpui::{App, ClickEvent, Div, IntoElement, Window, div, prelude::*, px, rgb, rgba};
-use gpui_component::list::ListItem;
+use gpui::{App, ClickEvent, Div, Entity, IntoElement, Window, div, prelude::*, px, rgb, rgba};
+use gpui_component::{
+    IconName,
+    input::{Input, InputState},
+    list::ListItem,
+};
 
 use crate::palette::{ActivePalette, PaletteItem, PaletteKind};
 use crate::ui::components::SelectableState;
@@ -48,6 +52,7 @@ pub fn palette_overlay<H, F>(
     active_palette: &ActivePalette,
     items: &[PaletteItem],
     ui_text: &UiText,
+    query_input: &Entity<InputState>,
     on_confirm_item: F,
 ) -> impl IntoElement
 where
@@ -75,12 +80,12 @@ where
                 .border_color(rgb(0x2a2a2a))
                 .bg(rgb(0x151515))
                 .text_color(rgb(0xf5f5f5))
-                .child(palette_header(active_palette, ui_text))
+                .child(palette_header(active_palette, query_input))
                 .child(palette_items(rows, ui_text, on_confirm_item)),
         )
 }
 
-fn palette_header(active_palette: &ActivePalette, ui_text: &UiText) -> Div {
+fn palette_header(active_palette: &ActivePalette, query_input: &Entity<InputState>) -> Div {
     div()
         .flex()
         .flex_col()
@@ -94,13 +99,12 @@ fn palette_header(active_palette: &ActivePalette, ui_text: &UiText) -> Div {
                 .text_color(rgb(0xd4d4d4))
                 .child(palette_title(active_palette.kind)),
         )
-        .child(div().text_sm().text_color(rgb(0x737373)).child(
-            if active_palette.query.is_empty() {
-                ui_text.get(UiTextKey::TypeToFilter).to_string()
-            } else {
-                active_palette.query.clone()
-            },
-        ))
+        .child(
+            Input::new(query_input)
+                .prefix(IconName::Search)
+                .cleanable(true)
+                .appearance(false),
+        )
 }
 
 fn palette_items<H, F>(rows: Vec<PaletteRow>, ui_text: &UiText, mut on_confirm_item: F) -> Div

@@ -2,7 +2,10 @@ use gpui::{
     Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent,
     PathPromptOptions, Render, Subscription, Window, div, prelude::*, rgb, rgba,
 };
-use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::{
+    button::{Button, ButtonVariants as _},
+    input::{InputEvent, InputState},
+};
 
 use std::{
     collections::{HashMap, HashSet},
@@ -73,6 +76,9 @@ pub struct RootView {
     last_opened_keybindings_file: Option<PathBuf>,
     pending_close_project_id: Option<ProjectId>,
     focus_handle: Option<FocusHandle>,
+    palette_input: Option<Entity<InputState>>,
+    palette_input_subscription: Option<Subscription>,
+    palette_input_needs_focus: bool,
     terminal_panes: HashMap<String, Entity<TerminalPaneView>>,
     terminal_pane_subscriptions: HashMap<String, Subscription>,
     toast_queue: ToastQueue,
@@ -138,6 +144,9 @@ impl RootView {
             last_opened_keybindings_file: None,
             pending_close_project_id: None,
             focus_handle: None,
+            palette_input: None,
+            palette_input_subscription: None,
+            palette_input_needs_focus: false,
             terminal_panes: HashMap::new(),
             terminal_pane_subscriptions: HashMap::new(),
             toast_queue: ToastQueue::default(),
@@ -162,17 +171,34 @@ impl RootView {
 
     pub fn open_palette(&mut self, kind: PaletteKind) {
         self.active_palette = Some(ActivePalette::new(kind));
+        self.reset_palette_input();
+        self.palette_input_needs_focus = true;
     }
 
     pub fn close_palette(&mut self) {
         self.active_palette = None;
+        self.reset_palette_input();
     }
 
     pub fn set_palette_query(&mut self, query: impl Into<String>) {
         if let Some(active_palette) = &mut self.active_palette {
             active_palette.query = query.into();
             active_palette.selected_index = 0;
+            self.reset_palette_input();
         }
+    }
+
+    pub fn sync_palette_query_from_input_value(&mut self, query: impl Into<String>) -> bool {
+        let Some(active_palette) = &mut self.active_palette else {
+            return false;
+        };
+
+        let query = query.into();
+        if active_palette.query != query {
+            active_palette.query = query;
+            active_palette.selected_index = 0;
+        }
+        true
     }
 
     pub fn confirm_palette_selection(&mut self) -> Result<(), RootViewError> {
@@ -632,6 +658,42 @@ impl RootView {
         focus_handle
     }
 
+    fn reset_palette_input(&mut self) {
+        self.palette_input = None;
+        self.palette_input_subscription = None;
+        self.palette_input_needs_focus = false;
+    }
+
+    fn palette_query_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<InputState>> {
+        let active_palette = self.active_palette.as_ref()?;
+        let input = if let Some(input) = &self.palette_input {
+            input.clone()
+        } else {
+            let placeholder = self.ui_text.get(UiTextKey::TypeToFilter);
+            let query = active_palette.query.clone();
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(placeholder)
+                    .default_value(query)
+            });
+            let subscription = cx.subscribe_in(&input, window, Self::on_palette_input_event);
+            self.palette_input = Some(input.clone());
+            self.palette_input_subscription = Some(subscription);
+            input
+        };
+
+        if self.palette_input_needs_focus {
+            input.update(cx, |input, cx| input.focus(window, cx));
+            self.palette_input_needs_focus = false;
+        }
+
+        Some(input)
+    }
+
     fn active_terminal_split_view(&mut self, window: &Window, cx: &mut Context<Self>) -> Div {
         self.prune_terminal_panes();
 
@@ -754,6 +816,28 @@ impl RootView {
                 self.handle_terminal_notification(event.clone());
                 cx.notify();
             }
+        }
+    }
+
+    fn on_palette_input_event(
+        &mut self,
+        input: &Entity<InputState>,
+        event: &InputEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Change => {
+                let query = input.read(cx).value().to_string();
+                if self.sync_palette_query_from_input_value(query) {
+                    cx.notify();
+                }
+            }
+            InputEvent::PressEnter { .. } => {
+                let _ = self.confirm_palette_selection();
+                cx.notify();
+            }
+            InputEvent::Focus | InputEvent::Blur => {}
         }
     }
 
@@ -1187,22 +1271,25 @@ impl Render for RootView {
                 )
         };
 
-        if let Some(active_palette) = &self.active_palette {
+        if let Some(active_palette) = self.active_palette.clone() {
             let items = self.palette_items(active_palette.kind);
-            root = root.child(palette_overlay(
-                active_palette,
-                &items,
-                &self.ui_text,
-                |selected_index| {
-                    cx.listener(move |this, _, _window, cx| {
-                        if let Some(active_palette) = &mut this.active_palette {
-                            active_palette.selected_index = selected_index;
-                        }
-                        let _ = this.confirm_palette_selection();
-                        cx.notify();
-                    })
-                },
-            ));
+            if let Some(query_input) = self.palette_query_input(window, cx) {
+                root = root.child(palette_overlay(
+                    &active_palette,
+                    &items,
+                    &self.ui_text,
+                    &query_input,
+                    |selected_index| {
+                        cx.listener(move |this, _, _window, cx| {
+                            if let Some(active_palette) = &mut this.active_palette {
+                                active_palette.selected_index = selected_index;
+                            }
+                            let _ = this.confirm_palette_selection();
+                            cx.notify();
+                        })
+                    },
+                ));
+            }
         }
         if let Some(load_error) = &self.load_error {
             root = root.child(error_banner(load_error));

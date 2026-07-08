@@ -379,6 +379,24 @@ fn root_view_pane_palette_scopes_to_current_tab_panes() {
 }
 
 #[test]
+fn root_view_syncs_palette_query_from_input_value() {
+    let mut root = RootView::dev_fixture();
+    root.open_palette(PaletteKind::Tab);
+    root.set_palette_query("agent");
+
+    assert!(root.sync_palette_query_from_input_value("dev"));
+
+    assert_eq!(root.visible_palette_titles(), vec!["Dev"]);
+}
+
+#[test]
+fn root_view_ignores_palette_input_value_without_active_palette() {
+    let mut root = RootView::dev_fixture();
+
+    assert!(!root.sync_palette_query_from_input_value("dev"));
+}
+
+#[test]
 fn visible_palette_rows_mark_selected_filtered_item() {
     let mut palette = ActivePalette::new(PaletteKind::Command);
     palette.query = "tab".to_string();
