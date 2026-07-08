@@ -84,6 +84,7 @@ pub struct RootView {
     palette_input_subscription: Option<Subscription>,
     palette_input_needs_focus: bool,
     active_split_resize_drag: Option<ActiveSplitResizeDrag>,
+    pending_terminal_focus_pane_id: Option<String>,
     terminal_panes: HashMap<String, Entity<TerminalPaneView>>,
     terminal_pane_subscriptions: HashMap<String, Subscription>,
     toast_queue: ToastQueue,
@@ -164,6 +165,7 @@ impl RootView {
             palette_input_subscription: None,
             palette_input_needs_focus: false,
             active_split_resize_drag: None,
+            pending_terminal_focus_pane_id: None,
             terminal_panes: HashMap::new(),
             terminal_pane_subscriptions: HashMap::new(),
             toast_queue: ToastQueue::default(),
@@ -415,7 +417,12 @@ impl RootView {
 
     pub fn focus_visible_terminal_pane(&mut self, pane_id: &str) -> Result<(), RootViewError> {
         self.workspace.focus_pane(pane_id)?;
+        self.queue_terminal_focus(pane_id);
         Ok(())
+    }
+
+    pub fn pending_terminal_focus_pane_id(&self) -> Option<&str> {
+        self.pending_terminal_focus_pane_id.as_deref()
     }
 
     pub fn last_opened_layout_file(&self) -> Option<&Path> {
@@ -489,6 +496,9 @@ impl RootView {
             }
             _ => {
                 dispatch_workspace_command(&mut self.workspace, command_id)?;
+                if should_focus_terminal_after_command(command_id) {
+                    self.queue_selected_terminal_focus();
+                }
                 Ok(())
             }
         }
@@ -704,6 +714,24 @@ impl RootView {
         self.palette_input_needs_focus = false;
     }
 
+    fn queue_terminal_focus(&mut self, pane_id: &str) {
+        self.pending_terminal_focus_pane_id = Some(pane_id.to_string());
+    }
+
+    fn queue_selected_terminal_focus(&mut self) {
+        if let Some(pane_id) = self.selected_focused_pane_id().map(ToOwned::to_owned) {
+            self.queue_terminal_focus(&pane_id);
+        }
+    }
+
+    fn selected_focused_pane_id(&self) -> Option<&str> {
+        let project_id = self.workspace.selected_project_id()?;
+        let project = self.workspace.project(project_id)?;
+        project
+            .tab_state(&project.selected_tab_id)
+            .and_then(|tab| tab.focused_pane_id.as_deref())
+    }
+
     fn palette_query_input(
         &mut self,
         window: &mut Window,
@@ -734,7 +762,7 @@ impl RootView {
         Some(input)
     }
 
-    fn active_terminal_split_view(&mut self, window: &Window, cx: &mut Context<Self>) -> Div {
+    fn active_terminal_split_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         self.prune_terminal_panes();
 
         let Some((project_id, project_path, project_title, tab_id, tab_title, layout)) =
@@ -764,7 +792,7 @@ impl RootView {
         &mut self,
         layout: &LayoutNode,
         tree_input: &RenderTerminalTreeInput<'_>,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
         match layout {
@@ -823,7 +851,7 @@ impl RootView {
     fn render_terminal_pane(
         &mut self,
         input: RenderTerminalPaneInput<'_>,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let key = terminal_pane_key(input.project_id, input.tab_id, &input.pane.id);
@@ -847,6 +875,12 @@ impl RootView {
         };
 
         let pane_id = input.pane.id.clone();
+        if self.pending_terminal_focus_pane_id.as_deref() == Some(&pane_id) {
+            if pane_view.update(cx, |pane, cx| pane.focus_terminal(window, cx)) {
+                self.pending_terminal_focus_pane_id = None;
+            }
+        }
+
         let mut wrapper = div().flex().flex_1();
         wrapper
             .interactivity()
@@ -1607,6 +1641,23 @@ fn recent_projects_for_palette(config: RecentProjectsConfig) -> Vec<RecentProjec
             path: project.path,
         })
         .collect()
+}
+
+fn should_focus_terminal_after_command(command_id: CommandId) -> bool {
+    matches!(
+        command_id,
+        CommandId::TabNew
+            | CommandId::TabClose
+            | CommandId::TabNext
+            | CommandId::TabPrev
+            | CommandId::PaneSplitVertical
+            | CommandId::PaneSplitHorizontal
+            | CommandId::PaneClose
+            | CommandId::PaneFocusLeft
+            | CommandId::PaneFocusRight
+            | CommandId::PaneFocusUp
+            | CommandId::PaneFocusDown
+    )
 }
 
 fn layout_source_message(source: &LayoutSource) -> String {

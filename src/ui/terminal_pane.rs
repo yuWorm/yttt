@@ -217,6 +217,15 @@ impl TerminalPaneView {
             cx.emit(TerminalPaneEvent::Notification(event));
         }
     }
+
+    pub fn focus_terminal(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(terminal) = &self.terminal else {
+            return false;
+        };
+
+        terminal.read(cx).focus_handle().focus(window);
+        true
+    }
 }
 
 impl EventEmitter<TerminalPaneEvent> for TerminalPaneView {}

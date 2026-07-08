@@ -577,6 +577,33 @@ fn root_view_focus_visible_terminal_pane_updates_focused_pane() {
 }
 
 #[test]
+fn root_view_focus_visible_terminal_pane_queues_terminal_focus() {
+    let mut root = RootView::dev_fixture();
+
+    root.focus_visible_terminal_pane("shell").unwrap();
+
+    assert_eq!(root.pending_terminal_focus_pane_id(), Some("shell"));
+}
+
+#[test]
+fn root_view_pane_focus_command_queues_target_terminal_focus() {
+    let mut root = RootView::dev_fixture();
+
+    root.run_command(CommandId::PaneFocusRight).unwrap();
+
+    assert_eq!(root.pending_terminal_focus_pane_id(), Some("shell"));
+}
+
+#[test]
+fn root_view_split_command_queues_new_terminal_focus() {
+    let mut root = RootView::dev_fixture();
+
+    root.run_command(CommandId::PaneSplitVertical).unwrap();
+
+    assert_eq!(root.pending_terminal_focus_pane_id(), Some("pane-1"));
+}
+
+#[test]
 fn root_view_enqueues_agent_toast_notifications() {
     let mut root = RootView::new();
 
