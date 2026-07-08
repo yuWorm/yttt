@@ -18,6 +18,7 @@ pub enum UiTextKey {
     Started,
     Active,
     NoResults,
+    TypeToFilter,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -56,6 +57,7 @@ fn english(key: UiTextKey) -> &'static str {
         UiTextKey::Started => "started",
         UiTextKey::Active => "active",
         UiTextKey::NoResults => "No results",
+        UiTextKey::TypeToFilter => "Type to filter",
     }
 }
 
@@ -73,5 +75,6 @@ fn chinese(key: UiTextKey) -> &'static str {
         UiTextKey::Started => "已启动",
         UiTextKey::Active => "当前",
         UiTextKey::NoResults => "无结果",
+        UiTextKey::TypeToFilter => "输入以筛选",
     }
 }

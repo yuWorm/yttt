@@ -9,6 +9,7 @@ use yttt::{
     runtime::notification::{NotificationEvent, NotificationKind},
     runtime::terminal::{ExitReason, ProcessStatus},
     ui::components::SelectableState,
+    ui::i18n::{Locale, UiText},
     ui::palette::visible_palette_rows,
     ui::sidebar::visible_project_items,
     ui::terminal_pane::{
@@ -284,6 +285,35 @@ fn visible_palette_rows_mark_selected_filtered_item() {
     assert_eq!(rows[0].state, SelectableState::Inactive);
     assert_eq!(rows[1].id, "tab.prev");
     assert_eq!(rows[1].state, SelectableState::Active);
+}
+
+#[test]
+fn visible_palette_rows_mark_disabled_items() {
+    let registry = yttt::commands::default_registry();
+    let workspace = Workspace::new();
+    let items = yttt::palette::command_palette_items(
+        &registry,
+        yttt::palette::CommandPaletteContext::from_workspace(&workspace),
+    );
+    let mut palette = ActivePalette::new(PaletteKind::Command);
+    palette.query = "Split Pane Vertically".to_string();
+
+    let rows = visible_palette_rows(&palette, &items);
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].title, "Split Pane Vertically");
+    assert!(!rows[0].enabled);
+    assert_eq!(
+        rows[0].disabled_reason.as_deref(),
+        Some("Open a project first")
+    );
+}
+
+#[test]
+fn palette_empty_label_uses_localized_text() {
+    let text = UiText::new(Locale::Chinese);
+
+    assert_eq!(yttt::ui::palette::palette_empty_label(&text), "无结果");
 }
 
 #[test]
