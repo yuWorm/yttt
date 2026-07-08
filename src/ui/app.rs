@@ -13,6 +13,9 @@ use crate::{
 
 pub fn run() {
     Application::new().run(|cx: &mut App| {
+        #[cfg(target_os = "macos")]
+        crate::ui::macos::prepare_macos_app_runtime();
+
         gpui_component::init(cx);
         let config_paths = AppConfigPaths::for_app();
         let command_registry = default_registry();

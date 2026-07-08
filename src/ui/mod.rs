@@ -3,6 +3,8 @@ pub mod agent_status;
 pub mod app;
 pub mod components;
 pub mod i18n;
+#[cfg(target_os = "macos")]
+pub mod macos;
 pub mod palette;
 pub mod root;
 pub mod sidebar;

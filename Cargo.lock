@@ -7653,10 +7653,12 @@ name = "yttt"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cocoa 0.26.0",
  "directories",
  "gpui",
  "gpui-component",
  "gpui-terminal",
+ "objc",
  "portable-pty",
  "serde",
  "tempfile",
