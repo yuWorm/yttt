@@ -250,6 +250,29 @@ impl RootView {
         self.toast_queue.push(event);
     }
 
+    pub fn focus_notification_target(
+        &mut self,
+        event: &NotificationEvent,
+    ) -> Result<(), RootViewError> {
+        let project_id = ProjectId::new(event.project_id.clone());
+        if self.workspace.project(&project_id).is_none() {
+            return self.fail_workspace_error(WorkspaceError::ProjectNotFound(
+                project_id.as_str().to_string(),
+            ));
+        }
+
+        self.workspace.select_project(&project_id)?;
+        if let Err(error) = self.workspace.select_tab(&event.tab_id) {
+            return self.fail_workspace_error(error);
+        }
+        if let Err(error) = self.workspace.focus_pane(&event.pane_id) {
+            return self.fail_workspace_error(error);
+        }
+
+        self.load_error = None;
+        Ok(())
+    }
+
     pub fn visible_toast_titles(&self) -> Vec<String> {
         self.toast_queue.titles()
     }
@@ -509,6 +532,11 @@ impl RootView {
             .ok_or_else(|| WorkspaceError::ProjectNotFound(project_id.as_str().to_string()))?;
 
         Ok((project.path.clone(), project.layout.clone()))
+    }
+
+    fn fail_workspace_error<T>(&mut self, error: WorkspaceError) -> Result<T, RootViewError> {
+        self.load_error = Some(error.to_string());
+        Err(error.into())
     }
 
     fn select_next_palette_item(&mut self) -> bool {

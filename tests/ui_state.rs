@@ -440,6 +440,42 @@ fn root_view_formats_failed_agent_toast_notifications() {
 }
 
 #[test]
+fn root_view_focuses_notification_target() {
+    let mut root = RootView::dev_fixture();
+    let event = notification_event();
+
+    root.focus_notification_target(&event).unwrap();
+
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    assert_eq!(project_id.as_str(), "/tmp/yttt");
+    let project = root.workspace().project(&project_id).unwrap();
+    assert_eq!(project.selected_tab_id, "agent");
+    assert_eq!(
+        project
+            .tab_state("agent")
+            .unwrap()
+            .focused_pane_id
+            .as_deref(),
+        Some("codex")
+    );
+}
+
+#[test]
+fn root_view_reports_missing_notification_target() {
+    let mut root = RootView::dev_fixture();
+    let mut event = notification_event();
+    event.pane_id = "missing-pane".to_string();
+
+    let err = root.focus_notification_target(&event).unwrap_err();
+
+    assert!(err.to_string().contains("pane not found: missing-pane"));
+    assert_eq!(
+        root.visible_error_message(),
+        Some("pane not found: missing-pane")
+    );
+}
+
+#[test]
 fn visible_toast_items_show_three_recent_events_with_tone() {
     let mut root = RootView::new();
     root.handle_terminal_notification(notification_event_for(
