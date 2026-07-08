@@ -133,6 +133,10 @@ Run these before marking a product phase complete:
 - `YTTT_OPEN_PROJECT=/path/to/project cargo run` opens that project.
 - `YTTT_DEV_FIXTURE=1 cargo run` shows the development fixture.
 - `YTTT_DEV_FIXTURE=agent-exit cargo run` produces an agent completion toast.
+- On macOS, `scripts/run-dev-app.sh --fixture dev` creates and opens
+  `target/dev-app/yttt.app` for UI-tool-friendly smoke testing.
+- On macOS, `scripts/run-dev-app.sh --fixture agent` opens the agent exit fixture
+  through the same `.app` wrapper.
 - Terminal panes accept input and render output.
 - Terminal panes resize with the split area.
 - Command, project, tab, and pane palettes can be opened from keyboard.
@@ -150,4 +154,5 @@ Run these before marking a product phase complete:
 - No output parser for agent internal state.
 - No GUI layout editor.
 - No OS-level notification click handler yet.
-- No packaged release artifact yet.
+- No packaged release artifact yet. `scripts/run-dev-app.sh` is a development smoke
+  wrapper, not a release package.

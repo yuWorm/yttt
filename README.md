@@ -33,6 +33,15 @@ YTTT_DEV_FIXTURE=1 cargo run
 YTTT_DEV_FIXTURE=agent-exit cargo run
 ```
 
+For GPUI smoke testing on macOS, use the dev app wrapper. It creates
+`target/dev-app/yttt.app` with a stable bundle id so local UI tools can identify the
+window more reliably than the naked debug binary:
+
+```bash
+scripts/run-dev-app.sh --fixture dev
+scripts/run-dev-app.sh --fixture agent
+```
+
 ## Key Paths
 
 Project layout:
@@ -53,7 +62,7 @@ config directory cannot be found, the fallback is `$XDG_CONFIG_HOME/yttt` or `./
 
 - Manual GPUI visual verification is still required for several phase gates.
 - Real terminal input/output and resize should be smoke-tested in the launched app.
-- Pointer split resize is not complete.
+- Pointer split resize has code support, but still needs real GPUI smoke verification.
 - Agent state is process-level only; output parsing is intentionally not implemented.
 - System notification click routing is not wired to the OS yet.
 - Sessions and running processes are not restored after app restart.
