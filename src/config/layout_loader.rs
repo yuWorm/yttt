@@ -61,6 +61,7 @@ pub struct LayoutMerge {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LayoutSource {
     ProjectConfig(PathBuf),
+    ProjectConfigWithAppOverride { project: PathBuf, local: PathBuf },
     AppLocalConfig(PathBuf),
     CreatedAppLocalDefault(PathBuf),
 }
@@ -218,7 +219,7 @@ pub fn export_project_layout(
 pub fn merge_layouts(
     base: &ProjectLayout,
     local_override: &LayoutOverride,
-) -> anyhow::Result<LayoutMerge> {
+) -> Result<LayoutMerge, LayoutError> {
     let mut layout = base.clone();
     let mut warnings = Vec::new();
 
@@ -291,6 +292,15 @@ fn load_project_layout(
     let project_layout_file = paths.project_layout_file(project_path);
     if project_layout_file.exists() {
         let layout = read_project_layout(&project_layout_file)?;
+        let local_layout_file = paths.local_layout_file(project_path);
+        if local_layout_file.exists() {
+            if let Some((layout, layout_source)) =
+                read_local_project_override(&layout, &project_layout_file, &local_layout_file)?
+            {
+                return Ok((layout, layout_source));
+            }
+        }
+
         return Ok((layout, LayoutSource::ProjectConfig(project_layout_file)));
     }
 
@@ -314,6 +324,46 @@ fn read_project_layout(path: &Path) -> Result<ProjectLayout, ProjectOpenError> {
             path: path.to_path_buf(),
             source,
         })?;
+    parse_project_layout(path, &source)
+}
+
+fn read_local_project_override(
+    base: &ProjectLayout,
+    project_layout_file: &Path,
+    local_layout_file: &Path,
+) -> Result<Option<(ProjectLayout, LayoutSource)>, ProjectOpenError> {
+    let source = match fs::read_to_string(local_layout_file) {
+        Ok(source) => source,
+        Err(_error) => return Ok(None),
+    };
+
+    if let Ok(local_override) = toml::from_str::<LayoutOverride>(&source) {
+        let merged = merge_layouts(base, &local_override).map_err(|source| {
+            ProjectOpenError::InvalidProjectLayout {
+                path: local_layout_file.to_path_buf(),
+                source,
+            }
+        })?;
+        return Ok(Some((
+            merged.layout,
+            LayoutSource::ProjectConfigWithAppOverride {
+                project: project_layout_file.to_path_buf(),
+                local: local_layout_file.to_path_buf(),
+            },
+        )));
+    }
+
+    if let Ok(layout) = parse_project_layout(local_layout_file, &source) {
+        return Ok(Some((
+            layout,
+            LayoutSource::AppLocalConfig(local_layout_file.to_path_buf()),
+        )));
+    }
+
+    Ok(None)
+}
+
+fn parse_project_layout(path: &Path, source: &str) -> Result<ProjectLayout, ProjectOpenError> {
     let layout: ProjectLayout =
         toml::from_str(&source).map_err(|source| ProjectOpenError::ParseProjectLayout {
             path: path.to_path_buf(),

@@ -234,6 +234,113 @@ fn config_project_layout_reports_project_config_source() {
 }
 
 #[test]
+fn config_project_layout_merges_app_local_override() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("override-source");
+    let project_config_dir = project_dir.join(".yttt");
+    fs::create_dir_all(&project_config_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    fs::write(
+        project_config_dir.join("layout.toml"),
+        toml::to_string_pretty(&sample_layout()).unwrap(),
+    )
+    .unwrap();
+    let opened_project_dir = project_dir.canonicalize().unwrap();
+    let local_layout_file = paths.local_layout_file(&opened_project_dir);
+    fs::create_dir_all(local_layout_file.parent().unwrap()).unwrap();
+    let override_layout = LayoutOverride {
+        tabs: vec![TabOverride {
+            id: "dev".to_string(),
+            title: Some("Development".to_string()),
+            layout: Some(LayoutNodeOverride::Pane(PaneOverride {
+                id: "server".to_string(),
+                command: Some("pnpm dev".to_string()),
+                ..Default::default()
+            })),
+        }],
+        ..Default::default()
+    };
+    fs::write(
+        &local_layout_file,
+        toml::to_string_pretty(&override_layout).unwrap(),
+    )
+    .unwrap();
+
+    let opened = open_project_config(&paths, &project_dir).unwrap();
+
+    assert_eq!(opened.layout.tab("dev").unwrap().title, "Development");
+    assert_eq!(
+        opened
+            .layout
+            .tab("dev")
+            .unwrap()
+            .layout
+            .find_pane("server")
+            .unwrap()
+            .command,
+        "pnpm dev"
+    );
+    assert_eq!(
+        opened.layout_source,
+        LayoutSource::ProjectConfigWithAppOverride {
+            project: paths.project_layout_file(&opened.path),
+            local: local_layout_file,
+        }
+    );
+}
+
+#[test]
+fn config_project_layout_with_full_app_local_layout_uses_compat_fallback() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("full-local-source");
+    let project_config_dir = project_dir.join(".yttt");
+    fs::create_dir_all(&project_config_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    fs::write(
+        project_config_dir.join("layout.toml"),
+        toml::to_string_pretty(&sample_layout()).unwrap(),
+    )
+    .unwrap();
+    let mut local_layout = sample_layout();
+    local_layout.project.name = "local name".to_string();
+    let local_layout_file =
+        save_local_layout(&paths, &project_dir.canonicalize().unwrap(), &local_layout).unwrap();
+
+    let opened = open_project_config(&paths, &project_dir).unwrap();
+
+    assert_eq!(opened.layout.project.name, "local name");
+    assert_eq!(
+        opened.layout_source,
+        LayoutSource::AppLocalConfig(local_layout_file)
+    );
+}
+
+#[test]
+fn config_invalid_app_local_override_is_ignored_when_project_config_exists() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("invalid-local-override");
+    let project_config_dir = project_dir.join(".yttt");
+    fs::create_dir_all(&project_config_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    fs::write(
+        project_config_dir.join("layout.toml"),
+        toml::to_string_pretty(&sample_layout()).unwrap(),
+    )
+    .unwrap();
+    let local_layout_file = paths.local_layout_file(&project_dir.canonicalize().unwrap());
+    fs::create_dir_all(local_layout_file.parent().unwrap()).unwrap();
+    fs::write(&local_layout_file, "[not valid toml").unwrap();
+
+    let opened = open_project_config(&paths, &project_dir).unwrap();
+
+    assert_eq!(opened.layout.project.name, "yttt");
+    assert_eq!(
+        opened.layout_source,
+        LayoutSource::ProjectConfig(paths.project_layout_file(&opened.path))
+    );
+}
+
+#[test]
 fn config_local_layout_reports_app_local_source() {
     let temp = tempdir().unwrap();
     let project_dir = temp.path().join("local-source");

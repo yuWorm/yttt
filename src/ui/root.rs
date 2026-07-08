@@ -1268,6 +1268,7 @@ fn recent_projects_for_palette(config: RecentProjectsConfig) -> Vec<RecentProjec
 fn layout_source_message(source: &LayoutSource) -> String {
     let source_name = match source {
         LayoutSource::ProjectConfig(_) => "project config",
+        LayoutSource::ProjectConfigWithAppOverride { .. } => "project config + app-local override",
         LayoutSource::AppLocalConfig(_) => "app-local layout",
         LayoutSource::CreatedAppLocalDefault(_) => "created app-local default",
     };
