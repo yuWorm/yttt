@@ -19,8 +19,8 @@ use crate::{
             KeybindingLoadWarning, KeybindingsLoadError, ensure_keybindings_file, load_keybindings,
         },
         layout_loader::{
-            ProjectOpenError, RecentProjectsConfig, export_project_layout, load_recent_projects,
-            open_project_config, save_local_layout,
+            LayoutSource, ProjectOpenError, RecentProjectsConfig, export_project_layout,
+            load_recent_projects, open_project_config, save_local_layout,
         },
         paths::AppConfigPaths,
     },
@@ -61,6 +61,7 @@ pub struct RootView {
     command_registry: CommandRegistry,
     recent_projects: Vec<RecentProject>,
     load_error: Option<String>,
+    layout_source_messages: HashMap<ProjectId, String>,
     keybinding_warning_lines: Vec<String>,
     last_opened_layout_file: Option<PathBuf>,
     last_opened_keybindings_file: Option<PathBuf>,
@@ -125,6 +126,7 @@ impl RootView {
             command_registry,
             recent_projects,
             load_error,
+            layout_source_messages: HashMap::new(),
             keybinding_warning_lines,
             last_opened_layout_file: None,
             last_opened_keybindings_file: None,
@@ -256,6 +258,13 @@ impl RootView {
         self.load_error.as_deref()
     }
 
+    pub fn visible_layout_source_message(&self) -> Option<&str> {
+        let selected_project_id = self.workspace.selected_project_id()?;
+        self.layout_source_messages
+            .get(selected_project_id)
+            .map(String::as_str)
+    }
+
     pub fn visible_keybinding_warning_lines(&self) -> Vec<&str> {
         self.keybinding_warning_lines
             .iter()
@@ -341,14 +350,18 @@ impl RootView {
             }
             CommandId::LayoutOpenFile => {
                 let (project_path, _layout) = self.selected_project_layout_snapshot()?;
-                let path = self.config_paths.project_layout_file(&project_path);
-                if path.exists() {
-                    self.last_opened_layout_file = Some(path);
+                let project_layout_file = self.config_paths.project_layout_file(&project_path);
+                let local_layout_file = self.config_paths.local_layout_file(&project_path);
+                if project_layout_file.exists() {
+                    self.last_opened_layout_file = Some(project_layout_file);
+                    self.load_error = None;
+                } else if local_layout_file.exists() {
+                    self.last_opened_layout_file = Some(local_layout_file);
                     self.load_error = None;
                 } else {
                     self.load_error = Some(format!(
-                        "Project layout file does not exist: {}",
-                        path.display()
+                        "Layout file does not exist: {}",
+                        project_layout_file.display()
                     ));
                 }
                 Ok(())
@@ -389,6 +402,7 @@ impl RootView {
             .ok_or(WorkspaceError::NoSelectedProject)?;
         let closed = self.workspace.confirm_close_project(&project_id)?;
         self.pending_close_project_id = None;
+        self.layout_source_messages.remove(&closed.project_id);
         self.remove_terminal_panes_for_project(closed.project_id.as_str());
         Ok(())
     }
@@ -403,7 +417,10 @@ impl RootView {
     ) -> Result<(), RootViewError> {
         match open_project_config(&self.config_paths, project_path.as_ref()) {
             Ok(opened) => {
-                self.workspace.open_project(opened.path, opened.layout)?;
+                let source_message = layout_source_message(&opened.layout_source);
+                let project_id = self.workspace.open_project(opened.path, opened.layout)?;
+                self.layout_source_messages
+                    .insert(project_id, source_message);
                 self.recent_projects = recent_projects_for_palette(opened.recent_projects);
                 self.load_error = None;
                 Ok(())
@@ -460,6 +477,7 @@ impl RootView {
         match &decision {
             CloseProjectDecision::Closed(closed) => {
                 self.pending_close_project_id = None;
+                self.layout_source_messages.remove(&closed.project_id);
                 self.remove_terminal_panes_for_project(closed.project_id.as_str());
             }
             CloseProjectDecision::NeedsConfirmation { project_id, .. } => {
@@ -1170,6 +1188,16 @@ fn recent_projects_for_palette(config: RecentProjectsConfig) -> Vec<RecentProjec
             path: project.path,
         })
         .collect()
+}
+
+fn layout_source_message(source: &LayoutSource) -> String {
+    let source_name = match source {
+        LayoutSource::ProjectConfig(_) => "project config",
+        LayoutSource::AppLocalConfig(_) => "app-local layout",
+        LayoutSource::CreatedAppLocalDefault(_) => "created app-local default",
+    };
+
+    format!("Layout source: {source_name}")
 }
 
 fn load_keybindings_messages(

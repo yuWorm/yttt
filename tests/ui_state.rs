@@ -99,6 +99,41 @@ fn root_view_layout_commands_write_current_project_files() {
 }
 
 #[test]
+fn root_view_exposes_created_app_local_layout_source() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("source-message-project");
+    fs::create_dir(&project_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths);
+
+    root.open_project_path(&project_dir).unwrap();
+
+    assert_eq!(
+        root.visible_layout_source_message(),
+        Some("Layout source: created app-local default")
+    );
+}
+
+#[test]
+fn root_view_layout_open_file_falls_back_to_app_local_layout() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("local-layout-open-project");
+    fs::create_dir(&project_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let expected_layout_file = paths.local_layout_file(&project_dir.canonicalize().unwrap());
+    let mut root = RootView::with_config_paths(paths);
+    root.open_project_path(&project_dir).unwrap();
+
+    root.run_command(CommandId::LayoutOpenFile).unwrap();
+
+    assert_eq!(
+        root.last_opened_layout_file(),
+        Some(expected_layout_file.as_path())
+    );
+    assert_eq!(root.visible_error_message(), None);
+}
+
+#[test]
 fn root_view_project_close_command_requires_confirmation_for_running_project() {
     let mut root = RootView::dev_fixture();
     let project_id = root.workspace().selected_project_id().unwrap().clone();
