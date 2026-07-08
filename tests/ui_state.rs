@@ -19,7 +19,7 @@ use yttt::{
     ui::palette::visible_palette_rows,
     ui::sidebar::visible_project_items,
     ui::terminal_pane::{
-        PaneLifecycle, TerminalPaneExitInput, TerminalSpawnFailure,
+        PaneLifecycle, TerminalPaneExitInput, TerminalPaneExitedEvent, TerminalSpawnFailure,
         notification_for_terminal_pane_exit, pane_lifecycle_label, spawn_failure_lines,
     },
     ui::toast::{ToastTone, toast_item_for_event, visible_toast_items},
@@ -694,6 +694,58 @@ fn root_view_split_command_queues_new_terminal_focus() {
 }
 
 #[test]
+fn root_view_terminal_exit_closes_exact_split_pane() {
+    let mut root = RootView::dev_fixture();
+
+    root.handle_terminal_pane_exit(terminal_pane_exited_event("dev", "server"))
+        .unwrap();
+
+    assert_eq!(visible_pane_titles(root.workspace()), vec!["shell"]);
+    assert!(
+        root.visible_terminal_pane_contexts()
+            .iter()
+            .all(|context| context.pane.id != "server")
+    );
+}
+
+#[test]
+fn root_view_terminal_exit_closes_single_pane_tab() {
+    let mut root = RootView::dev_fixture();
+    root.workspace_mut().select_tab("agent").unwrap();
+
+    root.handle_terminal_pane_exit(terminal_pane_exited_event("agent", "codex"))
+        .unwrap();
+
+    assert_eq!(visible_tab_titles(root.workspace()), vec!["Dev"]);
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let project = root.workspace().project(&project_id).unwrap();
+    assert_eq!(project.selected_tab_id, "dev");
+}
+
+#[test]
+fn root_view_terminal_exit_keeps_project_open_when_last_tab_closes() {
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(PathBuf::from("/tmp/single"), single_tab_layout())
+        .unwrap();
+    let mut root = RootView::with_workspace_for_test(workspace);
+
+    root.handle_terminal_pane_exit(TerminalPaneExitedEvent {
+        project_id: "/tmp/single".to_string(),
+        tab_id: "dev".to_string(),
+        pane_id: "shell".to_string(),
+        status: ProcessStatus::Exited { code: Some(0) },
+        exit_reason: ExitReason::Completed,
+    })
+    .unwrap();
+
+    assert_eq!(root.workspace().opened_projects().len(), 1);
+    assert!(visible_tab_titles(root.workspace()).is_empty());
+    assert!(root.visible_terminal_pane_contexts().is_empty());
+    assert!(root.selected_project_is_empty());
+}
+
+#[test]
 fn root_view_focus_notification_target_queues_terminal_focus() {
     let mut root = RootView::dev_fixture();
     let event = notification_event();
@@ -866,6 +918,21 @@ fn terminal_pane_agent_exit_builds_notification_event() {
 }
 
 #[test]
+fn terminal_pane_exit_event_preserves_process_identity() {
+    let event = TerminalPaneExitedEvent {
+        project_id: "/tmp/yttt".to_string(),
+        tab_id: "dev".to_string(),
+        pane_id: "server".to_string(),
+        status: ProcessStatus::Exited { code: Some(0) },
+        exit_reason: ExitReason::Completed,
+    };
+
+    assert_eq!(event.project_id, "/tmp/yttt");
+    assert_eq!(event.tab_id, "dev");
+    assert_eq!(event.pane_id, "server");
+}
+
+#[test]
 fn terminal_pane_lifecycle_labels_are_visible() {
     assert_eq!(pane_lifecycle_label(&PaneLifecycle::Running), "running");
     assert_eq!(
@@ -930,6 +997,16 @@ fn terminal_pane_exit_input(
         notify_on_exit: true,
         status,
         exit_reason,
+    }
+}
+
+fn terminal_pane_exited_event(tab_id: &str, pane_id: &str) -> TerminalPaneExitedEvent {
+    TerminalPaneExitedEvent {
+        project_id: "/tmp/yttt".to_string(),
+        tab_id: tab_id.to_string(),
+        pane_id: pane_id.to_string(),
+        status: ProcessStatus::Exited { code: Some(0) },
+        exit_reason: ExitReason::Completed,
     }
 }
 
@@ -998,6 +1075,22 @@ fn sample_layout() -> yttt::model::layout::ProjectLayout {
         id = "agent"
         title = "Agent"
         layout = { type = "pane", id = "codex", title = "Codex", command = "codex", kind = "agent", notify_on_exit = true }
+    "#,
+    )
+    .unwrap()
+}
+
+fn single_tab_layout() -> yttt::model::layout::ProjectLayout {
+    toml::from_str(
+        r#"
+        [project]
+        name = "single"
+        default_tab = "dev"
+
+        [[tabs]]
+        id = "dev"
+        title = "Dev"
+        layout = { type = "pane", id = "shell", title = "shell", command = "$SHELL" }
     "#,
     )
     .unwrap()

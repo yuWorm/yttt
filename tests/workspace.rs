@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use yttt::model::workspace::{
-    AgentStatus, CloseProjectDecision, CloseProjectError, ClosedProject, PaneProcessState,
-    TabStartState, Workspace,
+    AgentStatus, CloseProjectDecision, CloseProjectError, ClosedProject, PaneExitCloseOutcome,
+    PaneProcessState, TabStartState, Workspace,
 };
 
 #[test]
@@ -188,6 +188,82 @@ fn close_selected_tab_rejects_last_tab() {
         err,
         yttt::model::workspace::WorkspaceError::CannotCloseLastTab
     );
+}
+
+#[test]
+fn process_exit_closes_exact_pane_without_changing_project_selection() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+
+    let outcome = workspace
+        .close_pane_for_exit(&project_id, "dev", "server")
+        .unwrap();
+
+    let project = workspace.project(&project_id).unwrap();
+    assert_eq!(outcome, PaneExitCloseOutcome::PaneClosed);
+    assert!(
+        project
+            .layout
+            .tab("dev")
+            .unwrap()
+            .layout
+            .find_pane("server")
+            .is_none()
+    );
+    assert!(
+        project
+            .layout
+            .tab("dev")
+            .unwrap()
+            .layout
+            .find_pane("shell")
+            .is_some()
+    );
+    assert_eq!(project.selected_tab_id, "dev");
+    assert_eq!(
+        project.tab_state("dev").unwrap().focused_pane_id.as_deref(),
+        Some("shell")
+    );
+}
+
+#[test]
+fn process_exit_closes_single_pane_tab() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+    workspace.select_tab("agent").unwrap();
+
+    let outcome = workspace
+        .close_pane_for_exit(&project_id, "agent", "codex")
+        .unwrap();
+
+    let project = workspace.project(&project_id).unwrap();
+    assert_eq!(outcome, PaneExitCloseOutcome::TabClosed);
+    assert!(project.layout.tab("agent").is_none());
+    assert!(project.tab_state("agent").is_none());
+    assert_eq!(project.selected_tab_id, "dev");
+}
+
+#[test]
+fn process_exit_keeps_project_open_when_last_tab_closes() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(PathBuf::from("/tmp/single"), single_tab_layout())
+        .unwrap();
+
+    let outcome = workspace
+        .close_pane_for_exit(&project_id, "dev", "shell")
+        .unwrap();
+
+    let project = workspace.project(&project_id).unwrap();
+    assert_eq!(outcome, PaneExitCloseOutcome::ProjectEmptied);
+    assert_eq!(workspace.opened_projects().len(), 1);
+    assert!(project.layout.tabs.is_empty());
+    assert!(project.tab_states.is_empty());
+    assert_eq!(project.selected_tab_id, "");
 }
 
 #[test]

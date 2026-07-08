@@ -40,3 +40,14 @@ fn ui_text_returns_close_project_dialog_labels() {
     assert_eq!(chinese.get(UiTextKey::Cancel), "取消");
     assert_eq!(chinese.get(UiTextKey::CloseProjectAction), "关闭项目");
 }
+
+#[test]
+fn ui_text_returns_project_empty_terminal_labels() {
+    let english = UiText::english();
+    let chinese = UiText::new(Locale::Chinese);
+
+    assert_eq!(english.get(UiTextKey::NoTerminalTabs), "No terminal tabs");
+    assert_eq!(english.get(UiTextKey::NewTab), "New Tab");
+    assert_eq!(chinese.get(UiTextKey::NoTerminalTabs), "暂无终端标签页");
+    assert_eq!(chinese.get(UiTextKey::NewTab), "新建标签页");
+}

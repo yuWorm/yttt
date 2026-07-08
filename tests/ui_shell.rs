@@ -36,7 +36,8 @@ fn workbench_theme_keeps_focus_and_selection_muted() {
     let theme = WorkbenchTheme::dark();
 
     assert_ne!(theme.focused_pane_border, theme.focus_ring);
-    assert_eq!(theme.focused_pane_border, theme.border_strong);
+    assert_ne!(theme.focused_pane_border, theme.border_strong);
+    assert_ne!(theme.focused_pane_border, theme.split_line);
     assert_ne!(theme.active_surface, theme.accent);
     assert_ne!(theme.hover_surface, theme.accent);
 }

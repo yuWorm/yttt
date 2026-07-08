@@ -35,7 +35,8 @@ use crate::{
         ids::ProjectId,
         layout::{LayoutNode, PaneConfig, ProjectLayout, SplitDirection},
         workspace::{
-            AgentStatus, CloseProjectDecision, CloseProjectError, Workspace, WorkspaceError,
+            AgentStatus, CloseProjectDecision, CloseProjectError, PaneExitCloseOutcome, Workspace,
+            WorkspaceError,
         },
     },
     palette::{
@@ -65,7 +66,9 @@ use crate::{
         sidebar::project_sidebar,
         split_view::{pointer_resize_for_drag_delta, split_child_basis},
         tabs::project_tabs,
-        terminal_pane::{TerminalPaneContext, TerminalPaneEvent, TerminalPaneView},
+        terminal_pane::{
+            TerminalPaneContext, TerminalPaneEvent, TerminalPaneExitedEvent, TerminalPaneView,
+        },
         theme::WorkbenchTheme,
         titlebar::{TitlebarInfo, compact_path_for_titlebar, workbench_titlebar},
         toast::{ToastQueue, ToastTone, toast_item_for_event},
@@ -465,6 +468,37 @@ impl RootView {
         contexts
     }
 
+    pub fn selected_project_is_empty(&self) -> bool {
+        let Some(selected_project_id) = self.workspace.selected_project_id() else {
+            return false;
+        };
+        self.workspace
+            .project(selected_project_id)
+            .map(|project| project.layout.tabs.is_empty())
+            .unwrap_or(false)
+    }
+
+    pub fn handle_terminal_pane_exit(
+        &mut self,
+        event: TerminalPaneExitedEvent,
+    ) -> Result<PaneExitCloseOutcome, RootViewError> {
+        let project_id = ProjectId::new(event.project_id.clone());
+        let outcome =
+            self.workspace
+                .close_pane_for_exit(&project_id, &event.tab_id, &event.pane_id)?;
+        let key = terminal_pane_key(&event.project_id, &event.tab_id, &event.pane_id);
+        self.terminal_panes.remove(&key);
+        self.terminal_pane_subscriptions.remove(&key);
+
+        if self.pending_terminal_focus_pane_id.as_deref() == Some(event.pane_id.as_str()) {
+            self.pending_terminal_focus_pane_id = None;
+        }
+        self.queue_selected_terminal_focus();
+        self.load_error = None;
+
+        Ok(outcome)
+    }
+
     pub fn focus_visible_terminal_pane(&mut self, pane_id: &str) -> Result<(), RootViewError> {
         self.workspace.focus_pane(pane_id)?;
         self.queue_terminal_focus(pane_id);
@@ -664,6 +698,10 @@ impl RootView {
                 agent_exit_fixture_layout(),
             )
             .expect("agent exit fixture layout should be valid");
+        Self::with_workspace(workspace)
+    }
+
+    pub fn with_workspace_for_test(workspace: Workspace) -> Self {
         Self::with_workspace(workspace)
     }
 
@@ -870,7 +908,7 @@ impl RootView {
         let Some((project_id, project_path, project_title, tab_id, tab_title, layout)) =
             self.selected_tab_layout_clone()
         else {
-            return div();
+            return project_empty_terminal_state(cx, &self.ui_text, &self.theme);
         };
 
         let focused_pane_id = self.selected_focused_pane_id().map(ToOwned::to_owned);
@@ -1038,6 +1076,12 @@ impl RootView {
                 let event = event.clone();
                 self.handle_terminal_notification(event.clone());
                 push_component_notification(root, event, _window, cx);
+                cx.notify();
+            }
+            TerminalPaneEvent::Exited(event) => {
+                if let Err(error) = self.handle_terminal_pane_exit(event.clone()) {
+                    self.load_error = Some(error.to_string());
+                }
                 cx.notify();
             }
         }
@@ -2066,6 +2110,41 @@ fn empty_workspace(cx: &mut Context<RootView>, ui_text: &UiText, theme: &Workben
                         this.on_open_command_palette(&OpenCommandPalette, window, cx);
                     })),
                 ),
+        )
+}
+
+fn project_empty_terminal_state(
+    cx: &mut Context<RootView>,
+    ui_text: &UiText,
+    theme: &WorkbenchTheme,
+) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .flex_1()
+        .w_full()
+        .justify_center()
+        .items_center()
+        .bg(theme.terminal_background)
+        .text_color(theme.text)
+        .child(
+            div()
+                .text_sm()
+                .text_color(theme.text_muted)
+                .child(ui_text.get(UiTextKey::NoTerminalTabs)),
+        )
+        .child(
+            workbench_action_button(
+                "project-empty-new-tab",
+                ui_text.get(UiTextKey::NewTab),
+                "secondary-t",
+                ActionEmphasis::Primary,
+            )
+            .on_click(cx.listener(|this, _, _window, cx| {
+                let _ = this.run_command(CommandId::TabNew);
+                cx.notify();
+            })),
         )
 }
 

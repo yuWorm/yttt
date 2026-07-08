@@ -53,7 +53,7 @@ impl WorkbenchTheme {
             success: rgb(0x22c55e),
             warning: rgb(0xf59e0b),
             focus_ring: rgb(0x7aa2f7),
-            focused_pane_border: rgb(0x414852),
+            focused_pane_border: rgb(0x6f7785),
             split_line_width: px(1.0),
             split_hit_area_width: px(7.0),
             terminal_font_size: px(13.0),

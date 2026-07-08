@@ -31,6 +31,16 @@ pub struct TerminalPaneContext {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TerminalPaneEvent {
     Notification(NotificationEvent),
+    Exited(TerminalPaneExitedEvent),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalPaneExitedEvent {
+    pub project_id: String,
+    pub tab_id: String,
+    pub pane_id: String,
+    pub status: ProcessStatus,
+    pub exit_reason: ExitReason,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -206,6 +216,13 @@ impl TerminalPaneView {
             code,
             reason: exit_reason,
         };
+        let exit_event = TerminalPaneExitedEvent {
+            project_id: self.project_id.clone(),
+            tab_id: self.tab_id.clone(),
+            pane_id: self.pane_id.clone(),
+            status: status.clone(),
+            exit_reason,
+        };
         let event = notification_for_terminal_pane_exit(TerminalPaneExitInput {
             project_id: self.project_id.clone(),
             project_title: self.project_title.clone(),
@@ -223,6 +240,7 @@ impl TerminalPaneView {
         if let Some(event) = event {
             cx.emit(TerminalPaneEvent::Notification(event));
         }
+        cx.emit(TerminalPaneEvent::Exited(exit_event));
     }
 
     pub fn focus_terminal(&self, window: &Window, cx: &mut Context<Self>) -> bool {

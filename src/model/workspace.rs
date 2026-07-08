@@ -392,6 +392,83 @@ impl Workspace {
         Ok(focused_pane_id)
     }
 
+    pub fn close_pane_for_exit(
+        &mut self,
+        project_id: &ProjectId,
+        tab_id: &str,
+        pane_id: &str,
+    ) -> Result<PaneExitCloseOutcome, WorkspaceError> {
+        let project = self
+            .opened_projects
+            .iter_mut()
+            .find(|project| &project.id == project_id)
+            .ok_or_else(|| WorkspaceError::ProjectNotFound(project_id.as_str().to_string()))?;
+        let tab_index = project
+            .layout
+            .tabs
+            .iter()
+            .position(|tab| tab.id == tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(tab_id.to_string()))?;
+
+        if project.layout.tabs[tab_index]
+            .layout
+            .find_pane(pane_id)
+            .is_none()
+        {
+            return Err(WorkspaceError::PaneNotFound(pane_id.to_string()));
+        }
+
+        if pane_count(&project.layout.tabs[tab_index].layout) > 1 {
+            if !remove_pane_node(&mut project.layout.tabs[tab_index].layout, pane_id) {
+                return Err(WorkspaceError::PaneNotFound(pane_id.to_string()));
+            }
+
+            let remaining_panes = pane_ids(&project.layout.tabs[tab_index].layout);
+            let tab_state = project
+                .tab_state_mut(tab_id)
+                .ok_or_else(|| WorkspaceError::TabNotFound(tab_id.to_string()))?;
+            tab_state.pane_states.retain(|pane| pane.pane_id != pane_id);
+            if tab_state.focused_pane_id.as_deref() == Some(pane_id)
+                || tab_state
+                    .focused_pane_id
+                    .as_ref()
+                    .is_none_or(|focused| !remaining_panes.iter().any(|pane| pane == focused))
+            {
+                tab_state.focused_pane_id = remaining_panes.first().cloned();
+            }
+
+            return Ok(PaneExitCloseOutcome::PaneClosed);
+        }
+
+        let removed_tab_id = project.layout.tabs.remove(tab_index).id;
+        project
+            .tab_states
+            .retain(|tab| tab.tab_id != removed_tab_id);
+
+        if project.layout.tabs.is_empty() {
+            project.selected_tab_id.clear();
+            return Ok(PaneExitCloseOutcome::ProjectEmptied);
+        }
+
+        if project.selected_tab_id == removed_tab_id {
+            let next_index = tab_index.min(project.layout.tabs.len().saturating_sub(1));
+            let next_tab_id = project.layout.tabs[next_index].id.clone();
+            project.selected_tab_id = next_tab_id.clone();
+            let next_tab_state = project
+                .tab_state_mut(&next_tab_id)
+                .ok_or_else(|| WorkspaceError::TabNotFound(next_tab_id.clone()))?;
+            next_tab_state.start_state = TabStartState::Started;
+            if next_tab_state.focused_pane_id.is_none() {
+                next_tab_state.focused_pane_id = next_tab_state
+                    .pane_states
+                    .first()
+                    .map(|pane| pane.pane_id.clone());
+            }
+        }
+
+        Ok(PaneExitCloseOutcome::TabClosed)
+    }
+
     pub fn rename_focused_pane(&mut self, title: &str) -> Result<(), WorkspaceError> {
         let title = normalized_title(title)?;
         let project = self.selected_project_mut()?;
@@ -655,6 +732,13 @@ pub enum PaneProcessState {
     Idle,
     Running,
     Exited,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaneExitCloseOutcome {
+    PaneClosed,
+    TabClosed,
+    ProjectEmptied,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
