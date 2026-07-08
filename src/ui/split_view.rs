@@ -1,4 +1,4 @@
-use gpui::{Div, IntoElement, div, prelude::*, rgb};
+use gpui::{Div, IntoElement, div, prelude::*, relative, rgb};
 
 use crate::model::{
     layout::{LayoutNode, PaneConfig, SplitDirection},
@@ -13,6 +13,27 @@ pub fn visible_pane_titles(workspace: &Workspace) -> Vec<String> {
     let mut titles = Vec::new();
     collect_pane_titles(layout, &mut titles);
     titles
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SplitChildBasis {
+    pub left: f32,
+    pub right: f32,
+}
+
+pub fn root_split_child_basis(workspace: &Workspace) -> Option<SplitChildBasis> {
+    let (_project, layout) = selected_tab_layout(workspace)?;
+    match layout {
+        LayoutNode::Pane(_) => None,
+        LayoutNode::Split(split) => Some(split_child_basis(split.ratio)),
+    }
+}
+
+pub fn split_child_basis(ratio: f32) -> SplitChildBasis {
+    SplitChildBasis {
+        left: ratio,
+        right: 1.0 - ratio,
+    }
 }
 
 pub fn active_split_view(workspace: &Workspace) -> impl IntoElement {
@@ -54,15 +75,32 @@ pub fn split_view_for_layout(
     match layout {
         LayoutNode::Pane(pane) => render_pane(pane, tab_id),
         LayoutNode::Split(split) => {
+            let basis = split_child_basis(split.ratio);
             let mut container = div().flex().flex_1().gap_1();
             if split.direction == SplitDirection::Vertical {
                 container = container.flex_col();
             }
             container
-                .child(split_view_for_layout(&split.left, tab_id, render_pane))
-                .child(split_view_for_layout(&split.right, tab_id, render_pane))
+                .child(split_child(
+                    split_view_for_layout(&split.left, tab_id, render_pane),
+                    basis.left,
+                ))
+                .child(split_child(
+                    split_view_for_layout(&split.right, tab_id, render_pane),
+                    basis.right,
+                ))
         }
     }
+}
+
+fn split_child(child: Div, basis: f32) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_basis(relative(basis))
+        .flex_shrink()
+        .overflow_hidden()
+        .child(child)
 }
 
 fn render_mock_pane(pane: &PaneConfig, tab_id: &str) -> Div {

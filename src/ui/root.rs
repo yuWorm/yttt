@@ -265,6 +265,11 @@ impl RootView {
         contexts
     }
 
+    pub fn focus_visible_terminal_pane(&mut self, pane_id: &str) -> Result<(), RootViewError> {
+        self.workspace.focus_pane(pane_id)?;
+        Ok(())
+    }
+
     pub fn last_opened_layout_file(&self) -> Option<&Path> {
         self.last_opened_layout_file.as_deref()
     }
@@ -578,7 +583,15 @@ impl RootView {
             pane_view
         };
 
-        div().flex().flex_1().child(pane_view)
+        let pane_id = input.pane.id.clone();
+        let mut wrapper = div().flex().flex_1();
+        wrapper
+            .interactivity()
+            .on_click(cx.listener(move |this, _, _window, cx| {
+                let _ = this.focus_visible_terminal_pane(&pane_id);
+                cx.notify();
+            }));
+        wrapper.child(pane_view)
     }
 
     fn prune_terminal_panes(&mut self) {

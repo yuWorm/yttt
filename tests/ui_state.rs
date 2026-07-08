@@ -18,7 +18,7 @@ use yttt::{
     ui::toast::{ToastTone, visible_toast_items},
     ui::{
         root::RootView,
-        split_view::visible_pane_titles,
+        split_view::{root_split_child_basis, visible_pane_titles},
         tabs::{visible_tab_items, visible_tab_titles},
     },
 };
@@ -191,6 +191,16 @@ fn visible_pane_titles_come_from_selected_tab() {
 }
 
 #[test]
+fn visible_split_basis_comes_from_layout_ratio() {
+    let workspace = workspace_with_sample_project();
+
+    let basis = root_split_child_basis(&workspace).unwrap();
+
+    assert_ratio(basis.left, 0.65);
+    assert_ratio(basis.right, 0.35);
+}
+
+#[test]
 fn root_view_terminal_pane_contexts_include_project_path() {
     let root = RootView::dev_fixture();
 
@@ -262,6 +272,18 @@ fn root_view_confirming_pane_palette_selection_focuses_pane() {
     root.open_palette(PaletteKind::Pane);
     root.set_palette_query("shell");
     root.confirm_palette_selection().unwrap();
+
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let project = root.workspace().project(&project_id).unwrap();
+    let tab = project.tab_state("dev").unwrap();
+    assert_eq!(tab.focused_pane_id.as_deref(), Some("shell"));
+}
+
+#[test]
+fn root_view_focus_visible_terminal_pane_updates_focused_pane() {
+    let mut root = RootView::dev_fixture();
+
+    root.focus_visible_terminal_pane("shell").unwrap();
 
     let project_id = root.workspace().selected_project_id().unwrap().clone();
     let project = root.workspace().project(&project_id).unwrap();
@@ -419,6 +441,13 @@ fn palette_item(id: &str, title: &str) -> PaletteItem {
         status: None,
         command: CommandId::CommandPaletteOpen,
     }
+}
+
+fn assert_ratio(actual: f32, expected: f32) {
+    assert!(
+        (actual - expected).abs() < 0.001,
+        "expected ratio {expected}, got {actual}"
+    );
 }
 
 fn workspace_with_sample_project() -> Workspace {
