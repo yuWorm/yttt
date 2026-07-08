@@ -12,8 +12,8 @@ use yttt::{
     ui::palette::visible_palette_rows,
     ui::sidebar::visible_project_items,
     ui::terminal_pane::{
-        PaneLifecycle, TerminalPaneExitInput, notification_for_terminal_pane_exit,
-        pane_lifecycle_label,
+        PaneLifecycle, TerminalPaneExitInput, TerminalSpawnFailure,
+        notification_for_terminal_pane_exit, pane_lifecycle_label, spawn_failure_lines,
     },
     ui::toast::{ToastTone, visible_toast_items},
     ui::{
@@ -349,6 +349,20 @@ fn terminal_pane_lifecycle_labels_are_visible() {
         }),
         "spawn failed"
     );
+}
+
+#[test]
+fn terminal_spawn_failure_summary_includes_command_and_cwd() {
+    let lines = spawn_failure_lines(&TerminalSpawnFailure {
+        command: "missing-command".to_string(),
+        cwd: PathBuf::from("/tmp/yttt"),
+        message: "not found".to_string(),
+    });
+
+    assert_eq!(lines[0], "Failed to start terminal");
+    assert_eq!(lines[1], "command: missing-command");
+    assert_eq!(lines[2], "cwd: /tmp/yttt");
+    assert_eq!(lines[3], "error: not found");
 }
 
 #[test]

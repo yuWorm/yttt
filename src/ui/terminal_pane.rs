@@ -45,6 +45,13 @@ pub enum PaneLifecycle {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalSpawnFailure {
+    pub command: String,
+    pub cwd: PathBuf,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalPaneExitInput {
     pub project_title: String,
     pub tab_title: String,
@@ -57,6 +64,7 @@ pub struct TerminalPaneExitInput {
 }
 
 pub struct TerminalPaneView {
+    project_path: PathBuf,
     project_title: String,
     tab_title: String,
     pane_id: String,
@@ -86,6 +94,7 @@ impl TerminalPaneView {
             Err(error) => {
                 let message = error.to_string();
                 return Self {
+                    project_path,
                     project_title,
                     tab_title,
                     pane_id: pane.id,
@@ -107,6 +116,7 @@ impl TerminalPaneView {
         let Some(io) = session.take_io() else {
             let message = "pty session I/O was already taken".to_string();
             return Self {
+                project_path,
                 project_title,
                 tab_title,
                 pane_id: pane.id,
@@ -139,6 +149,7 @@ impl TerminalPaneView {
         });
 
         Self {
+            project_path,
             project_title,
             tab_title,
             pane_id: pane.id,
@@ -236,14 +247,22 @@ impl Render for TerminalPaneView {
         let body = if let Some(terminal) = &self.terminal {
             div().flex().flex_1().child(terminal.clone())
         } else {
+            let failure = TerminalSpawnFailure {
+                command: self.command.clone(),
+                cwd: self.project_path.clone(),
+                message: terminal_start_error(&self.lifecycle, &self.launch_error),
+            };
+
             div()
                 .flex()
+                .flex_col()
+                .gap_1()
                 .flex_1()
                 .items_center()
                 .justify_center()
                 .bg(rgb(0x111111))
                 .text_color(rgb(0xef4444))
-                .child(terminal_start_error(&self.lifecycle, &self.launch_error))
+                .children(spawn_failure_lines(&failure))
         };
 
         div()
@@ -267,6 +286,15 @@ pub fn pane_lifecycle_label(lifecycle: &PaneLifecycle) -> String {
         PaneLifecycle::Exited { code: None, .. } => "exited".to_string(),
         PaneLifecycle::SpawnFailed { .. } => "spawn failed".to_string(),
     }
+}
+
+pub fn spawn_failure_lines(failure: &TerminalSpawnFailure) -> Vec<String> {
+    vec![
+        "Failed to start terminal".to_string(),
+        format!("command: {}", failure.command),
+        format!("cwd: {}", failure.cwd.display()),
+        format!("error: {}", failure.message),
+    ]
 }
 
 fn terminal_start_error(lifecycle: &PaneLifecycle, launch_error: &Option<String>) -> String {
