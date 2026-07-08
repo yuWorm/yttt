@@ -1,11 +1,15 @@
+use std::mem::discriminant;
 use yttt::ui::app::workbench_window_options;
 use yttt::ui::components::{SelectableState, selectable_state_classes};
 use yttt::ui::palette_surface::{
     PaletteFooterAction, PaletteRowTone, palette_footer_actions, palette_panel_style,
-    palette_row_style,
+    palette_row_style, palette_scroll_anchor_index,
 };
 use yttt::ui::sidebar::project_sidebar_style;
-use yttt::ui::tabs::{ProjectTabCloseButtonVisibility, ProjectTabLeadingIcon, project_tabs_style};
+use yttt::ui::tabs::{
+    ProjectTabCloseButtonVisibility, ProjectTabLeadingIcon, ProjectTabStatusIndicator,
+    project_tabs_style, tab_toolbar_icon,
+};
 use yttt::ui::terminal_pane::TerminalPaneView;
 use yttt::ui::theme::WorkbenchTheme;
 use yttt::ui::titlebar::TitlebarInfo;
@@ -58,6 +62,10 @@ fn app_window_options_use_custom_titlebar() {
     let options = workbench_window_options(bounds);
 
     assert!(options.titlebar.is_some());
+    assert_eq!(
+        options.window_min_size,
+        Some(gpui::size(gpui::px(720.0), gpui::px(520.0)))
+    );
 }
 
 #[test]
@@ -94,8 +102,10 @@ fn sidebar_and_tabs_use_compact_zed_like_density() {
     let tabs = project_tabs_style();
 
     assert!(sidebar.width <= gpui::px(220.0));
+    assert!(sidebar.collapsed_width < sidebar.width);
     assert_eq!(sidebar.border_width, gpui::px(1.0));
     assert_eq!(sidebar.item_height, gpui::px(28.0));
+    assert_eq!(sidebar.item_padding_x, gpui::px(8.0));
     assert_eq!(sidebar.background, WorkbenchTheme::dark().app_background);
     assert!(tabs.height <= gpui::px(34.0));
     assert_eq!(tabs.border_width, gpui::px(1.0));
@@ -104,6 +114,7 @@ fn sidebar_and_tabs_use_compact_zed_like_density() {
         ProjectTabCloseButtonVisibility::Hover
     );
     assert_eq!(tabs.leading_icon, ProjectTabLeadingIcon::Terminal);
+    assert_eq!(tabs.status_indicator, ProjectTabStatusIndicator::Dot);
     assert_ne!(tabs.active_background, tabs.inactive_background);
 }
 
@@ -113,11 +124,29 @@ fn palette_surface_style_is_wide_elevated_and_scroll_bounded() {
 
     assert!(style.width >= gpui::px(720.0));
     assert!(style.max_width >= style.width);
-    assert_eq!(style.max_height, gpui::px(640.0));
+    assert!(style.max_height < gpui::px(520.0));
     assert_eq!(style.row_height, gpui::px(54.0));
     assert_eq!(style.footer_height, gpui::px(44.0));
     assert!(style.list_max_height < style.max_height);
     assert!(style.scrollable);
+}
+
+#[test]
+fn tab_toolbar_icons_match_split_orientation() {
+    assert_eq!(
+        discriminant(&tab_toolbar_icon(SplitDirection::Vertical)),
+        discriminant(&gpui_component::IconName::PanelBottom)
+    );
+    assert_eq!(
+        discriminant(&tab_toolbar_icon(SplitDirection::Horizontal)),
+        discriminant(&gpui_component::IconName::PanelRight)
+    );
+}
+
+#[test]
+fn palette_keyboard_selection_scrolls_to_center() {
+    assert_eq!(palette_scroll_anchor_index(0), None);
+    assert_eq!(palette_scroll_anchor_index(8), Some(4));
 }
 
 #[test]

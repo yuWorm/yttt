@@ -18,6 +18,7 @@ pub struct ProjectTabItem {
     pub id: String,
     pub title: String,
     pub status: Option<String>,
+    pub status_tone: ProjectTabStatusTone,
     pub state: SelectableState,
 }
 
@@ -31,6 +32,7 @@ pub struct ProjectTabsStyle {
     pub hover_background: Rgba,
     pub close_button_visibility: ProjectTabCloseButtonVisibility,
     pub leading_icon: ProjectTabLeadingIcon,
+    pub status_indicator: ProjectTabStatusIndicator,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +43,20 @@ pub enum ProjectTabCloseButtonVisibility {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectTabLeadingIcon {
     Terminal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectTabStatusIndicator {
+    Dot,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectTabStatusTone {
+    Lazy,
+    Started,
+    AgentRunning,
+    AgentCompleted,
+    AgentFailed,
 }
 
 pub fn project_tabs_style() -> ProjectTabsStyle {
@@ -55,6 +71,7 @@ pub fn project_tabs_style() -> ProjectTabsStyle {
         hover_background: theme.hover_surface,
         close_button_visibility: ProjectTabCloseButtonVisibility::Hover,
         leading_icon: ProjectTabLeadingIcon::Terminal,
+        status_indicator: ProjectTabStatusIndicator::Dot,
     }
 }
 
@@ -87,6 +104,10 @@ pub fn visible_tab_items(workspace: &Workspace) -> Vec<ProjectTabItem> {
                 }
                 parts.join(" · ")
             }),
+            status_tone: project
+                .tab_state(&tab.id)
+                .map(|state| tab_status_tone(state.start_state, tab_agent_status(project, &tab.id)))
+                .unwrap_or(ProjectTabStatusTone::Lazy),
             state: if tab.id == project.selected_tab_id {
                 SelectableState::Active
             } else {
@@ -210,14 +231,20 @@ where
                 .text_color(text_color)
                 .child(item.title),
         )
-        .children(item.status.map(|status| {
-            div()
-                .flex_none()
-                .truncate()
-                .text_color(theme.text_subtle)
-                .child(status)
-        }))
+        .child(tab_status_dot(item.status_tone, theme))
         .child(tab_close_button(index, group_name, theme, on_close_tab))
+}
+
+fn tab_status_dot(tone: ProjectTabStatusTone, theme: WorkbenchTheme) -> impl IntoElement {
+    let color = match tone {
+        ProjectTabStatusTone::Lazy => theme.text_subtle,
+        ProjectTabStatusTone::Started => theme.success,
+        ProjectTabStatusTone::AgentRunning => theme.accent,
+        ProjectTabStatusTone::AgentCompleted => theme.success,
+        ProjectTabStatusTone::AgentFailed => theme.danger,
+    };
+
+    div().flex_none().w_1p5().h_1p5().rounded_full().bg(color)
 }
 
 fn tab_close_button<CloseH>(
@@ -270,16 +297,23 @@ where
         ))
         .child(tab_toolbar_button(
             "pane-split-vertical",
-            IconName::PanelRight,
+            tab_toolbar_icon(crate::model::layout::SplitDirection::Vertical),
             theme,
             on_split_vertical,
         ))
         .child(tab_toolbar_button(
             "pane-split-horizontal",
-            IconName::PanelBottom,
+            tab_toolbar_icon(crate::model::layout::SplitDirection::Horizontal),
             theme,
             on_split_horizontal,
         ))
+}
+
+pub fn tab_toolbar_icon(direction: crate::model::layout::SplitDirection) -> IconName {
+    match direction {
+        crate::model::layout::SplitDirection::Vertical => IconName::PanelBottom,
+        crate::model::layout::SplitDirection::Horizontal => IconName::PanelRight,
+    }
 }
 
 fn tab_toolbar_button<H>(
@@ -309,5 +343,22 @@ fn tab_start_state_label(state: TabStartState) -> &'static str {
     match state {
         TabStartState::Lazy => "lazy",
         TabStartState::Started => "started",
+    }
+}
+
+fn tab_status_tone(
+    state: TabStartState,
+    agent_status: Option<crate::model::workspace::AgentStatus>,
+) -> ProjectTabStatusTone {
+    match agent_status {
+        Some(crate::model::workspace::AgentStatus::Running) => ProjectTabStatusTone::AgentRunning,
+        Some(crate::model::workspace::AgentStatus::Completed) => {
+            ProjectTabStatusTone::AgentCompleted
+        }
+        Some(crate::model::workspace::AgentStatus::Failed) => ProjectTabStatusTone::AgentFailed,
+        None => match state {
+            TabStartState::Lazy => ProjectTabStatusTone::Lazy,
+            TabStartState::Started => ProjectTabStatusTone::Started,
+        },
     }
 }

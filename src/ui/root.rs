@@ -1,7 +1,8 @@
 use gpui::{
-    AnyElement, Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathPromptOptions,
-    Pixels, Point, Render, Subscription, Window, div, prelude::*, relative, rgb, rgba,
+    AnyElement, ClickEvent, Context, Div, Entity, FocusHandle, InteractiveElement as _,
+    IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    PathPromptOptions, Pixels, Point, Render, ScrollHandle, Subscription, Window, div, prelude::*,
+    relative, rgb, rgba,
 };
 use gpui_component::{
     Root as ComponentRoot, WindowExt as _,
@@ -91,6 +92,8 @@ pub struct RootView {
     palette_input: Option<Entity<InputState>>,
     palette_input_subscription: Option<Subscription>,
     palette_input_needs_focus: bool,
+    palette_scroll_handle: ScrollHandle,
+    sidebar_collapsed: bool,
     active_split_resize_drag: Option<ActiveSplitResizeDrag>,
     pending_terminal_focus_pane_id: Option<String>,
     terminal_panes: HashMap<String, Entity<TerminalPaneView>>,
@@ -181,6 +184,8 @@ impl RootView {
             palette_input: None,
             palette_input_subscription: None,
             palette_input_needs_focus: false,
+            palette_scroll_handle: ScrollHandle::new(),
+            sidebar_collapsed: false,
             active_split_resize_drag: None,
             pending_terminal_focus_pane_id: None,
             terminal_panes: HashMap::new(),
@@ -202,6 +207,14 @@ impl RootView {
         &mut self.workspace
     }
 
+    pub fn sidebar_is_collapsed(&self) -> bool {
+        self.sidebar_collapsed
+    }
+
+    pub fn toggle_sidebar(&mut self) {
+        self.sidebar_collapsed = !self.sidebar_collapsed;
+    }
+
     pub fn active_palette(&self) -> Option<&ActivePalette> {
         self.active_palette.as_ref()
     }
@@ -209,6 +222,7 @@ impl RootView {
     pub fn open_palette(&mut self, kind: PaletteKind) {
         self.active_palette = Some(ActivePalette::new(kind));
         self.reset_palette_input();
+        self.palette_scroll_handle = ScrollHandle::new();
         self.palette_input_needs_focus = true;
     }
 
@@ -356,6 +370,21 @@ impl RootView {
         }
 
         self.queue_selected_terminal_focus();
+        self.load_error = None;
+        Ok(())
+    }
+
+    pub fn handle_project_tab_click(
+        &mut self,
+        tab_id: &str,
+        click_count: usize,
+    ) -> Result<(), RootViewError> {
+        self.workspace.select_tab(tab_id)?;
+        if click_count >= 2 {
+            self.run_command(CommandId::TabRename)?;
+        } else {
+            self.queue_selected_terminal_focus();
+        }
         self.load_error = None;
         Ok(())
     }
@@ -1640,14 +1669,22 @@ impl Render for RootView {
                 .relative()
                 .bg(self.theme.app_background)
                 .text_color(self.theme.text)
-                .child(project_sidebar(&self.workspace, |project_id| {
-                    let project_id = ProjectId::new(project_id);
-                    cx.listener(move |this, _, _window, cx| {
-                        let _ = this.workspace.select_project(&project_id);
-                        this.refresh_selected_project_git_status();
+                .child(project_sidebar(
+                    &self.workspace,
+                    self.sidebar_collapsed,
+                    cx.listener(|this, _, _window, cx| {
+                        this.toggle_sidebar();
                         cx.notify();
-                    })
-                }))
+                    }),
+                    |project_id| {
+                        let project_id = ProjectId::new(project_id);
+                        cx.listener(move |this, _, _window, cx| {
+                            let _ = this.workspace.select_project(&project_id);
+                            this.refresh_selected_project_git_status();
+                            cx.notify();
+                        })
+                    },
+                ))
                 .child(
                     div()
                         .flex()
@@ -1656,9 +1693,9 @@ impl Render for RootView {
                         .child(project_tabs(
                             &self.workspace,
                             |tab_id| {
-                                cx.listener(move |this, _, _window, cx| {
-                                    let _ = this.workspace.select_tab(&tab_id);
-                                    this.queue_selected_terminal_focus();
+                                cx.listener(move |this, event: &ClickEvent, _window, cx| {
+                                    let _ =
+                                        this.handle_project_tab_click(&tab_id, event.click_count());
                                     cx.notify();
                                 })
                             },
@@ -1704,6 +1741,7 @@ impl Render for RootView {
                     &items,
                     &self.ui_text,
                     &query_input,
+                    &self.palette_scroll_handle,
                     self.theme,
                     |selected_index| {
                         cx.listener(move |this, _, _window, cx| {

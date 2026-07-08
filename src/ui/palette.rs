@@ -1,5 +1,5 @@
 use gpui::{
-    AnyElement, App, ClickEvent, Div, Entity, InteractiveElement as _, IntoElement,
+    AnyElement, App, ClickEvent, Div, Entity, InteractiveElement as _, IntoElement, ScrollHandle,
     StatefulInteractiveElement as _, Window, div, prelude::*, rgba,
 };
 use gpui_component::{
@@ -12,6 +12,7 @@ use crate::ui::components::SelectableState;
 use crate::ui::i18n::{UiText, UiTextKey};
 use crate::ui::palette_surface::{
     PaletteFooterAction, palette_footer_actions, palette_panel_style, palette_row_style,
+    palette_scroll_anchor_index,
 };
 use crate::ui::theme::WorkbenchTheme;
 
@@ -59,6 +60,7 @@ pub fn palette_overlay<H, F>(
     items: &[PaletteItem],
     ui_text: &UiText,
     query_input: &Entity<InputState>,
+    scroll_handle: &ScrollHandle,
     theme: WorkbenchTheme,
     on_confirm_item: F,
 ) -> impl IntoElement
@@ -91,7 +93,13 @@ where
                 .text_color(theme.text)
                 .overflow_hidden()
                 .child(palette_header(query_input, theme))
-                .child(palette_items(rows, ui_text, theme, on_confirm_item))
+                .child(palette_items(
+                    rows,
+                    ui_text,
+                    scroll_handle,
+                    theme,
+                    on_confirm_item,
+                ))
                 .child(palette_footer(theme)),
         )
 }
@@ -115,6 +123,7 @@ fn palette_header(query_input: &Entity<InputState>, theme: WorkbenchTheme) -> Di
 fn palette_items<H, F>(
     rows: Vec<PaletteRow>,
     ui_text: &UiText,
+    scroll_handle: &ScrollHandle,
     theme: WorkbenchTheme,
     mut on_confirm_item: F,
 ) -> AnyElement
@@ -135,6 +144,14 @@ where
             .into_any_element();
     }
 
+    let selected_index = rows
+        .iter()
+        .position(|row| row.state == SelectableState::Active)
+        .unwrap_or(0);
+    if let Some(index) = palette_scroll_anchor_index(selected_index) {
+        scroll_handle.scroll_to_top_of_item(index);
+    }
+
     rows.into_iter()
         .enumerate()
         .fold(
@@ -145,7 +162,8 @@ where
                 .gap_1()
                 .p_2()
                 .max_h(panel_style.list_max_height)
-                .overflow_y_scroll(),
+                .overflow_y_scroll()
+                .track_scroll(scroll_handle),
             |list, (index, row)| {
                 list.child(palette_item(row, index, theme, on_confirm_item(index)))
             },

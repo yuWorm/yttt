@@ -45,13 +45,17 @@ pub fn palette_panel_style() -> PalettePanelStyle {
     PalettePanelStyle {
         width: px(760.0),
         max_width: px(900.0),
-        max_height: px(640.0),
-        list_max_height: px(520.0),
+        max_height: px(480.0),
+        list_max_height: px(376.0),
         row_height: px(54.0),
         footer_height: px(44.0),
         border_width: px(1.0),
         scrollable: true,
     }
+}
+
+pub fn palette_scroll_anchor_index(selected_index: usize) -> Option<usize> {
+    (selected_index > 0).then(|| selected_index.saturating_sub(4))
 }
 
 pub fn palette_row_style(

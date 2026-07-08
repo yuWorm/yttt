@@ -43,6 +43,7 @@ pub fn run() {
 pub fn workbench_window_options(bounds: Bounds<Pixels>) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_min_size: Some(size(px(720.0), px(520.0))),
         titlebar: Some(TitleBar::title_bar_options()),
         ..Default::default()
     }

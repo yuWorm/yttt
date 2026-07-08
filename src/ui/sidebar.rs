@@ -21,8 +21,10 @@ pub struct ProjectSidebarItem {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProjectSidebarStyle {
     pub width: Pixels,
+    pub collapsed_width: Pixels,
     pub border_width: Pixels,
     pub item_height: Pixels,
+    pub item_padding_x: Pixels,
     pub background: Rgba,
     pub active_background: Rgba,
     pub hover_background: Rgba,
@@ -33,8 +35,10 @@ pub fn project_sidebar_style() -> ProjectSidebarStyle {
 
     ProjectSidebarStyle {
         width: px(216.0),
+        collapsed_width: px(46.0),
         border_width: px(1.0),
         item_height: px(28.0),
+        item_padding_x: px(8.0),
         background: theme.app_background,
         active_background: theme.active_surface,
         hover_background: theme.hover_surface,
@@ -63,32 +67,36 @@ pub fn visible_project_items(workspace: &Workspace) -> Vec<ProjectSidebarItem> {
         .collect()
 }
 
-pub fn project_sidebar<H, F>(workspace: &Workspace, mut on_select_project: F) -> impl IntoElement
+pub fn project_sidebar<SelectH, SelectF, ToggleH>(
+    workspace: &Workspace,
+    collapsed: bool,
+    on_toggle_sidebar: ToggleH,
+    mut on_select_project: SelectF,
+) -> impl IntoElement
 where
-    H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    F: FnMut(String) -> H,
+    SelectH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    SelectF: FnMut(String) -> SelectH,
+    ToggleH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
     let style = project_sidebar_style();
     let theme = WorkbenchTheme::dark();
+    let width = if collapsed {
+        style.collapsed_width
+    } else {
+        style.width
+    };
     let mut sidebar = div()
         .flex()
         .flex_col()
         .flex_none()
         .h_full()
-        .w(style.width)
+        .w(width)
         .bg(style.background)
         .border_r_1()
         .border_color(theme.border)
         .px_2()
         .py_3()
-        .child(
-            div()
-                .px_1()
-                .pb_3()
-                .text_xs()
-                .text_color(theme.text_subtle)
-                .child("Projects"),
-        );
+        .child(project_sidebar_header(collapsed, theme, on_toggle_sidebar));
 
     for (index, item) in visible_project_items(workspace).into_iter().enumerate() {
         let suffix = match item.agent_status.as_deref() {
@@ -97,17 +105,58 @@ where
         };
         let on_click = on_select_project(item.id.clone());
         sidebar = sidebar.child(project_sidebar_item(
-            index, item, suffix, style, theme, on_click,
+            index, item, suffix, collapsed, style, theme, on_click,
         ));
     }
 
     sidebar
 }
 
+fn project_sidebar_header<H>(
+    collapsed: bool,
+    theme: WorkbenchTheme,
+    on_toggle_sidebar: H,
+) -> impl IntoElement
+where
+    H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+{
+    let icon = if collapsed {
+        IconName::PanelLeftOpen
+    } else {
+        IconName::PanelLeftClose
+    };
+    let mut header = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .pb_3()
+        .text_xs()
+        .text_color(theme.text_subtle);
+
+    if !collapsed {
+        header = header.child(div().px_1().child("Projects"));
+    }
+
+    header.child(
+        div()
+            .id("sidebar-toggle")
+            .flex()
+            .items_center()
+            .justify_center()
+            .size_6()
+            .rounded_sm()
+            .text_color(theme.text_subtle)
+            .hover(move |this| this.bg(theme.hover_surface).text_color(theme.text))
+            .on_click(on_toggle_sidebar)
+            .child(Icon::new(icon).size_3()),
+    )
+}
+
 fn project_sidebar_item<H>(
     index: usize,
     item: ProjectSidebarItem,
     suffix: String,
+    collapsed: bool,
     style: ProjectSidebarStyle,
     theme: WorkbenchTheme,
     on_select_project: H,
@@ -133,9 +182,9 @@ where
         .justify_between()
         .gap_2()
         .h(style.item_height)
-        .w(style.width)
+        .w_full()
         .rounded_sm()
-        .px_2()
+        .px(style.item_padding_x)
         .bg(background)
         .hover(move |this| this.bg(style.hover_background))
         .on_click(on_select_project)
@@ -150,22 +199,22 @@ where
                         .size_3()
                         .text_color(theme.text_subtle),
                 )
-                .child(
+                .children((!collapsed).then(|| {
                     div()
                         .text_sm()
                         .text_color(title_color)
                         .truncate()
-                        .child(item.title),
-                ),
+                        .child(item.title)
+                })),
         )
-        .child(
+        .children((!collapsed).then(|| {
             div()
                 .flex_none()
                 .text_xs()
                 .text_color(theme.text_subtle)
                 .truncate()
-                .child(suffix),
-        )
+                .child(suffix)
+        }))
 }
 
 fn compact_path(path: &str) -> String {

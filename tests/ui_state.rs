@@ -111,6 +111,26 @@ fn root_view_dev_fixture_contains_sample_project() {
 }
 
 #[test]
+fn root_view_toggles_sidebar_collapse_state() {
+    let mut root = RootView::dev_fixture();
+
+    assert!(!root.sidebar_is_collapsed());
+
+    root.toggle_sidebar();
+
+    assert!(root.sidebar_is_collapsed());
+}
+
+#[test]
+fn root_view_double_clicking_tab_renames_it() {
+    let mut root = RootView::dev_fixture();
+
+    root.handle_project_tab_click("dev", 2).unwrap();
+
+    assert_eq!(visible_tab_titles(root.workspace())[0], "Renamed Tab");
+}
+
+#[test]
 fn root_view_agent_exit_fixture_contains_sample_project() {
     let root = RootView::agent_exit_fixture();
 
