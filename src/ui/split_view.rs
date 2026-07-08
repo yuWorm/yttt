@@ -4,11 +4,19 @@ use crate::{
     commands::CommandId,
     model::{
         layout::{LayoutNode, PaneConfig, SplitDirection},
+        split_tree::ResizeDirection,
         workspace::Workspace,
     },
 };
 
 const SPLIT_RESIZE_DRAG_THRESHOLD_PX: f32 = 6.0;
+const SPLIT_POINTER_RESIZE_SENSITIVITY_PX: f32 = 600.0;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PointerSplitResize {
+    pub direction: ResizeDirection,
+    pub delta: f32,
+}
 
 pub fn visible_pane_titles(workspace: &Workspace) -> Vec<String> {
     let Some((_project, layout)) = selected_tab_layout(workspace) else {
@@ -133,11 +141,38 @@ pub fn resize_command_for_drag_delta(
     }
 }
 
+pub fn pointer_resize_for_drag_delta(
+    direction: SplitDirection,
+    delta_x: f32,
+    delta_y: f32,
+) -> Option<PointerSplitResize> {
+    let axis_delta = match direction {
+        SplitDirection::Horizontal => delta_x,
+        SplitDirection::Vertical => delta_y,
+    };
+
+    if axis_delta.abs() < SPLIT_RESIZE_DRAG_THRESHOLD_PX {
+        return None;
+    }
+
+    let resize_direction = match (direction, axis_delta.is_sign_positive()) {
+        (SplitDirection::Horizontal, true) => ResizeDirection::Right,
+        (SplitDirection::Horizontal, false) => ResizeDirection::Left,
+        (SplitDirection::Vertical, true) => ResizeDirection::Down,
+        (SplitDirection::Vertical, false) => ResizeDirection::Up,
+    };
+
+    Some(PointerSplitResize {
+        direction: resize_direction,
+        delta: axis_delta.abs() / SPLIT_POINTER_RESIZE_SENSITIVITY_PX,
+    })
+}
+
 fn inert_split_resize_handle(direction: SplitDirection) -> Div {
     let handle = div().flex_none().bg(rgb(0x1f1f1f));
     match direction {
-        SplitDirection::Horizontal => handle.w(px(5.0)).cursor_ew_resize(),
-        SplitDirection::Vertical => handle.h(px(5.0)).cursor_ns_resize(),
+        SplitDirection::Horizontal => handle.w(px(9.0)).cursor_ew_resize(),
+        SplitDirection::Vertical => handle.h(px(9.0)).cursor_ns_resize(),
     }
 }
 

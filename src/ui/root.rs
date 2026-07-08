@@ -1,8 +1,7 @@
 use gpui::{
-    AnyElement, Context, Div, DragMoveEvent, Empty, Entity, FocusHandle, InteractiveElement as _,
-    IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, PathPromptOptions, Pixels, Point,
-    Render, StatefulInteractiveElement as _, Subscription, Window, div, prelude::*, px, relative,
-    rgb, rgba,
+    AnyElement, Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathPromptOptions,
+    Pixels, Point, Render, Subscription, Window, div, prelude::*, px, relative, rgb, rgba,
 };
 use gpui_component::{
     Root as ComponentRoot, WindowExt as _,
@@ -60,7 +59,7 @@ use crate::{
         i18n::{UiText, UiTextKey},
         palette::palette_overlay,
         sidebar::project_sidebar,
-        split_view::{resize_command_for_drag_delta, split_child_basis},
+        split_view::{pointer_resize_for_drag_delta, split_child_basis},
         tabs::project_tabs,
         terminal_pane::{TerminalPaneContext, TerminalPaneEvent, TerminalPaneView},
         theme::WorkbenchTheme,
@@ -115,17 +114,6 @@ struct RenderTerminalTreeInput<'a> {
     project_title: &'a str,
     tab_id: &'a str,
     tab_title: &'a str,
-}
-
-#[derive(Clone, Debug)]
-struct SplitResizeDrag {
-    direction: SplitDirection,
-}
-
-impl Render for SplitResizeDrag {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        Empty
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -346,6 +334,22 @@ impl RootView {
 
         self.load_error = None;
         Ok(())
+    }
+
+    pub fn resize_focused_split_from_pointer_delta(
+        &mut self,
+        direction: SplitDirection,
+        delta_x: f32,
+        delta_y: f32,
+    ) -> Result<Option<f32>, RootViewError> {
+        let Some(resize) = pointer_resize_for_drag_delta(direction, delta_x, delta_y) else {
+            return Ok(None);
+        };
+
+        self.workspace
+            .resize_focused_split(resize.direction, resize.delta)
+            .map(Some)
+            .map_err(RootViewError::from)
     }
 
     pub fn visible_toast_titles(&self) -> Vec<String> {
@@ -891,7 +895,6 @@ impl RootView {
     }
 
     fn split_resize_handle(direction: SplitDirection, cx: &mut Context<Self>) -> AnyElement {
-        let drag = SplitResizeDrag { direction };
         let mut handle = div()
             .id(match direction {
                 SplitDirection::Horizontal => "horizontal-split-resize-handle",
@@ -905,24 +908,11 @@ impl RootView {
                     this.begin_split_resize_drag(direction, event.position);
                     cx.stop_propagation();
                 }),
-            )
-            .on_drag(drag, |drag, _, _, cx| {
-                cx.stop_propagation();
-                cx.new(|_| drag.clone())
-            })
-            .on_drag_move(cx.listener(
-                move |this, event: &DragMoveEvent<SplitResizeDrag>, _window, cx| {
-                    let drag = event.drag(cx);
-                    if drag.direction == direction {
-                        this.resize_from_split_drag(direction, event.event.position);
-                        cx.notify();
-                    }
-                },
-            ));
+            );
 
         handle = match direction {
-            SplitDirection::Horizontal => handle.w(px(5.0)).cursor_ew_resize(),
-            SplitDirection::Vertical => handle.h(px(5.0)).cursor_ns_resize(),
+            SplitDirection::Horizontal => handle.w(px(9.0)).cursor_ew_resize(),
+            SplitDirection::Vertical => handle.h(px(9.0)).cursor_ns_resize(),
         };
 
         handle.into_any_element()
@@ -947,12 +937,48 @@ impl RootView {
 
         let delta_x = f32::from(position.x - active_drag.last_position.x);
         let delta_y = f32::from(position.y - active_drag.last_position.y);
-        let Some(command_id) = resize_command_for_drag_delta(direction, delta_x, delta_y) else {
+        match self.resize_focused_split_from_pointer_delta(direction, delta_x, delta_y) {
+            Ok(Some(_)) => self.begin_split_resize_drag(direction, position),
+            Ok(None) => {}
+            Err(error) => {
+                self.load_error = Some(error.to_string());
+                self.begin_split_resize_drag(direction, position);
+            }
+        }
+    }
+
+    fn on_split_resize_mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(active_drag) = self.active_split_resize_drag else {
+            cx.propagate();
             return;
         };
 
-        let _ = self.run_command(command_id);
-        self.begin_split_resize_drag(direction, position);
+        if !event.dragging() {
+            self.active_split_resize_drag = None;
+            cx.notify();
+            return;
+        }
+
+        self.resize_from_split_drag(active_drag.direction, event.position);
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    fn on_split_resize_mouse_up(
+        &mut self,
+        _event: &MouseUpEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active_split_resize_drag.take().is_some() {
+            cx.stop_propagation();
+            cx.notify();
+        }
     }
 
     fn on_palette_input_event(
@@ -1450,6 +1476,11 @@ impl Render for RootView {
         root.track_focus(&focus_handle)
             .key_context(WORKSPACE_CONTEXT)
             .on_key_down(cx.listener(Self::on_key_down))
+            .on_mouse_move(cx.listener(Self::on_split_resize_mouse_move))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(Self::on_split_resize_mouse_up),
+            )
             .on_action(cx.listener(Self::on_open_project))
             .on_action(cx.listener(Self::on_open_command_palette))
             .on_action(cx.listener(Self::on_open_project_palette))

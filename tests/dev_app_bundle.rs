@@ -1,9 +1,12 @@
 #[cfg(target_os = "macos")]
 use std::os::unix::fs::PermissionsExt as _;
+#[cfg(target_os = "macos")]
+static DEV_APP_BUNDLE_SCRIPT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 #[cfg(target_os = "macos")]
 fn dev_app_bundle_script_generates_bundle_without_opening() {
+    let _guard = DEV_APP_BUNDLE_SCRIPT_LOCK.lock().unwrap();
     let repo = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let output = std::process::Command::new(repo.join("scripts/run-dev-app.sh"))
         .arg("--no-open")
@@ -51,6 +54,7 @@ fn dev_app_bundle_script_generates_bundle_without_opening() {
 #[test]
 #[cfg(target_os = "macos")]
 fn dev_app_bundle_none_fixture_preserves_user_shell() {
+    let _guard = DEV_APP_BUNDLE_SCRIPT_LOCK.lock().unwrap();
     let repo = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let output = std::process::Command::new(repo.join("scripts/run-dev-app.sh"))
         .arg("--no-open")

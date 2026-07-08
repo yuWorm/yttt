@@ -7,6 +7,7 @@ use yttt::{
     model::{
         layout::PaneKind,
         layout::SplitDirection,
+        split_tree::ResizeDirection,
         workspace::{AgentStatus, Workspace},
     },
     palette::{ActivePalette, PaletteItem, PaletteKind},
@@ -23,7 +24,10 @@ use yttt::{
     ui::toast::{ToastTone, toast_item_for_event, visible_toast_items},
     ui::{
         root::RootView,
-        split_view::{resize_command_for_drag_delta, root_split_child_basis, visible_pane_titles},
+        split_view::{
+            pointer_resize_for_drag_delta, resize_command_for_drag_delta, root_split_child_basis,
+            visible_pane_titles,
+        },
         tabs::{visible_tab_items, visible_tab_titles},
     },
 };
@@ -369,6 +373,40 @@ fn split_drag_delta_maps_to_resize_commands() {
         resize_command_for_drag_delta(SplitDirection::Horizontal, 2.0, 0.0),
         None
     );
+}
+
+#[test]
+fn split_pointer_drag_delta_maps_to_continuous_resize() {
+    let resize = pointer_resize_for_drag_delta(SplitDirection::Horizontal, -120.0, 0.0).unwrap();
+    assert_eq!(resize.direction, ResizeDirection::Left);
+    assert_ratio(resize.delta, 0.2);
+
+    let resize = pointer_resize_for_drag_delta(SplitDirection::Horizontal, 120.0, 0.0).unwrap();
+    assert_eq!(resize.direction, ResizeDirection::Right);
+    assert_ratio(resize.delta, 0.2);
+
+    let resize = pointer_resize_for_drag_delta(SplitDirection::Vertical, 0.0, -60.0).unwrap();
+    assert_eq!(resize.direction, ResizeDirection::Up);
+    assert_ratio(resize.delta, 0.1);
+
+    assert!(pointer_resize_for_drag_delta(SplitDirection::Horizontal, 2.0, 0.0).is_none());
+}
+
+#[test]
+fn root_view_pointer_drag_resize_changes_split_ratio_visibly() {
+    let mut root = RootView::dev_fixture();
+    let before = root_split_child_basis(root.workspace()).unwrap();
+
+    let resized_ratio = root
+        .resize_focused_split_from_pointer_delta(SplitDirection::Horizontal, -120.0, 0.0)
+        .unwrap()
+        .unwrap();
+    let after = root_split_child_basis(root.workspace()).unwrap();
+
+    assert_ratio(before.left, 0.65);
+    assert_ratio(resized_ratio, 0.45);
+    assert_ratio(after.left, 0.45);
+    assert_ratio(after.right, 0.55);
 }
 
 #[test]
