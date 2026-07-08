@@ -6,6 +6,7 @@ use yttt::{
     config::paths::AppConfigPaths,
     model::{
         layout::PaneKind,
+        layout::SplitDirection,
         workspace::{AgentStatus, Workspace},
     },
     palette::{ActivePalette, PaletteItem, PaletteKind},
@@ -22,7 +23,7 @@ use yttt::{
     ui::toast::{ToastTone, visible_toast_items},
     ui::{
         root::RootView,
-        split_view::{root_split_child_basis, visible_pane_titles},
+        split_view::{resize_command_for_drag_delta, root_split_child_basis, visible_pane_titles},
         tabs::{visible_tab_items, visible_tab_titles},
     },
 };
@@ -344,6 +345,30 @@ fn visible_split_basis_comes_from_layout_ratio() {
 
     assert_ratio(basis.left, 0.65);
     assert_ratio(basis.right, 0.35);
+}
+
+#[test]
+fn split_drag_delta_maps_to_resize_commands() {
+    assert_eq!(
+        resize_command_for_drag_delta(SplitDirection::Horizontal, 8.0, 0.0),
+        Some(CommandId::PaneResizeRight)
+    );
+    assert_eq!(
+        resize_command_for_drag_delta(SplitDirection::Horizontal, -8.0, 0.0),
+        Some(CommandId::PaneResizeLeft)
+    );
+    assert_eq!(
+        resize_command_for_drag_delta(SplitDirection::Vertical, 0.0, 8.0),
+        Some(CommandId::PaneResizeDown)
+    );
+    assert_eq!(
+        resize_command_for_drag_delta(SplitDirection::Vertical, 0.0, -8.0),
+        Some(CommandId::PaneResizeUp)
+    );
+    assert_eq!(
+        resize_command_for_drag_delta(SplitDirection::Horizontal, 2.0, 0.0),
+        None
+    );
 }
 
 #[test]

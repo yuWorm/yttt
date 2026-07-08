@@ -1,6 +1,8 @@
 use gpui::{
-    Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent,
-    PathPromptOptions, Render, Subscription, Window, div, prelude::*, rgb, rgba,
+    AnyElement, Context, Div, DragMoveEvent, Empty, Entity, FocusHandle, InteractiveElement as _,
+    IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, PathPromptOptions, Pixels, Point,
+    Render, StatefulInteractiveElement as _, Subscription, Window, div, prelude::*, px, relative,
+    rgb, rgba,
 };
 use gpui_component::{
     button::{Button, ButtonVariants as _},
@@ -29,7 +31,7 @@ use crate::{
     },
     model::{
         ids::ProjectId,
-        layout::{LayoutNode, PaneConfig, ProjectLayout},
+        layout::{LayoutNode, PaneConfig, ProjectLayout, SplitDirection},
         workspace::{
             AgentStatus, CloseProjectDecision, CloseProjectError, Workspace, WorkspaceError,
         },
@@ -55,7 +57,7 @@ use crate::{
         i18n::{UiText, UiTextKey},
         palette::palette_overlay,
         sidebar::project_sidebar,
-        split_view::split_view_for_layout,
+        split_view::{resize_command_for_drag_delta, split_child_basis},
         tabs::project_tabs,
         terminal_pane::{TerminalPaneContext, TerminalPaneEvent, TerminalPaneView},
         theme::WorkbenchTheme,
@@ -79,6 +81,7 @@ pub struct RootView {
     palette_input: Option<Entity<InputState>>,
     palette_input_subscription: Option<Subscription>,
     palette_input_needs_focus: bool,
+    active_split_resize_drag: Option<ActiveSplitResizeDrag>,
     terminal_panes: HashMap<String, Entity<TerminalPaneView>>,
     terminal_pane_subscriptions: HashMap<String, Subscription>,
     toast_queue: ToastQueue,
@@ -104,6 +107,31 @@ struct RenderTerminalPaneInput<'a> {
     pane: &'a PaneConfig,
     tab_id: &'a str,
     tab_title: &'a str,
+}
+
+struct RenderTerminalTreeInput<'a> {
+    project_id: &'a str,
+    project_path: &'a Path,
+    project_title: &'a str,
+    tab_id: &'a str,
+    tab_title: &'a str,
+}
+
+#[derive(Clone, Debug)]
+struct SplitResizeDrag {
+    direction: SplitDirection,
+}
+
+impl Render for SplitResizeDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ActiveSplitResizeDrag {
+    direction: SplitDirection,
+    last_position: Point<Pixels>,
 }
 
 impl RootView {
@@ -147,6 +175,7 @@ impl RootView {
             palette_input: None,
             palette_input_subscription: None,
             palette_input_needs_focus: false,
+            active_split_resize_drag: None,
             terminal_panes: HashMap::new(),
             terminal_pane_subscriptions: HashMap::new(),
             toast_queue: ToastQueue::default(),
@@ -703,19 +732,12 @@ impl RootView {
             return div();
         };
 
-        let mut render_pane = |pane: &PaneConfig, tab_id: &str| {
-            self.render_terminal_pane(
-                RenderTerminalPaneInput {
-                    project_id: &project_id,
-                    project_path: &project_path,
-                    project_title: &project_title,
-                    pane,
-                    tab_id,
-                    tab_title: &tab_title,
-                },
-                window,
-                cx,
-            )
+        let tree_input = RenderTerminalTreeInput {
+            project_id: &project_id,
+            project_path: &project_path,
+            project_title: &project_title,
+            tab_id: &tab_id,
+            tab_title: &tab_title,
         };
 
         div()
@@ -724,7 +746,46 @@ impl RootView {
             .bg(rgb(0x0a0a0a))
             .text_color(rgb(0xf5f5f5))
             .p_2()
-            .child(split_view_for_layout(&layout, &tab_id, &mut render_pane))
+            .child(self.terminal_split_view_for_layout(&layout, &tree_input, window, cx))
+    }
+
+    fn terminal_split_view_for_layout(
+        &mut self,
+        layout: &LayoutNode,
+        tree_input: &RenderTerminalTreeInput<'_>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        match layout {
+            LayoutNode::Pane(pane) => self.render_terminal_pane(
+                RenderTerminalPaneInput {
+                    project_id: tree_input.project_id,
+                    project_path: tree_input.project_path,
+                    project_title: tree_input.project_title,
+                    pane,
+                    tab_id: tree_input.tab_id,
+                    tab_title: tree_input.tab_title,
+                },
+                window,
+                cx,
+            ),
+            LayoutNode::Split(split) => {
+                let basis = split_child_basis(split.ratio);
+                let mut container = div().flex().flex_1().gap_1();
+                if split.direction == SplitDirection::Vertical {
+                    container = container.flex_col();
+                }
+
+                let left = self.terminal_split_view_for_layout(&split.left, tree_input, window, cx);
+                let right =
+                    self.terminal_split_view_for_layout(&split.right, tree_input, window, cx);
+
+                container
+                    .child(split_child(left, basis.left))
+                    .child(Self::split_resize_handle(split.direction, cx))
+                    .child(split_child(right, basis.right))
+            }
+        }
     }
 
     fn selected_tab_layout_clone(
@@ -817,6 +878,71 @@ impl RootView {
                 cx.notify();
             }
         }
+    }
+
+    fn split_resize_handle(direction: SplitDirection, cx: &mut Context<Self>) -> AnyElement {
+        let drag = SplitResizeDrag { direction };
+        let mut handle = div()
+            .id(match direction {
+                SplitDirection::Horizontal => "horizontal-split-resize-handle",
+                SplitDirection::Vertical => "vertical-split-resize-handle",
+            })
+            .flex_none()
+            .bg(rgb(0x262626))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                    this.begin_split_resize_drag(direction, event.position);
+                    cx.stop_propagation();
+                }),
+            )
+            .on_drag(drag, |drag, _, _, cx| {
+                cx.stop_propagation();
+                cx.new(|_| drag.clone())
+            })
+            .on_drag_move(cx.listener(
+                move |this, event: &DragMoveEvent<SplitResizeDrag>, _window, cx| {
+                    let drag = event.drag(cx);
+                    if drag.direction == direction {
+                        this.resize_from_split_drag(direction, event.event.position);
+                        cx.notify();
+                    }
+                },
+            ));
+
+        handle = match direction {
+            SplitDirection::Horizontal => handle.w(px(5.0)).cursor_ew_resize(),
+            SplitDirection::Vertical => handle.h(px(5.0)).cursor_ns_resize(),
+        };
+
+        handle.into_any_element()
+    }
+
+    fn begin_split_resize_drag(&mut self, direction: SplitDirection, position: Point<Pixels>) {
+        self.active_split_resize_drag = Some(ActiveSplitResizeDrag {
+            direction,
+            last_position: position,
+        });
+    }
+
+    fn resize_from_split_drag(&mut self, direction: SplitDirection, position: Point<Pixels>) {
+        let Some(active_drag) = self.active_split_resize_drag else {
+            self.begin_split_resize_drag(direction, position);
+            return;
+        };
+        if active_drag.direction != direction {
+            self.begin_split_resize_drag(direction, position);
+            return;
+        }
+
+        let delta_x = f32::from(position.x - active_drag.last_position.x);
+        let delta_y = f32::from(position.y - active_drag.last_position.y);
+        let Some(command_id) = resize_command_for_drag_delta(direction, delta_x, delta_y) else {
+            return;
+        };
+
+        let _ = self.run_command(command_id);
+        self.begin_split_resize_drag(direction, position);
     }
 
     fn on_palette_input_event(
@@ -1339,6 +1465,16 @@ impl Render for RootView {
             .on_action(cx.listener(Self::on_settings_keybindings))
             .on_action(cx.listener(Self::on_settings_notifications))
     }
+}
+
+fn split_child(child: Div, basis: f32) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_basis(relative(basis))
+        .flex_shrink()
+        .overflow_hidden()
+        .child(child)
 }
 
 fn terminal_pane_key(project_id: &str, tab_id: &str, pane_id: &str) -> String {

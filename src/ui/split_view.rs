@@ -1,9 +1,14 @@
-use gpui::{Div, IntoElement, div, prelude::*, relative, rgb};
+use gpui::{Div, IntoElement, div, prelude::*, px, relative, rgb};
 
-use crate::model::{
-    layout::{LayoutNode, PaneConfig, SplitDirection},
-    workspace::Workspace,
+use crate::{
+    commands::CommandId,
+    model::{
+        layout::{LayoutNode, PaneConfig, SplitDirection},
+        workspace::Workspace,
+    },
 };
+
+const SPLIT_RESIZE_DRAG_THRESHOLD_PX: f32 = 6.0;
 
 pub fn visible_pane_titles(workspace: &Workspace) -> Vec<String> {
     let Some((_project, layout)) = selected_tab_layout(workspace) else {
@@ -51,6 +56,7 @@ pub fn active_split_view(workspace: &Workspace) -> impl IntoElement {
             layout,
             &project.selected_tab_id,
             &mut render_mock_pane,
+            &mut inert_split_resize_handle,
         ))
 }
 
@@ -71,6 +77,7 @@ pub fn split_view_for_layout(
     layout: &LayoutNode,
     tab_id: &str,
     render_pane: &mut impl FnMut(&PaneConfig, &str) -> Div,
+    render_handle: &mut impl FnMut(SplitDirection) -> Div,
 ) -> Div {
     match layout {
         LayoutNode::Pane(pane) => render_pane(pane, tab_id),
@@ -82,11 +89,12 @@ pub fn split_view_for_layout(
             }
             container
                 .child(split_child(
-                    split_view_for_layout(&split.left, tab_id, render_pane),
+                    split_view_for_layout(&split.left, tab_id, render_pane, render_handle),
                     basis.left,
                 ))
+                .child(render_handle(split.direction))
                 .child(split_child(
-                    split_view_for_layout(&split.right, tab_id, render_pane),
+                    split_view_for_layout(&split.right, tab_id, render_pane, render_handle),
                     basis.right,
                 ))
         }
@@ -101,6 +109,36 @@ fn split_child(child: Div, basis: f32) -> Div {
         .flex_shrink()
         .overflow_hidden()
         .child(child)
+}
+
+pub fn resize_command_for_drag_delta(
+    direction: SplitDirection,
+    delta_x: f32,
+    delta_y: f32,
+) -> Option<CommandId> {
+    match direction {
+        SplitDirection::Horizontal if delta_x >= SPLIT_RESIZE_DRAG_THRESHOLD_PX => {
+            Some(CommandId::PaneResizeRight)
+        }
+        SplitDirection::Horizontal if delta_x <= -SPLIT_RESIZE_DRAG_THRESHOLD_PX => {
+            Some(CommandId::PaneResizeLeft)
+        }
+        SplitDirection::Vertical if delta_y >= SPLIT_RESIZE_DRAG_THRESHOLD_PX => {
+            Some(CommandId::PaneResizeDown)
+        }
+        SplitDirection::Vertical if delta_y <= -SPLIT_RESIZE_DRAG_THRESHOLD_PX => {
+            Some(CommandId::PaneResizeUp)
+        }
+        _ => None,
+    }
+}
+
+fn inert_split_resize_handle(direction: SplitDirection) -> Div {
+    let handle = div().flex_none().bg(rgb(0x1f1f1f));
+    match direction {
+        SplitDirection::Horizontal => handle.w(px(5.0)).cursor_ew_resize(),
+        SplitDirection::Vertical => handle.h(px(5.0)).cursor_ns_resize(),
+    }
 }
 
 fn render_mock_pane(pane: &PaneConfig, tab_id: &str) -> Div {
