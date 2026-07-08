@@ -54,10 +54,12 @@ esac
 
 case "$fixture" in
   dev)
-    fixture_env='export YTTT_DEV_FIXTURE=1'
+    fixture_env='export YTTT_DEV_FIXTURE=1
+export SHELL="$repo_root/$bundle_rel/Contents/MacOS/yttt-fixture-shell"'
     ;;
   agent)
-    fixture_env='export YTTT_DEV_FIXTURE=agent-exit'
+    fixture_env='export YTTT_DEV_FIXTURE=agent-exit
+export SHELL="$repo_root/$bundle_rel/Contents/MacOS/yttt-fixture-shell"'
     ;;
   none|"")
     fixture_env='unset YTTT_DEV_FIXTURE'
@@ -78,6 +80,7 @@ resources_dir="$contents_dir/Resources"
 launcher="$macos_dir/yttt-launcher"
 binary="$repo_root/target/debug/yttt"
 bundle_binary="$macos_dir/yttt-bin"
+fixture_shell="$macos_dir/yttt-fixture-shell"
 system_icon="/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns"
 bundle_icon="$resources_dir/AppIcon.icns"
 
@@ -95,6 +98,19 @@ fi
 
 cp "$binary" "$bundle_binary"
 chmod +x "$bundle_binary"
+
+cat > "$fixture_shell" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "-lc" ]]; then
+  shift
+  exec /bin/sh -c "${1:-}"
+fi
+
+exec /bin/sh "$@"
+EOF
+chmod +x "$fixture_shell"
 
 cat > "$contents_dir/Info.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -139,6 +155,7 @@ cat > "$launcher" <<EOF
 set -euo pipefail
 
 repo_root="$repo_root"
+bundle_rel="$bundle_rel"
 cd "\$repo_root"
 $fixture_env
 exec "\$repo_root/$bundle_rel/Contents/MacOS/yttt-bin"
