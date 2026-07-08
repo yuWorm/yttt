@@ -61,6 +61,7 @@ pub struct RootView {
     command_registry: CommandRegistry,
     recent_projects: Vec<RecentProject>,
     load_error: Option<String>,
+    keybinding_warning_lines: Vec<String>,
     last_opened_layout_file: Option<PathBuf>,
     last_opened_keybindings_file: Option<PathBuf>,
     pending_close_project_id: Option<ProjectId>,
@@ -114,7 +115,8 @@ impl RootView {
         let recent_projects = load_recent_projects(&config_paths)
             .map(recent_projects_for_palette)
             .unwrap_or_default();
-        let load_error = load_keybindings_message(&config_paths, &command_registry);
+        let (load_error, keybinding_warning_lines) =
+            load_keybindings_messages(&config_paths, &command_registry);
 
         Self {
             workspace,
@@ -123,6 +125,7 @@ impl RootView {
             command_registry,
             recent_projects,
             load_error,
+            keybinding_warning_lines,
             last_opened_layout_file: None,
             last_opened_keybindings_file: None,
             pending_close_project_id: None,
@@ -251,6 +254,13 @@ impl RootView {
 
     pub fn visible_error_message(&self) -> Option<&str> {
         self.load_error.as_deref()
+    }
+
+    pub fn visible_keybinding_warning_lines(&self) -> Vec<&str> {
+        self.keybinding_warning_lines
+            .iter()
+            .map(String::as_str)
+            .collect()
     }
 
     pub fn visible_empty_workspace_actions(&self) -> Vec<&'static str> {
@@ -1157,28 +1167,32 @@ fn recent_projects_for_palette(config: RecentProjectsConfig) -> Vec<RecentProjec
         .collect()
 }
 
-fn load_keybindings_message(paths: &AppConfigPaths, registry: &CommandRegistry) -> Option<String> {
+fn load_keybindings_messages(
+    paths: &AppConfigPaths,
+    registry: &CommandRegistry,
+) -> (Option<String>, Vec<String>) {
     match load_keybindings(paths, registry) {
-        Ok(loaded) if loaded.warnings.is_empty() => None,
-        Ok(loaded) => Some(format_keybinding_warnings(&loaded.warnings)),
-        Err(error) => Some(error.to_string()),
+        Ok(loaded) if loaded.warnings.is_empty() => (None, Vec::new()),
+        Ok(loaded) => {
+            let lines = format_keybinding_warning_lines(&loaded.warnings);
+            (Some(format!("Keybindings: {}", lines.join("; "))), lines)
+        }
+        Err(error) => (Some(error.to_string()), Vec::new()),
     }
 }
 
-fn format_keybinding_warnings(warnings: &[KeybindingLoadWarning]) -> String {
-    let parts: Vec<_> = warnings
+fn format_keybinding_warning_lines(warnings: &[KeybindingLoadWarning]) -> Vec<String> {
+    warnings
         .iter()
         .map(|warning| match warning {
             KeybindingLoadWarning::Conflict(conflict) => {
-                format!("conflicting keybinding: {}", conflict.keys)
+                format!("Conflicting keybinding: {}", conflict.keys)
             }
             KeybindingLoadWarning::InvalidCommand(command) => {
-                format!("invalid command id: {command}")
+                format!("Invalid command id: {command}")
             }
         })
-        .collect();
-
-    format!("Keybindings: {}", parts.join("; "))
+        .collect()
 }
 
 fn error_banner(message: &str) -> Div {

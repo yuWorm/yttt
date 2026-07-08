@@ -144,6 +144,40 @@ fn root_view_settings_keybindings_reveals_keybindings_file_path() {
 }
 
 #[test]
+fn root_view_exposes_keybinding_warning_lines() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    fs::create_dir_all(paths.config_dir()).unwrap();
+    fs::write(
+        paths.keybindings_file(),
+        r#"
+        [[bindings]]
+        keys = "cmd-p"
+        command = "command_palette.open"
+
+        [[bindings]]
+        keys = "CMD-P"
+        command = "project.palette"
+
+        [[bindings]]
+        keys = "cmd-x"
+        command = "missing.command"
+    "#,
+    )
+    .unwrap();
+
+    let root = RootView::with_config_paths(paths);
+
+    assert_eq!(
+        root.visible_keybinding_warning_lines(),
+        vec![
+            "Conflicting keybinding: cmd-p",
+            "Invalid command id: missing.command"
+        ]
+    );
+}
+
+#[test]
 fn visible_tab_titles_come_from_selected_project() {
     let workspace = workspace_with_sample_project();
 
