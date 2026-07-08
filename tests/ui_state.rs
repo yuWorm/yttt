@@ -149,7 +149,7 @@ fn root_view_project_close_command_requires_confirmation_for_running_project() {
 
     assert!(root.has_pending_project_close());
     assert_eq!(
-        root.visible_close_project_dialog_text(),
+        root.visible_close_project_dialog_text().as_deref(),
         Some("Close project?\nRunning terminal processes will be stopped.")
     );
     assert_eq!(

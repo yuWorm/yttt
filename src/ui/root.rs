@@ -5,6 +5,7 @@ use gpui::{
     rgb, rgba,
 };
 use gpui_component::{
+    alert::Alert,
     button::{Button, ButtonVariants as _},
     input::{InputEvent, InputState},
 };
@@ -91,9 +92,6 @@ pub struct RootView {
     theme: WorkbenchTheme,
 }
 
-const CLOSE_PROJECT_DIALOG_TEXT: &str =
-    "Close project?\nRunning terminal processes will be stopped.";
-const CLOSE_PROJECT_DIALOG_ACTIONS: [&str; 2] = ["Cancel", "Close Project"];
 const EMPTY_WORKSPACE_ACTIONS: [UiTextKey; 3] = [
     UiTextKey::OpenDirectory,
     UiTextKey::OpenRecent,
@@ -494,15 +492,22 @@ impl RootView {
         self.pending_close_project_id.is_some()
     }
 
-    pub fn visible_close_project_dialog_text(&self) -> Option<&'static str> {
-        self.pending_close_project_id
-            .as_ref()
-            .map(|_| CLOSE_PROJECT_DIALOG_TEXT)
+    pub fn visible_close_project_dialog_text(&self) -> Option<String> {
+        self.pending_close_project_id.as_ref().map(|_| {
+            format!(
+                "{}\n{}",
+                self.ui_text.get(UiTextKey::CloseProjectTitle),
+                self.ui_text.get(UiTextKey::CloseProjectBody)
+            )
+        })
     }
 
-    pub fn visible_close_project_dialog_actions(&self) -> Vec<&'static str> {
+    pub fn visible_close_project_dialog_actions(&self) -> Vec<String> {
         if self.pending_close_project_id.is_some() {
-            CLOSE_PROJECT_DIALOG_ACTIONS.to_vec()
+            vec![
+                self.ui_text.get(UiTextKey::Cancel).to_string(),
+                self.ui_text.get(UiTextKey::CloseProjectAction).to_string(),
+            ]
         } else {
             Vec::new()
         }
@@ -1421,7 +1426,7 @@ impl Render for RootView {
             root = root.child(error_banner(load_error));
         }
         if self.pending_close_project_id.is_some() {
-            root = root.child(close_project_dialog(cx));
+            root = root.child(close_project_dialog(cx, &self.ui_text));
         }
         root = root.child(toast_overlay(&self.toast_queue));
 
@@ -1605,17 +1610,10 @@ fn error_banner(message: &str) -> Div {
         .top_4()
         .left_4()
         .right_4()
-        .rounded_md()
-        .border_1()
-        .border_color(rgb(0x7f1d1d))
-        .bg(rgba(0x2a1010ee))
-        .p_3()
-        .text_sm()
-        .text_color(rgb(0xfecaca))
-        .child(message.to_string())
+        .child(Alert::error("root-error-banner", message.to_string()).banner())
 }
 
-fn close_project_dialog(cx: &mut Context<RootView>) -> Div {
+fn close_project_dialog(cx: &mut Context<RootView>, ui_text: &UiText) -> Div {
     div()
         .absolute()
         .top_0()
@@ -1638,12 +1636,17 @@ fn close_project_dialog(cx: &mut Context<RootView>) -> Div {
                 .bg(rgb(0x151515))
                 .p_4()
                 .text_color(rgb(0xf5f5f5))
-                .child(div().text_lg().child("Close project?"))
                 .child(
                     div()
-                        .text_sm()
-                        .text_color(rgb(0xa3a3a3))
-                        .child("Running terminal processes will be stopped."),
+                        .text_lg()
+                        .child(ui_text.get(UiTextKey::CloseProjectTitle)),
+                )
+                .child(
+                    Alert::warning(
+                        "close-project-warning",
+                        ui_text.get(UiTextKey::CloseProjectBody),
+                    )
+                    .banner(),
                 )
                 .child(
                     div()
@@ -1658,7 +1661,7 @@ fn close_project_dialog(cx: &mut Context<RootView>) -> Div {
                         .gap_2()
                         .child(
                             Button::new("cancel-close-project")
-                                .label(CLOSE_PROJECT_DIALOG_ACTIONS[0])
+                                .label(ui_text.get(UiTextKey::Cancel))
                                 .outline()
                                 .on_click(cx.listener(|this, _, _window, cx| {
                                     this.cancel_pending_project_close();
@@ -1667,7 +1670,7 @@ fn close_project_dialog(cx: &mut Context<RootView>) -> Div {
                         )
                         .child(
                             Button::new("confirm-close-project")
-                                .label(CLOSE_PROJECT_DIALOG_ACTIONS[1])
+                                .label(ui_text.get(UiTextKey::CloseProjectAction))
                                 .danger()
                                 .on_click(cx.listener(|this, _, _window, cx| {
                                     let _ = this.confirm_pending_project_close();

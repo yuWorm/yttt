@@ -19,6 +19,10 @@ pub enum UiTextKey {
     Active,
     NoResults,
     TypeToFilter,
+    CloseProjectTitle,
+    CloseProjectBody,
+    Cancel,
+    CloseProjectAction,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -58,6 +62,10 @@ fn english(key: UiTextKey) -> &'static str {
         UiTextKey::Active => "active",
         UiTextKey::NoResults => "No results",
         UiTextKey::TypeToFilter => "Type to filter",
+        UiTextKey::CloseProjectTitle => "Close project?",
+        UiTextKey::CloseProjectBody => "Running terminal processes will be stopped.",
+        UiTextKey::Cancel => "Cancel",
+        UiTextKey::CloseProjectAction => "Close Project",
     }
 }
 
@@ -76,5 +84,9 @@ fn chinese(key: UiTextKey) -> &'static str {
         UiTextKey::Active => "当前",
         UiTextKey::NoResults => "无结果",
         UiTextKey::TypeToFilter => "输入以筛选",
+        UiTextKey::CloseProjectTitle => "关闭项目？",
+        UiTextKey::CloseProjectBody => "正在运行的终端进程会被停止。",
+        UiTextKey::Cancel => "取消",
+        UiTextKey::CloseProjectAction => "关闭项目",
     }
 }

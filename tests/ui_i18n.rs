@@ -18,3 +18,25 @@ fn ui_text_supports_chinese_shell_labels() {
     assert_eq!(text.get(UiTextKey::OpenRecent), "打开最近项目");
     assert_eq!(text.get(UiTextKey::CommandPalette), "命令面板");
 }
+
+#[test]
+fn ui_text_returns_close_project_dialog_labels() {
+    let english = UiText::new(Locale::English);
+    let chinese = UiText::new(Locale::Chinese);
+
+    assert_eq!(english.get(UiTextKey::CloseProjectTitle), "Close project?");
+    assert_eq!(
+        english.get(UiTextKey::CloseProjectBody),
+        "Running terminal processes will be stopped."
+    );
+    assert_eq!(english.get(UiTextKey::Cancel), "Cancel");
+    assert_eq!(english.get(UiTextKey::CloseProjectAction), "Close Project");
+
+    assert_eq!(chinese.get(UiTextKey::CloseProjectTitle), "关闭项目？");
+    assert_eq!(
+        chinese.get(UiTextKey::CloseProjectBody),
+        "正在运行的终端进程会被停止。"
+    );
+    assert_eq!(chinese.get(UiTextKey::Cancel), "取消");
+    assert_eq!(chinese.get(UiTextKey::CloseProjectAction), "关闭项目");
+}

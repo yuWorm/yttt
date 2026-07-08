@@ -1,4 +1,5 @@
 use gpui::{App, AppContext, Application, Bounds, WindowBounds, WindowOptions, px, size};
+use gpui_component::Root as ComponentRoot;
 
 use crate::{
     commands::default_registry,
@@ -23,8 +24,8 @@ pub fn run() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| {
-                cx.new(|_| {
+            |window, cx| {
+                let view = cx.new(|_| {
                     match startup_mode_from_fixture(
                         std::env::var("YTTT_DEV_FIXTURE").ok().as_deref(),
                     ) {
@@ -32,7 +33,8 @@ pub fn run() {
                         StartupMode::AgentExitFixture => RootView::agent_exit_fixture(),
                         StartupMode::Normal => RootView::from_startup_env(),
                     }
-                })
+                });
+                cx.new(|cx| ComponentRoot::new(view, window, cx))
             },
         )
         .expect("failed to open yttt window");
