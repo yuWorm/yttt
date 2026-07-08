@@ -1,8 +1,24 @@
-use gpui::{Div, IntoElement, div, prelude::*, rgb};
+use gpui::{App, ClickEvent, IntoElement, SharedString, Window, div, prelude::*, rgb};
+use gpui_component::tab::{Tab, TabBar};
 
-use crate::model::workspace::Workspace;
+use crate::{model::workspace::Workspace, ui::components::SelectableState};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectTabItem {
+    pub id: String,
+    pub title: String,
+    pub status: Option<String>,
+    pub state: SelectableState,
+}
 
 pub fn visible_tab_titles(workspace: &Workspace) -> Vec<String> {
+    visible_tab_items(workspace)
+        .into_iter()
+        .map(|tab| tab.title)
+        .collect()
+}
+
+pub fn visible_tab_items(workspace: &Workspace) -> Vec<ProjectTabItem> {
     let Some(selected_project_id) = workspace.selected_project_id() else {
         return Vec::new();
     };
@@ -14,51 +30,54 @@ pub fn visible_tab_titles(workspace: &Workspace) -> Vec<String> {
         .layout
         .tabs
         .iter()
-        .map(|tab| tab.title.clone())
+        .map(|tab| ProjectTabItem {
+            id: tab.id.clone(),
+            title: tab.title.clone(),
+            status: project
+                .tab_state(&tab.id)
+                .map(|state| format!("{:?}", state.start_state).to_ascii_lowercase()),
+            state: if tab.id == project.selected_tab_id {
+                SelectableState::Active
+            } else {
+                SelectableState::Inactive
+            },
+        })
         .collect()
 }
 
-pub fn project_tabs(workspace: &Workspace) -> impl IntoElement {
-    let Some(selected_project_id) = workspace.selected_project_id() else {
-        return div();
-    };
-    let Some(project) = workspace.project(selected_project_id) else {
-        return div();
-    };
+pub fn project_tabs<H, F>(workspace: &Workspace, mut on_select_tab: F) -> impl IntoElement
+where
+    H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    F: FnMut(String) -> H,
+{
+    let items = visible_tab_items(workspace);
+    if items.is_empty() {
+        return div().into_any_element();
+    }
 
-    let mut bar = div()
-        .flex()
-        .gap_1()
+    let selected_index = items
+        .iter()
+        .position(|tab| tab.state == SelectableState::Active)
+        .unwrap_or(0);
+
+    let mut tabs = Vec::new();
+    for item in items {
+        let mut tab = Tab::new()
+            .label(SharedString::from(item.title.clone()))
+            .on_click(on_select_tab(item.id.clone()));
+
+        if let Some(status) = item.status {
+            tab = tab.suffix(div().text_xs().text_color(rgb(0xa3a3a3)).child(status));
+        }
+
+        tabs.push(tab);
+    }
+
+    TabBar::new("project-tabs")
+        .underline()
+        .selected_index(selected_index)
+        .children(tabs)
         .bg(rgb(0x171717))
-        .text_color(rgb(0xf5f5f5))
-        .p_2();
-
-    for tab in &project.layout.tabs {
-        bar = bar.child(tab_label(
-            &tab.title,
-            tab.id == project.selected_tab_id,
-            project
-                .tab_state(&tab.id)
-                .map(|state| format!("{:?}", state.start_state).to_ascii_lowercase()),
-        ));
-    }
-
-    bar
-}
-
-fn tab_label(title: &str, selected: bool, status: Option<String>) -> Div {
-    let background = if selected { 0x262626 } else { 0x171717 };
-    let mut label = div()
-        .flex()
-        .gap_2()
-        .bg(rgb(background))
-        .px_3()
-        .py_2()
-        .child(title.to_string());
-
-    if let Some(status) = status {
-        label = label.child(div().text_xs().text_color(rgb(0xa3a3a3)).child(status));
-    }
-
-    label
+        .p_2()
+        .into_any_element()
 }

@@ -851,13 +851,24 @@ impl Render for RootView {
                 .relative()
                 .bg(rgb(0x101010))
                 .text_color(rgb(0xf5f5f5))
-                .child(project_sidebar(&self.workspace))
+                .child(project_sidebar(&self.workspace, |project_id| {
+                    let project_id = ProjectId::new(project_id);
+                    cx.listener(move |this, _, _window, cx| {
+                        let _ = this.workspace.select_project(&project_id);
+                        cx.notify();
+                    })
+                }))
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .flex_1()
-                        .child(project_tabs(&self.workspace))
+                        .child(project_tabs(&self.workspace, |tab_id| {
+                            cx.listener(move |this, _, _window, cx| {
+                                let _ = this.workspace.select_tab(&tab_id);
+                                cx.notify();
+                            })
+                        }))
                         .child(split_view),
                 )
         };

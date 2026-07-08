@@ -8,8 +8,14 @@ use yttt::{
     palette::PaletteKind,
     runtime::notification::{NotificationEvent, NotificationKind},
     runtime::terminal::{ExitReason, ProcessStatus},
+    ui::components::SelectableState,
+    ui::sidebar::visible_project_items,
     ui::terminal_pane::{TerminalPaneExitInput, notification_for_terminal_pane_exit},
-    ui::{root::RootView, split_view::visible_pane_titles, tabs::visible_tab_titles},
+    ui::{
+        root::RootView,
+        split_view::visible_pane_titles,
+        tabs::{visible_tab_items, visible_tab_titles},
+    },
 };
 
 #[test]
@@ -133,6 +139,39 @@ fn visible_tab_titles_come_from_selected_project() {
     let workspace = workspace_with_sample_project();
 
     assert_eq!(visible_tab_titles(&workspace), vec!["Dev", "Agent"]);
+}
+
+#[test]
+fn visible_project_items_mark_selected_project() {
+    let mut workspace = Workspace::new();
+    let first = workspace
+        .open_project(PathBuf::from("/tmp/one"), sample_layout())
+        .unwrap();
+    let second = workspace
+        .open_project(PathBuf::from("/tmp/two"), sample_layout())
+        .unwrap();
+
+    workspace.select_project(&first).unwrap();
+
+    let items = visible_project_items(&workspace);
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].id, first.as_str());
+    assert_eq!(items[0].state, SelectableState::Active);
+    assert_eq!(items[1].id, second.as_str());
+    assert_eq!(items[1].state, SelectableState::Inactive);
+}
+
+#[test]
+fn visible_tab_items_mark_selected_tab() {
+    let mut workspace = workspace_with_sample_project();
+    workspace.select_tab("agent").unwrap();
+
+    let items = visible_tab_items(&workspace);
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].id, "dev");
+    assert_eq!(items[0].state, SelectableState::Inactive);
+    assert_eq!(items[1].id, "agent");
+    assert_eq!(items[1].state, SelectableState::Active);
 }
 
 #[test]
