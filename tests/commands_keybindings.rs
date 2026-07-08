@@ -8,6 +8,7 @@ use yttt::config::{
     },
     paths::AppConfigPaths,
 };
+use yttt::model::layout::LayoutNode;
 use yttt::model::workspace::{TabStartState, Workspace};
 use yttt::ui::split_view::visible_pane_titles;
 
@@ -182,12 +183,45 @@ fn pane_focus_commands_move_between_adjacent_panes() {
     assert_focused_pane(&workspace, "server");
 }
 
+#[test]
+fn pane_resize_commands_adjust_current_split_ratio() {
+    let mut workspace = workspace_with_sample_project();
+
+    dispatch_workspace_command(&mut workspace, CommandId::PaneResizeRight).unwrap();
+    assert_ratio(root_split_ratio(&workspace), 0.7);
+
+    dispatch_workspace_command(&mut workspace, CommandId::PaneResizeLeft).unwrap();
+    assert_ratio(root_split_ratio(&workspace), 0.65);
+}
+
 fn workspace_with_sample_project() -> Workspace {
     let mut workspace = Workspace::new();
     workspace
         .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
         .unwrap();
     workspace
+}
+
+fn root_split_ratio(workspace: &Workspace) -> f32 {
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    let project = workspace.project(&project_id).unwrap();
+    let tab = project
+        .layout
+        .tabs
+        .iter()
+        .find(|tab| tab.id == project.selected_tab_id)
+        .unwrap();
+    match &tab.layout {
+        LayoutNode::Split(split) => split.ratio,
+        LayoutNode::Pane(_) => panic!("sample tab should be split"),
+    }
+}
+
+fn assert_ratio(actual: f32, expected: f32) {
+    assert!(
+        (actual - expected).abs() < 0.001,
+        "expected ratio {expected}, got {actual}"
+    );
 }
 
 fn assert_focused_pane(workspace: &Workspace, expected_pane_id: &str) {

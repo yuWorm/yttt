@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crate::model::{
     ids::ProjectId,
     layout::{LayoutNode, PaneConfig, PaneKind, ProjectLayout, SplitConfig, SplitDirection},
-    split_tree::FocusDirection,
+    split_tree::{FocusDirection, ResizeDirection},
 };
 
 #[derive(Clone, Debug, Default)]
@@ -171,6 +171,38 @@ impl Workspace {
         tab_state.focused_pane_id = Some(next_pane_id.clone());
 
         Ok(next_pane_id)
+    }
+
+    pub fn resize_focused_split(
+        &mut self,
+        direction: ResizeDirection,
+        delta: f32,
+    ) -> Result<f32, WorkspaceError> {
+        let project = self.selected_project_mut()?;
+        let selected_tab_id = project.selected_tab_id.clone();
+        let tab_index = project
+            .layout
+            .tabs
+            .iter()
+            .position(|tab| tab.id == selected_tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
+        let focused_pane_id = project
+            .tab_state(&selected_tab_id)
+            .and_then(|tab| tab.focused_pane_id.clone())
+            .or_else(|| {
+                pane_ids(&project.layout.tabs[tab_index].layout)
+                    .into_iter()
+                    .next()
+            })
+            .ok_or_else(|| WorkspaceError::PaneNotFound("focused".to_string()))?;
+
+        resize_pane_split(
+            &mut project.layout.tabs[tab_index].layout,
+            &focused_pane_id,
+            direction,
+            delta,
+        )
+        .ok_or_else(|| WorkspaceError::PaneNotFound(format!("{direction:?}")))
     }
 
     pub fn select_next_tab(&mut self) -> Result<(), WorkspaceError> {
@@ -650,5 +682,44 @@ fn last_pane_id(layout: &LayoutNode) -> Option<String> {
     match layout {
         LayoutNode::Pane(pane) => Some(pane.id.clone()),
         LayoutNode::Split(split) => last_pane_id(&split.right),
+    }
+}
+
+fn resize_pane_split(
+    layout: &mut LayoutNode,
+    target_pane_id: &str,
+    resize_direction: ResizeDirection,
+    delta: f32,
+) -> Option<f32> {
+    match layout {
+        LayoutNode::Pane(_) => None,
+        LayoutNode::Split(split) => {
+            if let Some(ratio) =
+                resize_pane_split(&mut split.left, target_pane_id, resize_direction, delta)
+            {
+                return Some(ratio);
+            }
+            if let Some(ratio) =
+                resize_pane_split(&mut split.right, target_pane_id, resize_direction, delta)
+            {
+                return Some(ratio);
+            }
+
+            let target_in_left = layout_contains_pane(&split.left, target_pane_id);
+            let target_in_right = layout_contains_pane(&split.right, target_pane_id);
+            if !target_in_left && !target_in_right {
+                return None;
+            }
+
+            let adjustment = match (split.direction, resize_direction) {
+                (SplitDirection::Horizontal, ResizeDirection::Right)
+                | (SplitDirection::Vertical, ResizeDirection::Down) => delta,
+                (SplitDirection::Horizontal, ResizeDirection::Left)
+                | (SplitDirection::Vertical, ResizeDirection::Up) => -delta,
+                _ => return None,
+            };
+            split.ratio = (split.ratio + adjustment).clamp(0.1, 0.9);
+            Some(split.ratio)
+        }
     }
 }

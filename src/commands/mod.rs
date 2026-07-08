@@ -1,8 +1,10 @@
 use crate::model::{
     layout::SplitDirection,
-    split_tree::FocusDirection,
+    split_tree::{FocusDirection, ResizeDirection},
     workspace::{Workspace, WorkspaceError},
 };
+
+const PANE_RESIZE_DELTA: f32 = 0.05;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CommandId {
@@ -148,6 +150,7 @@ pub enum CommandOutcome {
     PaneSplit(String),
     PaneClosed(String),
     PaneFocused(String),
+    PaneResized,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -198,6 +201,22 @@ pub fn dispatch_workspace_command(
         CommandId::PaneFocusDown => workspace
             .focus_pane_direction(FocusDirection::Down)
             .map(CommandOutcome::PaneFocused)
+            .map_err(CommandDispatchError::from),
+        CommandId::PaneResizeLeft => workspace
+            .resize_focused_split(ResizeDirection::Left, PANE_RESIZE_DELTA)
+            .map(|_| CommandOutcome::PaneResized)
+            .map_err(CommandDispatchError::from),
+        CommandId::PaneResizeRight => workspace
+            .resize_focused_split(ResizeDirection::Right, PANE_RESIZE_DELTA)
+            .map(|_| CommandOutcome::PaneResized)
+            .map_err(CommandDispatchError::from),
+        CommandId::PaneResizeUp => workspace
+            .resize_focused_split(ResizeDirection::Up, PANE_RESIZE_DELTA)
+            .map(|_| CommandOutcome::PaneResized)
+            .map_err(CommandDispatchError::from),
+        CommandId::PaneResizeDown => workspace
+            .resize_focused_split(ResizeDirection::Down, PANE_RESIZE_DELTA)
+            .map(|_| CommandOutcome::PaneResized)
             .map_err(CommandDispatchError::from),
         _ => Err(CommandDispatchError::Unsupported(command_id)),
     }
