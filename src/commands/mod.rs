@@ -5,6 +5,8 @@ use crate::model::{
 };
 
 const PANE_RESIZE_DELTA: f32 = 0.05;
+const DEFAULT_RENAMED_TAB_TITLE: &str = "Renamed Tab";
+const DEFAULT_RENAMED_PANE_TITLE: &str = "Renamed Pane";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CommandId {
@@ -14,6 +16,7 @@ pub enum CommandId {
     ProjectPalette,
     TabNew,
     TabClose,
+    TabRename,
     TabNext,
     TabPrev,
     TabPalette,
@@ -46,6 +49,7 @@ impl CommandId {
         Self::ProjectPalette,
         Self::TabNew,
         Self::TabClose,
+        Self::TabRename,
         Self::TabNext,
         Self::TabPrev,
         Self::TabPalette,
@@ -78,6 +82,7 @@ impl CommandId {
             Self::ProjectPalette => "project.palette",
             Self::TabNew => "tab.new",
             Self::TabClose => "tab.close",
+            Self::TabRename => "tab.rename",
             Self::TabNext => "tab.next",
             Self::TabPrev => "tab.prev",
             Self::TabPalette => "tab.palette",
@@ -115,6 +120,7 @@ impl CommandId {
             }
             Self::TabNew => presentation("New Tab", "Create a shell tab in the selected project"),
             Self::TabClose => presentation("Close Tab", "Close the selected tab"),
+            Self::TabRename => presentation("Rename Tab", "Rename the selected tab"),
             Self::TabNext => presentation("Next Tab", "Switch to the next project tab"),
             Self::TabPrev => presentation("Previous Tab", "Switch to the previous project tab"),
             Self::TabPalette => {
@@ -188,9 +194,10 @@ impl CommandId {
             | Self::ProjectPalette
             | Self::SettingsKeybindings
             | Self::SettingsNotifications => enabled(),
-            Self::TabClose | Self::PaneRename => disabled("Not implemented yet"),
             Self::ProjectClose
             | Self::TabNew
+            | Self::TabClose
+            | Self::TabRename
             | Self::TabNext
             | Self::TabPrev
             | Self::TabPalette
@@ -205,6 +212,7 @@ impl CommandId {
             | Self::PaneResizeRight
             | Self::PaneResizeUp
             | Self::PaneResizeDown
+            | Self::PaneRename
             | Self::PanePalette
             | Self::LayoutSaveCurrent
             | Self::LayoutExportProjectConfig
@@ -293,8 +301,11 @@ pub fn default_registry() -> CommandRegistry {
 pub enum CommandOutcome {
     None,
     TabCreated(String),
+    TabClosed(String),
+    TabRenamed,
     PaneSplit(String),
     PaneClosed(String),
+    PaneRenamed,
     PaneFocused(String),
     PaneResized,
 }
@@ -324,6 +335,14 @@ pub fn dispatch_workspace_command(
             .create_shell_tab()
             .map(CommandOutcome::TabCreated)
             .map_err(CommandDispatchError::from),
+        CommandId::TabClose => workspace
+            .close_selected_tab()
+            .map(CommandOutcome::TabClosed)
+            .map_err(CommandDispatchError::from),
+        CommandId::TabRename => workspace
+            .rename_selected_tab(DEFAULT_RENAMED_TAB_TITLE)
+            .map(|_| CommandOutcome::TabRenamed)
+            .map_err(CommandDispatchError::from),
         CommandId::PaneSplitHorizontal => workspace
             .split_focused_pane(SplitDirection::Horizontal)
             .map(CommandOutcome::PaneSplit)
@@ -332,9 +351,17 @@ pub fn dispatch_workspace_command(
             .split_focused_pane(SplitDirection::Vertical)
             .map(CommandOutcome::PaneSplit)
             .map_err(CommandDispatchError::from),
-        CommandId::PaneClose => workspace
-            .close_focused_pane()
-            .map(CommandOutcome::PaneClosed)
+        CommandId::PaneClose => match workspace.close_focused_pane() {
+            Ok(pane_id) => Ok(CommandOutcome::PaneClosed(pane_id)),
+            Err(WorkspaceError::CannotCloseLastPane) => workspace
+                .close_selected_tab()
+                .map(CommandOutcome::TabClosed)
+                .map_err(CommandDispatchError::from),
+            Err(error) => Err(CommandDispatchError::from(error)),
+        },
+        CommandId::PaneRename => workspace
+            .rename_focused_pane(DEFAULT_RENAMED_PANE_TITLE)
+            .map(|_| CommandOutcome::PaneRenamed)
             .map_err(CommandDispatchError::from),
         CommandId::PaneFocusLeft => workspace
             .focus_pane_direction(FocusDirection::Left)

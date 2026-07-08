@@ -125,6 +125,10 @@ const DEFAULT_UI_KEYBINDING_SPECS: &[UiKeybindingSpec] = &[
         command: CommandId::PaneClose,
     },
     UiKeybindingSpec {
+        keys: "ctrl-w",
+        command: CommandId::PaneClose,
+    },
+    UiKeybindingSpec {
         keys: "cmd-alt-left",
         command: CommandId::PaneFocusLeft,
     },

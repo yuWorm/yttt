@@ -158,6 +158,74 @@ fn recording_agent_status_marks_pane_exited_with_result() {
     assert_eq!(pane.agent_status, Some(AgentStatus::Completed));
 }
 
+#[test]
+fn close_selected_tab_selects_adjacent_tab() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+    workspace.select_tab("agent").unwrap();
+
+    let closed_tab_id = workspace.close_selected_tab().unwrap();
+
+    let project = workspace.project(&project_id).unwrap();
+    assert_eq!(closed_tab_id, "agent");
+    assert_eq!(project.selected_tab_id, "dev");
+    assert!(project.layout.tab("agent").is_none());
+    assert!(project.tab_state("agent").is_none());
+}
+
+#[test]
+fn close_selected_tab_rejects_last_tab() {
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(PathBuf::from("/tmp/single"), single_tab_layout())
+        .unwrap();
+
+    let err = workspace.close_selected_tab().unwrap_err();
+
+    assert_eq!(
+        err,
+        yttt::model::workspace::WorkspaceError::CannotCloseLastTab
+    );
+}
+
+#[test]
+fn rename_selected_tab_changes_title_without_changing_id() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+
+    workspace.rename_selected_tab("Main Dev").unwrap();
+
+    let project = workspace.project(&project_id).unwrap();
+    let tab = project.layout.tab("dev").unwrap();
+    assert_eq!(tab.id, "dev");
+    assert_eq!(tab.title, "Main Dev");
+}
+
+#[test]
+fn rename_focused_pane_changes_title_without_changing_id() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+
+    workspace.rename_focused_pane("Server").unwrap();
+
+    let project = workspace.project(&project_id).unwrap();
+    let pane = project
+        .layout
+        .tab("dev")
+        .unwrap()
+        .layout
+        .find_pane("server")
+        .unwrap();
+    assert_eq!(pane.id, "server");
+    assert_eq!(pane.title, "Server");
+}
+
 fn sample_layout() -> yttt::model::layout::ProjectLayout {
     toml::from_str(
         r#"
@@ -180,6 +248,22 @@ fn sample_layout() -> yttt::model::layout::ProjectLayout {
         id = "agent"
         title = "Agent"
         layout = { type = "pane", id = "codex", title = "Codex", command = "codex", kind = "agent", notify_on_exit = true }
+    "#,
+    )
+    .unwrap()
+}
+
+fn single_tab_layout() -> yttt::model::layout::ProjectLayout {
+    toml::from_str(
+        r#"
+        [project]
+        name = "single"
+        default_tab = "dev"
+
+        [[tabs]]
+        id = "dev"
+        title = "Dev"
+        layout = { type = "pane", id = "shell", title = "shell", command = "$SHELL" }
     "#,
     )
     .unwrap()

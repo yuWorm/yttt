@@ -167,6 +167,8 @@ pub fn default_keybindings() -> KeybindingsConfig {
             binding("ctrl-d", "pane.split_vertical"),
             binding("cmd-shift-d", "pane.split_horizontal"),
             binding("ctrl-shift-d", "pane.split_horizontal"),
+            binding("cmd-w", "pane.close"),
+            binding("ctrl-w", "pane.close"),
             binding("cmd-alt-left", "pane.focus_left"),
             binding("cmd-alt-right", "pane.focus_right"),
             binding("cmd-alt-up", "pane.focus_up"),

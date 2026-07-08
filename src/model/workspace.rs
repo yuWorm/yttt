@@ -247,6 +247,57 @@ impl Workspace {
         Ok(tab_id)
     }
 
+    pub fn close_selected_tab(&mut self) -> Result<String, WorkspaceError> {
+        let project = self.selected_project_mut()?;
+        if project.layout.tabs.len() <= 1 {
+            return Err(WorkspaceError::CannotCloseLastTab);
+        }
+
+        let selected_tab_id = project.selected_tab_id.clone();
+        let tab_index = project
+            .layout
+            .tabs
+            .iter()
+            .position(|tab| tab.id == selected_tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
+
+        let removed_tab = project.layout.tabs.remove(tab_index);
+        project
+            .tab_states
+            .retain(|tab| tab.tab_id != removed_tab.id);
+
+        let next_index = tab_index.min(project.layout.tabs.len().saturating_sub(1));
+        let next_tab_id = project.layout.tabs[next_index].id.clone();
+        project.selected_tab_id = next_tab_id.clone();
+        let next_tab_state = project
+            .tab_state_mut(&next_tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(next_tab_id.clone()))?;
+        next_tab_state.start_state = TabStartState::Started;
+        if next_tab_state.focused_pane_id.is_none() {
+            next_tab_state.focused_pane_id = next_tab_state
+                .pane_states
+                .first()
+                .map(|pane| pane.pane_id.clone());
+        }
+
+        Ok(removed_tab.id)
+    }
+
+    pub fn rename_selected_tab(&mut self, title: &str) -> Result<(), WorkspaceError> {
+        let title = normalized_title(title)?;
+        let project = self.selected_project_mut()?;
+        let selected_tab_id = project.selected_tab_id.clone();
+        let tab = project
+            .layout
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.id == selected_tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
+
+        tab.title = title;
+        Ok(())
+    }
+
     pub fn split_focused_pane(
         &mut self,
         direction: SplitDirection,
@@ -339,6 +390,34 @@ impl Workspace {
         tab_state.focused_pane_id = remaining_panes.first().cloned();
 
         Ok(focused_pane_id)
+    }
+
+    pub fn rename_focused_pane(&mut self, title: &str) -> Result<(), WorkspaceError> {
+        let title = normalized_title(title)?;
+        let project = self.selected_project_mut()?;
+        let selected_tab_id = project.selected_tab_id.clone();
+        let tab_index = project
+            .layout
+            .tabs
+            .iter()
+            .position(|tab| tab.id == selected_tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
+        let focused_pane_id = project
+            .tab_state(&selected_tab_id)
+            .and_then(|tab| tab.focused_pane_id.clone())
+            .or_else(|| {
+                pane_ids(&project.layout.tabs[tab_index].layout)
+                    .into_iter()
+                    .next()
+            })
+            .ok_or_else(|| WorkspaceError::PaneNotFound("focused".to_string()))?;
+        let pane = project.layout.tabs[tab_index]
+            .layout
+            .find_pane_mut(&focused_pane_id)
+            .ok_or_else(|| WorkspaceError::PaneNotFound(focused_pane_id.clone()))?;
+
+        pane.title = title;
+        Ok(())
     }
 
     pub fn mark_pane_running(
@@ -583,7 +662,7 @@ pub struct ClosedProject {
     pub project_id: ProjectId,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, PartialEq)]
 pub enum WorkspaceError {
     #[error("{0}")]
     InvalidLayout(#[from] crate::model::layout::LayoutError),
@@ -599,6 +678,10 @@ pub enum WorkspaceError {
     NoTabs,
     #[error("cannot close the last pane in a tab")]
     CannotCloseLastPane,
+    #[error("cannot close the last tab in a project")]
+    CannotCloseLastTab,
+    #[error("title cannot be empty")]
+    EmptyTitle,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -615,6 +698,15 @@ fn default_tab_id(layout: &ProjectLayout) -> Option<String> {
         .default_tab
         .clone()
         .or_else(|| layout.tabs.first().map(|tab| tab.id.clone()))
+}
+
+fn normalized_title(title: &str) -> Result<String, WorkspaceError> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(WorkspaceError::EmptyTitle);
+    }
+
+    Ok(title.to_string())
 }
 
 fn pane_ids(layout: &LayoutNode) -> Vec<String> {

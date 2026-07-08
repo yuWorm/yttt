@@ -19,6 +19,7 @@ fn default_registry_contains_core_commands() {
 
     assert!(registry.contains(CommandId::ProjectOpen));
     assert!(registry.contains(CommandId::PaneSplitVertical));
+    assert!(registry.contains(CommandId::TabRename));
     assert!(registry.contains(CommandId::CommandPaletteOpen));
 }
 
@@ -107,6 +108,16 @@ fn default_keybindings_include_tab_new_shortcuts() {
     assert_has_config_binding(&config, "ctrl-t", "tab.new");
     assert_has_ui_binding("cmd-t", "tab.new");
     assert_has_ui_binding("ctrl-t", "tab.new");
+}
+
+#[test]
+fn default_keybindings_include_context_close_shortcuts() {
+    let config = default_keybindings();
+
+    assert_has_config_binding(&config, "cmd-w", "pane.close");
+    assert_has_config_binding(&config, "ctrl-w", "pane.close");
+    assert_has_ui_binding("cmd-w", "pane.close");
+    assert_has_ui_binding("ctrl-w", "pane.close");
 }
 
 #[test]
@@ -215,6 +226,31 @@ fn tab_new_command_adds_shell_tab_and_selects_it() {
 }
 
 #[test]
+fn tab_close_command_removes_selected_tab() {
+    let mut workspace = workspace_with_sample_project();
+    workspace.select_tab("agent").unwrap();
+
+    dispatch_workspace_command(&mut workspace, CommandId::TabClose).unwrap();
+
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    let project = workspace.project(&project_id).unwrap();
+    assert_eq!(project.selected_tab_id, "dev");
+    assert!(project.layout.tab("agent").is_none());
+}
+
+#[test]
+fn tab_rename_command_changes_selected_tab_title() {
+    let mut workspace = workspace_with_sample_project();
+
+    dispatch_workspace_command(&mut workspace, CommandId::TabRename).unwrap();
+
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    let project = workspace.project(&project_id).unwrap();
+    assert_eq!(project.layout.tab("dev").unwrap().title, "Renamed Tab");
+    assert!(project.layout.tab("dev").is_some());
+}
+
+#[test]
 fn pane_split_vertical_command_adds_pane_to_current_tab() {
     let mut workspace = workspace_with_sample_project();
 
@@ -231,6 +267,38 @@ fn pane_close_command_removes_focused_pane() {
     dispatch_workspace_command(&mut workspace, CommandId::PaneClose).unwrap();
 
     assert_eq!(visible_pane_titles(&workspace).len(), 2);
+}
+
+#[test]
+fn pane_close_command_closes_single_pane_tab_by_context() {
+    let mut workspace = workspace_with_sample_project();
+    workspace.select_tab("agent").unwrap();
+
+    dispatch_workspace_command(&mut workspace, CommandId::PaneClose).unwrap();
+
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    let project = workspace.project(&project_id).unwrap();
+    assert_eq!(project.selected_tab_id, "dev");
+    assert!(project.layout.tab("agent").is_none());
+}
+
+#[test]
+fn pane_rename_command_changes_focused_pane_title() {
+    let mut workspace = workspace_with_sample_project();
+
+    dispatch_workspace_command(&mut workspace, CommandId::PaneRename).unwrap();
+
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    let project = workspace.project(&project_id).unwrap();
+    let pane = project
+        .layout
+        .tab("dev")
+        .unwrap()
+        .layout
+        .find_pane("server")
+        .unwrap();
+    assert_eq!(pane.id, "server");
+    assert_eq!(pane.title, "Renamed Pane");
 }
 
 #[test]
