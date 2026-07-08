@@ -20,6 +20,16 @@ fn root_view_starts_with_empty_workspace() {
 }
 
 #[test]
+fn root_view_empty_workspace_exposes_visible_actions() {
+    let root = RootView::new();
+
+    assert_eq!(
+        root.visible_empty_workspace_actions(),
+        vec!["Open Directory", "Open Recent", "Command Palette"]
+    );
+}
+
+#[test]
 fn root_view_dev_fixture_contains_sample_project() {
     let root = RootView::dev_fixture();
 

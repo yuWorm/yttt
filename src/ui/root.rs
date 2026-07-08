@@ -1,6 +1,6 @@
 use gpui::{
-    Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent, Render,
-    Subscription, Window, div, prelude::*, rgb, rgba,
+    Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent,
+    MouseButton, PathPromptOptions, Render, Subscription, Window, div, prelude::*, rgb, rgba,
 };
 
 use std::{
@@ -68,6 +68,7 @@ pub struct RootView {
 
 const CLOSE_PROJECT_DIALOG_TEXT: &str =
     "Close project?\nRunning terminal processes will be stopped.";
+const EMPTY_WORKSPACE_ACTIONS: [&str; 3] = ["Open Directory", "Open Recent", "Command Palette"];
 
 struct RenderTerminalPaneInput<'a> {
     project_id: &'a str,
@@ -221,6 +222,10 @@ impl RootView {
 
     pub fn visible_error_message(&self) -> Option<&str> {
         self.load_error.as_deref()
+    }
+
+    pub fn visible_empty_workspace_actions(&self) -> Vec<&'static str> {
+        EMPTY_WORKSPACE_ACTIONS.to_vec()
     }
 
     pub fn last_opened_layout_file(&self) -> Option<&Path> {
@@ -580,10 +585,43 @@ impl RootView {
         if let Some(project_path) = std::env::var_os("YTTT_OPEN_PROJECT") {
             let _ = self.open_project_path(PathBuf::from(project_path));
         } else {
-            self.load_error =
-                Some("Set YTTT_OPEN_PROJECT=/path to open a directory in this MVP.".to_string());
+            self.prompt_for_project_directory(cx);
         }
         cx.notify();
+    }
+
+    fn prompt_for_project_directory(&mut self, cx: &mut Context<Self>) {
+        let picked_paths = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Open Directory".into()),
+        });
+
+        cx.spawn(async move |this, cx| match picked_paths.await {
+            Ok(Ok(Some(paths))) => {
+                if let Some(project_path) = paths.into_iter().next() {
+                    let _ = this.update(cx, |this, cx| {
+                        let _ = this.open_project_path(project_path);
+                        cx.notify();
+                    });
+                }
+            }
+            Ok(Ok(None)) => {}
+            Ok(Err(error)) => {
+                let _ = this.update(cx, |this, cx| {
+                    this.load_error = Some(format!("Failed to open directory picker: {error}"));
+                    cx.notify();
+                });
+            }
+            Err(error) => {
+                let _ = this.update(cx, |this, cx| {
+                    this.load_error = Some(format!("Directory picker was interrupted: {error}"));
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     fn on_open_tab_palette(
@@ -789,7 +827,7 @@ impl Render for RootView {
         let focus_handle = self.root_focus_handle(cx);
 
         let mut root = if self.workspace.opened_projects().is_empty() {
-            empty_workspace()
+            empty_workspace(cx)
         } else {
             let split_view = self.active_terminal_split_view(window, cx);
 
@@ -957,11 +995,11 @@ fn close_project_dialog() -> Div {
         )
 }
 
-fn empty_workspace() -> Div {
+fn empty_workspace(cx: &mut Context<RootView>) -> Div {
     div()
         .flex()
         .flex_col()
-        .gap_3()
+        .gap_5()
         .size_full()
         .relative()
         .justify_center()
@@ -969,8 +1007,94 @@ fn empty_workspace() -> Div {
         .bg(rgb(0x101010))
         .text_color(rgb(0xf5f5f5))
         .child(div().text_xl().child("yttt"))
-        .child("Open a directory or choose a recent project.")
-        .child("Command Palette: Cmd/Ctrl+P")
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .items_center()
+                .text_center()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(0xd4d4d4))
+                        .child("Open a directory or choose a recent project."),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0x737373))
+                        .child("Sidebar shows opened projects only."),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_2()
+                .justify_center()
+                .child(
+                    empty_workspace_action("Open Directory", "Cmd/Ctrl+O", true).on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            this.on_open_project(&OpenProject, window, cx);
+                        }),
+                    ),
+                )
+                .child(
+                    empty_workspace_action("Open Recent", "Cmd/Ctrl+Shift+O", false).on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            this.on_open_project_palette(&OpenProjectPalette, window, cx);
+                        }),
+                    ),
+                )
+                .child(
+                    empty_workspace_action("Command Palette", "Cmd/Ctrl+P", false).on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            this.on_open_command_palette(&OpenCommandPalette, window, cx);
+                        }),
+                    ),
+                ),
+        )
+}
+
+fn empty_workspace_action(label: &'static str, shortcut: &'static str, primary: bool) -> Div {
+    let (bg, border, text, shortcut_text, hover_bg) = if primary {
+        (
+            rgb(0xf5f5f5),
+            rgb(0xf5f5f5),
+            rgb(0x101010),
+            rgb(0x404040),
+            rgb(0xe5e5e5),
+        )
+    } else {
+        (
+            rgb(0x171717),
+            rgb(0x3a3a3a),
+            rgb(0xf5f5f5),
+            rgb(0xa3a3a3),
+            rgb(0x262626),
+        )
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .min_w_32()
+        .px_4()
+        .py_3()
+        .rounded_md()
+        .border_1()
+        .border_color(border)
+        .bg(bg)
+        .text_color(text)
+        .cursor_pointer()
+        .hover(|this| this.bg(hover_bg))
+        .child(div().text_sm().child(label))
+        .child(div().text_xs().text_color(shortcut_text).child(shortcut))
 }
 
 fn dev_fixture_layout() -> ProjectLayout {
