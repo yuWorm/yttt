@@ -19,8 +19,10 @@ use crate::{
 
 #[derive(Clone, Debug)]
 pub struct TerminalPaneContext {
+    pub project_id: String,
     pub project_path: PathBuf,
     pub project_title: String,
+    pub tab_id: String,
     pub tab_title: String,
     pub pane: PaneConfig,
 }
@@ -53,8 +55,11 @@ pub struct TerminalSpawnFailure {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalPaneExitInput {
+    pub project_id: String,
     pub project_title: String,
+    pub tab_id: String,
     pub tab_title: String,
+    pub pane_id: String,
     pub pane_title: String,
     pub command: String,
     pub kind: PaneKind,
@@ -64,8 +69,10 @@ pub struct TerminalPaneExitInput {
 }
 
 pub struct TerminalPaneView {
+    project_id: String,
     project_path: PathBuf,
     project_title: String,
+    tab_id: String,
     tab_title: String,
     pane_id: String,
     title: String,
@@ -82,8 +89,10 @@ pub struct TerminalPaneView {
 impl TerminalPaneView {
     pub fn new(context: TerminalPaneContext, cx: &mut Context<Self>) -> Self {
         let TerminalPaneContext {
+            project_id,
             project_path,
             project_title,
+            tab_id,
             tab_title,
             pane,
         } = context;
@@ -94,8 +103,10 @@ impl TerminalPaneView {
             Err(error) => {
                 let message = error.to_string();
                 return Self {
+                    project_id,
                     project_path,
                     project_title,
+                    tab_id,
                     tab_title,
                     pane_id: pane.id,
                     title: pane.title,
@@ -116,8 +127,10 @@ impl TerminalPaneView {
         let Some(io) = session.take_io() else {
             let message = "pty session I/O was already taken".to_string();
             return Self {
+                project_id,
                 project_path,
                 project_title,
+                tab_id,
                 tab_title,
                 pane_id: pane.id,
                 title: pane.title,
@@ -149,8 +162,10 @@ impl TerminalPaneView {
         });
 
         Self {
+            project_id,
             project_path,
             project_title,
+            tab_id,
             tab_title,
             pane_id: pane.id,
             title: pane.title,
@@ -185,8 +200,11 @@ impl TerminalPaneView {
             reason: exit_reason,
         };
         let event = notification_for_terminal_pane_exit(TerminalPaneExitInput {
+            project_id: self.project_id.clone(),
             project_title: self.project_title.clone(),
+            tab_id: self.tab_id.clone(),
             tab_title: self.tab_title.clone(),
+            pane_id: self.pane_id.clone(),
             pane_title: self.title.clone(),
             command: self.command.clone(),
             kind: self.kind.clone(),
@@ -337,6 +355,9 @@ pub fn notification_for_terminal_pane_exit(
         notify_on_exit: input.notify_on_exit,
         exit_code,
         exit_reason: input.exit_reason,
+        project_id: input.project_id,
+        tab_id: input.tab_id,
+        pane_id: input.pane_id,
         project_title: input.project_title,
         tab_title: input.tab_title,
         pane_title: input.pane_title,

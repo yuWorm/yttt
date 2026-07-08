@@ -478,6 +478,9 @@ fn terminal_pane_agent_exit_builds_notification_event() {
     .unwrap();
 
     assert_eq!(event.kind, NotificationKind::AgentCompleted);
+    assert_eq!(event.project_id, "/tmp/yttt");
+    assert_eq!(event.tab_id, "agent");
+    assert_eq!(event.pane_id, "codex");
     assert_eq!(event.project_title, "yttt");
     assert_eq!(event.tab_title, "Agent");
     assert_eq!(event.pane_title, "Codex");
@@ -538,8 +541,11 @@ fn terminal_pane_exit_input(
 ) -> TerminalPaneExitInput {
     TerminalPaneExitInput {
         project_title: "yttt".to_string(),
+        project_id: "/tmp/yttt".to_string(),
         tab_title: "Agent".to_string(),
+        tab_id: "agent".to_string(),
         pane_title: "Codex".to_string(),
+        pane_id: "codex".to_string(),
         command: "codex".to_string(),
         kind: PaneKind::Agent,
         notify_on_exit: true,
@@ -555,6 +561,9 @@ fn notification_event() -> NotificationEvent {
 fn notification_event_for(pane_title: &str, kind: NotificationKind) -> NotificationEvent {
     NotificationEvent {
         kind,
+        project_id: "/tmp/yttt".to_string(),
+        tab_id: "agent".to_string(),
+        pane_id: "codex".to_string(),
         project_title: "yttt".to_string(),
         tab_title: "Agent".to_string(),
         pane_title: pane_title.to_string(),

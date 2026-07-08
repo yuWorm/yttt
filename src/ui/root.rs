@@ -280,7 +280,7 @@ impl RootView {
     }
 
     pub fn visible_terminal_pane_contexts(&self) -> Vec<TerminalPaneContext> {
-        let Some((_project_id, project_path, project_title, _tab_id, tab_title, layout)) =
+        let Some((project_id, project_path, project_title, tab_id, tab_title, layout)) =
             self.selected_tab_layout_clone()
         else {
             return Vec::new();
@@ -288,8 +288,10 @@ impl RootView {
 
         let mut contexts = Vec::new();
         collect_terminal_pane_contexts(
+            &project_id,
             &project_path,
             &project_title,
+            &tab_id,
             &tab_title,
             &layout,
             &mut contexts,
@@ -630,8 +632,10 @@ impl RootView {
             pane_view.clone()
         } else {
             let context = TerminalPaneContext {
+                project_id: input.project_id.to_string(),
                 project_path: input.project_path.to_path_buf(),
                 project_title: input.project_title.to_string(),
+                tab_id: input.tab_id.to_string(),
                 tab_title: input.tab_title.to_string(),
                 pane: input.pane.clone(),
             };
@@ -1147,30 +1151,38 @@ fn opens_palette_command(command_id: CommandId) -> bool {
 }
 
 fn collect_terminal_pane_contexts(
+    project_id: &str,
     project_path: &Path,
     project_title: &str,
+    tab_id: &str,
     tab_title: &str,
     layout: &LayoutNode,
     contexts: &mut Vec<TerminalPaneContext>,
 ) {
     match layout {
         LayoutNode::Pane(pane) => contexts.push(TerminalPaneContext {
+            project_id: project_id.to_string(),
             project_path: project_path.to_path_buf(),
             project_title: project_title.to_string(),
+            tab_id: tab_id.to_string(),
             tab_title: tab_title.to_string(),
             pane: pane.clone(),
         }),
         LayoutNode::Split(split) => {
             collect_terminal_pane_contexts(
+                project_id,
                 project_path,
                 project_title,
+                tab_id,
                 tab_title,
                 &split.left,
                 contexts,
             );
             collect_terminal_pane_contexts(
+                project_id,
                 project_path,
                 project_title,
+                tab_id,
                 tab_title,
                 &split.right,
                 contexts,

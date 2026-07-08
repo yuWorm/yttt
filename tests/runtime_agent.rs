@@ -60,6 +60,9 @@ fn agent_exit_code_zero_emits_completed_notification() {
     let event = notification_for_exit(exit_input(true, Some(0), ExitReason::Completed)).unwrap();
 
     assert_eq!(event.kind, NotificationKind::AgentCompleted);
+    assert_eq!(event.project_id, "/tmp/yttt");
+    assert_eq!(event.tab_id, "agent");
+    assert_eq!(event.pane_id, "codex");
     assert_eq!(event.project_title, "yttt");
     assert_eq!(event.tab_title, "Agent");
     assert_eq!(event.pane_title, "Codex");
@@ -120,6 +123,9 @@ impl SystemNotifier for CountingNotifier {
 fn notification_event() -> NotificationEvent {
     NotificationEvent {
         kind: NotificationKind::AgentCompleted,
+        project_id: "/tmp/yttt".to_string(),
+        tab_id: "agent".to_string(),
+        pane_id: "codex".to_string(),
         project_title: "yttt".to_string(),
         tab_title: "Agent".to_string(),
         pane_title: "Codex".to_string(),
@@ -136,6 +142,9 @@ fn exit_input(
         notify_on_exit: true,
         exit_code,
         exit_reason,
+        project_id: "/tmp/yttt".to_string(),
+        tab_id: "agent".to_string(),
+        pane_id: "codex".to_string(),
         project_title: "yttt".to_string(),
         tab_title: "Agent".to_string(),
         pane_title: "Codex".to_string(),
