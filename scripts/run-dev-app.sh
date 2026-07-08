@@ -81,7 +81,7 @@ launcher="$macos_dir/yttt-launcher"
 binary="$repo_root/target/debug/yttt"
 bundle_binary="$macos_dir/yttt-bin"
 fixture_shell="$macos_dir/yttt-fixture-shell"
-system_icon="/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns"
+app_icon="$repo_root/assets/app-icon/macos/AppIcon.icns"
 bundle_icon="$resources_dir/AppIcon.icns"
 
 if [[ "$build" -eq 1 ]]; then
@@ -147,10 +147,11 @@ cat > "$contents_dir/Info.plist" <<'EOF'
 </plist>
 EOF
 
-if [[ -f "$system_icon" ]]; then
-  cp "$system_icon" "$bundle_icon"
+if [[ -f "$app_icon" ]]; then
+  cp "$app_icon" "$bundle_icon"
 else
-  echo "Missing system app icon: $system_icon" >&2
+  echo "Missing app icon: $app_icon" >&2
+  echo "Run scripts/build-app-icons.sh first." >&2
   exit 1
 fi
 
