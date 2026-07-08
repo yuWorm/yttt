@@ -171,12 +171,30 @@ fn pane_close_command_removes_focused_pane() {
     assert_eq!(visible_pane_titles(&workspace).len(), 2);
 }
 
+#[test]
+fn pane_focus_commands_move_between_adjacent_panes() {
+    let mut workspace = workspace_with_sample_project();
+
+    dispatch_workspace_command(&mut workspace, CommandId::PaneFocusRight).unwrap();
+    assert_focused_pane(&workspace, "shell");
+
+    dispatch_workspace_command(&mut workspace, CommandId::PaneFocusLeft).unwrap();
+    assert_focused_pane(&workspace, "server");
+}
+
 fn workspace_with_sample_project() -> Workspace {
     let mut workspace = Workspace::new();
     workspace
         .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
         .unwrap();
     workspace
+}
+
+fn assert_focused_pane(workspace: &Workspace, expected_pane_id: &str) {
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    let project = workspace.project(&project_id).unwrap();
+    let tab = project.tab_state(&project.selected_tab_id).unwrap();
+    assert_eq!(tab.focused_pane_id.as_deref(), Some(expected_pane_id));
 }
 
 fn sample_layout() -> yttt::model::layout::ProjectLayout {

@@ -1,5 +1,6 @@
 use crate::model::{
     layout::SplitDirection,
+    split_tree::FocusDirection,
     workspace::{Workspace, WorkspaceError},
 };
 
@@ -146,6 +147,7 @@ pub enum CommandOutcome {
     None,
     PaneSplit(String),
     PaneClosed(String),
+    PaneFocused(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -180,6 +182,22 @@ pub fn dispatch_workspace_command(
         CommandId::PaneClose => workspace
             .close_focused_pane()
             .map(CommandOutcome::PaneClosed)
+            .map_err(CommandDispatchError::from),
+        CommandId::PaneFocusLeft => workspace
+            .focus_pane_direction(FocusDirection::Left)
+            .map(CommandOutcome::PaneFocused)
+            .map_err(CommandDispatchError::from),
+        CommandId::PaneFocusRight => workspace
+            .focus_pane_direction(FocusDirection::Right)
+            .map(CommandOutcome::PaneFocused)
+            .map_err(CommandDispatchError::from),
+        CommandId::PaneFocusUp => workspace
+            .focus_pane_direction(FocusDirection::Up)
+            .map(CommandOutcome::PaneFocused)
+            .map_err(CommandDispatchError::from),
+        CommandId::PaneFocusDown => workspace
+            .focus_pane_direction(FocusDirection::Down)
+            .map(CommandOutcome::PaneFocused)
             .map_err(CommandDispatchError::from),
         _ => Err(CommandDispatchError::Unsupported(command_id)),
     }

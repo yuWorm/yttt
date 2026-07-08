@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use crate::model::{
     ids::ProjectId,
     layout::{LayoutNode, PaneConfig, PaneKind, ProjectLayout, SplitConfig, SplitDirection},
+    split_tree::FocusDirection,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -134,6 +135,42 @@ impl Workspace {
 
         tab_state.focused_pane_id = Some(pane_id.to_string());
         Ok(())
+    }
+
+    pub fn focus_pane_direction(
+        &mut self,
+        direction: FocusDirection,
+    ) -> Result<String, WorkspaceError> {
+        let project = self.selected_project_mut()?;
+        let selected_tab_id = project.selected_tab_id.clone();
+        let tab_index = project
+            .layout
+            .tabs
+            .iter()
+            .position(|tab| tab.id == selected_tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
+        let focused_pane_id = project
+            .tab_state(&selected_tab_id)
+            .and_then(|tab| tab.focused_pane_id.clone())
+            .or_else(|| {
+                pane_ids(&project.layout.tabs[tab_index].layout)
+                    .into_iter()
+                    .next()
+            })
+            .ok_or_else(|| WorkspaceError::PaneNotFound("focused".to_string()))?;
+        let next_pane_id = adjacent_pane_id(
+            &project.layout.tabs[tab_index].layout,
+            &focused_pane_id,
+            direction,
+        )
+        .ok_or_else(|| WorkspaceError::PaneNotFound(format!("{direction:?}")))?;
+
+        let tab_state = project
+            .tab_state_mut(&selected_tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(selected_tab_id.clone()))?;
+        tab_state.focused_pane_id = Some(next_pane_id.clone());
+
+        Ok(next_pane_id)
     }
 
     pub fn select_next_tab(&mut self) -> Result<(), WorkspaceError> {
@@ -554,5 +591,64 @@ fn remove_pane_node(layout: &mut LayoutNode, target_pane_id: &str) -> bool {
             remove_pane_node(&mut split.left, target_pane_id)
                 || remove_pane_node(&mut split.right, target_pane_id)
         }
+    }
+}
+
+fn adjacent_pane_id(
+    layout: &LayoutNode,
+    target_pane_id: &str,
+    focus_direction: FocusDirection,
+) -> Option<String> {
+    match layout {
+        LayoutNode::Pane(_) => None,
+        LayoutNode::Split(split) => {
+            if layout_contains_pane(&split.left, target_pane_id) {
+                adjacent_pane_id(&split.left, target_pane_id, focus_direction).or_else(|| {
+                    match (split.direction, focus_direction) {
+                        (SplitDirection::Horizontal, FocusDirection::Right)
+                        | (SplitDirection::Vertical, FocusDirection::Down) => {
+                            first_pane_id(&split.right)
+                        }
+                        _ => None,
+                    }
+                })
+            } else if layout_contains_pane(&split.right, target_pane_id) {
+                adjacent_pane_id(&split.right, target_pane_id, focus_direction).or_else(|| {
+                    match (split.direction, focus_direction) {
+                        (SplitDirection::Horizontal, FocusDirection::Left)
+                        | (SplitDirection::Vertical, FocusDirection::Up) => {
+                            last_pane_id(&split.left)
+                        }
+                        _ => None,
+                    }
+                })
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn layout_contains_pane(layout: &LayoutNode, target_pane_id: &str) -> bool {
+    match layout {
+        LayoutNode::Pane(pane) => pane.id == target_pane_id,
+        LayoutNode::Split(split) => {
+            layout_contains_pane(&split.left, target_pane_id)
+                || layout_contains_pane(&split.right, target_pane_id)
+        }
+    }
+}
+
+fn first_pane_id(layout: &LayoutNode) -> Option<String> {
+    match layout {
+        LayoutNode::Pane(pane) => Some(pane.id.clone()),
+        LayoutNode::Split(split) => first_pane_id(&split.left),
+    }
+}
+
+fn last_pane_id(layout: &LayoutNode) -> Option<String> {
+    match layout {
+        LayoutNode::Pane(pane) => Some(pane.id.clone()),
+        LayoutNode::Split(split) => last_pane_id(&split.right),
     }
 }
