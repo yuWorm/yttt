@@ -875,7 +875,15 @@ impl Render for RootView {
 
         if let Some(active_palette) = &self.active_palette {
             let items = self.palette_items(active_palette.kind);
-            root = root.child(palette_overlay(active_palette, &items));
+            root = root.child(palette_overlay(active_palette, &items, |selected_index| {
+                cx.listener(move |this, _, _window, cx| {
+                    if let Some(active_palette) = &mut this.active_palette {
+                        active_palette.selected_index = selected_index;
+                    }
+                    let _ = this.confirm_palette_selection();
+                    cx.notify();
+                })
+            }));
         }
         if let Some(load_error) = &self.load_error {
             root = root.child(error_banner(load_error));

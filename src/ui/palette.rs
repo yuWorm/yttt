@@ -1,9 +1,54 @@
-use gpui::{Div, IntoElement, div, prelude::*, px, rgb, rgba};
+use gpui::{App, ClickEvent, Div, IntoElement, Window, div, prelude::*, px, rgb, rgba};
+use gpui_component::list::ListItem;
 
 use crate::palette::{ActivePalette, PaletteItem, PaletteKind};
+use crate::ui::components::SelectableState;
 
-pub fn palette_overlay(active_palette: &ActivePalette, items: &[PaletteItem]) -> impl IntoElement {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaletteRow {
+    pub id: String,
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub status: Option<String>,
+    pub state: SelectableState,
+}
+
+pub fn visible_palette_rows(
+    active_palette: &ActivePalette,
+    items: &[PaletteItem],
+) -> Vec<PaletteRow> {
     let filtered_items = active_palette.filtered_items(items);
+    let selected_index = active_palette
+        .selected_index
+        .min(filtered_items.len().saturating_sub(1));
+
+    filtered_items
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| PaletteRow {
+            id: item.id.clone(),
+            title: item.title.clone(),
+            subtitle: item.subtitle.clone(),
+            status: item.status.clone(),
+            state: if index == selected_index {
+                SelectableState::Active
+            } else {
+                SelectableState::Inactive
+            },
+        })
+        .collect()
+}
+
+pub fn palette_overlay<H, F>(
+    active_palette: &ActivePalette,
+    items: &[PaletteItem],
+    on_confirm_item: F,
+) -> impl IntoElement
+where
+    H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    F: FnMut(usize) -> H,
+{
+    let rows = visible_palette_rows(active_palette, items);
 
     div()
         .absolute()
@@ -25,7 +70,7 @@ pub fn palette_overlay(active_palette: &ActivePalette, items: &[PaletteItem]) ->
                 .bg(rgb(0x151515))
                 .text_color(rgb(0xf5f5f5))
                 .child(palette_header(active_palette))
-                .child(palette_items(filtered_items, active_palette.selected_index)),
+                .child(palette_items(rows, on_confirm_item)),
         )
 }
 
@@ -52,8 +97,12 @@ fn palette_header(active_palette: &ActivePalette) -> Div {
         ))
 }
 
-fn palette_items(items: Vec<&PaletteItem>, selected_index: usize) -> Div {
-    if items.is_empty() {
+fn palette_items<H, F>(rows: Vec<PaletteRow>, mut on_confirm_item: F) -> Div
+where
+    H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    F: FnMut(usize) -> H,
+{
+    if rows.is_empty() {
         return div()
             .p_4()
             .text_sm()
@@ -61,49 +110,42 @@ fn palette_items(items: Vec<&PaletteItem>, selected_index: usize) -> Div {
             .child("No results");
     }
 
-    items
-        .into_iter()
-        .enumerate()
-        .fold(div().flex().flex_col().p_2(), |list, (index, item)| {
-            list.child(palette_item(item, index == selected_index))
-        })
+    rows.into_iter().enumerate().fold(
+        div().flex().flex_col().gap_1().p_2(),
+        |list, (index, row)| list.child(palette_item(row, index, on_confirm_item(index))),
+    )
 }
 
-fn palette_item(item: &PaletteItem, selected: bool) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap_3()
-        .rounded_sm()
-        .px_2()
-        .py_2()
-        .bg(if selected {
-            rgb(0x263238)
-        } else {
-            rgb(0x151515)
-        })
+fn palette_item<H>(row: PaletteRow, index: usize, on_click: H) -> ListItem
+where
+    H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+{
+    let status = row.status.clone().unwrap_or_default();
+
+    ListItem::new(("palette-item", index))
+        .selected(row.state == SelectableState::Active)
+        .on_click(on_click)
         .child(
             div()
                 .flex()
                 .flex_col()
                 .gap_1()
                 .overflow_hidden()
-                .child(div().text_sm().truncate().child(item.title.clone()))
+                .child(div().text_sm().truncate().child(row.title))
                 .child(
                     div()
                         .text_xs()
                         .text_color(rgb(0x8a8a8a))
                         .truncate()
-                        .child(item.subtitle.clone().unwrap_or_default()),
+                        .child(row.subtitle.unwrap_or_default()),
                 ),
         )
-        .child(
+        .suffix(move |_, _| {
             div()
                 .text_xs()
                 .text_color(rgb(0xa3a3a3))
-                .child(item.status.clone().unwrap_or_default()),
-        )
+                .child(status.clone())
+        })
 }
 
 fn palette_title(kind: PaletteKind) -> &'static str {

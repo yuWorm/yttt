@@ -5,10 +5,11 @@ use yttt::{
     commands::CommandId,
     config::paths::AppConfigPaths,
     model::{layout::PaneKind, workspace::Workspace},
-    palette::PaletteKind,
+    palette::{ActivePalette, PaletteItem, PaletteKind},
     runtime::notification::{NotificationEvent, NotificationKind},
     runtime::terminal::{ExitReason, ProcessStatus},
     ui::components::SelectableState,
+    ui::palette::visible_palette_rows,
     ui::sidebar::visible_project_items,
     ui::terminal_pane::{TerminalPaneExitInput, notification_for_terminal_pane_exit},
     ui::{
@@ -200,6 +201,26 @@ fn root_view_pane_palette_scopes_to_current_tab_panes() {
 }
 
 #[test]
+fn visible_palette_rows_mark_selected_filtered_item() {
+    let mut palette = ActivePalette::new(PaletteKind::Command);
+    palette.query = "tab".to_string();
+    palette.selected_index = 1;
+    let items = vec![
+        palette_item("project.open", "Open Project"),
+        palette_item("tab.next", "Next Tab"),
+        palette_item("tab.prev", "Previous Tab"),
+    ];
+
+    let rows = visible_palette_rows(&palette, &items);
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].id, "tab.next");
+    assert_eq!(rows[0].state, SelectableState::Inactive);
+    assert_eq!(rows[1].id, "tab.prev");
+    assert_eq!(rows[1].state, SelectableState::Active);
+}
+
+#[test]
 fn root_view_confirming_tab_palette_selection_switches_tabs() {
     let mut root = RootView::dev_fixture();
 
@@ -292,6 +313,16 @@ fn notification_event() -> NotificationEvent {
         project_title: "yttt".to_string(),
         tab_title: "Agent".to_string(),
         pane_title: "Codex".to_string(),
+    }
+}
+
+fn palette_item(id: &str, title: &str) -> PaletteItem {
+    PaletteItem {
+        id: id.to_string(),
+        title: title.to_string(),
+        subtitle: None,
+        status: None,
+        command: CommandId::CommandPaletteOpen,
     }
 }
 
