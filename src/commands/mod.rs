@@ -108,6 +108,13 @@ impl CommandId {
         }
     }
 
+    pub fn from_str_id(command_id: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|id| id.as_str() == command_id)
+    }
+
     pub fn presentation(self) -> CommandPresentation {
         match self {
             Self::ProjectOpen => presentation("Open Project", "Choose a project directory"),

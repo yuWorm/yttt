@@ -1,15 +1,21 @@
 use gpui::{App, AppContext, Application, Bounds, WindowBounds, WindowOptions, px, size};
 
-use crate::ui::{
-    actions::default_ui_keybindings,
-    root::RootView,
-    startup::{StartupMode, startup_mode_from_fixture},
+use crate::{
+    commands::default_registry,
+    config::paths::AppConfigPaths,
+    ui::{
+        actions::load_app_keybindings,
+        root::RootView,
+        startup::{StartupMode, startup_mode_from_fixture},
+    },
 };
 
 pub fn run() {
     Application::new().run(|cx: &mut App| {
         gpui_component::init(cx);
-        cx.bind_keys(default_ui_keybindings());
+        let config_paths = AppConfigPaths::for_app();
+        let command_registry = default_registry();
+        cx.bind_keys(load_app_keybindings(&config_paths, &command_registry));
 
         let bounds = Bounds::centered(None, size(px(960.0), px(640.0)), cx);
         cx.open_window(

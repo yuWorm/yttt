@@ -1,6 +1,14 @@
+use std::{borrow::Cow, collections::HashSet};
+
 use gpui::{KeyBinding, actions};
 
-use crate::commands::CommandId;
+use crate::{
+    commands::{CommandId, CommandRegistry},
+    config::{
+        keybindings::{KeybindingsConfig, load_keybindings},
+        paths::AppConfigPaths,
+    },
+};
 
 pub const WORKSPACE_CONTEXT: &str = "Workspace";
 
@@ -9,6 +17,7 @@ actions!(
     [
         OpenCommandPalette,
         OpenProject,
+        ProjectClose,
         OpenProjectPalette,
         OpenTabPalette,
         OpenPanePalette,
@@ -17,6 +26,8 @@ actions!(
         PaletteConfirm,
         PaletteCancel,
         TabNew,
+        TabClose,
+        TabRename,
         TabNext,
         TabPrev,
         PaneSplitVertical,
@@ -30,166 +41,172 @@ actions!(
         PaneResizeRight,
         PaneResizeUp,
         PaneResizeDown,
+        PaneRename,
+        LayoutSaveCurrent,
+        LayoutExportProjectConfig,
+        LayoutOpenFile,
+        SettingsKeybindings,
+        SettingsNotifications,
     ]
 );
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UiKeybindingSpec {
-    pub keys: &'static str,
+    pub keys: Cow<'static, str>,
     pub command: CommandId,
 }
 
 const DEFAULT_UI_KEYBINDING_SPECS: &[UiKeybindingSpec] = &[
     UiKeybindingSpec {
-        keys: "cmd-o",
+        keys: Cow::Borrowed("cmd-o"),
         command: CommandId::ProjectOpen,
     },
     UiKeybindingSpec {
-        keys: "ctrl-o",
+        keys: Cow::Borrowed("ctrl-o"),
         command: CommandId::ProjectOpen,
     },
     UiKeybindingSpec {
-        keys: "cmd-p",
+        keys: Cow::Borrowed("cmd-p"),
         command: CommandId::CommandPaletteOpen,
     },
     UiKeybindingSpec {
-        keys: "ctrl-p",
+        keys: Cow::Borrowed("ctrl-p"),
         command: CommandId::CommandPaletteOpen,
     },
     UiKeybindingSpec {
-        keys: "cmd-shift-o",
+        keys: Cow::Borrowed("cmd-shift-o"),
         command: CommandId::ProjectPalette,
     },
     UiKeybindingSpec {
-        keys: "ctrl-shift-o",
+        keys: Cow::Borrowed("ctrl-shift-o"),
         command: CommandId::ProjectPalette,
     },
     UiKeybindingSpec {
-        keys: "cmd-j",
+        keys: Cow::Borrowed("cmd-j"),
         command: CommandId::TabPalette,
     },
     UiKeybindingSpec {
-        keys: "ctrl-j",
+        keys: Cow::Borrowed("ctrl-j"),
         command: CommandId::TabPalette,
     },
     UiKeybindingSpec {
-        keys: "cmd-k",
+        keys: Cow::Borrowed("cmd-k"),
         command: CommandId::PanePalette,
     },
     UiKeybindingSpec {
-        keys: "ctrl-k",
+        keys: Cow::Borrowed("ctrl-k"),
         command: CommandId::PanePalette,
     },
     UiKeybindingSpec {
-        keys: "cmd-t",
+        keys: Cow::Borrowed("cmd-t"),
         command: CommandId::TabNew,
     },
     UiKeybindingSpec {
-        keys: "ctrl-t",
+        keys: Cow::Borrowed("ctrl-t"),
         command: CommandId::TabNew,
     },
     UiKeybindingSpec {
-        keys: "cmd-]",
+        keys: Cow::Borrowed("cmd-]"),
         command: CommandId::TabNext,
     },
     UiKeybindingSpec {
-        keys: "ctrl-tab",
+        keys: Cow::Borrowed("ctrl-tab"),
         command: CommandId::TabNext,
     },
     UiKeybindingSpec {
-        keys: "cmd-[",
+        keys: Cow::Borrowed("cmd-["),
         command: CommandId::TabPrev,
     },
     UiKeybindingSpec {
-        keys: "ctrl-shift-tab",
+        keys: Cow::Borrowed("ctrl-shift-tab"),
         command: CommandId::TabPrev,
     },
     UiKeybindingSpec {
-        keys: "cmd-d",
+        keys: Cow::Borrowed("cmd-d"),
         command: CommandId::PaneSplitVertical,
     },
     UiKeybindingSpec {
-        keys: "ctrl-d",
+        keys: Cow::Borrowed("ctrl-d"),
         command: CommandId::PaneSplitVertical,
     },
     UiKeybindingSpec {
-        keys: "cmd-shift-d",
+        keys: Cow::Borrowed("cmd-shift-d"),
         command: CommandId::PaneSplitHorizontal,
     },
     UiKeybindingSpec {
-        keys: "ctrl-shift-d",
+        keys: Cow::Borrowed("ctrl-shift-d"),
         command: CommandId::PaneSplitHorizontal,
     },
     UiKeybindingSpec {
-        keys: "cmd-w",
+        keys: Cow::Borrowed("cmd-w"),
         command: CommandId::PaneClose,
     },
     UiKeybindingSpec {
-        keys: "ctrl-w",
+        keys: Cow::Borrowed("ctrl-w"),
         command: CommandId::PaneClose,
     },
     UiKeybindingSpec {
-        keys: "cmd-alt-left",
+        keys: Cow::Borrowed("cmd-alt-left"),
         command: CommandId::PaneFocusLeft,
     },
     UiKeybindingSpec {
-        keys: "cmd-alt-right",
+        keys: Cow::Borrowed("cmd-alt-right"),
         command: CommandId::PaneFocusRight,
     },
     UiKeybindingSpec {
-        keys: "cmd-alt-up",
+        keys: Cow::Borrowed("cmd-alt-up"),
         command: CommandId::PaneFocusUp,
     },
     UiKeybindingSpec {
-        keys: "cmd-alt-down",
+        keys: Cow::Borrowed("cmd-alt-down"),
         command: CommandId::PaneFocusDown,
     },
     UiKeybindingSpec {
-        keys: "ctrl-alt-left",
+        keys: Cow::Borrowed("ctrl-alt-left"),
         command: CommandId::PaneFocusLeft,
     },
     UiKeybindingSpec {
-        keys: "ctrl-alt-right",
+        keys: Cow::Borrowed("ctrl-alt-right"),
         command: CommandId::PaneFocusRight,
     },
     UiKeybindingSpec {
-        keys: "ctrl-alt-up",
+        keys: Cow::Borrowed("ctrl-alt-up"),
         command: CommandId::PaneFocusUp,
     },
     UiKeybindingSpec {
-        keys: "ctrl-alt-down",
+        keys: Cow::Borrowed("ctrl-alt-down"),
         command: CommandId::PaneFocusDown,
     },
     UiKeybindingSpec {
-        keys: "cmd-alt-shift-left",
+        keys: Cow::Borrowed("cmd-alt-shift-left"),
         command: CommandId::PaneResizeLeft,
     },
     UiKeybindingSpec {
-        keys: "cmd-alt-shift-right",
+        keys: Cow::Borrowed("cmd-alt-shift-right"),
         command: CommandId::PaneResizeRight,
     },
     UiKeybindingSpec {
-        keys: "cmd-alt-shift-up",
+        keys: Cow::Borrowed("cmd-alt-shift-up"),
         command: CommandId::PaneResizeUp,
     },
     UiKeybindingSpec {
-        keys: "cmd-alt-shift-down",
+        keys: Cow::Borrowed("cmd-alt-shift-down"),
         command: CommandId::PaneResizeDown,
     },
     UiKeybindingSpec {
-        keys: "ctrl-alt-shift-left",
+        keys: Cow::Borrowed("ctrl-alt-shift-left"),
         command: CommandId::PaneResizeLeft,
     },
     UiKeybindingSpec {
-        keys: "ctrl-alt-shift-right",
+        keys: Cow::Borrowed("ctrl-alt-shift-right"),
         command: CommandId::PaneResizeRight,
     },
     UiKeybindingSpec {
-        keys: "ctrl-alt-shift-up",
+        keys: Cow::Borrowed("ctrl-alt-shift-up"),
         command: CommandId::PaneResizeUp,
     },
     UiKeybindingSpec {
-        keys: "ctrl-alt-shift-down",
+        keys: Cow::Borrowed("ctrl-alt-shift-down"),
         command: CommandId::PaneResizeDown,
     },
 ];
@@ -203,65 +220,127 @@ pub fn default_ui_keybindings() -> Vec<KeyBinding> {
         .iter()
         .map(command_keybinding)
         .collect();
-    bindings.extend([
+    bindings.extend(built_in_ui_keybindings());
+    bindings
+}
+
+pub fn load_app_keybindings(paths: &AppConfigPaths, registry: &CommandRegistry) -> Vec<KeyBinding> {
+    let Ok(loaded) = load_keybindings(paths, registry) else {
+        return default_ui_keybindings();
+    };
+
+    let mut bindings = ui_keybindings_from_config(&loaded.config, registry);
+    bindings.extend(built_in_ui_keybindings());
+    bindings
+}
+
+pub fn ui_keybindings_from_config(
+    config: &KeybindingsConfig,
+    registry: &CommandRegistry,
+) -> Vec<KeyBinding> {
+    ui_keybinding_specs_from_config(config, registry)
+        .iter()
+        .map(command_keybinding)
+        .collect()
+}
+
+pub fn ui_keybinding_specs_from_config(
+    config: &KeybindingsConfig,
+    registry: &CommandRegistry,
+) -> Vec<UiKeybindingSpec> {
+    let conflicting_keys: HashSet<_> = config
+        .conflicts()
+        .into_iter()
+        .map(|conflict| conflict.keys)
+        .collect();
+
+    config
+        .bindings
+        .iter()
+        .filter(|binding| !conflicting_keys.contains(&normalize_keys(&binding.keys)))
+        .filter_map(|binding| {
+            let command = CommandId::from_str_id(&binding.command)?;
+            if !registry.contains(command) || !command_has_ui_action(command) {
+                return None;
+            }
+
+            Some(UiKeybindingSpec {
+                keys: Cow::Owned(normalize_keys(&binding.keys)),
+                command,
+            })
+        })
+        .collect()
+}
+
+fn built_in_ui_keybindings() -> Vec<KeyBinding> {
+    vec![
         KeyBinding::new("down", PaletteSelectNext, Some(WORKSPACE_CONTEXT)),
         KeyBinding::new("up", PaletteSelectPrev, Some(WORKSPACE_CONTEXT)),
         KeyBinding::new("enter", PaletteConfirm, Some(WORKSPACE_CONTEXT)),
         KeyBinding::new("escape", PaletteCancel, Some(WORKSPACE_CONTEXT)),
-    ]);
-    bindings
+    ]
 }
 
 fn command_keybinding(spec: &UiKeybindingSpec) -> KeyBinding {
+    let keys = spec.keys.as_ref();
     match spec.command {
-        CommandId::ProjectOpen => KeyBinding::new(spec.keys, OpenProject, Some(WORKSPACE_CONTEXT)),
+        CommandId::ProjectOpen => KeyBinding::new(keys, OpenProject, Some(WORKSPACE_CONTEXT)),
+        CommandId::ProjectClose => KeyBinding::new(keys, ProjectClose, Some(WORKSPACE_CONTEXT)),
         CommandId::CommandPaletteOpen => {
-            KeyBinding::new(spec.keys, OpenCommandPalette, Some(WORKSPACE_CONTEXT))
+            KeyBinding::new(keys, OpenCommandPalette, Some(WORKSPACE_CONTEXT))
         }
         CommandId::ProjectPalette => {
-            KeyBinding::new(spec.keys, OpenProjectPalette, Some(WORKSPACE_CONTEXT))
+            KeyBinding::new(keys, OpenProjectPalette, Some(WORKSPACE_CONTEXT))
         }
-        CommandId::TabPalette => {
-            KeyBinding::new(spec.keys, OpenTabPalette, Some(WORKSPACE_CONTEXT))
-        }
-        CommandId::PanePalette => {
-            KeyBinding::new(spec.keys, OpenPanePalette, Some(WORKSPACE_CONTEXT))
-        }
-        CommandId::TabNew => KeyBinding::new(spec.keys, TabNew, Some(WORKSPACE_CONTEXT)),
-        CommandId::TabNext => KeyBinding::new(spec.keys, TabNext, Some(WORKSPACE_CONTEXT)),
-        CommandId::TabPrev => KeyBinding::new(spec.keys, TabPrev, Some(WORKSPACE_CONTEXT)),
+        CommandId::TabPalette => KeyBinding::new(keys, OpenTabPalette, Some(WORKSPACE_CONTEXT)),
+        CommandId::PanePalette => KeyBinding::new(keys, OpenPanePalette, Some(WORKSPACE_CONTEXT)),
+        CommandId::TabNew => KeyBinding::new(keys, TabNew, Some(WORKSPACE_CONTEXT)),
+        CommandId::TabClose => KeyBinding::new(keys, TabClose, Some(WORKSPACE_CONTEXT)),
+        CommandId::TabRename => KeyBinding::new(keys, TabRename, Some(WORKSPACE_CONTEXT)),
+        CommandId::TabNext => KeyBinding::new(keys, TabNext, Some(WORKSPACE_CONTEXT)),
+        CommandId::TabPrev => KeyBinding::new(keys, TabPrev, Some(WORKSPACE_CONTEXT)),
         CommandId::PaneSplitVertical => {
-            KeyBinding::new(spec.keys, PaneSplitVertical, Some(WORKSPACE_CONTEXT))
+            KeyBinding::new(keys, PaneSplitVertical, Some(WORKSPACE_CONTEXT))
         }
         CommandId::PaneSplitHorizontal => {
-            KeyBinding::new(spec.keys, PaneSplitHorizontal, Some(WORKSPACE_CONTEXT))
+            KeyBinding::new(keys, PaneSplitHorizontal, Some(WORKSPACE_CONTEXT))
         }
-        CommandId::PaneClose => KeyBinding::new(spec.keys, PaneClose, Some(WORKSPACE_CONTEXT)),
-        CommandId::PaneFocusLeft => {
-            KeyBinding::new(spec.keys, PaneFocusLeft, Some(WORKSPACE_CONTEXT))
-        }
-        CommandId::PaneFocusRight => {
-            KeyBinding::new(spec.keys, PaneFocusRight, Some(WORKSPACE_CONTEXT))
-        }
-        CommandId::PaneFocusUp => KeyBinding::new(spec.keys, PaneFocusUp, Some(WORKSPACE_CONTEXT)),
-        CommandId::PaneFocusDown => {
-            KeyBinding::new(spec.keys, PaneFocusDown, Some(WORKSPACE_CONTEXT))
-        }
-        CommandId::PaneResizeLeft => {
-            KeyBinding::new(spec.keys, PaneResizeLeft, Some(WORKSPACE_CONTEXT))
-        }
+        CommandId::PaneClose => KeyBinding::new(keys, PaneClose, Some(WORKSPACE_CONTEXT)),
+        CommandId::PaneRename => KeyBinding::new(keys, PaneRename, Some(WORKSPACE_CONTEXT)),
+        CommandId::PaneFocusLeft => KeyBinding::new(keys, PaneFocusLeft, Some(WORKSPACE_CONTEXT)),
+        CommandId::PaneFocusRight => KeyBinding::new(keys, PaneFocusRight, Some(WORKSPACE_CONTEXT)),
+        CommandId::PaneFocusUp => KeyBinding::new(keys, PaneFocusUp, Some(WORKSPACE_CONTEXT)),
+        CommandId::PaneFocusDown => KeyBinding::new(keys, PaneFocusDown, Some(WORKSPACE_CONTEXT)),
+        CommandId::PaneResizeLeft => KeyBinding::new(keys, PaneResizeLeft, Some(WORKSPACE_CONTEXT)),
         CommandId::PaneResizeRight => {
-            KeyBinding::new(spec.keys, PaneResizeRight, Some(WORKSPACE_CONTEXT))
+            KeyBinding::new(keys, PaneResizeRight, Some(WORKSPACE_CONTEXT))
         }
-        CommandId::PaneResizeUp => {
-            KeyBinding::new(spec.keys, PaneResizeUp, Some(WORKSPACE_CONTEXT))
+        CommandId::PaneResizeUp => KeyBinding::new(keys, PaneResizeUp, Some(WORKSPACE_CONTEXT)),
+        CommandId::PaneResizeDown => KeyBinding::new(keys, PaneResizeDown, Some(WORKSPACE_CONTEXT)),
+        CommandId::LayoutSaveCurrent => {
+            KeyBinding::new(keys, LayoutSaveCurrent, Some(WORKSPACE_CONTEXT))
         }
-        CommandId::PaneResizeDown => {
-            KeyBinding::new(spec.keys, PaneResizeDown, Some(WORKSPACE_CONTEXT))
+        CommandId::LayoutExportProjectConfig => {
+            KeyBinding::new(keys, LayoutExportProjectConfig, Some(WORKSPACE_CONTEXT))
+        }
+        CommandId::LayoutOpenFile => KeyBinding::new(keys, LayoutOpenFile, Some(WORKSPACE_CONTEXT)),
+        CommandId::SettingsKeybindings => {
+            KeyBinding::new(keys, SettingsKeybindings, Some(WORKSPACE_CONTEXT))
+        }
+        CommandId::SettingsNotifications => {
+            KeyBinding::new(keys, SettingsNotifications, Some(WORKSPACE_CONTEXT))
         }
         _ => unreachable!(
             "unsupported default UI keybinding command: {:?}",
             spec.command
         ),
     }
+}
+
+fn command_has_ui_action(command: CommandId) -> bool {
+    !matches!(command, CommandId::ProjectOpenRecent)
+}
+
+fn normalize_keys(keys: &str) -> String {
+    keys.trim().to_ascii_lowercase()
 }

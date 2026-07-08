@@ -121,6 +121,84 @@ fn default_keybindings_include_context_close_shortcuts() {
 }
 
 #[test]
+fn user_keybindings_specs_override_default_ui_bindings() {
+    let config: KeybindingsConfig = toml::from_str(
+        r#"
+        [[bindings]]
+        keys = "cmd-l"
+        command = "tab.palette"
+    "#,
+    )
+    .unwrap();
+
+    let specs = yttt::ui::actions::ui_keybinding_specs_from_config(&config, &default_registry());
+
+    assert!(
+        specs
+            .iter()
+            .any(|spec| spec.keys == "cmd-l" && spec.command == CommandId::TabPalette)
+    );
+    assert!(
+        !specs
+            .iter()
+            .any(|spec| spec.keys == "cmd-j" && spec.command == CommandId::TabPalette)
+    );
+}
+
+#[test]
+fn user_keybindings_specs_skip_conflicting_keys_and_invalid_commands() {
+    let config: KeybindingsConfig = toml::from_str(
+        r#"
+        [[bindings]]
+        keys = "cmd-l"
+        command = "tab.palette"
+
+        [[bindings]]
+        keys = "CMD-L"
+        command = "pane.palette"
+
+        [[bindings]]
+        keys = "cmd-x"
+        command = "missing.command"
+    "#,
+    )
+    .unwrap();
+
+    let specs = yttt::ui::actions::ui_keybinding_specs_from_config(&config, &default_registry());
+
+    assert!(specs.is_empty());
+}
+
+#[test]
+fn user_keybindings_specs_map_non_default_command_actions() {
+    let config: KeybindingsConfig = toml::from_str(
+        r#"
+        [[bindings]]
+        keys = "cmd-alt-k"
+        command = "settings.keybindings"
+    "#,
+    )
+    .unwrap();
+
+    let specs = yttt::ui::actions::ui_keybinding_specs_from_config(&config, &default_registry());
+
+    assert_eq!(specs.len(), 1);
+    assert_eq!(specs[0].keys, "cmd-alt-k");
+    assert_eq!(specs[0].command, CommandId::SettingsKeybindings);
+}
+
+#[test]
+fn load_app_keybindings_missing_file_writes_defaults() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+
+    let bindings = yttt::ui::actions::load_app_keybindings(&paths, &default_registry());
+
+    assert!(paths.keybindings_file().exists());
+    assert!(bindings.len() >= default_ui_keybinding_specs().len());
+}
+
+#[test]
 fn missing_keybindings_file_writes_defaults() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));

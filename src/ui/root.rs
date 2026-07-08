@@ -40,11 +40,13 @@ use crate::{
     },
     ui::{
         actions::{
-            OpenCommandPalette, OpenPanePalette, OpenProject, OpenProjectPalette, OpenTabPalette,
-            PaletteCancel, PaletteConfirm, PaletteSelectNext, PaletteSelectPrev, PaneClose,
-            PaneFocusDown, PaneFocusLeft, PaneFocusRight, PaneFocusUp, PaneResizeDown,
-            PaneResizeLeft, PaneResizeRight, PaneResizeUp, PaneSplitHorizontal, PaneSplitVertical,
-            TabNew, TabNext, TabPrev, WORKSPACE_CONTEXT,
+            LayoutExportProjectConfig, LayoutOpenFile, LayoutSaveCurrent, OpenCommandPalette,
+            OpenPanePalette, OpenProject, OpenProjectPalette, OpenTabPalette, PaletteCancel,
+            PaletteConfirm, PaletteSelectNext, PaletteSelectPrev, PaneClose, PaneFocusDown,
+            PaneFocusLeft, PaneFocusRight, PaneFocusUp, PaneRename, PaneResizeDown, PaneResizeLeft,
+            PaneResizeRight, PaneResizeUp, PaneSplitHorizontal, PaneSplitVertical, ProjectClose,
+            SettingsKeybindings, SettingsNotifications, TabClose, TabNew, TabNext, TabPrev,
+            TabRename, WORKSPACE_CONTEXT,
         },
         components::{ActionEmphasis, workbench_action_button},
         i18n::{UiText, UiTextKey},
@@ -905,15 +907,27 @@ impl RootView {
     }
 
     fn on_tab_new(&mut self, _: &TabNew, _window: &mut Window, cx: &mut Context<Self>) {
-        self.dispatch_workspace_action(CommandId::TabNew, cx);
+        self.dispatch_command_action(CommandId::TabNew, cx);
+    }
+
+    fn on_project_close(&mut self, _: &ProjectClose, _window: &mut Window, cx: &mut Context<Self>) {
+        self.dispatch_command_action(CommandId::ProjectClose, cx);
+    }
+
+    fn on_tab_close(&mut self, _: &TabClose, _window: &mut Window, cx: &mut Context<Self>) {
+        self.dispatch_command_action(CommandId::TabClose, cx);
+    }
+
+    fn on_tab_rename(&mut self, _: &TabRename, _window: &mut Window, cx: &mut Context<Self>) {
+        self.dispatch_command_action(CommandId::TabRename, cx);
     }
 
     fn on_tab_next(&mut self, _: &TabNext, _window: &mut Window, cx: &mut Context<Self>) {
-        self.dispatch_workspace_action(CommandId::TabNext, cx);
+        self.dispatch_command_action(CommandId::TabNext, cx);
     }
 
     fn on_tab_prev(&mut self, _: &TabPrev, _window: &mut Window, cx: &mut Context<Self>) {
-        self.dispatch_workspace_action(CommandId::TabPrev, cx);
+        self.dispatch_command_action(CommandId::TabPrev, cx);
     }
 
     fn on_pane_split_vertical(
@@ -922,7 +936,7 @@ impl RootView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_workspace_action(CommandId::PaneSplitVertical, cx);
+        self.dispatch_command_action(CommandId::PaneSplitVertical, cx);
     }
 
     fn on_pane_split_horizontal(
@@ -931,11 +945,15 @@ impl RootView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_workspace_action(CommandId::PaneSplitHorizontal, cx);
+        self.dispatch_command_action(CommandId::PaneSplitHorizontal, cx);
     }
 
     fn on_pane_close(&mut self, _: &PaneClose, _window: &mut Window, cx: &mut Context<Self>) {
-        self.dispatch_workspace_action(CommandId::PaneClose, cx);
+        self.dispatch_command_action(CommandId::PaneClose, cx);
+    }
+
+    fn on_pane_rename(&mut self, _: &PaneRename, _window: &mut Window, cx: &mut Context<Self>) {
+        self.dispatch_command_action(CommandId::PaneRename, cx);
     }
 
     fn on_pane_focus_left(
@@ -944,7 +962,7 @@ impl RootView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_workspace_action(CommandId::PaneFocusLeft, cx);
+        self.dispatch_command_action(CommandId::PaneFocusLeft, cx);
     }
 
     fn on_pane_focus_right(
@@ -953,11 +971,11 @@ impl RootView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_workspace_action(CommandId::PaneFocusRight, cx);
+        self.dispatch_command_action(CommandId::PaneFocusRight, cx);
     }
 
     fn on_pane_focus_up(&mut self, _: &PaneFocusUp, _window: &mut Window, cx: &mut Context<Self>) {
-        self.dispatch_workspace_action(CommandId::PaneFocusUp, cx);
+        self.dispatch_command_action(CommandId::PaneFocusUp, cx);
     }
 
     fn on_pane_focus_down(
@@ -966,7 +984,7 @@ impl RootView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_workspace_action(CommandId::PaneFocusDown, cx);
+        self.dispatch_command_action(CommandId::PaneFocusDown, cx);
     }
 
     fn on_pane_resize_left(
@@ -975,7 +993,7 @@ impl RootView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_workspace_action(CommandId::PaneResizeLeft, cx);
+        self.dispatch_command_action(CommandId::PaneResizeLeft, cx);
     }
 
     fn on_pane_resize_right(
@@ -984,7 +1002,7 @@ impl RootView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_workspace_action(CommandId::PaneResizeRight, cx);
+        self.dispatch_command_action(CommandId::PaneResizeRight, cx);
     }
 
     fn on_pane_resize_up(
@@ -993,7 +1011,7 @@ impl RootView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_workspace_action(CommandId::PaneResizeUp, cx);
+        self.dispatch_command_action(CommandId::PaneResizeUp, cx);
     }
 
     fn on_pane_resize_down(
@@ -1002,10 +1020,55 @@ impl RootView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_workspace_action(CommandId::PaneResizeDown, cx);
+        self.dispatch_command_action(CommandId::PaneResizeDown, cx);
     }
 
-    fn dispatch_workspace_action(&mut self, command_id: CommandId, cx: &mut Context<Self>) {
+    fn on_layout_save_current(
+        &mut self,
+        _: &LayoutSaveCurrent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::LayoutSaveCurrent, cx);
+    }
+
+    fn on_layout_export_project_config(
+        &mut self,
+        _: &LayoutExportProjectConfig,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::LayoutExportProjectConfig, cx);
+    }
+
+    fn on_layout_open_file(
+        &mut self,
+        _: &LayoutOpenFile,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::LayoutOpenFile, cx);
+    }
+
+    fn on_settings_keybindings(
+        &mut self,
+        _: &SettingsKeybindings,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::SettingsKeybindings, cx);
+    }
+
+    fn on_settings_notifications(
+        &mut self,
+        _: &SettingsNotifications,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::SettingsNotifications, cx);
+    }
+
+    fn dispatch_command_action(&mut self, command_id: CommandId, cx: &mut Context<Self>) {
         if self.active_palette.is_some() {
             cx.propagate();
             return;
@@ -1165,12 +1228,16 @@ impl Render for RootView {
             .on_action(cx.listener(Self::on_palette_select_prev))
             .on_action(cx.listener(Self::on_palette_confirm))
             .on_action(cx.listener(Self::on_palette_cancel))
+            .on_action(cx.listener(Self::on_project_close))
             .on_action(cx.listener(Self::on_tab_new))
+            .on_action(cx.listener(Self::on_tab_close))
+            .on_action(cx.listener(Self::on_tab_rename))
             .on_action(cx.listener(Self::on_tab_next))
             .on_action(cx.listener(Self::on_tab_prev))
             .on_action(cx.listener(Self::on_pane_split_vertical))
             .on_action(cx.listener(Self::on_pane_split_horizontal))
             .on_action(cx.listener(Self::on_pane_close))
+            .on_action(cx.listener(Self::on_pane_rename))
             .on_action(cx.listener(Self::on_pane_focus_left))
             .on_action(cx.listener(Self::on_pane_focus_right))
             .on_action(cx.listener(Self::on_pane_focus_up))
@@ -1179,6 +1246,11 @@ impl Render for RootView {
             .on_action(cx.listener(Self::on_pane_resize_right))
             .on_action(cx.listener(Self::on_pane_resize_up))
             .on_action(cx.listener(Self::on_pane_resize_down))
+            .on_action(cx.listener(Self::on_layout_save_current))
+            .on_action(cx.listener(Self::on_layout_export_project_config))
+            .on_action(cx.listener(Self::on_layout_open_file))
+            .on_action(cx.listener(Self::on_settings_keybindings))
+            .on_action(cx.listener(Self::on_settings_notifications))
     }
 }
 
