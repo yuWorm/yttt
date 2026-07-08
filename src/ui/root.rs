@@ -1,6 +1,6 @@
 use gpui::{
     Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent,
-    MouseButton, PathPromptOptions, Render, Subscription, Window, div, prelude::*, rgb, rgba,
+    PathPromptOptions, Render, Subscription, Window, div, prelude::*, rgb, rgba,
 };
 
 use std::{
@@ -39,12 +39,14 @@ use crate::{
             PaletteCancel, PaletteConfirm, PaletteSelectNext, PaletteSelectPrev, PaneClose,
             PaneSplitHorizontal, PaneSplitVertical, TabNext, TabPrev, WORKSPACE_CONTEXT,
         },
+        components::{ActionEmphasis, workbench_action_button},
         i18n::{UiText, UiTextKey},
         palette::palette_overlay,
         sidebar::project_sidebar,
         split_view::split_view_for_layout,
         tabs::project_tabs,
         terminal_pane::{TerminalPaneContext, TerminalPaneEvent, TerminalPaneView},
+        theme::WorkbenchTheme,
         toast::{ToastQueue, toast_overlay},
     },
 };
@@ -66,6 +68,7 @@ pub struct RootView {
     system_notifier: NoopSystemNotifier,
     system_notifications_enabled: bool,
     ui_text: UiText,
+    theme: WorkbenchTheme,
 }
 
 const CLOSE_PROJECT_DIALOG_TEXT: &str =
@@ -125,6 +128,7 @@ impl RootView {
             system_notifier: NoopSystemNotifier,
             system_notifications_enabled: false,
             ui_text: UiText::english(),
+            theme: WorkbenchTheme::dark(),
         }
     }
 
@@ -837,7 +841,7 @@ impl Render for RootView {
         let focus_handle = self.root_focus_handle(cx);
 
         let mut root = if self.workspace.opened_projects().is_empty() {
-            empty_workspace(cx, &self.ui_text)
+            empty_workspace(cx, &self.ui_text, &self.theme)
         } else {
             let split_view = self.active_terminal_split_view(window, cx);
 
@@ -1005,7 +1009,7 @@ fn close_project_dialog() -> Div {
         )
 }
 
-fn empty_workspace(cx: &mut Context<RootView>, ui_text: &UiText) -> Div {
+fn empty_workspace(cx: &mut Context<RootView>, ui_text: &UiText, theme: &WorkbenchTheme) -> Div {
     div()
         .flex()
         .flex_col()
@@ -1014,8 +1018,8 @@ fn empty_workspace(cx: &mut Context<RootView>, ui_text: &UiText) -> Div {
         .relative()
         .justify_center()
         .items_center()
-        .bg(rgb(0x101010))
-        .text_color(rgb(0xf5f5f5))
+        .bg(theme.app_background)
+        .text_color(theme.text)
         .child(div().text_xl().child(ui_text.get(UiTextKey::AppName)))
         .child(
             div()
@@ -1027,13 +1031,13 @@ fn empty_workspace(cx: &mut Context<RootView>, ui_text: &UiText) -> Div {
                 .child(
                     div()
                         .text_sm()
-                        .text_color(rgb(0xd4d4d4))
+                        .text_color(theme.text_muted)
                         .child(ui_text.get(UiTextKey::EmptySubtitle)),
                 )
                 .child(
                     div()
                         .text_xs()
-                        .text_color(rgb(0x737373))
+                        .text_color(theme.text_subtle)
                         .child(ui_text.get(UiTextKey::EmptySidebarNote)),
                 ),
         )
@@ -1044,82 +1048,39 @@ fn empty_workspace(cx: &mut Context<RootView>, ui_text: &UiText) -> Div {
                 .gap_2()
                 .justify_center()
                 .child(
-                    empty_workspace_action(
+                    workbench_action_button(
+                        "empty-open-directory",
                         ui_text.get(UiTextKey::OpenDirectory),
-                        "Cmd/Ctrl+O",
-                        true,
+                        "secondary-o",
+                        ActionEmphasis::Primary,
                     )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            this.on_open_project(&OpenProject, window, cx);
-                        }),
-                    ),
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.on_open_project(&OpenProject, window, cx);
+                    })),
                 )
                 .child(
-                    empty_workspace_action(
+                    workbench_action_button(
+                        "empty-open-recent",
                         ui_text.get(UiTextKey::OpenRecent),
-                        "Cmd/Ctrl+Shift+O",
-                        false,
+                        "secondary-shift-o",
+                        ActionEmphasis::Secondary,
                     )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            this.on_open_project_palette(&OpenProjectPalette, window, cx);
-                        }),
-                    ),
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.on_open_project_palette(&OpenProjectPalette, window, cx);
+                    })),
                 )
                 .child(
-                    empty_workspace_action(
+                    workbench_action_button(
+                        "empty-command-palette",
                         ui_text.get(UiTextKey::CommandPalette),
-                        "Cmd/Ctrl+P",
-                        false,
+                        "secondary-p",
+                        ActionEmphasis::Secondary,
                     )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            this.on_open_command_palette(&OpenCommandPalette, window, cx);
-                        }),
-                    ),
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.on_open_command_palette(&OpenCommandPalette, window, cx);
+                    })),
                 ),
         )
-}
-
-fn empty_workspace_action(label: &'static str, shortcut: &'static str, primary: bool) -> Div {
-    let (bg, border, text, shortcut_text, hover_bg) = if primary {
-        (
-            rgb(0xf5f5f5),
-            rgb(0xf5f5f5),
-            rgb(0x101010),
-            rgb(0x404040),
-            rgb(0xe5e5e5),
-        )
-    } else {
-        (
-            rgb(0x171717),
-            rgb(0x3a3a3a),
-            rgb(0xf5f5f5),
-            rgb(0xa3a3a3),
-            rgb(0x262626),
-        )
-    };
-
-    div()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .min_w_32()
-        .px_4()
-        .py_3()
-        .rounded_md()
-        .border_1()
-        .border_color(border)
-        .bg(bg)
-        .text_color(text)
-        .cursor_pointer()
-        .hover(|this| this.bg(hover_bg))
-        .child(div().text_sm().child(label))
-        .child(div().text_xs().text_color(shortcut_text).child(shortcut))
 }
 
 fn dev_fixture_layout() -> ProjectLayout {
