@@ -129,8 +129,12 @@ cat > "$contents_dir/Info.plist" <<'EOF'
   <string>yttt</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
+  <key>CFBundleIconName</key>
+  <string>AppIcon</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
+  <key>NSPrincipalClass</key>
+  <string>NSApplication</string>
   <key>CFBundleShortVersionString</key>
   <string>0.1.0-dev</string>
   <key>CFBundleVersion</key>

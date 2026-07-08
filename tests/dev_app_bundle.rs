@@ -37,6 +37,8 @@ fn dev_app_bundle_script_generates_bundle_without_opening() {
 
     assert!(plist.contains("com.yttt.dev"));
     assert!(plist.contains("CFBundleIconFile"));
+    assert!(plist.contains("CFBundleIconName"));
+    assert!(plist.contains("NSPrincipalClass"));
     assert!(icon.exists());
     assert!(bundled_binary.exists());
     assert!(bundled_binary.metadata().unwrap().permissions().mode() & 0o111 != 0);
