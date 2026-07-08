@@ -1,6 +1,7 @@
 pub mod actions;
 pub mod agent_status;
 pub mod app;
+pub mod assets;
 pub mod components;
 pub mod i18n;
 #[cfg(target_os = "macos")]

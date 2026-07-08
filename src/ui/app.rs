@@ -12,34 +12,36 @@ use crate::{
 };
 
 pub fn run() {
-    Application::new().run(|cx: &mut App| {
-        #[cfg(target_os = "macos")]
-        crate::ui::macos::prepare_macos_app_runtime();
+    Application::new()
+        .with_assets(crate::ui::assets::app_assets())
+        .run(|cx: &mut App| {
+            #[cfg(target_os = "macos")]
+            crate::ui::macos::prepare_macos_app_runtime();
 
-        gpui_component::init(cx);
-        let config_paths = AppConfigPaths::for_app();
-        let command_registry = default_registry();
-        cx.bind_keys(load_app_keybindings(&config_paths, &command_registry));
+            gpui_component::init(cx);
+            let config_paths = AppConfigPaths::for_app();
+            let command_registry = default_registry();
+            cx.bind_keys(load_app_keybindings(&config_paths, &command_registry));
 
-        let bounds = Bounds::centered(None, size(px(960.0), px(640.0)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
-            |window, cx| {
-                let view = cx.new(|_| {
-                    match startup_mode_from_fixture(
-                        std::env::var("YTTT_DEV_FIXTURE").ok().as_deref(),
-                    ) {
-                        StartupMode::DevFixture => RootView::dev_fixture(),
-                        StartupMode::AgentExitFixture => RootView::agent_exit_fixture(),
-                        StartupMode::Normal => RootView::from_startup_env(),
-                    }
-                });
-                cx.new(|cx| ComponentRoot::new(view, window, cx))
-            },
-        )
-        .expect("failed to open yttt window");
-    });
+            let bounds = Bounds::centered(None, size(px(960.0), px(640.0)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    ..Default::default()
+                },
+                |window, cx| {
+                    let view = cx.new(|_| {
+                        match startup_mode_from_fixture(
+                            std::env::var("YTTT_DEV_FIXTURE").ok().as_deref(),
+                        ) {
+                            StartupMode::DevFixture => RootView::dev_fixture(),
+                            StartupMode::AgentExitFixture => RootView::agent_exit_fixture(),
+                            StartupMode::Normal => RootView::from_startup_env(),
+                        }
+                    });
+                    cx.new(|cx| ComponentRoot::new(view, window, cx))
+                },
+            )
+            .expect("failed to open yttt window");
+        });
 }
