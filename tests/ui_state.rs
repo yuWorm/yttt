@@ -20,7 +20,7 @@ use yttt::{
         PaneLifecycle, TerminalPaneExitInput, TerminalSpawnFailure,
         notification_for_terminal_pane_exit, pane_lifecycle_label, spawn_failure_lines,
     },
-    ui::toast::{ToastTone, visible_toast_items},
+    ui::toast::{ToastTone, toast_item_for_event, visible_toast_items},
     ui::{
         root::RootView,
         split_view::{resize_command_for_drag_delta, root_split_child_basis, visible_pane_titles},
@@ -642,6 +642,25 @@ fn visible_toast_items_show_three_recent_events_with_tone() {
     assert_eq!(items[1].title, "third completed");
     assert_eq!(items[1].tone, ToastTone::Success);
     assert_eq!(items[2].title, "second failed");
+}
+
+#[test]
+fn toast_item_for_event_maps_agent_result_to_component_ready_item() {
+    let completed = toast_item_for_event(&notification_event_for(
+        "Codex",
+        NotificationKind::AgentCompleted,
+    ));
+    let failed = toast_item_for_event(&notification_event_for(
+        "Claude",
+        NotificationKind::AgentFailed,
+    ));
+
+    assert_eq!(completed.title, "Codex completed");
+    assert_eq!(completed.context, "yttt / Agent");
+    assert_eq!(completed.tone, ToastTone::Success);
+    assert_eq!(failed.title, "Claude failed");
+    assert_eq!(failed.context, "yttt / Agent");
+    assert_eq!(failed.tone, ToastTone::Error);
 }
 
 #[test]

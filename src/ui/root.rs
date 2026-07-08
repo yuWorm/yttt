@@ -5,10 +5,11 @@ use gpui::{
     rgb, rgba,
 };
 use gpui_component::{
-    Root as ComponentRoot,
+    Root as ComponentRoot, WindowExt as _,
     alert::Alert,
     button::{Button, ButtonVariants as _},
     input::{InputEvent, InputState},
+    notification::{Notification, NotificationType},
 };
 
 use std::{
@@ -63,7 +64,7 @@ use crate::{
         tabs::project_tabs,
         terminal_pane::{TerminalPaneContext, TerminalPaneEvent, TerminalPaneView},
         theme::WorkbenchTheme,
-        toast::{ToastQueue, toast_overlay},
+        toast::{ToastQueue, ToastTone, toast_item_for_event},
     },
 };
 
@@ -880,7 +881,10 @@ impl RootView {
     ) {
         match event {
             TerminalPaneEvent::Notification(event) => {
+                let root = cx.entity();
+                let event = event.clone();
                 self.handle_terminal_notification(event.clone());
+                push_component_notification(root, event, _window, cx);
                 cx.notify();
             }
         }
@@ -1429,7 +1433,6 @@ impl Render for RootView {
         if self.pending_close_project_id.is_some() {
             root = root.child(close_project_dialog(cx, &self.ui_text));
         }
-        root = root.child(toast_overlay(&self.toast_queue));
         if let Some(notification_layer) = ComponentRoot::render_notification_layer(window, cx) {
             root = root.child(notification_layer);
         }
@@ -1621,6 +1624,34 @@ fn error_banner(message: &str) -> Div {
         .left_4()
         .right_4()
         .child(Alert::error("root-error-banner", message.to_string()).banner())
+}
+
+fn push_component_notification(
+    root: Entity<RootView>,
+    event: NotificationEvent,
+    window: &mut Window,
+    cx: &mut Context<RootView>,
+) {
+    let item = toast_item_for_event(&event);
+    let notification_type = match item.tone {
+        ToastTone::Success => NotificationType::Success,
+        ToastTone::Error => NotificationType::Error,
+    };
+
+    let focus_event = event.clone();
+    window.push_notification(
+        Notification::new()
+            .title(item.title)
+            .message(item.context)
+            .with_type(notification_type)
+            .on_click(move |_, _window, cx| {
+                root.update(cx, |root, cx| {
+                    let _ = root.focus_notification_target(&focus_event);
+                    cx.notify();
+                });
+            }),
+        cx,
+    );
 }
 
 fn close_project_dialog(cx: &mut Context<RootView>, ui_text: &UiText) -> Div {
