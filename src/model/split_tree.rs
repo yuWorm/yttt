@@ -4,6 +4,14 @@ pub enum SplitDirection {
     Vertical,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FocusDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum SplitNode {
     Pane {
@@ -71,6 +79,19 @@ impl SplitTree {
         Ok(())
     }
 
+    pub fn focus_direction(&mut self, direction: FocusDirection) -> Result<(), SplitTreeError> {
+        let Some(focused_pane_id) = self.focused_pane_id.clone() else {
+            return Err(SplitTreeError::NoFocusedPane);
+        };
+
+        let next_pane_id = self
+            .root
+            .adjacent_pane(&focused_pane_id, direction)
+            .ok_or(SplitTreeError::NoAdjacentPane)?;
+        self.focused_pane_id = Some(next_pane_id.to_string());
+        Ok(())
+    }
+
     pub fn focused_pane_id(&self) -> Option<&str> {
         self.focused_pane_id.as_deref()
     }
@@ -131,10 +152,62 @@ impl SplitNode {
         matches!(self, Self::Pane { id } if id == target_id)
     }
 
+    fn contains_pane(&self, target_id: &str) -> bool {
+        match self {
+            Self::Pane { id } => id == target_id,
+            Self::Split { first, second, .. } => {
+                first.contains_pane(target_id) || second.contains_pane(target_id)
+            }
+        }
+    }
+
+    fn adjacent_pane(&self, target_id: &str, focus_direction: FocusDirection) -> Option<&str> {
+        match self {
+            Self::Pane { .. } => None,
+            Self::Split {
+                direction,
+                first,
+                second,
+                ..
+            } => {
+                if first.contains_pane(target_id) {
+                    first.adjacent_pane(target_id, focus_direction).or_else(|| {
+                        match (*direction, focus_direction) {
+                            (SplitDirection::Horizontal, FocusDirection::Right)
+                            | (SplitDirection::Vertical, FocusDirection::Down) => {
+                                second.first_pane_id()
+                            }
+                            _ => None,
+                        }
+                    })
+                } else if second.contains_pane(target_id) {
+                    second
+                        .adjacent_pane(target_id, focus_direction)
+                        .or_else(|| match (*direction, focus_direction) {
+                            (SplitDirection::Horizontal, FocusDirection::Left)
+                            | (SplitDirection::Vertical, FocusDirection::Up) => {
+                                first.last_pane_id()
+                            }
+                            _ => None,
+                        })
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
     fn first_pane_id(&self) -> Option<&str> {
         match self {
             Self::Pane { id } => Some(id),
             Self::Split { first, .. } => first.first_pane_id(),
+        }
+    }
+
+    fn last_pane_id(&self) -> Option<&str> {
+        match self {
+            Self::Pane { id } => Some(id),
+            Self::Split { second, .. } => second.last_pane_id(),
         }
     }
 
@@ -157,4 +230,6 @@ pub enum SplitTreeError {
     PaneNotFound(String),
     #[error("cannot close the last pane")]
     CannotCloseLastPane,
+    #[error("no adjacent pane in that direction")]
+    NoAdjacentPane,
 }
