@@ -30,8 +30,8 @@ use crate::{
         workspace::{CloseProjectDecision, CloseProjectError, Workspace, WorkspaceError},
     },
     palette::{
-        ActivePalette, PaletteItem, PaletteKind, RecentProject, command_palette_items,
-        pane_palette_items, project_palette_items, tab_palette_items,
+        ActivePalette, CommandPaletteContext, PaletteItem, PaletteKind, RecentProject,
+        command_palette_items, pane_palette_items, project_palette_items, tab_palette_items,
     },
     runtime::notification::{NoopSystemNotifier, NotificationEvent, maybe_notify_system},
     ui::{
@@ -401,7 +401,10 @@ impl RootView {
 
     fn palette_items(&self, kind: PaletteKind) -> Vec<PaletteItem> {
         match kind {
-            PaletteKind::Command => command_palette_items(&self.command_registry),
+            PaletteKind::Command => command_palette_items(
+                &self.command_registry,
+                CommandPaletteContext::from_workspace(&self.workspace),
+            ),
             PaletteKind::Project => project_palette_items(&self.workspace, &self.recent_projects),
             PaletteKind::Tab => tab_palette_items(&self.workspace).unwrap_or_default(),
             PaletteKind::Pane => pane_palette_items(&self.workspace).unwrap_or_default(),

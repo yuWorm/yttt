@@ -102,12 +102,158 @@ impl CommandId {
             Self::SettingsNotifications => "settings.notifications",
         }
     }
+
+    pub fn presentation(self) -> CommandPresentation {
+        match self {
+            Self::ProjectOpen => presentation("Open Project", "Choose a project directory"),
+            Self::ProjectOpenRecent => {
+                presentation("Open Recent Project", "Choose a recent project")
+            }
+            Self::ProjectClose => presentation("Close Project", "Close the selected project"),
+            Self::ProjectPalette => {
+                presentation("Open Project Palette", "Switch opened or recent projects")
+            }
+            Self::TabNew => presentation("New Tab", "Create a shell tab in the selected project"),
+            Self::TabClose => presentation("Close Tab", "Close the selected tab"),
+            Self::TabNext => presentation("Next Tab", "Switch to the next project tab"),
+            Self::TabPrev => presentation("Previous Tab", "Switch to the previous project tab"),
+            Self::TabPalette => {
+                presentation("Open Tab Palette", "Switch tabs in the selected project")
+            }
+            Self::PaneSplitHorizontal => presentation(
+                "Split Pane Horizontally",
+                "Split the focused pane into top and bottom panes",
+            ),
+            Self::PaneSplitVertical => presentation(
+                "Split Pane Vertically",
+                "Split the focused pane into left and right panes",
+            ),
+            Self::PaneClose => presentation("Close Pane", "Close the focused pane"),
+            Self::PaneFocusLeft => {
+                presentation("Focus Pane Left", "Move focus to the pane on the left")
+            }
+            Self::PaneFocusRight => {
+                presentation("Focus Pane Right", "Move focus to the pane on the right")
+            }
+            Self::PaneFocusUp => presentation("Focus Pane Up", "Move focus to the pane above"),
+            Self::PaneFocusDown => presentation("Focus Pane Down", "Move focus to the pane below"),
+            Self::PaneResizeLeft => presentation(
+                "Resize Pane Left",
+                "Resize the focused split toward the left",
+            ),
+            Self::PaneResizeRight => presentation(
+                "Resize Pane Right",
+                "Resize the focused split toward the right",
+            ),
+            Self::PaneResizeUp => presentation("Resize Pane Up", "Resize the focused split upward"),
+            Self::PaneResizeDown => {
+                presentation("Resize Pane Down", "Resize the focused split downward")
+            }
+            Self::PaneRename => presentation("Rename Pane", "Rename the focused pane"),
+            Self::PanePalette => {
+                presentation("Open Pane Palette", "Focus panes in the selected tab")
+            }
+            Self::LayoutSaveCurrent => presentation(
+                "Save Current Layout",
+                "Save the current layout as a local override",
+            ),
+            Self::LayoutExportProjectConfig => presentation(
+                "Export Project Layout",
+                "Write the current layout to the project config",
+            ),
+            Self::LayoutOpenFile => presentation(
+                "Open Layout File",
+                "Reveal the selected project's layout file path",
+            ),
+            Self::CommandPaletteOpen => {
+                presentation("Open Command Palette", "Search and run commands")
+            }
+            Self::SettingsKeybindings => presentation(
+                "Open Keybindings File",
+                "Open or create the editable keybindings TOML",
+            ),
+            Self::SettingsNotifications => presentation(
+                "Toggle Notifications",
+                "Toggle system notifications for agent exits",
+            ),
+        }
+    }
+
+    pub fn availability(self, has_selected_project: bool) -> CommandAvailability {
+        match self {
+            Self::ProjectOpen | Self::ProjectOpenRecent => {
+                disabled("Use the visible project actions")
+            }
+            Self::CommandPaletteOpen | Self::ProjectPalette | Self::SettingsKeybindings => {
+                enabled()
+            }
+            Self::TabClose | Self::PaneRename | Self::SettingsNotifications => {
+                disabled("Not implemented yet")
+            }
+            Self::ProjectClose
+            | Self::TabNew
+            | Self::TabNext
+            | Self::TabPrev
+            | Self::TabPalette
+            | Self::PaneSplitHorizontal
+            | Self::PaneSplitVertical
+            | Self::PaneClose
+            | Self::PaneFocusLeft
+            | Self::PaneFocusRight
+            | Self::PaneFocusUp
+            | Self::PaneFocusDown
+            | Self::PaneResizeLeft
+            | Self::PaneResizeRight
+            | Self::PaneResizeUp
+            | Self::PaneResizeDown
+            | Self::PanePalette
+            | Self::LayoutSaveCurrent
+            | Self::LayoutExportProjectConfig
+            | Self::LayoutOpenFile => {
+                if has_selected_project {
+                    enabled()
+                } else {
+                    disabled("Open a project first")
+                }
+            }
+        }
+    }
+}
+
+fn presentation(title: &'static str, description: &'static str) -> CommandPresentation {
+    CommandPresentation { title, description }
+}
+
+fn enabled() -> CommandAvailability {
+    CommandAvailability {
+        enabled: true,
+        disabled_reason: None,
+    }
+}
+
+fn disabled(reason: &'static str) -> CommandAvailability {
+    CommandAvailability {
+        enabled: false,
+        disabled_reason: Some(reason),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Command {
     pub id: CommandId,
     pub title: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommandPresentation {
+    pub title: &'static str,
+    pub description: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommandAvailability {
+    pub enabled: bool,
+    pub disabled_reason: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

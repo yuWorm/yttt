@@ -440,6 +440,8 @@ fn palette_item(id: &str, title: &str) -> PaletteItem {
         subtitle: None,
         status: None,
         command: CommandId::CommandPaletteOpen,
+        enabled: true,
+        disabled_reason: None,
     }
 }
 

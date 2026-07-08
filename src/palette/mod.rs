@@ -23,6 +23,8 @@ pub struct PaletteItem {
     pub subtitle: Option<String>,
     pub status: Option<String>,
     pub command: CommandId,
+    pub enabled: bool,
+    pub disabled_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -94,16 +96,38 @@ impl ActivePalette {
     }
 }
 
-pub fn command_palette_items(registry: &CommandRegistry) -> Vec<PaletteItem> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommandPaletteContext {
+    pub has_selected_project: bool,
+}
+
+impl CommandPaletteContext {
+    pub fn from_workspace(workspace: &Workspace) -> Self {
+        Self {
+            has_selected_project: workspace.selected_project_id().is_some(),
+        }
+    }
+}
+
+pub fn command_palette_items(
+    registry: &CommandRegistry,
+    context: CommandPaletteContext,
+) -> Vec<PaletteItem> {
     registry
         .commands()
         .iter()
-        .map(|command| PaletteItem {
-            id: command.id.as_str().to_string(),
-            title: command.title.to_string(),
-            subtitle: None,
-            status: None,
-            command: command.id,
+        .map(|command| {
+            let presentation = command.id.presentation();
+            let availability = command.id.availability(context.has_selected_project);
+            PaletteItem {
+                id: command.id.as_str().to_string(),
+                title: presentation.title.to_string(),
+                subtitle: Some(presentation.description.to_string()),
+                status: None,
+                command: command.id,
+                enabled: availability.enabled,
+                disabled_reason: availability.disabled_reason.map(ToOwned::to_owned),
+            }
         })
         .collect()
 }
@@ -121,6 +145,8 @@ pub fn project_palette_items(
             subtitle: Some(project.path.display().to_string()),
             status: Some("open".to_string()),
             command: CommandId::ProjectPalette,
+            enabled: true,
+            disabled_reason: None,
         })
         .collect();
 
@@ -130,6 +156,8 @@ pub fn project_palette_items(
         subtitle: Some(project.path.display().to_string()),
         status: Some("recent".to_string()),
         command: CommandId::ProjectOpenRecent,
+        enabled: true,
+        disabled_reason: None,
     }));
 
     items
@@ -160,6 +188,8 @@ pub fn tab_palette_items(workspace: &Workspace) -> Option<Vec<PaletteItem>> {
                     subtitle: Some(format!("{pane_count} panes")),
                     status,
                     command: CommandId::TabPalette,
+                    enabled: true,
+                    disabled_reason: None,
                 }
             })
             .collect(),
@@ -190,6 +220,8 @@ pub fn pane_palette_items(workspace: &Workspace) -> Option<Vec<PaletteItem>> {
                 subtitle: Some(tab.title.clone()),
                 status: Some(process_status_label(pane.process_state).to_string()),
                 command: CommandId::PanePalette,
+                enabled: true,
+                disabled_reason: None,
             })
             .collect(),
     )

@@ -4,21 +4,58 @@ use yttt::{
     commands::{CommandId, default_registry},
     model::workspace::Workspace,
     palette::{
-        ActivePalette, PaletteItem, PaletteKind, RecentProject, command_palette_items,
-        pane_palette_items, project_palette_items, tab_palette_items,
+        ActivePalette, CommandPaletteContext, PaletteItem, PaletteKind, RecentProject,
+        command_palette_items, pane_palette_items, project_palette_items, tab_palette_items,
     },
 };
 
 #[test]
 fn command_palette_contains_all_registered_commands() {
     let registry = default_registry();
+    let workspace = Workspace::new();
 
-    let items = command_palette_items(&registry);
+    let items = command_palette_items(&registry, CommandPaletteContext::from_workspace(&workspace));
 
     assert_eq!(items.len(), registry.commands().len());
     assert!(
         items.iter().any(|item| item.id == "command_palette.open"
             && item.command == CommandId::CommandPaletteOpen)
+    );
+}
+
+#[test]
+fn command_palette_uses_readable_titles_and_descriptions() {
+    let registry = default_registry();
+    let workspace = Workspace::new();
+
+    let items = command_palette_items(&registry, CommandPaletteContext::from_workspace(&workspace));
+    let command_palette = items
+        .iter()
+        .find(|item| item.command == CommandId::CommandPaletteOpen)
+        .unwrap();
+
+    assert_eq!(command_palette.title, "Open Command Palette");
+    assert_eq!(
+        command_palette.subtitle.as_deref(),
+        Some("Search and run commands")
+    );
+}
+
+#[test]
+fn command_palette_disables_workspace_commands_without_project() {
+    let registry = default_registry();
+    let workspace = Workspace::new();
+
+    let items = command_palette_items(&registry, CommandPaletteContext::from_workspace(&workspace));
+    let split = items
+        .iter()
+        .find(|item| item.command == CommandId::PaneSplitVertical)
+        .unwrap();
+
+    assert!(!split.enabled);
+    assert_eq!(
+        split.disabled_reason.as_deref(),
+        Some("Open a project first")
     );
 }
 
@@ -127,6 +164,8 @@ fn sample_palette_items() -> Vec<PaletteItem> {
             subtitle: Some("Dev".to_string()),
             status: Some("running".to_string()),
             command: CommandId::PanePalette,
+            enabled: true,
+            disabled_reason: None,
         },
         PaletteItem {
             id: "shell".to_string(),
@@ -134,6 +173,8 @@ fn sample_palette_items() -> Vec<PaletteItem> {
             subtitle: Some("Dev".to_string()),
             status: Some("idle".to_string()),
             command: CommandId::PanePalette,
+            enabled: true,
+            disabled_reason: None,
         },
         PaletteItem {
             id: "codex".to_string(),
@@ -141,6 +182,8 @@ fn sample_palette_items() -> Vec<PaletteItem> {
             subtitle: Some("Agent".to_string()),
             status: Some("lazy".to_string()),
             command: CommandId::TabPalette,
+            enabled: true,
+            disabled_reason: None,
         },
     ]
 }
