@@ -8,7 +8,7 @@ use gpui_component::{
     Root as ComponentRoot, WindowExt as _,
     alert::Alert,
     button::{Button, ButtonVariants as _},
-    input::{InputEvent, InputState},
+    input::{Input, InputEvent, InputState},
     notification::{Notification, NotificationType},
 };
 
@@ -88,10 +88,14 @@ pub struct RootView {
     last_opened_layout_file: Option<PathBuf>,
     last_opened_keybindings_file: Option<PathBuf>,
     pending_close_project_id: Option<ProjectId>,
+    pending_tab_rename: Option<PendingTabRename>,
     focus_handle: Option<FocusHandle>,
     palette_input: Option<Entity<InputState>>,
     palette_input_subscription: Option<Subscription>,
     palette_input_needs_focus: bool,
+    tab_rename_input: Option<Entity<InputState>>,
+    tab_rename_input_subscription: Option<Subscription>,
+    tab_rename_input_needs_focus: bool,
     palette_scroll_handle: ScrollHandle,
     sidebar_collapsed: bool,
     active_split_resize_drag: Option<ActiveSplitResizeDrag>,
@@ -137,6 +141,12 @@ struct ActiveSplitResizeDrag {
     last_position: Point<Pixels>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingTabRename {
+    tab_id: String,
+    value: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SplitHandleStyle {
     pub visible_line_width: Pixels,
@@ -180,10 +190,14 @@ impl RootView {
             last_opened_layout_file: None,
             last_opened_keybindings_file: None,
             pending_close_project_id: None,
+            pending_tab_rename: None,
             focus_handle: None,
             palette_input: None,
             palette_input_subscription: None,
             palette_input_needs_focus: false,
+            tab_rename_input: None,
+            tab_rename_input_subscription: None,
+            tab_rename_input_needs_focus: false,
             palette_scroll_handle: ScrollHandle::new(),
             sidebar_collapsed: false,
             active_split_resize_drag: None,
@@ -325,6 +339,40 @@ impl RootView {
             .into_iter()
             .map(|item| item.title.clone())
             .collect()
+    }
+
+    pub fn visible_tab_rename_dialog_title(&self) -> Option<String> {
+        self.pending_tab_rename
+            .as_ref()
+            .map(|_| self.ui_text.get(UiTextKey::RenameTabTitle).to_string())
+    }
+
+    pub fn pending_tab_rename_value(&self) -> Option<String> {
+        self.pending_tab_rename
+            .as_ref()
+            .map(|rename| rename.value.clone())
+    }
+
+    pub fn confirm_tab_rename_dialog(&mut self, title: &str) -> Result<(), RootViewError> {
+        let Some(rename) = self.pending_tab_rename.clone() else {
+            return Ok(());
+        };
+
+        self.workspace.select_tab(&rename.tab_id)?;
+        match self.workspace.rename_selected_tab(title) {
+            Ok(()) => {
+                self.clear_tab_rename_dialog();
+                self.queue_selected_terminal_focus();
+                self.load_error = None;
+                Ok(())
+            }
+            Err(error) => self.fail_workspace_error(error),
+        }
+    }
+
+    pub fn cancel_tab_rename_dialog(&mut self) {
+        self.clear_tab_rename_dialog();
+        self.queue_selected_terminal_focus();
     }
 
     pub fn handle_terminal_notification(&mut self, event: NotificationEvent) {
@@ -592,6 +640,10 @@ impl RootView {
                 self.request_close_selected_project()?;
                 Ok(())
             }
+            CommandId::TabRename => {
+                self.open_selected_tab_rename_dialog()?;
+                Ok(())
+            }
             CommandId::SettingsKeybindings => {
                 let path = ensure_keybindings_file(&self.config_paths)?;
                 self.last_opened_keybindings_file = Some(path.clone());
@@ -772,6 +824,37 @@ impl RootView {
         Ok(decision)
     }
 
+    fn open_selected_tab_rename_dialog(&mut self) -> Result<(), RootViewError> {
+        let project_id = self
+            .workspace
+            .selected_project_id()
+            .ok_or(WorkspaceError::NoSelectedProject)?;
+        let project = self
+            .workspace
+            .project(project_id)
+            .ok_or_else(|| WorkspaceError::ProjectNotFound(project_id.as_str().to_string()))?;
+        let tab_id = project.selected_tab_id.clone();
+        let tab = project
+            .layout
+            .tabs
+            .iter()
+            .find(|tab| tab.id == tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(tab_id.clone()))?;
+        let value = tab.title.clone();
+
+        self.close_palette();
+        self.pending_tab_rename = Some(PendingTabRename { tab_id, value });
+        self.reset_tab_rename_input();
+        self.tab_rename_input_needs_focus = true;
+        self.load_error = None;
+        Ok(())
+    }
+
+    fn clear_tab_rename_dialog(&mut self) {
+        self.pending_tab_rename = None;
+        self.reset_tab_rename_input();
+    }
+
     fn remove_terminal_panes_for_project(&mut self, project_id: &str) {
         let prefix = format!("{project_id}:");
         self.terminal_panes
@@ -860,6 +943,12 @@ impl RootView {
         self.palette_input_needs_focus = false;
     }
 
+    fn reset_tab_rename_input(&mut self) {
+        self.tab_rename_input = None;
+        self.tab_rename_input_subscription = None;
+        self.tab_rename_input_needs_focus = false;
+    }
+
     fn queue_terminal_focus(&mut self, pane_id: &str) {
         self.pending_terminal_focus_pane_id = Some(pane_id.to_string());
     }
@@ -926,6 +1015,36 @@ impl RootView {
         if self.palette_input_needs_focus {
             input.update(cx, |input, cx| input.focus(window, cx));
             self.palette_input_needs_focus = false;
+        }
+
+        Some(input)
+    }
+
+    fn tab_rename_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<InputState>> {
+        let rename = self.pending_tab_rename.as_ref()?;
+        let input = if let Some(input) = &self.tab_rename_input {
+            input.clone()
+        } else {
+            let value = rename.value.clone();
+            let placeholder = self.ui_text.get(UiTextKey::RenameTabTitle);
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(placeholder)
+                    .default_value(value)
+            });
+            let subscription = cx.subscribe_in(&input, window, Self::on_tab_rename_input_event);
+            self.tab_rename_input = Some(input.clone());
+            self.tab_rename_input_subscription = Some(subscription);
+            input
+        };
+
+        if self.tab_rename_input_needs_focus {
+            input.update(cx, |input, cx| input.focus(window, cx));
+            self.tab_rename_input_needs_focus = false;
         }
 
         Some(input)
@@ -1248,6 +1367,42 @@ impl RootView {
         }
     }
 
+    fn on_tab_rename_input_event(
+        &mut self,
+        input: &Entity<InputState>,
+        event: &InputEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Change => {
+                if let Some(rename) = &mut self.pending_tab_rename {
+                    rename.value = input.read(cx).value().to_string();
+                    cx.notify();
+                }
+            }
+            InputEvent::PressEnter { .. } => {
+                let _ = self.confirm_tab_rename_dialog_from_input(cx);
+                cx.notify();
+            }
+            InputEvent::Focus | InputEvent::Blur => {}
+        }
+    }
+
+    fn confirm_tab_rename_dialog_from_input(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Result<(), RootViewError> {
+        let value = self
+            .tab_rename_input
+            .as_ref()
+            .map(|input| input.read(cx).value().to_string())
+            .or_else(|| self.pending_tab_rename_value())
+            .unwrap_or_default();
+
+        self.confirm_tab_rename_dialog(&value)
+    }
+
     fn on_open_command_palette(
         &mut self,
         _: &OpenCommandPalette,
@@ -1363,6 +1518,12 @@ impl RootView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.pending_tab_rename.is_some() {
+            let _ = self.confirm_tab_rename_dialog_from_input(cx);
+            cx.notify();
+            return;
+        }
+
         if self.pending_close_project_id.is_some() {
             let _ = self.confirm_pending_project_close();
             cx.notify();
@@ -1383,6 +1544,12 @@ impl RootView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.pending_tab_rename.is_some() {
+            self.cancel_tab_rename_dialog();
+            cx.notify();
+            return;
+        }
+
         if self.pending_close_project_id.is_some() {
             self.cancel_pending_project_close();
             cx.notify();
@@ -1560,7 +1727,7 @@ impl RootView {
     }
 
     fn dispatch_command_action(&mut self, command_id: CommandId, cx: &mut Context<Self>) {
-        if self.active_palette.is_some() {
+        if self.active_palette.is_some() || self.pending_tab_rename.is_some() {
             cx.propagate();
             return;
         }
@@ -1757,6 +1924,11 @@ impl Render for RootView {
         }
         if let Some(load_error) = &self.load_error {
             root = root.child(error_banner(load_error));
+        }
+        if self.pending_tab_rename.is_some() {
+            if let Some(input) = self.tab_rename_input(window, cx) {
+                root = root.child(tab_rename_dialog(cx, &self.ui_text, &input, self.theme));
+            }
         }
         if self.pending_close_project_id.is_some() {
             root = root.child(close_project_dialog(cx, &self.ui_text));
@@ -2006,6 +2178,76 @@ fn push_component_notification(
             }),
         cx,
     );
+}
+
+fn tab_rename_dialog(
+    cx: &mut Context<RootView>,
+    ui_text: &UiText,
+    input: &Entity<InputState>,
+    theme: WorkbenchTheme,
+) -> Div {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
+        .bottom_0()
+        .flex()
+        .items_start()
+        .justify_center()
+        .pt_16()
+        .bg(rgba(0x00000066))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .w_96()
+                .rounded_md()
+                .border_1()
+                .border_color(theme.border_strong)
+                .bg(theme.surface)
+                .p_4()
+                .text_color(theme.text)
+                .shadow_lg()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(ui_text.get(UiTextKey::RenameTabTitle)),
+                )
+                .child(Input::new(input).cleanable(false).appearance(false))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.text_subtle)
+                        .child(ui_text.get(UiTextKey::RenameTabHint)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("cancel-tab-rename")
+                                .label(ui_text.get(UiTextKey::Cancel))
+                                .outline()
+                                .on_click(cx.listener(|this, _, _window, cx| {
+                                    this.cancel_tab_rename_dialog();
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("confirm-tab-rename")
+                                .label(ui_text.get(UiTextKey::RenameTabAction))
+                                .primary()
+                                .on_click(cx.listener(|this, _, _window, cx| {
+                                    let _ = this.confirm_tab_rename_dialog_from_input(cx);
+                                    cx.notify();
+                                })),
+                        ),
+                ),
+        )
 }
 
 fn close_project_dialog(cx: &mut Context<RootView>, ui_text: &UiText) -> Div {

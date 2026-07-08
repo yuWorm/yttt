@@ -25,6 +25,9 @@ pub enum UiTextKey {
     CloseProjectBody,
     Cancel,
     CloseProjectAction,
+    RenameTabTitle,
+    RenameTabAction,
+    RenameTabHint,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -70,6 +73,9 @@ fn english(key: UiTextKey) -> &'static str {
         UiTextKey::CloseProjectBody => "Running terminal processes will be stopped.",
         UiTextKey::Cancel => "Cancel",
         UiTextKey::CloseProjectAction => "Close Project",
+        UiTextKey::RenameTabTitle => "Rename tab",
+        UiTextKey::RenameTabAction => "Rename",
+        UiTextKey::RenameTabHint => "Enter to rename, Escape to cancel",
     }
 }
 
@@ -94,5 +100,8 @@ fn chinese(key: UiTextKey) -> &'static str {
         UiTextKey::CloseProjectBody => "正在运行的终端进程会被停止。",
         UiTextKey::Cancel => "取消",
         UiTextKey::CloseProjectAction => "关闭项目",
+        UiTextKey::RenameTabTitle => "重命名标签页",
+        UiTextKey::RenameTabAction => "重命名",
+        UiTextKey::RenameTabHint => "回车重命名，Esc 取消",
     }
 }

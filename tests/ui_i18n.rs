@@ -42,6 +42,25 @@ fn ui_text_returns_close_project_dialog_labels() {
 }
 
 #[test]
+fn ui_text_returns_rename_tab_dialog_labels() {
+    let english = UiText::new(Locale::English);
+    let chinese = UiText::new(Locale::Chinese);
+
+    assert_eq!(english.get(UiTextKey::RenameTabTitle), "Rename tab");
+    assert_eq!(english.get(UiTextKey::RenameTabAction), "Rename");
+    assert_eq!(
+        english.get(UiTextKey::RenameTabHint),
+        "Enter to rename, Escape to cancel"
+    );
+    assert_eq!(chinese.get(UiTextKey::RenameTabTitle), "重命名标签页");
+    assert_eq!(chinese.get(UiTextKey::RenameTabAction), "重命名");
+    assert_eq!(
+        chinese.get(UiTextKey::RenameTabHint),
+        "回车重命名，Esc 取消"
+    );
+}
+
+#[test]
 fn ui_text_returns_project_empty_terminal_labels() {
     let english = UiText::english();
     let chinese = UiText::new(Locale::Chinese);

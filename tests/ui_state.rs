@@ -122,12 +122,39 @@ fn root_view_toggles_sidebar_collapse_state() {
 }
 
 #[test]
-fn root_view_double_clicking_tab_renames_it() {
+fn root_view_double_clicking_tab_opens_rename_dialog() {
     let mut root = RootView::dev_fixture();
 
     root.handle_project_tab_click("dev", 2).unwrap();
 
-    assert_eq!(visible_tab_titles(root.workspace())[0], "Renamed Tab");
+    assert_eq!(visible_tab_titles(root.workspace())[0], "Dev");
+    assert_eq!(
+        root.visible_tab_rename_dialog_title().as_deref(),
+        Some("Rename tab")
+    );
+    assert_eq!(root.pending_tab_rename_value().as_deref(), Some("Dev"));
+}
+
+#[test]
+fn root_view_confirming_tab_rename_uses_entered_title() {
+    let mut root = RootView::dev_fixture();
+
+    root.handle_project_tab_click("dev", 2).unwrap();
+    root.confirm_tab_rename_dialog("Runtime").unwrap();
+
+    assert_eq!(visible_tab_titles(root.workspace())[0], "Runtime");
+    assert!(root.visible_tab_rename_dialog_title().is_none());
+}
+
+#[test]
+fn root_view_canceling_tab_rename_keeps_title() {
+    let mut root = RootView::dev_fixture();
+
+    root.handle_project_tab_click("dev", 2).unwrap();
+    root.cancel_tab_rename_dialog();
+
+    assert_eq!(visible_tab_titles(root.workspace())[0], "Dev");
+    assert!(root.visible_tab_rename_dialog_title().is_none());
 }
 
 #[test]
