@@ -12,6 +12,7 @@ use yttt::{
     ui::palette::visible_palette_rows,
     ui::sidebar::visible_project_items,
     ui::terminal_pane::{TerminalPaneExitInput, notification_for_terminal_pane_exit},
+    ui::toast::{ToastTone, visible_toast_items},
     ui::{
         root::RootView,
         split_view::visible_pane_titles,
@@ -107,6 +108,10 @@ fn root_view_project_close_command_requires_confirmation_for_running_project() {
     assert_eq!(
         root.visible_close_project_dialog_text(),
         Some("Close project?\nRunning terminal processes will be stopped.")
+    );
+    assert_eq!(
+        root.visible_close_project_dialog_actions(),
+        vec!["Cancel", "Close Project"]
     );
 
     root.confirm_pending_project_close().unwrap();
@@ -268,6 +273,36 @@ fn root_view_formats_failed_agent_toast_notifications() {
 }
 
 #[test]
+fn visible_toast_items_show_three_recent_events_with_tone() {
+    let mut root = RootView::new();
+    root.handle_terminal_notification(notification_event_for(
+        "first",
+        NotificationKind::AgentCompleted,
+    ));
+    root.handle_terminal_notification(notification_event_for(
+        "second",
+        NotificationKind::AgentFailed,
+    ));
+    root.handle_terminal_notification(notification_event_for(
+        "third",
+        NotificationKind::AgentCompleted,
+    ));
+    root.handle_terminal_notification(notification_event_for(
+        "fourth",
+        NotificationKind::AgentFailed,
+    ));
+
+    let items = visible_toast_items(root.toast_queue());
+
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0].title, "fourth failed");
+    assert_eq!(items[0].tone, ToastTone::Error);
+    assert_eq!(items[1].title, "third completed");
+    assert_eq!(items[1].tone, ToastTone::Success);
+    assert_eq!(items[2].title, "second failed");
+}
+
+#[test]
 fn terminal_pane_agent_exit_builds_notification_event() {
     let event = notification_for_terminal_pane_exit(terminal_pane_exit_input(
         ProcessStatus::Exited { code: Some(0) },
@@ -308,11 +343,15 @@ fn terminal_pane_exit_input(
 }
 
 fn notification_event() -> NotificationEvent {
+    notification_event_for("Codex", NotificationKind::AgentCompleted)
+}
+
+fn notification_event_for(pane_title: &str, kind: NotificationKind) -> NotificationEvent {
     NotificationEvent {
-        kind: NotificationKind::AgentCompleted,
+        kind,
         project_title: "yttt".to_string(),
         tab_title: "Agent".to_string(),
-        pane_title: "Codex".to_string(),
+        pane_title: pane_title.to_string(),
     }
 }
 

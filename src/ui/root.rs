@@ -2,6 +2,7 @@ use gpui::{
     Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent,
     PathPromptOptions, Render, Subscription, Window, div, prelude::*, rgb, rgba,
 };
+use gpui_component::button::{Button, ButtonVariants as _};
 
 use std::{
     collections::{HashMap, HashSet},
@@ -73,6 +74,7 @@ pub struct RootView {
 
 const CLOSE_PROJECT_DIALOG_TEXT: &str =
     "Close project?\nRunning terminal processes will be stopped.";
+const CLOSE_PROJECT_DIALOG_ACTIONS: [&str; 2] = ["Cancel", "Close Project"];
 const EMPTY_WORKSPACE_ACTIONS: [UiTextKey; 3] = [
     UiTextKey::OpenDirectory,
     UiTextKey::OpenRecent,
@@ -301,6 +303,18 @@ impl RootView {
         self.pending_close_project_id
             .as_ref()
             .map(|_| CLOSE_PROJECT_DIALOG_TEXT)
+    }
+
+    pub fn visible_close_project_dialog_actions(&self) -> Vec<&'static str> {
+        if self.pending_close_project_id.is_some() {
+            CLOSE_PROJECT_DIALOG_ACTIONS.to_vec()
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn toast_queue(&self) -> &ToastQueue {
+        &self.toast_queue
     }
 
     pub fn confirm_pending_project_close(&mut self) -> Result<(), RootViewError> {
@@ -889,7 +903,7 @@ impl Render for RootView {
             root = root.child(error_banner(load_error));
         }
         if self.pending_close_project_id.is_some() {
-            root = root.child(close_project_dialog());
+            root = root.child(close_project_dialog(cx));
         }
         root = root.child(toast_overlay(&self.toast_queue));
 
@@ -989,7 +1003,7 @@ fn error_banner(message: &str) -> Div {
         .child(message.to_string())
 }
 
-fn close_project_dialog() -> Div {
+fn close_project_dialog(cx: &mut Context<RootView>) -> Div {
     div()
         .absolute()
         .top_0()
@@ -1024,6 +1038,30 @@ fn close_project_dialog() -> Div {
                         .text_xs()
                         .text_color(rgb(0x737373))
                         .child("Enter to close, Escape to cancel"),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("cancel-close-project")
+                                .label(CLOSE_PROJECT_DIALOG_ACTIONS[0])
+                                .outline()
+                                .on_click(cx.listener(|this, _, _window, cx| {
+                                    this.cancel_pending_project_close();
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("confirm-close-project")
+                                .label(CLOSE_PROJECT_DIALOG_ACTIONS[1])
+                                .danger()
+                                .on_click(cx.listener(|this, _, _window, cx| {
+                                    let _ = this.confirm_pending_project_close();
+                                    cx.notify();
+                                })),
+                        ),
                 ),
         )
 }
