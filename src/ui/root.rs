@@ -5,6 +5,7 @@ use gpui::{
     rgb, rgba,
 };
 use gpui_component::{
+    Root as ComponentRoot,
     alert::Alert,
     button::{Button, ButtonVariants as _},
     input::{InputEvent, InputState},
@@ -1429,6 +1430,15 @@ impl Render for RootView {
             root = root.child(close_project_dialog(cx, &self.ui_text));
         }
         root = root.child(toast_overlay(&self.toast_queue));
+        if let Some(notification_layer) = ComponentRoot::render_notification_layer(window, cx) {
+            root = root.child(notification_layer);
+        }
+        if let Some(sheet_layer) = ComponentRoot::render_sheet_layer(window, cx) {
+            root = root.child(sheet_layer);
+        }
+        if let Some(dialog_layer) = ComponentRoot::render_dialog_layer(window, cx) {
+            root = root.child(dialog_layer);
+        }
 
         if !focus_handle.contains_focused(window, cx) {
             focus_handle.focus(window);
