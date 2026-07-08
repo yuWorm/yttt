@@ -218,12 +218,14 @@ impl TerminalPaneView {
         }
     }
 
-    pub fn focus_terminal(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some(terminal) = &self.terminal else {
+    pub fn focus_terminal(&self, window: &Window, cx: &mut Context<Self>) -> bool {
+        let Some(terminal) = self.terminal.clone() else {
             return false;
         };
 
-        terminal.read(cx).focus_handle().focus(window);
+        cx.defer_in(window, move |_this, window, cx| {
+            terminal.read(cx).focus_handle().focus(window);
+        });
         true
     }
 }
