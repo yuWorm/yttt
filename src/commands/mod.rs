@@ -147,6 +147,7 @@ pub fn default_registry() -> CommandRegistry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CommandOutcome {
     None,
+    TabCreated(String),
     PaneSplit(String),
     PaneClosed(String),
     PaneFocused(String),
@@ -174,6 +175,10 @@ pub fn dispatch_workspace_command(
             workspace.select_prev_tab()?;
             Ok(CommandOutcome::None)
         }
+        CommandId::TabNew => workspace
+            .create_shell_tab()
+            .map(CommandOutcome::TabCreated)
+            .map_err(CommandDispatchError::from),
         CommandId::PaneSplitHorizontal => workspace
             .split_focused_pane(SplitDirection::Horizontal)
             .map(CommandOutcome::PaneSplit)

@@ -92,6 +92,16 @@ fn default_keybindings_include_pane_navigation_shortcuts() {
 }
 
 #[test]
+fn default_keybindings_include_tab_new_shortcuts() {
+    let config = default_keybindings();
+
+    assert_has_config_binding(&config, "cmd-t", "tab.new");
+    assert_has_config_binding(&config, "ctrl-t", "tab.new");
+    assert_has_ui_binding("cmd-t", "tab.new");
+    assert_has_ui_binding("ctrl-t", "tab.new");
+}
+
+#[test]
 fn missing_keybindings_file_writes_defaults() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
@@ -169,6 +179,31 @@ fn tab_next_command_selects_next_tab_and_marks_it_started() {
         project.tab_state("agent").unwrap().start_state,
         TabStartState::Started
     );
+}
+
+#[test]
+fn tab_new_command_adds_shell_tab_and_selects_it() {
+    let mut workspace = workspace_with_sample_project();
+
+    dispatch_workspace_command(&mut workspace, CommandId::TabNew).unwrap();
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    let project = workspace.project(&project_id).unwrap();
+    let tab = project
+        .layout
+        .tabs
+        .iter()
+        .find(|tab| tab.id == project.selected_tab_id)
+        .unwrap();
+
+    assert_eq!(project.layout.tabs.len(), 3);
+    assert_eq!(tab.id, "tab-1");
+    assert_eq!(tab.title, "Tab 1");
+    assert_eq!(tab.layout.pane_id(), Some("shell"));
+    assert_eq!(
+        project.tab_state("tab-1").unwrap().start_state,
+        TabStartState::Started
+    );
+    assert_focused_pane(&workspace, "shell");
 }
 
 #[test]

@@ -40,7 +40,7 @@ use crate::{
             PaletteCancel, PaletteConfirm, PaletteSelectNext, PaletteSelectPrev, PaneClose,
             PaneFocusDown, PaneFocusLeft, PaneFocusRight, PaneFocusUp, PaneResizeDown,
             PaneResizeLeft, PaneResizeRight, PaneResizeUp, PaneSplitHorizontal, PaneSplitVertical,
-            TabNext, TabPrev, WORKSPACE_CONTEXT,
+            TabNew, TabNext, TabPrev, WORKSPACE_CONTEXT,
         },
         components::{ActionEmphasis, workbench_action_button},
         i18n::{UiText, UiTextKey},
@@ -764,6 +764,10 @@ impl RootView {
         }
     }
 
+    fn on_tab_new(&mut self, _: &TabNew, _window: &mut Window, cx: &mut Context<Self>) {
+        self.dispatch_workspace_action(CommandId::TabNew, cx);
+    }
+
     fn on_tab_next(&mut self, _: &TabNext, _window: &mut Window, cx: &mut Context<Self>) {
         self.dispatch_workspace_action(CommandId::TabNext, cx);
     }
@@ -1016,6 +1020,7 @@ impl Render for RootView {
             .on_action(cx.listener(Self::on_palette_select_prev))
             .on_action(cx.listener(Self::on_palette_confirm))
             .on_action(cx.listener(Self::on_palette_cancel))
+            .on_action(cx.listener(Self::on_tab_new))
             .on_action(cx.listener(Self::on_tab_next))
             .on_action(cx.listener(Self::on_tab_prev))
             .on_action(cx.listener(Self::on_pane_split_vertical))

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use crate::model::{
     ids::ProjectId,
+    layout::TabConfig,
     layout::{LayoutNode, PaneConfig, PaneKind, ProjectLayout, SplitConfig, SplitDirection},
     split_tree::{FocusDirection, ResizeDirection},
 };
@@ -211,6 +212,36 @@ impl Workspace {
 
     pub fn select_prev_tab(&mut self) -> Result<(), WorkspaceError> {
         self.select_relative_tab(-1)
+    }
+
+    pub fn create_shell_tab(&mut self) -> Result<String, WorkspaceError> {
+        let project = self.selected_project_mut()?;
+        let (tab_id, title) = next_tab_identity(&project.layout);
+        let pane_id = "shell".to_string();
+
+        project.layout.tabs.push(TabConfig {
+            id: tab_id.clone(),
+            title,
+            layout: LayoutNode::Pane(PaneConfig {
+                id: pane_id.clone(),
+                title: "shell".to_string(),
+                command: "$SHELL".to_string(),
+                kind: PaneKind::Shell,
+                notify_on_exit: false,
+            }),
+        });
+        project.selected_tab_id = tab_id.clone();
+        project.tab_states.push(TabState {
+            tab_id: tab_id.clone(),
+            start_state: TabStartState::Started,
+            focused_pane_id: Some(pane_id.clone()),
+            pane_states: vec![PaneState {
+                pane_id,
+                process_state: PaneProcessState::Idle,
+            }],
+        });
+
+        Ok(tab_id)
     }
 
     pub fn split_focused_pane(
@@ -576,6 +607,17 @@ fn next_pane_id(layout: &LayoutNode) -> String {
     }
 
     unreachable!("unbounded pane id search should always produce a candidate")
+}
+
+fn next_tab_identity(layout: &ProjectLayout) -> (String, String) {
+    for index in 1.. {
+        let id = format!("tab-{index}");
+        if !layout.tabs.iter().any(|tab| tab.id == id) {
+            return (id, format!("Tab {index}"));
+        }
+    }
+
+    unreachable!("unbounded tab id search should always produce a candidate")
 }
 
 fn split_pane_node(

@@ -16,6 +16,7 @@ actions!(
         PaletteSelectPrev,
         PaletteConfirm,
         PaletteCancel,
+        TabNew,
         TabNext,
         TabPrev,
         PaneSplitVertical,
@@ -78,6 +79,14 @@ const DEFAULT_UI_KEYBINDING_SPECS: &[UiKeybindingSpec] = &[
     UiKeybindingSpec {
         keys: "ctrl-k",
         command: CommandId::PanePalette,
+    },
+    UiKeybindingSpec {
+        keys: "cmd-t",
+        command: CommandId::TabNew,
+    },
+    UiKeybindingSpec {
+        keys: "ctrl-t",
+        command: CommandId::TabNew,
     },
     UiKeybindingSpec {
         keys: "cmd-]",
@@ -214,6 +223,7 @@ fn command_keybinding(spec: &UiKeybindingSpec) -> KeyBinding {
         CommandId::PanePalette => {
             KeyBinding::new(spec.keys, OpenPanePalette, Some(WORKSPACE_CONTEXT))
         }
+        CommandId::TabNew => KeyBinding::new(spec.keys, TabNew, Some(WORKSPACE_CONTEXT)),
         CommandId::TabNext => KeyBinding::new(spec.keys, TabNext, Some(WORKSPACE_CONTEXT)),
         CommandId::TabPrev => KeyBinding::new(spec.keys, TabPrev, Some(WORKSPACE_CONTEXT)),
         CommandId::PaneSplitVertical => {
