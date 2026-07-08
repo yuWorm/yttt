@@ -522,6 +522,17 @@ fn root_view_confirming_tab_palette_selection_switches_tabs() {
 }
 
 #[test]
+fn root_view_confirming_tab_palette_selection_queues_terminal_focus() {
+    let mut root = RootView::dev_fixture();
+
+    root.open_palette(PaletteKind::Tab);
+    root.set_palette_query("agent");
+    root.confirm_palette_selection().unwrap();
+
+    assert_eq!(root.pending_terminal_focus_pane_id(), Some("codex"));
+}
+
+#[test]
 fn root_view_confirming_pane_palette_selection_focuses_pane() {
     let mut root = RootView::dev_fixture();
 
@@ -533,6 +544,17 @@ fn root_view_confirming_pane_palette_selection_focuses_pane() {
     let project = root.workspace().project(&project_id).unwrap();
     let tab = project.tab_state("dev").unwrap();
     assert_eq!(tab.focused_pane_id.as_deref(), Some("shell"));
+}
+
+#[test]
+fn root_view_confirming_pane_palette_selection_queues_terminal_focus() {
+    let mut root = RootView::dev_fixture();
+
+    root.open_palette(PaletteKind::Pane);
+    root.set_palette_query("shell");
+    root.confirm_palette_selection().unwrap();
+
+    assert_eq!(root.pending_terminal_focus_pane_id(), Some("shell"));
 }
 
 #[test]
@@ -601,6 +623,36 @@ fn root_view_split_command_queues_new_terminal_focus() {
     root.run_command(CommandId::PaneSplitVertical).unwrap();
 
     assert_eq!(root.pending_terminal_focus_pane_id(), Some("pane-1"));
+}
+
+#[test]
+fn root_view_focus_notification_target_queues_terminal_focus() {
+    let mut root = RootView::dev_fixture();
+    let event = notification_event();
+
+    root.focus_notification_target(&event).unwrap();
+
+    assert_eq!(root.pending_terminal_focus_pane_id(), Some("codex"));
+}
+
+#[test]
+fn workspace_arrow_keydown_fallback_maps_to_pane_commands() {
+    assert_eq!(
+        RootView::workspace_arrow_keydown_command("right", true, false, true, false),
+        Some(CommandId::PaneFocusRight)
+    );
+    assert_eq!(
+        RootView::workspace_arrow_keydown_command("left", false, true, true, false),
+        Some(CommandId::PaneFocusLeft)
+    );
+    assert_eq!(
+        RootView::workspace_arrow_keydown_command("down", true, false, true, true),
+        Some(CommandId::PaneResizeDown)
+    );
+    assert_eq!(
+        RootView::workspace_arrow_keydown_command("right", true, false, false, false),
+        None
+    );
 }
 
 #[test]

@@ -255,15 +255,17 @@ impl RootView {
                     .map(|project| project.id.clone());
                 if let Some(project_id) = project_id {
                     self.workspace.select_project(&project_id)?;
+                    self.queue_selected_terminal_focus();
                 } else if item.command == CommandId::ProjectOpenRecent {
                     self.open_project_path(PathBuf::from(&item.id))?;
                 }
             }
             PaletteKind::Tab => {
                 self.workspace.select_tab(&item.id)?;
+                self.queue_selected_terminal_focus();
             }
             PaletteKind::Pane => {
-                self.workspace.focus_pane(&item.id)?;
+                self.focus_visible_terminal_pane(&item.id)?;
             }
         }
 
@@ -334,6 +336,7 @@ impl RootView {
             return self.fail_workspace_error(error);
         }
 
+        self.queue_selected_terminal_focus();
         self.load_error = None;
         Ok(())
     }
@@ -423,6 +426,30 @@ impl RootView {
 
     pub fn pending_terminal_focus_pane_id(&self) -> Option<&str> {
         self.pending_terminal_focus_pane_id.as_deref()
+    }
+
+    pub fn workspace_arrow_keydown_command(
+        key: &str,
+        platform: bool,
+        control: bool,
+        alt: bool,
+        shift: bool,
+    ) -> Option<CommandId> {
+        if !(platform || control) || !alt {
+            return None;
+        }
+
+        match (key, shift) {
+            ("left", false) => Some(CommandId::PaneFocusLeft),
+            ("right", false) => Some(CommandId::PaneFocusRight),
+            ("up", false) => Some(CommandId::PaneFocusUp),
+            ("down", false) => Some(CommandId::PaneFocusDown),
+            ("left", true) => Some(CommandId::PaneResizeLeft),
+            ("right", true) => Some(CommandId::PaneResizeRight),
+            ("up", true) => Some(CommandId::PaneResizeUp),
+            ("down", true) => Some(CommandId::PaneResizeDown),
+            _ => None,
+        }
     }
 
     pub fn last_opened_layout_file(&self) -> Option<&Path> {
@@ -557,6 +584,7 @@ impl RootView {
             Ok(opened) => {
                 let source_message = layout_source_message(&opened.layout_source);
                 let project_id = self.workspace.open_project(opened.path, opened.layout)?;
+                self.queue_selected_terminal_focus();
                 self.layout_source_messages
                     .insert(project_id, source_message);
                 self.recent_projects = recent_projects_for_palette(opened.recent_projects);
@@ -1360,6 +1388,19 @@ impl RootView {
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if self.active_palette.is_none() {
+            if let Some(command_id) = Self::workspace_arrow_keydown_command(
+                &event.keystroke.key,
+                event.keystroke.modifiers.platform,
+                event.keystroke.modifiers.control,
+                event.keystroke.modifiers.alt,
+                event.keystroke.modifiers.shift,
+            ) {
+                let _ = self.run_command(command_id);
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+
             cx.propagate();
             return;
         }
