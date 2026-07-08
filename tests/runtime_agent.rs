@@ -4,13 +4,17 @@ use yttt::runtime::notification::{
     ExitNotificationInput, NoopSystemNotifier, NotificationEvent, NotificationKind, SystemNotifier,
     maybe_notify_system, notification_for_exit,
 };
-use yttt::runtime::terminal::{ExitReason, FakeTerminalRuntime, ProcessStatus, TerminalRuntime};
+use yttt::runtime::terminal::{
+    ExitReason, FakeTerminalRuntime, ProcessStatus, TerminalRuntime, TerminalSpawnRequest,
+};
 
 #[test]
 fn fake_runtime_marks_process_running_then_exited() {
     let mut runtime = FakeTerminalRuntime::default();
 
-    let pane = runtime.spawn("server", "echo ok").unwrap();
+    let pane = runtime
+        .spawn(TerminalSpawnRequest::for_shell("server", "echo ok"))
+        .unwrap();
     assert_eq!(runtime.status(pane), Some(ProcessStatus::Running));
 
     runtime.exit(pane, 0, ExitReason::Completed);
@@ -18,6 +22,19 @@ fn fake_runtime_marks_process_running_then_exited() {
     assert_eq!(
         runtime.status(pane),
         Some(ProcessStatus::Exited { code: Some(0) })
+    );
+}
+
+#[test]
+fn fake_runtime_records_spawn_cwd() {
+    let mut runtime = FakeTerminalRuntime::default();
+    let request = TerminalSpawnRequest::for_shell("server", "pwd").cwd("/tmp/yttt");
+
+    let pane = runtime.spawn(request).unwrap();
+
+    assert_eq!(
+        runtime.spawn_cwd(pane).unwrap().to_string_lossy(),
+        "/tmp/yttt"
     );
 }
 

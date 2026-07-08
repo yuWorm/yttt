@@ -8,7 +8,10 @@ use crate::{
     runtime::{
         agent::classify_agent,
         notification::{ExitNotificationInput, NotificationEvent, notification_for_exit},
-        terminal::{ExitReason, PortablePtySession, ProcessStatus, spawn_portable_pty_session},
+        terminal::{
+            ExitReason, PortablePtySession, ProcessStatus, TerminalSpawnRequest,
+            spawn_portable_pty_session,
+        },
     },
 };
 
@@ -57,7 +60,10 @@ impl TerminalPaneView {
             tab_title,
             pane,
         } = context;
-        let mut session = match spawn_portable_pty_session(&pane.id, &pane.command, 80, 24) {
+        let mut session = match spawn_portable_pty_session(TerminalSpawnRequest::for_shell(
+            &pane.id,
+            &pane.command,
+        )) {
             Ok(session) => session,
             Err(error) => {
                 return Self {

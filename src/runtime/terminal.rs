@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -27,8 +28,40 @@ pub enum ExitReason {
     KilledByUser,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalSpawnRequest {
+    pub pane_id: String,
+    pub command: String,
+    pub cwd: PathBuf,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+impl TerminalSpawnRequest {
+    pub fn for_shell(pane_id: impl Into<String>, command: impl Into<String>) -> Self {
+        Self {
+            pane_id: pane_id.into(),
+            command: command.into(),
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            cols: 80,
+            rows: 24,
+        }
+    }
+
+    pub fn cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
+        self.cwd = cwd.into();
+        self
+    }
+
+    pub fn size(mut self, cols: u16, rows: u16) -> Self {
+        self.cols = cols;
+        self.rows = rows;
+        self
+    }
+}
+
 pub trait TerminalRuntime {
-    fn spawn(&mut self, pane_id: &str, command: &str) -> anyhow::Result<ProcessHandle>;
+    fn spawn(&mut self, request: TerminalSpawnRequest) -> anyhow::Result<ProcessHandle>;
     fn kill(&mut self, handle: ProcessHandle) -> anyhow::Result<()>;
     fn status(&self, handle: ProcessHandle) -> Option<ProcessStatus>;
 }
@@ -41,6 +74,7 @@ pub struct PortablePtyIo {
 pub struct PortablePtySession {
     _pane_id: String,
     _command: String,
+    _cwd: PathBuf,
     master: PortablePtyMaster,
     child: Box<dyn Child + Send + Sync>,
     io: Option<PortablePtyIo>,
@@ -107,19 +141,19 @@ impl PortablePtyRuntime {
 }
 
 impl TerminalRuntime for PortablePtyRuntime {
-    fn spawn(&mut self, pane_id: &str, command: &str) -> anyhow::Result<ProcessHandle> {
+    fn spawn(&mut self, request: TerminalSpawnRequest) -> anyhow::Result<ProcessHandle> {
         self.next_handle += 1;
         let handle = ProcessHandle(self.next_handle);
 
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
-            rows: 24,
-            cols: 80,
+            rows: request.rows,
+            cols: request.cols,
             pixel_width: 0,
             pixel_height: 0,
         })?;
         let portable_pty::PtyPair { slave, master } = pair;
-        let command_builder = shell_command(command);
+        let command_builder = shell_command(&request.command, &request.cwd);
         let child = slave.spawn_command(command_builder)?;
         drop(slave);
 
@@ -132,8 +166,9 @@ impl TerminalRuntime for PortablePtyRuntime {
         self.processes.insert(
             handle,
             PortablePtyProcess {
-                _pane_id: pane_id.to_string(),
-                _command: command.to_string(),
+                _pane_id: request.pane_id,
+                _command: request.command,
+                _cwd: request.cwd,
                 _master: master,
                 child,
                 status: ProcessStatus::Running,
@@ -162,17 +197,24 @@ impl FakeTerminalRuntime {
             process.status = ProcessStatus::Exited { code: Some(code) };
         }
     }
+
+    pub fn spawn_cwd(&self, handle: ProcessHandle) -> Option<&Path> {
+        self.processes
+            .get(&handle)
+            .map(|process| process.cwd.as_path())
+    }
 }
 
 impl TerminalRuntime for FakeTerminalRuntime {
-    fn spawn(&mut self, pane_id: &str, command: &str) -> anyhow::Result<ProcessHandle> {
+    fn spawn(&mut self, request: TerminalSpawnRequest) -> anyhow::Result<ProcessHandle> {
         self.next_handle += 1;
         let handle = ProcessHandle(self.next_handle);
         self.processes.insert(
             handle,
             FakeProcess {
-                _pane_id: pane_id.to_string(),
-                _command: command.to_string(),
+                _pane_id: request.pane_id,
+                _command: request.command,
+                cwd: request.cwd,
                 status: ProcessStatus::Running,
             },
         );
@@ -192,20 +234,17 @@ impl TerminalRuntime for FakeTerminalRuntime {
 }
 
 pub fn spawn_portable_pty_session(
-    pane_id: &str,
-    command: &str,
-    cols: u16,
-    rows: u16,
+    request: TerminalSpawnRequest,
 ) -> anyhow::Result<PortablePtySession> {
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize {
-        rows,
-        cols,
+        rows: request.rows,
+        cols: request.cols,
         pixel_width: 0,
         pixel_height: 0,
     })?;
     let portable_pty::PtyPair { slave, master } = pair;
-    let command_builder = shell_command(command);
+    let command_builder = shell_command(&request.command, &request.cwd);
     let child = slave.spawn_command(command_builder)?;
     drop(slave);
 
@@ -214,8 +253,9 @@ pub fn spawn_portable_pty_session(
     let master = Arc::new(Mutex::new(master));
 
     Ok(PortablePtySession {
-        _pane_id: pane_id.to_string(),
-        _command: command.to_string(),
+        _pane_id: request.pane_id,
+        _command: request.command,
+        _cwd: request.cwd,
         master,
         child,
         io: Some(PortablePtyIo { writer, reader }),
@@ -278,23 +318,26 @@ impl PortablePtyResizeHandle {
 struct FakeProcess {
     _pane_id: String,
     _command: String,
+    cwd: PathBuf,
     status: ProcessStatus,
 }
 
 struct PortablePtyProcess {
     _pane_id: String,
     _command: String,
+    _cwd: PathBuf,
     _master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
     status: ProcessStatus,
 }
 
-fn shell_command(command: &str) -> CommandBuilder {
+fn shell_command(command: &str, cwd: &Path) -> CommandBuilder {
     #[cfg(windows)]
     {
         let mut builder = CommandBuilder::new("cmd");
         builder.arg("/C");
         builder.arg(command);
+        builder.cwd(cwd);
         builder
     }
 
@@ -304,6 +347,7 @@ fn shell_command(command: &str) -> CommandBuilder {
         let mut builder = CommandBuilder::new(shell);
         builder.arg("-lc");
         builder.arg(command);
+        builder.cwd(cwd);
         builder
     }
 }
