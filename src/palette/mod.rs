@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crate::{
     commands::{CommandId, CommandRegistry},
     model::{
-        layout::LayoutNode,
+        layout::{LayoutNode, PaneKind},
         workspace::{PaneProcessState, TabStartState, Workspace},
     },
 };
@@ -178,14 +178,18 @@ pub fn tab_palette_items(workspace: &Workspace) -> Option<Vec<PaletteItem>> {
                     .map(|state| state.pane_states.len())
                     .unwrap_or_else(|| pane_count(&tab.layout));
                 let status = tab_state.map(|state| match state.start_state {
-                    TabStartState::Lazy => "lazy".to_string(),
-                    TabStartState::Started => "started".to_string(),
+                    TabStartState::Lazy => {
+                        tab_status(tab.id == project.selected_tab_id, TabStartState::Lazy)
+                    }
+                    TabStartState::Started => {
+                        tab_status(tab.id == project.selected_tab_id, TabStartState::Started)
+                    }
                 });
 
                 PaletteItem {
                     id: tab.id.clone(),
                     title: tab.title.clone(),
-                    subtitle: Some(format!("{pane_count} panes")),
+                    subtitle: Some(pane_count_label(pane_count)),
                     status,
                     command: CommandId::TabPalette,
                     enabled: true,
@@ -210,21 +214,60 @@ pub fn pane_palette_items(workspace: &Workspace) -> Option<Vec<PaletteItem>> {
         tab_state
             .pane_states
             .iter()
-            .map(|pane| PaletteItem {
-                id: pane.pane_id.clone(),
-                title: tab
-                    .layout
-                    .find_pane(&pane.pane_id)
+            .map(|pane| {
+                let pane_config = tab.layout.find_pane(&pane.pane_id);
+                let title = pane_config
                     .map(|pane_config| pane_config.title.clone())
-                    .unwrap_or_else(|| pane.pane_id.clone()),
-                subtitle: Some(tab.title.clone()),
-                status: Some(process_status_label(pane.process_state).to_string()),
-                command: CommandId::PanePalette,
-                enabled: true,
-                disabled_reason: None,
+                    .unwrap_or_else(|| pane.pane_id.clone());
+                let is_active = tab_state.focused_pane_id.as_deref() == Some(&pane.pane_id);
+                let is_agent = pane_config
+                    .map(|pane_config| pane_config.kind == PaneKind::Agent)
+                    .unwrap_or(false);
+
+                PaletteItem {
+                    id: pane.pane_id.clone(),
+                    title,
+                    subtitle: Some(tab.title.clone()),
+                    status: Some(pane_status(pane.process_state, is_active, is_agent)),
+                    command: CommandId::PanePalette,
+                    enabled: true,
+                    disabled_reason: None,
+                }
             })
             .collect(),
     )
+}
+
+fn pane_count_label(pane_count: usize) -> String {
+    if pane_count == 1 {
+        "1 pane".to_string()
+    } else {
+        format!("{pane_count} panes")
+    }
+}
+
+fn tab_status(is_active: bool, state: TabStartState) -> String {
+    let mut parts = Vec::new();
+    if is_active {
+        parts.push("active");
+    }
+    parts.push(match state {
+        TabStartState::Lazy => "lazy",
+        TabStartState::Started => "started",
+    });
+    parts.join(" · ")
+}
+
+fn pane_status(state: PaneProcessState, is_active: bool, is_agent: bool) -> String {
+    let mut parts = Vec::new();
+    if is_active {
+        parts.push("active");
+    }
+    parts.push(process_status_label(state));
+    if is_agent {
+        parts.push("agent");
+    }
+    parts.join(" · ")
 }
 
 fn pane_count(layout: &LayoutNode) -> usize {

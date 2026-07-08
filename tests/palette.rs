@@ -93,16 +93,12 @@ fn tab_palette_contains_current_project_tabs() {
 
     let items = tab_palette_items(&workspace).unwrap();
 
-    assert!(
-        items
-            .iter()
-            .any(|item| item.title == "Dev" && item.status.as_deref() == Some("started"))
-    );
-    assert!(
-        items
-            .iter()
-            .any(|item| item.title == "Agent" && item.status.as_deref() == Some("lazy"))
-    );
+    assert!(items.iter().any(|item| item.title == "Dev"
+        && item.subtitle.as_deref() == Some("2 panes")
+        && item.status.as_deref() == Some("active · started")));
+    assert!(items.iter().any(|item| item.title == "Agent"
+        && item.subtitle.as_deref() == Some("1 pane")
+        && item.status.as_deref() == Some("lazy")));
 }
 
 #[test]
@@ -117,13 +113,28 @@ fn pane_palette_contains_current_tab_panes() {
     assert!(
         items
             .iter()
-            .any(|item| item.title == "server" && item.status.as_deref() == Some("idle"))
+            .any(|item| item.title == "server" && item.status.as_deref() == Some("active · idle"))
     );
     assert!(
         items
             .iter()
             .any(|item| item.title == "shell" && item.status.as_deref() == Some("idle"))
     );
+}
+
+#[test]
+fn pane_palette_marks_agent_panes() {
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+    workspace.select_tab("agent").unwrap();
+
+    let items = pane_palette_items(&workspace).unwrap();
+
+    assert!(items.iter().any(
+        |item| item.title == "Codex" && item.status.as_deref() == Some("active · idle · agent")
+    ));
 }
 
 #[test]
