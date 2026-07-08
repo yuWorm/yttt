@@ -1,7 +1,13 @@
 use std::path::Path;
 
 use tempfile::tempdir;
-use yttt::config::{paths::AppConfigPaths, settings::load_or_create_settings};
+use yttt::config::{
+    paths::AppConfigPaths,
+    settings::{
+        AUTO_SHELL, AppSettings, detect_shell_candidates_with, load_or_create_settings,
+        resolve_default_shell, save_settings,
+    },
+};
 
 #[test]
 fn app_config_paths_expose_settings_and_theme_dir() {
@@ -23,7 +29,9 @@ fn missing_settings_file_writes_defaults() {
 
     assert_eq!(loaded.settings.theme.name, "yttt-dark");
     assert_eq!(loaded.settings.theme.terminal, None);
+    assert!(!loaded.settings.notifications.system);
     assert_eq!(loaded.settings.terminal.font_family, "monospace");
+    assert_eq!(loaded.settings.terminal.shell, AUTO_SHELL);
     assert_eq!(loaded.settings.terminal.font_size, 13.0);
     assert_eq!(loaded.settings.terminal.line_height, 1.15);
     assert_eq!(loaded.settings.terminal.padding, 6.0);
@@ -56,4 +64,51 @@ scrollback = 0
     assert_eq!(loaded.settings.terminal.padding, 6.0);
     assert_eq!(loaded.settings.terminal.scrollback, 10000);
     assert_eq!(loaded.warnings.len(), 4);
+}
+
+#[test]
+fn settings_persist_notification_and_terminal_shell_choices() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    let mut settings = AppSettings::default();
+    settings.notifications.system = true;
+    settings.terminal.shell = "/bin/zsh".to_string();
+    settings.terminal.font_size = 15.0;
+
+    save_settings(&paths, &settings).unwrap();
+    let loaded = load_or_create_settings(&paths).unwrap();
+
+    assert!(loaded.settings.notifications.system);
+    assert_eq!(loaded.settings.terminal.shell, "/bin/zsh");
+    assert_eq!(loaded.settings.terminal.font_size, 15.0);
+}
+
+#[test]
+fn shell_detection_prioritizes_shell_env_then_common_system_shells() {
+    let candidates = detect_shell_candidates_with(Some("/opt/homebrew/bin/fish"), |path| {
+        matches!(path, "/bin/zsh" | "/bin/bash")
+    });
+
+    assert_eq!(
+        candidates,
+        vec![
+            "/opt/homebrew/bin/fish".to_string(),
+            "/bin/zsh".to_string(),
+            "/bin/bash".to_string(),
+            "sh".to_string()
+        ]
+    );
+}
+
+#[test]
+fn resolve_default_shell_uses_auto_or_manual_choice() {
+    let candidates = vec!["/bin/zsh".to_string(), "/bin/bash".to_string()];
+
+    assert_eq!(resolve_default_shell(AUTO_SHELL, &candidates), "/bin/zsh");
+    assert_eq!(resolve_default_shell("", &candidates), "/bin/zsh");
+    assert_eq!(
+        resolve_default_shell("/usr/local/bin/fish", &candidates),
+        "/usr/local/bin/fish"
+    );
+    assert_eq!(resolve_default_shell(AUTO_SHELL, &[]), "sh");
 }

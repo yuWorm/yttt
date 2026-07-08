@@ -11,6 +11,7 @@ use yttt::ui::primitives::{
     dialog::yttt_dialog_style,
     input::{YtttInputKind, yttt_input_style},
 };
+use yttt::ui::settings::{SettingsGroupId, settings_panel_style, settings_rows_for_group};
 use yttt::ui::sidebar::project_sidebar_style;
 use yttt::ui::tabs::{
     ProjectTabCloseButtonVisibility, ProjectTabLeadingIcon, ProjectTabStatusIndicator,
@@ -228,6 +229,32 @@ fn palette_footer_exposes_keyboard_actions() {
                 key: "esc",
             },
         ]
+    );
+}
+
+#[test]
+fn settings_panel_style_uses_zed_like_sidebar_and_content_bounds() {
+    let style = settings_panel_style();
+
+    assert!(style.width >= gpui::px(920.0));
+    assert!(style.max_width >= style.width);
+    assert!(style.max_height < gpui::px(720.0));
+    assert_eq!(style.sidebar_width, gpui::px(260.0));
+    assert_eq!(style.row_min_height, gpui::px(68.0));
+    assert_eq!(style.border_width, gpui::px(1.0));
+}
+
+#[test]
+fn settings_rows_are_grouped_by_user_facing_sections() {
+    let terminal_rows = settings_rows_for_group(SettingsGroupId::Terminal);
+    let layout_rows = settings_rows_for_group(SettingsGroupId::ProjectLayout);
+
+    assert!(terminal_rows.iter().any(|row| row.title == "Default shell"));
+    assert!(terminal_rows.iter().any(|row| row.title == "Font size"));
+    assert!(
+        layout_rows
+            .iter()
+            .any(|row| row.title == "Edit layout TOML")
     );
 }
 

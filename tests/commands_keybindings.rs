@@ -21,6 +21,7 @@ fn default_registry_contains_core_commands() {
     assert!(registry.contains(CommandId::PaneSplitVertical));
     assert!(registry.contains(CommandId::TabRename));
     assert!(registry.contains(CommandId::CommandPaletteOpen));
+    assert!(registry.contains(CommandId::SettingsOpen));
 }
 
 #[test]
@@ -29,6 +30,19 @@ fn notification_settings_command_is_available_without_project() {
 
     assert!(availability.enabled);
     assert!(availability.disabled_reason.is_none());
+}
+
+#[test]
+fn settings_open_command_is_available_without_project() {
+    let availability = CommandId::SettingsOpen.availability(false);
+
+    assert!(availability.enabled);
+    assert!(availability.disabled_reason.is_none());
+    assert_eq!(CommandId::SettingsOpen.as_str(), "settings.open");
+    assert_eq!(
+        CommandId::SettingsOpen.presentation().title,
+        "Open Settings"
+    );
 }
 
 #[test]
@@ -71,6 +85,16 @@ fn default_keybindings_include_palette_shortcuts() {
 
     assert_has_config_binding(&config, "cmd-p", "command_palette.open");
     assert_has_config_binding(&config, "ctrl-k", "pane.palette");
+}
+
+#[test]
+fn default_keybindings_include_settings_shortcuts() {
+    let config = default_keybindings();
+
+    assert_has_config_binding(&config, "cmd-,", "settings.open");
+    assert_has_config_binding(&config, "ctrl-,", "settings.open");
+    assert_has_ui_binding("cmd-,", "settings.open");
+    assert_has_ui_binding("ctrl-,", "settings.open");
 }
 
 #[test]

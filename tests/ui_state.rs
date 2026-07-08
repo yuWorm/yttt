@@ -243,6 +243,78 @@ fn root_view_layout_open_file_falls_back_to_app_local_layout() {
 }
 
 #[test]
+fn root_view_layout_toml_editor_opens_current_layout_file() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("layout-editor-project");
+    fs::create_dir(&project_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let expected_layout_file = paths.local_layout_file(&project_dir.canonicalize().unwrap());
+    let mut root = RootView::with_config_paths(paths);
+    root.open_project_path(&project_dir).unwrap();
+
+    root.open_layout_toml_editor().unwrap();
+
+    assert!(root.layout_toml_editor_is_open());
+    assert_eq!(
+        root.layout_toml_editor_path(),
+        Some(expected_layout_file.as_path())
+    );
+    assert!(
+        root.layout_toml_editor_value()
+            .unwrap()
+            .contains("[project]")
+    );
+    assert_eq!(root.visible_layout_toml_editor_error(), None);
+}
+
+#[test]
+fn root_view_layout_toml_editor_saves_valid_toml() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("layout-editor-save-project");
+    fs::create_dir(&project_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let layout_file = paths.local_layout_file(&project_dir.canonicalize().unwrap());
+    let mut root = RootView::with_config_paths(paths);
+    root.open_project_path(&project_dir).unwrap();
+    root.open_layout_toml_editor().unwrap();
+
+    let updated = root
+        .layout_toml_editor_value()
+        .unwrap()
+        .replace("name = \"layout-editor-save-project\"", "name = \"saved\"");
+    root.set_layout_toml_editor_value(updated);
+    root.save_layout_toml_editor().unwrap();
+
+    assert!(!root.layout_toml_editor_is_open());
+    assert!(
+        fs::read_to_string(layout_file)
+            .unwrap()
+            .contains("name = \"saved\"")
+    );
+}
+
+#[test]
+fn root_view_layout_toml_editor_keeps_invalid_toml_open() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("layout-editor-invalid-project");
+    fs::create_dir(&project_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths);
+    root.open_project_path(&project_dir).unwrap();
+    root.open_layout_toml_editor().unwrap();
+
+    root.set_layout_toml_editor_value("[project\n");
+    root.save_layout_toml_editor().unwrap();
+
+    assert!(root.layout_toml_editor_is_open());
+    assert!(
+        root.visible_layout_toml_editor_error()
+            .unwrap()
+            .contains("failed to parse layout TOML")
+    );
+}
+
+#[test]
 fn root_view_project_close_command_requires_confirmation_for_running_project() {
     let mut root = RootView::dev_fixture();
     let project_id = root.workspace().selected_project_id().unwrap().clone();
@@ -289,8 +361,53 @@ fn root_view_settings_keybindings_reveals_keybindings_file_path() {
 }
 
 #[test]
-fn root_view_toggles_system_notifications() {
+fn root_view_settings_open_command_opens_settings_page() {
     let mut root = RootView::new();
+
+    root.run_command(CommandId::SettingsOpen).unwrap();
+
+    assert!(root.settings_is_open());
+    assert_eq!(
+        root.visible_settings_group_titles(),
+        vec![
+            "General",
+            "Appearance",
+            "Terminal",
+            "Project Layout",
+            "Keybindings"
+        ]
+    );
+    assert_eq!(root.selected_settings_group_title(), Some("General"));
+}
+
+#[test]
+fn root_view_settings_search_filters_groups() {
+    let mut root = RootView::new();
+    root.open_settings();
+
+    root.set_settings_search_query("shell");
+
+    assert_eq!(root.visible_settings_group_titles(), vec!["Terminal"]);
+    assert_eq!(root.selected_settings_group_title(), Some("Terminal"));
+}
+
+#[test]
+fn root_view_settings_can_select_and_close_group() {
+    let mut root = RootView::new();
+    root.open_settings();
+
+    root.select_settings_group("terminal").unwrap();
+    root.close_settings();
+
+    assert!(!root.settings_is_open());
+    assert_eq!(root.selected_settings_group_title(), Some("Terminal"));
+}
+
+#[test]
+fn root_view_toggles_system_notifications() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths.clone());
 
     assert!(!root.system_notifications_enabled());
     assert_eq!(
@@ -306,6 +423,40 @@ fn root_view_toggles_system_notifications() {
         "System notifications: enabled"
     );
 
+    let reloaded = RootView::with_config_paths(paths);
+    assert!(reloaded.system_notifications_enabled());
+    assert_eq!(
+        reloaded.visible_notification_settings_message(),
+        "System notifications: enabled"
+    );
+}
+
+#[test]
+fn root_view_terminal_shell_setting_changes_new_shell_tabs() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("shell-settings-project");
+    fs::create_dir(&project_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths);
+    root.open_project_path(&project_dir).unwrap();
+
+    root.set_terminal_shell("/bin/bash").unwrap();
+    root.run_command(CommandId::TabNew).unwrap();
+
+    let project_id = root.workspace().selected_project_id().unwrap();
+    let project = root.workspace().project(project_id).unwrap();
+    let tab = project.layout.tab(&project.selected_tab_id).unwrap();
+    let pane = tab.layout.find_pane("shell").unwrap();
+    assert_eq!(pane.command, "/bin/bash");
+}
+
+#[test]
+fn root_view_notification_settings_can_be_disabled_again() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths.clone());
+
+    root.run_command(CommandId::SettingsNotifications).unwrap();
     root.run_command(CommandId::SettingsNotifications).unwrap();
 
     assert!(!root.system_notifications_enabled());
@@ -313,6 +464,9 @@ fn root_view_toggles_system_notifications() {
         root.visible_notification_settings_message(),
         "System notifications: disabled"
     );
+
+    let reloaded = RootView::with_config_paths(paths);
+    assert!(!reloaded.system_notifications_enabled());
 }
 
 #[test]

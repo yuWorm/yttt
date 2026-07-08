@@ -37,6 +37,7 @@ pub enum CommandId {
     LayoutExportProjectConfig,
     LayoutOpenFile,
     CommandPaletteOpen,
+    SettingsOpen,
     SettingsKeybindings,
     SettingsNotifications,
 }
@@ -70,6 +71,7 @@ impl CommandId {
         Self::LayoutExportProjectConfig,
         Self::LayoutOpenFile,
         Self::CommandPaletteOpen,
+        Self::SettingsOpen,
         Self::SettingsKeybindings,
         Self::SettingsNotifications,
     ];
@@ -103,6 +105,7 @@ impl CommandId {
             Self::LayoutExportProjectConfig => "layout.export_project_config",
             Self::LayoutOpenFile => "layout.open_file",
             Self::CommandPaletteOpen => "command_palette.open",
+            Self::SettingsOpen => "settings.open",
             Self::SettingsKeybindings => "settings.keybindings",
             Self::SettingsNotifications => "settings.notifications",
         }
@@ -181,6 +184,7 @@ impl CommandId {
             Self::CommandPaletteOpen => {
                 presentation("Open Command Palette", "Search and run commands")
             }
+            Self::SettingsOpen => presentation("Open Settings", "Configure YTTT"),
             Self::SettingsKeybindings => presentation(
                 "Open Keybindings File",
                 "Open or create the editable keybindings TOML",
@@ -199,6 +203,7 @@ impl CommandId {
             }
             Self::CommandPaletteOpen
             | Self::ProjectPalette
+            | Self::SettingsOpen
             | Self::SettingsKeybindings
             | Self::SettingsNotifications => enabled(),
             Self::ProjectClose

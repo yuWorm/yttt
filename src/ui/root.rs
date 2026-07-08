@@ -1,19 +1,21 @@
 use gpui::{
-    AnyElement, ClickEvent, Context, Div, Entity, FocusHandle, InteractiveElement as _,
+    AnyElement, ClickEvent, Context, Div, Entity, FocusHandle, FontWeight, InteractiveElement as _,
     IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    PathPromptOptions, Pixels, Point, Render, ScrollHandle, Subscription, Window, div, prelude::*,
-    relative, rgba,
+    ParentElement as _, PathPromptOptions, Pixels, Point, Render, ScrollHandle, SharedString,
+    Stateful, Subscription, Window, div, prelude::*, px, relative, rgba,
 };
 use gpui_component::{
-    Root as ComponentRoot, WindowExt as _,
+    IconName, Root as ComponentRoot, WindowExt as _,
     alert::Alert,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     input::{Input, InputEvent, InputState},
     notification::{Notification, NotificationType},
+    scroll::ScrollableElement as _,
 };
 
 use std::{
     collections::{HashMap, HashSet},
+    fs,
     path::{Path, PathBuf},
 };
 
@@ -31,7 +33,10 @@ use crate::{
             load_recent_projects, open_project_config, save_local_layout,
         },
         paths::AppConfigPaths,
-        settings::{AppSettings, SettingsLoadWarning, load_or_create_settings},
+        settings::{
+            AppSettings, SettingsLoadWarning, SettingsSaveError, detect_shell_candidates,
+            load_or_create_settings, resolve_default_shell, save_settings,
+        },
         theme::{ThemeLoadWarning, ThemeStore, load_theme_store},
     },
     model::{
@@ -59,8 +64,8 @@ use crate::{
             PaletteConfirm, PaletteSelectNext, PaletteSelectPrev, PaneClose, PaneFocusDown,
             PaneFocusLeft, PaneFocusRight, PaneFocusUp, PaneRename, PaneResizeDown, PaneResizeLeft,
             PaneResizeRight, PaneResizeUp, PaneSplitHorizontal, PaneSplitVertical, ProjectClose,
-            SettingsKeybindings, SettingsNotifications, TabClose, TabNew, TabNext, TabPrev,
-            TabRename, WORKSPACE_CONTEXT,
+            SettingsKeybindings, SettingsNotifications, SettingsOpen, TabClose, TabNew, TabNext,
+            TabPrev, TabRename, WORKSPACE_CONTEXT,
         },
         components::{ActionEmphasis, workbench_action_button},
         i18n::{UiText, UiTextKey},
@@ -71,6 +76,7 @@ use crate::{
             dialog::yttt_dialog_style,
             input::{YtttInputKind, yttt_input_style},
         },
+        settings::{SettingsGroupId, SettingsPageState, SettingsPanelStyle, settings_panel_style},
         sidebar::project_sidebar,
         split_view::{pointer_resize_for_drag_delta, split_child_basis},
         tabs::project_tabs,
@@ -103,6 +109,13 @@ pub struct RootView {
     tab_rename_input: Option<Entity<InputState>>,
     tab_rename_input_subscription: Option<Subscription>,
     tab_rename_input_needs_focus: bool,
+    settings_search_input: Option<Entity<InputState>>,
+    settings_search_input_subscription: Option<Subscription>,
+    settings_search_input_needs_focus: bool,
+    layout_toml_editor: Option<LayoutTomlEditorState>,
+    layout_toml_input: Option<Entity<InputState>>,
+    layout_toml_input_subscription: Option<Subscription>,
+    layout_toml_input_needs_focus: bool,
     palette_scroll_handle: ScrollHandle,
     sidebar_collapsed: bool,
     active_split_resize_drag: Option<ActiveSplitResizeDrag>,
@@ -114,7 +127,9 @@ pub struct RootView {
     system_notifier: NoopSystemNotifier,
     system_notifications_enabled: bool,
     ui_text: UiText,
+    app_settings: AppSettings,
     theme_runtime: ThemeRuntime,
+    settings_page: SettingsPageState,
 }
 
 const EMPTY_WORKSPACE_ACTIONS: [UiTextKey; 3] = [
@@ -154,6 +169,13 @@ struct PendingTabRename {
     value: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LayoutTomlEditorState {
+    path: PathBuf,
+    value: String,
+    error: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SplitHandleStyle {
     pub visible_line_width: Pixels,
@@ -184,13 +206,25 @@ impl RootView {
             .unwrap_or_default();
         let (load_error, keybinding_warning_lines) =
             load_keybindings_messages(&config_paths, &command_registry);
-        let (theme_runtime, theme_warning_lines) = load_theme_runtime_messages(&config_paths);
+        let (app_settings, settings_warning_lines) = load_app_settings_messages(&config_paths);
+        let (theme_runtime, theme_warning_lines) =
+            load_theme_runtime_messages(&config_paths, &app_settings);
         let load_error = combine_load_messages(
             load_error,
-            theme_warning_lines
-                .first()
-                .map(|_| theme_warning_lines.join("; ")),
+            settings_warning_lines
+                .iter()
+                .chain(theme_warning_lines.iter())
+                .next()
+                .map(|_| {
+                    settings_warning_lines
+                        .iter()
+                        .chain(theme_warning_lines.iter())
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                }),
         );
+        let system_notifications_enabled = app_settings.notifications.system;
 
         Self {
             workspace,
@@ -212,6 +246,13 @@ impl RootView {
             tab_rename_input: None,
             tab_rename_input_subscription: None,
             tab_rename_input_needs_focus: false,
+            settings_search_input: None,
+            settings_search_input_subscription: None,
+            settings_search_input_needs_focus: false,
+            layout_toml_editor: None,
+            layout_toml_input: None,
+            layout_toml_input_subscription: None,
+            layout_toml_input_needs_focus: false,
             palette_scroll_handle: ScrollHandle::new(),
             sidebar_collapsed: false,
             active_split_resize_drag: None,
@@ -221,9 +262,11 @@ impl RootView {
             project_git_statuses: HashMap::new(),
             toast_queue: ToastQueue::default(),
             system_notifier: NoopSystemNotifier,
-            system_notifications_enabled: false,
+            system_notifications_enabled,
             ui_text: UiText::english(),
+            app_settings,
             theme_runtime,
+            settings_page: SettingsPageState::default(),
         }
     }
 
@@ -490,6 +533,169 @@ impl RootView {
         self.system_notifications_enabled
     }
 
+    pub fn settings_is_open(&self) -> bool {
+        self.settings_page.is_open
+    }
+
+    pub fn open_settings(&mut self) {
+        self.close_palette();
+        self.settings_page.is_open = true;
+        self.settings_search_input_needs_focus = true;
+        self.load_error = None;
+    }
+
+    pub fn close_settings(&mut self) {
+        self.settings_page.is_open = false;
+        self.reset_settings_search_input();
+    }
+
+    pub fn set_system_notifications_enabled(&mut self, enabled: bool) -> Result<(), RootViewError> {
+        self.app_settings.notifications.system = enabled;
+        save_settings(&self.config_paths, &self.app_settings)?;
+        self.system_notifications_enabled = enabled;
+        Ok(())
+    }
+
+    pub fn set_terminal_shell(&mut self, shell: &str) -> Result<(), RootViewError> {
+        self.app_settings.terminal.shell = shell.to_string();
+        save_settings(&self.config_paths, &self.app_settings)?;
+        self.refresh_theme_runtime_from_settings();
+        Ok(())
+    }
+
+    pub fn set_settings_search_query(&mut self, query: impl Into<String>) {
+        self.settings_page.search_query = query.into();
+        let selected_group_visible = self
+            .settings_page
+            .visible_groups()
+            .iter()
+            .any(|group| group.id == self.settings_page.selected_group);
+        if !selected_group_visible
+            && let Some(first_group) = self.settings_page.visible_groups().first()
+        {
+            self.settings_page.selected_group = first_group.id;
+        }
+    }
+
+    pub fn select_settings_group(&mut self, group_id: &str) -> Result<(), String> {
+        let group = SettingsGroupId::from_id(group_id)
+            .ok_or_else(|| format!("Unknown settings group: {group_id}"))?;
+        self.settings_page.selected_group = group;
+        Ok(())
+    }
+
+    pub fn visible_settings_group_titles(&self) -> Vec<&'static str> {
+        self.settings_page
+            .visible_groups()
+            .into_iter()
+            .map(|group| group.title)
+            .collect()
+    }
+
+    pub fn selected_settings_group_title(&self) -> Option<&'static str> {
+        Some(self.settings_page.selected_group.title())
+    }
+
+    pub fn layout_toml_editor_is_open(&self) -> bool {
+        self.layout_toml_editor.is_some()
+    }
+
+    pub fn layout_toml_editor_path(&self) -> Option<&Path> {
+        self.layout_toml_editor
+            .as_ref()
+            .map(|editor| editor.path.as_path())
+    }
+
+    pub fn layout_toml_editor_value(&self) -> Option<&str> {
+        self.layout_toml_editor
+            .as_ref()
+            .map(|editor| editor.value.as_str())
+    }
+
+    pub fn visible_layout_toml_editor_error(&self) -> Option<&str> {
+        self.layout_toml_editor
+            .as_ref()
+            .and_then(|editor| editor.error.as_deref())
+    }
+
+    pub fn open_layout_toml_editor(&mut self) -> Result<(), RootViewError> {
+        let path = self.ensure_layout_toml_edit_file()?;
+        let value = fs::read_to_string(&path).map_err(|source| {
+            RootViewError::LayoutTomlEditor(format!(
+                "failed to read layout TOML at {}: {source}",
+                path.display()
+            ))
+        })?;
+
+        self.layout_toml_editor = Some(LayoutTomlEditorState {
+            path,
+            value,
+            error: None,
+        });
+        self.reset_layout_toml_input();
+        self.layout_toml_input_needs_focus = true;
+        self.load_error = None;
+        Ok(())
+    }
+
+    pub fn set_layout_toml_editor_value(&mut self, value: impl Into<String>) {
+        if let Some(editor) = &mut self.layout_toml_editor {
+            editor.value = value.into();
+            editor.error = None;
+            self.reset_layout_toml_input();
+        }
+    }
+
+    pub fn save_layout_toml_editor(&mut self) -> Result<(), RootViewError> {
+        let Some(editor) = self.layout_toml_editor.clone() else {
+            return Ok(());
+        };
+
+        let layout = match toml::from_str::<ProjectLayout>(&editor.value) {
+            Ok(layout) => layout,
+            Err(error) => {
+                self.set_layout_toml_editor_error(format!("failed to parse layout TOML: {error}"));
+                return Ok(());
+            }
+        };
+        if let Err(error) = layout.validate() {
+            self.set_layout_toml_editor_error(format!("invalid layout TOML: {error}"));
+            return Ok(());
+        }
+
+        if let Some(parent) = editor.path.parent() {
+            fs::create_dir_all(parent).map_err(|source| {
+                RootViewError::LayoutTomlEditor(format!(
+                    "failed to create layout directory {}: {source}",
+                    parent.display()
+                ))
+            })?;
+        }
+        fs::write(&editor.path, editor.value).map_err(|source| {
+            RootViewError::LayoutTomlEditor(format!(
+                "failed to write layout TOML at {}: {source}",
+                editor.path.display()
+            ))
+        })?;
+
+        let selected_project_id = self.workspace.selected_project_id().cloned();
+        self.workspace.replace_selected_project_layout(layout)?;
+        if let Some(project_id) = selected_project_id {
+            self.remove_terminal_panes_for_project(project_id.as_str());
+        }
+        self.layout_toml_editor = None;
+        self.reset_layout_toml_input();
+        self.queue_selected_terminal_focus();
+        self.load_error = None;
+        Ok(())
+    }
+
+    pub fn cancel_layout_toml_editor(&mut self) {
+        self.layout_toml_editor = None;
+        self.reset_layout_toml_input();
+        self.queue_selected_terminal_focus();
+    }
+
     pub fn visible_notification_settings_message(&self) -> &'static str {
         if self.system_notifications_enabled {
             "System notifications: enabled"
@@ -654,6 +860,10 @@ impl RootView {
                 self.open_palette(PaletteKind::Pane);
                 Ok(())
             }
+            CommandId::SettingsOpen => {
+                self.open_settings();
+                Ok(())
+            }
             CommandId::ProjectClose => {
                 self.request_close_selected_project()?;
                 Ok(())
@@ -669,8 +879,14 @@ impl RootView {
                 Ok(())
             }
             CommandId::SettingsNotifications => {
-                self.system_notifications_enabled = !self.system_notifications_enabled;
+                self.set_system_notifications_enabled(!self.system_notifications_enabled)?;
                 self.load_error = Some(self.visible_notification_settings_message().to_string());
+                Ok(())
+            }
+            CommandId::TabNew => {
+                let shell = self.resolved_terminal_shell();
+                let _tab_id = self.workspace.create_shell_tab_with_command(shell)?;
+                self.queue_selected_terminal_focus();
                 Ok(())
             }
             CommandId::LayoutSaveCurrent => {
@@ -894,6 +1110,27 @@ impl RootView {
         Ok((project.path.clone(), project.layout.clone()))
     }
 
+    fn ensure_layout_toml_edit_file(&self) -> Result<PathBuf, RootViewError> {
+        let (project_path, layout) = self.selected_project_layout_snapshot()?;
+        let project_layout_file = self.config_paths.project_layout_file(&project_path);
+        if project_layout_file.exists() {
+            return Ok(project_layout_file);
+        }
+
+        let local_layout_file = self.config_paths.local_layout_file(&project_path);
+        if local_layout_file.exists() {
+            return Ok(local_layout_file);
+        }
+
+        save_local_layout(&self.config_paths, &project_path, &layout).map_err(RootViewError::from)
+    }
+
+    fn set_layout_toml_editor_error(&mut self, error: String) {
+        if let Some(editor) = &mut self.layout_toml_editor {
+            editor.error = Some(error);
+        }
+    }
+
     fn fail_workspace_error<T>(&mut self, error: WorkspaceError) -> Result<T, RootViewError> {
         self.load_error = Some(error.to_string());
         Err(error.into())
@@ -967,6 +1204,18 @@ impl RootView {
         self.tab_rename_input_needs_focus = false;
     }
 
+    fn reset_settings_search_input(&mut self) {
+        self.settings_search_input = None;
+        self.settings_search_input_subscription = None;
+        self.settings_search_input_needs_focus = false;
+    }
+
+    fn reset_layout_toml_input(&mut self) {
+        self.layout_toml_input = None;
+        self.layout_toml_input_subscription = None;
+        self.layout_toml_input_needs_focus = false;
+    }
+
     fn queue_terminal_focus(&mut self, pane_id: &str) {
         self.pending_terminal_focus_pane_id = Some(pane_id.to_string());
     }
@@ -998,6 +1247,22 @@ impl RootView {
         };
 
         self.refresh_project_git_status(&project_id, &project_path);
+    }
+
+    fn refresh_theme_runtime_from_settings(&mut self) {
+        match load_theme_store(&self.config_paths) {
+            Ok(loaded) => {
+                self.theme_runtime = ThemeRuntime::resolve(&self.app_settings, &loaded.store);
+            }
+            Err(error) => {
+                self.load_error = Some(error.to_string());
+            }
+        }
+    }
+
+    fn resolved_terminal_shell(&self) -> String {
+        let candidates = detect_shell_candidates();
+        resolve_default_shell(&self.app_settings.terminal.shell, &candidates)
     }
 
     fn selected_focused_pane_id(&self) -> Option<&str> {
@@ -1063,6 +1328,72 @@ impl RootView {
         if self.tab_rename_input_needs_focus {
             input.update(cx, |input, cx| input.focus(window, cx));
             self.tab_rename_input_needs_focus = false;
+        }
+
+        Some(input)
+    }
+
+    fn settings_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<InputState>> {
+        if !self.settings_page.is_open {
+            return None;
+        }
+
+        let input = if let Some(input) = &self.settings_search_input {
+            input.clone()
+        } else {
+            let query = self.settings_page.search_query.clone();
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("Search settings...")
+                    .default_value(query)
+            });
+            let subscription =
+                cx.subscribe_in(&input, window, Self::on_settings_search_input_event);
+            self.settings_search_input = Some(input.clone());
+            self.settings_search_input_subscription = Some(subscription);
+            input
+        };
+
+        if self.settings_search_input_needs_focus {
+            input.update(cx, |input, cx| input.focus(window, cx));
+            self.settings_search_input_needs_focus = false;
+        }
+
+        Some(input)
+    }
+
+    fn layout_toml_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<InputState>> {
+        let editor = self.layout_toml_editor.as_ref()?;
+
+        let input = if let Some(input) = &self.layout_toml_input {
+            input.clone()
+        } else {
+            let value = editor.value.clone();
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("Edit layout TOML...")
+                    .default_value(value)
+                    .code_editor("toml")
+                    .rows(24)
+                    .soft_wrap(false)
+            });
+            let subscription = cx.subscribe_in(&input, window, Self::on_layout_toml_input_event);
+            self.layout_toml_input = Some(input.clone());
+            self.layout_toml_input_subscription = Some(subscription);
+            input
+        };
+
+        if self.layout_toml_input_needs_focus {
+            input.update(cx, |input, cx| input.focus(window, cx));
+            self.layout_toml_input_needs_focus = false;
         }
 
         Some(input)
@@ -1409,6 +1740,41 @@ impl RootView {
         }
     }
 
+    fn on_settings_search_input_event(
+        &mut self,
+        input: &Entity<InputState>,
+        event: &InputEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Change => {
+                self.set_settings_search_query(input.read(cx).value().to_string());
+                cx.notify();
+            }
+            InputEvent::PressEnter { .. } | InputEvent::Focus | InputEvent::Blur => {}
+        }
+    }
+
+    fn on_layout_toml_input_event(
+        &mut self,
+        input: &Entity<InputState>,
+        event: &InputEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Change => {
+                if let Some(editor) = &mut self.layout_toml_editor {
+                    editor.value = input.read(cx).value().to_string();
+                    editor.error = None;
+                    cx.notify();
+                }
+            }
+            InputEvent::PressEnter { .. } | InputEvent::Focus | InputEvent::Blur => {}
+        }
+    }
+
     fn confirm_tab_rename_dialog_from_input(
         &mut self,
         cx: &mut Context<Self>,
@@ -1564,6 +1930,12 @@ impl RootView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.layout_toml_editor.is_some() {
+            self.cancel_layout_toml_editor();
+            cx.notify();
+            return;
+        }
+
         if self.pending_tab_rename.is_some() {
             self.cancel_tab_rename_dialog();
             cx.notify();
@@ -1578,6 +1950,9 @@ impl RootView {
 
         if self.active_palette.is_some() {
             self.close_palette();
+            cx.notify();
+        } else if self.settings_page.is_open {
+            self.close_settings();
             cx.notify();
         } else {
             cx.propagate();
@@ -1737,6 +2112,10 @@ impl RootView {
         self.dispatch_command_action(CommandId::SettingsKeybindings, cx);
     }
 
+    fn on_settings_open(&mut self, _: &SettingsOpen, _window: &mut Window, cx: &mut Context<Self>) {
+        self.dispatch_command_action(CommandId::SettingsOpen, cx);
+    }
+
     fn on_settings_notifications(
         &mut self,
         _: &SettingsNotifications,
@@ -1747,7 +2126,10 @@ impl RootView {
     }
 
     fn dispatch_command_action(&mut self, command_id: CommandId, cx: &mut Context<Self>) {
-        if self.active_palette.is_some() || self.pending_tab_rename.is_some() {
+        if self.active_palette.is_some()
+            || self.pending_tab_rename.is_some()
+            || self.layout_toml_editor.is_some()
+        {
             cx.propagate();
             return;
         }
@@ -1757,6 +2139,11 @@ impl RootView {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.layout_toml_editor.is_some() {
+            cx.propagate();
+            return;
+        }
+
         if self.active_palette.is_none() {
             if let Some(command_id) = Self::workspace_arrow_keydown_command(
                 &event.keystroke.key,
@@ -1821,6 +2208,10 @@ pub enum RootViewError {
     ProjectOpen(Box<ProjectOpenError>),
     #[error("{0}")]
     Keybindings(Box<KeybindingsLoadError>),
+    #[error("{0}")]
+    SettingsSave(Box<SettingsSaveError>),
+    #[error("{0}")]
+    LayoutTomlEditor(String),
 }
 
 impl From<ProjectOpenError> for RootViewError {
@@ -1832,6 +2223,12 @@ impl From<ProjectOpenError> for RootViewError {
 impl From<KeybindingsLoadError> for RootViewError {
     fn from(error: KeybindingsLoadError) -> Self {
         Self::Keybindings(Box::new(error))
+    }
+}
+
+impl From<SettingsSaveError> for RootViewError {
+    fn from(error: SettingsSaveError) -> Self {
+        Self::SettingsSave(Box::new(error))
     }
 }
 
@@ -1950,6 +2347,16 @@ impl Render for RootView {
         if let Some(load_error) = &self.load_error {
             root = root.child(error_banner(load_error));
         }
+        if self.settings_page.is_open {
+            if let Some(search_input) = self.settings_search_input(window, cx) {
+                root = root.child(settings_overlay(self, &search_input, cx));
+            }
+        }
+        if self.layout_toml_editor.is_some() {
+            if let Some(input) = self.layout_toml_input(window, cx) {
+                root = root.child(layout_toml_editor_overlay(self, &input, cx));
+            }
+        }
         if self.pending_tab_rename.is_some() {
             if let Some(input) = self.tab_rename_input(window, cx) {
                 root = root.child(tab_rename_dialog(
@@ -2019,6 +2426,7 @@ impl Render for RootView {
             .on_action(cx.listener(Self::on_layout_save_current))
             .on_action(cx.listener(Self::on_layout_export_project_config))
             .on_action(cx.listener(Self::on_layout_open_file))
+            .on_action(cx.listener(Self::on_settings_open))
             .on_action(cx.listener(Self::on_settings_keybindings))
             .on_action(cx.listener(Self::on_settings_notifications))
     }
@@ -2032,6 +2440,750 @@ fn split_child(child: Div, basis: f32) -> Div {
         .flex_shrink()
         .overflow_hidden()
         .child(child)
+}
+
+fn layout_toml_editor_overlay(
+    root: &RootView,
+    input: &Entity<InputState>,
+    cx: &mut Context<RootView>,
+) -> Div {
+    let theme = root.theme_runtime.ui;
+    let Some(editor) = root.layout_toml_editor.as_ref() else {
+        return div();
+    };
+    let path = editor.path.display().to_string();
+    let error = editor.error.clone();
+
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(rgba(0x00000099))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .w(relative(0.72))
+                .max_w(px(1040.))
+                .h(px(680.))
+                .max_h(relative(0.86))
+                .rounded_md()
+                .border_1()
+                .border_color(theme.border_strong)
+                .bg(theme.surface)
+                .text_color(theme.text)
+                .overflow_hidden()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .px_5()
+                        .py_4()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .text_lg()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("Edit layout TOML"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.text_subtle)
+                                        .truncate()
+                                        .child(path),
+                                ),
+                        )
+                        .child(settings_button(
+                            "layout-toml-editor-close",
+                            "Cancel",
+                            false,
+                            theme,
+                            cx.listener(|this, _, _window, cx| {
+                                this.cancel_layout_toml_editor();
+                                cx.notify();
+                            }),
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_h_0()
+                        .p_4()
+                        .gap_3()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_h_0()
+                                .rounded_sm()
+                                .border_1()
+                                .border_color(theme.border)
+                                .bg(theme.terminal_background)
+                                .overflow_hidden()
+                                .child(
+                                    Input::new(input)
+                                        .h_full()
+                                        .appearance(false)
+                                        .bordered(false)
+                                        .focus_bordered(false),
+                                ),
+                        )
+                        .when_some(error, |this, error| {
+                            this.child(
+                                div()
+                                    .rounded_sm()
+                                    .border_1()
+                                    .border_color(theme.danger)
+                                    .bg(theme.surface_elevated)
+                                    .px_3()
+                                    .py_2()
+                                    .text_xs()
+                                    .text_color(theme.danger)
+                                    .child(error),
+                            )
+                        }),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap_2()
+                        .border_t_1()
+                        .border_color(theme.border)
+                        .px_5()
+                        .py_3()
+                        .child(settings_button(
+                            "layout-toml-editor-cancel",
+                            "Cancel",
+                            false,
+                            theme,
+                            cx.listener(|this, _, _window, cx| {
+                                this.cancel_layout_toml_editor();
+                                cx.notify();
+                            }),
+                        ))
+                        .child(settings_button(
+                            "layout-toml-editor-save",
+                            "Save",
+                            true,
+                            theme,
+                            cx.listener(|this, _, _window, cx| {
+                                let _ = this.save_layout_toml_editor();
+                                cx.notify();
+                            }),
+                        )),
+                ),
+        )
+}
+
+fn settings_overlay(
+    root: &RootView,
+    search_input: &Entity<InputState>,
+    cx: &mut Context<RootView>,
+) -> Div {
+    let theme = root.theme_runtime.ui;
+    let style = settings_panel_style();
+
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(rgba(0x00000066))
+        .child(
+            div()
+                .flex()
+                .w(style.width)
+                .max_w(style.max_width)
+                .max_h(style.max_height)
+                .rounded_md()
+                .border_1()
+                .border_color(theme.border_strong)
+                .bg(theme.surface)
+                .text_color(theme.text)
+                .overflow_hidden()
+                .child(settings_sidebar(root, search_input, style, cx))
+                .child(settings_content(root, style, cx)),
+        )
+}
+
+fn settings_sidebar(
+    root: &RootView,
+    search_input: &Entity<InputState>,
+    style: SettingsPanelStyle,
+    cx: &mut Context<RootView>,
+) -> Div {
+    let theme = root.theme_runtime.ui;
+    root.settings_page.visible_groups().into_iter().fold(
+        div()
+            .flex()
+            .flex_col()
+            .w(style.sidebar_width)
+            .flex_none()
+            .border_r_1()
+            .border_color(theme.border)
+            .bg(theme.app_background)
+            .p_3()
+            .gap_3()
+            .child(
+                div()
+                    .id(SharedString::from("settings-search"))
+                    .flex()
+                    .items_center()
+                    .h_10()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.surface)
+                    .px_2()
+                    .child(
+                        Input::new(search_input)
+                            .prefix(IconName::Search)
+                            .cleanable(true)
+                            .appearance(false),
+                    ),
+            ),
+        |sidebar, group| {
+            let group_id = group.id.as_str().to_string();
+            let background = if group.selected {
+                theme.active_surface
+            } else {
+                rgba(0x00000000)
+            };
+            let text = if group.selected {
+                theme.text
+            } else {
+                theme.text_muted
+            };
+
+            sidebar.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "settings-group-{}",
+                        group.id.as_str()
+                    )))
+                    .flex()
+                    .items_center()
+                    .h_8()
+                    .rounded_sm()
+                    .px_3()
+                    .bg(background)
+                    .text_sm()
+                    .text_color(text)
+                    .hover(move |this| this.bg(theme.hover_surface))
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        let _ = this.select_settings_group(&group_id);
+                        cx.notify();
+                    }))
+                    .child(group.title),
+            )
+        },
+    )
+}
+
+fn settings_content(root: &RootView, style: SettingsPanelStyle, cx: &mut Context<RootView>) -> Div {
+    let theme = root.theme_runtime.ui;
+    let group = root.settings_page.selected_group;
+
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w_0()
+        .bg(theme.surface)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .border_b_1()
+                .border_color(theme.border)
+                .px_6()
+                .py_4()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_lg()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(group.title()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.text_subtle)
+                                .child(group.description()),
+                        ),
+                )
+                .child(settings_button(
+                    "settings-close",
+                    "Close",
+                    false,
+                    theme,
+                    cx.listener(|this, _, _window, cx| {
+                        this.close_settings();
+                        cx.notify();
+                    }),
+                )),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .overflow_y_scrollbar()
+                .px_6()
+                .child(settings_rows(root, group, style, cx)),
+        )
+}
+
+fn settings_rows(
+    root: &RootView,
+    group: SettingsGroupId,
+    style: SettingsPanelStyle,
+    cx: &mut Context<RootView>,
+) -> Div {
+    match group {
+        SettingsGroupId::General => settings_general_rows(root, style, cx),
+        SettingsGroupId::Appearance => settings_appearance_rows(root, style, cx),
+        SettingsGroupId::Terminal => settings_terminal_rows(root, style, cx),
+        SettingsGroupId::ProjectLayout => settings_project_layout_rows(root, style, cx),
+        SettingsGroupId::Keybindings => settings_keybinding_rows(root, style, cx),
+    }
+}
+
+fn settings_general_rows(
+    root: &RootView,
+    style: SettingsPanelStyle,
+    cx: &mut Context<RootView>,
+) -> Div {
+    let theme = root.theme_runtime.ui;
+    div().flex().flex_col().child(setting_row(
+        style,
+        theme,
+        "System notifications",
+        "Notify when agent terminal tasks complete or fail.",
+        settings_button(
+            "settings-notifications",
+            if root.system_notifications_enabled {
+                "On"
+            } else {
+                "Off"
+            },
+            root.system_notifications_enabled,
+            theme,
+            cx.listener(|this, _, _window, cx| {
+                let _ = this.run_command(CommandId::SettingsNotifications);
+                cx.notify();
+            }),
+        )
+        .into_any_element(),
+    ))
+}
+
+fn settings_appearance_rows(
+    root: &RootView,
+    style: SettingsPanelStyle,
+    cx: &mut Context<RootView>,
+) -> Div {
+    let theme = root.theme_runtime.ui;
+    let settings_file = root.config_paths.settings_file().display().to_string();
+    let themes_dir = root.config_paths.themes_dir().display().to_string();
+
+    div()
+        .flex()
+        .flex_col()
+        .child(setting_row(
+            style,
+            theme,
+            "UI theme",
+            "Theme used for YTTT chrome, panels, and controls.",
+            settings_value(root.theme_runtime.theme_name.clone(), theme).into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            "Terminal theme",
+            "Optional terminal colors override.",
+            settings_value(
+                root.app_settings
+                    .theme
+                    .terminal
+                    .clone()
+                    .unwrap_or_else(|| "Follow UI theme".to_string()),
+                theme,
+            )
+            .into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            "Edit settings TOML",
+            "Open the app settings file for advanced edits.",
+            settings_button(
+                "settings-open-file",
+                "Show Path",
+                false,
+                theme,
+                cx.listener(move |this, _, _window, cx| {
+                    this.load_error = Some(format!("Settings file: {settings_file}"));
+                    cx.notify();
+                }),
+            )
+            .into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            "Themes directory",
+            "Open the folder containing user theme TOML files.",
+            settings_button(
+                "settings-open-themes-dir",
+                "Show Path",
+                false,
+                theme,
+                cx.listener(move |this, _, _window, cx| {
+                    this.load_error = Some(format!("Themes directory: {themes_dir}"));
+                    cx.notify();
+                }),
+            )
+            .into_any_element(),
+        ))
+}
+
+fn settings_terminal_rows(
+    root: &RootView,
+    style: SettingsPanelStyle,
+    cx: &mut Context<RootView>,
+) -> Div {
+    let theme = root.theme_runtime.ui;
+    let terminal = &root.app_settings.terminal;
+
+    div()
+        .flex()
+        .flex_col()
+        .child(setting_row(
+            style,
+            theme,
+            "Default shell",
+            "Shell command used when creating new terminal tabs.",
+            shell_choice_buttons(root, theme, cx).into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            "Font family",
+            "Terminal font family.",
+            settings_value(terminal.font_family.clone(), theme).into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            "Font size",
+            "Terminal font size in pixels.",
+            settings_value(format!("{:.1}", terminal.font_size), theme).into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            "Line height",
+            "Terminal line height multiplier.",
+            settings_value(format!("{:.2}", terminal.line_height), theme).into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            "Padding",
+            "Terminal pane inner padding.",
+            settings_value(format!("{:.1}", terminal.padding), theme).into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            "Scrollback",
+            "Number of terminal lines kept in memory.",
+            settings_value(terminal.scrollback.to_string(), theme).into_any_element(),
+        ))
+}
+
+fn settings_project_layout_rows(
+    root: &RootView,
+    style: SettingsPanelStyle,
+    cx: &mut Context<RootView>,
+) -> Div {
+    let theme = root.theme_runtime.ui;
+    let has_project = root.workspace.selected_project_id().is_some();
+    let layout_source = root
+        .visible_layout_source_message()
+        .unwrap_or("Open a project first")
+        .to_string();
+
+    div()
+        .flex()
+        .flex_col()
+        .child(setting_row(
+            style,
+            theme,
+            "Layout source",
+            "Current project layout source.",
+            settings_value(layout_source, theme).into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            "Save current layout",
+            "Save current layout as an app-local override.",
+            settings_command_button(
+                "settings-layout-save",
+                "Save",
+                has_project,
+                theme,
+                CommandId::LayoutSaveCurrent,
+                cx,
+            )
+            .into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            "Export project layout",
+            "Write current layout into the project config.",
+            settings_command_button(
+                "settings-layout-export",
+                "Export",
+                has_project,
+                theme,
+                CommandId::LayoutExportProjectConfig,
+                cx,
+            )
+            .into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            "Edit layout TOML",
+            "Edit the selected project layout file.",
+            settings_button(
+                "settings-layout-edit",
+                "Open",
+                false,
+                theme,
+                cx.listener(move |this, _, _window, cx| {
+                    if has_project {
+                        let _ = this.open_layout_toml_editor();
+                    }
+                    cx.notify();
+                }),
+            )
+            .into_any_element(),
+        ))
+}
+
+fn settings_keybinding_rows(
+    root: &RootView,
+    style: SettingsPanelStyle,
+    cx: &mut Context<RootView>,
+) -> Div {
+    let theme = root.theme_runtime.ui;
+    let diagnostics = if root.keybinding_warning_lines.is_empty() {
+        "No keybinding conflicts".to_string()
+    } else {
+        root.keybinding_warning_lines.join("; ")
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .child(setting_row(
+            style,
+            theme,
+            "Edit keybindings TOML",
+            "Open the user keybindings file.",
+            settings_command_button(
+                "settings-keybindings-open",
+                "Open",
+                true,
+                theme,
+                CommandId::SettingsKeybindings,
+                cx,
+            )
+            .into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            "Keybinding diagnostics",
+            "Show invalid commands and shortcut conflicts.",
+            settings_value(diagnostics, theme).into_any_element(),
+        ))
+}
+
+fn setting_row(
+    style: SettingsPanelStyle,
+    theme: WorkbenchTheme,
+    title: &'static str,
+    description: &'static str,
+    control: AnyElement,
+) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_6()
+        .min_h(style.row_min_height)
+        .border_b_1()
+        .border_color(theme.border)
+        .py_3()
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .min_w_0()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.text)
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.text_subtle)
+                        .child(description),
+                ),
+        )
+        .child(div().flex_none().child(control))
+}
+
+fn shell_choice_buttons(root: &RootView, theme: WorkbenchTheme, cx: &mut Context<RootView>) -> Div {
+    let current = root.app_settings.terminal.shell.clone();
+    let mut shells = detect_shell_candidates();
+    if current != crate::config::settings::AUTO_SHELL && !shells.contains(&current) {
+        shells.insert(0, current.clone());
+    }
+
+    shells.into_iter().fold(
+        div()
+            .flex()
+            .flex_wrap()
+            .justify_end()
+            .gap_2()
+            .child(settings_button(
+                "settings-shell-auto",
+                "Auto",
+                current == crate::config::settings::AUTO_SHELL,
+                theme,
+                cx.listener(|this, _, _window, cx| {
+                    let _ = this.set_terminal_shell(crate::config::settings::AUTO_SHELL);
+                    cx.notify();
+                }),
+            )),
+        |row, shell| {
+            let selected = current == shell;
+            let id = format!("settings-shell-{shell}");
+            let shell_value = shell.clone();
+            row.child(settings_button(
+                id,
+                shell,
+                selected,
+                theme,
+                cx.listener(move |this, _, _window, cx| {
+                    let _ = this.set_terminal_shell(&shell_value);
+                    cx.notify();
+                }),
+            ))
+        },
+    )
+}
+
+fn settings_command_button(
+    id: impl Into<String>,
+    label: impl Into<String>,
+    enabled: bool,
+    theme: WorkbenchTheme,
+    command: CommandId,
+    cx: &mut Context<RootView>,
+) -> Stateful<Div> {
+    settings_button(
+        id,
+        label,
+        false,
+        theme,
+        cx.listener(move |this, _, _window, cx| {
+            if enabled {
+                let _ = this.run_command(command);
+            }
+            cx.notify();
+        }),
+    )
+}
+
+fn settings_button<H>(
+    _id: impl Into<String>,
+    label: impl Into<String>,
+    selected: bool,
+    theme: WorkbenchTheme,
+    on_click: H,
+) -> Stateful<Div>
+where
+    H: Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
+{
+    let id: String = _id.into();
+    let label: String = label.into();
+    let background = if selected {
+        theme.active_surface
+    } else {
+        theme.surface_elevated
+    };
+    div()
+        .id(SharedString::from(id))
+        .flex()
+        .items_center()
+        .justify_center()
+        .h_7()
+        .rounded_sm()
+        .border_1()
+        .border_color(theme.border)
+        .bg(background)
+        .px_3()
+        .text_xs()
+        .text_color(theme.text)
+        .hover(move |this| this.bg(theme.hover_surface))
+        .on_click(on_click)
+        .child(label)
+}
+
+fn settings_value(value: impl Into<String>, theme: WorkbenchTheme) -> Div {
+    div()
+        .max_w_64()
+        .rounded_sm()
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.surface_elevated)
+        .px_3()
+        .py_1()
+        .text_xs()
+        .text_color(theme.text_muted)
+        .child(value.into())
 }
 
 fn terminal_pane_key(project_id: &str, tab_id: &str, pane_id: &str) -> String {
@@ -2163,7 +3315,7 @@ fn load_keybindings_messages(
     }
 }
 
-fn load_theme_runtime_messages(paths: &AppConfigPaths) -> (ThemeRuntime, Vec<String>) {
+fn load_app_settings_messages(paths: &AppConfigPaths) -> (AppSettings, Vec<String>) {
     let mut warnings = Vec::new();
     let settings = match load_or_create_settings(paths) {
         Ok(loaded) => {
@@ -2176,6 +3328,14 @@ fn load_theme_runtime_messages(paths: &AppConfigPaths) -> (ThemeRuntime, Vec<Str
         }
     };
 
+    (settings, warnings)
+}
+
+fn load_theme_runtime_messages(
+    paths: &AppConfigPaths,
+    settings: &AppSettings,
+) -> (ThemeRuntime, Vec<String>) {
+    let mut warnings = Vec::new();
     let theme_store = match load_theme_store(paths) {
         Ok(loaded) => {
             warnings.extend(loaded.warnings.iter().map(format_theme_warning_line));
@@ -2187,7 +3347,7 @@ fn load_theme_runtime_messages(paths: &AppConfigPaths) -> (ThemeRuntime, Vec<Str
         }
     };
 
-    (ThemeRuntime::resolve(&settings, &theme_store), warnings)
+    (ThemeRuntime::resolve(settings, &theme_store), warnings)
 }
 
 fn combine_load_messages(left: Option<String>, right: Option<String>) -> Option<String> {

@@ -78,6 +78,26 @@ impl Workspace {
         Ok(id)
     }
 
+    pub fn replace_selected_project_layout(
+        &mut self,
+        layout: ProjectLayout,
+    ) -> Result<(), WorkspaceError> {
+        layout.validate().map_err(WorkspaceError::InvalidLayout)?;
+        let project = self.selected_project_mut()?;
+        let selected_tab_id = if layout.tab(&project.selected_tab_id).is_some() {
+            project.selected_tab_id.clone()
+        } else {
+            default_tab_id(&layout).unwrap_or_default()
+        };
+        let tab_states = tab_states_for_layout(&layout, &selected_tab_id);
+
+        project.layout = layout;
+        project.selected_tab_id = selected_tab_id;
+        project.tab_states = tab_states;
+
+        Ok(())
+    }
+
     pub fn select_project(&mut self, project_id: &ProjectId) -> Result<(), WorkspaceError> {
         if self.project(project_id).is_none() {
             return Err(WorkspaceError::ProjectNotFound(
@@ -216,9 +236,17 @@ impl Workspace {
     }
 
     pub fn create_shell_tab(&mut self) -> Result<String, WorkspaceError> {
+        self.create_shell_tab_with_command("$SHELL")
+    }
+
+    pub fn create_shell_tab_with_command(
+        &mut self,
+        command: impl Into<String>,
+    ) -> Result<String, WorkspaceError> {
         let project = self.selected_project_mut()?;
         let (tab_id, title) = next_tab_identity(&project.layout);
         let pane_id = "shell".to_string();
+        let command = command.into();
 
         project.layout.tabs.push(TabConfig {
             id: tab_id.clone(),
@@ -226,7 +254,7 @@ impl Workspace {
             layout: LayoutNode::Pane(PaneConfig {
                 id: pane_id.clone(),
                 title: "shell".to_string(),
-                command: "$SHELL".to_string(),
+                command,
                 kind: PaneKind::Shell,
                 notify_on_exit: false,
                 detector: None,
@@ -774,6 +802,33 @@ pub enum CloseProjectError {
     RunningProcesses,
     #[error("project not found: {0}")]
     ProjectNotFound(String),
+}
+
+fn tab_states_for_layout(layout: &ProjectLayout, selected_tab_id: &str) -> Vec<TabState> {
+    layout
+        .tabs
+        .iter()
+        .map(|tab| {
+            let pane_ids = pane_ids(&tab.layout);
+            TabState {
+                tab_id: tab.id.clone(),
+                start_state: if tab.id == selected_tab_id {
+                    TabStartState::Started
+                } else {
+                    TabStartState::Lazy
+                },
+                focused_pane_id: pane_ids.first().cloned(),
+                pane_states: pane_ids
+                    .into_iter()
+                    .map(|pane_id| PaneState {
+                        pane_id,
+                        process_state: PaneProcessState::Idle,
+                        agent_status: None,
+                    })
+                    .collect(),
+            }
+        })
+        .collect()
 }
 
 fn default_tab_id(layout: &ProjectLayout) -> Option<String> {

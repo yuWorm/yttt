@@ -155,6 +155,8 @@ pub fn default_keybindings() -> KeybindingsConfig {
             binding("ctrl-o", "project.open"),
             binding("cmd-p", "command_palette.open"),
             binding("ctrl-p", "command_palette.open"),
+            binding("cmd-,", "settings.open"),
+            binding("ctrl-,", "settings.open"),
             binding("cmd-shift-o", "project.palette"),
             binding("ctrl-shift-o", "project.palette"),
             binding("cmd-j", "tab.palette"),

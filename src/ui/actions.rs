@@ -45,6 +45,7 @@ actions!(
         LayoutSaveCurrent,
         LayoutExportProjectConfig,
         LayoutOpenFile,
+        SettingsOpen,
         SettingsKeybindings,
         SettingsNotifications,
     ]
@@ -72,6 +73,14 @@ const DEFAULT_UI_KEYBINDING_SPECS: &[UiKeybindingSpec] = &[
     UiKeybindingSpec {
         keys: Cow::Borrowed("ctrl-p"),
         command: CommandId::CommandPaletteOpen,
+    },
+    UiKeybindingSpec {
+        keys: Cow::Borrowed("cmd-,"),
+        command: CommandId::SettingsOpen,
+    },
+    UiKeybindingSpec {
+        keys: Cow::Borrowed("ctrl-,"),
+        command: CommandId::SettingsOpen,
     },
     UiKeybindingSpec {
         keys: Cow::Borrowed("cmd-shift-o"),
@@ -324,6 +333,7 @@ fn command_keybinding(spec: &UiKeybindingSpec) -> KeyBinding {
             KeyBinding::new(keys, LayoutExportProjectConfig, Some(WORKSPACE_CONTEXT))
         }
         CommandId::LayoutOpenFile => KeyBinding::new(keys, LayoutOpenFile, Some(WORKSPACE_CONTEXT)),
+        CommandId::SettingsOpen => KeyBinding::new(keys, SettingsOpen, Some(WORKSPACE_CONTEXT)),
         CommandId::SettingsKeybindings => {
             KeyBinding::new(keys, SettingsKeybindings, Some(WORKSPACE_CONTEXT))
         }

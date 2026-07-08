@@ -10,6 +10,7 @@ pub mod palette;
 pub mod palette_surface;
 pub mod primitives;
 pub mod root;
+pub mod settings;
 pub mod sidebar;
 pub mod split_view;
 pub mod startup;
