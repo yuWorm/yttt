@@ -1,23 +1,39 @@
 use gpui::{
-    AnyElement, ClickEvent, Context, Div, Entity, FocusHandle, FontWeight, InteractiveElement as _,
-    IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement as _, PathPromptOptions, Pixels, Point, Render, ScrollHandle, SharedString,
-    Stateful, Subscription, Window, div, prelude::*, px, relative, rgba,
+    AnyElement, ClickEvent, Context, Div, Entity, FocusHandle, Focusable as _, FontWeight,
+    InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement as _, PathPromptOptions, Pixels, Point, Render,
+    ScrollHandle, SharedString, Stateful, Subscription, Window, div, prelude::*, px, relative,
+    rgba,
 };
 use gpui_component::{
-    IconName, Root as ComponentRoot, WindowExt as _,
+    IconName, IndexPath, Root as ComponentRoot, Sizable as _, Theme as ComponentTheme,
+    WindowExt as _,
     alert::Alert,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
-    input::{Input, InputEvent, InputState},
+    input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent, StepAction},
     notification::{Notification, NotificationType},
     scroll::ScrollableElement as _,
+    select::{SearchableVec, Select, SelectEvent, SelectState},
 };
 
 use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
+    rc::Rc,
 };
+
+type SettingsStringSelectState = SelectState<SearchableVec<String>>;
+
+const TERMINAL_THEME_FOLLOW_UI: &str = "Follow UI theme";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum SettingsNumberField {
+    FontSize,
+    LineHeight,
+    Padding,
+    Scrollback,
+}
 
 use crate::{
     commands::{
@@ -34,8 +50,8 @@ use crate::{
         },
         paths::AppConfigPaths,
         settings::{
-            AppSettings, SettingsLoadWarning, SettingsSaveError, detect_shell_candidates,
-            load_or_create_settings, resolve_default_shell, save_settings,
+            AppSettings, LanguageSetting, SettingsLoadWarning, SettingsSaveError,
+            detect_shell_candidates, load_or_create_settings, resolve_default_shell, save_settings,
         },
         theme::{ThemeLoadWarning, ThemeStore, load_theme_store},
     },
@@ -65,10 +81,17 @@ use crate::{
             PaneFocusLeft, PaneFocusRight, PaneFocusUp, PaneRename, PaneResizeDown, PaneResizeLeft,
             PaneResizeRight, PaneResizeUp, PaneSplitHorizontal, PaneSplitVertical, ProjectClose,
             SettingsKeybindings, SettingsNotifications, SettingsOpen, TabClose, TabNew, TabNext,
-            TabPrev, TabRename, WORKSPACE_CONTEXT,
+            TabPrev, TabRename, UiKeybindingSpec, WORKSPACE_CONTEXT, runtime_command_for_keystroke,
+            ui_keybinding_specs_from_config,
         },
         components::{ActionEmphasis, workbench_action_button},
-        i18n::{UiText, UiTextKey},
+        font_options::{
+            terminal_font_family_option_for_setting, terminal_font_family_options_from_system,
+            terminal_font_family_setting_from_option,
+        },
+        i18n::{Locale, UiText, UiTextKey},
+        input_owner::{InputOwnerKind, InputOwnerStack, TerminalInputGate},
+        keybindings_editor::{KeybindingEditError, KeybindingRow, KeybindingsEditorState},
         palette::palette_overlay,
         palette_surface::palette_input_placeholder,
         primitives::{
@@ -98,20 +121,40 @@ pub struct RootView {
     load_error: Option<String>,
     layout_source_messages: HashMap<ProjectId, String>,
     keybinding_warning_lines: Vec<String>,
+    keybindings_editor: KeybindingsEditorState,
     last_opened_layout_file: Option<PathBuf>,
     last_opened_keybindings_file: Option<PathBuf>,
     pending_close_project_id: Option<ProjectId>,
     pending_tab_rename: Option<PendingTabRename>,
+    pending_keybinding_edit: Option<PendingKeybindingEdit>,
+    keybinding_interceptor_subscription: Option<Subscription>,
     focus_handle: Option<FocusHandle>,
+    input_owner_stack: InputOwnerStack,
+    terminal_input_gate: TerminalInputGate,
     palette_input: Option<Entity<InputState>>,
     palette_input_subscription: Option<Subscription>,
     palette_input_needs_focus: bool,
     tab_rename_input: Option<Entity<InputState>>,
     tab_rename_input_subscription: Option<Subscription>,
     tab_rename_input_needs_focus: bool,
+    keybinding_edit_input: Option<Entity<InputState>>,
+    keybinding_edit_input_subscription: Option<Subscription>,
+    keybinding_edit_input_needs_focus: bool,
     settings_search_input: Option<Entity<InputState>>,
     settings_search_input_subscription: Option<Subscription>,
     settings_search_input_needs_focus: bool,
+    settings_language_select: Option<Entity<SettingsStringSelectState>>,
+    settings_language_select_subscription: Option<Subscription>,
+    settings_shell_select: Option<Entity<SettingsStringSelectState>>,
+    settings_shell_select_subscription: Option<Subscription>,
+    settings_ui_theme_select: Option<Entity<SettingsStringSelectState>>,
+    settings_ui_theme_select_subscription: Option<Subscription>,
+    settings_terminal_theme_select: Option<Entity<SettingsStringSelectState>>,
+    settings_terminal_theme_select_subscription: Option<Subscription>,
+    settings_font_family_select: Option<Entity<SettingsStringSelectState>>,
+    settings_font_family_select_subscription: Option<Subscription>,
+    settings_number_inputs: HashMap<SettingsNumberField, Entity<InputState>>,
+    settings_number_input_subscriptions: HashMap<SettingsNumberField, Vec<Subscription>>,
     layout_toml_editor: Option<LayoutTomlEditorState>,
     layout_toml_input: Option<Entity<InputState>>,
     layout_toml_input_subscription: Option<Subscription>,
@@ -170,6 +213,12 @@ struct PendingTabRename {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingKeybindingEdit {
+    command: CommandId,
+    value: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct LayoutTomlEditorState {
     path: PathBuf,
     value: String,
@@ -206,6 +255,7 @@ impl RootView {
             .unwrap_or_default();
         let (load_error, keybinding_warning_lines) =
             load_keybindings_messages(&config_paths, &command_registry);
+        let keybindings_editor = load_keybindings_editor_state(&config_paths, &command_registry);
         let (app_settings, settings_warning_lines) = load_app_settings_messages(&config_paths);
         let (theme_runtime, theme_warning_lines) =
             load_theme_runtime_messages(&config_paths, &app_settings);
@@ -235,20 +285,40 @@ impl RootView {
             load_error,
             layout_source_messages: HashMap::new(),
             keybinding_warning_lines,
+            keybindings_editor,
             last_opened_layout_file: None,
             last_opened_keybindings_file: None,
             pending_close_project_id: None,
             pending_tab_rename: None,
+            pending_keybinding_edit: None,
+            keybinding_interceptor_subscription: None,
             focus_handle: None,
+            input_owner_stack: InputOwnerStack::default(),
+            terminal_input_gate: TerminalInputGate::default(),
             palette_input: None,
             palette_input_subscription: None,
             palette_input_needs_focus: false,
             tab_rename_input: None,
             tab_rename_input_subscription: None,
             tab_rename_input_needs_focus: false,
+            keybinding_edit_input: None,
+            keybinding_edit_input_subscription: None,
+            keybinding_edit_input_needs_focus: false,
             settings_search_input: None,
             settings_search_input_subscription: None,
             settings_search_input_needs_focus: false,
+            settings_language_select: None,
+            settings_language_select_subscription: None,
+            settings_shell_select: None,
+            settings_shell_select_subscription: None,
+            settings_ui_theme_select: None,
+            settings_ui_theme_select_subscription: None,
+            settings_terminal_theme_select: None,
+            settings_terminal_theme_select_subscription: None,
+            settings_font_family_select: None,
+            settings_font_family_select_subscription: None,
+            settings_number_inputs: HashMap::new(),
+            settings_number_input_subscriptions: HashMap::new(),
             layout_toml_editor: None,
             layout_toml_input: None,
             layout_toml_input_subscription: None,
@@ -263,7 +333,7 @@ impl RootView {
             toast_queue: ToastQueue::default(),
             system_notifier: NoopSystemNotifier,
             system_notifications_enabled,
-            ui_text: UiText::english(),
+            ui_text: ui_text_for_language(app_settings.general.language),
             app_settings,
             theme_runtime,
             settings_page: SettingsPageState::default(),
@@ -414,6 +484,12 @@ impl RootView {
             .map(|rename| rename.value.clone())
     }
 
+    pub fn pending_keybinding_edit_value(&self) -> Option<String> {
+        self.pending_keybinding_edit
+            .as_ref()
+            .map(|edit| edit.value.clone())
+    }
+
     pub fn confirm_tab_rename_dialog(&mut self, title: &str) -> Result<(), RootViewError> {
         let Some(rename) = self.pending_tab_rename.clone() else {
             return Ok(());
@@ -434,6 +510,29 @@ impl RootView {
     pub fn cancel_tab_rename_dialog(&mut self) {
         self.clear_tab_rename_dialog();
         self.queue_selected_terminal_focus();
+    }
+
+    pub fn open_keybinding_edit_dialog(&mut self, command: CommandId) -> Result<(), RootViewError> {
+        let value = self.keybindings_editor.command_keys(command).join(", ");
+        self.pending_keybinding_edit = Some(PendingKeybindingEdit { command, value });
+        self.reset_keybinding_edit_input();
+        self.keybinding_edit_input_needs_focus = true;
+        self.load_error = None;
+        Ok(())
+    }
+
+    pub fn confirm_keybinding_edit_dialog(&mut self, value: &str) -> Result<(), RootViewError> {
+        let Some(edit) = self.pending_keybinding_edit.clone() else {
+            return Ok(());
+        };
+        self.set_keybinding_command_keys(edit.command, parse_keybinding_edit_value(value))?;
+        self.clear_keybinding_edit_dialog();
+        self.load_error = None;
+        Ok(())
+    }
+
+    pub fn cancel_keybinding_edit_dialog(&mut self) {
+        self.clear_keybinding_edit_dialog();
     }
 
     pub fn handle_terminal_notification(&mut self, event: NotificationEvent) {
@@ -533,6 +632,10 @@ impl RootView {
         self.system_notifications_enabled
     }
 
+    pub fn terminal_close_on_exit(&self) -> bool {
+        self.app_settings.terminal.close_on_exit
+    }
+
     pub fn settings_is_open(&self) -> bool {
         self.settings_page.is_open
     }
@@ -556,11 +659,59 @@ impl RootView {
         Ok(())
     }
 
+    pub fn set_language(&mut self, language: LanguageSetting) -> Result<(), RootViewError> {
+        self.app_settings.general.language = language;
+        save_settings(&self.config_paths, &self.app_settings)?;
+        self.ui_text = ui_text_for_language(language);
+        Ok(())
+    }
+
     pub fn set_terminal_shell(&mut self, shell: &str) -> Result<(), RootViewError> {
         self.app_settings.terminal.shell = shell.to_string();
-        save_settings(&self.config_paths, &self.app_settings)?;
-        self.refresh_theme_runtime_from_settings();
-        Ok(())
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_ui_theme_name(&mut self, theme_name: &str) -> Result<(), RootViewError> {
+        self.app_settings.theme.name = theme_name.to_string();
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_terminal_theme_name(
+        &mut self,
+        theme_name: Option<&str>,
+    ) -> Result<(), RootViewError> {
+        self.app_settings.theme.terminal = theme_name.map(ToString::to_string);
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_terminal_font_family(&mut self, font_family: &str) -> Result<(), RootViewError> {
+        self.app_settings.terminal.font_family = font_family.to_string();
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_terminal_font_size(&mut self, font_size: f32) -> Result<(), RootViewError> {
+        self.app_settings.terminal.font_size = font_size;
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_terminal_line_height(&mut self, line_height: f32) -> Result<(), RootViewError> {
+        self.app_settings.terminal.line_height = line_height;
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_terminal_padding(&mut self, padding: f32) -> Result<(), RootViewError> {
+        self.app_settings.terminal.padding = padding;
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_terminal_scrollback(&mut self, scrollback: usize) -> Result<(), RootViewError> {
+        self.app_settings.terminal.scrollback = scrollback;
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_terminal_close_on_exit(&mut self, close_on_exit: bool) -> Result<(), RootViewError> {
+        self.app_settings.terminal.close_on_exit = close_on_exit;
+        self.save_app_settings_and_refresh_runtime()
     }
 
     pub fn set_settings_search_query(&mut self, query: impl Into<String>) {
@@ -594,6 +745,47 @@ impl RootView {
 
     pub fn selected_settings_group_title(&self) -> Option<&'static str> {
         Some(self.settings_page.selected_group.title())
+    }
+
+    pub fn should_auto_focus_workspace(&self) -> bool {
+        self.foreground_input_owner_kind() == InputOwnerKind::Workspace
+    }
+
+    pub fn foreground_input_owner_kind(&self) -> InputOwnerKind {
+        if self.pending_keybinding_edit.is_some() {
+            InputOwnerKind::KeybindingRecorder
+        } else if self.pending_tab_rename.is_some() || self.pending_close_project_id.is_some() {
+            InputOwnerKind::Dialog
+        } else if self.layout_toml_editor.is_some() {
+            InputOwnerKind::Editor
+        } else if self.settings_page.is_open {
+            InputOwnerKind::Settings
+        } else if self.active_palette.is_some() {
+            InputOwnerKind::Palette
+        } else {
+            InputOwnerKind::Workspace
+        }
+    }
+
+    pub fn terminal_input_allowed(&self) -> bool {
+        self.foreground_input_owner_kind() == InputOwnerKind::Workspace
+    }
+
+    pub fn take_pending_terminal_focus_for_render(&mut self, pane_id: &str) -> bool {
+        if !self.should_auto_focus_workspace() {
+            return false;
+        }
+
+        if self.pending_terminal_focus_pane_id.as_deref() == Some(pane_id) {
+            self.pending_terminal_focus_pane_id = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn should_use_palette_text_fallback(&self, input_is_focused: bool) -> bool {
+        self.active_palette.is_some() && !input_is_focused
     }
 
     pub fn layout_toml_editor_is_open(&self) -> bool {
@@ -711,6 +903,65 @@ impl RootView {
             .collect()
     }
 
+    pub fn visible_keybinding_rows(&self) -> Vec<KeybindingRow> {
+        self.keybindings_editor.rows()
+    }
+
+    pub fn runtime_keybinding_specs(&self) -> Vec<UiKeybindingSpec> {
+        ui_keybinding_specs_from_config(self.keybindings_editor.config(), &self.command_registry)
+    }
+
+    pub fn runtime_command_for_keystroke(&self, keystroke: &Keystroke) -> Option<CommandId> {
+        runtime_command_for_keystroke(&self.runtime_keybinding_specs(), keystroke)
+    }
+
+    pub(crate) fn set_keybinding_interceptor_subscription(&mut self, subscription: Subscription) {
+        self.keybinding_interceptor_subscription = Some(subscription);
+    }
+
+    pub(crate) fn dispatch_runtime_keybinding(&mut self, keystroke: &Keystroke) -> bool {
+        if self.foreground_input_owner_kind() != InputOwnerKind::Workspace {
+            return false;
+        }
+
+        let Some(command_id) = self.runtime_command_for_keystroke(keystroke) else {
+            return false;
+        };
+
+        let _ = self.run_command(command_id);
+        true
+    }
+
+    pub fn set_keybinding_command_keys(
+        &mut self,
+        command: CommandId,
+        keys: Vec<String>,
+    ) -> Result<(), RootViewError> {
+        let previous = self.keybindings_editor.clone();
+        self.keybindings_editor.set_command_keys(command, keys);
+        if let Err(error) = self.save_keybindings_editor() {
+            self.keybindings_editor = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub fn delete_keybinding_command_keys(
+        &mut self,
+        command: CommandId,
+    ) -> Result<(), RootViewError> {
+        self.keybindings_editor.delete_command_keys(command);
+        self.save_keybindings_editor()
+    }
+
+    pub fn reset_keybinding_command_keys(
+        &mut self,
+        command: CommandId,
+    ) -> Result<(), RootViewError> {
+        self.keybindings_editor.reset_command_keys(command);
+        self.save_keybindings_editor()
+    }
+
     pub fn visible_empty_workspace_actions(&self) -> Vec<&'static str> {
         EMPTY_WORKSPACE_ACTIONS
             .iter()
@@ -784,6 +1035,13 @@ impl RootView {
         event: TerminalPaneExitedEvent,
     ) -> Result<PaneExitCloseOutcome, RootViewError> {
         let project_id = ProjectId::new(event.project_id.clone());
+        if !self.app_settings.terminal.close_on_exit {
+            self.workspace
+                .record_pane_exited(&project_id, &event.tab_id, &event.pane_id)?;
+            self.load_error = None;
+            return Ok(PaneExitCloseOutcome::PaneKept);
+        }
+
         let outcome =
             self.workspace
                 .close_pane_for_exit(&project_id, &event.tab_id, &event.pane_id)?;
@@ -1020,6 +1278,13 @@ impl RootView {
         Self::with_workspace(workspace)
     }
 
+    pub fn with_workspace_for_test_and_config_paths(
+        workspace: Workspace,
+        config_paths: AppConfigPaths,
+    ) -> Self {
+        Self::with_workspace_and_config_paths(workspace, config_paths)
+    }
+
     fn with_workspace(workspace: Workspace) -> Self {
         Self::with_workspace_and_config_paths(workspace, AppConfigPaths::for_app())
     }
@@ -1087,6 +1352,11 @@ impl RootView {
     fn clear_tab_rename_dialog(&mut self) {
         self.pending_tab_rename = None;
         self.reset_tab_rename_input();
+    }
+
+    fn clear_keybinding_edit_dialog(&mut self) {
+        self.pending_keybinding_edit = None;
+        self.reset_keybinding_edit_input();
     }
 
     fn remove_terminal_panes_for_project(&mut self, project_id: &str) {
@@ -1204,10 +1474,28 @@ impl RootView {
         self.tab_rename_input_needs_focus = false;
     }
 
+    fn reset_keybinding_edit_input(&mut self) {
+        self.keybinding_edit_input = None;
+        self.keybinding_edit_input_subscription = None;
+        self.keybinding_edit_input_needs_focus = false;
+    }
+
     fn reset_settings_search_input(&mut self) {
         self.settings_search_input = None;
         self.settings_search_input_subscription = None;
         self.settings_search_input_needs_focus = false;
+        self.settings_language_select = None;
+        self.settings_language_select_subscription = None;
+        self.settings_shell_select = None;
+        self.settings_shell_select_subscription = None;
+        self.settings_ui_theme_select = None;
+        self.settings_ui_theme_select_subscription = None;
+        self.settings_terminal_theme_select = None;
+        self.settings_terminal_theme_select_subscription = None;
+        self.settings_font_family_select = None;
+        self.settings_font_family_select_subscription = None;
+        self.settings_number_inputs.clear();
+        self.settings_number_input_subscriptions.clear();
     }
 
     fn reset_layout_toml_input(&mut self) {
@@ -1260,9 +1548,151 @@ impl RootView {
         }
     }
 
+    fn save_app_settings_and_refresh_runtime(&mut self) -> Result<(), RootViewError> {
+        save_settings(&self.config_paths, &self.app_settings)?;
+        self.refresh_theme_runtime_from_settings();
+        Ok(())
+    }
+
+    fn sync_terminal_pane_configs(&mut self, cx: &mut Context<Self>) {
+        let terminal_config = self.theme_runtime.to_terminal_config();
+        let theme = self.theme_runtime.ui;
+        for pane in self.terminal_panes.values() {
+            pane.update(cx, |pane, cx| {
+                pane.update_terminal_appearance(terminal_config.clone(), theme, cx);
+            });
+        }
+    }
+
+    fn sync_gpui_component_theme(&self, cx: &mut Context<Self>) {
+        ComponentTheme::global_mut(cx).apply_config(&Rc::new(
+            self.theme_runtime.to_gpui_component_theme_config(),
+        ));
+    }
+
+    fn save_keybindings_editor(&mut self) -> Result<(), RootViewError> {
+        self.keybindings_editor.save(&self.config_paths)?;
+        self.keybinding_warning_lines.clear();
+        Ok(())
+    }
+
+    fn sync_input_owner_state(&mut self) {
+        let owner = self.foreground_input_owner_kind();
+        self.input_owner_stack.clear();
+        if owner != InputOwnerKind::Workspace {
+            self.input_owner_stack.push(owner);
+        }
+        self.terminal_input_gate
+            .sync_from_owner(self.input_owner_stack.active_kind());
+    }
+
     fn resolved_terminal_shell(&self) -> String {
         let candidates = detect_shell_candidates();
         resolve_default_shell(&self.app_settings.terminal.shell, &candidates)
+    }
+
+    fn available_theme_names(&self) -> Vec<String> {
+        load_theme_store(&self.config_paths)
+            .map(|loaded| loaded.store.theme_names())
+            .unwrap_or_else(|_| ThemeStore::builtin().theme_names())
+    }
+
+    fn settings_number_value(&self, field: SettingsNumberField) -> String {
+        let terminal = &self.app_settings.terminal;
+        match field {
+            SettingsNumberField::FontSize => format!("{:.1}", terminal.font_size),
+            SettingsNumberField::LineHeight => format!("{:.2}", terminal.line_height),
+            SettingsNumberField::Padding => format!("{:.1}", terminal.padding),
+            SettingsNumberField::Scrollback => terminal.scrollback.to_string(),
+        }
+    }
+
+    fn apply_settings_number_value(
+        &mut self,
+        field: SettingsNumberField,
+        value: &str,
+    ) -> Result<(), RootViewError> {
+        let value = value.trim();
+        match field {
+            SettingsNumberField::FontSize => {
+                if let Ok(value) = value.parse::<f32>() {
+                    self.set_terminal_font_size(value)?;
+                }
+            }
+            SettingsNumberField::LineHeight => {
+                if let Ok(value) = value.parse::<f32>() {
+                    self.set_terminal_line_height(value)?;
+                }
+            }
+            SettingsNumberField::Padding => {
+                if let Ok(value) = value.parse::<f32>() {
+                    self.set_terminal_padding(value)?;
+                }
+            }
+            SettingsNumberField::Scrollback => {
+                if let Ok(value) = value.parse::<usize>() {
+                    self.set_terminal_scrollback(value)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn stepped_settings_number_value(
+        &self,
+        field: SettingsNumberField,
+        value: &str,
+        action: StepAction,
+    ) -> String {
+        let sign = match action {
+            StepAction::Increment => 1.0,
+            StepAction::Decrement => -1.0,
+        };
+        match field {
+            SettingsNumberField::FontSize => {
+                let value = value
+                    .trim()
+                    .parse::<f32>()
+                    .unwrap_or(self.app_settings.terminal.font_size);
+                format!("{:.1}", (value + sign).max(1.0))
+            }
+            SettingsNumberField::LineHeight => {
+                let value = value
+                    .trim()
+                    .parse::<f32>()
+                    .unwrap_or(self.app_settings.terminal.line_height);
+                format!("{:.2}", (value + sign * 0.05).max(0.5))
+            }
+            SettingsNumberField::Padding => {
+                let value = value
+                    .trim()
+                    .parse::<f32>()
+                    .unwrap_or(self.app_settings.terminal.padding);
+                format!("{:.1}", (value + sign).max(0.0))
+            }
+            SettingsNumberField::Scrollback => {
+                let value = value
+                    .trim()
+                    .parse::<isize>()
+                    .unwrap_or(self.app_settings.terminal.scrollback as isize);
+                ((value + (sign as isize) * 1000).max(1000)).to_string()
+            }
+        }
+    }
+
+    fn settings_number_field_for_input(
+        &self,
+        input: &Entity<InputState>,
+    ) -> Option<SettingsNumberField> {
+        self.settings_number_inputs
+            .iter()
+            .find_map(|(field, entity)| (entity.entity_id() == input.entity_id()).then_some(*field))
+    }
+
+    fn palette_input_contains_focus(&self, window: &Window, cx: &Context<Self>) -> bool {
+        self.palette_input
+            .as_ref()
+            .is_some_and(|input| input.read(cx).focus_handle(cx).contains_focused(window, cx))
     }
 
     fn selected_focused_pane_id(&self) -> Option<&str> {
@@ -1333,6 +1763,36 @@ impl RootView {
         Some(input)
     }
 
+    fn keybinding_edit_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<InputState>> {
+        let edit = self.pending_keybinding_edit.as_ref()?;
+        let input = if let Some(input) = &self.keybinding_edit_input {
+            input.clone()
+        } else {
+            let value = edit.value.clone();
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("cmd-l, ctrl-l")
+                    .default_value(value)
+            });
+            let subscription =
+                cx.subscribe_in(&input, window, Self::on_keybinding_edit_input_event);
+            self.keybinding_edit_input = Some(input.clone());
+            self.keybinding_edit_input_subscription = Some(subscription);
+            input
+        };
+
+        if self.keybinding_edit_input_needs_focus {
+            input.update(cx, |input, cx| input.focus(window, cx));
+            self.keybinding_edit_input_needs_focus = false;
+        }
+
+        Some(input)
+    }
+
     fn settings_search_input(
         &mut self,
         window: &mut Window,
@@ -1364,6 +1824,169 @@ impl RootView {
         }
 
         Some(input)
+    }
+
+    fn settings_language_select(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SettingsStringSelectState> {
+        let items = language_setting_labels();
+        let selected = language_setting_label(self.app_settings.general.language).to_string();
+
+        if let Some(select) = &self.settings_language_select {
+            select.clone()
+        } else {
+            let selected_index = selected_index_for_settings_option(&items, &selected);
+            let select = cx
+                .new(|cx| SelectState::new(SearchableVec::new(items), selected_index, window, cx));
+            let subscription =
+                cx.subscribe_in(&select, window, Self::on_settings_language_select_event);
+            self.settings_language_select = Some(select.clone());
+            self.settings_language_select_subscription = Some(subscription);
+            select
+        }
+    }
+
+    fn settings_shell_select(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SettingsStringSelectState> {
+        let mut items = vec!["Auto".to_string()];
+        for shell in detect_shell_candidates() {
+            push_unique_string(&mut items, shell);
+        }
+        let selected = if self.app_settings.terminal.shell == crate::config::settings::AUTO_SHELL {
+            "Auto".to_string()
+        } else {
+            self.app_settings.terminal.shell.clone()
+        };
+        if selected != "Auto" {
+            push_unique_string(&mut items, selected.clone());
+        }
+
+        if let Some(select) = &self.settings_shell_select {
+            select.clone()
+        } else {
+            let selected_index = selected_index_for_settings_option(&items, &selected);
+            let select = cx
+                .new(|cx| SelectState::new(SearchableVec::new(items), selected_index, window, cx));
+            let subscription =
+                cx.subscribe_in(&select, window, Self::on_settings_shell_select_event);
+            self.settings_shell_select = Some(select.clone());
+            self.settings_shell_select_subscription = Some(subscription);
+            select
+        }
+    }
+
+    fn settings_ui_theme_select(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SettingsStringSelectState> {
+        let items = self.available_theme_names();
+        let selected = self.theme_runtime.theme_name.clone();
+
+        if let Some(select) = &self.settings_ui_theme_select {
+            select.clone()
+        } else {
+            let selected_index = selected_index_for_settings_option(&items, &selected);
+            let select = cx.new(|cx| {
+                SelectState::new(SearchableVec::new(items), selected_index, window, cx)
+                    .searchable(true)
+            });
+            let subscription =
+                cx.subscribe_in(&select, window, Self::on_settings_ui_theme_select_event);
+            self.settings_ui_theme_select = Some(select.clone());
+            self.settings_ui_theme_select_subscription = Some(subscription);
+            select
+        }
+    }
+
+    fn settings_terminal_theme_select(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SettingsStringSelectState> {
+        let mut items = vec![TERMINAL_THEME_FOLLOW_UI.to_string()];
+        for theme_name in self.available_theme_names() {
+            push_unique_string(&mut items, theme_name);
+        }
+        let selected = self
+            .app_settings
+            .theme
+            .terminal
+            .clone()
+            .unwrap_or_else(|| TERMINAL_THEME_FOLLOW_UI.to_string());
+
+        if let Some(select) = &self.settings_terminal_theme_select {
+            select.clone()
+        } else {
+            let selected_index = selected_index_for_settings_option(&items, &selected);
+            let select = cx.new(|cx| {
+                SelectState::new(SearchableVec::new(items), selected_index, window, cx)
+                    .searchable(true)
+            });
+            let subscription = cx.subscribe_in(
+                &select,
+                window,
+                Self::on_settings_terminal_theme_select_event,
+            );
+            self.settings_terminal_theme_select = Some(select.clone());
+            self.settings_terminal_theme_select_subscription = Some(subscription);
+            select
+        }
+    }
+
+    fn settings_font_family_select(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SettingsStringSelectState> {
+        let selected =
+            terminal_font_family_option_for_setting(&self.app_settings.terminal.font_family);
+        let items = terminal_font_family_options_from_system(
+            &self.app_settings.terminal.font_family,
+            cx.text_system().all_font_names(),
+        );
+
+        if let Some(select) = &self.settings_font_family_select {
+            select.clone()
+        } else {
+            let selected_index = selected_index_for_settings_option(&items, &selected);
+            let select = cx.new(|cx| {
+                SelectState::new(SearchableVec::new(items), selected_index, window, cx)
+                    .searchable(true)
+            });
+            let subscription =
+                cx.subscribe_in(&select, window, Self::on_settings_font_family_select_event);
+            self.settings_font_family_select = Some(select.clone());
+            self.settings_font_family_select_subscription = Some(subscription);
+            select
+        }
+    }
+
+    fn settings_number_input(
+        &mut self,
+        field: SettingsNumberField,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(input) = self.settings_number_inputs.get(&field) {
+            return input.clone();
+        }
+
+        let value = self.settings_number_value(field);
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(value));
+        let input_subscription =
+            cx.subscribe_in(&input, window, Self::on_settings_number_input_event);
+        let step_subscription =
+            cx.subscribe_in(&input, window, Self::on_settings_number_step_event);
+        self.settings_number_inputs.insert(field, input.clone());
+        self.settings_number_input_subscriptions
+            .insert(field, vec![input_subscription, step_subscription]);
+        input
     }
 
     fn layout_toml_input(
@@ -1505,6 +2128,7 @@ impl RootView {
                 tab_title: input.tab_title.to_string(),
                 pane: input.pane.clone(),
                 is_focused: input.is_focused,
+                terminal_input_gate: self.terminal_input_gate.clone(),
             };
             let terminal_config = self.theme_runtime.to_terminal_config();
             let theme = self.theme_runtime.ui;
@@ -1517,10 +2141,14 @@ impl RootView {
         };
 
         let pane_id = input.pane.id.clone();
-        if self.pending_terminal_focus_pane_id.as_deref() == Some(&pane_id) {
-            if pane_view.update(cx, |pane, cx| pane.focus_terminal(window, cx)) {
-                self.pending_terminal_focus_pane_id = None;
-            }
+        if self
+            .pending_terminal_focus_pane_id
+            .as_deref()
+            .is_some_and(|pending| pending == pane_id)
+            && self.should_auto_focus_workspace()
+            && pane_view.update(cx, |pane, cx| pane.focus_terminal(window, cx))
+        {
+            self.pending_terminal_focus_pane_id = None;
         }
 
         let border_color = if input.is_focused {
@@ -1528,19 +2156,38 @@ impl RootView {
         } else {
             rgba(0x00000000)
         };
+        let terminal_input_allowed = self.terminal_input_allowed();
         let mut wrapper = div()
             .flex()
             .flex_1()
+            .relative()
             .border_1()
             .border_color(border_color)
             .bg(self.theme_runtime.ui.terminal_background);
-        wrapper
-            .interactivity()
-            .on_click(cx.listener(move |this, _, _window, cx| {
+        wrapper.interactivity().on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _window, cx| {
+                if !this.terminal_input_allowed() {
+                    cx.stop_propagation();
+                    return;
+                }
                 let _ = this.focus_visible_terminal_pane(&pane_id);
                 cx.notify();
-            }));
-        wrapper.child(pane_view)
+            }),
+        );
+        wrapper = wrapper.child(pane_view);
+        if !terminal_input_allowed {
+            wrapper = wrapper.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .bg(rgba(0x00000000))
+                    .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                        cx.stop_propagation();
+                    }),
+            );
+        }
+        wrapper
     }
 
     fn prune_terminal_panes(&mut self) {
@@ -1740,6 +2387,29 @@ impl RootView {
         }
     }
 
+    fn on_keybinding_edit_input_event(
+        &mut self,
+        input: &Entity<InputState>,
+        event: &InputEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Change => {
+                if let Some(edit) = &mut self.pending_keybinding_edit {
+                    edit.value = input.read(cx).value().to_string();
+                    cx.notify();
+                }
+            }
+            InputEvent::PressEnter { .. } => {
+                let value = input.read(cx).value().to_string();
+                let _ = self.confirm_keybinding_edit_dialog(&value);
+                cx.notify();
+            }
+            InputEvent::Focus | InputEvent::Blur => {}
+        }
+    }
+
     fn on_settings_search_input_event(
         &mut self,
         input: &Entity<InputState>,
@@ -1754,6 +2424,150 @@ impl RootView {
             }
             InputEvent::PressEnter { .. } | InputEvent::Focus | InputEvent::Blur => {}
         }
+    }
+
+    fn on_settings_language_select_event(
+        &mut self,
+        _select: &Entity<SettingsStringSelectState>,
+        event: &SelectEvent<SearchableVec<String>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(Some(value)) = event else {
+            return;
+        };
+        let Some(language) = language_setting_from_label(value) else {
+            return;
+        };
+        if let Err(error) = self.set_language(language) {
+            self.load_error = Some(error.to_string());
+        }
+        cx.notify();
+    }
+
+    fn on_settings_shell_select_event(
+        &mut self,
+        _select: &Entity<SettingsStringSelectState>,
+        event: &SelectEvent<SearchableVec<String>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(Some(value)) = event else {
+            return;
+        };
+        let shell = if value == "Auto" {
+            crate::config::settings::AUTO_SHELL
+        } else {
+            value.as_str()
+        };
+        if let Err(error) = self.set_terminal_shell(shell) {
+            self.load_error = Some(error.to_string());
+        }
+        cx.notify();
+    }
+
+    fn on_settings_ui_theme_select_event(
+        &mut self,
+        _select: &Entity<SettingsStringSelectState>,
+        event: &SelectEvent<SearchableVec<String>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(Some(value)) = event else {
+            return;
+        };
+        if let Err(error) = self.set_ui_theme_name(value) {
+            self.load_error = Some(error.to_string());
+        }
+        self.sync_gpui_component_theme(cx);
+        self.sync_terminal_pane_configs(cx);
+        cx.notify();
+    }
+
+    fn on_settings_terminal_theme_select_event(
+        &mut self,
+        _select: &Entity<SettingsStringSelectState>,
+        event: &SelectEvent<SearchableVec<String>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(Some(value)) = event else {
+            return;
+        };
+        let terminal_theme = (value != TERMINAL_THEME_FOLLOW_UI).then_some(value.as_str());
+        if let Err(error) = self.set_terminal_theme_name(terminal_theme) {
+            self.load_error = Some(error.to_string());
+        }
+        self.sync_gpui_component_theme(cx);
+        self.sync_terminal_pane_configs(cx);
+        cx.notify();
+    }
+
+    fn on_settings_font_family_select_event(
+        &mut self,
+        _select: &Entity<SettingsStringSelectState>,
+        event: &SelectEvent<SearchableVec<String>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(Some(value)) = event else {
+            return;
+        };
+        let font_family = terminal_font_family_setting_from_option(value);
+        if let Err(error) = self.set_terminal_font_family(&font_family) {
+            self.load_error = Some(error.to_string());
+        }
+        self.sync_gpui_component_theme(cx);
+        self.sync_terminal_pane_configs(cx);
+        cx.notify();
+    }
+
+    fn on_settings_number_input_event(
+        &mut self,
+        input: &Entity<InputState>,
+        event: &InputEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Change | InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                let Some(field) = self.settings_number_field_for_input(input) else {
+                    return;
+                };
+                let value = input.read(cx).value().to_string();
+                if let Err(error) = self.apply_settings_number_value(field, &value) {
+                    self.load_error = Some(error.to_string());
+                }
+                self.sync_gpui_component_theme(cx);
+                self.sync_terminal_pane_configs(cx);
+                cx.notify();
+            }
+            InputEvent::Focus => {}
+        }
+    }
+
+    fn on_settings_number_step_event(
+        &mut self,
+        input: &Entity<InputState>,
+        event: &NumberInputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(field) = self.settings_number_field_for_input(input) else {
+            return;
+        };
+        let NumberInputEvent::Step(action) = event;
+        let value = input.read(cx).value().to_string();
+        let stepped = self.stepped_settings_number_value(field, &value, *action);
+        input.update(cx, |input, cx| {
+            input.set_value(stepped.clone(), window, cx);
+        });
+        if let Err(error) = self.apply_settings_number_value(field, &stepped) {
+            self.load_error = Some(error.to_string());
+        }
+        self.sync_gpui_component_theme(cx);
+        self.sync_terminal_pane_configs(cx);
+        cx.notify();
     }
 
     fn on_layout_toml_input_event(
@@ -1787,6 +2601,20 @@ impl RootView {
             .unwrap_or_default();
 
         self.confirm_tab_rename_dialog(&value)
+    }
+
+    fn confirm_keybinding_edit_dialog_from_input(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Result<(), RootViewError> {
+        let value = self
+            .keybinding_edit_input
+            .as_ref()
+            .map(|input| input.read(cx).value().to_string())
+            .or_else(|| self.pending_keybinding_edit_value())
+            .unwrap_or_default();
+
+        self.confirm_keybinding_edit_dialog(&value)
     }
 
     fn on_open_command_palette(
@@ -2128,6 +2956,7 @@ impl RootView {
     fn dispatch_command_action(&mut self, command_id: CommandId, cx: &mut Context<Self>) {
         if self.active_palette.is_some()
             || self.pending_tab_rename.is_some()
+            || self.pending_keybinding_edit.is_some()
             || self.layout_toml_editor.is_some()
         {
             cx.propagate();
@@ -2138,7 +2967,7 @@ impl RootView {
         cx.notify();
     }
 
-    fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.layout_toml_editor.is_some() {
             cx.propagate();
             return;
@@ -2158,6 +2987,11 @@ impl RootView {
                 return;
             }
 
+            cx.propagate();
+            return;
+        }
+
+        if !self.should_use_palette_text_fallback(self.palette_input_contains_focus(window, cx)) {
             cx.propagate();
             return;
         }
@@ -2211,6 +3045,8 @@ pub enum RootViewError {
     #[error("{0}")]
     SettingsSave(Box<SettingsSaveError>),
     #[error("{0}")]
+    KeybindingEdit(Box<KeybindingEditError>),
+    #[error("{0}")]
     LayoutTomlEditor(String),
 }
 
@@ -2232,6 +3068,12 @@ impl From<SettingsSaveError> for RootViewError {
     }
 }
 
+impl From<KeybindingEditError> for RootViewError {
+    fn from(error: KeybindingEditError) -> Self {
+        Self::KeybindingEdit(Box::new(error))
+    }
+}
+
 impl Default for RootView {
     fn default() -> Self {
         Self::new()
@@ -2240,6 +3082,7 @@ impl Default for RootView {
 
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_input_owner_state();
         let focus_handle = self.root_focus_handle(cx);
 
         let body = if self.workspace.opened_projects().is_empty() {
@@ -2349,7 +3192,7 @@ impl Render for RootView {
         }
         if self.settings_page.is_open {
             if let Some(search_input) = self.settings_search_input(window, cx) {
-                root = root.child(settings_overlay(self, &search_input, cx));
+                root = root.child(settings_overlay(self, &search_input, window, cx));
             }
         }
         if self.layout_toml_editor.is_some() {
@@ -2365,6 +3208,11 @@ impl Render for RootView {
                     &input,
                     self.theme_runtime.ui,
                 ));
+            }
+        }
+        if self.pending_keybinding_edit.is_some() {
+            if let Some(input) = self.keybinding_edit_input(window, cx) {
+                root = root.child(keybinding_edit_dialog(cx, &input, self.theme_runtime.ui));
             }
         }
         if self.pending_close_project_id.is_some() {
@@ -2384,7 +3232,7 @@ impl Render for RootView {
             root = root.child(dialog_layer);
         }
 
-        if !focus_handle.contains_focused(window, cx) {
+        if self.should_auto_focus_workspace() && !focus_handle.contains_focused(window, cx) {
             focus_handle.focus(window);
         }
 
@@ -2590,8 +3438,9 @@ fn layout_toml_editor_overlay(
 }
 
 fn settings_overlay(
-    root: &RootView,
+    root: &mut RootView,
     search_input: &Entity<InputState>,
+    window: &mut Window,
     cx: &mut Context<RootView>,
 ) -> Div {
     let theme = root.theme_runtime.ui;
@@ -2608,6 +3457,7 @@ fn settings_overlay(
             div()
                 .flex()
                 .w(style.width)
+                .h(style.height)
                 .max_w(style.max_width)
                 .max_h(style.max_height)
                 .rounded_md()
@@ -2617,7 +3467,7 @@ fn settings_overlay(
                 .text_color(theme.text)
                 .overflow_hidden()
                 .child(settings_sidebar(root, search_input, style, cx))
-                .child(settings_content(root, style, cx)),
+                .child(settings_content(root, style, window, cx)),
         )
 }
 
@@ -2628,36 +3478,9 @@ fn settings_sidebar(
     cx: &mut Context<RootView>,
 ) -> Div {
     let theme = root.theme_runtime.ui;
-    root.settings_page.visible_groups().into_iter().fold(
-        div()
-            .flex()
-            .flex_col()
-            .w(style.sidebar_width)
-            .flex_none()
-            .border_r_1()
-            .border_color(theme.border)
-            .bg(theme.app_background)
-            .p_3()
-            .gap_3()
-            .child(
-                div()
-                    .id(SharedString::from("settings-search"))
-                    .flex()
-                    .items_center()
-                    .h_10()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(theme.border)
-                    .bg(theme.surface)
-                    .px_2()
-                    .child(
-                        Input::new(search_input)
-                            .prefix(IconName::Search)
-                            .cleanable(true)
-                            .appearance(false),
-                    ),
-            ),
-        |sidebar, group| {
+    let groups = root.settings_page.visible_groups().into_iter().fold(
+        div().flex().flex_col().gap_1().min_h_0(),
+        |groups, group| {
             let group_id = group.id.as_str().to_string();
             let background = if group.selected {
                 theme.active_surface
@@ -2670,7 +3493,7 @@ fn settings_sidebar(
                 theme.text_muted
             };
 
-            sidebar.child(
+            groups.child(
                 div()
                     .id(SharedString::from(format!(
                         "settings-group-{}",
@@ -2692,10 +3515,53 @@ fn settings_sidebar(
                     .child(group.title),
             )
         },
-    )
+    );
+
+    div()
+        .flex()
+        .flex_col()
+        .w(style.sidebar_width)
+        .h_full()
+        .min_h_0()
+        .flex_none()
+        .border_r_1()
+        .border_color(theme.border)
+        .bg(theme.app_background)
+        .p_3()
+        .gap_3()
+        .child(
+            div()
+                .id(SharedString::from("settings-search"))
+                .flex()
+                .items_center()
+                .h(style.search_height)
+                .flex_none()
+                .rounded_md()
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.surface)
+                .px_2()
+                .child(
+                    Input::new(search_input)
+                        .prefix(IconName::Search)
+                        .cleanable(true)
+                        .appearance(false),
+                ),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .child(groups.overflow_y_scrollbar()),
+        )
 }
 
-fn settings_content(root: &RootView, style: SettingsPanelStyle, cx: &mut Context<RootView>) -> Div {
+fn settings_content(
+    root: &mut RootView,
+    style: SettingsPanelStyle,
+    window: &mut Window,
+    cx: &mut Context<RootView>,
+) -> Div {
     let theme = root.theme_runtime.ui;
     let group = root.settings_page.selected_group;
 
@@ -2704,9 +3570,11 @@ fn settings_content(root: &RootView, style: SettingsPanelStyle, cx: &mut Context
         .flex_col()
         .flex_1()
         .min_w_0()
+        .min_h_0()
         .bg(theme.surface)
         .child(
             div()
+                .flex_none()
                 .flex()
                 .items_center()
                 .justify_between()
@@ -2748,64 +3616,82 @@ fn settings_content(root: &RootView, style: SettingsPanelStyle, cx: &mut Context
                 .flex()
                 .flex_col()
                 .flex_1()
+                .min_h_0()
                 .overflow_y_scrollbar()
                 .px_6()
-                .child(settings_rows(root, group, style, cx)),
+                .child(settings_rows(root, group, style, window, cx)),
         )
 }
 
 fn settings_rows(
-    root: &RootView,
+    root: &mut RootView,
     group: SettingsGroupId,
     style: SettingsPanelStyle,
+    window: &mut Window,
     cx: &mut Context<RootView>,
 ) -> Div {
     match group {
-        SettingsGroupId::General => settings_general_rows(root, style, cx),
-        SettingsGroupId::Appearance => settings_appearance_rows(root, style, cx),
-        SettingsGroupId::Terminal => settings_terminal_rows(root, style, cx),
+        SettingsGroupId::General => settings_general_rows(root, style, window, cx),
+        SettingsGroupId::Appearance => settings_appearance_rows(root, style, window, cx),
+        SettingsGroupId::Terminal => settings_terminal_rows(root, style, window, cx),
         SettingsGroupId::ProjectLayout => settings_project_layout_rows(root, style, cx),
         SettingsGroupId::Keybindings => settings_keybinding_rows(root, style, cx),
     }
 }
 
 fn settings_general_rows(
-    root: &RootView,
+    root: &mut RootView,
     style: SettingsPanelStyle,
+    window: &mut Window,
     cx: &mut Context<RootView>,
 ) -> Div {
     let theme = root.theme_runtime.ui;
-    div().flex().flex_col().child(setting_row(
-        style,
-        theme,
-        "System notifications",
-        "Notify when agent terminal tasks complete or fail.",
-        settings_button(
-            "settings-notifications",
-            if root.system_notifications_enabled {
-                "On"
-            } else {
-                "Off"
-            },
-            root.system_notifications_enabled,
+    let language_select = root.settings_language_select(window, cx);
+    div()
+        .flex()
+        .flex_col()
+        .child(setting_row(
+            style,
             theme,
-            cx.listener(|this, _, _window, cx| {
-                let _ = this.run_command(CommandId::SettingsNotifications);
-                cx.notify();
-            }),
-        )
-        .into_any_element(),
-    ))
+            "Language",
+            "Application display language.",
+            settings_select_control(language_select, style, false, "Select language")
+                .into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            "System notifications",
+            "Notify when agent terminal tasks complete or fail.",
+            settings_button(
+                "settings-notifications",
+                if root.system_notifications_enabled {
+                    "On"
+                } else {
+                    "Off"
+                },
+                root.system_notifications_enabled,
+                theme,
+                cx.listener(|this, _, _window, cx| {
+                    let _ = this.run_command(CommandId::SettingsNotifications);
+                    cx.notify();
+                }),
+            )
+            .into_any_element(),
+        ))
 }
 
 fn settings_appearance_rows(
-    root: &RootView,
+    root: &mut RootView,
     style: SettingsPanelStyle,
+    window: &mut Window,
     cx: &mut Context<RootView>,
 ) -> Div {
     let theme = root.theme_runtime.ui;
     let settings_file = root.config_paths.settings_file().display().to_string();
     let themes_dir = root.config_paths.themes_dir().display().to_string();
+    let ui_theme_select = root.settings_ui_theme_select(window, cx);
+    let terminal_theme_select = root.settings_terminal_theme_select(window, cx);
 
     div()
         .flex()
@@ -2815,22 +3701,16 @@ fn settings_appearance_rows(
             theme,
             "UI theme",
             "Theme used for YTTT chrome, panels, and controls.",
-            settings_value(root.theme_runtime.theme_name.clone(), theme).into_any_element(),
+            settings_select_control(ui_theme_select, style, true, "Search theme...")
+                .into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
             "Terminal theme",
             "Optional terminal colors override.",
-            settings_value(
-                root.app_settings
-                    .theme
-                    .terminal
-                    .clone()
-                    .unwrap_or_else(|| "Follow UI theme".to_string()),
-                theme,
-            )
-            .into_any_element(),
+            settings_select_control(terminal_theme_select, style, true, "Search theme...")
+                .into_any_element(),
         ))
         .child(setting_row(
             style,
@@ -2869,12 +3749,18 @@ fn settings_appearance_rows(
 }
 
 fn settings_terminal_rows(
-    root: &RootView,
+    root: &mut RootView,
     style: SettingsPanelStyle,
+    window: &mut Window,
     cx: &mut Context<RootView>,
 ) -> Div {
     let theme = root.theme_runtime.ui;
-    let terminal = &root.app_settings.terminal;
+    let shell_select = root.settings_shell_select(window, cx);
+    let font_select = root.settings_font_family_select(window, cx);
+    let font_size_input = root.settings_number_input(SettingsNumberField::FontSize, window, cx);
+    let line_height_input = root.settings_number_input(SettingsNumberField::LineHeight, window, cx);
+    let padding_input = root.settings_number_input(SettingsNumberField::Padding, window, cx);
+    let scrollback_input = root.settings_number_input(SettingsNumberField::Scrollback, window, cx);
 
     div()
         .flex()
@@ -2884,42 +3770,64 @@ fn settings_terminal_rows(
             theme,
             "Default shell",
             "Shell command used when creating new terminal tabs.",
-            shell_choice_buttons(root, theme, cx).into_any_element(),
+            settings_select_control(shell_select, style, false, "Select shell").into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
             "Font family",
             "Terminal font family.",
-            settings_value(terminal.font_family.clone(), theme).into_any_element(),
+            settings_select_control(font_select, style, true, "Search font...").into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
             "Font size",
             "Terminal font size in pixels.",
-            settings_value(format!("{:.1}", terminal.font_size), theme).into_any_element(),
+            settings_number_control(font_size_input, style).into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
             "Line height",
             "Terminal line height multiplier.",
-            settings_value(format!("{:.2}", terminal.line_height), theme).into_any_element(),
+            settings_number_control(line_height_input, style).into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
             "Padding",
             "Terminal pane inner padding.",
-            settings_value(format!("{:.1}", terminal.padding), theme).into_any_element(),
+            settings_number_control(padding_input, style).into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
             "Scrollback",
             "Number of terminal lines kept in memory.",
-            settings_value(terminal.scrollback.to_string(), theme).into_any_element(),
+            settings_number_control(scrollback_input, style).into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            "Close pane on exit",
+            "Automatically close terminal panes when their process exits.",
+            settings_button(
+                "settings-close-on-exit",
+                if root.terminal_close_on_exit() {
+                    "On"
+                } else {
+                    "Off"
+                },
+                root.terminal_close_on_exit(),
+                theme,
+                cx.listener(|this, _, _window, cx| {
+                    let next = !this.terminal_close_on_exit();
+                    let _ = this.set_terminal_close_on_exit(next);
+                    cx.notify();
+                }),
+            )
+            .into_any_element(),
         ))
 }
 
@@ -2997,7 +3905,7 @@ fn settings_project_layout_rows(
 }
 
 fn settings_keybinding_rows(
-    root: &RootView,
+    root: &mut RootView,
     style: SettingsPanelStyle,
     cx: &mut Context<RootView>,
 ) -> Div {
@@ -3008,7 +3916,7 @@ fn settings_keybinding_rows(
         root.keybinding_warning_lines.join("; ")
     };
 
-    div()
+    let mut rows = div()
         .flex()
         .flex_col()
         .child(setting_row(
@@ -3032,16 +3940,108 @@ fn settings_keybinding_rows(
             "Keybinding diagnostics",
             "Show invalid commands and shortcut conflicts.",
             settings_value(diagnostics, theme).into_any_element(),
-        ))
+        ));
+
+    for row in root.visible_keybinding_rows() {
+        let command = row.command;
+        let keys = if row.keys.is_empty() {
+            "Unbound".to_string()
+        } else {
+            row.keys.join(", ")
+        };
+        let title = row.title;
+        let description = row.command_id;
+        let title_text = if row.has_conflict {
+            format!("{title} (conflict)")
+        } else {
+            title.to_string()
+        };
+
+        rows = rows.child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_4()
+                .min_h(style.row_min_height)
+                .border_b_1()
+                .border_color(theme.border)
+                .py_3()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .min_w_0()
+                        .flex_1()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme.text)
+                                .child(title_text),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.text_subtle)
+                                .child(description),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap_1()
+                        .flex_none()
+                        .child(settings_value(keys, theme))
+                        .child(settings_button(
+                            format!("settings-keybinding-edit-{}", row.command_id),
+                            "Edit",
+                            false,
+                            theme,
+                            cx.listener(move |this, _, _window, cx| {
+                                let _ = this.open_keybinding_edit_dialog(command);
+                                cx.notify();
+                            }),
+                        ))
+                        .child(settings_button(
+                            format!("settings-keybinding-reset-{}", row.command_id),
+                            "Reset",
+                            false,
+                            theme,
+                            cx.listener(move |this, _, _window, cx| {
+                                let _ = this.reset_keybinding_command_keys(command);
+                                cx.notify();
+                            }),
+                        ))
+                        .child(settings_button(
+                            format!("settings-keybinding-delete-{}", row.command_id),
+                            "Delete",
+                            false,
+                            theme,
+                            cx.listener(move |this, _, _window, cx| {
+                                let _ = this.delete_keybinding_command_keys(command);
+                                cx.notify();
+                            }),
+                        )),
+                ),
+        );
+    }
+
+    rows
 }
 
 fn setting_row(
     style: SettingsPanelStyle,
     theme: WorkbenchTheme,
-    title: &'static str,
-    description: &'static str,
+    title: impl Into<String>,
+    description: impl Into<String>,
     control: AnyElement,
 ) -> Div {
+    let title = title.into();
+    let description = description.into();
     div()
         .flex()
         .items_center()
@@ -3057,6 +4057,7 @@ fn setting_row(
                 .flex_col()
                 .gap_1()
                 .min_w_0()
+                .flex_1()
                 .child(
                     div()
                         .text_sm()
@@ -3071,48 +4072,44 @@ fn setting_row(
                         .child(description),
                 ),
         )
-        .child(div().flex_none().child(control))
+        .child(
+            div()
+                .flex()
+                .justify_end()
+                .items_center()
+                .w(style.control_width)
+                .flex_none()
+                .child(control),
+        )
 }
 
-fn shell_choice_buttons(root: &RootView, theme: WorkbenchTheme, cx: &mut Context<RootView>) -> Div {
-    let current = root.app_settings.terminal.shell.clone();
-    let mut shells = detect_shell_candidates();
-    if current != crate::config::settings::AUTO_SHELL && !shells.contains(&current) {
-        shells.insert(0, current.clone());
-    }
+fn settings_select_control(
+    select: Entity<SettingsStringSelectState>,
+    style: SettingsPanelStyle,
+    searchable: bool,
+    search_placeholder: &'static str,
+) -> Select<SearchableVec<String>> {
+    Select::new(&select)
+        .small()
+        .menu_width(style.select_menu_width)
+        .search_placeholder(search_placeholder)
+        .appearance(true)
+        .w(style.control_width)
+        .h(style.control_height)
+        .when(searchable, |select| select.cleanable(false))
+}
 
-    shells.into_iter().fold(
-        div()
-            .flex()
-            .flex_wrap()
-            .justify_end()
-            .gap_2()
-            .child(settings_button(
-                "settings-shell-auto",
-                "Auto",
-                current == crate::config::settings::AUTO_SHELL,
-                theme,
-                cx.listener(|this, _, _window, cx| {
-                    let _ = this.set_terminal_shell(crate::config::settings::AUTO_SHELL);
-                    cx.notify();
-                }),
-            )),
-        |row, shell| {
-            let selected = current == shell;
-            let id = format!("settings-shell-{shell}");
-            let shell_value = shell.clone();
-            row.child(settings_button(
-                id,
-                shell,
-                selected,
-                theme,
-                cx.listener(move |this, _, _window, cx| {
-                    let _ = this.set_terminal_shell(&shell_value);
-                    cx.notify();
-                }),
-            ))
-        },
-    )
+fn settings_number_control(input: Entity<InputState>, style: SettingsPanelStyle) -> Div {
+    div()
+        .w(style.compact_control_width)
+        .h(style.control_height)
+        .child(
+            NumberInput::new(&input)
+                .small()
+                .appearance(true)
+                .w(style.compact_control_width)
+                .h(style.control_height),
+        )
 }
 
 fn settings_command_button(
@@ -3236,6 +4233,7 @@ fn collect_terminal_pane_contexts(
             tab_title: tab_title.to_string(),
             pane: pane.clone(),
             is_focused: focused_pane_id == Some(pane.id.as_str()),
+            terminal_input_gate: TerminalInputGate::default(),
         }),
         LayoutNode::Split(split) => {
             collect_terminal_pane_contexts(
@@ -3270,6 +4268,57 @@ fn recent_projects_for_palette(config: RecentProjectsConfig) -> Vec<RecentProjec
             title: project.title,
             path: project.path,
         })
+        .collect()
+}
+
+fn push_unique_string(values: &mut Vec<String>, value: String) {
+    if values.iter().all(|existing| existing != &value) {
+        values.push(value);
+    }
+}
+
+fn selected_index_for_settings_option(items: &[String], selected: &str) -> Option<IndexPath> {
+    items
+        .iter()
+        .position(|item| item == selected)
+        .map(|index| IndexPath::default().row(index))
+}
+
+fn language_setting_labels() -> Vec<String> {
+    [
+        LanguageSetting::System,
+        LanguageSetting::English,
+        LanguageSetting::Chinese,
+    ]
+    .into_iter()
+    .map(language_setting_label)
+    .map(ToString::to_string)
+    .collect()
+}
+
+fn language_setting_label(language: LanguageSetting) -> &'static str {
+    match language {
+        LanguageSetting::System => "System",
+        LanguageSetting::English => "English",
+        LanguageSetting::Chinese => "中文",
+    }
+}
+
+fn language_setting_from_label(label: &str) -> Option<LanguageSetting> {
+    match label {
+        "System" => Some(LanguageSetting::System),
+        "English" => Some(LanguageSetting::English),
+        "中文" => Some(LanguageSetting::Chinese),
+        _ => None,
+    }
+}
+
+fn parse_keybinding_edit_value(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(ToString::to_string)
         .collect()
 }
 
@@ -3313,6 +4362,16 @@ fn load_keybindings_messages(
         }
         Err(error) => (Some(error.to_string()), Vec::new()),
     }
+}
+
+fn load_keybindings_editor_state(
+    paths: &AppConfigPaths,
+    registry: &CommandRegistry,
+) -> KeybindingsEditorState {
+    let config = load_keybindings(paths, registry)
+        .map(|loaded| loaded.config)
+        .unwrap_or_else(|_| crate::config::keybindings::default_keybindings());
+    KeybindingsEditorState::new(config, registry.clone())
 }
 
 fn load_app_settings_messages(paths: &AppConfigPaths) -> (AppSettings, Vec<String>) {
@@ -3364,6 +4423,9 @@ fn format_settings_warning_line(warning: &SettingsLoadWarning) -> String {
         SettingsLoadWarning::InvalidToml { path, message } => {
             format!("Settings {}: {message}", path.display())
         }
+        SettingsLoadWarning::InvalidGeneralValue { field } => {
+            format!("Settings general.{field} is invalid; using default")
+        }
         SettingsLoadWarning::InvalidTerminalValue { field } => {
             format!("Settings terminal.{field} is invalid; using default")
         }
@@ -3384,6 +4446,13 @@ fn format_theme_warning_line(warning: &ThemeLoadWarning) -> String {
         ThemeLoadWarning::InvalidColor { theme, field } => {
             format!("Theme {theme} has invalid color {field}; using fallback")
         }
+    }
+}
+
+fn ui_text_for_language(language: LanguageSetting) -> UiText {
+    match language {
+        LanguageSetting::System | LanguageSetting::English => UiText::english(),
+        LanguageSetting::Chinese => UiText::new(Locale::Chinese),
     }
 }
 
@@ -3505,6 +4574,79 @@ fn tab_rename_dialog(
                             theme,
                             cx.listener(|this, _, _window, cx| {
                                 let _ = this.confirm_tab_rename_dialog_from_input(cx);
+                                cx.notify();
+                            }),
+                        )),
+                ),
+        )
+}
+
+fn keybinding_edit_dialog(
+    cx: &mut Context<RootView>,
+    input: &Entity<InputState>,
+    theme: WorkbenchTheme,
+) -> Div {
+    let dialog = yttt_dialog_style(theme);
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
+        .bottom_0()
+        .flex()
+        .items_start()
+        .justify_center()
+        .pt_16()
+        .bg(dialog.overlay)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .w(dialog.max_width)
+                .rounded(dialog.radius)
+                .border_1()
+                .border_color(dialog.border)
+                .bg(dialog.background)
+                .p(dialog.padding)
+                .text_color(dialog.text)
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child("Edit keybinding"),
+                )
+                .child(yttt_dialog_input(input, theme))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(dialog.hint)
+                        .child("Separate multiple bindings with commas."),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(yttt_dialog_button(
+                            cx,
+                            "cancel-keybinding-edit",
+                            "Cancel",
+                            YtttButtonVariant::Secondary,
+                            theme,
+                            cx.listener(|this, _, _window, cx| {
+                                this.cancel_keybinding_edit_dialog();
+                                cx.notify();
+                            }),
+                        ))
+                        .child(yttt_dialog_button(
+                            cx,
+                            "confirm-keybinding-edit",
+                            "Save",
+                            YtttButtonVariant::Primary,
+                            theme,
+                            cx.listener(|this, _, _window, cx| {
+                                let _ = this.confirm_keybinding_edit_dialog_from_input(cx);
                                 cx.notify();
                             }),
                         )),

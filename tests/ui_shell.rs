@@ -2,6 +2,10 @@ use std::mem::discriminant;
 use yttt::config::{paths::AppConfigPaths, settings::TerminalSettings};
 use yttt::ui::app::workbench_window_options;
 use yttt::ui::components::{SelectableState, selectable_state_classes};
+use yttt::ui::font_options::{
+    SYSTEM_FONT_FAMILY_LABEL, terminal_font_family_option_for_setting,
+    terminal_font_family_options_from_system, terminal_font_family_setting_from_option,
+};
 use yttt::ui::palette_surface::{
     PaletteFooterAction, PaletteRowTone, palette_footer_actions, palette_panel_style,
     palette_row_style, palette_scroll_anchor_index,
@@ -94,7 +98,7 @@ fn app_window_options_use_custom_titlebar() {
     assert!(options.titlebar.is_some());
     assert_eq!(
         options.window_min_size,
-        Some(gpui::size(gpui::px(720.0), gpui::px(520.0)))
+        Some(gpui::size(gpui::px(960.0), gpui::px(640.0)))
     );
 }
 
@@ -236,25 +240,90 @@ fn palette_footer_exposes_keyboard_actions() {
 fn settings_panel_style_uses_zed_like_sidebar_and_content_bounds() {
     let style = settings_panel_style();
 
-    assert!(style.width >= gpui::px(920.0));
+    assert_eq!(style.width, gpui::px(900.0));
     assert!(style.max_width >= style.width);
-    assert!(style.max_height < gpui::px(720.0));
-    assert_eq!(style.sidebar_width, gpui::px(260.0));
-    assert_eq!(style.row_min_height, gpui::px(68.0));
+    assert_eq!(style.height, gpui::px(560.0));
+    assert!(style.max_height < gpui::px(640.0));
+    assert_eq!(style.sidebar_width, gpui::px(240.0));
+    assert_eq!(style.row_min_height, gpui::px(72.0));
+    assert_eq!(style.control_width, gpui::px(220.0));
+    assert_eq!(style.compact_control_width, gpui::px(128.0));
+    assert_eq!(style.control_height, gpui::px(32.0));
+    assert_eq!(style.search_height, gpui::px(36.0));
+    assert_eq!(style.select_menu_width, gpui::px(280.0));
     assert_eq!(style.border_width, gpui::px(1.0));
 }
 
 #[test]
 fn settings_rows_are_grouped_by_user_facing_sections() {
+    let general_rows = settings_rows_for_group(SettingsGroupId::General);
     let terminal_rows = settings_rows_for_group(SettingsGroupId::Terminal);
     let layout_rows = settings_rows_for_group(SettingsGroupId::ProjectLayout);
 
+    assert!(general_rows.iter().any(|row| row.title == "Language"));
     assert!(terminal_rows.iter().any(|row| row.title == "Default shell"));
     assert!(terminal_rows.iter().any(|row| row.title == "Font size"));
+    assert!(
+        terminal_rows
+            .iter()
+            .any(|row| row.title == "Close pane on exit")
+    );
     assert!(
         layout_rows
             .iter()
             .any(|row| row.title == "Edit layout TOML")
+    );
+}
+
+#[test]
+fn font_options_sort_and_dedupe_system_fonts() {
+    let options = terminal_font_family_options_from_system(
+        "B Font",
+        ["Z Font", "A Font", "A Font", "B Font"],
+    );
+
+    assert_eq!(
+        options,
+        vec![SYSTEM_FONT_FAMILY_LABEL, "A Font", "B Font", "Z Font"]
+    );
+}
+
+#[test]
+fn font_options_do_not_inject_hardcoded_recommendations() {
+    let options = terminal_font_family_options_from_system("Custom Font", ["Alpha"]);
+
+    assert_eq!(
+        options,
+        vec![SYSTEM_FONT_FAMILY_LABEL, "Custom Font", "Alpha"]
+    );
+    assert!(!options.iter().any(|font| font == "monospace"));
+    assert!(!options.iter().any(|font| font == "SF Mono"));
+    assert!(!options.iter().any(|font| font == "Menlo"));
+}
+
+#[test]
+fn font_options_prepend_missing_current_font() {
+    let options = terminal_font_family_options_from_system("Custom Font", ["Alpha", "Beta"]);
+
+    assert_eq!(
+        options,
+        vec![SYSTEM_FONT_FAMILY_LABEL, "Custom Font", "Alpha", "Beta"]
+    );
+}
+
+#[test]
+fn font_option_maps_system_default_to_empty_setting() {
+    assert_eq!(
+        terminal_font_family_option_for_setting(""),
+        SYSTEM_FONT_FAMILY_LABEL
+    );
+    assert_eq!(
+        terminal_font_family_setting_from_option(SYSTEM_FONT_FAMILY_LABEL),
+        ""
+    );
+    assert_eq!(
+        terminal_font_family_setting_from_option("JetBrains Mono"),
+        "JetBrains Mono"
     );
 }
 
@@ -278,6 +347,18 @@ fn yttt_input_style_makes_dialog_input_visible() {
     assert_eq!(style.background, theme.surface_elevated);
     assert_eq!(style.border, theme.border);
     assert_eq!(style.focused_border, theme.border_strong);
+}
+
+#[test]
+fn yttt_input_style_has_settings_control_variant() {
+    let theme = WorkbenchTheme::dark();
+    let style = yttt_input_style(YtttInputKind::Settings, theme);
+
+    assert_eq!(style.height, gpui::px(32.0));
+    assert_eq!(style.radius, gpui::px(6.0));
+    assert_eq!(style.background, theme.surface_elevated);
+    assert_eq!(style.border, theme.border);
+    assert_eq!(style.focused_border, theme.focused_pane_border);
 }
 
 #[test]

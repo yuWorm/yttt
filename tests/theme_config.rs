@@ -42,6 +42,31 @@ foreground = "#eeeeee"
 }
 
 #[test]
+fn theme_store_exposes_sorted_theme_names_for_settings_selects() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    std::fs::create_dir_all(paths.themes_dir()).unwrap();
+    std::fs::write(
+        paths.themes_dir().join("zed-like.toml"),
+        r##"
+name = "zed-like"
+mode = "dark"
+
+[ui]
+background = "#20232a"
+"##,
+    )
+    .unwrap();
+
+    let loaded = load_theme_store(&paths).unwrap();
+
+    assert_eq!(
+        loaded.store.theme_names(),
+        vec!["yttt-dark".to_string(), "zed-like".to_string()]
+    );
+}
+
+#[test]
 fn theme_runtime_resolves_ui_and_terminal_from_theme_name() {
     let settings = AppSettings::default();
     let store = ThemeStore::builtin();
@@ -80,4 +105,17 @@ fn terminal_config_uses_runtime_settings_and_colors() {
     assert_eq!(config.font_size, gpui::px(15.0));
     assert_eq!(config.padding.left, gpui::px(8.0));
     assert_eq!(config.scrollback, 10000);
+}
+
+#[test]
+fn terminal_config_uses_upstream_default_font_when_setting_is_empty() {
+    let mut runtime = ThemeRuntime::default();
+    runtime.terminal_settings.font_family = String::new();
+
+    let config = runtime.to_terminal_config();
+
+    assert_eq!(
+        config.font_family,
+        gpui_terminal::TerminalConfig::default().font_family
+    );
 }

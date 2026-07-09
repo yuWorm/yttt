@@ -1,6 +1,6 @@
 use std::{borrow::Cow, collections::HashSet};
 
-use gpui::{KeyBinding, actions};
+use gpui::{KeyBinding, KeybindingKeystroke, Keystroke, actions};
 
 use crate::{
     commands::{CommandId, CommandRegistry},
@@ -224,33 +224,13 @@ pub fn default_ui_keybinding_specs() -> &'static [UiKeybindingSpec] {
     DEFAULT_UI_KEYBINDING_SPECS
 }
 
-pub fn default_ui_keybindings() -> Vec<KeyBinding> {
-    let mut bindings: Vec<_> = default_ui_keybinding_specs()
-        .iter()
-        .map(command_keybinding)
-        .collect();
-    bindings.extend(built_in_ui_keybindings());
-    bindings
+pub fn app_startup_keybindings() -> Vec<KeyBinding> {
+    built_in_ui_keybindings()
 }
 
 pub fn load_app_keybindings(paths: &AppConfigPaths, registry: &CommandRegistry) -> Vec<KeyBinding> {
-    let Ok(loaded) = load_keybindings(paths, registry) else {
-        return default_ui_keybindings();
-    };
-
-    let mut bindings = ui_keybindings_from_config(&loaded.config, registry);
-    bindings.extend(built_in_ui_keybindings());
-    bindings
-}
-
-pub fn ui_keybindings_from_config(
-    config: &KeybindingsConfig,
-    registry: &CommandRegistry,
-) -> Vec<KeyBinding> {
-    ui_keybinding_specs_from_config(config, registry)
-        .iter()
-        .map(command_keybinding)
-        .collect()
+    let _ = load_keybindings(paths, registry);
+    app_startup_keybindings()
 }
 
 pub fn ui_keybinding_specs_from_config(
@@ -281,6 +261,21 @@ pub fn ui_keybinding_specs_from_config(
         .collect()
 }
 
+pub fn runtime_command_for_keystroke(
+    specs: &[UiKeybindingSpec],
+    keystroke: &Keystroke,
+) -> Option<CommandId> {
+    specs
+        .iter()
+        .find(|spec| {
+            Keystroke::parse(spec.keys.as_ref())
+                .map(KeybindingKeystroke::from_keystroke)
+                .map(|target| keystroke.should_match(&target))
+                .unwrap_or(false)
+        })
+        .map(|spec| spec.command)
+}
+
 fn built_in_ui_keybindings() -> Vec<KeyBinding> {
     vec![
         KeyBinding::new("down", PaletteSelectNext, Some(WORKSPACE_CONTEXT)),
@@ -288,63 +283,6 @@ fn built_in_ui_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("enter", PaletteConfirm, Some(WORKSPACE_CONTEXT)),
         KeyBinding::new("escape", PaletteCancel, Some(WORKSPACE_CONTEXT)),
     ]
-}
-
-fn command_keybinding(spec: &UiKeybindingSpec) -> KeyBinding {
-    let keys = spec.keys.as_ref();
-    match spec.command {
-        CommandId::ProjectOpen => KeyBinding::new(keys, OpenProject, Some(WORKSPACE_CONTEXT)),
-        CommandId::ProjectClose => KeyBinding::new(keys, ProjectClose, Some(WORKSPACE_CONTEXT)),
-        CommandId::CommandPaletteOpen => {
-            KeyBinding::new(keys, OpenCommandPalette, Some(WORKSPACE_CONTEXT))
-        }
-        CommandId::ProjectPalette => {
-            KeyBinding::new(keys, OpenProjectPalette, Some(WORKSPACE_CONTEXT))
-        }
-        CommandId::TabPalette => KeyBinding::new(keys, OpenTabPalette, Some(WORKSPACE_CONTEXT)),
-        CommandId::PanePalette => KeyBinding::new(keys, OpenPanePalette, Some(WORKSPACE_CONTEXT)),
-        CommandId::TabNew => KeyBinding::new(keys, TabNew, Some(WORKSPACE_CONTEXT)),
-        CommandId::TabClose => KeyBinding::new(keys, TabClose, Some(WORKSPACE_CONTEXT)),
-        CommandId::TabRename => KeyBinding::new(keys, TabRename, Some(WORKSPACE_CONTEXT)),
-        CommandId::TabNext => KeyBinding::new(keys, TabNext, Some(WORKSPACE_CONTEXT)),
-        CommandId::TabPrev => KeyBinding::new(keys, TabPrev, Some(WORKSPACE_CONTEXT)),
-        CommandId::PaneSplitVertical => {
-            KeyBinding::new(keys, PaneSplitVertical, Some(WORKSPACE_CONTEXT))
-        }
-        CommandId::PaneSplitHorizontal => {
-            KeyBinding::new(keys, PaneSplitHorizontal, Some(WORKSPACE_CONTEXT))
-        }
-        CommandId::PaneClose => KeyBinding::new(keys, PaneClose, Some(WORKSPACE_CONTEXT)),
-        CommandId::PaneRename => KeyBinding::new(keys, PaneRename, Some(WORKSPACE_CONTEXT)),
-        CommandId::PaneFocusLeft => KeyBinding::new(keys, PaneFocusLeft, Some(WORKSPACE_CONTEXT)),
-        CommandId::PaneFocusRight => KeyBinding::new(keys, PaneFocusRight, Some(WORKSPACE_CONTEXT)),
-        CommandId::PaneFocusUp => KeyBinding::new(keys, PaneFocusUp, Some(WORKSPACE_CONTEXT)),
-        CommandId::PaneFocusDown => KeyBinding::new(keys, PaneFocusDown, Some(WORKSPACE_CONTEXT)),
-        CommandId::PaneResizeLeft => KeyBinding::new(keys, PaneResizeLeft, Some(WORKSPACE_CONTEXT)),
-        CommandId::PaneResizeRight => {
-            KeyBinding::new(keys, PaneResizeRight, Some(WORKSPACE_CONTEXT))
-        }
-        CommandId::PaneResizeUp => KeyBinding::new(keys, PaneResizeUp, Some(WORKSPACE_CONTEXT)),
-        CommandId::PaneResizeDown => KeyBinding::new(keys, PaneResizeDown, Some(WORKSPACE_CONTEXT)),
-        CommandId::LayoutSaveCurrent => {
-            KeyBinding::new(keys, LayoutSaveCurrent, Some(WORKSPACE_CONTEXT))
-        }
-        CommandId::LayoutExportProjectConfig => {
-            KeyBinding::new(keys, LayoutExportProjectConfig, Some(WORKSPACE_CONTEXT))
-        }
-        CommandId::LayoutOpenFile => KeyBinding::new(keys, LayoutOpenFile, Some(WORKSPACE_CONTEXT)),
-        CommandId::SettingsOpen => KeyBinding::new(keys, SettingsOpen, Some(WORKSPACE_CONTEXT)),
-        CommandId::SettingsKeybindings => {
-            KeyBinding::new(keys, SettingsKeybindings, Some(WORKSPACE_CONTEXT))
-        }
-        CommandId::SettingsNotifications => {
-            KeyBinding::new(keys, SettingsNotifications, Some(WORKSPACE_CONTEXT))
-        }
-        _ => unreachable!(
-            "unsupported default UI keybinding command: {:?}",
-            spec.command
-        ),
-    }
 }
 
 fn command_has_ui_action(command: CommandId) -> bool {

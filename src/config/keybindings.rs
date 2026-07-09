@@ -98,6 +98,25 @@ pub enum KeybindingsLoadError {
     },
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum KeybindingsSaveError {
+    #[error("failed to create keybindings config directory {path}: {source}")]
+    CreateConfigDirectory {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("failed to serialize keybindings at {path}: {source}")]
+    Serialize {
+        path: PathBuf,
+        source: toml::ser::Error,
+    },
+    #[error("failed to write keybindings at {path}: {source}")]
+    Write {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+}
+
 pub fn load_keybindings(
     paths: &AppConfigPaths,
     registry: &CommandRegistry,
@@ -117,6 +136,33 @@ pub fn load_keybindings(
         warnings: keybinding_warnings(&config, registry),
         config,
     })
+}
+
+pub fn save_keybindings(
+    paths: &AppConfigPaths,
+    config: &KeybindingsConfig,
+) -> Result<PathBuf, KeybindingsSaveError> {
+    let path = paths.keybindings_file();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| {
+            KeybindingsSaveError::CreateConfigDirectory {
+                path: parent.to_path_buf(),
+                source,
+            }
+        })?;
+    }
+
+    let source =
+        toml::to_string_pretty(config).map_err(|source| KeybindingsSaveError::Serialize {
+            path: path.clone(),
+            source,
+        })?;
+    fs::write(&path, source).map_err(|source| KeybindingsSaveError::Write {
+        path: path.clone(),
+        source,
+    })?;
+
+    Ok(path)
 }
 
 pub fn ensure_keybindings_file(paths: &AppConfigPaths) -> Result<PathBuf, KeybindingsLoadError> {

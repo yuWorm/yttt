@@ -4,8 +4,9 @@ use tempfile::tempdir;
 use yttt::config::{
     paths::AppConfigPaths,
     settings::{
-        AUTO_SHELL, AppSettings, detect_shell_candidates_with, load_or_create_settings,
-        resolve_default_shell, save_settings,
+        AUTO_SHELL, AppSettings, LanguageSetting, SettingsLoadWarning,
+        detect_shell_candidates_with, load_or_create_settings, resolve_default_shell,
+        save_settings,
     },
 };
 
@@ -27,17 +28,26 @@ fn missing_settings_file_writes_defaults() {
 
     let loaded = load_or_create_settings(&paths).unwrap();
 
+    assert_eq!(loaded.settings.general.language, LanguageSetting::System);
     assert_eq!(loaded.settings.theme.name, "yttt-dark");
     assert_eq!(loaded.settings.theme.terminal, None);
     assert!(!loaded.settings.notifications.system);
-    assert_eq!(loaded.settings.terminal.font_family, "monospace");
+    assert_eq!(loaded.settings.terminal.font_family, "");
     assert_eq!(loaded.settings.terminal.shell, AUTO_SHELL);
     assert_eq!(loaded.settings.terminal.font_size, 13.0);
     assert_eq!(loaded.settings.terminal.line_height, 1.15);
     assert_eq!(loaded.settings.terminal.padding, 6.0);
     assert_eq!(loaded.settings.terminal.scrollback, 10000);
+    assert!(loaded.settings.terminal.close_on_exit);
     assert!(paths.settings_file().exists());
     assert!(loaded.warnings.is_empty());
+}
+
+#[test]
+fn settings_default_language_is_system() {
+    let settings = AppSettings::default();
+
+    assert_eq!(settings.general.language, LanguageSetting::System);
 }
 
 #[test]
@@ -67,6 +77,29 @@ scrollback = 0
 }
 
 #[test]
+fn invalid_language_falls_back_to_system() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(
+        paths.settings_file(),
+        r#"
+[general]
+language = "xx"
+"#,
+    )
+    .unwrap();
+
+    let loaded = load_or_create_settings(&paths).unwrap();
+
+    assert_eq!(loaded.settings.general.language, LanguageSetting::System);
+    assert_eq!(
+        loaded.warnings,
+        vec![SettingsLoadWarning::InvalidGeneralValue { field: "language" }]
+    );
+}
+
+#[test]
 fn settings_persist_notification_and_terminal_shell_choices() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
@@ -84,15 +117,46 @@ fn settings_persist_notification_and_terminal_shell_choices() {
 }
 
 #[test]
+fn settings_persist_language_and_close_on_exit() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    let mut settings = AppSettings::default();
+    settings.general.language = LanguageSetting::Chinese;
+    settings.terminal.close_on_exit = false;
+
+    save_settings(&paths, &settings).unwrap();
+    let loaded = load_or_create_settings(&paths).unwrap();
+
+    assert_eq!(loaded.settings.general.language, LanguageSetting::Chinese);
+    assert!(!loaded.settings.terminal.close_on_exit);
+}
+
+#[test]
 fn shell_detection_prioritizes_shell_env_then_common_system_shells() {
     let candidates = detect_shell_candidates_with(Some("/opt/homebrew/bin/fish"), |path| {
-        matches!(path, "/bin/zsh" | "/bin/bash")
+        matches!(path, "/opt/homebrew/bin/fish" | "/bin/zsh" | "/bin/bash")
     });
 
     assert_eq!(
         candidates,
         vec![
             "/opt/homebrew/bin/fish".to_string(),
+            "/bin/zsh".to_string(),
+            "/bin/bash".to_string(),
+            "sh".to_string()
+        ]
+    );
+}
+
+#[test]
+fn shell_detection_skips_missing_shell_env_value() {
+    let candidates = detect_shell_candidates_with(Some("/tmp/not-a-shell"), |path| {
+        matches!(path, "/bin/zsh" | "/bin/bash")
+    });
+
+    assert_eq!(
+        candidates,
+        vec![
             "/bin/zsh".to_string(),
             "/bin/bash".to_string(),
             "sh".to_string()

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::atomic::Ordering};
 
 use gpui::{Context, Entity, EventEmitter, IntoElement, Render, Window, div, prelude::*};
 use gpui_terminal::{TerminalConfig, TerminalView};
@@ -13,7 +13,7 @@ use crate::{
             spawn_portable_pty_session,
         },
     },
-    ui::theme::WorkbenchTheme,
+    ui::{input_owner::TerminalInputGate, theme::WorkbenchTheme},
 };
 
 #[derive(Clone, Debug)]
@@ -25,6 +25,7 @@ pub struct TerminalPaneContext {
     pub tab_title: String,
     pub pane: PaneConfig,
     pub is_focused: bool,
+    pub terminal_input_gate: TerminalInputGate,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -118,6 +119,7 @@ impl TerminalPaneView {
             tab_title,
             pane,
             is_focused: _,
+            terminal_input_gate,
         } = context;
         let mut session = match spawn_portable_pty_session(
             TerminalSpawnRequest::for_shell(&pane.id, &pane.command).cwd(project_path.clone()),
@@ -177,8 +179,10 @@ impl TerminalPaneView {
         let resize_handle = session.resize_handle();
         let parent = cx.weak_entity();
         let initial_config = terminal_config.clone();
+        let terminal_input_allowed = terminal_input_gate.shared_flag();
         let terminal = cx.new(|cx| {
             TerminalView::new(io.writer, io.reader, initial_config, cx)
+                .with_key_handler(move |_event| !terminal_input_allowed.load(Ordering::SeqCst))
                 .with_resize_callback(move |cols, rows| {
                     let _ = resize_handle.resize(cols, rows);
                 })
@@ -280,6 +284,17 @@ impl TerminalPaneView {
             });
         }
         self.terminal_config = config;
+    }
+
+    pub fn update_terminal_appearance(
+        &mut self,
+        config: TerminalConfig,
+        theme: WorkbenchTheme,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_terminal_config(config, cx);
+        self.theme = theme;
+        cx.notify();
     }
 }
 

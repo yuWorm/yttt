@@ -25,6 +25,12 @@ impl ThemeStore {
         self.themes.get(name)
     }
 
+    pub fn theme_names(&self) -> Vec<String> {
+        let mut names = self.themes.keys().cloned().collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
     fn insert(&mut self, theme: AppTheme) {
         self.themes.insert(theme.name.clone(), theme);
     }

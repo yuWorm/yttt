@@ -1,7 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use directories::ProjectDirs;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppConfigPaths {
     config_dir: PathBuf,
@@ -15,9 +13,7 @@ impl AppConfigPaths {
     }
 
     pub fn for_app() -> Self {
-        ProjectDirs::from("dev", "yttt", "yttt")
-            .map(|dirs| Self::from_config_dir(dirs.config_dir().to_path_buf()))
-            .unwrap_or_else(|| Self::from_config_dir(fallback_config_dir()))
+        Self::from_config_dir(default_config_dir())
     }
 
     pub fn config_dir(&self) -> &Path {
@@ -59,13 +55,31 @@ impl AppConfigPaths {
 }
 
 fn fallback_config_dir() -> PathBuf {
-    if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME") {
-        return PathBuf::from(config_home).join("yttt");
+    fallback_config_dir_from_parts(
+        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+        std::env::var_os("HOME").map(PathBuf::from),
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    )
+}
+
+fn default_config_dir() -> PathBuf {
+    fallback_config_dir()
+}
+
+fn fallback_config_dir_from_parts(
+    xdg_config_home: Option<PathBuf>,
+    home: Option<PathBuf>,
+    current_dir: PathBuf,
+) -> PathBuf {
+    if let Some(config_home) = xdg_config_home.filter(|path| !path.as_os_str().is_empty()) {
+        return config_home.join("yttt");
     }
 
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".yttt")
+    if let Some(home) = home.filter(|path| !path.as_os_str().is_empty()) {
+        return home.join(".config").join("yttt");
+    }
+
+    current_dir.join(".yttt")
 }
 
 fn encode_path(path: &Path) -> String {
@@ -81,4 +95,38 @@ fn encode_path(path: &Path) -> String {
     }
 
     encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fallback_config_dir_prefers_xdg_config_home() {
+        let dir = fallback_config_dir_from_parts(
+            Some(PathBuf::from("/tmp/xdg")),
+            Some(PathBuf::from("/Users/example")),
+            PathBuf::from("/repo"),
+        );
+
+        assert_eq!(dir, PathBuf::from("/tmp/xdg/yttt"));
+    }
+
+    #[test]
+    fn fallback_config_dir_uses_home_config_when_xdg_is_missing() {
+        let dir = fallback_config_dir_from_parts(
+            None,
+            Some(PathBuf::from("/Users/example")),
+            PathBuf::from("/repo"),
+        );
+
+        assert_eq!(dir, PathBuf::from("/Users/example/.config/yttt"));
+    }
+
+    #[test]
+    fn fallback_config_dir_uses_local_directory_only_without_home() {
+        let dir = fallback_config_dir_from_parts(None, None, PathBuf::from("/repo"));
+
+        assert_eq!(dir, PathBuf::from("/repo/.yttt"));
+    }
 }

@@ -3,7 +3,10 @@ pub mod agent_status;
 pub mod app;
 pub mod assets;
 pub mod components;
+pub mod font_options;
 pub mod i18n;
+pub mod input_owner;
+pub mod keybindings_editor;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod palette;

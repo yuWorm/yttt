@@ -8,6 +8,7 @@ use crate::config::paths::AppConfigPaths;
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
+    pub general: GeneralSettings,
     pub theme: ThemeSettings,
     pub notifications: NotificationSettings,
     pub terminal: TerminalSettings,
@@ -16,9 +17,35 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            general: GeneralSettings::default(),
             theme: ThemeSettings::default(),
             notifications: NotificationSettings::default(),
             terminal: TerminalSettings::default(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LanguageSetting {
+    #[serde(rename = "system")]
+    System,
+    #[serde(rename = "en")]
+    English,
+    #[serde(rename = "zh-CN")]
+    Chinese,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct GeneralSettings {
+    pub language: LanguageSetting,
+}
+
+impl Default for GeneralSettings {
+    fn default() -> Self {
+        Self {
+            language: LanguageSetting::System,
         }
     }
 }
@@ -62,17 +89,19 @@ pub struct TerminalSettings {
     pub line_height: f32,
     pub padding: f32,
     pub scrollback: usize,
+    pub close_on_exit: bool,
 }
 
 impl Default for TerminalSettings {
     fn default() -> Self {
         Self {
             shell: AUTO_SHELL.to_string(),
-            font_family: "monospace".to_string(),
+            font_family: String::new(),
             font_size: 13.0,
             line_height: 1.15,
             padding: 6.0,
             scrollback: 10000,
+            close_on_exit: true,
         }
     }
 }
@@ -86,6 +115,7 @@ pub struct LoadedSettings {
 #[derive(Clone, Debug, PartialEq)]
 pub enum SettingsLoadWarning {
     InvalidToml { path: PathBuf, message: String },
+    InvalidGeneralValue { field: &'static str },
     InvalidTerminalValue { field: &'static str },
 }
 
@@ -142,19 +172,59 @@ pub fn load_or_create_settings(
     })?;
 
     let mut warnings = Vec::new();
-    let settings = match toml::from_str::<AppSettings>(&source) {
+    let settings = parse_settings_source(&source, &path, &mut warnings);
+    let settings = validate_settings(settings, &mut warnings);
+
+    Ok(LoadedSettings { settings, warnings })
+}
+
+fn parse_settings_source(
+    source: &str,
+    path: &Path,
+    warnings: &mut Vec<SettingsLoadWarning>,
+) -> AppSettings {
+    let mut value = match toml::from_str::<toml::Value>(source) {
+        Ok(value) => value,
+        Err(error) => {
+            warnings.push(SettingsLoadWarning::InvalidToml {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            });
+            return AppSettings::default();
+        }
+    };
+
+    normalize_general_settings(&mut value, warnings);
+
+    match value.try_into::<AppSettings>() {
         Ok(settings) => settings,
         Err(error) => {
             warnings.push(SettingsLoadWarning::InvalidToml {
-                path,
+                path: path.to_path_buf(),
                 message: error.to_string(),
             });
             AppSettings::default()
         }
-    };
-    let settings = validate_settings(settings, &mut warnings);
+    }
+}
 
-    Ok(LoadedSettings { settings, warnings })
+fn normalize_general_settings(value: &mut toml::Value, warnings: &mut Vec<SettingsLoadWarning>) {
+    let Some(general) = value.get_mut("general").and_then(toml::Value::as_table_mut) else {
+        return;
+    };
+    let Some(language) = general.get("language") else {
+        return;
+    };
+
+    if matches!(language.as_str(), Some("system" | "en" | "zh-CN")) {
+        return;
+    }
+
+    general.insert(
+        "language".to_string(),
+        toml::Value::String("system".to_string()),
+    );
+    warnings.push(SettingsLoadWarning::InvalidGeneralValue { field: "language" });
 }
 
 pub fn save_settings(
@@ -192,7 +262,10 @@ pub fn detect_shell_candidates_with(
     exists: impl Fn(&str) -> bool,
 ) -> Vec<String> {
     let mut candidates = Vec::new();
-    if let Some(shell_env) = shell_env.map(str::trim).filter(|shell| !shell.is_empty()) {
+    if let Some(shell_env) = shell_env
+        .map(str::trim)
+        .filter(|shell| !shell.is_empty() && exists(shell))
+    {
         push_unique(&mut candidates, shell_env);
     }
 

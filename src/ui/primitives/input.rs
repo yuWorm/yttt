@@ -6,6 +6,7 @@ use crate::ui::theme::WorkbenchTheme;
 pub enum YtttInputKind {
     Dialog,
     Palette,
+    Settings,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -24,11 +25,18 @@ pub fn yttt_input_style(kind: YtttInputKind, theme: WorkbenchTheme) -> YtttInput
         height: match kind {
             YtttInputKind::Dialog => px(34.0),
             YtttInputKind::Palette => px(42.0),
+            YtttInputKind::Settings => px(32.0),
         },
-        radius: px(7.0),
+        radius: match kind {
+            YtttInputKind::Settings => px(6.0),
+            YtttInputKind::Dialog | YtttInputKind::Palette => px(7.0),
+        },
         background: theme.surface_elevated,
         border: theme.border,
-        focused_border: theme.border_strong,
+        focused_border: match kind {
+            YtttInputKind::Settings => theme.focused_pane_border,
+            YtttInputKind::Dialog | YtttInputKind::Palette => theme.border_strong,
+        },
         text: theme.text,
         placeholder: theme.text_subtle,
     }

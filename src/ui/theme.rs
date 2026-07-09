@@ -170,10 +170,17 @@ impl ThemeRuntime {
     }
 
     pub fn to_terminal_config(&self) -> TerminalConfig {
+        let default_config = TerminalConfig::default();
+        let font_family = if self.terminal_settings.font_family.trim().is_empty() {
+            default_config.font_family
+        } else {
+            self.terminal_settings.font_family.clone()
+        };
+
         TerminalConfig {
             cols: 80,
             rows: 24,
-            font_family: self.terminal_settings.font_family.clone(),
+            font_family,
             font_size: px(self.terminal_settings.font_size),
             scrollback: self.terminal_settings.scrollback,
             line_height_multiplier: self.terminal_settings.line_height,

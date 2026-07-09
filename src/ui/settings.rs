@@ -3,20 +3,32 @@ use gpui::{Pixels, px};
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SettingsPanelStyle {
     pub width: Pixels,
+    pub height: Pixels,
     pub max_width: Pixels,
     pub max_height: Pixels,
     pub sidebar_width: Pixels,
     pub row_min_height: Pixels,
+    pub control_width: Pixels,
+    pub compact_control_width: Pixels,
+    pub control_height: Pixels,
+    pub search_height: Pixels,
+    pub select_menu_width: Pixels,
     pub border_width: Pixels,
 }
 
 pub fn settings_panel_style() -> SettingsPanelStyle {
     SettingsPanelStyle {
-        width: px(980.0),
-        max_width: px(1180.0),
-        max_height: px(680.0),
-        sidebar_width: px(260.0),
-        row_min_height: px(68.0),
+        width: px(900.0),
+        height: px(560.0),
+        max_width: px(940.0),
+        max_height: px(600.0),
+        sidebar_width: px(240.0),
+        row_min_height: px(72.0),
+        control_width: px(220.0),
+        compact_control_width: px(128.0),
+        control_height: px(32.0),
+        search_height: px(36.0),
+        select_menu_width: px(280.0),
         border_width: px(1.0),
     }
 }
@@ -82,10 +94,16 @@ pub struct SettingsRowMeta {
 
 pub fn settings_rows_for_group(group: SettingsGroupId) -> Vec<SettingsRowMeta> {
     match group {
-        SettingsGroupId::General => vec![SettingsRowMeta {
-            title: "System notifications",
-            description: "Notify when agent terminal tasks complete or fail.",
-        }],
+        SettingsGroupId::General => vec![
+            SettingsRowMeta {
+                title: "Language",
+                description: "Application display language.",
+            },
+            SettingsRowMeta {
+                title: "System notifications",
+                description: "Notify when agent terminal tasks complete or fail.",
+            },
+        ],
         SettingsGroupId::Appearance => vec![
             SettingsRowMeta {
                 title: "UI theme",
@@ -128,6 +146,10 @@ pub fn settings_rows_for_group(group: SettingsGroupId) -> Vec<SettingsRowMeta> {
             SettingsRowMeta {
                 title: "Scrollback",
                 description: "Number of terminal lines kept in memory.",
+            },
+            SettingsRowMeta {
+                title: "Close pane on exit",
+                description: "Automatically close terminal panes when their process exits.",
             },
         ],
         SettingsGroupId::ProjectLayout => vec![

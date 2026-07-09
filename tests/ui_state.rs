@@ -1,14 +1,15 @@
 use std::{fs, path::PathBuf};
 
+use gpui::Keystroke;
 use tempfile::tempdir;
 use yttt::{
     commands::CommandId,
-    config::paths::AppConfigPaths,
+    config::{paths::AppConfigPaths, settings::LanguageSetting},
     model::{
         layout::PaneKind,
         layout::SplitDirection,
         split_tree::ResizeDirection,
-        workspace::{AgentStatus, Workspace},
+        workspace::{AgentStatus, PaneProcessState, Workspace},
     },
     palette::{ActivePalette, PaletteItem, PaletteKind},
     runtime::git_status::{GitStatusSummary, parse_git_status_porcelain},
@@ -16,6 +17,7 @@ use yttt::{
     runtime::terminal::{ExitReason, ProcessStatus},
     ui::components::SelectableState,
     ui::i18n::{Locale, UiText},
+    ui::input_owner::{InputOwnerKind, InputOwnerStack, TerminalInputGate},
     ui::palette::visible_palette_rows,
     ui::sidebar::visible_project_items,
     ui::terminal_pane::{
@@ -119,6 +121,49 @@ fn root_view_toggles_sidebar_collapse_state() {
     root.toggle_sidebar();
 
     assert!(root.sidebar_is_collapsed());
+}
+
+#[test]
+fn input_owner_stack_restores_parent_after_nested_owner_closes() {
+    let mut stack = InputOwnerStack::default();
+    let settings = stack.push(InputOwnerKind::Settings);
+    let recorder = stack.push(InputOwnerKind::KeybindingRecorder);
+
+    assert_eq!(stack.active_kind(), InputOwnerKind::KeybindingRecorder);
+    stack.pop(recorder);
+    assert_eq!(stack.active_kind(), InputOwnerKind::Settings);
+    stack.pop(settings);
+    assert_eq!(stack.active_kind(), InputOwnerKind::Workspace);
+}
+
+#[test]
+fn input_owner_stack_closing_parent_removes_descendants() {
+    let mut stack = InputOwnerStack::default();
+    let palette = stack.push(InputOwnerKind::Palette);
+    let dialog = stack.push(InputOwnerKind::Dialog);
+    let recorder = stack.push(InputOwnerKind::KeybindingRecorder);
+
+    stack.pop(dialog);
+
+    assert_eq!(stack.active_kind(), InputOwnerKind::Palette);
+    stack.pop(recorder);
+    assert_eq!(stack.active_kind(), InputOwnerKind::Palette);
+    stack.pop(palette);
+    assert_eq!(stack.active_kind(), InputOwnerKind::Workspace);
+}
+
+#[test]
+fn terminal_input_gate_allows_only_workspace_owner() {
+    let gate = TerminalInputGate::default();
+    let mut stack = InputOwnerStack::default();
+
+    gate.sync_from_owner(stack.active_kind());
+    assert!(gate.allows_terminal_input());
+
+    stack.push(InputOwnerKind::Editor);
+    gate.sync_from_owner(stack.active_kind());
+
+    assert!(!gate.allows_terminal_input());
 }
 
 #[test]
@@ -432,6 +477,40 @@ fn root_view_toggles_system_notifications() {
 }
 
 #[test]
+fn root_view_language_setting_persists_and_updates_visible_text() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths.clone());
+
+    root.set_language(LanguageSetting::Chinese).unwrap();
+
+    assert_eq!(
+        root.visible_empty_workspace_actions(),
+        vec!["打开目录", "打开最近项目", "命令面板"]
+    );
+
+    let reloaded = RootView::with_config_paths(paths);
+    assert_eq!(
+        reloaded.visible_empty_workspace_actions(),
+        vec!["打开目录", "打开最近项目", "命令面板"]
+    );
+}
+
+#[test]
+fn root_view_terminal_close_on_exit_setting_persists() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths.clone());
+
+    assert!(root.terminal_close_on_exit());
+
+    root.set_terminal_close_on_exit(false).unwrap();
+
+    assert!(!root.terminal_close_on_exit());
+    assert!(!RootView::with_config_paths(paths).terminal_close_on_exit());
+}
+
+#[test]
 fn root_view_terminal_shell_setting_changes_new_shell_tabs() {
     let temp = tempdir().unwrap();
     let project_dir = temp.path().join("shell-settings-project");
@@ -448,6 +527,128 @@ fn root_view_terminal_shell_setting_changes_new_shell_tabs() {
     let tab = project.layout.tab(&project.selected_tab_id).unwrap();
     let pane = tab.layout.find_pane("shell").unwrap();
     assert_eq!(pane.command, "/bin/bash");
+}
+
+#[test]
+fn root_view_terminal_display_settings_persist() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths.clone());
+
+    root.set_terminal_font_family("JetBrains Mono").unwrap();
+    root.set_terminal_font_size(14.5).unwrap();
+    root.set_terminal_line_height(1.2).unwrap();
+    root.set_terminal_padding(8.0).unwrap();
+    root.set_terminal_scrollback(20000).unwrap();
+
+    let runtime = &root.theme_runtime().terminal_settings;
+    assert_eq!(runtime.font_family, "JetBrains Mono");
+    assert_eq!(runtime.font_size, 14.5);
+    assert_eq!(runtime.line_height, 1.2);
+    assert_eq!(runtime.padding, 8.0);
+    assert_eq!(runtime.scrollback, 20000);
+
+    let reloaded = RootView::with_config_paths(paths);
+    let terminal = &reloaded.theme_runtime().terminal_settings;
+    assert_eq!(terminal.font_family, "JetBrains Mono");
+    assert_eq!(terminal.font_size, 14.5);
+    assert_eq!(terminal.line_height, 1.2);
+    assert_eq!(terminal.padding, 8.0);
+    assert_eq!(terminal.scrollback, 20000);
+}
+
+#[test]
+fn root_view_does_not_auto_focus_workspace_while_settings_is_open() {
+    let mut root = RootView::new();
+
+    assert!(root.should_auto_focus_workspace());
+    root.open_settings();
+    assert!(!root.should_auto_focus_workspace());
+    root.close_settings();
+    assert!(root.should_auto_focus_workspace());
+}
+
+#[test]
+fn root_view_terminal_input_owner_tracks_foreground_overlays() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+    let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths);
+
+    assert_eq!(
+        root.foreground_input_owner_kind(),
+        InputOwnerKind::Workspace
+    );
+    assert!(root.terminal_input_allowed());
+
+    root.open_palette(PaletteKind::Command);
+    assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Palette);
+    assert!(!root.terminal_input_allowed());
+
+    root.close_palette();
+    assert_eq!(
+        root.foreground_input_owner_kind(),
+        InputOwnerKind::Workspace
+    );
+    assert!(root.terminal_input_allowed());
+
+    root.open_settings();
+    assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Settings);
+    assert!(!root.terminal_input_allowed());
+
+    root.open_layout_toml_editor().unwrap();
+    assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Editor);
+    assert!(!root.terminal_input_allowed());
+
+    root.cancel_layout_toml_editor();
+    assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Settings);
+    assert!(!root.terminal_input_allowed());
+
+    root.close_settings();
+    assert_eq!(
+        root.foreground_input_owner_kind(),
+        InputOwnerKind::Workspace
+    );
+    assert!(root.terminal_input_allowed());
+}
+
+#[test]
+fn root_view_dialog_owner_blocks_terminal_input() {
+    let mut root = RootView::dev_fixture();
+
+    root.handle_project_tab_click("dev", 2).unwrap();
+
+    assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Dialog);
+    assert!(!root.terminal_input_allowed());
+}
+
+#[test]
+fn root_view_does_not_consume_terminal_focus_while_overlay_is_open() {
+    let mut root = RootView::dev_fixture();
+
+    root.focus_visible_terminal_pane("shell").unwrap();
+    assert_eq!(root.pending_terminal_focus_pane_id(), Some("shell"));
+
+    root.open_settings();
+    assert!(!root.take_pending_terminal_focus_for_render("shell"));
+    assert_eq!(root.pending_terminal_focus_pane_id(), Some("shell"));
+
+    root.close_settings();
+    assert!(root.take_pending_terminal_focus_for_render("shell"));
+    assert_eq!(root.pending_terminal_focus_pane_id(), None);
+}
+
+#[test]
+fn root_view_does_not_use_palette_text_fallback_when_input_is_focused() {
+    let mut root = RootView::new();
+
+    root.open_palette(PaletteKind::Command);
+
+    assert!(!root.should_use_palette_text_fallback(true));
+    assert!(root.should_use_palette_text_fallback(false));
 }
 
 #[test]
@@ -500,6 +701,95 @@ fn root_view_exposes_keybinding_warning_lines() {
             "Conflicting keybinding: cmd-p",
             "Invalid command id: missing.command"
         ]
+    );
+}
+
+#[test]
+fn root_view_keybindings_editor_updates_and_persists_command_keys() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths.clone());
+
+    root.set_keybinding_command_keys(CommandId::TabPalette, vec!["cmd-l".to_string()])
+        .unwrap();
+
+    let row = root
+        .visible_keybinding_rows()
+        .into_iter()
+        .find(|row| row.command == CommandId::TabPalette)
+        .unwrap();
+    assert_eq!(row.keys, vec!["cmd-l".to_string()]);
+
+    let reloaded = RootView::with_config_paths(paths);
+    let row = reloaded
+        .visible_keybinding_rows()
+        .into_iter()
+        .find(|row| row.command == CommandId::TabPalette)
+        .unwrap();
+    assert_eq!(row.keys, vec!["cmd-l".to_string()]);
+}
+
+#[test]
+fn root_view_runtime_keybindings_follow_edited_settings() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths);
+
+    root.set_keybinding_command_keys(CommandId::TabPalette, vec!["cmd-l".to_string()])
+        .unwrap();
+
+    assert_eq!(
+        root.runtime_command_for_keystroke(&Keystroke::parse("cmd-l").unwrap()),
+        Some(CommandId::TabPalette)
+    );
+    assert_eq!(
+        root.runtime_command_for_keystroke(&Keystroke::parse("cmd-j").unwrap()),
+        None
+    );
+}
+
+#[test]
+fn root_view_keybindings_editor_rejects_conflicts() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths);
+
+    let error = root
+        .set_keybinding_command_keys(CommandId::TabPalette, vec!["cmd-p".to_string()])
+        .unwrap_err();
+
+    assert!(error.to_string().contains("conflicting keybindings"));
+}
+
+#[test]
+fn root_view_keybinding_edit_dialog_updates_command_keys() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths);
+
+    root.open_keybinding_edit_dialog(CommandId::TabPalette)
+        .unwrap();
+
+    assert_eq!(
+        root.pending_keybinding_edit_value().as_deref(),
+        Some("cmd-j, ctrl-j")
+    );
+    assert_eq!(
+        root.foreground_input_owner_kind(),
+        InputOwnerKind::KeybindingRecorder
+    );
+
+    root.confirm_keybinding_edit_dialog("cmd-l, ctrl-l")
+        .unwrap();
+
+    assert!(root.pending_keybinding_edit_value().is_none());
+    assert_eq!(
+        root.visible_keybinding_rows()
+            .into_iter()
+            .find(|row| row.command == CommandId::TabPalette)
+            .unwrap()
+            .keys,
+        vec!["cmd-l".to_string(), "ctrl-l".to_string()]
     );
 }
 
@@ -944,6 +1234,125 @@ fn root_view_terminal_exit_keeps_project_open_when_last_tab_closes() {
     assert!(visible_tab_titles(root.workspace()).is_empty());
     assert!(root.visible_terminal_pane_contexts().is_empty());
     assert!(root.selected_project_is_empty());
+}
+
+#[test]
+fn root_view_terminal_exit_keeps_split_pane_when_close_on_exit_is_disabled() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    fs::create_dir_all(paths.config_dir()).unwrap();
+    fs::write(
+        paths.settings_file(),
+        r#"
+[terminal]
+close_on_exit = false
+"#,
+    )
+    .unwrap();
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+    let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths);
+
+    let outcome = root
+        .handle_terminal_pane_exit(terminal_pane_exited_event("dev", "server"))
+        .unwrap();
+
+    assert_eq!(
+        outcome,
+        yttt::model::workspace::PaneExitCloseOutcome::PaneKept
+    );
+    assert_eq!(
+        visible_pane_titles(root.workspace()),
+        vec!["server", "shell"]
+    );
+    let project_id = root.workspace().selected_project_id().unwrap();
+    let project = root.workspace().project(project_id).unwrap();
+    let server = project
+        .tab_state("dev")
+        .unwrap()
+        .pane_states
+        .iter()
+        .find(|pane| pane.pane_id == "server")
+        .unwrap();
+    assert_eq!(server.process_state, PaneProcessState::Exited);
+}
+
+#[test]
+fn root_view_terminal_exit_keeps_single_pane_tab_when_close_on_exit_is_disabled() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    fs::create_dir_all(paths.config_dir()).unwrap();
+    fs::write(
+        paths.settings_file(),
+        r#"
+[terminal]
+close_on_exit = false
+"#,
+    )
+    .unwrap();
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+    let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths);
+    root.workspace_mut().select_tab("agent").unwrap();
+
+    root.handle_terminal_pane_exit(terminal_pane_exited_event("agent", "codex"))
+        .unwrap();
+
+    assert_eq!(visible_tab_titles(root.workspace()), vec!["Dev", "Agent"]);
+    let project_id = root.workspace().selected_project_id().unwrap();
+    let project = root.workspace().project(project_id).unwrap();
+    assert_eq!(project.selected_tab_id, "agent");
+    let codex = project
+        .tab_state("agent")
+        .unwrap()
+        .pane_states
+        .iter()
+        .find(|pane| pane.pane_id == "codex")
+        .unwrap();
+    assert_eq!(codex.process_state, PaneProcessState::Exited);
+}
+
+#[test]
+fn root_view_terminal_exit_keeps_last_tab_when_close_on_exit_is_disabled() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    fs::create_dir_all(paths.config_dir()).unwrap();
+    fs::write(
+        paths.settings_file(),
+        r#"
+[terminal]
+close_on_exit = false
+"#,
+    )
+    .unwrap();
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(PathBuf::from("/tmp/single"), single_tab_layout())
+        .unwrap();
+    let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths);
+
+    root.handle_terminal_pane_exit(TerminalPaneExitedEvent {
+        project_id: "/tmp/single".to_string(),
+        tab_id: "dev".to_string(),
+        pane_id: "shell".to_string(),
+        status: ProcessStatus::Exited { code: Some(0) },
+        exit_reason: ExitReason::Completed,
+    })
+    .unwrap();
+
+    assert_eq!(root.workspace().opened_projects().len(), 1);
+    assert_eq!(visible_tab_titles(root.workspace()), vec!["Dev"]);
+    assert!(!root.selected_project_is_empty());
+    let project_id = root.workspace().selected_project_id().unwrap();
+    let project = root.workspace().project(project_id).unwrap();
+    assert_eq!(
+        project.tab_state("dev").unwrap().pane_states[0].process_state,
+        PaneProcessState::Exited
+    );
 }
 
 #[test]

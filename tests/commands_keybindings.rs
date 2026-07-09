@@ -1,16 +1,21 @@
 use std::path::PathBuf;
 
+use gpui::Keystroke;
 use tempfile::tempdir;
 use yttt::commands::{CommandId, default_registry, dispatch_workspace_command};
 use yttt::config::{
     keybindings::{
         KeybindingLoadWarning, KeybindingsConfig, default_keybindings, load_keybindings,
+        save_keybindings,
     },
     paths::AppConfigPaths,
 };
 use yttt::model::layout::LayoutNode;
 use yttt::model::workspace::{TabStartState, Workspace};
-use yttt::ui::actions::default_ui_keybinding_specs;
+use yttt::ui::actions::{
+    app_startup_keybindings, default_ui_keybinding_specs, runtime_command_for_keystroke,
+};
+use yttt::ui::keybindings_editor::{KeybindingEditError, KeybindingsEditorState};
 use yttt::ui::split_view::visible_pane_titles;
 
 #[test]
@@ -212,14 +217,41 @@ fn user_keybindings_specs_map_non_default_command_actions() {
 }
 
 #[test]
-fn load_app_keybindings_missing_file_writes_defaults() {
+fn runtime_keybinding_matcher_uses_current_config_specs_only() {
+    let config: KeybindingsConfig = toml::from_str(
+        r#"
+        [[bindings]]
+        keys = "cmd-l"
+        command = "tab.palette"
+    "#,
+    )
+    .unwrap();
+    let specs = yttt::ui::actions::ui_keybinding_specs_from_config(&config, &default_registry());
+
+    assert_eq!(
+        runtime_command_for_keystroke(&specs, &Keystroke::parse("cmd-l").unwrap()),
+        Some(CommandId::TabPalette)
+    );
+    assert_eq!(
+        runtime_command_for_keystroke(&specs, &Keystroke::parse("cmd-j").unwrap()),
+        None
+    );
+}
+
+#[test]
+fn app_startup_keybindings_keep_user_editable_bindings_out_of_gpui_keymap() {
+    assert_eq!(app_startup_keybindings().len(), 4);
+}
+
+#[test]
+fn load_app_keybindings_missing_file_writes_defaults_without_registering_editable_keys() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
 
     let bindings = yttt::ui::actions::load_app_keybindings(&paths, &default_registry());
 
     assert!(paths.keybindings_file().exists());
-    assert!(bindings.len() >= default_ui_keybinding_specs().len());
+    assert_eq!(bindings.len(), app_startup_keybindings().len());
 }
 
 #[test]
@@ -232,6 +264,76 @@ fn missing_keybindings_file_writes_defaults() {
     assert_eq!(loaded.config, default_keybindings());
     assert!(loaded.warnings.is_empty());
     assert!(paths.keybindings_file().exists());
+}
+
+#[test]
+fn save_keybindings_writes_user_toml() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let config = KeybindingsConfig {
+        bindings: vec![yttt::config::keybindings::Keybinding {
+            keys: "cmd-l".to_string(),
+            command: "tab.palette".to_string(),
+        }],
+    };
+
+    save_keybindings(&paths, &config).unwrap();
+
+    let saved = std::fs::read_to_string(paths.keybindings_file()).unwrap();
+    assert!(saved.contains("cmd-l"));
+    assert!(saved.contains("tab.palette"));
+}
+
+#[test]
+fn keybindings_editor_lists_commands_with_current_keys() {
+    let editor = KeybindingsEditorState::new(default_keybindings(), default_registry());
+
+    let row = editor
+        .rows()
+        .into_iter()
+        .find(|row| row.command == CommandId::CommandPaletteOpen)
+        .unwrap();
+
+    assert_eq!(row.title, "Open Command Palette");
+    assert!(row.keys.contains(&"cmd-p".to_string()));
+    assert!(row.keys.contains(&"ctrl-p".to_string()));
+}
+
+#[test]
+fn keybindings_editor_edits_deletes_and_resets_command_keys() {
+    let mut editor = KeybindingsEditorState::new(default_keybindings(), default_registry());
+
+    editor.set_command_keys(CommandId::TabPalette, vec!["cmd-l".to_string()]);
+    assert_eq!(
+        editor.command_keys(CommandId::TabPalette),
+        vec!["cmd-l".to_string()]
+    );
+
+    editor.delete_command_keys(CommandId::TabPalette);
+    assert!(editor.command_keys(CommandId::TabPalette).is_empty());
+
+    editor.reset_command_keys(CommandId::TabPalette);
+    assert!(
+        editor
+            .command_keys(CommandId::TabPalette)
+            .contains(&"cmd-j".to_string())
+    );
+}
+
+#[test]
+fn keybindings_editor_blocks_conflicting_save() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut editor = KeybindingsEditorState::new(default_keybindings(), default_registry());
+    editor.set_command_keys(CommandId::TabPalette, vec!["cmd-p".to_string()]);
+
+    let error = editor.save(&paths).unwrap_err();
+
+    assert_eq!(
+        error,
+        KeybindingEditError::ConflictingBindings(vec!["cmd-p".to_string()])
+    );
+    assert!(!paths.keybindings_file().exists());
 }
 
 #[test]
