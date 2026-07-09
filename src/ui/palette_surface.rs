@@ -4,6 +4,7 @@ use crate::{
     palette::PaletteKind,
     ui::{
         components::SelectableState,
+        i18n::{UiText, UiTextKey},
         primitives::row::{YtttRowKind, yttt_row_style},
         theme::WorkbenchTheme,
     },
@@ -96,24 +97,24 @@ pub fn palette_row_style(
     }
 }
 
-pub fn palette_footer_actions() -> Vec<PaletteFooterAction> {
+pub fn palette_footer_actions(ui_text: &UiText) -> Vec<PaletteFooterAction> {
     vec![
         PaletteFooterAction {
-            label: "Run",
+            label: ui_text.get(UiTextKey::PaletteRun),
             key: "enter",
         },
         PaletteFooterAction {
-            label: "Close",
+            label: ui_text.get(UiTextKey::PaletteClose),
             key: "esc",
         },
     ]
 }
 
-pub fn palette_input_placeholder(kind: PaletteKind) -> &'static str {
+pub fn palette_input_placeholder(kind: PaletteKind, ui_text: &UiText) -> &'static str {
     match kind {
-        PaletteKind::Command => "Execute a command...",
-        PaletteKind::Project => "Switch project...",
-        PaletteKind::Tab => "Switch tab...",
-        PaletteKind::Pane => "Switch pane...",
+        PaletteKind::Command => ui_text.get(UiTextKey::PalettePlaceholderCommand),
+        PaletteKind::Project => ui_text.get(UiTextKey::PalettePlaceholderProject),
+        PaletteKind::Tab => ui_text.get(UiTextKey::PalettePlaceholderTab),
+        PaletteKind::Pane => ui_text.get(UiTextKey::PalettePlaceholderPane),
     }
 }

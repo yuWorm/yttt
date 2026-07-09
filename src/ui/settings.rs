@@ -1,5 +1,7 @@
 use gpui::{Pixels, px};
 
+use crate::ui::i18n::{UiText, UiTextKey};
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SettingsPanelStyle {
     pub width: Pixels,
@@ -61,24 +63,32 @@ impl SettingsGroupId {
         }
     }
 
-    pub fn title(self) -> &'static str {
+    pub fn title_key(self) -> UiTextKey {
         match self {
-            Self::General => "General",
-            Self::Appearance => "Appearance",
-            Self::Terminal => "Terminal",
-            Self::ProjectLayout => "Project Layout",
-            Self::Keybindings => "Keybindings",
+            Self::General => UiTextKey::SettingsGroupGeneral,
+            Self::Appearance => UiTextKey::SettingsGroupAppearance,
+            Self::Terminal => UiTextKey::SettingsGroupTerminal,
+            Self::ProjectLayout => UiTextKey::SettingsGroupProjectLayout,
+            Self::Keybindings => UiTextKey::SettingsGroupKeybindings,
         }
     }
 
-    pub fn description(self) -> &'static str {
+    pub fn description_key(self) -> UiTextKey {
         match self {
-            Self::General => "Application behavior and notifications",
-            Self::Appearance => "UI and terminal themes",
-            Self::Terminal => "Shell, font, and terminal runtime defaults",
-            Self::ProjectLayout => "Project layout files and TOML editing",
-            Self::Keybindings => "Keyboard shortcuts and conflict diagnostics",
+            Self::General => UiTextKey::SettingsGroupGeneralDescription,
+            Self::Appearance => UiTextKey::SettingsGroupAppearanceDescription,
+            Self::Terminal => UiTextKey::SettingsGroupTerminalDescription,
+            Self::ProjectLayout => UiTextKey::SettingsGroupProjectLayoutDescription,
+            Self::Keybindings => UiTextKey::SettingsGroupKeybindingsDescription,
         }
+    }
+
+    pub fn title(self, text: &UiText) -> &'static str {
+        text.get(self.title_key())
+    }
+
+    pub fn description(self, text: &UiText) -> &'static str {
+        text.get(self.description_key())
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
@@ -92,97 +102,102 @@ pub struct SettingsRowMeta {
     pub description: &'static str,
 }
 
-pub fn settings_rows_for_group(group: SettingsGroupId) -> Vec<SettingsRowMeta> {
+pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<SettingsRowMeta> {
+    let row = |title, description| SettingsRowMeta {
+        title: text.get(title),
+        description: text.get(description),
+    };
+
     match group {
         SettingsGroupId::General => vec![
-            SettingsRowMeta {
-                title: "Language",
-                description: "Application display language.",
-            },
-            SettingsRowMeta {
-                title: "System notifications",
-                description: "Notify when agent terminal tasks complete or fail.",
-            },
+            row(
+                UiTextKey::SettingsLanguage,
+                UiTextKey::SettingsLanguageDescription,
+            ),
+            row(
+                UiTextKey::SettingsSystemNotifications,
+                UiTextKey::SettingsSystemNotificationsDescription,
+            ),
         ],
         SettingsGroupId::Appearance => vec![
-            SettingsRowMeta {
-                title: "UI theme",
-                description: "Theme used for YTTT chrome, panels, and controls.",
-            },
-            SettingsRowMeta {
-                title: "Terminal theme",
-                description: "Optional terminal colors override.",
-            },
-            SettingsRowMeta {
-                title: "Edit settings TOML",
-                description: "Open the app settings file for advanced edits.",
-            },
-            SettingsRowMeta {
-                title: "Themes directory",
-                description: "Open the folder containing user theme TOML files.",
-            },
+            row(
+                UiTextKey::SettingsUiTheme,
+                UiTextKey::SettingsUiThemeDescription,
+            ),
+            row(
+                UiTextKey::SettingsTerminalTheme,
+                UiTextKey::SettingsTerminalThemeDescription,
+            ),
+            row(
+                UiTextKey::SettingsEditSettingsToml,
+                UiTextKey::SettingsEditSettingsTomlDescription,
+            ),
+            row(
+                UiTextKey::SettingsThemesDirectory,
+                UiTextKey::SettingsThemesDirectoryDescription,
+            ),
         ],
         SettingsGroupId::Terminal => vec![
-            SettingsRowMeta {
-                title: "Default shell",
-                description: "Shell command used when creating new terminal tabs.",
-            },
-            SettingsRowMeta {
-                title: "Font family",
-                description: "Terminal font family.",
-            },
-            SettingsRowMeta {
-                title: "Font size",
-                description: "Terminal font size in pixels.",
-            },
-            SettingsRowMeta {
-                title: "Line height",
-                description: "Terminal line height multiplier.",
-            },
-            SettingsRowMeta {
-                title: "Padding",
-                description: "Terminal pane inner padding.",
-            },
-            SettingsRowMeta {
-                title: "Scrollback",
-                description: "Number of terminal lines kept in memory.",
-            },
-            SettingsRowMeta {
-                title: "Scrollbar",
-                description: "Show a thin scrollback indicator in terminal panes.",
-            },
-            SettingsRowMeta {
-                title: "Close pane on exit",
-                description: "Automatically close terminal panes when their process exits.",
-            },
+            row(
+                UiTextKey::SettingsDefaultShell,
+                UiTextKey::SettingsDefaultShellDescription,
+            ),
+            row(
+                UiTextKey::SettingsFontFamily,
+                UiTextKey::SettingsFontFamilyDescription,
+            ),
+            row(
+                UiTextKey::SettingsFontSize,
+                UiTextKey::SettingsFontSizeDescription,
+            ),
+            row(
+                UiTextKey::SettingsLineHeight,
+                UiTextKey::SettingsLineHeightDescription,
+            ),
+            row(
+                UiTextKey::SettingsPadding,
+                UiTextKey::SettingsPaddingDescription,
+            ),
+            row(
+                UiTextKey::SettingsScrollback,
+                UiTextKey::SettingsScrollbackDescription,
+            ),
+            row(
+                UiTextKey::SettingsScrollbar,
+                UiTextKey::SettingsScrollbarDescription,
+            ),
+            row(
+                UiTextKey::SettingsClosePaneOnExit,
+                UiTextKey::SettingsClosePaneOnExitDescription,
+            ),
         ],
         SettingsGroupId::ProjectLayout => vec![
-            SettingsRowMeta {
-                title: "Layout source",
-                description: "Current project layout source.",
-            },
-            SettingsRowMeta {
-                title: "Save current layout",
-                description: "Save current layout as an app-local override.",
-            },
-            SettingsRowMeta {
-                title: "Export project layout",
-                description: "Write current layout into the project config.",
-            },
-            SettingsRowMeta {
-                title: "Edit layout TOML",
-                description: "Edit the selected project layout file.",
-            },
+            row(
+                UiTextKey::SettingsLayoutSource,
+                UiTextKey::SettingsLayoutSourceDescription,
+            ),
+            row(
+                UiTextKey::SettingsSaveCurrentLayout,
+                UiTextKey::SettingsSaveCurrentLayoutDescription,
+            ),
+            row(
+                UiTextKey::SettingsExportProjectLayout,
+                UiTextKey::SettingsExportProjectLayoutDescription,
+            ),
+            row(
+                UiTextKey::SettingsEditLayoutToml,
+                UiTextKey::SettingsEditLayoutTomlDescription,
+            ),
         ],
         SettingsGroupId::Keybindings => vec![
-            SettingsRowMeta {
-                title: "Edit keybindings TOML",
-                description: "Open the user keybindings file.",
-            },
-            SettingsRowMeta {
-                title: "Keybinding diagnostics",
-                description: "Show invalid commands and shortcut conflicts.",
-            },
+            row(
+                UiTextKey::SettingsEditKeybindingsToml,
+                UiTextKey::SettingsEditKeybindingsTomlDescription,
+            ),
+            row(
+                UiTextKey::SettingsKeybindingDiagnostics,
+                UiTextKey::SettingsKeybindingDiagnosticsDescription,
+            ),
         ],
     }
 }
@@ -213,20 +228,20 @@ impl Default for SettingsPageState {
 }
 
 impl SettingsPageState {
-    pub fn visible_groups(&self) -> Vec<SettingsGroupItem> {
-        let query = self.search_query.trim().to_ascii_lowercase();
+    pub fn visible_groups(&self, text: &UiText) -> Vec<SettingsGroupItem> {
+        let query = self.search_query.trim().to_lowercase();
         SettingsGroupId::ALL
             .iter()
             .copied()
             .filter(|group| {
                 query.is_empty()
-                    || group.title().to_ascii_lowercase().contains(&query)
-                    || group.description().to_ascii_lowercase().contains(&query)
+                    || group.title(text).to_lowercase().contains(&query)
+                    || group.description(text).to_lowercase().contains(&query)
             })
             .map(|group| SettingsGroupItem {
                 id: group,
-                title: group.title(),
-                description: group.description(),
+                title: group.title(text),
+                description: group.description(text),
                 selected: group == self.selected_group,
             })
             .collect()

@@ -3,6 +3,7 @@ use crate::runtime::notification::{NotificationEvent, NotificationKind};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToastTone {
     Success,
+    Warning,
     Error,
 }
 

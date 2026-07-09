@@ -6,10 +6,8 @@ use crate::{
         layout::LayoutNode,
         workspace::{AgentStatus, OpenedProject, PaneProcessState, TabStartState, Workspace},
     },
-    ui::agent_status::{
-        agent_status_label, is_agent_pane, pane_agent_status, project_agent_status,
-        tab_agent_status,
-    },
+    ui::agent_status::{is_agent_pane, pane_agent_status, project_agent_status, tab_agent_status},
+    ui::i18n::{UiText, UiTextKey},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,20 +115,31 @@ pub fn command_palette_items(
     registry: &CommandRegistry,
     context: CommandPaletteContext,
 ) -> Vec<PaletteItem> {
+    command_palette_items_with_text(registry, context, &UiText::english())
+}
+
+pub fn command_palette_items_with_text(
+    registry: &CommandRegistry,
+    context: CommandPaletteContext,
+    ui_text: &UiText,
+) -> Vec<PaletteItem> {
     registry
         .commands()
         .iter()
         .map(|command| {
-            let presentation = command.id.presentation();
             let availability = command.id.availability(context.has_selected_project);
             PaletteItem {
                 id: command.id.as_str().to_string(),
-                title: presentation.title.to_string(),
-                subtitle: Some(presentation.description.to_string()),
+                title: ui_text.get(command_title_key(command.id)).to_string(),
+                subtitle: Some(ui_text.get(command_description_key(command.id)).to_string()),
                 status: None,
                 command: command.id,
                 enabled: availability.enabled,
-                disabled_reason: availability.disabled_reason.map(ToOwned::to_owned),
+                disabled_reason: command_disabled_reason_key(
+                    command.id,
+                    context.has_selected_project,
+                )
+                .map(|key| ui_text.get(key).to_string()),
             }
         })
         .collect()
@@ -140,6 +149,14 @@ pub fn project_palette_items(
     workspace: &Workspace,
     recent_projects: &[RecentProject],
 ) -> Vec<PaletteItem> {
+    project_palette_items_with_text(workspace, recent_projects, &UiText::english())
+}
+
+pub fn project_palette_items_with_text(
+    workspace: &Workspace,
+    recent_projects: &[RecentProject],
+    ui_text: &UiText,
+) -> Vec<PaletteItem> {
     let mut items: Vec<_> = workspace
         .opened_projects()
         .iter()
@@ -147,7 +164,7 @@ pub fn project_palette_items(
             id: project.id.as_str().to_string(),
             title: project.layout.project.name.clone(),
             subtitle: Some(project.path.display().to_string()),
-            status: Some(open_project_status(project)),
+            status: Some(open_project_status(project, ui_text)),
             command: CommandId::ProjectPalette,
             enabled: true,
             disabled_reason: None,
@@ -158,7 +175,7 @@ pub fn project_palette_items(
         id: project.path.display().to_string(),
         title: project.title.clone(),
         subtitle: Some(project.path.display().to_string()),
-        status: Some("recent".to_string()),
+        status: Some(ui_text.get(UiTextKey::PaletteStatusRecent).to_string()),
         command: CommandId::ProjectOpenRecent,
         enabled: true,
         disabled_reason: None,
@@ -168,6 +185,13 @@ pub fn project_palette_items(
 }
 
 pub fn tab_palette_items(workspace: &Workspace) -> Option<Vec<PaletteItem>> {
+    tab_palette_items_with_text(workspace, &UiText::english())
+}
+
+pub fn tab_palette_items_with_text(
+    workspace: &Workspace,
+    ui_text: &UiText,
+) -> Option<Vec<PaletteItem>> {
     let selected_project_id = workspace.selected_project_id()?;
     let project = workspace.project(selected_project_id)?;
 
@@ -187,13 +211,14 @@ pub fn tab_palette_items(workspace: &Workspace) -> Option<Vec<PaletteItem>> {
                         tab.id == project.selected_tab_id,
                         state.start_state,
                         agent_status,
+                        ui_text,
                     )
                 });
 
                 PaletteItem {
                     id: tab.id.clone(),
                     title: tab.title.clone(),
-                    subtitle: Some(pane_count_label(pane_count)),
+                    subtitle: Some(pane_count_label(pane_count, ui_text)),
                     status,
                     command: CommandId::TabPalette,
                     enabled: true,
@@ -205,6 +230,13 @@ pub fn tab_palette_items(workspace: &Workspace) -> Option<Vec<PaletteItem>> {
 }
 
 pub fn pane_palette_items(workspace: &Workspace) -> Option<Vec<PaletteItem>> {
+    pane_palette_items_with_text(workspace, &UiText::english())
+}
+
+pub fn pane_palette_items_with_text(
+    workspace: &Workspace,
+    ui_text: &UiText,
+) -> Option<Vec<PaletteItem>> {
     let selected_project_id = workspace.selected_project_id()?;
     let project = workspace.project(selected_project_id)?;
     let tab = project
@@ -237,6 +269,7 @@ pub fn pane_palette_items(workspace: &Workspace) -> Option<Vec<PaletteItem>> {
                         is_active,
                         is_agent,
                         agent_status,
+                        ui_text,
                     )),
                     command: CommandId::PanePalette,
                     enabled: true,
@@ -247,33 +280,127 @@ pub fn pane_palette_items(workspace: &Workspace) -> Option<Vec<PaletteItem>> {
     )
 }
 
-fn open_project_status(project: &OpenedProject) -> String {
-    let mut parts = vec!["open".to_string()];
+fn command_title_key(command_id: CommandId) -> UiTextKey {
+    match command_id {
+        CommandId::ProjectOpen => UiTextKey::CommandProjectOpenTitle,
+        CommandId::ProjectOpenRecent => UiTextKey::CommandProjectOpenRecentTitle,
+        CommandId::ProjectClose => UiTextKey::CommandProjectCloseTitle,
+        CommandId::ProjectPalette => UiTextKey::CommandProjectPaletteTitle,
+        CommandId::TabNew => UiTextKey::CommandTabNewTitle,
+        CommandId::TabClose => UiTextKey::CommandTabCloseTitle,
+        CommandId::TabRename => UiTextKey::CommandTabRenameTitle,
+        CommandId::TabNext => UiTextKey::CommandTabNextTitle,
+        CommandId::TabPrev => UiTextKey::CommandTabPrevTitle,
+        CommandId::TabPalette => UiTextKey::CommandTabPaletteTitle,
+        CommandId::PaneSplitHorizontal => UiTextKey::CommandPaneSplitHorizontalTitle,
+        CommandId::PaneSplitVertical => UiTextKey::CommandPaneSplitVerticalTitle,
+        CommandId::PaneClose => UiTextKey::CommandPaneCloseTitle,
+        CommandId::PaneFocusLeft => UiTextKey::CommandPaneFocusLeftTitle,
+        CommandId::PaneFocusRight => UiTextKey::CommandPaneFocusRightTitle,
+        CommandId::PaneFocusUp => UiTextKey::CommandPaneFocusUpTitle,
+        CommandId::PaneFocusDown => UiTextKey::CommandPaneFocusDownTitle,
+        CommandId::PaneResizeLeft => UiTextKey::CommandPaneResizeLeftTitle,
+        CommandId::PaneResizeRight => UiTextKey::CommandPaneResizeRightTitle,
+        CommandId::PaneResizeUp => UiTextKey::CommandPaneResizeUpTitle,
+        CommandId::PaneResizeDown => UiTextKey::CommandPaneResizeDownTitle,
+        CommandId::PaneRename => UiTextKey::CommandPaneRenameTitle,
+        CommandId::PanePalette => UiTextKey::CommandPanePaletteTitle,
+        CommandId::LayoutSaveCurrent => UiTextKey::CommandLayoutSaveCurrentTitle,
+        CommandId::LayoutExportProjectConfig => UiTextKey::CommandLayoutExportProjectConfigTitle,
+        CommandId::LayoutOpenFile => UiTextKey::CommandLayoutOpenFileTitle,
+        CommandId::CommandPaletteOpen => UiTextKey::CommandPaletteOpenTitle,
+        CommandId::SettingsOpen => UiTextKey::CommandSettingsOpenTitle,
+        CommandId::SettingsKeybindings => UiTextKey::CommandSettingsKeybindingsTitle,
+        CommandId::SettingsNotifications => UiTextKey::CommandSettingsNotificationsTitle,
+    }
+}
+
+fn command_description_key(command_id: CommandId) -> UiTextKey {
+    match command_id {
+        CommandId::ProjectOpen => UiTextKey::CommandProjectOpenDescription,
+        CommandId::ProjectOpenRecent => UiTextKey::CommandProjectOpenRecentDescription,
+        CommandId::ProjectClose => UiTextKey::CommandProjectCloseDescription,
+        CommandId::ProjectPalette => UiTextKey::CommandProjectPaletteDescription,
+        CommandId::TabNew => UiTextKey::CommandTabNewDescription,
+        CommandId::TabClose => UiTextKey::CommandTabCloseDescription,
+        CommandId::TabRename => UiTextKey::CommandTabRenameDescription,
+        CommandId::TabNext => UiTextKey::CommandTabNextDescription,
+        CommandId::TabPrev => UiTextKey::CommandTabPrevDescription,
+        CommandId::TabPalette => UiTextKey::CommandTabPaletteDescription,
+        CommandId::PaneSplitHorizontal => UiTextKey::CommandPaneSplitHorizontalDescription,
+        CommandId::PaneSplitVertical => UiTextKey::CommandPaneSplitVerticalDescription,
+        CommandId::PaneClose => UiTextKey::CommandPaneCloseDescription,
+        CommandId::PaneFocusLeft => UiTextKey::CommandPaneFocusLeftDescription,
+        CommandId::PaneFocusRight => UiTextKey::CommandPaneFocusRightDescription,
+        CommandId::PaneFocusUp => UiTextKey::CommandPaneFocusUpDescription,
+        CommandId::PaneFocusDown => UiTextKey::CommandPaneFocusDownDescription,
+        CommandId::PaneResizeLeft => UiTextKey::CommandPaneResizeLeftDescription,
+        CommandId::PaneResizeRight => UiTextKey::CommandPaneResizeRightDescription,
+        CommandId::PaneResizeUp => UiTextKey::CommandPaneResizeUpDescription,
+        CommandId::PaneResizeDown => UiTextKey::CommandPaneResizeDownDescription,
+        CommandId::PaneRename => UiTextKey::CommandPaneRenameDescription,
+        CommandId::PanePalette => UiTextKey::CommandPanePaletteDescription,
+        CommandId::LayoutSaveCurrent => UiTextKey::CommandLayoutSaveCurrentDescription,
+        CommandId::LayoutExportProjectConfig => {
+            UiTextKey::CommandLayoutExportProjectConfigDescription
+        }
+        CommandId::LayoutOpenFile => UiTextKey::CommandLayoutOpenFileDescription,
+        CommandId::CommandPaletteOpen => UiTextKey::CommandPaletteOpenDescription,
+        CommandId::SettingsOpen => UiTextKey::CommandSettingsOpenDescription,
+        CommandId::SettingsKeybindings => UiTextKey::CommandSettingsKeybindingsDescription,
+        CommandId::SettingsNotifications => UiTextKey::CommandSettingsNotificationsDescription,
+    }
+}
+
+fn command_disabled_reason_key(
+    command_id: CommandId,
+    has_selected_project: bool,
+) -> Option<UiTextKey> {
+    match command_id {
+        CommandId::ProjectOpen | CommandId::ProjectOpenRecent => None,
+        CommandId::CommandPaletteOpen
+        | CommandId::ProjectPalette
+        | CommandId::SettingsOpen
+        | CommandId::SettingsKeybindings
+        | CommandId::SettingsNotifications => None,
+        _ if has_selected_project => None,
+        _ => Some(UiTextKey::CommandDisabledOpenProjectFirst),
+    }
+}
+
+fn open_project_status(project: &OpenedProject, ui_text: &UiText) -> String {
+    let mut parts = vec![ui_text.get(UiTextKey::PaletteStatusOpen)];
     if let Some(agent_status) = project_agent_status(project) {
-        parts.push(agent_status_label(agent_status).to_string());
+        parts.push(agent_status_label(agent_status, ui_text));
     }
     parts.join(" · ")
 }
 
-fn pane_count_label(pane_count: usize) -> String {
-    if pane_count == 1 {
-        "1 pane".to_string()
+fn pane_count_label(pane_count: usize, ui_text: &UiText) -> String {
+    let unit = if pane_count == 1 {
+        ui_text.get(UiTextKey::PaletteStatusPaneSingular)
     } else {
-        format!("{pane_count} panes")
-    }
+        ui_text.get(UiTextKey::PaletteStatusPanePlural)
+    };
+    format!("{pane_count} {unit}")
 }
 
-fn tab_status(is_active: bool, state: TabStartState, agent_status: Option<AgentStatus>) -> String {
+fn tab_status(
+    is_active: bool,
+    state: TabStartState,
+    agent_status: Option<AgentStatus>,
+    ui_text: &UiText,
+) -> String {
     let mut parts = Vec::new();
     if is_active {
-        parts.push("active");
+        parts.push(ui_text.get(UiTextKey::PaletteStatusActive));
     }
     parts.push(match state {
-        TabStartState::Lazy => "lazy",
-        TabStartState::Started => "started",
+        TabStartState::Lazy => ui_text.get(UiTextKey::PaletteStatusLazy),
+        TabStartState::Started => ui_text.get(UiTextKey::PaletteStatusStarted),
     });
     if let Some(agent_status) = agent_status {
-        parts.push(agent_status_label(agent_status));
+        parts.push(agent_status_label(agent_status, ui_text));
     }
     parts.join(" · ")
 }
@@ -283,16 +410,17 @@ fn pane_status(
     is_active: bool,
     is_agent: bool,
     agent_status: Option<AgentStatus>,
+    ui_text: &UiText,
 ) -> String {
     let mut parts = Vec::new();
     if is_active {
-        parts.push("active");
+        parts.push(ui_text.get(UiTextKey::PaletteStatusActive));
     }
-    parts.push(process_status_label(state));
+    parts.push(process_status_label(state, ui_text));
     if let Some(agent_status) = agent_status {
-        parts.push(agent_status_label(agent_status));
+        parts.push(agent_status_label(agent_status, ui_text));
     } else if is_agent {
-        parts.push("agent");
+        parts.push(ui_text.get(UiTextKey::PaletteStatusAgent));
     }
     parts.join(" · ")
 }
@@ -304,11 +432,19 @@ fn pane_count(layout: &LayoutNode) -> usize {
     }
 }
 
-fn process_status_label(state: PaneProcessState) -> &'static str {
+fn process_status_label(state: PaneProcessState, ui_text: &UiText) -> &'static str {
     match state {
-        PaneProcessState::Idle => "idle",
-        PaneProcessState::Running => "running",
-        PaneProcessState::Exited => "exited",
+        PaneProcessState::Idle => ui_text.get(UiTextKey::PaletteStatusIdle),
+        PaneProcessState::Running => ui_text.get(UiTextKey::PaletteStatusRunning),
+        PaneProcessState::Exited => ui_text.get(UiTextKey::PaletteStatusExited),
+    }
+}
+
+fn agent_status_label(status: AgentStatus, ui_text: &UiText) -> &'static str {
+    match status {
+        AgentStatus::Running => ui_text.get(UiTextKey::PaletteStatusAgentRunning),
+        AgentStatus::Completed => ui_text.get(UiTextKey::PaletteStatusAgentCompleted),
+        AgentStatus::Failed => ui_text.get(UiTextKey::PaletteStatusAgentFailed),
     }
 }
 

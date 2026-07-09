@@ -7,7 +7,6 @@ use gpui::{
 use gpui_component::{
     Disableable as _, IconName, IndexPath, Root as ComponentRoot, Sizable as _,
     Theme as ComponentTheme, WindowExt as _,
-    alert::Alert,
     button::Button,
     input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent, StepAction},
     scroll::ScrollableElement as _,
@@ -69,7 +68,8 @@ use crate::{
     },
     palette::{
         ActivePalette, CommandPaletteContext, PaletteItem, PaletteKind, RecentProject,
-        command_palette_items, pane_palette_items, project_palette_items, tab_palette_items,
+        command_palette_items_with_text, pane_palette_items_with_text,
+        project_palette_items_with_text, tab_palette_items_with_text,
     },
     runtime::{
         git_status::{ProjectGitStatus, read_project_git_status},
@@ -90,7 +90,8 @@ use crate::{
         },
         components::{
             ActionEmphasis, workbench_action_button, workbench_agent_notification,
-            workbench_settings_row, workbench_switch,
+            workbench_inline_notification, workbench_settings_row, workbench_status_notification,
+            workbench_switch,
         },
         font_options::{
             terminal_font_family_option_for_setting, terminal_font_family_options_from_system,
@@ -122,7 +123,7 @@ use crate::{
         },
         theme::{ThemeRuntime, WorkbenchTheme},
         titlebar::{TitlebarInfo, compact_path_for_titlebar, workbench_titlebar},
-        toast::{ToastQueue, toast_item_for_event},
+        toast::{ToastItem, ToastQueue, ToastTone, toast_item_for_event},
     },
 };
 
@@ -141,6 +142,8 @@ pub struct RootView {
     last_opened_layout_file: Option<PathBuf>,
     last_opened_keybindings_file: Option<PathBuf>,
     pending_close_project_id: Option<ProjectId>,
+    pending_open_project_request: bool,
+    pending_status_notifications: Vec<ToastItem>,
     pending_tab_rename: Option<PendingTabRename>,
     pending_keybinding_edit: Option<PendingKeybindingEdit>,
     keybinding_interceptor_subscription: Option<Subscription>,
@@ -314,6 +317,8 @@ impl RootView {
             last_opened_layout_file: None,
             last_opened_keybindings_file: None,
             pending_close_project_id: None,
+            pending_open_project_request: false,
+            pending_status_notifications: Vec::new(),
             pending_tab_rename: None,
             pending_keybinding_edit: None,
             keybinding_interceptor_subscription: None,
@@ -437,7 +442,7 @@ impl RootView {
             let reason = item
                 .disabled_reason
                 .as_deref()
-                .unwrap_or("Command is unavailable");
+                .unwrap_or(self.ui_text.get(UiTextKey::CommandUnavailable));
             self.load_error = Some(format!("Command unavailable: {reason}"));
             return Ok(());
         }
@@ -629,6 +634,11 @@ impl RootView {
         Ok(())
     }
 
+    pub fn close_project_tab(&mut self, tab_id: &str) -> Result<(), RootViewError> {
+        self.workspace.select_tab(tab_id)?;
+        self.run_command(CommandId::TabClose)
+    }
+
     pub fn resize_focused_split_from_pointer_delta(
         &mut self,
         direction: SplitDirection,
@@ -649,8 +659,23 @@ impl RootView {
         self.toast_queue.titles()
     }
 
+    pub fn pending_status_notification_titles(&self) -> Vec<String> {
+        self.pending_status_notifications
+            .iter()
+            .map(|item| item.title.clone())
+            .collect()
+    }
+
     pub fn visible_error_message(&self) -> Option<&str> {
         self.load_error.as_deref()
+    }
+
+    pub fn visible_error_notification_item(&self) -> Option<ToastItem> {
+        self.load_error.as_ref().map(|message| ToastItem {
+            title: message.clone(),
+            context: self.ui_text.get(UiTextKey::StatusErrorContext).to_string(),
+            tone: ToastTone::Error,
+        })
     }
 
     pub fn visible_layout_source_message(&self) -> Option<&str> {
@@ -701,6 +726,8 @@ impl RootView {
         self.app_settings.general.language = language;
         save_settings(&self.config_paths, &self.app_settings)?;
         self.ui_text = ui_text_for_language(language);
+        self.reset_palette_input();
+        self.reset_settings_search_input();
         Ok(())
     }
 
@@ -764,11 +791,11 @@ impl RootView {
         self.settings_page.search_query = query.into();
         let selected_group_visible = self
             .settings_page
-            .visible_groups()
+            .visible_groups(&self.ui_text)
             .iter()
             .any(|group| group.id == self.settings_page.selected_group);
         if !selected_group_visible
-            && let Some(first_group) = self.settings_page.visible_groups().first()
+            && let Some(first_group) = self.settings_page.visible_groups(&self.ui_text).first()
         {
             self.settings_page.selected_group = first_group.id;
         }
@@ -783,14 +810,14 @@ impl RootView {
 
     pub fn visible_settings_group_titles(&self) -> Vec<&'static str> {
         self.settings_page
-            .visible_groups()
+            .visible_groups(&self.ui_text)
             .into_iter()
             .map(|group| group.title)
             .collect()
     }
 
     pub fn selected_settings_group_title(&self) -> Option<&'static str> {
-        Some(self.settings_page.selected_group.title())
+        Some(self.settings_page.selected_group.title(&self.ui_text))
     }
 
     pub fn should_auto_focus_workspace(&self) -> bool {
@@ -939,10 +966,48 @@ impl RootView {
 
     pub fn visible_notification_settings_message(&self) -> &'static str {
         if self.system_notifications_enabled {
-            "System notifications: enabled"
+            self.ui_text
+                .get(UiTextKey::StatusSystemNotificationsEnabled)
         } else {
-            "System notifications: disabled"
+            self.ui_text
+                .get(UiTextKey::StatusSystemNotificationsDisabled)
         }
+    }
+
+    pub fn show_settings_file_path_status(&mut self) {
+        self.queue_status_notification(
+            format!(
+                "{}: {}",
+                self.ui_text.get(UiTextKey::StatusSettingsFile),
+                self.config_paths.settings_file().display()
+            ),
+            self.ui_text.get(UiTextKey::SettingsGroupAppearance),
+        );
+        self.load_error = None;
+    }
+
+    pub fn show_themes_directory_status(&mut self) {
+        self.queue_status_notification(
+            format!(
+                "{}: {}",
+                self.ui_text.get(UiTextKey::StatusThemesDirectory),
+                self.config_paths.themes_dir().display()
+            ),
+            self.ui_text.get(UiTextKey::SettingsGroupAppearance),
+        );
+        self.load_error = None;
+    }
+
+    fn show_layout_file_path_status(&mut self, path: &Path) {
+        self.queue_status_notification(
+            format!(
+                "{}: {}",
+                self.ui_text.get(UiTextKey::StatusLayoutFile),
+                path.display()
+            ),
+            self.ui_text.get(UiTextKey::SettingsGroupProjectLayout),
+        );
+        self.load_error = None;
     }
 
     pub fn visible_keybinding_warning_lines(&self) -> Vec<&str> {
@@ -1159,6 +1224,14 @@ impl RootView {
 
     pub fn run_command(&mut self, command_id: CommandId) -> Result<(), RootViewError> {
         match command_id {
+            CommandId::ProjectOpen => {
+                self.request_open_project();
+                Ok(())
+            }
+            CommandId::ProjectOpenRecent => {
+                self.open_palette(PaletteKind::Project);
+                Ok(())
+            }
             CommandId::CommandPaletteOpen => {
                 self.open_palette(PaletteKind::Command);
                 Ok(())
@@ -1190,12 +1263,24 @@ impl RootView {
             CommandId::SettingsKeybindings => {
                 let path = ensure_keybindings_file(&self.config_paths)?;
                 self.last_opened_keybindings_file = Some(path.clone());
-                self.load_error = Some(format!("Keybindings file: {}", path.display()));
+                self.queue_status_notification(
+                    format!(
+                        "{}: {}",
+                        self.ui_text.get(UiTextKey::StatusKeybindingsFile),
+                        path.display()
+                    ),
+                    self.ui_text.get(UiTextKey::SettingsGroupKeybindings),
+                );
+                self.load_error = None;
                 Ok(())
             }
             CommandId::SettingsNotifications => {
                 self.set_system_notifications_enabled(!self.system_notifications_enabled)?;
-                self.load_error = Some(self.visible_notification_settings_message().to_string());
+                self.queue_status_notification(
+                    self.visible_notification_settings_message().to_string(),
+                    self.ui_text.get(UiTextKey::SettingsGroupGeneral),
+                );
+                self.load_error = None;
                 Ok(())
             }
             CommandId::TabNew => {
@@ -1219,11 +1304,11 @@ impl RootView {
                 let project_layout_file = self.config_paths.project_layout_file(&project_path);
                 let local_layout_file = self.config_paths.local_layout_file(&project_path);
                 if project_layout_file.exists() {
+                    self.show_layout_file_path_status(&project_layout_file);
                     self.last_opened_layout_file = Some(project_layout_file);
-                    self.load_error = None;
                 } else if local_layout_file.exists() {
+                    self.show_layout_file_path_status(&local_layout_file);
                     self.last_opened_layout_file = Some(local_layout_file);
-                    self.load_error = None;
                 } else {
                     self.load_error = Some(format!(
                         "Layout file does not exist: {}",
@@ -1244,6 +1329,26 @@ impl RootView {
 
     pub fn has_pending_project_close(&self) -> bool {
         self.pending_close_project_id.is_some()
+    }
+
+    fn request_open_project(&mut self) {
+        self.pending_open_project_request = true;
+    }
+
+    pub fn take_pending_open_project_request(&mut self) -> bool {
+        std::mem::take(&mut self.pending_open_project_request)
+    }
+
+    fn handle_pending_open_project_request(&mut self, cx: &mut Context<Self>) {
+        if !self.take_pending_open_project_request() {
+            return;
+        }
+
+        if let Some(project_path) = std::env::var_os("YTTT_OPEN_PROJECT") {
+            let _ = self.open_project_path(PathBuf::from(project_path));
+        } else {
+            self.prompt_for_project_directory(cx);
+        }
     }
 
     pub fn visible_close_project_dialog_text(&self) -> Option<String> {
@@ -1269,6 +1374,21 @@ impl RootView {
 
     pub fn toast_queue(&self) -> &ToastQueue {
         &self.toast_queue
+    }
+
+    fn queue_status_notification(&mut self, title: impl Into<String>, context: impl Into<String>) {
+        self.pending_status_notifications.push(ToastItem {
+            title: title.into(),
+            context: context.into(),
+            tone: ToastTone::Success,
+        });
+    }
+
+    fn flush_pending_status_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let theme = self.theme_runtime.ui;
+        for item in self.pending_status_notifications.drain(..) {
+            window.push_notification(workbench_status_notification(item, theme), cx);
+        }
     }
 
     pub fn confirm_pending_project_close(&mut self) -> Result<(), RootViewError> {
@@ -1350,13 +1470,22 @@ impl RootView {
 
     fn palette_items(&self, kind: PaletteKind) -> Vec<PaletteItem> {
         match kind {
-            PaletteKind::Command => command_palette_items(
+            PaletteKind::Command => command_palette_items_with_text(
                 &self.command_registry,
                 CommandPaletteContext::from_workspace(&self.workspace),
+                &self.ui_text,
             ),
-            PaletteKind::Project => project_palette_items(&self.workspace, &self.recent_projects),
-            PaletteKind::Tab => tab_palette_items(&self.workspace).unwrap_or_default(),
-            PaletteKind::Pane => pane_palette_items(&self.workspace).unwrap_or_default(),
+            PaletteKind::Project => project_palette_items_with_text(
+                &self.workspace,
+                &self.recent_projects,
+                &self.ui_text,
+            ),
+            PaletteKind::Tab => {
+                tab_palette_items_with_text(&self.workspace, &self.ui_text).unwrap_or_default()
+            }
+            PaletteKind::Pane => {
+                pane_palette_items_with_text(&self.workspace, &self.ui_text).unwrap_or_default()
+            }
         }
     }
 
@@ -1809,7 +1938,7 @@ impl RootView {
         let input = if let Some(input) = &self.palette_input {
             input.clone()
         } else {
-            let placeholder = palette_input_placeholder(active_palette.kind);
+            let placeholder = palette_input_placeholder(active_palette.kind, &self.ui_text);
             let query = active_palette.query.clone();
             let input = cx.new(|cx| {
                 InputState::new(window, cx)
@@ -1905,7 +2034,7 @@ impl RootView {
             let query = self.settings_page.search_query.clone();
             let input = cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("Search settings...")
+                    .placeholder(self.ui_text.get(UiTextKey::SettingsSearchPlaceholder))
                     .default_value(query)
             });
             let subscription =
@@ -2444,7 +2573,7 @@ impl RootView {
         &mut self,
         input: &Entity<InputState>,
         event: &InputEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match event {
@@ -2456,6 +2585,8 @@ impl RootView {
             }
             InputEvent::PressEnter { .. } => {
                 let _ = self.confirm_palette_selection();
+                self.handle_pending_open_project_request(cx);
+                self.flush_pending_status_notifications(window, cx);
                 cx.notify();
             }
             InputEvent::Focus | InputEvent::Blur => {}
@@ -2735,11 +2866,8 @@ impl RootView {
     }
 
     fn on_open_project(&mut self, _: &OpenProject, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(project_path) = std::env::var_os("YTTT_OPEN_PROJECT") {
-            let _ = self.open_project_path(PathBuf::from(project_path));
-        } else {
-            self.prompt_for_project_directory(cx);
-        }
+        self.request_open_project();
+        self.handle_pending_open_project_request(cx);
         cx.notify();
     }
 
@@ -2826,7 +2954,7 @@ impl RootView {
     fn on_palette_confirm(
         &mut self,
         _: &PaletteConfirm,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.pending_tab_rename.is_some() {
@@ -2843,6 +2971,8 @@ impl RootView {
 
         if self.active_palette.is_some() {
             let _ = self.confirm_palette_selection();
+            self.handle_pending_open_project_request(cx);
+            self.flush_pending_status_notifications(window, cx);
             cx.notify();
         } else {
             cx.propagate();
@@ -3004,37 +3134,41 @@ impl RootView {
     fn on_layout_save_current(
         &mut self,
         _: &LayoutSaveCurrent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.dispatch_command_action(CommandId::LayoutSaveCurrent, cx);
+        self.flush_pending_status_notifications(window, cx);
     }
 
     fn on_layout_export_project_config(
         &mut self,
         _: &LayoutExportProjectConfig,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.dispatch_command_action(CommandId::LayoutExportProjectConfig, cx);
+        self.flush_pending_status_notifications(window, cx);
     }
 
     fn on_layout_open_file(
         &mut self,
         _: &LayoutOpenFile,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.dispatch_command_action(CommandId::LayoutOpenFile, cx);
+        self.flush_pending_status_notifications(window, cx);
     }
 
     fn on_settings_keybindings(
         &mut self,
         _: &SettingsKeybindings,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.dispatch_command_action(CommandId::SettingsKeybindings, cx);
+        self.flush_pending_status_notifications(window, cx);
     }
 
     fn on_settings_open(&mut self, _: &SettingsOpen, _window: &mut Window, cx: &mut Context<Self>) {
@@ -3044,10 +3178,11 @@ impl RootView {
     fn on_settings_notifications(
         &mut self,
         _: &SettingsNotifications,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.dispatch_command_action(CommandId::SettingsNotifications, cx);
+        self.flush_pending_status_notifications(window, cx);
     }
 
     fn dispatch_command_action(&mut self, command_id: CommandId, cx: &mut Context<Self>) {
@@ -3226,9 +3361,9 @@ impl Render for RootView {
                                 })
                             },
                             |tab_id| {
-                                cx.listener(move |this, _, _window, cx| {
-                                    let _ = this.workspace.select_tab(&tab_id);
-                                    let _ = this.run_command(CommandId::TabClose);
+                                cx.listener(move |this, _event: &ClickEvent, _window, cx| {
+                                    cx.stop_propagation();
+                                    let _ = this.close_project_tab(&tab_id);
                                     cx.notify();
                                 })
                             },
@@ -3273,19 +3408,24 @@ impl Render for RootView {
                     &self.palette_scroll_handle,
                     self.theme_runtime.ui,
                     |selected_index| {
-                        cx.listener(move |this, _, _window, cx| {
+                        cx.listener(move |this, _, window, cx| {
                             if let Some(active_palette) = &mut this.active_palette {
                                 active_palette.selected_index = selected_index;
                             }
                             let _ = this.confirm_palette_selection();
+                            this.handle_pending_open_project_request(cx);
+                            this.flush_pending_status_notifications(window, cx);
                             cx.notify();
                         })
                     },
                 ));
             }
         }
-        if let Some(load_error) = &self.load_error {
-            root = root.child(error_banner(load_error));
+        if let Some(error_item) = self.visible_error_notification_item() {
+            root = root.child(error_notification_overlay(
+                error_item,
+                self.theme_runtime.ui,
+            ));
         }
         if self.settings_page.is_open {
             if let Some(search_input) = self.settings_search_input(window, cx) {
@@ -3583,44 +3723,48 @@ fn settings_sidebar(
     cx: &mut Context<RootView>,
 ) -> Div {
     let theme = root.theme_runtime.ui;
-    let groups = root.settings_page.visible_groups().into_iter().fold(
-        div().flex().flex_col().gap_1().min_h_0(),
-        |groups, group| {
-            let group_id = group.id.as_str().to_string();
-            let background = if group.selected {
-                theme.active_surface
-            } else {
-                rgba(0x00000000)
-            };
-            let text = if group.selected {
-                theme.text
-            } else {
-                theme.text_muted
-            };
+    let groups = root
+        .settings_page
+        .visible_groups(&root.ui_text)
+        .into_iter()
+        .fold(
+            div().flex().flex_col().gap_1().min_h_0(),
+            |groups, group| {
+                let group_id = group.id.as_str().to_string();
+                let background = if group.selected {
+                    theme.active_surface
+                } else {
+                    rgba(0x00000000)
+                };
+                let text = if group.selected {
+                    theme.text
+                } else {
+                    theme.text_muted
+                };
 
-            groups.child(
-                div()
-                    .id(SharedString::from(format!(
-                        "settings-group-{}",
-                        group.id.as_str()
-                    )))
-                    .flex()
-                    .items_center()
-                    .h_8()
-                    .rounded_sm()
-                    .px_3()
-                    .bg(background)
-                    .text_sm()
-                    .text_color(text)
-                    .hover(move |this| this.bg(theme.hover_surface))
-                    .on_click(cx.listener(move |this, _, _window, cx| {
-                        let _ = this.select_settings_group(&group_id);
-                        cx.notify();
-                    }))
-                    .child(group.title),
-            )
-        },
-    );
+                groups.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "settings-group-{}",
+                            group.id.as_str()
+                        )))
+                        .flex()
+                        .items_center()
+                        .h_8()
+                        .rounded_sm()
+                        .px_3()
+                        .bg(background)
+                        .text_sm()
+                        .text_color(text)
+                        .hover(move |this| this.bg(theme.hover_surface))
+                        .on_click(cx.listener(move |this, _, _window, cx| {
+                            let _ = this.select_settings_group(&group_id);
+                            cx.notify();
+                        }))
+                        .child(group.title),
+                )
+            },
+        );
 
     div()
         .flex()
@@ -3696,18 +3840,18 @@ fn settings_content(
                             div()
                                 .text_lg()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child(group.title()),
+                                .child(group.title(&root.ui_text)),
                         )
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(theme.text_subtle)
-                                .child(group.description()),
+                                .child(group.description(&root.ui_text)),
                         ),
                 )
                 .child(settings_button(
                     "settings-close",
-                    "Close",
+                    root.ui_text.get(UiTextKey::SettingsClose),
                     false,
                     theme,
                     cx,
@@ -3752,6 +3896,7 @@ fn settings_general_rows(
     cx: &mut Context<RootView>,
 ) -> Div {
     let theme = root.theme_runtime.ui;
+    let text = root.ui_text;
     let language_select = root.settings_language_select(window, cx);
     div()
         .flex()
@@ -3759,16 +3904,21 @@ fn settings_general_rows(
         .child(setting_row(
             style,
             theme,
-            "Language",
-            "Application display language.",
-            settings_select_control(language_select, theme, false, "Select language")
-                .into_any_element(),
+            text.get(UiTextKey::SettingsLanguage),
+            text.get(UiTextKey::SettingsLanguageDescription),
+            settings_select_control(
+                language_select,
+                theme,
+                false,
+                text.get(UiTextKey::SettingsSelectLanguage),
+            )
+            .into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
-            "System notifications",
-            "Notify when agent terminal tasks complete or fail.",
+            text.get(UiTextKey::SettingsSystemNotifications),
+            text.get(UiTextKey::SettingsSystemNotificationsDescription),
             settings_switch(
                 "settings-notifications",
                 root.system_notifications_enabled,
@@ -3789,8 +3939,7 @@ fn settings_appearance_rows(
     cx: &mut Context<RootView>,
 ) -> Div {
     let theme = root.theme_runtime.ui;
-    let settings_file = root.config_paths.settings_file().display().to_string();
-    let themes_dir = root.config_paths.themes_dir().display().to_string();
+    let text = root.ui_text;
     let ui_theme_select = root.settings_ui_theme_select(window, cx);
     let terminal_theme_select = root.settings_terminal_theme_select(window, cx);
 
@@ -3800,32 +3949,43 @@ fn settings_appearance_rows(
         .child(setting_row(
             style,
             theme,
-            "UI theme",
-            "Theme used for YTTT chrome, panels, and controls.",
-            settings_select_control(ui_theme_select, theme, true, "Search theme...")
-                .into_any_element(),
+            text.get(UiTextKey::SettingsUiTheme),
+            text.get(UiTextKey::SettingsUiThemeDescription),
+            settings_select_control(
+                ui_theme_select,
+                theme,
+                true,
+                text.get(UiTextKey::SettingsSearchTheme),
+            )
+            .into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
-            "Terminal theme",
-            "Optional terminal colors override.",
-            settings_select_control(terminal_theme_select, theme, true, "Search theme...")
-                .into_any_element(),
+            text.get(UiTextKey::SettingsTerminalTheme),
+            text.get(UiTextKey::SettingsTerminalThemeDescription),
+            settings_select_control(
+                terminal_theme_select,
+                theme,
+                true,
+                text.get(UiTextKey::SettingsSearchTheme),
+            )
+            .into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
-            "Edit settings TOML",
-            "Open the app settings file for advanced edits.",
+            text.get(UiTextKey::SettingsEditSettingsToml),
+            text.get(UiTextKey::SettingsEditSettingsTomlDescription),
             settings_button(
                 "settings-open-file",
-                "Show Path",
+                text.get(UiTextKey::SettingsShowPath),
                 false,
                 theme,
                 cx,
-                cx.listener(move |this, _, _window, cx| {
-                    this.load_error = Some(format!("Settings file: {settings_file}"));
+                cx.listener(move |this, _, window, cx| {
+                    this.show_settings_file_path_status();
+                    this.flush_pending_status_notifications(window, cx);
                     cx.notify();
                 }),
             )
@@ -3834,16 +3994,17 @@ fn settings_appearance_rows(
         .child(setting_row(
             style,
             theme,
-            "Themes directory",
-            "Open the folder containing user theme TOML files.",
+            text.get(UiTextKey::SettingsThemesDirectory),
+            text.get(UiTextKey::SettingsThemesDirectoryDescription),
             settings_button(
                 "settings-open-themes-dir",
-                "Show Path",
+                text.get(UiTextKey::SettingsShowPath),
                 false,
                 theme,
                 cx,
-                cx.listener(move |this, _, _window, cx| {
-                    this.load_error = Some(format!("Themes directory: {themes_dir}"));
+                cx.listener(move |this, _, window, cx| {
+                    this.show_themes_directory_status();
+                    this.flush_pending_status_notifications(window, cx);
                     cx.notify();
                 }),
             )
@@ -3858,6 +4019,7 @@ fn settings_terminal_rows(
     cx: &mut Context<RootView>,
 ) -> Div {
     let theme = root.theme_runtime.ui;
+    let text = root.ui_text;
     let shell_select = root.settings_shell_select(window, cx);
     let font_select = root.settings_font_family_select(window, cx);
     let font_size_input = root.settings_number_input(SettingsNumberField::FontSize, window, cx);
@@ -3871,50 +4033,62 @@ fn settings_terminal_rows(
         .child(setting_row(
             style,
             theme,
-            "Default shell",
-            "Shell command used when creating new terminal tabs.",
-            settings_select_control(shell_select, theme, false, "Select shell").into_any_element(),
+            text.get(UiTextKey::SettingsDefaultShell),
+            text.get(UiTextKey::SettingsDefaultShellDescription),
+            settings_select_control(
+                shell_select,
+                theme,
+                false,
+                text.get(UiTextKey::SettingsSelectShell),
+            )
+            .into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
-            "Font family",
-            "Terminal font family.",
-            settings_select_control(font_select, theme, true, "Search font...").into_any_element(),
+            text.get(UiTextKey::SettingsFontFamily),
+            text.get(UiTextKey::SettingsFontFamilyDescription),
+            settings_select_control(
+                font_select,
+                theme,
+                true,
+                text.get(UiTextKey::SettingsSearchFont),
+            )
+            .into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
-            "Font size",
-            "Terminal font size in pixels.",
+            text.get(UiTextKey::SettingsFontSize),
+            text.get(UiTextKey::SettingsFontSizeDescription),
             settings_number_control(font_size_input, style).into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
-            "Line height",
-            "Terminal line height multiplier.",
+            text.get(UiTextKey::SettingsLineHeight),
+            text.get(UiTextKey::SettingsLineHeightDescription),
             settings_number_control(line_height_input, style).into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
-            "Padding",
-            "Terminal pane inner padding.",
+            text.get(UiTextKey::SettingsPadding),
+            text.get(UiTextKey::SettingsPaddingDescription),
             settings_number_control(padding_input, style).into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
-            "Scrollback",
-            "Number of terminal lines kept in memory.",
+            text.get(UiTextKey::SettingsScrollback),
+            text.get(UiTextKey::SettingsScrollbackDescription),
             settings_number_control(scrollback_input, style).into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
-            "Scrollbar",
-            "Show a thin scrollback indicator in terminal panes.",
+            text.get(UiTextKey::SettingsScrollbar),
+            text.get(UiTextKey::SettingsScrollbarDescription),
             settings_switch(
                 "settings-show-scrollbar",
                 root.terminal_show_scrollbar(),
@@ -3930,8 +4104,8 @@ fn settings_terminal_rows(
         .child(setting_row(
             style,
             theme,
-            "Close pane on exit",
-            "Automatically close terminal panes when their process exits.",
+            text.get(UiTextKey::SettingsClosePaneOnExit),
+            text.get(UiTextKey::SettingsClosePaneOnExitDescription),
             settings_switch(
                 "settings-close-on-exit",
                 root.terminal_close_on_exit(),
@@ -3951,10 +4125,11 @@ fn settings_project_layout_rows(
     cx: &mut Context<RootView>,
 ) -> Div {
     let theme = root.theme_runtime.ui;
+    let text = root.ui_text;
     let has_project = root.workspace.selected_project_id().is_some();
     let layout_source = root
         .visible_layout_source_message()
-        .unwrap_or("Open a project first")
+        .unwrap_or(text.get(UiTextKey::SettingsOpenProjectFirst))
         .to_string();
 
     div()
@@ -3963,18 +4138,18 @@ fn settings_project_layout_rows(
         .child(setting_row(
             style,
             theme,
-            "Layout source",
-            "Current project layout source.",
+            text.get(UiTextKey::SettingsLayoutSource),
+            text.get(UiTextKey::SettingsLayoutSourceDescription),
             settings_value(layout_source, theme).into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
-            "Save current layout",
-            "Save current layout as an app-local override.",
+            text.get(UiTextKey::SettingsSaveCurrentLayout),
+            text.get(UiTextKey::SettingsSaveCurrentLayoutDescription),
             settings_command_button(
                 "settings-layout-save",
-                "Save",
+                text.get(UiTextKey::SettingsSave),
                 has_project,
                 theme,
                 CommandId::LayoutSaveCurrent,
@@ -3985,11 +4160,11 @@ fn settings_project_layout_rows(
         .child(setting_row(
             style,
             theme,
-            "Export project layout",
-            "Write current layout into the project config.",
+            text.get(UiTextKey::SettingsExportProjectLayout),
+            text.get(UiTextKey::SettingsExportProjectLayoutDescription),
             settings_command_button(
                 "settings-layout-export",
-                "Export",
+                text.get(UiTextKey::SettingsExport),
                 has_project,
                 theme,
                 CommandId::LayoutExportProjectConfig,
@@ -4000,11 +4175,11 @@ fn settings_project_layout_rows(
         .child(setting_row(
             style,
             theme,
-            "Edit layout TOML",
-            "Edit the selected project layout file.",
+            text.get(UiTextKey::SettingsEditLayoutToml),
+            text.get(UiTextKey::SettingsEditLayoutTomlDescription),
             settings_button(
                 "settings-layout-edit",
-                "Open",
+                text.get(UiTextKey::SettingsOpen),
                 false,
                 theme,
                 cx,
@@ -4025,8 +4200,10 @@ fn settings_keybinding_rows(
     cx: &mut Context<RootView>,
 ) -> Div {
     let theme = root.theme_runtime.ui;
+    let text = root.ui_text;
     let diagnostics = if root.keybinding_warning_lines.is_empty() {
-        "No keybinding conflicts".to_string()
+        text.get(UiTextKey::SettingsNoKeybindingConflicts)
+            .to_string()
     } else {
         root.keybinding_warning_lines.join("; ")
     };
@@ -4037,11 +4214,11 @@ fn settings_keybinding_rows(
         .child(setting_row(
             style,
             theme,
-            "Edit keybindings TOML",
-            "Open the user keybindings file.",
+            text.get(UiTextKey::SettingsEditKeybindingsToml),
+            text.get(UiTextKey::SettingsEditKeybindingsTomlDescription),
             settings_command_button(
                 "settings-keybindings-open",
-                "Open",
+                text.get(UiTextKey::SettingsOpen),
                 true,
                 theme,
                 CommandId::SettingsKeybindings,
@@ -4052,22 +4229,22 @@ fn settings_keybinding_rows(
         .child(setting_row(
             style,
             theme,
-            "Keybinding diagnostics",
-            "Show invalid commands and shortcut conflicts.",
+            text.get(UiTextKey::SettingsKeybindingDiagnostics),
+            text.get(UiTextKey::SettingsKeybindingDiagnosticsDescription),
             settings_value(diagnostics, theme).into_any_element(),
         ));
 
     for row in root.visible_keybinding_rows() {
         let command = row.command;
         let keys = if row.keys.is_empty() {
-            "Unbound".to_string()
+            text.get(UiTextKey::SettingsUnbound).to_string()
         } else {
             row.keys.join(", ")
         };
         let title = row.title;
         let description = row.command_id;
         let title_text = if row.has_conflict {
-            format!("{title} (conflict)")
+            format!("{title} ({})", text.get(UiTextKey::SettingsConflict))
         } else {
             title.to_string()
         };
@@ -4113,7 +4290,7 @@ fn settings_keybinding_rows(
                         .child(settings_value(keys, theme))
                         .child(settings_button(
                             format!("settings-keybinding-edit-{}", row.command_id),
-                            "Edit",
+                            text.get(UiTextKey::SettingsEdit),
                             false,
                             theme,
                             cx,
@@ -4124,7 +4301,7 @@ fn settings_keybinding_rows(
                         ))
                         .child(settings_button(
                             format!("settings-keybinding-reset-{}", row.command_id),
-                            "Reset",
+                            text.get(UiTextKey::SettingsReset),
                             false,
                             theme,
                             cx,
@@ -4135,7 +4312,7 @@ fn settings_keybinding_rows(
                         ))
                         .child(settings_button(
                             format!("settings-keybinding-delete-{}", row.command_id),
-                            "Delete",
+                            text.get(UiTextKey::SettingsDelete),
                             false,
                             theme,
                             cx,
@@ -4209,9 +4386,10 @@ fn settings_command_button(
         false,
         theme,
         cx,
-        cx.listener(move |this, _, _window, cx| {
+        cx.listener(move |this, _, window, cx| {
             if enabled {
                 let _ = this.run_command(command);
+                this.flush_pending_status_notifications(window, cx);
             }
             cx.notify();
         }),
@@ -4272,13 +4450,12 @@ fn settings_value(value: impl Into<String>, theme: WorkbenchTheme) -> Div {
         .child(value.into())
 }
 
-fn error_banner(message: &str) -> Div {
+fn error_notification_overlay(item: ToastItem, theme: WorkbenchTheme) -> Div {
     div()
         .absolute()
-        .top_4()
-        .left_4()
-        .right_4()
-        .child(Alert::error("root-error-banner", message.to_string()).banner())
+        .top(px(48.0))
+        .right(px(12.0))
+        .child(workbench_inline_notification(item, theme))
 }
 
 fn push_component_notification(

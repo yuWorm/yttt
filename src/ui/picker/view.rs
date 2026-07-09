@@ -70,7 +70,7 @@ where
                         theme,
                         on_confirm_item,
                     ))
-                    .child(picker_footer(theme)),
+                    .child(picker_footer(ui_text, theme)),
             ),
     )
 }
@@ -166,7 +166,7 @@ where
     )
 }
 
-fn picker_footer(theme: WorkbenchTheme) -> Div {
+fn picker_footer(ui_text: &UiText, theme: WorkbenchTheme) -> Div {
     let style = palette_panel_style();
 
     div()
@@ -181,7 +181,7 @@ fn picker_footer(theme: WorkbenchTheme) -> Div {
         .text_xs()
         .text_color(theme.text_muted)
         .children(
-            palette_footer_actions()
+            palette_footer_actions(ui_text)
                 .into_iter()
                 .map(|action| picker_footer_action(action, theme)),
         )

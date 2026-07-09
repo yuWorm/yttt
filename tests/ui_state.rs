@@ -316,6 +316,10 @@ fn root_view_open_project_path_records_visible_load_error() {
             .unwrap()
             .contains("failed to parse project layout")
     );
+    let item = root.visible_error_notification_item().unwrap();
+    assert!(item.title.contains("failed to parse project layout"));
+    assert_eq!(item.context, "Error");
+    assert_eq!(item.tone, ToastTone::Error);
 }
 
 #[test]
@@ -374,6 +378,11 @@ fn root_view_layout_open_file_falls_back_to_app_local_layout() {
         Some(expected_layout_file.as_path())
     );
     assert_eq!(root.visible_error_message(), None);
+    assert!(
+        root.pending_status_notification_titles()
+            .iter()
+            .any(|title| title.contains("layout.toml"))
+    );
 }
 
 #[test]
@@ -486,17 +495,35 @@ fn root_view_settings_keybindings_reveals_keybindings_file_path() {
         root.last_opened_keybindings_file(),
         Some(paths.keybindings_file().as_path())
     );
+    assert_eq!(root.visible_error_message(), None);
     assert!(
-        root.visible_error_message()
-            .unwrap()
-            .contains("keybindings.toml")
+        root.pending_status_notification_titles()
+            .iter()
+            .any(|title| title.contains("keybindings.toml"))
     );
     assert!(paths.keybindings_file().exists());
 }
 
 #[test]
+fn root_view_status_reveals_settings_paths_without_error_banner() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths.clone());
+
+    root.show_settings_file_path_status();
+    root.show_themes_directory_status();
+
+    assert_eq!(root.visible_error_message(), None);
+    let titles = root.pending_status_notification_titles();
+    assert!(titles.iter().any(|title| title.contains("settings.toml")));
+    assert!(titles.iter().any(|title| title.contains("themes")));
+}
+
+#[test]
 fn root_view_settings_open_command_opens_settings_page() {
-    let mut root = RootView::new();
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths);
 
     root.run_command(CommandId::SettingsOpen).unwrap();
 
@@ -516,7 +543,9 @@ fn root_view_settings_open_command_opens_settings_page() {
 
 #[test]
 fn root_view_settings_search_filters_groups() {
-    let mut root = RootView::new();
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths);
     root.open_settings();
 
     root.set_settings_search_query("shell");
@@ -527,7 +556,9 @@ fn root_view_settings_search_filters_groups() {
 
 #[test]
 fn root_view_settings_can_select_and_close_group() {
-    let mut root = RootView::new();
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths);
     root.open_settings();
 
     root.select_settings_group("terminal").unwrap();
@@ -552,9 +583,14 @@ fn root_view_toggles_system_notifications() {
     root.run_command(CommandId::SettingsNotifications).unwrap();
 
     assert!(root.system_notifications_enabled());
+    assert_eq!(root.visible_error_message(), None);
     assert_eq!(
         root.visible_notification_settings_message(),
         "System notifications: enabled"
+    );
+    assert_eq!(
+        root.pending_status_notification_titles(),
+        vec!["System notifications: enabled".to_string()]
     );
 
     let reloaded = RootView::with_config_paths(paths);
@@ -583,6 +619,92 @@ fn root_view_language_setting_persists_and_updates_visible_text() {
         reloaded.visible_empty_workspace_actions(),
         vec!["打开目录", "打开最近项目", "命令面板"]
     );
+}
+
+#[test]
+fn root_view_status_notifications_use_selected_language() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths);
+
+    root.set_language(LanguageSetting::Chinese).unwrap();
+    root.run_command(CommandId::SettingsNotifications).unwrap();
+    root.run_command(CommandId::SettingsKeybindings).unwrap();
+
+    let titles = root.pending_status_notification_titles();
+    assert!(titles.iter().any(|title| title == "系统通知：已启用"));
+    assert!(titles.iter().any(|title| title.starts_with("快捷键文件: ")));
+    assert_eq!(root.visible_error_message(), None);
+}
+
+#[test]
+fn root_view_language_setting_updates_settings_labels() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths);
+    root.open_settings();
+
+    root.set_language(LanguageSetting::Chinese).unwrap();
+
+    assert_eq!(
+        root.visible_settings_group_titles(),
+        vec!["通用", "外观", "终端", "项目布局", "快捷键"]
+    );
+    assert_eq!(root.selected_settings_group_title(), Some("通用"));
+
+    root.set_settings_search_query("Shell");
+
+    assert_eq!(root.visible_settings_group_titles(), vec!["终端"]);
+    assert_eq!(root.selected_settings_group_title(), Some("终端"));
+}
+
+#[test]
+fn root_view_language_setting_updates_command_palette_labels() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths);
+
+    root.set_language(LanguageSetting::Chinese).unwrap();
+    root.open_palette(PaletteKind::Command);
+
+    let items = root.active_palette_items();
+    let open_project = items
+        .iter()
+        .find(|item| item.command == CommandId::ProjectOpen)
+        .unwrap();
+    assert_eq!(open_project.title, "打开项目");
+    assert_eq!(open_project.subtitle.as_deref(), Some("选择一个项目目录"));
+    assert!(open_project.enabled);
+    assert_eq!(open_project.disabled_reason.as_deref(), None);
+
+    let new_tab = items
+        .iter()
+        .find(|item| item.command == CommandId::TabNew)
+        .unwrap();
+    assert_eq!(new_tab.title, "新建标签页");
+    assert_eq!(new_tab.disabled_reason.as_deref(), Some("请先打开项目"));
+}
+
+#[test]
+fn root_view_command_palette_can_request_open_project() {
+    let (_temp, mut root) = english_test_root();
+
+    root.open_palette(PaletteKind::Command);
+    root.set_palette_query("Open Project");
+    root.confirm_palette_selection().unwrap();
+
+    assert!(root.active_palette().is_none());
+    assert!(root.take_pending_open_project_request());
+    assert_eq!(root.visible_error_message(), None);
+}
+
+#[test]
+fn root_view_closes_requested_tab_by_id() {
+    let mut root = RootView::dev_fixture();
+
+    root.close_project_tab("agent").unwrap();
+
+    assert_eq!(visible_tab_titles(root.workspace()), vec!["Dev"]);
 }
 
 #[test]
@@ -850,9 +972,17 @@ fn root_view_notification_settings_can_be_disabled_again() {
     root.run_command(CommandId::SettingsNotifications).unwrap();
 
     assert!(!root.system_notifications_enabled());
+    assert_eq!(root.visible_error_message(), None);
     assert_eq!(
         root.visible_notification_settings_message(),
         "System notifications: disabled"
+    );
+    assert_eq!(
+        root.pending_status_notification_titles(),
+        vec![
+            "System notifications: enabled".to_string(),
+            "System notifications: disabled".to_string()
+        ]
     );
 
     let reloaded = RootView::with_config_paths(paths);
@@ -1293,7 +1423,7 @@ fn root_view_confirming_pane_palette_selection_queues_terminal_focus() {
 
 #[test]
 fn root_view_confirming_disabled_command_palette_item_keeps_palette_open() {
-    let mut root = RootView::new();
+    let (_temp, mut root) = english_test_root();
 
     root.open_palette(PaletteKind::Command);
     root.set_palette_query("Split Pane Vertically");
@@ -1308,7 +1438,7 @@ fn root_view_confirming_disabled_command_palette_item_keeps_palette_open() {
 
 #[test]
 fn root_view_command_palette_can_open_project_palette() {
-    let mut root = RootView::new();
+    let (_temp, mut root) = english_test_root();
 
     root.open_palette(PaletteKind::Command);
     root.set_palette_query("Open Project Palette");
@@ -1703,7 +1833,7 @@ fn root_view_focuses_notification_target() {
 
 #[test]
 fn root_view_reports_missing_notification_target() {
-    let mut root = RootView::dev_fixture();
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
     let mut event = notification_event();
     event.pane_id = "missing-pane".to_string();
 
@@ -1714,6 +1844,10 @@ fn root_view_reports_missing_notification_target() {
         root.visible_error_message(),
         Some("pane not found: missing-pane")
     );
+    let item = root.visible_error_notification_item().unwrap();
+    assert_eq!(item.title, "pane not found: missing-pane");
+    assert_eq!(item.context, "Error");
+    assert_eq!(item.tone, ToastTone::Error);
 }
 
 #[test]

@@ -5,6 +5,7 @@ use crate::ui::theme::WorkbenchTheme;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum YtttNotificationTone {
     Success,
+    Warning,
     Error,
 }
 
@@ -33,6 +34,7 @@ pub fn yttt_notification_style(
 ) -> YtttNotificationStyle {
     let tone = match tone {
         YtttNotificationTone::Success => theme.success,
+        YtttNotificationTone::Warning => theme.warning,
         YtttNotificationTone::Error => theme.danger,
     };
 

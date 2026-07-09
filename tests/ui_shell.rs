@@ -8,12 +8,13 @@ use yttt::ui::font_options::{
     SYSTEM_FONT_FAMILY_LABEL, terminal_font_family_option_for_setting,
     terminal_font_family_options_from_system, terminal_font_family_setting_from_option,
 };
+use yttt::ui::i18n::{Locale, UiText};
 use yttt::ui::overlay::{
     KeyboardCapture, overlay_input_capture_policy, popover_overlay_event_policy,
 };
 use yttt::ui::palette_surface::{
-    PaletteFooterAction, PaletteRowTone, palette_footer_actions, palette_panel_style,
-    palette_row_style, palette_scroll_anchor_index,
+    PaletteFooterAction, PaletteRowTone, palette_footer_actions, palette_input_placeholder,
+    palette_panel_style, palette_row_style, palette_scroll_anchor_index,
 };
 use yttt::ui::primitives::{
     button::{YtttButtonVariant, yttt_button_style},
@@ -308,8 +309,10 @@ fn yttt_status_dot_style_maps_common_tones_to_theme_colors() {
 
 #[test]
 fn palette_footer_exposes_keyboard_actions() {
+    let text = UiText::english();
+
     assert_eq!(
-        palette_footer_actions(),
+        palette_footer_actions(&text),
         vec![
             PaletteFooterAction {
                 label: "Run",
@@ -317,6 +320,33 @@ fn palette_footer_exposes_keyboard_actions() {
             },
             PaletteFooterAction {
                 label: "Close",
+                key: "esc",
+            },
+        ]
+    );
+}
+
+#[test]
+fn palette_surface_text_is_localized() {
+    let text = UiText::new(Locale::Chinese);
+
+    assert_eq!(
+        palette_input_placeholder(yttt::palette::PaletteKind::Command, &text),
+        "执行命令..."
+    );
+    assert_eq!(
+        palette_input_placeholder(yttt::palette::PaletteKind::Project, &text),
+        "切换项目..."
+    );
+    assert_eq!(
+        palette_footer_actions(&text),
+        vec![
+            PaletteFooterAction {
+                label: "运行",
+                key: "enter",
+            },
+            PaletteFooterAction {
+                label: "关闭",
                 key: "esc",
             },
         ]
@@ -343,9 +373,10 @@ fn settings_panel_style_uses_zed_like_sidebar_and_content_bounds() {
 
 #[test]
 fn settings_rows_are_grouped_by_user_facing_sections() {
-    let general_rows = settings_rows_for_group(SettingsGroupId::General);
-    let terminal_rows = settings_rows_for_group(SettingsGroupId::Terminal);
-    let layout_rows = settings_rows_for_group(SettingsGroupId::ProjectLayout);
+    let text = UiText::english();
+    let general_rows = settings_rows_for_group(SettingsGroupId::General, &text);
+    let terminal_rows = settings_rows_for_group(SettingsGroupId::Terminal, &text);
+    let layout_rows = settings_rows_for_group(SettingsGroupId::ProjectLayout, &text);
 
     assert!(general_rows.iter().any(|row| row.title == "Language"));
     assert!(terminal_rows.iter().any(|row| row.title == "Default shell"));
@@ -360,6 +391,22 @@ fn settings_rows_are_grouped_by_user_facing_sections() {
         layout_rows
             .iter()
             .any(|row| row.title == "Edit layout TOML")
+    );
+}
+
+#[test]
+fn settings_rows_are_localized() {
+    let text = UiText::new(Locale::Chinese);
+    let general_rows = settings_rows_for_group(SettingsGroupId::General, &text);
+    let terminal_rows = settings_rows_for_group(SettingsGroupId::Terminal, &text);
+
+    assert!(general_rows.iter().any(|row| row.title == "语言"));
+    assert!(general_rows.iter().any(|row| row.title == "系统通知"));
+    assert!(terminal_rows.iter().any(|row| row.title == "默认 Shell"));
+    assert!(
+        terminal_rows
+            .iter()
+            .any(|row| row.title == "退出后关闭面板")
     );
 }
 
@@ -590,6 +637,14 @@ fn yttt_notification_error_style_uses_danger_tone() {
 }
 
 #[test]
+fn yttt_notification_warning_style_uses_warning_tone() {
+    let theme = WorkbenchTheme::dark();
+    let notification = yttt_notification_style(YtttNotificationTone::Warning, theme);
+
+    assert_eq!(notification.tone, theme.warning);
+}
+
+#[test]
 fn toast_tones_map_to_workbench_notification_tones() {
     assert_eq!(
         notification_tone_for_toast(ToastTone::Success),
@@ -598,6 +653,10 @@ fn toast_tones_map_to_workbench_notification_tones() {
     assert_eq!(
         notification_tone_for_toast(ToastTone::Error),
         YtttNotificationTone::Error
+    );
+    assert_eq!(
+        notification_tone_for_toast(ToastTone::Warning),
+        YtttNotificationTone::Warning
     );
 }
 

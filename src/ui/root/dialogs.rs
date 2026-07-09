@@ -186,13 +186,14 @@ pub(super) fn close_project_dialog(
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(ui_text.get(UiTextKey::CloseProjectTitle)),
                     )
-                    .child(
-                        Alert::warning(
-                            "close-project-warning",
-                            ui_text.get(UiTextKey::CloseProjectBody),
-                        )
-                        .banner(),
-                    )
+                    .child(workbench_inline_notification(
+                        ToastItem {
+                            title: ui_text.get(UiTextKey::CloseProjectBody).to_string(),
+                            context: ui_text.get(UiTextKey::StatusWarningContext).to_string(),
+                            tone: ToastTone::Warning,
+                        },
+                        theme,
+                    ))
                     .child(
                         div()
                             .text_xs()

@@ -198,10 +198,9 @@ impl CommandId {
 
     pub fn availability(self, has_selected_project: bool) -> CommandAvailability {
         match self {
-            Self::ProjectOpen | Self::ProjectOpenRecent => {
-                disabled("Use the visible project actions")
-            }
             Self::CommandPaletteOpen
+            | Self::ProjectOpen
+            | Self::ProjectOpenRecent
             | Self::ProjectPalette
             | Self::SettingsOpen
             | Self::SettingsKeybindings
