@@ -546,12 +546,19 @@ fn yttt_switch_style_matches_settings_control_density() {
     let theme = WorkbenchTheme::dark();
     let switch = yttt_switch_style(theme);
 
-    assert_eq!(switch.width, gpui::px(36.0));
-    assert_eq!(switch.height, gpui::px(20.0));
+    assert_eq!(switch.width, gpui::px(42.0));
+    assert_eq!(switch.height, gpui::px(26.0));
+    assert_eq!(switch.track_width, gpui::px(34.0));
+    assert_eq!(switch.track_height, gpui::px(20.0));
+    assert_eq!(switch.thumb_size, gpui::px(14.0));
+    assert_eq!(switch.track_padding, gpui::px(2.0));
     assert_eq!(switch.control_height, gpui::px(32.0));
-    assert_eq!(switch.active_background, theme.active_surface);
-    assert_eq!(switch.inactive_background, theme.surface_elevated);
-    assert_eq!(switch.thumb, theme.text);
+    assert_eq!(switch.active_background, theme.accent);
+    assert_eq!(switch.inactive_background, theme.active_surface);
+    assert_eq!(switch.active_border, theme.focus_ring);
+    assert_eq!(switch.inactive_border, theme.border_strong);
+    assert_eq!(switch.active_thumb, theme.text);
+    assert_eq!(switch.inactive_thumb, theme.text_subtle);
 }
 
 #[test]
