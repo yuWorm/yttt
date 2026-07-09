@@ -5,3 +5,5 @@ docs/superpowers
 docs/zed-screenshots
 /.codegraph
 /sources
+/.agents
+/skills-lock.json

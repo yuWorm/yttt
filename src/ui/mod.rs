@@ -6,12 +6,14 @@ pub mod components;
 pub mod font_options;
 pub mod i18n;
 pub mod input_owner;
+pub mod interaction;
 pub mod keybindings_editor;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod overlay;
 pub mod palette;
 pub mod palette_surface;
+pub mod picker;
 pub mod primitives;
 pub mod root;
 pub mod settings;

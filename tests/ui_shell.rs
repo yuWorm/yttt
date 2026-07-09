@@ -6,6 +6,9 @@ use yttt::ui::font_options::{
     SYSTEM_FONT_FAMILY_LABEL, terminal_font_family_option_for_setting,
     terminal_font_family_options_from_system, terminal_font_family_setting_from_option,
 };
+use yttt::ui::overlay::{
+    KeyboardCapture, overlay_input_capture_policy, popover_overlay_event_policy,
+};
 use yttt::ui::palette_surface::{
     PaletteFooterAction, PaletteRowTone, palette_footer_actions, palette_panel_style,
     palette_row_style, palette_scroll_anchor_index,
@@ -24,10 +27,7 @@ use yttt::ui::tabs::{
 use yttt::ui::terminal_pane::TerminalPaneView;
 use yttt::ui::theme::WorkbenchTheme;
 use yttt::ui::titlebar::TitlebarInfo;
-use yttt::{
-    model::layout::SplitDirection,
-    ui::root::{RootView, overlay_input_capture_policy},
-};
+use yttt::{model::layout::SplitDirection, ui::root::RootView};
 
 #[test]
 fn workbench_theme_exposes_terminal_first_tokens() {
@@ -280,12 +280,32 @@ fn settings_rows_are_grouped_by_user_facing_sections() {
 }
 
 #[test]
-fn floating_layers_capture_all_direct_input_events() {
+fn floating_layers_leave_keyboard_events_for_focused_inputs() {
     let policy = overlay_input_capture_policy();
 
-    assert!(policy.keyboard);
+    assert_eq!(policy.keyboard, KeyboardCapture::ScopeOnly);
     assert!(policy.mouse);
     assert!(policy.scroll);
+}
+
+#[test]
+fn modal_overlay_policy_captures_pointer_and_scroll_without_global_keyboard_capture() {
+    let policy = overlay_input_capture_policy();
+
+    assert_eq!(policy.keyboard, KeyboardCapture::ScopeOnly);
+    assert!(policy.mouse);
+    assert!(policy.scroll);
+    assert!(policy.dismiss_on_escape);
+}
+
+#[test]
+fn popover_overlay_policy_captures_pointer_and_click_outside() {
+    let policy = popover_overlay_event_policy();
+
+    assert_eq!(policy.keyboard, KeyboardCapture::ScopeOnly);
+    assert!(policy.mouse);
+    assert!(policy.scroll);
+    assert!(policy.dismiss_on_click_outside);
 }
 
 #[test]

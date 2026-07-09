@@ -7,6 +7,11 @@ use yttt::{
         ActivePalette, CommandPaletteContext, PaletteItem, PaletteKind, RecentProject,
         command_palette_items, pane_palette_items, project_palette_items, tab_palette_items,
     },
+    ui::{
+        components::SelectableState,
+        palette::visible_palette_rows,
+        picker::{PalettePickerDelegate, PickerDelegate, PickerItem, PickerState},
+    },
 };
 
 #[test]
@@ -217,6 +222,114 @@ fn active_palette_moves_selection_within_filtered_items() {
 
     palette.select_prev(&items);
     assert_eq!(palette.selected_item(&items).unwrap().id, "server");
+}
+
+#[test]
+fn picker_state_filters_items_case_insensitively() {
+    let mut state = PickerState::new();
+    state.set_query("open");
+    let items = vec![
+        PickerItem::new("open", "Open Project"),
+        PickerItem::new("close", "Close Project"),
+    ];
+
+    let rows = state.filtered_items(&items);
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "open");
+}
+
+#[test]
+fn picker_state_clamps_selected_index_to_filtered_rows() {
+    let mut state = PickerState::new();
+    state.selected_index = 99;
+    state.set_query("project");
+    state.selected_index = 99;
+    let items = vec![
+        PickerItem::new("open", "Open Project"),
+        PickerItem::new("close", "Close Project"),
+    ];
+
+    assert_eq!(state.clamped_selected_index(&items), Some(1));
+}
+
+#[test]
+fn picker_item_preserves_disabled_reason_from_palette_item() {
+    let item = PaletteItem {
+        id: "tab.new".to_string(),
+        title: "New Tab".to_string(),
+        subtitle: Some("Create tab".to_string()),
+        status: None,
+        command: CommandId::TabNew,
+        enabled: false,
+        disabled_reason: Some("Open a project first".to_string()),
+    };
+
+    let picker = PickerItem::from_palette_item(&item);
+
+    assert_eq!(
+        picker.disabled_reason.as_deref(),
+        Some("Open a project first")
+    );
+    assert!(!picker.enabled);
+}
+
+#[test]
+fn visible_palette_rows_preserve_active_selection_after_picker_migration() {
+    let mut active = ActivePalette::new(PaletteKind::Command);
+    active.query = "project".to_string();
+    active.selected_index = 1;
+    let items = vec![
+        PaletteItem {
+            id: "project.open".to_string(),
+            title: "Open Project".to_string(),
+            subtitle: Some("Choose a project directory".to_string()),
+            status: None,
+            command: CommandId::ProjectOpen,
+            enabled: true,
+            disabled_reason: None,
+        },
+        PaletteItem {
+            id: "project.close".to_string(),
+            title: "Close Project".to_string(),
+            subtitle: Some("Close the selected project".to_string()),
+            status: None,
+            command: CommandId::ProjectClose,
+            enabled: true,
+            disabled_reason: None,
+        },
+    ];
+
+    let rows = visible_palette_rows(&active, &items);
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1].state, SelectableState::Active);
+}
+
+#[test]
+fn palette_picker_delegate_exposes_picker_items_for_all_palette_kinds() {
+    for kind in [
+        PaletteKind::Command,
+        PaletteKind::Project,
+        PaletteKind::Tab,
+        PaletteKind::Pane,
+    ] {
+        let delegate = PalettePickerDelegate::new(
+            kind,
+            vec![PaletteItem {
+                id: "item".to_string(),
+                title: "Item".to_string(),
+                subtitle: None,
+                status: None,
+                command: CommandId::CommandPaletteOpen,
+                enabled: true,
+                disabled_reason: None,
+            }],
+        );
+
+        assert_eq!(delegate.kind(), kind);
+        assert_eq!(delegate.items()[0].id, "item");
+    }
 }
 
 fn sample_palette_items() -> Vec<PaletteItem> {

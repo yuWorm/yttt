@@ -83,6 +83,8 @@
 //! assert_eq!(keystroke_to_bytes(&keystroke, TermMode::empty()), Some(vec![0x03]));
 //! ```
 
+use std::borrow::Cow;
+
 use alacritty_terminal::term::TermMode;
 use gpui::Keystroke;
 
@@ -114,8 +116,14 @@ use gpui::Keystroke;
 /// assert_eq!(bytes, Some(b"\r".to_vec()));
 /// ```
 pub fn keystroke_to_bytes(keystroke: &Keystroke, mode: TermMode) -> Option<Vec<u8>> {
+    if keystroke.modifiers.platform {
+        return None;
+    }
+
+    let key_name = normalized_key_name(&keystroke.key);
+
     // Handle special keys first
-    match keystroke.key.as_str() {
+    match key_name.as_ref() {
         // Basic control characters
         "space" => {
             if keystroke.modifiers.control {
@@ -187,7 +195,7 @@ pub fn keystroke_to_bytes(keystroke: &Keystroke, mode: TermMode) -> Option<Vec<u
 
     // Handle Ctrl+key combinations
     if keystroke.modifiers.control {
-        let key = keystroke.key.as_str();
+        let key = key_name.as_ref();
 
         // Ctrl+A through Ctrl+Z map to 0x01 through 0x1a
         if key.len() == 1 {
@@ -256,6 +264,20 @@ pub fn keystroke_to_bytes(keystroke: &Keystroke, mode: TermMode) -> Option<Vec<u
 
     // If we get here, the keystroke doesn't produce any output
     None
+}
+
+fn normalized_key_name(key: &str) -> Cow<'_, str> {
+    let lower = key.to_ascii_lowercase();
+    match lower.as_str() {
+        "arrowup" => Cow::Borrowed("up"),
+        "arrowdown" => Cow::Borrowed("down"),
+        "arrowleft" => Cow::Borrowed("left"),
+        "arrowright" => Cow::Borrowed("right"),
+        "return" => Cow::Borrowed("enter"),
+        "esc" => Cow::Borrowed("escape"),
+        _ if lower == key => Cow::Borrowed(key),
+        _ => Cow::Owned(lower),
+    }
 }
 
 #[cfg(test)]

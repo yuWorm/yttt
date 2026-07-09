@@ -17,7 +17,6 @@ use yttt::{
     runtime::terminal::{ExitReason, ProcessStatus},
     ui::components::SelectableState,
     ui::i18n::{Locale, UiText},
-    ui::input_owner::{InputOwnerKind, InputOwnerStack, TerminalInputGate},
     ui::palette::visible_palette_rows,
     ui::sidebar::visible_project_items,
     ui::terminal_pane::{
@@ -25,6 +24,13 @@ use yttt::{
         notification_for_terminal_pane_exit, pane_lifecycle_label, spawn_failure_lines,
     },
     ui::toast::{ToastTone, toast_item_for_event, visible_toast_items},
+    ui::{
+        input_owner::{InputOwnerKind, InputOwnerStack, TerminalInputGate},
+        interaction::input_owner::{
+            InputOwnerRegistration, InputOwnerToken, InputScopeId, TerminalInputPolicy,
+        },
+        interaction::key_dispatch::workspace_command_for_keystroke,
+    },
     ui::{
         root::RootView,
         split_view::{
@@ -126,14 +132,53 @@ fn root_view_toggles_sidebar_collapse_state() {
 #[test]
 fn input_owner_stack_restores_parent_after_nested_owner_closes() {
     let mut stack = InputOwnerStack::default();
-    let settings = stack.push(InputOwnerKind::Settings);
-    let recorder = stack.push(InputOwnerKind::KeybindingRecorder);
+    let settings = stack.push_owner(InputOwnerRegistration::blocking(
+        InputOwnerKind::Settings,
+        InputScopeId::new("settings"),
+    ));
+    let recorder = stack.push_owner(InputOwnerRegistration::blocking(
+        InputOwnerKind::KeybindingRecorder,
+        InputScopeId::new("settings.keybindings.command-palette"),
+    ));
 
     assert_eq!(stack.active_kind(), InputOwnerKind::KeybindingRecorder);
-    stack.pop(recorder);
-    assert_eq!(stack.active_kind(), InputOwnerKind::Settings);
-    stack.pop(settings);
-    assert_eq!(stack.active_kind(), InputOwnerKind::Workspace);
+    assert_eq!(
+        stack.active_scope_id(),
+        &InputScopeId::new("settings.keybindings.command-palette")
+    );
+    let snapshot = stack.pop_owner(recorder);
+    assert_eq!(snapshot.active_kind(), InputOwnerKind::Settings);
+    assert_eq!(snapshot.active_scope_id(), &InputScopeId::new("settings"));
+    assert!(!snapshot.terminal_input_allowed());
+
+    let snapshot = stack.pop_owner(settings);
+    assert_eq!(snapshot.active_kind(), InputOwnerKind::Workspace);
+    assert_eq!(snapshot.active_scope_id(), &InputScopeId::new("workspace"));
+    assert!(snapshot.terminal_input_allowed());
+}
+
+#[test]
+fn input_owner_stack_records_scope_and_terminal_policy() {
+    let mut stack = InputOwnerStack::default();
+
+    let token = stack.push_owner(InputOwnerRegistration::blocking(
+        InputOwnerKind::Palette,
+        InputScopeId::new("palette.command"),
+    ));
+
+    let owner = stack.active_owner();
+    assert_eq!(owner.active_kind(), InputOwnerKind::Palette);
+    assert_eq!(
+        owner.active_scope_id(),
+        &InputScopeId::new("palette.command")
+    );
+    assert_eq!(owner.terminal_input_policy(), TerminalInputPolicy::Block);
+    assert!(!owner.terminal_input_allowed());
+
+    let owner = stack.pop_owner(token);
+    assert_eq!(owner.active_kind(), InputOwnerKind::Workspace);
+    assert_eq!(owner.terminal_input_policy(), TerminalInputPolicy::Allow);
+    assert!(owner.terminal_input_allowed());
 }
 
 #[test]
@@ -143,13 +188,30 @@ fn input_owner_stack_closing_parent_removes_descendants() {
     let dialog = stack.push(InputOwnerKind::Dialog);
     let recorder = stack.push(InputOwnerKind::KeybindingRecorder);
 
-    stack.pop(dialog);
+    assert!(stack.pop(dialog));
 
     assert_eq!(stack.active_kind(), InputOwnerKind::Palette);
-    stack.pop(recorder);
+    assert!(!stack.pop(recorder));
     assert_eq!(stack.active_kind(), InputOwnerKind::Palette);
-    stack.pop(palette);
+    assert!(stack.pop(palette));
     assert_eq!(stack.active_kind(), InputOwnerKind::Workspace);
+}
+
+#[test]
+fn input_owner_stack_ignores_unknown_token_without_changing_owner() {
+    let mut stack = InputOwnerStack::default();
+    let settings = stack.push_owner(InputOwnerRegistration::blocking(
+        InputOwnerKind::Settings,
+        InputScopeId::new("settings"),
+    ));
+    let unknown = InputOwnerToken::from_raw_for_test(settings.raw() + 100);
+
+    let snapshot = stack.pop_owner(unknown);
+
+    assert_eq!(snapshot.active_kind(), InputOwnerKind::Settings);
+    assert_eq!(snapshot.active_scope_id(), &InputScopeId::new("settings"));
+    assert_eq!(stack.active_kind(), InputOwnerKind::Settings);
+    assert_eq!(stack.active_scope_id(), &InputScopeId::new("settings"));
 }
 
 #[test]
@@ -157,13 +219,40 @@ fn terminal_input_gate_allows_only_workspace_owner() {
     let gate = TerminalInputGate::default();
     let mut stack = InputOwnerStack::default();
 
-    gate.sync_from_owner(stack.active_kind());
+    gate.sync_from_snapshot(&stack.snapshot());
     assert!(gate.allows_terminal_input());
+    assert_eq!(
+        stack.snapshot().terminal_input_policy(),
+        TerminalInputPolicy::Allow
+    );
 
-    stack.push(InputOwnerKind::Editor);
-    gate.sync_from_owner(stack.active_kind());
+    let editor = stack.push_owner(InputOwnerRegistration::blocking(
+        InputOwnerKind::Editor,
+        InputScopeId::new("layout_editor"),
+    ));
+    gate.sync_from_snapshot(&stack.snapshot());
 
     assert!(!gate.allows_terminal_input());
+    assert_eq!(
+        stack.snapshot().terminal_input_policy(),
+        TerminalInputPolicy::Block
+    );
+
+    stack.pop_owner(editor);
+    gate.sync_from_snapshot(&stack.snapshot());
+
+    assert!(gate.allows_terminal_input());
+}
+
+#[test]
+fn input_owner_stack_focus_restore_target_is_empty_without_registered_focus_handle() {
+    let mut stack = InputOwnerStack::default();
+    stack.push_owner(InputOwnerRegistration::blocking(
+        InputOwnerKind::Settings,
+        InputScopeId::new("settings"),
+    ));
+
+    assert!(stack.focus_restore_target().is_none());
 }
 
 #[test]
@@ -616,6 +705,103 @@ fn root_view_terminal_input_owner_tracks_foreground_overlays() {
         InputOwnerKind::Workspace
     );
     assert!(root.terminal_input_allowed());
+}
+
+#[test]
+fn root_view_exposes_foreground_input_scope_id() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+    let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths);
+
+    assert_eq!(
+        root.foreground_input_scope_id().as_deref(),
+        Some("workspace")
+    );
+
+    root.open_palette(PaletteKind::Command);
+    assert_eq!(
+        root.foreground_input_scope_id().as_deref(),
+        Some("palette.command")
+    );
+
+    root.close_palette();
+    root.open_settings();
+    assert_eq!(
+        root.foreground_input_scope_id().as_deref(),
+        Some("settings")
+    );
+
+    root.open_layout_toml_editor().unwrap();
+    assert_eq!(
+        root.foreground_input_scope_id().as_deref(),
+        Some("editor.layout_toml")
+    );
+}
+
+#[test]
+fn root_view_workspace_keybindings_are_blocked_by_foreground_owner() {
+    let mut root = RootView::dev_fixture();
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let initial_tab_count = root
+        .workspace()
+        .project(&project_id)
+        .unwrap()
+        .layout
+        .tabs
+        .len();
+
+    root.open_settings();
+
+    assert!(!root.dispatch_runtime_keybinding(&Keystroke::parse("cmd-t").unwrap()));
+    assert_eq!(
+        root.workspace()
+            .project(&project_id)
+            .unwrap()
+            .layout
+            .tabs
+            .len(),
+        initial_tab_count
+    );
+}
+
+#[test]
+fn key_dispatch_blocks_workspace_commands_for_foreground_owner() {
+    let command = workspace_command_for_keystroke(
+        InputOwnerKind::Settings,
+        &Keystroke::parse("cmd-t").unwrap(),
+        |_| Some(CommandId::TabNew),
+        |_| false,
+    );
+
+    assert_eq!(command, None);
+}
+
+#[test]
+fn key_dispatch_leaves_terminal_bytes_for_terminal_input() {
+    let command = workspace_command_for_keystroke(
+        InputOwnerKind::Workspace,
+        &Keystroke::parse("ctrl-c").unwrap(),
+        |_| Some(CommandId::TabNew),
+        |_| true,
+    );
+
+    assert_eq!(command, None);
+}
+
+#[test]
+fn key_dispatch_allows_workspace_command_when_terminal_does_not_need_key() {
+    let command = workspace_command_for_keystroke(
+        InputOwnerKind::Workspace,
+        &Keystroke::parse("cmd-t").unwrap(),
+        |_| Some(CommandId::TabNew),
+        |_| false,
+    );
+
+    assert_eq!(command, Some(CommandId::TabNew));
 }
 
 #[test]
@@ -1167,6 +1353,72 @@ fn root_view_focus_visible_terminal_pane_queues_terminal_focus() {
     root.focus_visible_terminal_pane("shell").unwrap();
 
     assert_eq!(root.pending_terminal_focus_pane_id(), Some("shell"));
+}
+
+#[test]
+fn root_view_leaves_terminal_control_keybindings_for_focused_terminal() {
+    let mut root = RootView::dev_fixture();
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let initial_tab_count = root
+        .workspace()
+        .project(&project_id)
+        .unwrap()
+        .layout
+        .tabs
+        .len();
+
+    root.focus_visible_terminal_pane("shell").unwrap();
+
+    assert!(!root.dispatch_runtime_keybinding(&Keystroke::parse("ctrl-t").unwrap()));
+    assert_eq!(
+        root.workspace()
+            .project(&project_id)
+            .unwrap()
+            .layout
+            .tabs
+            .len(),
+        initial_tab_count
+    );
+}
+
+#[test]
+fn root_view_routes_terminal_special_keys_to_focused_terminal() {
+    let mut root = RootView::dev_fixture();
+
+    root.focus_visible_terminal_pane("shell").unwrap();
+
+    for keys in ["ctrl-c", "tab", "enter", "escape", "up"] {
+        assert!(
+            root.terminal_should_receive_keystroke(&Keystroke::parse(keys).unwrap()),
+            "{keys} should be routed to the focused terminal"
+        );
+    }
+}
+
+#[test]
+fn root_view_keeps_platform_shortcuts_available_when_terminal_is_focused() {
+    let mut root = RootView::dev_fixture();
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let initial_tab_count = root
+        .workspace()
+        .project(&project_id)
+        .unwrap()
+        .layout
+        .tabs
+        .len();
+
+    root.focus_visible_terminal_pane("shell").unwrap();
+
+    assert!(root.dispatch_runtime_keybinding(&Keystroke::parse("cmd-t").unwrap()));
+    assert_eq!(
+        root.workspace()
+            .project(&project_id)
+            .unwrap()
+            .layout
+            .tabs
+            .len(),
+        initial_tab_count + 1
+    );
 }
 
 #[test]

@@ -848,24 +848,28 @@ impl TerminalView {
     /// Converts GPUI keystrokes to terminal escape sequences and writes them
     /// to the stdin writer. If a key handler is set and returns true, the event
     /// is consumed and not sent to the terminal.
-    fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+    fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         // Check if key handler wants to consume this event
         if let Some(ref handler) = self.key_handler
             && handler(event)
         {
+            cx.stop_propagation();
             return; // Event consumed by handler
         }
 
         if Self::is_copy_keystroke(&event.keystroke) && self.copy_selection_to_clipboard() {
+            cx.stop_propagation();
             return;
         }
 
         if Self::is_paste_keystroke(&event.keystroke) && self.paste_clipboard_to_terminal() {
+            cx.stop_propagation();
             return;
         }
 
         if let Some(bytes) = keystroke_to_bytes(&event.keystroke, self.state.mode()) {
             self.write_stdin(&bytes);
+            cx.stop_propagation();
         }
     }
 
