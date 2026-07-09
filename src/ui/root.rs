@@ -10,7 +10,6 @@ use gpui_component::{
     alert::Alert,
     button::Button,
     input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent, StepAction},
-    notification::{Notification, NotificationType},
     scroll::ScrollableElement as _,
     select::{SearchableVec, Select, SelectEvent, SelectState},
 };
@@ -90,7 +89,8 @@ use crate::{
             ui_keybinding_specs_from_config,
         },
         components::{
-            ActionEmphasis, workbench_action_button, workbench_settings_row, workbench_switch,
+            ActionEmphasis, workbench_action_button, workbench_agent_notification,
+            workbench_settings_row, workbench_switch,
         },
         font_options::{
             terminal_font_family_option_for_setting, terminal_font_family_options_from_system,
@@ -122,7 +122,7 @@ use crate::{
         },
         theme::{ThemeRuntime, WorkbenchTheme},
         titlebar::{TitlebarInfo, compact_path_for_titlebar, workbench_titlebar},
-        toast::{ToastQueue, ToastTone, toast_item_for_event},
+        toast::{ToastQueue, toast_item_for_event},
     },
 };
 
@@ -4288,23 +4288,20 @@ fn push_component_notification(
     cx: &mut Context<RootView>,
 ) {
     let item = toast_item_for_event(&event);
-    let notification_type = match item.tone {
-        ToastTone::Success => NotificationType::Success,
-        ToastTone::Error => NotificationType::Error,
-    };
-
+    let root_state = root.read(cx);
+    let theme = root_state.theme_runtime.ui;
+    let action_label = root_state
+        .ui_text
+        .get(UiTextKey::OpenNotificationTarget)
+        .to_string();
     let focus_event = event.clone();
     window.push_notification(
-        Notification::new()
-            .title(item.title)
-            .message(item.context)
-            .with_type(notification_type)
-            .on_click(move |_, _window, cx| {
-                root.update(cx, |root, cx| {
-                    let _ = root.focus_notification_target(&focus_event);
-                    cx.notify();
-                });
-            }),
+        workbench_agent_notification(item, action_label, theme).on_click(move |_, _window, cx| {
+            root.update(cx, |root, cx| {
+                let _ = root.focus_notification_target(&focus_event);
+                cx.notify();
+            });
+        }),
         cx,
     );
 }

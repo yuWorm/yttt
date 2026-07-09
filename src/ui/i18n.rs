@@ -28,6 +28,7 @@ pub enum UiTextKey {
     RenameTabTitle,
     RenameTabAction,
     RenameTabHint,
+    OpenNotificationTarget,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -76,6 +77,7 @@ fn english(key: UiTextKey) -> &'static str {
         UiTextKey::RenameTabTitle => "Rename tab",
         UiTextKey::RenameTabAction => "Rename",
         UiTextKey::RenameTabHint => "Enter to rename, Escape to cancel",
+        UiTextKey::OpenNotificationTarget => "Open",
     }
 }
 
@@ -103,5 +105,6 @@ fn chinese(key: UiTextKey) -> &'static str {
         UiTextKey::RenameTabTitle => "重命名标签页",
         UiTextKey::RenameTabAction => "重命名",
         UiTextKey::RenameTabHint => "回车重命名，Esc 取消",
+        UiTextKey::OpenNotificationTarget => "打开",
     }
 }

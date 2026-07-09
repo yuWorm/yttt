@@ -70,3 +70,12 @@ fn ui_text_returns_project_empty_terminal_labels() {
     assert_eq!(chinese.get(UiTextKey::NoTerminalTabs), "暂无终端标签页");
     assert_eq!(chinese.get(UiTextKey::NewTab), "新建标签页");
 }
+
+#[test]
+fn ui_text_returns_notification_action_labels() {
+    let english = UiText::english();
+    let chinese = UiText::new(Locale::Chinese);
+
+    assert_eq!(english.get(UiTextKey::OpenNotificationTarget), "Open");
+    assert_eq!(chinese.get(UiTextKey::OpenNotificationTarget), "打开");
+}

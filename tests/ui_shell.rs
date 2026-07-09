@@ -1,7 +1,9 @@
 use std::mem::discriminant;
 use yttt::config::{paths::AppConfigPaths, settings::TerminalSettings};
 use yttt::ui::app::workbench_window_options;
-use yttt::ui::components::{SelectableState, selectable_state_classes};
+use yttt::ui::components::{
+    SelectableState, notification_tone_for_toast, selectable_state_classes,
+};
 use yttt::ui::font_options::{
     SYSTEM_FONT_FAMILY_LABEL, terminal_font_family_option_for_setting,
     terminal_font_family_options_from_system, terminal_font_family_setting_from_option,
@@ -18,6 +20,7 @@ use yttt::ui::primitives::{
     dialog::yttt_dialog_style,
     icon_button::{YtttIconButtonKind, yttt_icon_button_style},
     input::{YtttInputKind, yttt_input_style},
+    notification::{YtttNotificationTone, yttt_notification_style},
     panel::{YtttPanelKind, yttt_panel_style},
     row::{YtttRowKind, yttt_row_style},
     select::yttt_select_style,
@@ -35,6 +38,7 @@ use yttt::ui::tabs::{
 use yttt::ui::terminal_pane::TerminalPaneView;
 use yttt::ui::theme::WorkbenchTheme;
 use yttt::ui::titlebar::TitlebarInfo;
+use yttt::ui::toast::ToastTone;
 use yttt::{model::layout::SplitDirection, ui::root::RootView};
 
 #[test]
@@ -548,6 +552,46 @@ fn yttt_switch_style_matches_settings_control_density() {
     assert_eq!(switch.active_background, theme.active_surface);
     assert_eq!(switch.inactive_background, theme.surface_elevated);
     assert_eq!(switch.thumb, theme.text);
+}
+
+#[test]
+fn yttt_notification_style_matches_zed_like_status_toast_density() {
+    let theme = WorkbenchTheme::dark();
+    let notification = yttt_notification_style(YtttNotificationTone::Success, theme);
+
+    assert_eq!(notification.width, gpui::px(360.0));
+    assert_eq!(notification.min_height, gpui::px(44.0));
+    assert_eq!(notification.padding_x, gpui::px(12.0));
+    assert_eq!(notification.padding_y, gpui::px(8.0));
+    assert_eq!(notification.radius, gpui::px(8.0));
+    assert_eq!(notification.border_width, gpui::px(1.0));
+    assert_eq!(notification.icon_size, gpui::px(14.0));
+    assert_eq!(notification.background, theme.surface);
+    assert_eq!(notification.border, theme.border);
+    assert_eq!(notification.title, theme.text);
+    assert_eq!(notification.context, theme.text_subtle);
+    assert_eq!(notification.action, theme.text_muted);
+    assert_eq!(notification.tone, theme.success);
+}
+
+#[test]
+fn yttt_notification_error_style_uses_danger_tone() {
+    let theme = WorkbenchTheme::dark();
+    let notification = yttt_notification_style(YtttNotificationTone::Error, theme);
+
+    assert_eq!(notification.tone, theme.danger);
+}
+
+#[test]
+fn toast_tones_map_to_workbench_notification_tones() {
+    assert_eq!(
+        notification_tone_for_toast(ToastTone::Success),
+        YtttNotificationTone::Success
+    );
+    assert_eq!(
+        notification_tone_for_toast(ToastTone::Error),
+        YtttNotificationTone::Error
+    );
 }
 
 #[test]

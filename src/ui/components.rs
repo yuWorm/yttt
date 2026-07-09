@@ -7,6 +7,7 @@ use gpui_component::{
     Icon, IconName,
     button::{Button, ButtonVariants},
     kbd::Kbd,
+    notification::Notification,
     switch::Switch,
 };
 
@@ -14,10 +15,12 @@ use crate::ui::{
     palette_surface::palette_row_style,
     primitives::{
         icon_button::{YtttIconButtonKind, yttt_icon_button_style},
+        notification::{YtttNotificationTone, yttt_notification_style},
         row::{YtttRowKind, yttt_row_style},
         switch::yttt_switch_style,
     },
     theme::WorkbenchTheme,
+    toast::{ToastItem, ToastTone},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -222,6 +225,86 @@ where
         .items_center()
         .justify_end()
         .child(Switch::new(id).checked(checked).on_click(on_change))
+}
+
+pub fn notification_tone_for_toast(tone: ToastTone) -> YtttNotificationTone {
+    match tone {
+        ToastTone::Success => YtttNotificationTone::Success,
+        ToastTone::Error => YtttNotificationTone::Error,
+    }
+}
+
+pub fn workbench_agent_notification(
+    item: ToastItem,
+    action_label: impl Into<SharedString>,
+    theme: WorkbenchTheme,
+) -> Notification {
+    let tone = notification_tone_for_toast(item.tone);
+    let style = yttt_notification_style(tone, theme);
+    let icon = match tone {
+        YtttNotificationTone::Success => IconName::CircleCheck,
+        YtttNotificationTone::Error => IconName::CircleX,
+    };
+    let title = SharedString::from(item.title);
+    let context = SharedString::from(item.context);
+    let action_label = action_label.into();
+
+    Notification::new()
+        .w(style.width)
+        .border(style.border_width)
+        .border_color(style.border)
+        .bg(style.background)
+        .rounded(style.radius)
+        .px(style.padding_x)
+        .py(style.padding_y)
+        .content(move |_, _, _| {
+            div()
+                .flex()
+                .items_center()
+                .gap(style.gap)
+                .min_h(style.min_height)
+                .w_full()
+                .child(
+                    Icon::new(icon.clone())
+                        .size(style.icon_size)
+                        .text_color(style.tone),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_0()
+                        .min_w_0()
+                        .flex_1()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(style.title)
+                                .truncate()
+                                .child(title.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(style.context)
+                                .truncate()
+                                .child(context.clone()),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .rounded(px(5.0))
+                        .bg(style.action_background)
+                        .px(px(6.0))
+                        .py(px(2.0))
+                        .text_xs()
+                        .text_color(style.action)
+                        .child(action_label.clone()),
+                )
+                .into_any_element()
+        })
 }
 
 fn shortcut_keystroke(shortcut: &str) -> Keystroke {
