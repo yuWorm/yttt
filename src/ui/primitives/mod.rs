@@ -7,4 +7,5 @@ pub mod row;
 pub mod select;
 pub mod sidebar;
 pub mod status;
+pub mod switch;
 pub mod tabs;

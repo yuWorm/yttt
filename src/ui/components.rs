@@ -7,6 +7,7 @@ use gpui_component::{
     Icon, IconName,
     button::{Button, ButtonVariants},
     kbd::Kbd,
+    switch::Switch,
 };
 
 use crate::ui::{
@@ -14,6 +15,7 @@ use crate::ui::{
     primitives::{
         icon_button::{YtttIconButtonKind, yttt_icon_button_style},
         row::{YtttRowKind, yttt_row_style},
+        switch::yttt_switch_style,
     },
     theme::WorkbenchTheme,
 };
@@ -201,6 +203,25 @@ pub fn workbench_settings_row(
                 .flex_none()
                 .child(control),
         )
+}
+
+pub fn workbench_switch<H>(
+    id: impl Into<ElementId>,
+    checked: bool,
+    theme: WorkbenchTheme,
+    on_change: H,
+) -> Div
+where
+    H: Fn(&bool, &mut Window, &mut App) + 'static,
+{
+    let style = yttt_switch_style(theme);
+
+    div()
+        .h(style.control_height)
+        .flex()
+        .items_center()
+        .justify_end()
+        .child(Switch::new(id).checked(checked).on_click(on_change))
 }
 
 fn shortcut_keystroke(shortcut: &str) -> Keystroke {

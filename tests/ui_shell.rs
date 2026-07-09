@@ -23,6 +23,7 @@ use yttt::ui::primitives::{
     select::yttt_select_style,
     sidebar::yttt_sidebar_style,
     status::{YtttStatusTone, yttt_status_dot_style},
+    switch::yttt_switch_style,
     tabs::yttt_tabbar_style,
 };
 use yttt::ui::settings::{SettingsGroupId, settings_panel_style, settings_rows_for_group};
@@ -534,6 +535,19 @@ fn yttt_select_style_matches_settings_input_density() {
     assert_eq!(select.border, theme.border);
     assert_eq!(select.text, theme.text);
     assert_eq!(select.menu_width, gpui::px(280.0));
+}
+
+#[test]
+fn yttt_switch_style_matches_settings_control_density() {
+    let theme = WorkbenchTheme::dark();
+    let switch = yttt_switch_style(theme);
+
+    assert_eq!(switch.width, gpui::px(36.0));
+    assert_eq!(switch.height, gpui::px(20.0));
+    assert_eq!(switch.control_height, gpui::px(32.0));
+    assert_eq!(switch.active_background, theme.active_surface);
+    assert_eq!(switch.inactive_background, theme.surface_elevated);
+    assert_eq!(switch.thumb, theme.text);
 }
 
 #[test]

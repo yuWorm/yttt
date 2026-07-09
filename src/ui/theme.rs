@@ -136,6 +136,8 @@ impl ThemeRuntime {
         colors.secondary_foreground = Some(color_hex(theme.text_muted).into());
         colors.secondary_hover = Some(color_hex(theme.hover_surface).into());
         colors.secondary_active = Some(color_hex(theme.active_surface).into());
+        colors.switch = Some(color_hex(theme.surface_elevated).into());
+        colors.switch_thumb = Some(color_hex(theme.text).into());
         colors.accent = Some(color_hex(theme.hover_surface).into());
         colors.caret = Some(color_hex(theme.accent).into());
         colors.list = Some(color_hex(theme.surface_elevated).into());

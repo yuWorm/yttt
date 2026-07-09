@@ -89,7 +89,9 @@ use crate::{
             TabPrev, TabRename, UiKeybindingSpec, WORKSPACE_CONTEXT, runtime_command_for_keystroke,
             ui_keybinding_specs_from_config,
         },
-        components::{ActionEmphasis, workbench_action_button, workbench_settings_row},
+        components::{
+            ActionEmphasis, workbench_action_button, workbench_settings_row, workbench_switch,
+        },
         font_options::{
             terminal_font_family_option_for_setting, terminal_font_family_options_from_system,
             terminal_font_family_setting_from_option,
@@ -3767,18 +3769,12 @@ fn settings_general_rows(
             theme,
             "System notifications",
             "Notify when agent terminal tasks complete or fail.",
-            settings_button(
+            settings_switch(
                 "settings-notifications",
-                if root.system_notifications_enabled {
-                    "On"
-                } else {
-                    "Off"
-                },
                 root.system_notifications_enabled,
                 theme,
-                cx,
-                cx.listener(|this, _, _window, cx| {
-                    let _ = this.run_command(CommandId::SettingsNotifications);
+                cx.listener(|this, checked: &bool, _window, cx| {
+                    let _ = this.set_system_notifications_enabled(*checked);
                     cx.notify();
                 }),
             )
@@ -3919,19 +3915,12 @@ fn settings_terminal_rows(
             theme,
             "Scrollbar",
             "Show a thin scrollback indicator in terminal panes.",
-            settings_button(
+            settings_switch(
                 "settings-show-scrollbar",
-                if root.terminal_show_scrollbar() {
-                    "On"
-                } else {
-                    "Off"
-                },
                 root.terminal_show_scrollbar(),
                 theme,
-                cx,
-                cx.listener(|this, _, _window, cx| {
-                    let next = !this.terminal_show_scrollbar();
-                    let _ = this.set_terminal_show_scrollbar(next);
+                cx.listener(|this, checked: &bool, _window, cx| {
+                    let _ = this.set_terminal_show_scrollbar(*checked);
                     this.sync_terminal_pane_configs(cx);
                     cx.notify();
                 }),
@@ -3943,19 +3932,12 @@ fn settings_terminal_rows(
             theme,
             "Close pane on exit",
             "Automatically close terminal panes when their process exits.",
-            settings_button(
+            settings_switch(
                 "settings-close-on-exit",
-                if root.terminal_close_on_exit() {
-                    "On"
-                } else {
-                    "Off"
-                },
                 root.terminal_close_on_exit(),
                 theme,
-                cx,
-                cx.listener(|this, _, _window, cx| {
-                    let next = !this.terminal_close_on_exit();
-                    let _ = this.set_terminal_close_on_exit(next);
+                cx.listener(|this, checked: &bool, _window, cx| {
+                    let _ = this.set_terminal_close_on_exit(*checked);
                     cx.notify();
                 }),
             )
@@ -4236,6 +4218,18 @@ fn settings_command_button(
     )
     .disabled(!enabled)
     .tab_stop(enabled)
+}
+
+fn settings_switch<H>(
+    id: impl Into<String>,
+    checked: bool,
+    theme: WorkbenchTheme,
+    on_change: H,
+) -> Div
+where
+    H: Fn(&bool, &mut Window, &mut gpui::App) + 'static,
+{
+    workbench_switch(SharedString::from(id.into()), checked, theme, on_change)
 }
 
 fn settings_button<H>(

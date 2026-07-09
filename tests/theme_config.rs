@@ -90,6 +90,24 @@ fn workbench_theme_maps_to_gpui_component_theme_config() {
     assert!(config.colors.input.is_some());
     assert!(config.colors.title_bar.is_some());
     assert!(config.colors.list_active.is_some());
+    assert_eq!(
+        config
+            .colors
+            .switch
+            .as_ref()
+            .map(|color| color.to_string())
+            .as_deref(),
+        Some("#23272e")
+    );
+    assert_eq!(
+        config
+            .colors
+            .switch_thumb
+            .as_ref()
+            .map(|color| color.to_string())
+            .as_deref(),
+        Some("#e6e8eb")
+    );
 }
 
 #[test]
