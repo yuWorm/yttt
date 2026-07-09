@@ -2,6 +2,8 @@ pub mod button;
 pub mod dialog;
 pub mod input;
 pub mod panel;
+pub mod row;
 pub mod select;
 pub mod sidebar;
+pub mod status;
 pub mod tabs;

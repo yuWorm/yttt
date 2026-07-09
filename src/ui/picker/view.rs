@@ -155,7 +155,6 @@ where
         row.item.disabled_reason.clone().unwrap_or_default()
     };
     let style = palette_row_style(row.state, row.item.enabled, theme);
-    let panel_style = palette_panel_style();
 
     div()
         .id(("palette-item", index))
@@ -163,12 +162,12 @@ where
         .items_center()
         .justify_between()
         .gap_4()
-        .h(panel_style.row_height)
-        .rounded_sm()
-        .border_1()
+        .h(style.height)
+        .rounded(style.radius)
+        .border(style.border_width)
         .border_color(style.border)
         .bg(style.background)
-        .px_3()
+        .px(style.padding_x)
         .hover(move |this| this.bg(style.hover_background))
         .on_click(on_click)
         .child(

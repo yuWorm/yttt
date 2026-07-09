@@ -89,7 +89,7 @@ use crate::{
             TabPrev, TabRename, UiKeybindingSpec, WORKSPACE_CONTEXT, runtime_command_for_keystroke,
             ui_keybinding_specs_from_config,
         },
-        components::{ActionEmphasis, workbench_action_button},
+        components::{ActionEmphasis, SelectableState, workbench_action_button},
         font_options::{
             terminal_font_family_option_for_setting, terminal_font_family_options_from_system,
             terminal_font_family_setting_from_option,
@@ -109,6 +109,7 @@ use crate::{
             dialog::yttt_dialog_style,
             input::{YtttInputKind, yttt_input_style},
             panel::{YtttPanelKind, yttt_panel_style},
+            row::{YtttRowKind, yttt_row_style},
             select::yttt_select_style,
         },
         settings::{SettingsGroupId, SettingsPageState, SettingsPanelStyle, settings_panel_style},
@@ -4178,15 +4179,23 @@ fn setting_row(
 ) -> Div {
     let title = title.into();
     let description = description.into();
+    let row_style = yttt_row_style(
+        YtttRowKind::Settings,
+        SelectableState::Inactive,
+        true,
+        theme,
+    );
+
     div()
         .flex()
         .items_center()
         .justify_between()
         .gap_6()
-        .min_h(style.row_min_height)
-        .border_b_1()
-        .border_color(theme.border)
-        .py_3()
+        .min_h(row_style.height)
+        .border_b(row_style.border_width)
+        .border_color(row_style.border)
+        .bg(row_style.background)
+        .py(row_style.padding_y)
         .child(
             div()
                 .flex()
@@ -4198,13 +4207,13 @@ fn setting_row(
                     div()
                         .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme.text)
+                        .text_color(row_style.title)
                         .child(title),
                 )
                 .child(
                     div()
                         .text_xs()
-                        .text_color(theme.text_subtle)
+                        .text_color(row_style.subtitle)
                         .child(description),
                 ),
         )

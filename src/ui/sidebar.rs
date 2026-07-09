@@ -7,7 +7,13 @@ use gpui_component::{Icon, IconName};
 use crate::model::workspace::Workspace;
 use crate::ui::agent_status::{agent_status_label, project_agent_status};
 use crate::ui::components::SelectableState;
-use crate::ui::{primitives::sidebar::yttt_sidebar_style, theme::WorkbenchTheme};
+use crate::ui::{
+    primitives::{
+        row::{YtttRowKind, yttt_row_style},
+        sidebar::yttt_sidebar_style,
+    },
+    theme::WorkbenchTheme,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectSidebarItem {
@@ -104,7 +110,7 @@ where
         };
         let on_click = on_select_project(item.id.clone());
         sidebar = sidebar.child(project_sidebar_item(
-            index, item, suffix, collapsed, style, theme, on_click,
+            index, item, suffix, collapsed, theme, on_click,
         ));
     }
 
@@ -156,23 +162,13 @@ fn project_sidebar_item<H>(
     item: ProjectSidebarItem,
     suffix: String,
     collapsed: bool,
-    style: ProjectSidebarStyle,
     theme: WorkbenchTheme,
     on_select_project: H,
 ) -> impl IntoElement
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    let background = if item.state == SelectableState::Active {
-        style.active_background
-    } else {
-        style.background
-    };
-    let title_color = if item.state == SelectableState::Active {
-        theme.text
-    } else {
-        theme.text_muted
-    };
+    let row_style = yttt_row_style(YtttRowKind::Sidebar, item.state, true, theme);
 
     div()
         .id(("project-sidebar-item", index))
@@ -180,12 +176,12 @@ where
         .items_center()
         .justify_between()
         .gap_2()
-        .h(style.item_height)
+        .h(row_style.height)
         .w_full()
-        .rounded_sm()
-        .px(style.item_padding_x)
-        .bg(background)
-        .hover(move |this| this.bg(style.hover_background))
+        .rounded(row_style.radius)
+        .px(row_style.padding_x)
+        .bg(row_style.background)
+        .hover(move |this| this.bg(row_style.hover_background))
         .on_click(on_select_project)
         .child(
             div()
@@ -196,12 +192,12 @@ where
                 .child(
                     Icon::new(IconName::Folder)
                         .size_3()
-                        .text_color(theme.text_subtle),
+                        .text_color(row_style.subtitle),
                 )
                 .children((!collapsed).then(|| {
                     div()
                         .text_sm()
-                        .text_color(title_color)
+                        .text_color(row_style.title)
                         .truncate()
                         .child(item.title)
                 })),
@@ -210,7 +206,7 @@ where
             div()
                 .flex_none()
                 .text_xs()
-                .text_color(theme.text_subtle)
+                .text_color(row_style.status)
                 .truncate()
                 .child(suffix)
         }))

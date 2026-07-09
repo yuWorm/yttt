@@ -2,7 +2,11 @@ use gpui::{Pixels, Rgba, px};
 
 use crate::{
     palette::PaletteKind,
-    ui::{components::SelectableState, theme::WorkbenchTheme},
+    ui::{
+        components::SelectableState,
+        primitives::row::{YtttRowKind, yttt_row_style},
+        theme::WorkbenchTheme,
+    },
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -27,6 +31,10 @@ pub enum PaletteRowTone {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PaletteRowStyle {
     pub tone: PaletteRowTone,
+    pub height: Pixels,
+    pub padding_x: Pixels,
+    pub radius: Pixels,
+    pub border_width: Pixels,
     pub background: Rgba,
     pub hover_background: Rgba,
     pub border: Rgba,
@@ -63,37 +71,28 @@ pub fn palette_row_style(
     enabled: bool,
     theme: WorkbenchTheme,
 ) -> PaletteRowStyle {
-    if !enabled {
-        return PaletteRowStyle {
-            tone: PaletteRowTone::Disabled,
-            background: theme.surface_elevated,
-            hover_background: theme.surface_elevated,
-            border: theme.surface_elevated,
-            title: theme.text_subtle,
-            subtitle: theme.text_subtle,
-            status: theme.text_subtle,
-        };
-    }
+    let row = yttt_row_style(YtttRowKind::Palette, state, enabled, theme);
+    let tone = if !enabled {
+        PaletteRowTone::Disabled
+    } else {
+        match state {
+            SelectableState::Active => PaletteRowTone::Active,
+            SelectableState::Inactive => PaletteRowTone::Inactive,
+        }
+    };
 
-    match state {
-        SelectableState::Active => PaletteRowStyle {
-            tone: PaletteRowTone::Active,
-            background: theme.active_surface,
-            hover_background: theme.active_surface,
-            border: theme.active_surface,
-            title: theme.text,
-            subtitle: theme.text_muted,
-            status: theme.text_muted,
-        },
-        SelectableState::Inactive => PaletteRowStyle {
-            tone: PaletteRowTone::Inactive,
-            background: theme.surface_elevated,
-            hover_background: theme.hover_surface,
-            border: theme.surface_elevated,
-            title: theme.text_muted,
-            subtitle: theme.text_subtle,
-            status: theme.text_muted,
-        },
+    PaletteRowStyle {
+        tone,
+        height: row.height,
+        padding_x: row.padding_x,
+        radius: row.radius,
+        border_width: row.border_width,
+        background: row.background,
+        hover_background: row.hover_background,
+        border: row.border,
+        title: row.title,
+        subtitle: row.subtitle,
+        status: row.status,
     }
 }
 

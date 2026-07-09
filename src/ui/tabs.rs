@@ -9,7 +9,11 @@ use crate::{
     ui::{
         agent_status::{agent_status_label, tab_agent_status},
         components::SelectableState,
-        primitives::tabs::yttt_tabbar_style,
+        primitives::{
+            row::{YtttRowKind, yttt_row_style},
+            status::{YtttStatusTone, yttt_status_dot_style},
+            tabs::yttt_tabbar_style,
+        },
         theme::WorkbenchTheme,
     },
 };
@@ -153,7 +157,6 @@ where
         tab_row = tab_row.child(project_tab(
             index,
             item,
-            style,
             theme,
             on_select_tab(select_tab_id),
             on_close_tab(close_tab_id),
@@ -181,7 +184,6 @@ where
 fn project_tab<SelectH, CloseH>(
     index: usize,
     item: ProjectTabItem,
-    style: ProjectTabsStyle,
     theme: WorkbenchTheme,
     on_select_tab: SelectH,
     on_close_tab: CloseH,
@@ -190,17 +192,7 @@ where
     SelectH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     CloseH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    let is_active = item.state == SelectableState::Active;
-    let background = if is_active {
-        style.active_background
-    } else {
-        style.inactive_background
-    };
-    let text_color = if is_active {
-        theme.text
-    } else {
-        theme.text_muted
-    };
+    let row_style = yttt_row_style(YtttRowKind::Tab, item.state, true, theme);
     let group_name = format!("project-tab-{}", item.id);
 
     div()
@@ -209,26 +201,26 @@ where
         .flex()
         .items_center()
         .gap_2()
-        .h(style.item_height)
+        .h(row_style.height)
         .min_w(px(128.0))
         .max_w(px(220.0))
-        .border_r_1()
-        .border_color(theme.border)
-        .bg(background)
-        .px_2()
+        .border_r(row_style.border_width)
+        .border_color(row_style.border)
+        .bg(row_style.background)
+        .px(row_style.padding_x)
         .text_xs()
-        .hover(move |this| this.bg(style.hover_background))
+        .hover(move |this| this.bg(row_style.hover_background))
         .on_click(on_select_tab)
         .child(
             Icon::new(IconName::SquareTerminal)
                 .size_3()
-                .text_color(theme.text_subtle),
+                .text_color(row_style.subtitle),
         )
         .child(
             div()
                 .flex_1()
                 .truncate()
-                .text_color(text_color)
+                .text_color(row_style.title)
                 .child(item.title),
         )
         .child(tab_status_dot(item.status_tone, theme))
@@ -236,15 +228,21 @@ where
 }
 
 fn tab_status_dot(tone: ProjectTabStatusTone, theme: WorkbenchTheme) -> impl IntoElement {
-    let color = match tone {
-        ProjectTabStatusTone::Lazy => theme.text_subtle,
-        ProjectTabStatusTone::Started => theme.success,
-        ProjectTabStatusTone::AgentRunning => theme.accent,
-        ProjectTabStatusTone::AgentCompleted => theme.success,
-        ProjectTabStatusTone::AgentFailed => theme.danger,
+    let tone = match tone {
+        ProjectTabStatusTone::Lazy => YtttStatusTone::Neutral,
+        ProjectTabStatusTone::Started => YtttStatusTone::Success,
+        ProjectTabStatusTone::AgentRunning => YtttStatusTone::Running,
+        ProjectTabStatusTone::AgentCompleted => YtttStatusTone::Success,
+        ProjectTabStatusTone::AgentFailed => YtttStatusTone::Error,
     };
+    let style = yttt_status_dot_style(tone, theme);
 
-    div().flex_none().w_1p5().h_1p5().rounded_full().bg(color)
+    div()
+        .flex_none()
+        .w(style.size)
+        .h(style.size)
+        .rounded_full()
+        .bg(style.color)
 }
 
 fn tab_close_button<CloseH>(

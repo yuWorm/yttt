@@ -18,8 +18,10 @@ use yttt::ui::primitives::{
     dialog::yttt_dialog_style,
     input::{YtttInputKind, yttt_input_style},
     panel::{YtttPanelKind, yttt_panel_style},
+    row::{YtttRowKind, yttt_row_style},
     select::yttt_select_style,
     sidebar::yttt_sidebar_style,
+    status::{YtttStatusTone, yttt_status_dot_style},
     tabs::yttt_tabbar_style,
 };
 use yttt::ui::settings::{SettingsGroupId, settings_panel_style, settings_rows_for_group};
@@ -224,6 +226,78 @@ fn palette_row_style_uses_muted_selection_without_focus_ring() {
     assert_ne!(active.border, theme.focus_ring);
     assert_eq!(inactive.background, theme.surface_elevated);
     assert_eq!(disabled.title, theme.text_subtle);
+}
+
+#[test]
+fn yttt_row_style_centralizes_selectable_row_density_and_tones() {
+    let theme = WorkbenchTheme::dark();
+    let active = yttt_row_style(YtttRowKind::Palette, SelectableState::Active, true, theme);
+    let inactive = yttt_row_style(YtttRowKind::Palette, SelectableState::Inactive, true, theme);
+    let disabled = yttt_row_style(
+        YtttRowKind::Palette,
+        SelectableState::Inactive,
+        false,
+        theme,
+    );
+
+    assert_eq!(active.height, gpui::px(54.0));
+    assert_eq!(active.radius, gpui::px(6.0));
+    assert_eq!(active.background, theme.active_surface);
+    assert_eq!(active.border, theme.active_surface);
+    assert_eq!(active.title, theme.text);
+    assert_eq!(inactive.background, theme.surface_elevated);
+    assert_eq!(inactive.hover_background, theme.hover_surface);
+    assert_eq!(disabled.background, theme.surface_elevated);
+    assert_eq!(disabled.title, theme.text_subtle);
+    assert_eq!(disabled.subtitle, theme.text_subtle);
+}
+
+#[test]
+fn yttt_row_style_centralizes_settings_row_spacing() {
+    let theme = WorkbenchTheme::dark();
+    let row = yttt_row_style(
+        YtttRowKind::Settings,
+        SelectableState::Inactive,
+        true,
+        theme,
+    );
+
+    assert_eq!(row.height, gpui::px(72.0));
+    assert_eq!(row.padding_y, gpui::px(12.0));
+    assert_eq!(row.border_width, gpui::px(1.0));
+    assert_eq!(row.border, theme.border);
+    assert_eq!(row.background, theme.surface);
+    assert_eq!(row.title, theme.text);
+    assert_eq!(row.subtitle, theme.text_subtle);
+}
+
+#[test]
+fn yttt_row_style_uses_domain_specific_sidebar_and_tab_surfaces() {
+    let theme = WorkbenchTheme::dark();
+    let sidebar = yttt_row_style(YtttRowKind::Sidebar, SelectableState::Inactive, true, theme);
+    let tab = yttt_row_style(YtttRowKind::Tab, SelectableState::Active, true, theme);
+
+    assert_eq!(sidebar.height, gpui::px(28.0));
+    assert_eq!(sidebar.background, theme.app_background);
+    assert_eq!(sidebar.hover_background, theme.hover_surface);
+    assert_eq!(tab.height, gpui::px(32.0));
+    assert_eq!(tab.background, theme.surface);
+    assert_eq!(tab.border, theme.border);
+}
+
+#[test]
+fn yttt_status_dot_style_maps_common_tones_to_theme_colors() {
+    let theme = WorkbenchTheme::dark();
+    let neutral = yttt_status_dot_style(YtttStatusTone::Neutral, theme);
+    let running = yttt_status_dot_style(YtttStatusTone::Running, theme);
+    let success = yttt_status_dot_style(YtttStatusTone::Success, theme);
+    let error = yttt_status_dot_style(YtttStatusTone::Error, theme);
+
+    assert_eq!(neutral.size, gpui::px(6.0));
+    assert_eq!(neutral.color, theme.text_subtle);
+    assert_eq!(running.color, theme.accent);
+    assert_eq!(success.color, theme.success);
+    assert_eq!(error.color, theme.danger);
 }
 
 #[test]
