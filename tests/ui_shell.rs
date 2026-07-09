@@ -375,10 +375,26 @@ fn settings_panel_style_uses_zed_like_sidebar_and_content_bounds() {
 fn settings_rows_are_grouped_by_user_facing_sections() {
     let text = UiText::english();
     let general_rows = settings_rows_for_group(SettingsGroupId::General, &text);
+    let language_rows = settings_rows_for_group(SettingsGroupId::Languages, &text);
     let terminal_rows = settings_rows_for_group(SettingsGroupId::Terminal, &text);
     let layout_rows = settings_rows_for_group(SettingsGroupId::ProjectLayout, &text);
 
     assert!(general_rows.iter().any(|row| row.title == "Language"));
+    assert!(
+        language_rows
+            .iter()
+            .any(|row| row.title == "Language detection")
+    );
+    assert!(
+        language_rows
+            .iter()
+            .any(|row| row.title == "Default code language")
+    );
+    assert!(
+        language_rows
+            .iter()
+            .any(|row| row.title == "Language server")
+    );
     assert!(terminal_rows.iter().any(|row| row.title == "Default shell"));
     assert!(terminal_rows.iter().any(|row| row.title == "Font size"));
     assert!(
@@ -398,10 +414,13 @@ fn settings_rows_are_grouped_by_user_facing_sections() {
 fn settings_rows_are_localized() {
     let text = UiText::new(Locale::Chinese);
     let general_rows = settings_rows_for_group(SettingsGroupId::General, &text);
+    let language_rows = settings_rows_for_group(SettingsGroupId::Languages, &text);
     let terminal_rows = settings_rows_for_group(SettingsGroupId::Terminal, &text);
 
     assert!(general_rows.iter().any(|row| row.title == "语言"));
     assert!(general_rows.iter().any(|row| row.title == "系统通知"));
+    assert!(language_rows.iter().any(|row| row.title == "语言检测"));
+    assert!(language_rows.iter().any(|row| row.title == "默认代码语言"));
     assert!(terminal_rows.iter().any(|row| row.title == "默认 Shell"));
     assert!(
         terminal_rows

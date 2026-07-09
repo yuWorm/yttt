@@ -40,6 +40,10 @@ fn missing_settings_file_writes_defaults() {
     assert_eq!(loaded.settings.terminal.scrollback, 10000);
     assert!(loaded.settings.terminal.close_on_exit);
     assert!(loaded.settings.terminal.show_scrollbar);
+    assert!(loaded.settings.editor.auto_detect_language);
+    assert_eq!(loaded.settings.editor.default_language, "plain_text");
+    assert!(!loaded.settings.editor.lsp.enabled);
+    assert_eq!(loaded.settings.editor.lsp.command, "");
     assert!(paths.settings_file().exists());
     assert!(loaded.warnings.is_empty());
 }
@@ -132,6 +136,40 @@ fn settings_persist_language_and_close_on_exit() {
     assert_eq!(loaded.settings.general.language, LanguageSetting::Chinese);
     assert!(!loaded.settings.terminal.close_on_exit);
     assert!(!loaded.settings.terminal.show_scrollbar);
+}
+
+#[test]
+fn settings_persist_editor_language_and_lsp_choices() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    let mut settings = AppSettings::default();
+    settings.editor.auto_detect_language = false;
+    settings.editor.default_language = "toml".to_string();
+    settings.editor.lsp.enabled = true;
+    settings.editor.lsp.command = "taplo lsp stdio".to_string();
+
+    save_settings(&paths, &settings).unwrap();
+    let loaded = load_or_create_settings(&paths).unwrap();
+
+    assert!(!loaded.settings.editor.auto_detect_language);
+    assert_eq!(loaded.settings.editor.default_language, "toml");
+    assert!(loaded.settings.editor.lsp.enabled);
+    assert_eq!(loaded.settings.editor.lsp.command, "taplo lsp stdio");
+}
+
+#[test]
+fn settings_allow_lsp_enabled_without_command_for_reserved_slot() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    let mut settings = AppSettings::default();
+    settings.editor.lsp.enabled = true;
+
+    save_settings(&paths, &settings).unwrap();
+    let loaded = load_or_create_settings(&paths).unwrap();
+
+    assert!(loaded.settings.editor.lsp.enabled);
+    assert_eq!(loaded.settings.editor.lsp.command, "");
+    assert!(loaded.warnings.is_empty());
 }
 
 #[test]

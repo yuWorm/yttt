@@ -3,6 +3,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use super::{
+    EditorLanguageCatalog, EditorLanguageId, EditorLanguageResolution,
+    EditorLanguageResolutionSource,
+};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EditorRange {
     pub start_line: usize,
@@ -57,10 +62,45 @@ pub trait EditorLanguageService {
     fn language(&self) -> &str;
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodeEditorLanguageMode {
+    Auto,
+    Explicit(EditorLanguageId),
+}
+
+impl CodeEditorLanguageMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "code",
+            Self::Explicit(language_id) => language_id.as_str(),
+        }
+    }
+}
+
+impl From<EditorLanguageId> for CodeEditorLanguageMode {
+    fn from(language_id: EditorLanguageId) -> Self {
+        Self::Explicit(language_id)
+    }
+}
+
+impl From<&str> for CodeEditorLanguageMode {
+    fn from(language: &str) -> Self {
+        EditorLanguageId::parse(language)
+            .map(Self::Explicit)
+            .unwrap_or(Self::Explicit(EditorLanguageId::PlainText))
+    }
+}
+
+impl From<String> for CodeEditorLanguageMode {
+    fn from(language: String) -> Self {
+        Self::from(language.as_str())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodeEditorConfig {
     title: String,
-    language: String,
+    language_mode: CodeEditorLanguageMode,
     placeholder: String,
     rows: usize,
     soft_wrap: bool,
@@ -68,10 +108,10 @@ pub struct CodeEditorConfig {
 }
 
 impl CodeEditorConfig {
-    pub fn new(title: impl Into<String>, language: impl Into<String>) -> Self {
+    pub fn new(title: impl Into<String>, language: impl Into<CodeEditorLanguageMode>) -> Self {
         Self {
             title: title.into(),
-            language: language.into(),
+            language_mode: language.into(),
             placeholder: String::new(),
             rows: 24,
             soft_wrap: false,
@@ -83,13 +123,13 @@ impl CodeEditorConfig {
         &self.title
     }
 
-    pub fn language(&self) -> &str {
-        &self.language
+    pub fn language_mode(&self) -> CodeEditorLanguageMode {
+        self.language_mode
     }
 
     pub fn placeholder(&self) -> Cow<'_, str> {
         if self.placeholder.is_empty() {
-            Cow::Owned(format!("Edit {}...", self.language))
+            Cow::Owned(format!("Edit {}...", self.language_mode.label()))
         } else {
             Cow::Borrowed(&self.placeholder)
         }
@@ -132,6 +172,7 @@ impl CodeEditorConfig {
 pub struct CodeEditorState {
     path: PathBuf,
     config: CodeEditorConfig,
+    resolved_language: EditorLanguageResolution,
     value: String,
     saved_value: String,
     error: Option<String>,
@@ -144,10 +185,23 @@ impl CodeEditorState {
         config: CodeEditorConfig,
         value: impl Into<String>,
     ) -> Self {
+        Self::new_with_catalog(path, config, value, &EditorLanguageCatalog::builtin())
+    }
+
+    pub fn new_with_catalog(
+        path: impl Into<PathBuf>,
+        config: CodeEditorConfig,
+        value: impl Into<String>,
+        catalog: &EditorLanguageCatalog,
+    ) -> Self {
+        let path = path.into();
         let value = value.into();
+        let resolved_language =
+            resolve_editor_language(&path, &value, config.language_mode, catalog);
         Self {
-            path: path.into(),
+            path,
             config,
+            resolved_language,
             saved_value: value.clone(),
             value,
             error: None,
@@ -164,7 +218,15 @@ impl CodeEditorState {
     }
 
     pub fn language(&self) -> &str {
-        self.config.language()
+        &self.resolved_language.highlighter_name
+    }
+
+    pub fn language_id(&self) -> EditorLanguageId {
+        self.resolved_language.language_id
+    }
+
+    pub fn resolved_language(&self) -> &EditorLanguageResolution {
+        &self.resolved_language
     }
 
     pub fn value(&self) -> &str {
@@ -209,5 +271,21 @@ impl CodeEditorState {
         self.saved_value = self.value.clone();
         self.clear_error();
         self.clear_diagnostics();
+    }
+}
+
+fn resolve_editor_language(
+    path: &Path,
+    value: &str,
+    mode: CodeEditorLanguageMode,
+    catalog: &EditorLanguageCatalog,
+) -> EditorLanguageResolution {
+    match mode {
+        CodeEditorLanguageMode::Auto => catalog.resolve_for_path(path, Some(value)),
+        CodeEditorLanguageMode::Explicit(language_id) => {
+            let mut resolution = catalog.resolve_explicit(language_id);
+            resolution.source = EditorLanguageResolutionSource::Explicit;
+            resolution
+        }
     }
 }

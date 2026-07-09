@@ -1,7 +1,8 @@
 use gpui_component::highlighter::LanguageRegistry;
 use yttt::ui::editor::{
-    CodeEditorConfig, CodeEditorState, EditorDiagnostic, EditorDiagnosticSeverity,
-    register_builtin_editor_languages,
+    CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, EditorDiagnostic,
+    EditorDiagnosticSeverity, EditorLanguageCatalog, EditorLanguageId,
+    EditorLanguageResolutionSource, register_builtin_editor_languages,
 };
 
 #[test]
@@ -61,4 +62,106 @@ fn code_editor_state_tracks_and_clears_diagnostics() {
     state.set_value("name = \"fixed\"");
 
     assert!(state.diagnostics().is_empty());
+}
+
+#[test]
+fn language_catalog_resolves_builtin_languages_from_path_and_content() {
+    register_builtin_editor_languages();
+    let catalog = EditorLanguageCatalog::builtin();
+
+    let toml = catalog.resolve_for_path("layout.toml", None);
+    assert_eq!(toml.language_id, EditorLanguageId::Toml);
+    assert_eq!(toml.highlighter_name, "toml");
+    assert_eq!(toml.source, EditorLanguageResolutionSource::Filename);
+
+    let cargo = catalog.resolve_for_path("Cargo.toml", None);
+    assert_eq!(cargo.language_id, EditorLanguageId::Toml);
+    assert_eq!(cargo.source, EditorLanguageResolutionSource::Filename);
+
+    let json = catalog.resolve_for_path("package.json", None);
+    assert_eq!(json.language_id, EditorLanguageId::Json);
+    assert_eq!(json.highlighter_name, "json");
+
+    let yaml = catalog.resolve_for_path("config.yml", None);
+    assert_eq!(yaml.language_id, EditorLanguageId::Yaml);
+    assert_eq!(yaml.source, EditorLanguageResolutionSource::Extension);
+
+    let rust = catalog.resolve_for_path("src/main.rs", None);
+    assert_eq!(rust.language_id, EditorLanguageId::Rust);
+
+    let typescript = catalog.resolve_for_path("types/index.d.ts", None);
+    assert_eq!(typescript.language_id, EditorLanguageId::Typescript);
+    assert_eq!(typescript.matched_rule.as_deref(), Some("d.ts"));
+
+    let makefile = catalog.resolve_for_path("Makefile", None);
+    assert_eq!(makefile.language_id, EditorLanguageId::Make);
+    assert_eq!(makefile.highlighter_name, "make");
+
+    let dockerfile = catalog.resolve_for_path("Dockerfile", None);
+    assert_eq!(dockerfile.language_id, EditorLanguageId::Dockerfile);
+    assert_eq!(dockerfile.highlighter_name, "text");
+
+    let shebang = catalog.resolve_for_path("run", Some("#!/usr/bin/env bash\npwd\n"));
+    assert_eq!(shebang.language_id, EditorLanguageId::Bash);
+    assert_eq!(shebang.source, EditorLanguageResolutionSource::FirstLine);
+
+    let unknown = catalog.resolve_for_path("README.unknown", None);
+    assert_eq!(unknown.language_id, EditorLanguageId::PlainText);
+    assert_eq!(unknown.highlighter_name, "text");
+    assert_eq!(unknown.source, EditorLanguageResolutionSource::Fallback);
+}
+
+#[test]
+fn language_catalog_falls_back_to_text_for_missing_highlighter() {
+    register_builtin_editor_languages();
+    let mut catalog = EditorLanguageCatalog::builtin();
+    catalog.set_highlighter_for_test(EditorLanguageId::Toml, "not-registered");
+
+    let resolution = catalog.resolve_for_path("layout.toml", None);
+
+    assert_eq!(resolution.language_id, EditorLanguageId::Toml);
+    assert_eq!(resolution.highlighter_name, "text");
+}
+
+#[test]
+fn code_editor_state_resolves_language_from_path_with_catalog() {
+    register_builtin_editor_languages();
+    let catalog = EditorLanguageCatalog::builtin();
+
+    let state = CodeEditorState::new_with_catalog(
+        "/tmp/settings.toml",
+        CodeEditorConfig::new("Settings", CodeEditorLanguageMode::Auto),
+        "theme = \"yttt-dark\"",
+        &catalog,
+    );
+
+    assert_eq!(state.language_id(), EditorLanguageId::Toml);
+    assert_eq!(state.language(), "toml");
+    assert_eq!(
+        state.resolved_language().source,
+        EditorLanguageResolutionSource::Filename
+    );
+}
+
+#[test]
+fn code_editor_state_explicit_language_wins_over_path_detection() {
+    register_builtin_editor_languages();
+    let catalog = EditorLanguageCatalog::builtin();
+
+    let state = CodeEditorState::new_with_catalog(
+        "/tmp/settings.toml",
+        CodeEditorConfig::new(
+            "Settings",
+            CodeEditorLanguageMode::Explicit(EditorLanguageId::Json),
+        ),
+        "{}",
+        &catalog,
+    );
+
+    assert_eq!(state.language_id(), EditorLanguageId::Json);
+    assert_eq!(state.language(), "json");
+    assert_eq!(
+        state.resolved_language().source,
+        EditorLanguageResolutionSource::Explicit
+    );
 }
