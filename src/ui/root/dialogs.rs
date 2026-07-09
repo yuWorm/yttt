@@ -257,21 +257,7 @@ fn yttt_dialog_button<H>(
 where
     H: Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
 {
-    let style = yttt_button_style(variant, theme);
-    let variant = ButtonCustomVariant::new(cx)
-        .color(style.background.into())
-        .foreground(style.text.into())
-        .border(style.border.into())
-        .hover(style.hover_background.into())
-        .active(style.background.into())
-        .shadow(false);
-
-    Button::new(id)
-        .label(label)
-        .compact()
-        .rounded(style.radius)
-        .custom(variant)
-        .on_click(on_click)
+    yttt_button(id, label, variant, theme, cx).on_click(on_click)
 }
 
 pub(super) fn empty_workspace(

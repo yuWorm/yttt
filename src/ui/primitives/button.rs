@@ -1,4 +1,8 @@
-use gpui::{Pixels, Rgba, px};
+use gpui::{App, ElementId, Pixels, Rgba, SharedString, prelude::*, px};
+use gpui_component::{
+    Sizable as _,
+    button::{Button, ButtonCustomVariant, ButtonVariants},
+};
 
 use crate::ui::theme::WorkbenchTheme;
 
@@ -58,4 +62,38 @@ pub fn yttt_button_style(variant: YtttButtonVariant, theme: WorkbenchTheme) -> Y
         border,
         text,
     }
+}
+
+pub fn yttt_button_variant(
+    variant: YtttButtonVariant,
+    theme: WorkbenchTheme,
+    cx: &App,
+) -> ButtonCustomVariant {
+    let style = yttt_button_style(variant, theme);
+    ButtonCustomVariant::new(cx)
+        .color(style.background.into())
+        .foreground(style.text.into())
+        .border(style.border.into())
+        .hover(style.hover_background.into())
+        .active(style.background.into())
+        .shadow(false)
+}
+
+pub fn yttt_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    variant: YtttButtonVariant,
+    theme: WorkbenchTheme,
+    cx: &App,
+) -> Button {
+    let style = yttt_button_style(variant, theme);
+    Button::new(id)
+        .label(label)
+        .xsmall()
+        .compact()
+        .h(style.height)
+        .px(style.padding_x)
+        .rounded(style.radius)
+        .custom(yttt_button_variant(variant, theme, cx))
+        .text_color(style.text)
 }

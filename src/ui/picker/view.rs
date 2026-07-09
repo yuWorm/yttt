@@ -1,6 +1,6 @@
 use gpui::{
     AnyElement, App, ClickEvent, Div, Entity, InteractiveElement as _, IntoElement, ScrollHandle,
-    StatefulInteractiveElement as _, Window, div, prelude::*, rgba,
+    StatefulInteractiveElement as _, Window, div, prelude::*,
 };
 use gpui_component::{
     IconName,
@@ -16,6 +16,7 @@ use crate::ui::{
         palette_scroll_anchor_index,
     },
     picker::PickerItem,
+    primitives::panel::{YtttPanelKind, yttt_panel_style},
     theme::WorkbenchTheme,
 };
 
@@ -37,7 +38,7 @@ where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     F: FnMut(usize) -> H,
 {
-    let style = palette_panel_style();
+    let panel = yttt_panel_style(YtttPanelKind::Palette, theme);
 
     capture_overlay_input(
         div()
@@ -47,18 +48,18 @@ where
             .items_start()
             .justify_center()
             .pt_16()
-            .bg(rgba(0x00000066))
+            .bg(panel.overlay)
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .w(style.width)
-                    .max_w(style.max_width)
-                    .max_h(style.max_height)
-                    .rounded_md()
+                    .w(panel.width)
+                    .max_w(panel.max_width)
+                    .max_h(panel.max_height)
+                    .rounded(panel.radius)
                     .border_1()
-                    .border_color(theme.border_strong)
-                    .bg(theme.surface)
+                    .border_color(panel.border)
+                    .bg(panel.background)
                     .text_color(theme.text)
                     .overflow_hidden()
                     .child(picker_header(query_input, theme))

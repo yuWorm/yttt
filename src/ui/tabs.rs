@@ -9,6 +9,7 @@ use crate::{
     ui::{
         agent_status::{agent_status_label, tab_agent_status},
         components::SelectableState,
+        primitives::tabs::yttt_tabbar_style,
         theme::WorkbenchTheme,
     },
 };
@@ -60,13 +61,14 @@ pub enum ProjectTabStatusTone {
 }
 
 pub fn project_tabs_style(theme: WorkbenchTheme) -> ProjectTabsStyle {
+    let primitive = yttt_tabbar_style(theme);
     ProjectTabsStyle {
-        height: px(32.0),
-        item_height: px(32.0),
-        border_width: px(1.0),
-        active_background: theme.surface,
-        inactive_background: theme.app_background,
-        hover_background: theme.hover_surface,
+        height: primitive.height,
+        item_height: primitive.item_height,
+        border_width: primitive.border_width,
+        active_background: primitive.active_background,
+        inactive_background: primitive.inactive_background,
+        hover_background: primitive.hover_background,
         close_button_visibility: ProjectTabCloseButtonVisibility::Hover,
         leading_icon: ProjectTabLeadingIcon::Terminal,
         status_indicator: ProjectTabStatusIndicator::Dot,

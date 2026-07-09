@@ -17,6 +17,10 @@ use yttt::ui::primitives::{
     button::{YtttButtonVariant, yttt_button_style},
     dialog::yttt_dialog_style,
     input::{YtttInputKind, yttt_input_style},
+    panel::{YtttPanelKind, yttt_panel_style},
+    select::yttt_select_style,
+    sidebar::yttt_sidebar_style,
+    tabs::yttt_tabbar_style,
 };
 use yttt::ui::settings::{SettingsGroupId, settings_panel_style, settings_rows_for_group};
 use yttt::ui::sidebar::project_sidebar_style;
@@ -403,4 +407,64 @@ fn yttt_dialog_style_uses_bounded_panel_surface() {
     assert_eq!(style.radius, gpui::px(8.0));
     assert_eq!(style.background, theme.surface);
     assert_eq!(style.border, theme.border_strong);
+}
+
+#[test]
+fn yttt_panel_style_centralizes_overlay_bounds() {
+    let theme = WorkbenchTheme::dark();
+    let palette = yttt_panel_style(YtttPanelKind::Palette, theme);
+    let settings = yttt_panel_style(YtttPanelKind::Settings, theme);
+    let dialog = yttt_panel_style(YtttPanelKind::Dialog, theme);
+
+    assert_eq!(palette.width, gpui::px(760.0));
+    assert_eq!(palette.max_height, gpui::px(480.0));
+    assert_eq!(settings.width, gpui::px(900.0));
+    assert_eq!(settings.height, Some(gpui::px(560.0)));
+    assert_eq!(dialog.width, gpui::px(420.0));
+    assert_eq!(dialog.height, None);
+    assert_eq!(palette.background, theme.surface);
+    assert_eq!(settings.border, theme.border_strong);
+    assert_eq!(dialog.overlay, gpui::rgba(0x00000073));
+}
+
+#[test]
+fn yttt_select_style_matches_settings_input_density() {
+    let theme = WorkbenchTheme::dark();
+    let select = yttt_select_style(theme);
+    let input = yttt_input_style(YtttInputKind::Settings, theme);
+
+    assert_eq!(select.height, input.height);
+    assert_eq!(select.radius, input.radius);
+    assert_eq!(select.background, theme.surface_elevated);
+    assert_eq!(select.border, theme.border);
+    assert_eq!(select.text, theme.text);
+    assert_eq!(select.menu_width, gpui::px(280.0));
+}
+
+#[test]
+fn yttt_sidebar_style_matches_project_sidebar_density() {
+    let theme = WorkbenchTheme::dark();
+    let primitive = yttt_sidebar_style(theme);
+    let project = project_sidebar_style(theme);
+
+    assert_eq!(primitive.width, project.width);
+    assert_eq!(primitive.collapsed_width, project.collapsed_width);
+    assert_eq!(primitive.item_height, gpui::px(28.0));
+    assert_eq!(primitive.item_padding_x, gpui::px(8.0));
+    assert_eq!(primitive.background, theme.app_background);
+    assert_eq!(primitive.active_background, theme.active_surface);
+}
+
+#[test]
+fn yttt_tabbar_style_matches_project_tab_density() {
+    let theme = WorkbenchTheme::dark();
+    let primitive = yttt_tabbar_style(theme);
+    let project = project_tabs_style(theme);
+
+    assert_eq!(primitive.height, project.height);
+    assert_eq!(primitive.item_height, project.item_height);
+    assert_eq!(primitive.border_width, gpui::px(1.0));
+    assert_eq!(primitive.active_background, theme.surface);
+    assert_eq!(primitive.inactive_background, theme.app_background);
+    assert_eq!(primitive.hover_background, theme.hover_surface);
 }

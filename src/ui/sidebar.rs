@@ -1,13 +1,13 @@
 use gpui::{
     App, ClickEvent, InteractiveElement as _, IntoElement, Pixels, Rgba,
-    StatefulInteractiveElement as _, Window, div, prelude::*, px,
+    StatefulInteractiveElement as _, Window, div, prelude::*,
 };
 use gpui_component::{Icon, IconName};
 
 use crate::model::workspace::Workspace;
 use crate::ui::agent_status::{agent_status_label, project_agent_status};
 use crate::ui::components::SelectableState;
-use crate::ui::theme::WorkbenchTheme;
+use crate::ui::{primitives::sidebar::yttt_sidebar_style, theme::WorkbenchTheme};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectSidebarItem {
@@ -31,15 +31,16 @@ pub struct ProjectSidebarStyle {
 }
 
 pub fn project_sidebar_style(theme: WorkbenchTheme) -> ProjectSidebarStyle {
+    let primitive = yttt_sidebar_style(theme);
     ProjectSidebarStyle {
-        width: px(216.0),
-        collapsed_width: px(46.0),
-        border_width: px(1.0),
-        item_height: px(28.0),
-        item_padding_x: px(8.0),
-        background: theme.app_background,
-        active_background: theme.active_surface,
-        hover_background: theme.hover_surface,
+        width: primitive.width,
+        collapsed_width: primitive.collapsed_width,
+        border_width: primitive.border_width,
+        item_height: primitive.item_height,
+        item_padding_x: primitive.item_padding_x,
+        background: primitive.background,
+        active_background: primitive.active_background,
+        hover_background: primitive.hover_background,
     }
 }
 

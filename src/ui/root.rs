@@ -2,14 +2,13 @@ use gpui::{
     AnyElement, ClickEvent, Context, Div, Entity, FocusHandle, Focusable as _, FontWeight,
     InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement as _, PathPromptOptions, Pixels, Point, Render,
-    ScrollHandle, SharedString, Stateful, Subscription, Window, div, prelude::*, px, relative,
-    rgba,
+    ScrollHandle, SharedString, Subscription, Window, div, prelude::*, px, relative, rgba,
 };
 use gpui_component::{
-    IconName, IndexPath, Root as ComponentRoot, Sizable as _, Theme as ComponentTheme,
-    WindowExt as _,
+    Disableable as _, IconName, IndexPath, Root as ComponentRoot, Sizable as _,
+    Theme as ComponentTheme, WindowExt as _,
     alert::Alert,
-    button::{Button, ButtonCustomVariant, ButtonVariants as _},
+    button::Button,
     input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent, StepAction},
     notification::{Notification, NotificationType},
     scroll::ScrollableElement as _,
@@ -106,9 +105,11 @@ use crate::{
         palette::palette_overlay,
         palette_surface::palette_input_placeholder,
         primitives::{
-            button::{YtttButtonVariant, yttt_button_style},
+            button::{YtttButtonVariant, yttt_button},
             dialog::yttt_dialog_style,
             input::{YtttInputKind, yttt_input_style},
+            panel::{YtttPanelKind, yttt_panel_style},
+            select::yttt_select_style,
         },
         settings::{SettingsGroupId, SettingsPageState, SettingsPanelStyle, settings_panel_style},
         sidebar::project_sidebar,
@@ -3452,6 +3453,7 @@ fn layout_toml_editor_overlay(
                                 "Cancel",
                                 false,
                                 theme,
+                                cx,
                                 cx.listener(|this, _, _window, cx| {
                                     this.cancel_layout_toml_editor();
                                     cx.notify();
@@ -3513,6 +3515,7 @@ fn layout_toml_editor_overlay(
                                 "Cancel",
                                 false,
                                 theme,
+                                cx,
                                 cx.listener(|this, _, _window, cx| {
                                     this.cancel_layout_toml_editor();
                                     cx.notify();
@@ -3523,6 +3526,7 @@ fn layout_toml_editor_overlay(
                                 "Save",
                                 true,
                                 theme,
+                                cx,
                                 cx.listener(|this, _, _window, cx| {
                                     let _ = this.save_layout_toml_editor();
                                     cx.notify();
@@ -3541,6 +3545,7 @@ fn settings_overlay(
 ) -> Div {
     let theme = root.theme_runtime.ui;
     let style = settings_panel_style();
+    let panel = yttt_panel_style(YtttPanelKind::Settings, theme);
 
     capture_overlay_input(
         div()
@@ -3553,14 +3558,14 @@ fn settings_overlay(
             .child(
                 div()
                     .flex()
-                    .w(style.width)
-                    .h(style.height)
-                    .max_w(style.max_width)
-                    .max_h(style.max_height)
-                    .rounded_md()
+                    .w(panel.width)
+                    .h(panel.height.unwrap_or(style.height))
+                    .max_w(panel.max_width)
+                    .max_h(panel.max_height)
+                    .rounded(panel.radius)
                     .border_1()
-                    .border_color(theme.border_strong)
-                    .bg(theme.surface)
+                    .border_color(panel.border)
+                    .bg(panel.background)
                     .text_color(theme.text)
                     .overflow_hidden()
                     .child(settings_sidebar(root, search_input, style, cx))
@@ -3703,6 +3708,7 @@ fn settings_content(
                     "Close",
                     false,
                     theme,
+                    cx,
                     cx.listener(|this, _, _window, cx| {
                         this.close_settings();
                         cx.notify();
@@ -3753,7 +3759,7 @@ fn settings_general_rows(
             theme,
             "Language",
             "Application display language.",
-            settings_select_control(language_select, style, false, "Select language")
+            settings_select_control(language_select, theme, false, "Select language")
                 .into_any_element(),
         ))
         .child(setting_row(
@@ -3770,6 +3776,7 @@ fn settings_general_rows(
                 },
                 root.system_notifications_enabled,
                 theme,
+                cx,
                 cx.listener(|this, _, _window, cx| {
                     let _ = this.run_command(CommandId::SettingsNotifications);
                     cx.notify();
@@ -3799,7 +3806,7 @@ fn settings_appearance_rows(
             theme,
             "UI theme",
             "Theme used for YTTT chrome, panels, and controls.",
-            settings_select_control(ui_theme_select, style, true, "Search theme...")
+            settings_select_control(ui_theme_select, theme, true, "Search theme...")
                 .into_any_element(),
         ))
         .child(setting_row(
@@ -3807,7 +3814,7 @@ fn settings_appearance_rows(
             theme,
             "Terminal theme",
             "Optional terminal colors override.",
-            settings_select_control(terminal_theme_select, style, true, "Search theme...")
+            settings_select_control(terminal_theme_select, theme, true, "Search theme...")
                 .into_any_element(),
         ))
         .child(setting_row(
@@ -3820,6 +3827,7 @@ fn settings_appearance_rows(
                 "Show Path",
                 false,
                 theme,
+                cx,
                 cx.listener(move |this, _, _window, cx| {
                     this.load_error = Some(format!("Settings file: {settings_file}"));
                     cx.notify();
@@ -3837,6 +3845,7 @@ fn settings_appearance_rows(
                 "Show Path",
                 false,
                 theme,
+                cx,
                 cx.listener(move |this, _, _window, cx| {
                     this.load_error = Some(format!("Themes directory: {themes_dir}"));
                     cx.notify();
@@ -3868,14 +3877,14 @@ fn settings_terminal_rows(
             theme,
             "Default shell",
             "Shell command used when creating new terminal tabs.",
-            settings_select_control(shell_select, style, false, "Select shell").into_any_element(),
+            settings_select_control(shell_select, theme, false, "Select shell").into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
             "Font family",
             "Terminal font family.",
-            settings_select_control(font_select, style, true, "Search font...").into_any_element(),
+            settings_select_control(font_select, theme, true, "Search font...").into_any_element(),
         ))
         .child(setting_row(
             style,
@@ -3919,6 +3928,7 @@ fn settings_terminal_rows(
                 },
                 root.terminal_show_scrollbar(),
                 theme,
+                cx,
                 cx.listener(|this, _, _window, cx| {
                     let next = !this.terminal_show_scrollbar();
                     let _ = this.set_terminal_show_scrollbar(next);
@@ -3942,6 +3952,7 @@ fn settings_terminal_rows(
                 },
                 root.terminal_close_on_exit(),
                 theme,
+                cx,
                 cx.listener(|this, _, _window, cx| {
                     let next = !this.terminal_close_on_exit();
                     let _ = this.set_terminal_close_on_exit(next);
@@ -4014,6 +4025,7 @@ fn settings_project_layout_rows(
                 "Open",
                 false,
                 theme,
+                cx,
                 cx.listener(move |this, _, _window, cx| {
                     if has_project {
                         let _ = this.open_layout_toml_editor();
@@ -4122,6 +4134,7 @@ fn settings_keybinding_rows(
                             "Edit",
                             false,
                             theme,
+                            cx,
                             cx.listener(move |this, _, _window, cx| {
                                 let _ = this.open_keybinding_edit_dialog(command);
                                 cx.notify();
@@ -4132,6 +4145,7 @@ fn settings_keybinding_rows(
                             "Reset",
                             false,
                             theme,
+                            cx,
                             cx.listener(move |this, _, _window, cx| {
                                 let _ = this.reset_keybinding_command_keys(command);
                                 cx.notify();
@@ -4142,6 +4156,7 @@ fn settings_keybinding_rows(
                             "Delete",
                             false,
                             theme,
+                            cx,
                             cx.listener(move |this, _, _window, cx| {
                                 let _ = this.delete_keybinding_command_keys(command);
                                 cx.notify();
@@ -4206,17 +4221,22 @@ fn setting_row(
 
 fn settings_select_control(
     select: Entity<SettingsStringSelectState>,
-    style: SettingsPanelStyle,
+    theme: WorkbenchTheme,
     searchable: bool,
     search_placeholder: &'static str,
 ) -> Select<SearchableVec<String>> {
+    let select_style = yttt_select_style(theme);
     Select::new(&select)
         .small()
-        .menu_width(style.select_menu_width)
+        .menu_width(select_style.menu_width)
         .search_placeholder(search_placeholder)
         .appearance(true)
-        .w(style.control_width)
-        .h(style.control_height)
+        .w(select_style.width)
+        .h(select_style.height)
+        .rounded(select_style.radius)
+        .bg(select_style.background)
+        .border_color(select_style.border)
+        .text_color(select_style.text)
         .when(searchable, |select| select.cleanable(false))
 }
 
@@ -4240,12 +4260,13 @@ fn settings_command_button(
     theme: WorkbenchTheme,
     command: CommandId,
     cx: &mut Context<RootView>,
-) -> Stateful<Div> {
+) -> Button {
     settings_button(
         id,
         label,
         false,
         theme,
+        cx,
         cx.listener(move |this, _, _window, cx| {
             if enabled {
                 let _ = this.run_command(command);
@@ -4253,41 +4274,34 @@ fn settings_command_button(
             cx.notify();
         }),
     )
+    .disabled(!enabled)
+    .tab_stop(enabled)
 }
 
 fn settings_button<H>(
-    _id: impl Into<String>,
+    id: impl Into<String>,
     label: impl Into<String>,
     selected: bool,
     theme: WorkbenchTheme,
+    cx: &mut Context<RootView>,
     on_click: H,
-) -> Stateful<Div>
+) -> Button
 where
     H: Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
 {
-    let id: String = _id.into();
-    let label: String = label.into();
-    let background = if selected {
-        theme.active_surface
+    let variant = if selected {
+        YtttButtonVariant::Primary
     } else {
-        theme.surface_elevated
+        YtttButtonVariant::Secondary
     };
-    div()
-        .id(SharedString::from(id))
-        .flex()
-        .items_center()
-        .justify_center()
-        .h_7()
-        .rounded_sm()
-        .border_1()
-        .border_color(theme.border)
-        .bg(background)
-        .px_3()
-        .text_xs()
-        .text_color(theme.text)
-        .hover(move |this| this.bg(theme.hover_surface))
-        .on_click(on_click)
-        .child(label)
+    yttt_button(
+        SharedString::from(id.into()),
+        SharedString::from(label.into()),
+        variant,
+        theme,
+        cx,
+    )
+    .on_click(on_click)
 }
 
 fn settings_value(value: impl Into<String>, theme: WorkbenchTheme) -> Div {

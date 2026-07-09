@@ -103,7 +103,7 @@ fn root_view_starts_with_empty_workspace() {
 
 #[test]
 fn root_view_empty_workspace_exposes_visible_actions() {
-    let root = RootView::new();
+    let (_temp, root) = english_test_root();
 
     assert_eq!(
         root.visible_empty_workspace_actions(),
@@ -257,7 +257,7 @@ fn input_owner_stack_focus_restore_target_is_empty_without_registered_focus_hand
 
 #[test]
 fn root_view_double_clicking_tab_opens_rename_dialog() {
-    let mut root = RootView::dev_fixture();
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
 
     root.handle_project_tab_click("dev", 2).unwrap();
 
@@ -450,7 +450,7 @@ fn root_view_layout_toml_editor_keeps_invalid_toml_open() {
 
 #[test]
 fn root_view_project_close_command_requires_confirmation_for_running_project() {
-    let mut root = RootView::dev_fixture();
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
     let project_id = root.workspace().selected_project_id().unwrap().clone();
     root.workspace_mut()
         .mark_pane_running(&project_id, "dev", "server")
@@ -1916,6 +1916,35 @@ fn workspace_with_sample_project() -> Workspace {
         .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
         .unwrap();
     workspace
+}
+
+fn english_test_root() -> (tempfile::TempDir, RootView) {
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    (temp, RootView::with_config_paths(paths))
+}
+
+fn english_test_root_with_workspace(workspace: Workspace) -> (tempfile::TempDir, RootView) {
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    (
+        temp,
+        RootView::with_workspace_for_test_and_config_paths(workspace, paths),
+    )
+}
+
+fn english_test_config_paths(temp: &tempfile::TempDir) -> AppConfigPaths {
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    fs::create_dir_all(paths.config_dir()).unwrap();
+    fs::write(
+        paths.settings_file(),
+        r#"
+[general]
+language = "en"
+"#,
+    )
+    .unwrap();
+    paths
 }
 
 fn sample_layout() -> yttt::model::layout::ProjectLayout {

@@ -1,6 +1,9 @@
-use gpui::{Pixels, Rgba, px, rgba};
+use gpui::{Pixels, Rgba};
 
-use crate::ui::theme::WorkbenchTheme;
+use crate::ui::{
+    primitives::panel::{YtttPanelKind, yttt_panel_style},
+    theme::WorkbenchTheme,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct YtttDialogStyle {
@@ -15,13 +18,14 @@ pub struct YtttDialogStyle {
 }
 
 pub fn yttt_dialog_style(theme: WorkbenchTheme) -> YtttDialogStyle {
+    let panel = yttt_panel_style(YtttPanelKind::Dialog, theme);
     YtttDialogStyle {
-        max_width: px(420.0),
-        radius: px(8.0),
-        padding: px(16.0),
-        overlay: rgba(0x00000073),
-        background: theme.surface,
-        border: theme.border_strong,
+        max_width: panel.max_width,
+        radius: panel.radius,
+        padding: panel.padding,
+        overlay: panel.overlay,
+        background: panel.background,
+        border: panel.border,
         text: theme.text,
         hint: theme.text_subtle,
     }
