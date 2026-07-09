@@ -1,17 +1,16 @@
 use std::{path::PathBuf, sync::atomic::Ordering};
 
 use gpui::{Context, Entity, EventEmitter, IntoElement, Render, Window, div, prelude::*};
-use gpui_terminal::{TerminalConfig, TerminalView};
+use yttt_terminal::{
+    ExitReason, PortablePtySession, ProcessStatus, TerminalConfig, TerminalSpawnRequest,
+    TerminalView, spawn_portable_pty_session,
+};
 
 use crate::{
     model::layout::{PaneConfig, PaneKind},
     runtime::{
         agent::classify_agent,
         notification::{ExitNotificationInput, NotificationEvent, notification_for_exit},
-        terminal::{
-            ExitReason, PortablePtySession, ProcessStatus, TerminalSpawnRequest,
-            spawn_portable_pty_session,
-        },
     },
     ui::{input_owner::TerminalInputGate, theme::WorkbenchTheme},
 };

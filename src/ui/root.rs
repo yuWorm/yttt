@@ -92,6 +92,7 @@ use crate::{
         i18n::{Locale, UiText, UiTextKey},
         input_owner::{InputOwnerKind, InputOwnerStack, TerminalInputGate},
         keybindings_editor::{KeybindingEditError, KeybindingRow, KeybindingsEditorState},
+        overlay::capture_overlay_input,
         palette::palette_overlay,
         palette_surface::palette_input_placeholder,
         primitives::{
@@ -111,6 +112,8 @@ use crate::{
         toast::{ToastQueue, ToastTone, toast_item_for_event},
     },
 };
+
+pub use crate::ui::overlay::overlay_input_capture_policy;
 
 pub struct RootView {
     workspace: Workspace,
@@ -636,6 +639,10 @@ impl RootView {
         self.app_settings.terminal.close_on_exit
     }
 
+    pub fn terminal_show_scrollbar(&self) -> bool {
+        self.app_settings.terminal.show_scrollbar
+    }
+
     pub fn settings_is_open(&self) -> bool {
         self.settings_page.is_open
     }
@@ -711,6 +718,14 @@ impl RootView {
 
     pub fn set_terminal_close_on_exit(&mut self, close_on_exit: bool) -> Result<(), RootViewError> {
         self.app_settings.terminal.close_on_exit = close_on_exit;
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_terminal_show_scrollbar(
+        &mut self,
+        show_scrollbar: bool,
+    ) -> Result<(), RootViewError> {
+        self.app_settings.terminal.show_scrollbar = show_scrollbar;
         self.save_app_settings_and_refresh_runtime()
     }
 
@@ -3302,139 +3317,141 @@ fn layout_toml_editor_overlay(
     let path = editor.path.display().to_string();
     let error = editor.error.clone();
 
-    div()
-        .absolute()
-        .inset_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(rgba(0x00000099))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .w(relative(0.72))
-                .max_w(px(1040.))
-                .h(px(680.))
-                .max_h(relative(0.86))
-                .rounded_md()
-                .border_1()
-                .border_color(theme.border_strong)
-                .bg(theme.surface)
-                .text_color(theme.text)
-                .overflow_hidden()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .border_b_1()
-                        .border_color(theme.border)
-                        .px_5()
-                        .py_4()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_1()
-                                .min_w_0()
-                                .child(
-                                    div()
-                                        .text_lg()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child("Edit layout TOML"),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.text_subtle)
-                                        .truncate()
-                                        .child(path),
-                                ),
-                        )
-                        .child(settings_button(
-                            "layout-toml-editor-close",
-                            "Cancel",
-                            false,
-                            theme,
-                            cx.listener(|this, _, _window, cx| {
-                                this.cancel_layout_toml_editor();
-                                cx.notify();
-                            }),
-                        )),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_h_0()
-                        .p_4()
-                        .gap_3()
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_h_0()
-                                .rounded_sm()
-                                .border_1()
-                                .border_color(theme.border)
-                                .bg(theme.terminal_background)
-                                .overflow_hidden()
-                                .child(
-                                    Input::new(input)
-                                        .h_full()
-                                        .appearance(false)
-                                        .bordered(false)
-                                        .focus_bordered(false),
-                                ),
-                        )
-                        .when_some(error, |this, error| {
-                            this.child(
+    capture_overlay_input(
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgba(0x00000099))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .w(relative(0.72))
+                    .max_w(px(1040.))
+                    .h(px(680.))
+                    .max_h(relative(0.86))
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.border_strong)
+                    .bg(theme.surface)
+                    .text_color(theme.text)
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .border_b_1()
+                            .border_color(theme.border)
+                            .px_5()
+                            .py_4()
+                            .child(
                                 div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_lg()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child("Edit layout TOML"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.text_subtle)
+                                            .truncate()
+                                            .child(path),
+                                    ),
+                            )
+                            .child(settings_button(
+                                "layout-toml-editor-close",
+                                "Cancel",
+                                false,
+                                theme,
+                                cx.listener(|this, _, _window, cx| {
+                                    this.cancel_layout_toml_editor();
+                                    cx.notify();
+                                }),
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_h_0()
+                            .p_4()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
                                     .rounded_sm()
                                     .border_1()
-                                    .border_color(theme.danger)
-                                    .bg(theme.surface_elevated)
-                                    .px_3()
-                                    .py_2()
-                                    .text_xs()
-                                    .text_color(theme.danger)
-                                    .child(error),
+                                    .border_color(theme.border)
+                                    .bg(theme.terminal_background)
+                                    .overflow_hidden()
+                                    .child(
+                                        Input::new(input)
+                                            .h_full()
+                                            .appearance(false)
+                                            .bordered(false)
+                                            .focus_bordered(false),
+                                    ),
                             )
-                        }),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_end()
-                        .gap_2()
-                        .border_t_1()
-                        .border_color(theme.border)
-                        .px_5()
-                        .py_3()
-                        .child(settings_button(
-                            "layout-toml-editor-cancel",
-                            "Cancel",
-                            false,
-                            theme,
-                            cx.listener(|this, _, _window, cx| {
-                                this.cancel_layout_toml_editor();
-                                cx.notify();
+                            .when_some(error, |this, error| {
+                                this.child(
+                                    div()
+                                        .rounded_sm()
+                                        .border_1()
+                                        .border_color(theme.danger)
+                                        .bg(theme.surface_elevated)
+                                        .px_3()
+                                        .py_2()
+                                        .text_xs()
+                                        .text_color(theme.danger)
+                                        .child(error),
+                                )
                             }),
-                        ))
-                        .child(settings_button(
-                            "layout-toml-editor-save",
-                            "Save",
-                            true,
-                            theme,
-                            cx.listener(|this, _, _window, cx| {
-                                let _ = this.save_layout_toml_editor();
-                                cx.notify();
-                            }),
-                        )),
-                ),
-        )
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_end()
+                            .gap_2()
+                            .border_t_1()
+                            .border_color(theme.border)
+                            .px_5()
+                            .py_3()
+                            .child(settings_button(
+                                "layout-toml-editor-cancel",
+                                "Cancel",
+                                false,
+                                theme,
+                                cx.listener(|this, _, _window, cx| {
+                                    this.cancel_layout_toml_editor();
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(settings_button(
+                                "layout-toml-editor-save",
+                                "Save",
+                                true,
+                                theme,
+                                cx.listener(|this, _, _window, cx| {
+                                    let _ = this.save_layout_toml_editor();
+                                    cx.notify();
+                                }),
+                            )),
+                    ),
+            ),
+    )
 }
 
 fn settings_overlay(
@@ -3446,29 +3463,31 @@ fn settings_overlay(
     let theme = root.theme_runtime.ui;
     let style = settings_panel_style();
 
-    div()
-        .absolute()
-        .inset_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(rgba(0x00000066))
-        .child(
-            div()
-                .flex()
-                .w(style.width)
-                .h(style.height)
-                .max_w(style.max_width)
-                .max_h(style.max_height)
-                .rounded_md()
-                .border_1()
-                .border_color(theme.border_strong)
-                .bg(theme.surface)
-                .text_color(theme.text)
-                .overflow_hidden()
-                .child(settings_sidebar(root, search_input, style, cx))
-                .child(settings_content(root, style, window, cx)),
-        )
+    capture_overlay_input(
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgba(0x00000066))
+            .child(
+                div()
+                    .flex()
+                    .w(style.width)
+                    .h(style.height)
+                    .max_w(style.max_width)
+                    .max_h(style.max_height)
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.border_strong)
+                    .bg(theme.surface)
+                    .text_color(theme.text)
+                    .overflow_hidden()
+                    .child(settings_sidebar(root, search_input, style, cx))
+                    .child(settings_content(root, style, window, cx)),
+            ),
+    )
 }
 
 fn settings_sidebar(
@@ -3806,6 +3825,29 @@ fn settings_terminal_rows(
             "Scrollback",
             "Number of terminal lines kept in memory.",
             settings_number_control(scrollback_input, style).into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            "Scrollbar",
+            "Show a thin scrollback indicator in terminal panes.",
+            settings_button(
+                "settings-show-scrollbar",
+                if root.terminal_show_scrollbar() {
+                    "On"
+                } else {
+                    "Off"
+                },
+                root.terminal_show_scrollbar(),
+                theme,
+                cx.listener(|this, _, _window, cx| {
+                    let next = !this.terminal_show_scrollbar();
+                    let _ = this.set_terminal_show_scrollbar(next);
+                    this.sync_terminal_pane_configs(cx);
+                    cx.notify();
+                }),
+            )
+            .into_any_element(),
         ))
         .child(setting_row(
             style,
@@ -4514,71 +4556,73 @@ fn tab_rename_dialog(
     theme: WorkbenchTheme,
 ) -> Div {
     let dialog = yttt_dialog_style(theme);
-    div()
-        .absolute()
-        .top_0()
-        .left_0()
-        .right_0()
-        .bottom_0()
-        .flex()
-        .items_start()
-        .justify_center()
-        .pt_16()
-        .bg(dialog.overlay)
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .w(dialog.max_width)
-                .rounded(dialog.radius)
-                .border_1()
-                .border_color(dialog.border)
-                .bg(dialog.background)
-                .p(dialog.padding)
-                .text_color(dialog.text)
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child(ui_text.get(UiTextKey::RenameTabTitle)),
-                )
-                .child(yttt_dialog_input(input, theme))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(dialog.hint)
-                        .child(ui_text.get(UiTextKey::RenameTabHint)),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap_2()
-                        .child(yttt_dialog_button(
-                            cx,
-                            "cancel-tab-rename",
-                            ui_text.get(UiTextKey::Cancel),
-                            YtttButtonVariant::Secondary,
-                            theme,
-                            cx.listener(|this, _, _window, cx| {
-                                this.cancel_tab_rename_dialog();
-                                cx.notify();
-                            }),
-                        ))
-                        .child(yttt_dialog_button(
-                            cx,
-                            "confirm-tab-rename",
-                            ui_text.get(UiTextKey::RenameTabAction),
-                            YtttButtonVariant::Primary,
-                            theme,
-                            cx.listener(|this, _, _window, cx| {
-                                let _ = this.confirm_tab_rename_dialog_from_input(cx);
-                                cx.notify();
-                            }),
-                        )),
-                ),
-        )
+    capture_overlay_input(
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .flex()
+            .items_start()
+            .justify_center()
+            .pt_16()
+            .bg(dialog.overlay)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .w(dialog.max_width)
+                    .rounded(dialog.radius)
+                    .border_1()
+                    .border_color(dialog.border)
+                    .bg(dialog.background)
+                    .p(dialog.padding)
+                    .text_color(dialog.text)
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(ui_text.get(UiTextKey::RenameTabTitle)),
+                    )
+                    .child(yttt_dialog_input(input, theme))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(dialog.hint)
+                            .child(ui_text.get(UiTextKey::RenameTabHint)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(yttt_dialog_button(
+                                cx,
+                                "cancel-tab-rename",
+                                ui_text.get(UiTextKey::Cancel),
+                                YtttButtonVariant::Secondary,
+                                theme,
+                                cx.listener(|this, _, _window, cx| {
+                                    this.cancel_tab_rename_dialog();
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(yttt_dialog_button(
+                                cx,
+                                "confirm-tab-rename",
+                                ui_text.get(UiTextKey::RenameTabAction),
+                                YtttButtonVariant::Primary,
+                                theme,
+                                cx.listener(|this, _, _window, cx| {
+                                    let _ = this.confirm_tab_rename_dialog_from_input(cx);
+                                    cx.notify();
+                                }),
+                            )),
+                    ),
+            ),
+    )
 }
 
 fn keybinding_edit_dialog(
@@ -4587,71 +4631,73 @@ fn keybinding_edit_dialog(
     theme: WorkbenchTheme,
 ) -> Div {
     let dialog = yttt_dialog_style(theme);
-    div()
-        .absolute()
-        .top_0()
-        .left_0()
-        .right_0()
-        .bottom_0()
-        .flex()
-        .items_start()
-        .justify_center()
-        .pt_16()
-        .bg(dialog.overlay)
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .w(dialog.max_width)
-                .rounded(dialog.radius)
-                .border_1()
-                .border_color(dialog.border)
-                .bg(dialog.background)
-                .p(dialog.padding)
-                .text_color(dialog.text)
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child("Edit keybinding"),
-                )
-                .child(yttt_dialog_input(input, theme))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(dialog.hint)
-                        .child("Separate multiple bindings with commas."),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap_2()
-                        .child(yttt_dialog_button(
-                            cx,
-                            "cancel-keybinding-edit",
-                            "Cancel",
-                            YtttButtonVariant::Secondary,
-                            theme,
-                            cx.listener(|this, _, _window, cx| {
-                                this.cancel_keybinding_edit_dialog();
-                                cx.notify();
-                            }),
-                        ))
-                        .child(yttt_dialog_button(
-                            cx,
-                            "confirm-keybinding-edit",
-                            "Save",
-                            YtttButtonVariant::Primary,
-                            theme,
-                            cx.listener(|this, _, _window, cx| {
-                                let _ = this.confirm_keybinding_edit_dialog_from_input(cx);
-                                cx.notify();
-                            }),
-                        )),
-                ),
-        )
+    capture_overlay_input(
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .flex()
+            .items_start()
+            .justify_center()
+            .pt_16()
+            .bg(dialog.overlay)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .w(dialog.max_width)
+                    .rounded(dialog.radius)
+                    .border_1()
+                    .border_color(dialog.border)
+                    .bg(dialog.background)
+                    .p(dialog.padding)
+                    .text_color(dialog.text)
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Edit keybinding"),
+                    )
+                    .child(yttt_dialog_input(input, theme))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(dialog.hint)
+                            .child("Separate multiple bindings with commas."),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(yttt_dialog_button(
+                                cx,
+                                "cancel-keybinding-edit",
+                                "Cancel",
+                                YtttButtonVariant::Secondary,
+                                theme,
+                                cx.listener(|this, _, _window, cx| {
+                                    this.cancel_keybinding_edit_dialog();
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(yttt_dialog_button(
+                                cx,
+                                "confirm-keybinding-edit",
+                                "Save",
+                                YtttButtonVariant::Primary,
+                                theme,
+                                cx.listener(|this, _, _window, cx| {
+                                    let _ = this.confirm_keybinding_edit_dialog_from_input(cx);
+                                    cx.notify();
+                                }),
+                            )),
+                    ),
+            ),
+    )
 }
 
 fn close_project_dialog(
@@ -4660,76 +4706,78 @@ fn close_project_dialog(
     theme: WorkbenchTheme,
 ) -> Div {
     let dialog = yttt_dialog_style(theme);
-    div()
-        .absolute()
-        .top_0()
-        .left_0()
-        .right_0()
-        .bottom_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(dialog.overlay)
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .w(dialog.max_width)
-                .rounded(dialog.radius)
-                .border_1()
-                .border_color(dialog.border)
-                .bg(dialog.background)
-                .p(dialog.padding)
-                .text_color(dialog.text)
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child(ui_text.get(UiTextKey::CloseProjectTitle)),
-                )
-                .child(
-                    Alert::warning(
-                        "close-project-warning",
-                        ui_text.get(UiTextKey::CloseProjectBody),
+    capture_overlay_input(
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(dialog.overlay)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .w(dialog.max_width)
+                    .rounded(dialog.radius)
+                    .border_1()
+                    .border_color(dialog.border)
+                    .bg(dialog.background)
+                    .p(dialog.padding)
+                    .text_color(dialog.text)
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(ui_text.get(UiTextKey::CloseProjectTitle)),
                     )
-                    .banner(),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(dialog.hint)
-                        .child("Enter to close, Escape to cancel"),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap_2()
-                        .child(yttt_dialog_button(
-                            cx,
-                            "cancel-close-project",
-                            ui_text.get(UiTextKey::Cancel),
-                            YtttButtonVariant::Secondary,
-                            theme,
-                            cx.listener(|this, _, _window, cx| {
-                                this.cancel_pending_project_close();
-                                cx.notify();
-                            }),
-                        ))
-                        .child(yttt_dialog_button(
-                            cx,
-                            "confirm-close-project",
-                            ui_text.get(UiTextKey::CloseProjectAction),
-                            YtttButtonVariant::Danger,
-                            theme,
-                            cx.listener(|this, _, _window, cx| {
-                                let _ = this.confirm_pending_project_close();
-                                cx.notify();
-                            }),
-                        )),
-                ),
-        )
+                    .child(
+                        Alert::warning(
+                            "close-project-warning",
+                            ui_text.get(UiTextKey::CloseProjectBody),
+                        )
+                        .banner(),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(dialog.hint)
+                            .child("Enter to close, Escape to cancel"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(yttt_dialog_button(
+                                cx,
+                                "cancel-close-project",
+                                ui_text.get(UiTextKey::Cancel),
+                                YtttButtonVariant::Secondary,
+                                theme,
+                                cx.listener(|this, _, _window, cx| {
+                                    this.cancel_pending_project_close();
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(yttt_dialog_button(
+                                cx,
+                                "confirm-close-project",
+                                ui_text.get(UiTextKey::CloseProjectAction),
+                                YtttButtonVariant::Danger,
+                                theme,
+                                cx.listener(|this, _, _window, cx| {
+                                    let _ = this.confirm_pending_project_close();
+                                    cx.notify();
+                                }),
+                            )),
+                    ),
+            ),
+    )
 }
 
 fn yttt_dialog_input(input: &Entity<InputState>, theme: WorkbenchTheme) -> Div {

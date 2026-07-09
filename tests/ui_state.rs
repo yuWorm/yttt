@@ -540,6 +540,7 @@ fn root_view_terminal_display_settings_persist() {
     root.set_terminal_line_height(1.2).unwrap();
     root.set_terminal_padding(8.0).unwrap();
     root.set_terminal_scrollback(20000).unwrap();
+    root.set_terminal_show_scrollbar(false).unwrap();
 
     let runtime = &root.theme_runtime().terminal_settings;
     assert_eq!(runtime.font_family, "JetBrains Mono");
@@ -547,6 +548,7 @@ fn root_view_terminal_display_settings_persist() {
     assert_eq!(runtime.line_height, 1.2);
     assert_eq!(runtime.padding, 8.0);
     assert_eq!(runtime.scrollback, 20000);
+    assert!(!runtime.show_scrollbar);
 
     let reloaded = RootView::with_config_paths(paths);
     let terminal = &reloaded.theme_runtime().terminal_settings;
@@ -555,6 +557,7 @@ fn root_view_terminal_display_settings_persist() {
     assert_eq!(terminal.line_height, 1.2);
     assert_eq!(terminal.padding, 8.0);
     assert_eq!(terminal.scrollback, 20000);
+    assert!(!terminal.show_scrollbar);
 }
 
 #[test]

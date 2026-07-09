@@ -10,6 +10,7 @@ use gpui_component::{
 use crate::palette::{ActivePalette, PaletteItem};
 use crate::ui::components::SelectableState;
 use crate::ui::i18n::{UiText, UiTextKey};
+use crate::ui::overlay::capture_overlay_input;
 use crate::ui::palette_surface::{
     PaletteFooterAction, palette_footer_actions, palette_panel_style, palette_row_style,
     palette_scroll_anchor_index,
@@ -71,37 +72,39 @@ where
     let rows = visible_palette_rows(active_palette, items);
     let style = palette_panel_style();
 
-    div()
-        .absolute()
-        .inset_0()
-        .flex()
-        .items_start()
-        .justify_center()
-        .pt_16()
-        .bg(rgba(0x00000066))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .w(style.width)
-                .max_w(style.max_width)
-                .max_h(style.max_height)
-                .rounded_md()
-                .border_1()
-                .border_color(theme.border_strong)
-                .bg(theme.surface)
-                .text_color(theme.text)
-                .overflow_hidden()
-                .child(palette_header(query_input, theme))
-                .child(palette_items(
-                    rows,
-                    ui_text,
-                    scroll_handle,
-                    theme,
-                    on_confirm_item,
-                ))
-                .child(palette_footer(theme)),
-        )
+    capture_overlay_input(
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_start()
+            .justify_center()
+            .pt_16()
+            .bg(rgba(0x00000066))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .w(style.width)
+                    .max_w(style.max_width)
+                    .max_h(style.max_height)
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.border_strong)
+                    .bg(theme.surface)
+                    .text_color(theme.text)
+                    .overflow_hidden()
+                    .child(palette_header(query_input, theme))
+                    .child(palette_items(
+                        rows,
+                        ui_text,
+                        scroll_handle,
+                        theme,
+                        on_confirm_item,
+                    ))
+                    .child(palette_footer(theme)),
+            ),
+    )
 }
 
 fn palette_header(query_input: &Entity<InputState>, theme: WorkbenchTheme) -> Div {

@@ -1,6 +1,6 @@
 use gpui::{Edges, Pixels, Rgba, px, rgb};
 use gpui_component::{ThemeConfig, ThemeConfigColors, ThemeMode};
-use gpui_terminal::{ColorPalette, TerminalConfig};
+use yttt_terminal::{ColorPalette, TerminalConfig};
 
 use crate::config::{
     settings::{AppSettings, TerminalSettings},
@@ -185,6 +185,7 @@ impl ThemeRuntime {
             scrollback: self.terminal_settings.scrollback,
             line_height_multiplier: self.terminal_settings.line_height,
             padding: Edges::all(px(self.terminal_settings.padding)),
+            show_scrollbar: self.terminal_settings.show_scrollbar,
             colors: self.terminal.to_color_palette(),
         }
     }
@@ -225,11 +226,14 @@ impl TerminalTheme {
         let (foreground_r, foreground_g, foreground_b) = color_bytes(self.foreground);
         let cursor = self.cursor.unwrap_or(self.foreground);
         let (cursor_r, cursor_g, cursor_b) = color_bytes(cursor);
+        let selection_background = self.selection_background.unwrap_or(self.background);
+        let (selection_r, selection_g, selection_b) = color_bytes(selection_background);
 
         let mut builder = ColorPalette::builder()
             .background(background_r, background_g, background_b)
             .foreground(foreground_r, foreground_g, foreground_b)
-            .cursor(cursor_r, cursor_g, cursor_b);
+            .cursor(cursor_r, cursor_g, cursor_b)
+            .selection_background(selection_r, selection_g, selection_b);
 
         let (r, g, b) = color_bytes(self.normal.black);
         builder = builder.black(r, g, b);

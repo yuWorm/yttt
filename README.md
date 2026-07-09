@@ -1,7 +1,7 @@
 # yttt
 
-`yttt` is a Rust desktop terminal workbench built with GPUI, `gpui-component`, and
-`gpui-terminal`.
+`yttt` is a Rust desktop terminal workbench built with GPUI, `gpui-component`, and a
+project-owned `yttt-terminal` crate based on `alacritty_terminal`.
 
 The product direction is project-first and terminal-first:
 

@@ -98,6 +98,7 @@ fn terminal_config_uses_runtime_settings_and_colors() {
     runtime.terminal_settings.font_family = "JetBrains Mono".to_string();
     runtime.terminal_settings.font_size = 15.0;
     runtime.terminal_settings.padding = 8.0;
+    runtime.terminal_settings.show_scrollbar = false;
 
     let config = runtime.to_terminal_config();
 
@@ -105,6 +106,7 @@ fn terminal_config_uses_runtime_settings_and_colors() {
     assert_eq!(config.font_size, gpui::px(15.0));
     assert_eq!(config.padding.left, gpui::px(8.0));
     assert_eq!(config.scrollback, 10000);
+    assert!(!config.show_scrollbar);
 }
 
 #[test]
@@ -116,6 +118,6 @@ fn terminal_config_uses_upstream_default_font_when_setting_is_empty() {
 
     assert_eq!(
         config.font_family,
-        gpui_terminal::TerminalConfig::default().font_family
+        yttt_terminal::TerminalConfig::default().font_family
     );
 }

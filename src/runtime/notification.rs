@@ -1,4 +1,4 @@
-use crate::runtime::terminal::ExitReason;
+use yttt_terminal::ExitReason;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NotificationKind {

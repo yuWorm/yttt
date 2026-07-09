@@ -39,6 +39,7 @@ fn missing_settings_file_writes_defaults() {
     assert_eq!(loaded.settings.terminal.padding, 6.0);
     assert_eq!(loaded.settings.terminal.scrollback, 10000);
     assert!(loaded.settings.terminal.close_on_exit);
+    assert!(loaded.settings.terminal.show_scrollbar);
     assert!(paths.settings_file().exists());
     assert!(loaded.warnings.is_empty());
 }
@@ -123,12 +124,14 @@ fn settings_persist_language_and_close_on_exit() {
     let mut settings = AppSettings::default();
     settings.general.language = LanguageSetting::Chinese;
     settings.terminal.close_on_exit = false;
+    settings.terminal.show_scrollbar = false;
 
     save_settings(&paths, &settings).unwrap();
     let loaded = load_or_create_settings(&paths).unwrap();
 
     assert_eq!(loaded.settings.general.language, LanguageSetting::Chinese);
     assert!(!loaded.settings.terminal.close_on_exit);
+    assert!(!loaded.settings.terminal.show_scrollbar);
 }
 
 #[test]

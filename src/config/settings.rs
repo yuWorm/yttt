@@ -90,6 +90,7 @@ pub struct TerminalSettings {
     pub padding: f32,
     pub scrollback: usize,
     pub close_on_exit: bool,
+    pub show_scrollbar: bool,
 }
 
 impl Default for TerminalSettings {
@@ -102,6 +103,7 @@ impl Default for TerminalSettings {
             padding: 6.0,
             scrollback: 10000,
             close_on_exit: true,
+            show_scrollbar: true,
         }
     }
 }

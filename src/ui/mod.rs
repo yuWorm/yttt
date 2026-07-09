@@ -9,6 +9,7 @@ pub mod input_owner;
 pub mod keybindings_editor;
 #[cfg(target_os = "macos")]
 pub mod macos;
+pub mod overlay;
 pub mod palette;
 pub mod palette_surface;
 pub mod primitives;

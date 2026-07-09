@@ -148,6 +148,10 @@ pub fn settings_rows_for_group(group: SettingsGroupId) -> Vec<SettingsRowMeta> {
                 description: "Number of terminal lines kept in memory.",
             },
             SettingsRowMeta {
+                title: "Scrollbar",
+                description: "Show a thin scrollback indicator in terminal panes.",
+            },
+            SettingsRowMeta {
                 title: "Close pane on exit",
                 description: "Automatically close terminal panes when their process exits.",
             },

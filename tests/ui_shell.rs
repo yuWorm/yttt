@@ -24,7 +24,10 @@ use yttt::ui::tabs::{
 use yttt::ui::terminal_pane::TerminalPaneView;
 use yttt::ui::theme::WorkbenchTheme;
 use yttt::ui::titlebar::TitlebarInfo;
-use yttt::{model::layout::SplitDirection, ui::root::RootView};
+use yttt::{
+    model::layout::SplitDirection,
+    ui::root::{RootView, overlay_input_capture_policy},
+};
 
 #[test]
 fn workbench_theme_exposes_terminal_first_tokens() {
@@ -268,11 +271,21 @@ fn settings_rows_are_grouped_by_user_facing_sections() {
             .iter()
             .any(|row| row.title == "Close pane on exit")
     );
+    assert!(terminal_rows.iter().any(|row| row.title == "Scrollbar"));
     assert!(
         layout_rows
             .iter()
             .any(|row| row.title == "Edit layout TOML")
     );
+}
+
+#[test]
+fn floating_layers_capture_all_direct_input_events() {
+    let policy = overlay_input_capture_policy();
+
+    assert!(policy.keyboard);
+    assert!(policy.mouse);
+    assert!(policy.scroll);
 }
 
 #[test]
