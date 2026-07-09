@@ -6,9 +6,10 @@ use gpui_component::{Icon, IconName};
 
 use crate::model::workspace::Workspace;
 use crate::ui::agent_status::{agent_status_label, project_agent_status};
-use crate::ui::components::SelectableState;
+use crate::ui::components::{SelectableState, workbench_icon_button};
 use crate::ui::{
     primitives::{
+        icon_button::YtttIconButtonKind,
         row::{YtttRowKind, yttt_row_style},
         sidebar::yttt_sidebar_style,
     },
@@ -142,19 +143,13 @@ where
         header = header.child(div().px_1().child("Projects"));
     }
 
-    header.child(
-        div()
-            .id("sidebar-toggle")
-            .flex()
-            .items_center()
-            .justify_center()
-            .size_6()
-            .rounded_sm()
-            .text_color(theme.text_subtle)
-            .hover(move |this| this.bg(theme.hover_surface).text_color(theme.text))
-            .on_click(on_toggle_sidebar)
-            .child(Icon::new(icon).size_3()),
-    )
+    header.child(workbench_icon_button(
+        "sidebar-toggle",
+        icon,
+        YtttIconButtonKind::SidebarHeader,
+        theme,
+        on_toggle_sidebar,
+    ))
 }
 
 fn project_sidebar_item<H>(

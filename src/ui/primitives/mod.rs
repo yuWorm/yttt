@@ -1,5 +1,6 @@
 pub mod button;
 pub mod dialog;
+pub mod icon_button;
 pub mod input;
 pub mod panel;
 pub mod row;

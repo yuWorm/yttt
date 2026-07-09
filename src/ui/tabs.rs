@@ -8,8 +8,9 @@ use crate::{
     model::workspace::{TabStartState, Workspace},
     ui::{
         agent_status::{agent_status_label, tab_agent_status},
-        components::SelectableState,
+        components::{SelectableState, workbench_icon_button},
         primitives::{
+            icon_button::YtttIconButtonKind,
             row::{YtttRowKind, yttt_row_style},
             status::{YtttStatusTone, yttt_status_dot_style},
             tabs::yttt_tabbar_style,
@@ -254,19 +255,15 @@ fn tab_close_button<CloseH>(
 where
     CloseH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    div()
-        .id(("project-tab-close", index))
-        .flex()
-        .items_center()
-        .justify_center()
-        .size_4()
-        .rounded_sm()
-        .text_color(theme.text_subtle)
-        .invisible()
-        .group_hover(group_name, |this| this.visible())
-        .hover(move |this| this.bg(theme.hover_surface).text_color(theme.text))
-        .on_click(on_close_tab)
-        .child(Icon::new(IconName::Close).size_3())
+    workbench_icon_button(
+        ("project-tab-close", index),
+        IconName::Close,
+        YtttIconButtonKind::TabClose,
+        theme,
+        on_close_tab,
+    )
+    .invisible()
+    .group_hover(group_name, |this| this.visible())
 }
 
 fn tab_toolbar<NewH, SplitVH, SplitHH>(
@@ -323,18 +320,7 @@ fn tab_toolbar_button<H>(
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    div()
-        .id(id)
-        .flex()
-        .items_center()
-        .justify_center()
-        .size_7()
-        .border_l_1()
-        .border_color(theme.border)
-        .text_color(theme.text_muted)
-        .hover(move |this| this.bg(theme.hover_surface).text_color(theme.text))
-        .on_click(on_click)
-        .child(Icon::new(icon).size_3())
+    workbench_icon_button(id, icon, YtttIconButtonKind::Toolbar, theme, on_click)
 }
 
 fn tab_start_state_label(state: TabStartState) -> &'static str {

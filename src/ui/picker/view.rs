@@ -8,11 +8,11 @@ use gpui_component::{
 };
 
 use crate::ui::{
-    components::SelectableState,
+    components::{SelectableState, workbench_palette_item},
     i18n::{UiText, UiTextKey},
     overlay::capture_overlay_input,
     palette_surface::{
-        PaletteFooterAction, palette_footer_actions, palette_panel_style, palette_row_style,
+        PaletteFooterAction, palette_footer_actions, palette_panel_style,
         palette_scroll_anchor_index,
     },
     picker::PickerItem,
@@ -154,50 +154,16 @@ where
     } else {
         row.item.disabled_reason.clone().unwrap_or_default()
     };
-    let style = palette_row_style(row.state, row.item.enabled, theme);
-
-    div()
-        .id(("palette-item", index))
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap_4()
-        .h(style.height)
-        .rounded(style.radius)
-        .border(style.border_width)
-        .border_color(style.border)
-        .bg(style.background)
-        .px(style.padding_x)
-        .hover(move |this| this.bg(style.hover_background))
-        .on_click(on_click)
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .overflow_hidden()
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(style.title)
-                        .truncate()
-                        .child(row.item.title),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(style.subtitle)
-                        .truncate()
-                        .child(row.item.subtitle.unwrap_or_default()),
-                ),
-        )
-        .child(
-            div()
-                .flex_none()
-                .text_xs()
-                .text_color(style.status)
-                .child(status),
-        )
+    workbench_palette_item(
+        ("palette-item", index),
+        row.item.title,
+        row.item.subtitle.unwrap_or_default(),
+        status,
+        row.state,
+        row.item.enabled,
+        theme,
+        on_click,
+    )
 }
 
 fn picker_footer(theme: WorkbenchTheme) -> Div {

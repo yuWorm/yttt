@@ -16,6 +16,7 @@ use yttt::ui::palette_surface::{
 use yttt::ui::primitives::{
     button::{YtttButtonVariant, yttt_button_style},
     dialog::yttt_dialog_style,
+    icon_button::{YtttIconButtonKind, yttt_icon_button_style},
     input::{YtttInputKind, yttt_input_style},
     panel::{YtttPanelKind, yttt_panel_style},
     row::{YtttRowKind, yttt_row_style},
@@ -447,6 +448,26 @@ fn yttt_button_style_keeps_primary_muted_and_compact() {
     assert_eq!(style.radius, gpui::px(6.0));
     assert_eq!(style.background, theme.active_surface);
     assert_ne!(style.background, gpui::rgb(0xffffff));
+}
+
+#[test]
+fn yttt_icon_button_style_covers_toolbar_sidebar_and_close_density() {
+    let theme = WorkbenchTheme::dark();
+    let toolbar = yttt_icon_button_style(YtttIconButtonKind::Toolbar, theme);
+    let sidebar = yttt_icon_button_style(YtttIconButtonKind::SidebarHeader, theme);
+    let close = yttt_icon_button_style(YtttIconButtonKind::TabClose, theme);
+
+    assert_eq!(toolbar.size, gpui::px(28.0));
+    assert_eq!(toolbar.icon_size, gpui::px(12.0));
+    assert_eq!(toolbar.border_width, gpui::px(1.0));
+    assert_eq!(toolbar.border, theme.border);
+    assert_eq!(toolbar.text, theme.text_muted);
+    assert_eq!(toolbar.hover_text, theme.text);
+    assert_eq!(sidebar.size, gpui::px(24.0));
+    assert_eq!(sidebar.border_width, gpui::px(0.0));
+    assert_eq!(sidebar.text, theme.text_subtle);
+    assert_eq!(close.size, gpui::px(16.0));
+    assert_eq!(close.radius, gpui::px(4.0));
 }
 
 #[test]
