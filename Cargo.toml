@@ -8,6 +8,7 @@ anyhow = "1"
 gpui = "0.2.2"
 gpui-component = { version = "0.5.1", features = ["tree-sitter-languages"] }
 gpui-component-assets = "0.5"
+tree-sitter-toml-ng = "0.7"
 yttt-terminal = { path = "crates/yttt-terminal" }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"

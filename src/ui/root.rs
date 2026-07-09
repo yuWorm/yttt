@@ -90,8 +90,12 @@ use crate::{
         },
         components::{
             ActionEmphasis, workbench_action_button, workbench_agent_notification,
-            workbench_inline_notification, workbench_settings_row, workbench_status_notification,
-            workbench_switch,
+            workbench_inline_notification, workbench_keybinding_badge, workbench_settings_row,
+            workbench_status_notification, workbench_switch,
+        },
+        editor::{
+            CodeEditorConfig, CodeEditorState, EditorDiagnostic, EditorDiagnosticSeverity,
+            code_editor_input_state,
         },
         font_options::{
             terminal_font_family_option_for_setting, terminal_font_family_options_from_system,
@@ -103,6 +107,7 @@ use crate::{
             TerminalInputGate,
         },
         interaction::key_dispatch::workspace_command_for_keystroke,
+        keybinding_display::primary_display_keybinding_for_current_platform,
         keybindings_editor::{KeybindingEditError, KeybindingRow, KeybindingsEditorState},
         overlay::capture_overlay_input,
         palette::palette_overlay,
@@ -174,7 +179,7 @@ pub struct RootView {
     settings_font_family_select_subscription: Option<Subscription>,
     settings_number_inputs: HashMap<SettingsNumberField, Entity<InputState>>,
     settings_number_input_subscriptions: HashMap<SettingsNumberField, Vec<Subscription>>,
-    layout_toml_editor: Option<LayoutTomlEditorState>,
+    layout_toml_editor: Option<CodeEditorState>,
     layout_toml_input: Option<Entity<InputState>>,
     layout_toml_input_subscription: Option<Subscription>,
     layout_toml_input_needs_focus: bool,
@@ -244,13 +249,6 @@ struct PendingTabRename {
 struct PendingKeybindingEdit {
     command: CommandId,
     value: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct LayoutTomlEditorState {
-    path: PathBuf,
-    value: String,
-    error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -866,21 +864,26 @@ impl RootView {
     }
 
     pub fn layout_toml_editor_path(&self) -> Option<&Path> {
-        self.layout_toml_editor
-            .as_ref()
-            .map(|editor| editor.path.as_path())
+        self.layout_toml_editor.as_ref().map(|editor| editor.path())
     }
 
     pub fn layout_toml_editor_value(&self) -> Option<&str> {
         self.layout_toml_editor
             .as_ref()
-            .map(|editor| editor.value.as_str())
+            .map(|editor| editor.value())
     }
 
     pub fn visible_layout_toml_editor_error(&self) -> Option<&str> {
         self.layout_toml_editor
             .as_ref()
-            .and_then(|editor| editor.error.as_deref())
+            .and_then(|editor| editor.error())
+    }
+
+    pub fn visible_layout_toml_editor_diagnostics(&self) -> Vec<EditorDiagnostic> {
+        self.layout_toml_editor
+            .as_ref()
+            .map(|editor| editor.diagnostics().to_vec())
+            .unwrap_or_default()
     }
 
     pub fn open_layout_toml_editor(&mut self) -> Result<(), RootViewError> {
@@ -892,11 +895,14 @@ impl RootView {
             ))
         })?;
 
-        self.layout_toml_editor = Some(LayoutTomlEditorState {
+        self.layout_toml_editor = Some(CodeEditorState::new(
             path,
+            CodeEditorConfig::new("Edit layout TOML", "toml")
+                .placeholder_text("Edit layout TOML...")
+                .with_rows(24)
+                .with_soft_wrap(false),
             value,
-            error: None,
-        });
+        ));
         self.reset_layout_toml_input();
         self.layout_toml_input_needs_focus = true;
         self.load_error = None;
@@ -906,8 +912,7 @@ impl RootView {
 
     pub fn set_layout_toml_editor_value(&mut self, value: impl Into<String>) {
         if let Some(editor) = &mut self.layout_toml_editor {
-            editor.value = value.into();
-            editor.error = None;
+            editor.set_value(value);
             self.reset_layout_toml_input();
         }
     }
@@ -917,19 +922,22 @@ impl RootView {
             return Ok(());
         };
 
-        let layout = match toml::from_str::<ProjectLayout>(&editor.value) {
+        let layout = match toml::from_str::<ProjectLayout>(editor.value()) {
             Ok(layout) => layout,
             Err(error) => {
-                self.set_layout_toml_editor_error(format!("failed to parse layout TOML: {error}"));
+                self.set_layout_toml_editor_error(
+                    "toml",
+                    format!("failed to parse layout TOML: {error}"),
+                );
                 return Ok(());
             }
         };
         if let Err(error) = layout.validate() {
-            self.set_layout_toml_editor_error(format!("invalid layout TOML: {error}"));
+            self.set_layout_toml_editor_error("layout", format!("invalid layout TOML: {error}"));
             return Ok(());
         }
 
-        if let Some(parent) = editor.path.parent() {
+        if let Some(parent) = editor.path().parent() {
             fs::create_dir_all(parent).map_err(|source| {
                 RootViewError::LayoutTomlEditor(format!(
                     "failed to create layout directory {}: {source}",
@@ -937,10 +945,10 @@ impl RootView {
                 ))
             })?;
         }
-        fs::write(&editor.path, editor.value).map_err(|source| {
+        fs::write(editor.path(), editor.value()).map_err(|source| {
             RootViewError::LayoutTomlEditor(format!(
                 "failed to write layout TOML at {}: {source}",
-                editor.path.display()
+                editor.path().display()
             ))
         })?;
 
@@ -1470,11 +1478,7 @@ impl RootView {
 
     fn palette_items(&self, kind: PaletteKind) -> Vec<PaletteItem> {
         match kind {
-            PaletteKind::Command => command_palette_items_with_text(
-                &self.command_registry,
-                CommandPaletteContext::from_workspace(&self.workspace),
-                &self.ui_text,
-            ),
+            PaletteKind::Command => self.command_palette_items(),
             PaletteKind::Project => project_palette_items_with_text(
                 &self.workspace,
                 &self.recent_projects,
@@ -1487,6 +1491,26 @@ impl RootView {
                 pane_palette_items_with_text(&self.workspace, &self.ui_text).unwrap_or_default()
             }
         }
+    }
+
+    fn command_palette_items(&self) -> Vec<PaletteItem> {
+        let mut items = command_palette_items_with_text(
+            &self.command_registry,
+            CommandPaletteContext::from_workspace(&self.workspace),
+            &self.ui_text,
+        );
+
+        for item in &mut items {
+            item.keybinding = self.display_keybinding_for_command(item.command);
+        }
+
+        items
+    }
+
+    fn display_keybinding_for_command(&self, command: CommandId) -> Option<String> {
+        primary_display_keybinding_for_current_platform(
+            &self.keybindings_editor.command_keys(command),
+        )
     }
 
     fn request_close_selected_project(&mut self) -> Result<CloseProjectDecision, RootViewError> {
@@ -1585,9 +1609,14 @@ impl RootView {
         save_local_layout(&self.config_paths, &project_path, &layout).map_err(RootViewError::from)
     }
 
-    fn set_layout_toml_editor_error(&mut self, error: String) {
+    fn set_layout_toml_editor_error(&mut self, source: &'static str, error: String) {
         if let Some(editor) = &mut self.layout_toml_editor {
-            editor.error = Some(error);
+            editor.set_error(error.clone());
+            editor.set_diagnostics(vec![EditorDiagnostic::new(
+                EditorDiagnosticSeverity::Error,
+                source,
+                error,
+            )]);
         }
     }
 
@@ -2225,15 +2254,7 @@ impl RootView {
         let input = if let Some(input) = &self.layout_toml_input {
             input.clone()
         } else {
-            let value = editor.value.clone();
-            let input = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("Edit layout TOML...")
-                    .default_value(value)
-                    .code_editor("toml")
-                    .rows(24)
-                    .soft_wrap(false)
-            });
+            let input = cx.new(|cx| code_editor_input_state(window, cx, editor));
             let subscription = cx.subscribe_in(&input, window, Self::on_layout_toml_input_event);
             self.layout_toml_input = Some(input.clone());
             self.layout_toml_input_subscription = Some(subscription);
@@ -2808,8 +2829,7 @@ impl RootView {
         match event {
             InputEvent::Change => {
                 if let Some(editor) = &mut self.layout_toml_editor {
-                    editor.value = input.read(cx).value().to_string();
-                    editor.error = None;
+                    editor.set_value(input.read(cx).value().to_string());
                     cx.notify();
                 }
             }
@@ -3533,11 +3553,13 @@ fn layout_toml_editor_overlay(
     cx: &mut Context<RootView>,
 ) -> Div {
     let theme = root.theme_runtime.ui;
+    let editor_theme = root.theme_runtime.editor;
     let Some(editor) = root.layout_toml_editor.as_ref() else {
         return div();
     };
-    let path = editor.path.display().to_string();
-    let error = editor.error.clone();
+    let title = editor.config().title().to_string();
+    let path = editor.path().display().to_string();
+    let error = editor.error().map(ToOwned::to_owned);
 
     capture_overlay_input(
         div()
@@ -3580,7 +3602,7 @@ fn layout_toml_editor_overlay(
                                         div()
                                             .text_lg()
                                             .font_weight(FontWeight::SEMIBOLD)
-                                            .child("Edit layout TOML"),
+                                            .child(title),
                                     )
                                     .child(
                                         div()
@@ -3617,7 +3639,7 @@ fn layout_toml_editor_overlay(
                                     .rounded_sm()
                                     .border_1()
                                     .border_color(theme.border)
-                                    .bg(theme.terminal_background)
+                                    .bg(editor_theme.background)
                                     .overflow_hidden()
                                     .child(
                                         Input::new(input)
@@ -4236,11 +4258,7 @@ fn settings_keybinding_rows(
 
     for row in root.visible_keybinding_rows() {
         let command = row.command;
-        let keys = if row.keys.is_empty() {
-            text.get(UiTextKey::SettingsUnbound).to_string()
-        } else {
-            row.keys.join(", ")
-        };
+        let keys = row.display_keys();
         let title = row.title;
         let description = row.command_id;
         let title_text = if row.has_conflict {
@@ -4287,7 +4305,11 @@ fn settings_keybinding_rows(
                         .justify_end()
                         .gap_1()
                         .flex_none()
-                        .child(settings_value(keys, theme))
+                        .child(settings_keybinding_value(
+                            keys,
+                            text.get(UiTextKey::SettingsUnbound),
+                            theme,
+                        ))
                         .child(settings_button(
                             format!("settings-keybinding-edit-{}", row.command_id),
                             text.get(UiTextKey::SettingsEdit),
@@ -4448,6 +4470,22 @@ fn settings_value(value: impl Into<String>, theme: WorkbenchTheme) -> Div {
         .text_xs()
         .text_color(theme.text_muted)
         .child(value.into())
+}
+
+fn settings_keybinding_value(
+    keybindings: Vec<String>,
+    unbound_label: impl Into<String>,
+    theme: WorkbenchTheme,
+) -> Div {
+    if keybindings.is_empty() {
+        return div().child(settings_value(unbound_label, theme));
+    }
+
+    let mut value = div().flex().items_center().justify_end().gap_1().max_w_96();
+    for keybinding in keybindings {
+        value = value.child(workbench_keybinding_badge(keybinding, theme));
+    }
+    value
 }
 
 fn error_notification_overlay(item: ToastItem, theme: WorkbenchTheme) -> Div {

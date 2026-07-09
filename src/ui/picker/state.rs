@@ -35,6 +35,10 @@ impl PickerState {
                         .status
                         .as_deref()
                         .is_some_and(|status| status.to_lowercase().contains(&query))
+                    || item
+                        .keybinding
+                        .as_deref()
+                        .is_some_and(|keybinding| keybinding.to_lowercase().contains(&query))
             })
             .collect()
     }

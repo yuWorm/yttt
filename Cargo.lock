@@ -7943,6 +7943,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "toml 0.8.23",
+ "tree-sitter-toml-ng",
  "uuid",
  "yttt-terminal",
 ]

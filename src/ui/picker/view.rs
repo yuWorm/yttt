@@ -159,6 +159,7 @@ where
         row.item.title,
         row.item.subtitle.unwrap_or_default(),
         status,
+        row.item.keybinding,
         row.state,
         row.item.enabled,
         theme,

@@ -30,7 +30,7 @@ impl PickerItem {
             title: item.title.clone(),
             subtitle: item.subtitle.clone(),
             status: item.status.clone(),
-            keybinding: None,
+            keybinding: item.keybinding.clone(),
             enabled: item.enabled,
             disabled_reason: item.disabled_reason.clone(),
         }

@@ -16,6 +16,7 @@ pub struct PaletteRow {
     pub title: String,
     pub subtitle: Option<String>,
     pub status: Option<String>,
+    pub keybinding: Option<String>,
     pub state: SelectableState,
     pub enabled: bool,
     pub disabled_reason: Option<String>,
@@ -44,6 +45,7 @@ pub fn visible_palette_rows(
             title: item.title.clone(),
             subtitle: item.subtitle.clone(),
             status: item.status.clone(),
+            keybinding: item.keybinding.clone(),
             state: if Some(index) == selected_index {
                 SelectableState::Active
             } else {

@@ -240,6 +240,20 @@ fn picker_state_filters_items_case_insensitively() {
 }
 
 #[test]
+fn picker_state_filters_items_by_keybinding() {
+    let mut state = PickerState::new();
+    state.set_query("cmd-p");
+    let mut open = PickerItem::new("command_palette.open", "Open Command Palette");
+    open.keybinding = Some("cmd-p".to_string());
+    let items = vec![PickerItem::new("project.open", "Open Project"), open];
+
+    let rows = state.filtered_items(&items);
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "command_palette.open");
+}
+
+#[test]
 fn picker_state_clamps_selected_index_to_filtered_rows() {
     let mut state = PickerState::new();
     state.selected_index = 99;
@@ -260,6 +274,7 @@ fn picker_item_preserves_disabled_reason_from_palette_item() {
         title: "New Tab".to_string(),
         subtitle: Some("Create tab".to_string()),
         status: None,
+        keybinding: Some("cmd-t".to_string()),
         command: CommandId::TabNew,
         enabled: false,
         disabled_reason: Some("Open a project first".to_string()),
@@ -271,6 +286,7 @@ fn picker_item_preserves_disabled_reason_from_palette_item() {
         picker.disabled_reason.as_deref(),
         Some("Open a project first")
     );
+    assert_eq!(picker.keybinding.as_deref(), Some("cmd-t"));
     assert!(!picker.enabled);
 }
 
@@ -285,6 +301,7 @@ fn visible_palette_rows_preserve_active_selection_after_picker_migration() {
             title: "Open Project".to_string(),
             subtitle: Some("Choose a project directory".to_string()),
             status: None,
+            keybinding: Some("cmd-o".to_string()),
             command: CommandId::ProjectOpen,
             enabled: true,
             disabled_reason: None,
@@ -294,6 +311,7 @@ fn visible_palette_rows_preserve_active_selection_after_picker_migration() {
             title: "Close Project".to_string(),
             subtitle: Some("Close the selected project".to_string()),
             status: None,
+            keybinding: None,
             command: CommandId::ProjectClose,
             enabled: true,
             disabled_reason: None,
@@ -304,6 +322,7 @@ fn visible_palette_rows_preserve_active_selection_after_picker_migration() {
 
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[1].state, SelectableState::Active);
+    assert_eq!(rows[0].keybinding.as_deref(), Some("cmd-o"));
 }
 
 #[test]
@@ -321,6 +340,7 @@ fn palette_picker_delegate_exposes_picker_items_for_all_palette_kinds() {
                 title: "Item".to_string(),
                 subtitle: None,
                 status: None,
+                keybinding: Some("cmd-p".to_string()),
                 command: CommandId::CommandPaletteOpen,
                 enabled: true,
                 disabled_reason: None,
@@ -329,6 +349,7 @@ fn palette_picker_delegate_exposes_picker_items_for_all_palette_kinds() {
 
         assert_eq!(delegate.kind(), kind);
         assert_eq!(delegate.items()[0].id, "item");
+        assert_eq!(delegate.items()[0].keybinding.as_deref(), Some("cmd-p"));
     }
 }
 
@@ -339,6 +360,7 @@ fn sample_palette_items() -> Vec<PaletteItem> {
             title: "Server".to_string(),
             subtitle: Some("Dev".to_string()),
             status: Some("running".to_string()),
+            keybinding: None,
             command: CommandId::PanePalette,
             enabled: true,
             disabled_reason: None,
@@ -348,6 +370,7 @@ fn sample_palette_items() -> Vec<PaletteItem> {
             title: "Shell".to_string(),
             subtitle: Some("Dev".to_string()),
             status: Some("idle".to_string()),
+            keybinding: None,
             command: CommandId::PanePalette,
             enabled: true,
             disabled_reason: None,
@@ -357,6 +380,7 @@ fn sample_palette_items() -> Vec<PaletteItem> {
             title: "Codex Agent".to_string(),
             subtitle: Some("Agent".to_string()),
             status: Some("lazy".to_string()),
+            keybinding: None,
             command: CommandId::TabPalette,
             enabled: true,
             disabled_reason: None,

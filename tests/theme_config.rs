@@ -1,3 +1,4 @@
+use gpui::rgb;
 use tempfile::tempdir;
 use yttt::config::{
     paths::AppConfigPaths,
@@ -108,6 +109,86 @@ fn workbench_theme_maps_to_gpui_component_theme_config() {
             .as_deref(),
         Some("#e6e8eb")
     );
+}
+
+#[test]
+fn builtin_theme_maps_editor_highlight_theme() {
+    let runtime = ThemeRuntime::default();
+    let config = runtime.to_gpui_component_theme_config();
+    let highlight = config
+        .highlight
+        .expect("builtin theme should include editor highlight theme");
+
+    assert_eq!(
+        highlight.editor_background,
+        Some(gpui::Hsla::from(rgb(0x1b1e23)))
+    );
+    assert_eq!(
+        highlight.editor_foreground,
+        Some(gpui::Hsla::from(rgb(0xe6e8eb)))
+    );
+    assert!(highlight.syntax.style("keyword").is_some());
+    assert!(highlight.syntax.style("string").is_some());
+}
+
+#[test]
+fn theme_loader_reads_editor_highlight_theme_from_toml() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    std::fs::create_dir_all(paths.themes_dir()).unwrap();
+    std::fs::write(
+        paths.themes_dir().join("editor-custom.toml"),
+        r##"
+name = "editor-custom"
+mode = "dark"
+
+[editor]
+background = "#111111"
+foreground = "#eeeeee"
+active_line = "#222222"
+line_number = "#333333"
+active_line_number = "#dddddd"
+
+[editor.syntax]
+keyword = "#ff0000"
+string = "#00ff00"
+comment = "#555555"
+"##,
+    )
+    .unwrap();
+
+    let loaded = load_theme_store(&paths).unwrap();
+    let mut settings = AppSettings::default();
+    settings.theme.name = "editor-custom".to_string();
+    let runtime = ThemeRuntime::resolve(&settings, &loaded.store);
+    let config = runtime.to_gpui_component_theme_config();
+    let highlight = config
+        .highlight
+        .expect("custom theme should include editor highlight theme");
+
+    assert_eq!(
+        highlight.editor_background,
+        Some(gpui::Hsla::from(rgb(0x111111)))
+    );
+    assert_eq!(
+        highlight.editor_active_line,
+        Some(gpui::Hsla::from(rgb(0x222222)))
+    );
+    assert_eq!(
+        highlight
+            .syntax
+            .style("keyword")
+            .and_then(|style| style.color),
+        Some(gpui::Hsla::from(rgb(0xff0000)))
+    );
+    assert_eq!(
+        highlight
+            .syntax
+            .style("string")
+            .and_then(|style| style.color),
+        Some(gpui::Hsla::from(rgb(0x00ff00)))
+    );
+    assert!(loaded.warnings.is_empty());
 }
 
 #[test]

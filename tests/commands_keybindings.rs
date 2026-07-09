@@ -15,6 +15,7 @@ use yttt::model::workspace::{TabStartState, Workspace};
 use yttt::ui::actions::{
     app_startup_keybindings, default_ui_keybinding_specs, runtime_command_for_keystroke,
 };
+use yttt::ui::keybinding_display::{KeybindingDisplayPlatform, display_keybindings_for_platform};
 use yttt::ui::keybindings_editor::{KeybindingEditError, KeybindingsEditorState};
 use yttt::ui::split_view::visible_pane_titles;
 
@@ -100,6 +101,35 @@ fn default_keybindings_include_settings_shortcuts() {
     assert_has_config_binding(&config, "ctrl-,", "settings.open");
     assert_has_ui_binding("cmd-,", "settings.open");
     assert_has_ui_binding("ctrl-,", "settings.open");
+}
+
+#[test]
+fn keybinding_display_filters_shortcuts_by_platform() {
+    let keys = vec!["cmd-p".to_string(), "ctrl-p".to_string()];
+
+    assert_eq!(
+        display_keybindings_for_platform(&keys, KeybindingDisplayPlatform::Mac),
+        vec!["cmd-p".to_string()]
+    );
+    assert_eq!(
+        display_keybindings_for_platform(&keys, KeybindingDisplayPlatform::Other),
+        vec!["ctrl-p".to_string()]
+    );
+}
+
+#[test]
+fn keybinding_display_keeps_neutral_or_fallback_shortcuts() {
+    let neutral = vec!["enter".to_string(), "escape".to_string()];
+    assert_eq!(
+        display_keybindings_for_platform(&neutral, KeybindingDisplayPlatform::Mac),
+        neutral
+    );
+
+    let fallback = vec!["cmd-p".to_string()];
+    assert_eq!(
+        display_keybindings_for_platform(&fallback, KeybindingDisplayPlatform::Other),
+        fallback
+    );
 }
 
 #[test]
@@ -297,6 +327,11 @@ fn keybindings_editor_lists_commands_with_current_keys() {
     assert_eq!(row.title, "Open Command Palette");
     assert!(row.keys.contains(&"cmd-p".to_string()));
     assert!(row.keys.contains(&"ctrl-p".to_string()));
+    if cfg!(target_os = "macos") {
+        assert_eq!(row.display_keys(), vec!["cmd-p".to_string()]);
+    } else {
+        assert_eq!(row.display_keys(), vec!["ctrl-p".to_string()]);
+    }
 }
 
 #[test]

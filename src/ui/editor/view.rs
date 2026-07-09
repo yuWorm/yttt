@@ -1,0 +1,18 @@
+use gpui::{Context, Window};
+use gpui_component::input::InputState;
+
+use super::CodeEditorState;
+
+pub fn code_editor_input_state(
+    window: &mut Window,
+    cx: &mut Context<InputState>,
+    editor: &CodeEditorState,
+) -> InputState {
+    InputState::new(window, cx)
+        .placeholder(editor.config().placeholder().to_string())
+        .default_value(editor.value().to_string())
+        .code_editor(editor.language().to_string())
+        .line_number(editor.config().line_number())
+        .rows(editor.config().rows())
+        .soft_wrap(editor.config().soft_wrap())
+}

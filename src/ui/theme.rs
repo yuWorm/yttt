@@ -1,5 +1,8 @@
 use gpui::{Edges, Pixels, Rgba, px, rgb};
-use gpui_component::{ThemeConfig, ThemeConfigColors, ThemeMode};
+use gpui_component::{
+    ThemeConfig, ThemeConfigColors, ThemeMode,
+    highlighter::{HighlightThemeStyle, SyntaxColors, ThemeStyle},
+};
 use yttt_terminal::{ColorPalette, TerminalConfig};
 
 use crate::config::{
@@ -71,6 +74,7 @@ pub struct AppTheme {
     pub name: String,
     pub mode: ThemeMode,
     pub ui: WorkbenchTheme,
+    pub editor: EditorTheme,
     pub terminal: TerminalTheme,
 }
 
@@ -80,6 +84,7 @@ impl AppTheme {
         Self {
             name: "yttt-dark".to_string(),
             mode: ThemeMode::Dark,
+            editor: EditorTheme::from_workbench_theme(ui),
             terminal: TerminalTheme::from_workbench_theme(ui),
             ui,
         }
@@ -91,6 +96,7 @@ pub struct ThemeRuntime {
     pub theme_name: String,
     pub mode: ThemeMode,
     pub ui: WorkbenchTheme,
+    pub editor: EditorTheme,
     pub terminal: TerminalTheme,
     pub terminal_settings: TerminalSettings,
 }
@@ -114,6 +120,7 @@ impl ThemeRuntime {
             theme_name: selected.name,
             mode: selected.mode,
             ui: selected.ui,
+            editor: selected.editor,
             terminal,
             terminal_settings: settings.terminal.clone(),
         }
@@ -168,6 +175,7 @@ impl ThemeRuntime {
         config.radius_lg = Some(8);
         config.shadow = Some(false);
         config.colors = colors;
+        config.highlight = Some(self.editor.to_highlight_theme_style());
         config
     }
 
@@ -196,6 +204,104 @@ impl ThemeRuntime {
 impl Default for ThemeRuntime {
     fn default() -> Self {
         Self::resolve(&AppSettings::default(), &ThemeStore::builtin())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EditorTheme {
+    pub background: Rgba,
+    pub foreground: Rgba,
+    pub active_line: Rgba,
+    pub line_number: Rgba,
+    pub active_line_number: Rgba,
+    pub syntax: EditorSyntaxTheme,
+}
+
+impl EditorTheme {
+    pub fn from_workbench_theme(theme: WorkbenchTheme) -> Self {
+        Self {
+            background: theme.terminal_background,
+            foreground: theme.text,
+            active_line: theme.surface,
+            line_number: theme.text_subtle,
+            active_line_number: theme.text_muted,
+            syntax: EditorSyntaxTheme::dark(),
+        }
+    }
+
+    pub fn to_highlight_theme_style(self) -> HighlightThemeStyle {
+        let mut syntax = SyntaxColors::default();
+        syntax.boolean = Some(theme_style(self.syntax.boolean));
+        syntax.comment = Some(theme_style(self.syntax.comment));
+        syntax.comment_doc = Some(theme_style(self.syntax.comment_doc));
+        syntax.constant = Some(theme_style(self.syntax.constant));
+        syntax.constructor = Some(theme_style(self.syntax.constructor));
+        syntax.function = Some(theme_style(self.syntax.function));
+        syntax.keyword = Some(theme_style(self.syntax.keyword));
+        syntax.number = Some(theme_style(self.syntax.number));
+        syntax.operator = Some(theme_style(self.syntax.operator));
+        syntax.property = Some(theme_style(self.syntax.property));
+        syntax.punctuation = Some(theme_style(self.syntax.punctuation));
+        syntax.punctuation_bracket = Some(theme_style(self.syntax.punctuation));
+        syntax.punctuation_delimiter = Some(theme_style(self.syntax.punctuation));
+        syntax.string = Some(theme_style(self.syntax.string));
+        syntax.string_escape = Some(theme_style(self.syntax.string_escape));
+        syntax.type_ = Some(theme_style(self.syntax.type_));
+        syntax.variable = Some(theme_style(self.syntax.variable));
+        syntax.variable_special = Some(theme_style(self.syntax.variable_special));
+
+        HighlightThemeStyle {
+            editor_background: Some(self.background.into()),
+            editor_foreground: Some(self.foreground.into()),
+            editor_active_line: Some(self.active_line.into()),
+            editor_line_number: Some(self.line_number.into()),
+            editor_active_line_number: Some(self.active_line_number.into()),
+            status: Default::default(),
+            syntax,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EditorSyntaxTheme {
+    pub boolean: Rgba,
+    pub comment: Rgba,
+    pub comment_doc: Rgba,
+    pub constant: Rgba,
+    pub constructor: Rgba,
+    pub function: Rgba,
+    pub keyword: Rgba,
+    pub number: Rgba,
+    pub operator: Rgba,
+    pub property: Rgba,
+    pub punctuation: Rgba,
+    pub string: Rgba,
+    pub string_escape: Rgba,
+    pub type_: Rgba,
+    pub variable: Rgba,
+    pub variable_special: Rgba,
+}
+
+impl EditorSyntaxTheme {
+    pub fn dark() -> Self {
+        Self {
+            boolean: rgb(0xff9e64),
+            comment: rgb(0x697386),
+            comment_doc: rgb(0x7d8794),
+            constant: rgb(0xffcb6b),
+            constructor: rgb(0xffcb6b),
+            function: rgb(0x82aaff),
+            keyword: rgb(0xc792ea),
+            number: rgb(0xf78c6c),
+            operator: rgb(0x89ddff),
+            property: rgb(0x82aaff),
+            punctuation: rgb(0x89ddff),
+            string: rgb(0xecc48d),
+            string_escape: rgb(0x89ddff),
+            type_: rgb(0xffcb6b),
+            variable: rgb(0xe6e8eb),
+            variable_special: rgb(0xffcb6b),
+        }
     }
 }
 
@@ -334,4 +440,9 @@ fn color_bytes(color: Rgba) -> (u8, u8, u8) {
         (color.g.clamp(0.0, 1.0) * 255.0).round() as u8,
         (color.b.clamp(0.0, 1.0) * 255.0).round() as u8,
     )
+}
+
+fn theme_style(color: Rgba) -> ThemeStyle {
+    toml::from_str(&format!("color = \"{}\"", color_hex(color)))
+        .expect("valid editor syntax theme style")
 }

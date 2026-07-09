@@ -5,7 +5,7 @@ use gpui_component::ThemeMode;
 
 use crate::{
     config::paths::AppConfigPaths,
-    ui::theme::{AnsiColors, AppTheme},
+    ui::theme::{AnsiColors, AppTheme, EditorSyntaxTheme},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -120,6 +120,7 @@ struct ThemeFile {
     name: String,
     mode: String,
     ui: UiThemeFile,
+    editor: EditorThemeFile,
     terminal: TerminalThemeFile,
 }
 
@@ -148,6 +149,39 @@ struct UiThemeFile {
     warning: Option<String>,
     focus_ring: Option<String>,
     focused_pane_border: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[serde(default)]
+struct EditorThemeFile {
+    background: Option<String>,
+    foreground: Option<String>,
+    active_line: Option<String>,
+    line_number: Option<String>,
+    active_line_number: Option<String>,
+    syntax: EditorSyntaxThemeFile,
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[serde(default)]
+struct EditorSyntaxThemeFile {
+    boolean: Option<String>,
+    comment: Option<String>,
+    comment_doc: Option<String>,
+    constant: Option<String>,
+    constructor: Option<String>,
+    function: Option<String>,
+    keyword: Option<String>,
+    number: Option<String>,
+    operator: Option<String>,
+    property: Option<String>,
+    punctuation: Option<String>,
+    string: Option<String>,
+    string_escape: Option<String>,
+    #[serde(rename = "type")]
+    type_: Option<String>,
+    variable: Option<String>,
+    variable_special: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -205,6 +239,7 @@ fn theme_from_file(file: ThemeFile, warnings: &mut Vec<ThemeLoadWarning>) -> Opt
 
     let fallback = AppTheme::builtin_dark();
     let mut ui = fallback.ui;
+    let mut editor = fallback.editor;
     let theme_name = file.name;
 
     apply_color(
@@ -356,6 +391,48 @@ fn theme_from_file(file: ThemeFile, warnings: &mut Vec<ThemeLoadWarning>) -> Opt
         warnings,
     );
 
+    apply_color(
+        &mut editor.background,
+        file.editor.background,
+        &theme_name,
+        "editor.background",
+        warnings,
+    );
+    apply_color(
+        &mut editor.foreground,
+        file.editor.foreground,
+        &theme_name,
+        "editor.foreground",
+        warnings,
+    );
+    apply_color(
+        &mut editor.active_line,
+        file.editor.active_line,
+        &theme_name,
+        "editor.active_line",
+        warnings,
+    );
+    apply_color(
+        &mut editor.line_number,
+        file.editor.line_number,
+        &theme_name,
+        "editor.line_number",
+        warnings,
+    );
+    apply_color(
+        &mut editor.active_line_number,
+        file.editor.active_line_number,
+        &theme_name,
+        "editor.active_line_number",
+        warnings,
+    );
+    apply_editor_syntax_colors(
+        &mut editor.syntax,
+        file.editor.syntax,
+        &theme_name,
+        warnings,
+    );
+
     let mut terminal = fallback.terminal;
     apply_color(
         &mut terminal.background,
@@ -404,6 +481,7 @@ fn theme_from_file(file: ThemeFile, warnings: &mut Vec<ThemeLoadWarning>) -> Opt
         name: theme_name,
         mode: parse_theme_mode(&file.mode),
         ui,
+        editor,
         terminal,
     })
 }
@@ -514,6 +592,126 @@ fn apply_ansi_colors(
         colors.white,
         theme,
         &format!("{prefix}.white"),
+        warnings,
+    );
+}
+
+fn apply_editor_syntax_colors(
+    target: &mut EditorSyntaxTheme,
+    syntax: EditorSyntaxThemeFile,
+    theme: &str,
+    warnings: &mut Vec<ThemeLoadWarning>,
+) {
+    apply_color(
+        &mut target.boolean,
+        syntax.boolean,
+        theme,
+        "editor.syntax.boolean",
+        warnings,
+    );
+    apply_color(
+        &mut target.comment,
+        syntax.comment,
+        theme,
+        "editor.syntax.comment",
+        warnings,
+    );
+    apply_color(
+        &mut target.comment_doc,
+        syntax.comment_doc,
+        theme,
+        "editor.syntax.comment_doc",
+        warnings,
+    );
+    apply_color(
+        &mut target.constant,
+        syntax.constant,
+        theme,
+        "editor.syntax.constant",
+        warnings,
+    );
+    apply_color(
+        &mut target.constructor,
+        syntax.constructor,
+        theme,
+        "editor.syntax.constructor",
+        warnings,
+    );
+    apply_color(
+        &mut target.function,
+        syntax.function,
+        theme,
+        "editor.syntax.function",
+        warnings,
+    );
+    apply_color(
+        &mut target.keyword,
+        syntax.keyword,
+        theme,
+        "editor.syntax.keyword",
+        warnings,
+    );
+    apply_color(
+        &mut target.number,
+        syntax.number,
+        theme,
+        "editor.syntax.number",
+        warnings,
+    );
+    apply_color(
+        &mut target.operator,
+        syntax.operator,
+        theme,
+        "editor.syntax.operator",
+        warnings,
+    );
+    apply_color(
+        &mut target.property,
+        syntax.property,
+        theme,
+        "editor.syntax.property",
+        warnings,
+    );
+    apply_color(
+        &mut target.punctuation,
+        syntax.punctuation,
+        theme,
+        "editor.syntax.punctuation",
+        warnings,
+    );
+    apply_color(
+        &mut target.string,
+        syntax.string,
+        theme,
+        "editor.syntax.string",
+        warnings,
+    );
+    apply_color(
+        &mut target.string_escape,
+        syntax.string_escape,
+        theme,
+        "editor.syntax.string_escape",
+        warnings,
+    );
+    apply_color(
+        &mut target.type_,
+        syntax.type_,
+        theme,
+        "editor.syntax.type",
+        warnings,
+    );
+    apply_color(
+        &mut target.variable,
+        syntax.variable,
+        theme,
+        "editor.syntax.variable",
+        warnings,
+    );
+    apply_color(
+        &mut target.variable_special,
+        syntax.variable_special,
+        theme,
+        "editor.syntax.variable_special",
         warnings,
     );
 }

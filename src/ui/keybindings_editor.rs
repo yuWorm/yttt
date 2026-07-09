@@ -9,6 +9,8 @@ use crate::{
     },
 };
 
+use super::keybinding_display::display_keybindings_for_current_platform;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeybindingRow {
     pub command: CommandId,
@@ -17,6 +19,12 @@ pub struct KeybindingRow {
     pub description: &'static str,
     pub keys: Vec<String>,
     pub has_conflict: bool,
+}
+
+impl KeybindingRow {
+    pub fn display_keys(&self) -> Vec<String> {
+        display_keybindings_for_current_platform(&self.keys)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

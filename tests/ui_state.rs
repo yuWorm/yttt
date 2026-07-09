@@ -16,6 +16,7 @@ use yttt::{
     runtime::notification::{NotificationEvent, NotificationKind},
     runtime::terminal::{ExitReason, ProcessStatus},
     ui::components::SelectableState,
+    ui::editor::EditorDiagnosticSeverity,
     ui::i18n::{Locale, UiText},
     ui::palette::visible_palette_rows,
     ui::sidebar::visible_project_items,
@@ -458,6 +459,51 @@ fn root_view_layout_toml_editor_keeps_invalid_toml_open() {
 }
 
 #[test]
+fn root_view_layout_toml_editor_records_parse_diagnostic() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("layout-editor-diagnostic-project");
+    fs::create_dir(&project_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths);
+    root.open_project_path(&project_dir).unwrap();
+    root.open_layout_toml_editor().unwrap();
+
+    root.set_layout_toml_editor_value("[project\n");
+    root.save_layout_toml_editor().unwrap();
+
+    let diagnostics = root.visible_layout_toml_editor_diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].severity, EditorDiagnosticSeverity::Error);
+    assert_eq!(diagnostics[0].source, "toml");
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("failed to parse layout TOML")
+    );
+}
+
+#[test]
+fn root_view_layout_toml_editor_clears_diagnostics_after_valid_save() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("layout-editor-clear-diagnostic-project");
+    fs::create_dir(&project_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths);
+    root.open_project_path(&project_dir).unwrap();
+    root.open_layout_toml_editor().unwrap();
+
+    let valid = root.layout_toml_editor_value().unwrap().to_string();
+    root.set_layout_toml_editor_value("[project\n");
+    root.save_layout_toml_editor().unwrap();
+    assert!(!root.visible_layout_toml_editor_diagnostics().is_empty());
+
+    root.set_layout_toml_editor_value(valid);
+    root.save_layout_toml_editor().unwrap();
+
+    assert!(root.visible_layout_toml_editor_diagnostics().is_empty());
+}
+
+#[test]
 fn root_view_project_close_command_requires_confirmation_for_running_project() {
     let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
     let project_id = root.workspace().selected_project_id().unwrap().clone();
@@ -683,6 +729,31 @@ fn root_view_language_setting_updates_command_palette_labels() {
         .unwrap();
     assert_eq!(new_tab.title, "新建标签页");
     assert_eq!(new_tab.disabled_reason.as_deref(), Some("请先打开项目"));
+}
+
+#[test]
+fn root_view_command_palette_items_show_current_platform_keybindings() {
+    let (_temp, mut root) = english_test_root();
+
+    root.open_palette(PaletteKind::Command);
+
+    let items = root.active_palette_items();
+    let command_palette = items
+        .iter()
+        .find(|item| item.command == CommandId::CommandPaletteOpen)
+        .unwrap();
+    let tab_new = items
+        .iter()
+        .find(|item| item.command == CommandId::TabNew)
+        .unwrap();
+
+    if cfg!(target_os = "macos") {
+        assert_eq!(command_palette.keybinding.as_deref(), Some("cmd-p"));
+        assert_eq!(tab_new.keybinding.as_deref(), Some("cmd-t"));
+    } else {
+        assert_eq!(command_palette.keybinding.as_deref(), Some("ctrl-p"));
+        assert_eq!(tab_new.keybinding.as_deref(), Some("ctrl-t"));
+    }
 }
 
 #[test]
@@ -2031,6 +2102,7 @@ fn palette_item(id: &str, title: &str) -> PaletteItem {
         title: title.to_string(),
         subtitle: None,
         status: None,
+        keybinding: None,
         command: CommandId::CommandPaletteOpen,
         enabled: true,
         disabled_reason: None,
