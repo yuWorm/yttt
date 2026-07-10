@@ -117,6 +117,24 @@ project and the default for future projects, while other open projects retain th
 widths. Valid width ranges are 200–520 px for the right tree and 160–420 px for the left
 sidebar.
 
+## Theme TOML
+
+Place user themes in `<app config>/themes/*.toml` and select one with `[theme].name` in
+`settings.toml`.
+
+```toml
+name = "custom-dark"
+mode = "dark"
+
+[ui]
+focus_ring = "#7aa2f7"
+selection = "#3f5f9f"
+```
+
+`ui.selection` is the global text-selection color for inputs and code editors. It is independent
+from `ui.focus_ring`; if omitted, it defaults to the resolved `ui.focus_ring` value for
+backward-compatible existing themes.
+
 ## Layout TOML
 
 Global default layout:

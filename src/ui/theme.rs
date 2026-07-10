@@ -33,6 +33,7 @@ pub struct WorkbenchTheme {
     pub success: Rgba,
     pub warning: Rgba,
     pub focus_ring: Rgba,
+    pub selection: Rgba,
     pub focused_pane_border: Rgba,
     pub split_line_width: Pixels,
     pub split_hit_area_width: Pixels,
@@ -62,6 +63,7 @@ impl WorkbenchTheme {
             success: rgb(0x22c55e),
             warning: rgb(0xf59e0b),
             focus_ring: rgb(0x7aa2f7),
+            selection: rgb(0x7aa2f7),
             focused_pane_border: rgb(0x6f7785),
             split_line_width: px(1.0),
             split_hit_area_width: px(7.0),
@@ -133,6 +135,7 @@ impl ThemeRuntime {
         colors.foreground = Some(color_hex(theme.text).into());
         colors.border = Some(color_hex(theme.border).into());
         colors.input = Some(color_hex(theme.border).into());
+        colors.ring = Some(color_hex(theme.focus_ring).into());
         colors.muted = Some(color_hex(theme.surface).into());
         colors.muted_foreground = Some(color_hex(theme.text_subtle).into());
         colors.primary = Some(color_hex(theme.active_surface).into());
@@ -153,7 +156,7 @@ impl ThemeRuntime {
         colors.list_hover = Some(color_hex(theme.hover_surface).into());
         colors.popover = Some(color_hex(theme.surface).into());
         colors.popover_foreground = Some(color_hex(theme.text).into());
-        colors.selection = Some(color_hex(theme.active_surface).into());
+        colors.selection = Some(color_hex(theme.selection).into());
         colors.sidebar = Some(color_hex(theme.sidebar_background).into());
         colors.sidebar_foreground = Some(color_hex(theme.text_muted).into());
         colors.sidebar_primary = Some(color_hex(theme.active_surface).into());

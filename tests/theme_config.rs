@@ -89,6 +89,24 @@ fn workbench_theme_maps_to_gpui_component_theme_config() {
     assert!(config.colors.background.is_some());
     assert!(config.colors.border.is_some());
     assert!(config.colors.input.is_some());
+    assert_eq!(
+        config
+            .colors
+            .ring
+            .as_ref()
+            .map(|color| color.to_string())
+            .as_deref(),
+        Some("#7aa2f7")
+    );
+    assert_eq!(
+        config
+            .colors
+            .selection
+            .as_ref()
+            .map(|color| color.to_string())
+            .as_deref(),
+        Some("#7aa2f7")
+    );
     assert!(config.colors.title_bar.is_some());
     assert!(config.colors.list_active.is_some());
     assert_eq!(
@@ -111,6 +129,80 @@ fn workbench_theme_maps_to_gpui_component_theme_config() {
     );
 }
 
+#[test]
+fn theme_loader_overrides_selection_without_changing_focus_ring() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    std::fs::create_dir_all(paths.themes_dir()).unwrap();
+    std::fs::write(
+        paths.themes_dir().join("selection-custom.toml"),
+        r##"
+name = "selection-custom"
+mode = "dark"
+
+[ui]
+focus_ring = "#112233"
+selection = "#445566"
+"##,
+    )
+    .unwrap();
+
+    let loaded = load_theme_store(&paths).unwrap();
+    let mut settings = AppSettings::default();
+    settings.theme.name = "selection-custom".to_string();
+    let config = ThemeRuntime::resolve(&settings, &loaded.store).to_gpui_component_theme_config();
+
+    assert_eq!(
+        config
+            .colors
+            .ring
+            .as_ref()
+            .map(|color| color.to_string())
+            .as_deref(),
+        Some("#112233")
+    );
+    assert_eq!(
+        config
+            .colors
+            .selection
+            .as_ref()
+            .map(|color| color.to_string())
+            .as_deref(),
+        Some("#445566")
+    );
+    assert!(loaded.warnings.is_empty());
+}
+
+#[test]
+fn theme_loader_defaults_selection_to_resolved_focus_ring() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    std::fs::create_dir_all(paths.themes_dir()).unwrap();
+    std::fs::write(
+        paths.themes_dir().join("focus-only.toml"),
+        r##"
+name = "focus-only"
+mode = "dark"
+
+[ui]
+focus_ring = "#112233"
+"##,
+    )
+    .unwrap();
+
+    let loaded = load_theme_store(&paths).unwrap();
+    let mut settings = AppSettings::default();
+    settings.theme.name = "focus-only".to_string();
+    let config = ThemeRuntime::resolve(&settings, &loaded.store).to_gpui_component_theme_config();
+
+    for color in [&config.colors.ring, &config.colors.selection] {
+        assert_eq!(
+            color.as_ref().map(|color| color.to_string()).as_deref(),
+            Some("#112233")
+        );
+    }
+    assert!(loaded.warnings.is_empty());
+}
 #[test]
 fn builtin_theme_maps_editor_highlight_theme() {
     let runtime = ThemeRuntime::default();

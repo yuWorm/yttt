@@ -737,7 +737,7 @@ fn yttt_input_style_makes_dialog_input_visible() {
     assert_eq!(style.height, gpui::px(34.0));
     assert_eq!(style.background, theme.surface_elevated);
     assert_eq!(style.border, theme.border);
-    assert_eq!(style.focused_border, theme.border_strong);
+    assert_eq!(style.focused_border, theme.focus_ring);
 }
 
 #[test]
@@ -749,7 +749,7 @@ fn yttt_input_style_has_settings_control_variant() {
     assert_eq!(style.radius, gpui::px(6.0));
     assert_eq!(style.background, theme.surface_elevated);
     assert_eq!(style.border, theme.border);
-    assert_eq!(style.focused_border, theme.focused_pane_border);
+    assert_eq!(style.focused_border, theme.focus_ring);
 }
 
 #[test]

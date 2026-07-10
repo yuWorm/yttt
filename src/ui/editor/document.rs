@@ -319,7 +319,7 @@ impl Render for ProjectEditorDocument {
         let input = Input::new(&self.input)
             .w_full()
             .h_full()
-            .appearance(false)
+            .appearance(true)
             .text_size(px(self.appearance.font_size))
             .line_height(relative(self.appearance.line_height));
         if self.appearance.font_family.is_empty() {

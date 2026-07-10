@@ -6738,17 +6738,9 @@ fn layout_toml_editor_overlay(
                                     .flex_1()
                                     .min_h_0()
                                     .rounded_sm()
-                                    .border_1()
-                                    .border_color(theme.border)
                                     .bg(editor_theme.background)
                                     .overflow_hidden()
-                                    .child(
-                                        Input::new(input)
-                                            .h_full()
-                                            .appearance(false)
-                                            .bordered(false)
-                                            .focus_bordered(false),
-                                    ),
+                                    .child(Input::new(input).h_full().appearance(true)),
                             )
                             .when_some(error, |this, error| {
                                 this.child(
@@ -6909,15 +6901,14 @@ fn settings_sidebar(
                 .h(style.search_height)
                 .flex_none()
                 .rounded_md()
-                .border_1()
-                .border_color(theme.border)
                 .bg(theme.surface)
-                .px_2()
+                .overflow_hidden()
                 .child(
                     Input::new(search_input)
                         .prefix(IconName::Search)
                         .cleanable(true)
-                        .appearance(false),
+                        .appearance(true)
+                        .bg(theme.surface),
                 ),
         )
         .child(

@@ -148,6 +148,7 @@ struct UiThemeFile {
     success: Option<String>,
     warning: Option<String>,
     focus_ring: Option<String>,
+    selection: Option<String>,
     focused_pane_border: Option<String>,
 }
 
@@ -381,6 +382,14 @@ fn theme_from_file(file: ThemeFile, warnings: &mut Vec<ThemeLoadWarning>) -> Opt
         file.ui.focus_ring,
         &theme_name,
         "ui.focus_ring",
+        warnings,
+    );
+    ui.selection = ui.focus_ring;
+    apply_color(
+        &mut ui.selection,
+        file.ui.selection,
+        &theme_name,
+        "ui.selection",
         warnings,
     );
     apply_color(

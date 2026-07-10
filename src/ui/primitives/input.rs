@@ -33,10 +33,7 @@ pub fn yttt_input_style(kind: YtttInputKind, theme: WorkbenchTheme) -> YtttInput
         },
         background: theme.surface_elevated,
         border: theme.border,
-        focused_border: match kind {
-            YtttInputKind::Settings => theme.focused_pane_border,
-            YtttInputKind::Dialog | YtttInputKind::Palette => theme.border_strong,
-        },
+        focused_border: theme.focus_ring,
         text: theme.text,
         placeholder: theme.text_subtle,
     }

@@ -87,7 +87,8 @@ fn picker_header(query_input: &Entity<InputState>, theme: WorkbenchTheme) -> Div
             Input::new(query_input)
                 .prefix(IconName::Search)
                 .cleanable(true)
-                .appearance(false),
+                .appearance(true)
+                .bg(theme.surface_elevated),
         )
 }
 

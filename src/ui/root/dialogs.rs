@@ -444,12 +444,16 @@ fn yttt_dialog_input(input: &Entity<InputState>, theme: WorkbenchTheme) -> Div {
         .items_center()
         .h(style.height)
         .rounded(style.radius)
-        .border_1()
-        .border_color(style.border)
         .bg(style.background)
-        .px_2()
+        .overflow_hidden()
         .text_color(style.text)
-        .child(Input::new(input).cleanable(false).appearance(false))
+        .child(
+            Input::new(input)
+                .cleanable(false)
+                .appearance(true)
+                .rounded(style.radius)
+                .bg(style.background),
+        )
 }
 
 fn yttt_dialog_button<H>(
