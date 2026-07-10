@@ -10,5 +10,6 @@ pub use state::{
     DirectoryLoadRequest, ProjectFileTree, ProjectTreeLoadState, ProjectTreeVisibleRow,
 };
 pub use view::{
-    ProjectTreeRenderRow, ProjectTreeRenderSnapshot, ProjectTreeView, ProjectTreeViewEvent,
+    ProjectTreeRenderRow, ProjectTreeRenderSnapshot, ProjectTreeRenderText, ProjectTreeView,
+    ProjectTreeViewEvent,
 };

@@ -102,6 +102,30 @@ impl ProjectFileTree {
         normalize_tree_path(path).is_some_and(|path| self.directories.contains_key(&path))
     }
 
+    pub fn directory_load_state(&self, path: &Path) -> ProjectTreeLoadState {
+        let Some(path) = normalize_tree_path(path) else {
+            return ProjectTreeLoadState::NotApplicable;
+        };
+        if let Some(error) = self.errors.get(&path) {
+            return ProjectTreeLoadState::Error(error.clone());
+        }
+        if self.loading.contains(&path) {
+            return ProjectTreeLoadState::Loading;
+        }
+        if self.directories.contains_key(&path) {
+            return ProjectTreeLoadState::Loaded;
+        }
+        if path.as_os_str().is_empty()
+            || self
+                .entry_for_path(&path)
+                .is_some_and(|entry| entry.kind.is_traversable())
+        {
+            ProjectTreeLoadState::Unloaded
+        } else {
+            ProjectTreeLoadState::NotApplicable
+        }
+    }
+
     pub fn apply_snapshot(&mut self, generation: u64, snapshot: DirectorySnapshot) -> bool {
         if generation != self.generation {
             return false;

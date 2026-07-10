@@ -20,7 +20,7 @@ pub use language_catalog::{
     EditorLanguageCatalog, EditorLanguageDefinition, EditorLanguageId, EditorLanguageResolution,
     EditorLanguageResolutionSource,
 };
-pub use runtime::ProjectEditorRuntime;
+pub use runtime::{ProjectEditorRuntime, ProjectFileLoadRequest};
 pub use state::{
     CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, EditorDiagnostic,
     EditorDiagnosticSeverity, EditorLanguageService, EditorRange,

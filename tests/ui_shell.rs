@@ -205,6 +205,7 @@ impl gpui::Render for EmptyProjectTabs {
             Vec::new(),
             WorkbenchTheme::dark(),
             false,
+            project_tree_toggle_tooltip(false),
             |_| |_, _, _| {},
             |_| |_, _, _| {},
             |_, _, _| {},

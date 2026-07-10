@@ -1,6 +1,6 @@
 use gpui::{
-    App, ClickEvent, Div, InteractiveElement as _, IntoElement, Pixels, Rgba, Stateful,
-    StatefulInteractiveElement as _, Window, div, prelude::*, px, rgba,
+    App, ClickEvent, Div, InteractiveElement as _, IntoElement, Pixels, Rgba, SharedString,
+    Stateful, StatefulInteractiveElement as _, Window, div, prelude::*, px, rgba,
 };
 use gpui_component::{Icon, IconName, tooltip::Tooltip};
 
@@ -232,6 +232,7 @@ pub fn project_tabs<SelectH, SelectF, CloseH, CloseF, NewH, SplitVH, SplitHH, To
     items: Vec<WorkbenchTabItem>,
     theme: WorkbenchTheme,
     project_tree_open: bool,
+    project_tree_tooltip: impl Into<SharedString>,
     mut on_select_tab: SelectF,
     mut on_close_tab: CloseF,
     on_new_tab: NewH,
@@ -284,6 +285,7 @@ where
             on_split_vertical,
             on_split_horizontal,
             project_tree_open,
+            project_tree_tooltip.into(),
             on_toggle_project_tree,
         ))
         .into_any_element()
@@ -435,6 +437,7 @@ fn tab_toolbar<NewH, SplitVH, SplitHH, ToggleTreeH>(
     on_split_vertical: SplitVH,
     on_split_horizontal: SplitHH,
     project_tree_open: bool,
+    tooltip: SharedString,
     on_toggle_project_tree: ToggleTreeH,
 ) -> impl IntoElement
 where
@@ -443,7 +446,6 @@ where
     SplitHH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ToggleTreeH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    let tooltip = project_tree_toggle_tooltip(project_tree_open);
     div()
         .flex()
         .items_center()
@@ -479,7 +481,7 @@ where
             .when(project_tree_open, |this| {
                 this.bg(theme.active_surface).text_color(theme.text)
             })
-            .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx)),
+            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx)),
         )
 }
 

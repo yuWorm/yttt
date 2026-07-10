@@ -27,6 +27,23 @@ pub enum ProjectTreeViewEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectTreeRenderText {
+    pub loading: String,
+    pub empty_directory: String,
+    pub retry: String,
+}
+
+impl Default for ProjectTreeRenderText {
+    fn default() -> Self {
+        Self {
+            loading: "Loading…".to_string(),
+            empty_directory: "Empty directory".to_string(),
+            retry: "Retry".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectTreeRenderRow {
     pub id: String,
     pub relative_path: Option<PathBuf>,
@@ -50,9 +67,17 @@ pub struct ProjectTreeRenderSnapshot {
 
 impl ProjectTreeRenderSnapshot {
     pub fn from_tree(tree: &ProjectFileTree, git_status: Option<&ProjectGitStatus>) -> Self {
+        Self::from_tree_with_text(tree, git_status, &ProjectTreeRenderText::default())
+    }
+
+    pub fn from_tree_with_text(
+        tree: &ProjectFileTree,
+        git_status: Option<&ProjectGitStatus>,
+        text: &ProjectTreeRenderText,
+    ) -> Self {
         let source_rows = tree.visible_rows();
         let mut index = 0;
-        let nodes = build_nodes(&source_rows, &mut index, 0, git_status);
+        let nodes = build_nodes(&source_rows, &mut index, 0, git_status, text);
         let tree_items = nodes.iter().map(RenderNode::tree_item).collect::<Vec<_>>();
         let mut visible_rows = Vec::new();
         let mut rows_by_id = HashMap::new();
@@ -137,6 +162,7 @@ fn build_nodes(
     index: &mut usize,
     depth: usize,
     git_status: Option<&ProjectGitStatus>,
+    text: &ProjectTreeRenderText,
 ) -> Vec<RenderNode> {
     let mut nodes = Vec::new();
     while let Some(source) = source_rows.get(*index) {
@@ -149,10 +175,10 @@ fn build_nodes(
         }
 
         *index += 1;
-        let mut children = build_nodes(source_rows, index, depth + 1, git_status);
+        let mut children = build_nodes(source_rows, index, depth + 1, git_status, text);
         let row = render_row(source, git_status);
         if source.kind.is_traversable() && children.is_empty() {
-            children.push(synthetic_child(&row));
+            children.push(synthetic_child(&row, text));
         }
         nodes.push(RenderNode { row, children });
     }
@@ -177,10 +203,11 @@ fn render_row(
     }
 }
 
-fn synthetic_child(parent: &ProjectTreeRenderRow) -> RenderNode {
+fn synthetic_child(parent: &ProjectTreeRenderRow, text: &ProjectTreeRenderText) -> RenderNode {
     let label = match &parent.load_state {
-        ProjectTreeLoadState::Loading => "Loading…".to_string(),
-        ProjectTreeLoadState::Error(error) => error.clone(),
+        ProjectTreeLoadState::Loading => text.loading.clone(),
+        ProjectTreeLoadState::Loaded => text.empty_directory.clone(),
+        ProjectTreeLoadState::Error(error) => format!("{error} · {}", text.retry),
         _ => String::new(),
     };
     RenderNode {

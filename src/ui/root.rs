@@ -101,9 +101,11 @@ use crate::{
             workbench_status_notification, workbench_switch,
         },
         editor::{
-            CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, EditorDiagnostic,
-            EditorDiagnosticSeverity, EditorLanguageCatalog, EditorLanguageId,
-            ProjectEditorRuntime, WorkItemId, code_editor_input_state,
+            CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, EditorAppearance,
+            EditorDiagnostic, EditorDiagnosticSeverity, EditorLanguageCatalog, EditorLanguageId,
+            LoadedProjectFile, ProjectEditorDocument, ProjectEditorDocumentEvent,
+            ProjectEditorModel, ProjectEditorRuntime, ProjectFileIoError, ProjectFileLoadRequest,
+            WorkItemId, code_editor_input_state, read_project_file,
         },
         font_options::{
             terminal_font_family_option_for_setting, terminal_font_family_options_from_system,
@@ -126,6 +128,11 @@ use crate::{
             input::{YtttInputKind, yttt_input_style},
             panel::{YtttPanelKind, yttt_panel_style},
             select::yttt_select_style,
+        },
+        project_tree::{
+            DirectoryLoadRequest, DirectorySnapshot, ProjectTreeFsError, ProjectTreeLoadState,
+            ProjectTreeRenderSnapshot, ProjectTreeRenderText, ProjectTreeView,
+            ProjectTreeViewEvent, scan_project_directory,
         },
         root::layout_editor::{
             LayoutEditorSession, LayoutEditorTarget, ProjectLayoutEditorFormat,
@@ -209,6 +216,7 @@ pub struct RootView {
     terminal_panes: HashMap<String, Entity<TerminalPaneView>>,
     terminal_pane_subscriptions: HashMap<String, Subscription>,
     project_editor_runtime: ProjectEditorRuntime,
+    pending_project_tree_loads: Vec<(ProjectId, DirectoryLoadRequest)>,
     project_git_statuses: HashMap<ProjectId, ProjectGitStatus>,
     toast_queue: ToastQueue,
     system_notifier: NoopSystemNotifier,
@@ -401,6 +409,7 @@ impl RootView {
             terminal_panes: HashMap::new(),
             terminal_pane_subscriptions: HashMap::new(),
             project_editor_runtime,
+            pending_project_tree_loads: Vec::new(),
             project_git_statuses: HashMap::new(),
             toast_queue: ToastQueue::default(),
             system_notifier: NoopSystemNotifier,
@@ -435,6 +444,444 @@ impl RootView {
 
     pub fn project_editor_runtime_mut(&mut self) -> &mut ProjectEditorRuntime {
         &mut self.project_editor_runtime
+    }
+
+    pub fn refresh_project_tree_state(
+        &mut self,
+        project_id: &ProjectId,
+    ) -> Option<DirectoryLoadRequest> {
+        let request = self
+            .project_editor_runtime
+            .workspace_mut()
+            .session_mut(project_id)?
+            .file_tree_mut()
+            .refresh();
+        self.project_editor_runtime
+            .track_tree_load(project_id.clone(), request.generation);
+        Some(request)
+    }
+
+    pub fn apply_project_tree_snapshot(
+        &mut self,
+        project_id: &ProjectId,
+        generation: u64,
+        snapshot: DirectorySnapshot,
+    ) -> bool {
+        if !self
+            .project_editor_runtime
+            .tree_load_is_current(project_id, generation)
+        {
+            return false;
+        }
+        self.project_editor_runtime
+            .workspace_mut()
+            .session_mut(project_id)
+            .is_some_and(|session| session.file_tree_mut().apply_snapshot(generation, snapshot))
+    }
+
+    pub fn apply_project_tree_error(
+        &mut self,
+        project_id: &ProjectId,
+        generation: u64,
+        relative_directory: &Path,
+        error: impl Into<String>,
+    ) -> bool {
+        if !self
+            .project_editor_runtime
+            .tree_load_is_current(project_id, generation)
+        {
+            return false;
+        }
+        self.project_editor_runtime
+            .workspace_mut()
+            .session_mut(project_id)
+            .is_some_and(|session| {
+                session
+                    .file_tree_mut()
+                    .apply_error(generation, relative_directory, error)
+            })
+    }
+
+    fn project_tree_render_snapshot(
+        &self,
+        project_id: &ProjectId,
+    ) -> Option<ProjectTreeRenderSnapshot> {
+        let session = self
+            .project_editor_runtime
+            .workspace()
+            .session(project_id)?;
+        Some(ProjectTreeRenderSnapshot::from_tree_with_text(
+            session.file_tree(),
+            self.project_git_statuses.get(project_id),
+            &ProjectTreeRenderText {
+                loading: self.ui_text.get(UiTextKey::ProjectFilesLoading).to_string(),
+                empty_directory: self
+                    .ui_text
+                    .get(UiTextKey::ProjectFilesEmptyDirectory)
+                    .to_string(),
+                retry: self.ui_text.get(UiTextKey::ProjectFilesRetry).to_string(),
+            },
+        ))
+    }
+
+    fn ensure_project_tree_view(
+        &mut self,
+        project_id: &ProjectId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<ProjectTreeView>> {
+        if let Some(tree) = self.project_editor_runtime.tree(project_id).cloned() {
+            if let Some(snapshot) = self.project_tree_render_snapshot(project_id) {
+                tree.update(cx, |tree, tree_cx| tree.sync(snapshot, tree_cx));
+            }
+            return Some(tree);
+        }
+
+        let request = self
+            .project_editor_runtime
+            .workspace_mut()
+            .session_mut(project_id)?
+            .file_tree_mut()
+            .request_expand(Path::new(""));
+        if let Some(request) = &request {
+            self.project_editor_runtime
+                .track_tree_load(project_id.clone(), request.generation);
+        }
+        let snapshot = self.project_tree_render_snapshot(project_id)?;
+        let tree = cx.new(|tree_cx| ProjectTreeView::new(snapshot, tree_cx));
+        let event_project_id = project_id.clone();
+        let subscription = cx.subscribe_in(&tree, window, move |this, tree, event, window, cx| {
+            this.on_project_tree_view_event(&event_project_id, tree, event, window, cx);
+        });
+        self.project_editor_runtime
+            .insert_tree(project_id.clone(), tree.clone(), subscription);
+        if let Some(request) = request {
+            self.spawn_project_directory_scan(project_id.clone(), request, window, cx);
+        }
+        Some(tree)
+    }
+
+    fn on_project_tree_view_event(
+        &mut self,
+        project_id: &ProjectId,
+        _tree: &Entity<ProjectTreeView>,
+        event: &ProjectTreeViewEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            ProjectTreeViewEvent::ToggleDirectory { path, expanded } => {
+                let request = self
+                    .project_editor_runtime
+                    .workspace_mut()
+                    .session_mut(project_id)
+                    .and_then(|session| {
+                        let tree = session.file_tree_mut();
+                        tree.select(Some(path.clone()));
+                        if *expanded {
+                            tree.request_expand(path)
+                        } else {
+                            tree.collapse(path);
+                            None
+                        }
+                    });
+                if let Some(request) = request {
+                    self.project_editor_runtime
+                        .track_tree_load(project_id.clone(), request.generation);
+                    self.spawn_project_directory_scan(project_id.clone(), request, window, cx);
+                }
+            }
+            ProjectTreeViewEvent::OpenFile(path) => {
+                if let Some(session) = self
+                    .project_editor_runtime
+                    .workspace_mut()
+                    .session_mut(project_id)
+                {
+                    session.file_tree_mut().select(Some(path.clone()));
+                }
+                self.spawn_project_file_open(project_id.clone(), path.clone(), window, cx);
+            }
+            ProjectTreeViewEvent::Refresh => {
+                self.refresh_project_tree(project_id.clone(), window, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    fn refresh_project_tree(
+        &mut self,
+        project_id: ProjectId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let project_path = self
+            .workspace
+            .project(&project_id)
+            .map(|project| project.path.clone());
+        if let Some(request) = self.refresh_project_tree_state(&project_id) {
+            self.spawn_project_directory_scan(project_id.clone(), request, window, cx);
+        }
+        if let Some(project_path) = project_path {
+            self.refresh_project_git_status(&project_id, &project_path);
+        }
+    }
+
+    fn queue_project_tree_refresh(&mut self, project_id: ProjectId) {
+        if let Some(request) = self.refresh_project_tree_state(&project_id) {
+            self.pending_project_tree_loads.push((project_id, request));
+        }
+    }
+
+    fn flush_pending_project_tree_loads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let pending = std::mem::take(&mut self.pending_project_tree_loads);
+        for (project_id, request) in pending {
+            self.spawn_project_directory_scan(project_id, request, window, cx);
+        }
+    }
+
+    fn spawn_project_directory_scan(
+        &mut self,
+        project_id: ProjectId,
+        request: DirectoryLoadRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .project_editor_runtime
+            .tree_load_is_current(&project_id, request.generation)
+        {
+            return;
+        }
+        let Some(project_root) = self
+            .workspace
+            .project(&project_id)
+            .map(|project| project.path.clone())
+        else {
+            return;
+        };
+        let relative_directory = request.relative_directory.clone();
+        let generation = request.generation;
+        let show_hidden = self.app_settings.project_panel.show_hidden;
+        let scan_relative_directory = relative_directory.clone();
+        let io_task = cx.background_spawn(async move {
+            scan_project_directory(&project_root, &scan_relative_directory, show_hidden)
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = io_task.await;
+            let _ = this.update_in(cx, |root, _window, cx| {
+                match result {
+                    Ok(snapshot) => {
+                        root.apply_project_tree_snapshot(&project_id, generation, snapshot);
+                    }
+                    Err(error) => {
+                        let message = root.localized_project_tree_error(&error);
+                        root.apply_project_tree_error(
+                            &project_id,
+                            generation,
+                            &relative_directory,
+                            message,
+                        );
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn localized_project_tree_error(&self, error: &ProjectTreeFsError) -> String {
+        format!(
+            "{}: {error}",
+            self.ui_text.get(UiTextKey::ProjectFilesDirectoryError)
+        )
+    }
+
+    fn localized_project_file_error(&self, error: &ProjectFileIoError) -> String {
+        let summary = match error {
+            ProjectFileIoError::PathOutsideProject { .. } => {
+                self.ui_text.get(UiTextKey::ProjectFileOutsideProject)
+            }
+            ProjectFileIoError::FileTooLarge { .. } => {
+                self.ui_text.get(UiTextKey::ProjectFileTooLarge)
+            }
+            ProjectFileIoError::BinaryContent { .. } => {
+                self.ui_text.get(UiTextKey::ProjectFileUnsupportedBinary)
+            }
+            ProjectFileIoError::InvalidUtf8 { .. } => {
+                self.ui_text.get(UiTextKey::ProjectFileInvalidEncoding)
+            }
+            ProjectFileIoError::NotAFile { .. } | ProjectFileIoError::Io { .. } => {
+                self.ui_text.get(UiTextKey::StatusErrorContext)
+            }
+        };
+        format!("{summary}: {error}")
+    }
+
+    pub fn begin_project_file_open(
+        &mut self,
+        project_id: &ProjectId,
+        relative_path: &Path,
+    ) -> Option<ProjectFileLoadRequest> {
+        let project_root = self.workspace.project(project_id)?.path.clone();
+        if self
+            .project_editor_runtime
+            .workspace()
+            .session(project_id)
+            .is_none()
+        {
+            return None;
+        }
+        let document_id = crate::ui::editor::DocumentId {
+            project_id: project_id.clone(),
+            canonical_path: project_root.join(relative_path),
+        };
+        let generation = self
+            .project_editor_runtime
+            .begin_file_load(document_id.clone())?;
+        Some(ProjectFileLoadRequest {
+            document_id,
+            project_root,
+            relative_path: relative_path.to_path_buf(),
+            generation,
+        })
+    }
+
+    pub fn cancel_project_file_open(&mut self, request: &ProjectFileLoadRequest) -> bool {
+        self.project_editor_runtime
+            .finish_file_load(&request.document_id, request.generation)
+    }
+
+    pub fn apply_project_file_open_error(
+        &mut self,
+        request: &ProjectFileLoadRequest,
+        error: impl Into<String>,
+    ) -> bool {
+        if !self
+            .project_editor_runtime
+            .finish_file_load(&request.document_id, request.generation)
+        {
+            return false;
+        }
+        self.load_error = Some(error.into());
+        true
+    }
+
+    fn spawn_project_file_open(
+        &mut self,
+        project_id: ProjectId,
+        relative_path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let requested_document_id =
+            self.workspace
+                .project(&project_id)
+                .map(|project| crate::ui::editor::DocumentId {
+                    project_id: project_id.clone(),
+                    canonical_path: project.path.join(&relative_path),
+                });
+        if let Some(document_id) = requested_document_id
+            && (self.project_editor_runtime.document(&document_id).is_some()
+                || self
+                    .project_editor_runtime
+                    .workspace()
+                    .session(&project_id)
+                    .is_some_and(|session| session.file_ids().contains(&document_id)))
+        {
+            let _ = self.select_work_item(WorkItemId::File(document_id));
+            cx.notify();
+            return;
+        }
+        let Some(request) = self.begin_project_file_open(&project_id, &relative_path) else {
+            return;
+        };
+        let project_root = request.project_root.clone();
+        let read_relative_path = request.relative_path.clone();
+        let io_task = cx
+            .background_spawn(async move { read_project_file(&project_root, &read_relative_path) });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = io_task.await;
+            let _ = this.update_in(cx, |root, window, cx| {
+                match result {
+                    Ok(loaded) => {
+                        root.apply_project_file_open_success(&request, loaded, window, cx);
+                    }
+                    Err(error) => {
+                        let message = root.localized_project_file_error(&error);
+                        root.apply_project_file_open_error(&request, message);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn apply_project_file_open_success(
+        &mut self,
+        request: &ProjectFileLoadRequest,
+        loaded: LoadedProjectFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self
+            .project_editor_runtime
+            .finish_file_load(&request.document_id, request.generation)
+            || self
+                .workspace
+                .project(&request.document_id.project_id)
+                .is_none()
+        {
+            return false;
+        }
+        let document_id = crate::ui::editor::DocumentId {
+            project_id: request.document_id.project_id.clone(),
+            canonical_path: loaded.canonical_path.clone(),
+        };
+        if self.project_editor_runtime.document(&document_id).is_none() {
+            let language_mode = if self.app_settings.editor.auto_detect_language {
+                CodeEditorLanguageMode::Auto
+            } else {
+                CodeEditorLanguageMode::from(self.app_settings.editor.default_language.clone())
+            };
+            let title = loaded
+                .relative_path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| loaded.relative_path.to_string_lossy().into_owned());
+            let config = CodeEditorConfig::new(title, language_mode)
+                .with_tab_size(self.app_settings.editor.tab_size)
+                .with_soft_wrap(self.app_settings.editor.soft_wrap)
+                .with_line_number(self.app_settings.editor.line_numbers);
+            let model = ProjectEditorModel::new(
+                document_id.clone(),
+                CodeEditorState::new(&loaded.canonical_path, config, loaded.text),
+                loaded.fingerprint,
+            );
+            let appearance = EditorAppearance::from(&self.app_settings.editor);
+            let document = cx.new(|document_cx| {
+                ProjectEditorDocument::new(model, appearance, window, document_cx)
+            });
+            let subscription =
+                cx.subscribe_in(&document, window, Self::on_project_editor_document_event);
+            self.project_editor_runtime.insert_document(
+                document_id.clone(),
+                document,
+                subscription,
+            );
+        }
+        let opened_id = self
+            .project_editor_runtime
+            .workspace_mut()
+            .session_mut(&document_id.project_id)
+            .map(|session| session.open_file(document_id.canonical_path.clone()));
+        let Some(opened_id) = opened_id else {
+            self.project_editor_runtime.remove_document(&document_id);
+            return false;
+        };
+        let _ = self.select_work_item(WorkItemId::File(opened_id));
+        self.load_error = None;
+        true
     }
 
     pub fn active_work_item(&self) -> Option<WorkItemId> {
@@ -1577,7 +2024,12 @@ impl RootView {
                 }
                 Ok(())
             }
-            CommandId::ProjectPanelRefresh => Ok(()),
+            CommandId::ProjectPanelRefresh => {
+                if let Some(project_id) = self.workspace.selected_project_id().cloned() {
+                    self.queue_project_tree_refresh(project_id);
+                }
+                Ok(())
+            }
             CommandId::TabPalette => {
                 self.open_palette(PaletteKind::Tab);
                 Ok(())
@@ -1968,6 +2420,8 @@ impl RootView {
     fn cleanup_closed_project(&mut self, project_id: &ProjectId) {
         self.layout_source_messages.remove(project_id);
         self.project_git_statuses.remove(project_id);
+        self.pending_project_tree_loads
+            .retain(|(pending_project_id, _)| pending_project_id != project_id);
         self.remove_terminal_panes_for_project(project_id.as_str());
         self.project_editor_runtime.close_project(project_id);
         if self
@@ -2993,6 +3447,157 @@ impl RootView {
             .is_some_and(|session| session.project_panel_visible())
     }
 
+    fn project_file_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Div> {
+        let project_id = self.workspace.selected_project_id()?.clone();
+        let project_name = self
+            .workspace
+            .project(&project_id)?
+            .layout
+            .project
+            .name
+            .clone();
+        let tree = self.ensure_project_tree_view(&project_id, window, cx)?;
+        let session = self
+            .project_editor_runtime
+            .workspace()
+            .session(&project_id)?;
+        let panel_width = session.project_panel_width();
+        let root_load_state = session.file_tree().directory_load_state(Path::new(""));
+        let root_is_empty = session.file_tree().visible_rows().is_empty();
+        let has_root_snapshot = session.file_tree().has_snapshot(Path::new(""));
+        let theme = self.theme_runtime.ui;
+
+        let content = match root_load_state {
+            ProjectTreeLoadState::Loading | ProjectTreeLoadState::Unloaded
+                if !has_root_snapshot =>
+            {
+                div()
+                    .debug_selector(|| "project-file-panel-loading".to_string())
+                    .flex()
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .px_4()
+                    .text_sm()
+                    .text_color(theme.text_subtle)
+                    .child(self.ui_text.get(UiTextKey::ProjectFilesLoading))
+            }
+            ProjectTreeLoadState::Error(error) if !has_root_snapshot => {
+                let retry_project_id = project_id.clone();
+                div()
+                    .debug_selector(|| "project-file-panel-error".to_string())
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .gap_3()
+                    .px_4()
+                    .text_center()
+                    .text_sm()
+                    .text_color(theme.text_muted)
+                    .child(error)
+                    .child(
+                        yttt_button(
+                            "project-file-panel-retry",
+                            self.ui_text.get(UiTextKey::ProjectFilesRetry),
+                            YtttButtonVariant::Secondary,
+                            theme,
+                            cx,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.refresh_project_tree(retry_project_id.clone(), window, cx);
+                                cx.notify();
+                            },
+                        )),
+                    )
+            }
+            ProjectTreeLoadState::Loaded if root_is_empty => div()
+                .debug_selector(|| "project-file-panel-empty".to_string())
+                .flex()
+                .flex_1()
+                .items_center()
+                .justify_center()
+                .px_4()
+                .text_sm()
+                .text_color(theme.text_subtle)
+                .child(self.ui_text.get(UiTextKey::ProjectFilesEmptyDirectory)),
+            _ => div()
+                .debug_selector(|| "project-file-tree".to_string())
+                .flex()
+                .flex_1()
+                .overflow_hidden()
+                .child(tree),
+        };
+
+        let refresh_project_id = project_id;
+        Some(
+            div()
+                .debug_selector(|| "project-file-panel".to_string())
+                .flex()
+                .flex_col()
+                .flex_none()
+                .h_full()
+                .w(px(panel_width))
+                .overflow_hidden()
+                .border_l_1()
+                .border_color(theme.border)
+                .bg(theme.sidebar_background)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .h(px(40.0))
+                        .flex_none()
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .px_3()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .truncate()
+                                        .child(self.ui_text.get(UiTextKey::ProjectFiles)),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.text_subtle)
+                                        .truncate()
+                                        .child(project_name),
+                                ),
+                        )
+                        .child(
+                            yttt_button(
+                                "project-file-panel-refresh",
+                                self.ui_text.get(UiTextKey::ProjectFilesRefresh),
+                                YtttButtonVariant::Ghost,
+                                theme,
+                                cx,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    this.refresh_project_tree(
+                                        refresh_project_id.clone(),
+                                        window,
+                                        cx,
+                                    );
+                                    cx.notify();
+                                },
+                            )),
+                        ),
+                )
+                .child(content),
+        )
+    }
+
     fn terminal_split_view_for_layout(
         &mut self,
         layout: &LayoutNode,
@@ -3968,6 +4573,20 @@ impl RootView {
         self.flush_pending_status_notifications(window, cx);
     }
 
+    fn on_project_editor_document_event(
+        &mut self,
+        document: &Entity<ProjectEditorDocument>,
+        event: &ProjectEditorDocumentEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(event, ProjectEditorDocumentEvent::Focused) {
+            let document_id = document.read(cx).model().document_id().clone();
+            let _ = self.select_work_item(WorkItemId::File(document_id));
+        }
+        cx.notify();
+    }
+
     fn dispatch_command_action(&mut self, command_id: CommandId, cx: &mut Context<Self>) {
         if self.active_palette.is_some()
             || self.pending_tab_rename.is_some()
@@ -4143,6 +4762,7 @@ impl Default for RootView {
 
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.flush_pending_project_tree_loads(window, cx);
         self.sync_input_owner_state();
         let focus_handle = self.root_focus_handle(cx);
 
@@ -4152,8 +4772,11 @@ impl Render for RootView {
             let tab_items = self.workbench_tab_items(cx);
             let project_panel_visible = self.selected_project_panel_visible();
             let split_view = self.active_work_item_view(window, cx);
+            let project_file_panel = project_panel_visible
+                .then(|| self.project_file_panel(window, cx))
+                .flatten();
 
-            div()
+            let workbench = div()
                 .flex()
                 .flex_1()
                 .relative()
@@ -4190,10 +4813,16 @@ impl Render for RootView {
                         .flex()
                         .flex_col()
                         .flex_1()
+                        .min_w_0()
                         .child(project_tabs(
                             tab_items,
                             self.theme_runtime.ui,
                             project_panel_visible,
+                            self.ui_text.get(if project_panel_visible {
+                                UiTextKey::ProjectFilesHide
+                            } else {
+                                UiTextKey::ProjectFilesShow
+                            }),
                             |work_item| {
                                 cx.listener(move |this, event: &ClickEvent, _window, cx| {
                                     let _ = this.handle_work_item_tab_click(
@@ -4228,7 +4857,12 @@ impl Render for RootView {
                             }),
                         ))
                         .child(split_view),
-                )
+                );
+            if let Some(project_file_panel) = project_file_panel {
+                workbench.child(project_file_panel)
+            } else {
+                workbench
+            }
         };
 
         let mut root = div()

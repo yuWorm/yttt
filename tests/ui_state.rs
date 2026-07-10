@@ -32,6 +32,7 @@ use yttt::{
     },
     ui::i18n::{Locale, UiText},
     ui::palette::visible_palette_rows,
+    ui::project_tree::{DirectorySnapshot, ProjectTreeEntry, ProjectTreeEntryKind},
     ui::sidebar::visible_project_items,
     ui::terminal_pane::{
         PaneLifecycle, TerminalPaneExitInput, TerminalPaneExitedEvent, TerminalSpawnFailure,
@@ -449,6 +450,157 @@ fn root_view_creates_project_work_item_session_on_open() {
     );
     assert!(!session.project_panel_visible());
     assert_eq!(session.project_panel_width(), 336.0);
+}
+
+#[test]
+fn stale_project_tree_result_does_not_replace_refreshed_state() {
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let stale = root.refresh_project_tree_state(&project_id).unwrap();
+    let current = root.refresh_project_tree_state(&project_id).unwrap();
+
+    assert!(!root.apply_project_tree_snapshot(
+        &project_id,
+        stale.generation,
+        DirectorySnapshot {
+            relative_directory: PathBuf::new(),
+            entries: vec![ProjectTreeEntry {
+                name: "stale.rs".into(),
+                relative_path: PathBuf::from("stale.rs"),
+                kind: ProjectTreeEntryKind::File,
+            }],
+        },
+    ));
+    assert!(root.apply_project_tree_snapshot(
+        &project_id,
+        current.generation,
+        DirectorySnapshot {
+            relative_directory: PathBuf::new(),
+            entries: vec![ProjectTreeEntry {
+                name: "current.rs".into(),
+                relative_path: PathBuf::from("current.rs"),
+                kind: ProjectTreeEntryKind::File,
+            }],
+        },
+    ));
+
+    let rows = root
+        .project_editor_runtime()
+        .workspace()
+        .session(&project_id)
+        .unwrap()
+        .file_tree()
+        .visible_rows();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].relative_path, PathBuf::from("current.rs"));
+}
+
+#[test]
+fn pending_and_failed_project_file_loads_preserve_active_surface() {
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let previous = root.active_work_item();
+
+    let stale = root
+        .begin_project_file_open(&project_id, Path::new("src/main.rs"))
+        .unwrap();
+    assert!(
+        root.begin_project_file_open(&project_id, Path::new("src/main.rs"))
+            .is_none()
+    );
+    assert!(root.cancel_project_file_open(&stale));
+    let current = root
+        .begin_project_file_open(&project_id, Path::new("src/main.rs"))
+        .unwrap();
+    assert!(current.generation > stale.generation);
+
+    assert!(!root.apply_project_file_open_error(&stale, "stale error"));
+    assert!(root.apply_project_file_open_error(&current, "unsupported file"));
+
+    assert_eq!(root.active_work_item(), previous);
+    assert!(
+        root.project_editor_runtime()
+            .workspace()
+            .session(&project_id)
+            .unwrap()
+            .file_ids()
+            .is_empty()
+    );
+    assert!(
+        root.project_editor_runtime()
+            .document(&current.document_id)
+            .is_none()
+    );
+    assert_eq!(root.visible_error_message(), Some("unsupported file"));
+}
+
+#[gpui::test]
+fn root_view_file_tree_loads_and_opens_a_project_file(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("tree-editor-project");
+    fs::create_dir_all(project_dir.join("src")).unwrap();
+    fs::write(project_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+    fs::write(project_dir.join("README.md"), "# Tree editor\n").unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(project_dir.clone(), sample_layout())
+        .unwrap();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| RootView::with_workspace_for_test_and_config_paths(workspace, paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("project-file-panel").is_some());
+    let tree = cx
+        .read(|app| {
+            root.read(app)
+                .project_editor_runtime()
+                .tree(&project_id)
+                .cloned()
+        })
+        .expect("visible project panel should create a tree entity");
+    cx.read(|app| {
+        assert!(
+            tree.read(app)
+                .snapshot()
+                .row_for_path(Path::new("src"))
+                .is_some()
+        );
+    });
+
+    tree.update(cx, |tree, tree_cx| {
+        assert!(tree.activate_path(Path::new("src"), tree_cx));
+    });
+    cx.run_until_parked();
+    tree.update(cx, |tree, tree_cx| {
+        assert!(tree.activate_path(Path::new("src/main.rs"), tree_cx));
+    });
+    cx.run_until_parked();
+
+    let expected_document_id = DocumentId {
+        project_id,
+        canonical_path: fs::canonicalize(project_dir.join("src/main.rs")).unwrap(),
+    };
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).active_work_item(),
+            Some(WorkItemId::File(expected_document_id.clone()))
+        );
+        assert!(
+            root.read(app)
+                .project_editor_runtime()
+                .document(&expected_document_id)
+                .is_some()
+        );
+    });
+    assert!(cx.debug_bounds("active-file-editor").is_some());
 }
 
 #[test]

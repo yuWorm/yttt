@@ -72,6 +72,32 @@ fn ui_text_returns_project_empty_terminal_labels() {
 }
 
 #[test]
+fn ui_text_returns_project_file_tree_and_open_error_labels() {
+    let english = UiText::english();
+    let chinese = UiText::new(Locale::Chinese);
+
+    assert_eq!(english.get(UiTextKey::ProjectFiles), "Files");
+    assert_eq!(english.get(UiTextKey::ProjectFilesShow), "Show Files");
+    assert_eq!(english.get(UiTextKey::ProjectFilesHide), "Hide Files");
+    assert_eq!(english.get(UiTextKey::ProjectFilesRefresh), "Refresh");
+    assert_eq!(
+        english.get(UiTextKey::ProjectFileUnsupportedBinary),
+        "Binary files are not supported"
+    );
+    assert_eq!(chinese.get(UiTextKey::ProjectFiles), "文件");
+    assert_eq!(chinese.get(UiTextKey::ProjectFilesShow), "显示文件");
+    assert_eq!(chinese.get(UiTextKey::ProjectFilesRetry), "重试");
+    assert_eq!(
+        chinese.get(UiTextKey::ProjectFileInvalidEncoding),
+        "仅支持 UTF-8 文件"
+    );
+    assert_eq!(
+        chinese.get(UiTextKey::ProjectFileOutsideProject),
+        "文件位于项目目录之外"
+    );
+}
+
+#[test]
 fn ui_text_returns_notification_action_labels() {
     let english = UiText::english();
     let chinese = UiText::new(Locale::Chinese);

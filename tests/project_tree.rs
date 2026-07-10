@@ -259,6 +259,34 @@ fn component_items_keep_empty_directories_expandable() {
 }
 
 #[test]
+fn component_synthetic_rows_use_supplied_project_tree_text() {
+    let mut tree = ProjectFileTree::new("/project");
+    let root_request = tree.request_expand(Path::new("")).unwrap();
+    tree.apply_snapshot(
+        root_request.generation,
+        snapshot("", [entry("src", ProjectTreeEntryKind::Directory)]),
+    );
+    tree.request_expand(Path::new("src")).unwrap();
+
+    let render = ProjectTreeRenderSnapshot::from_tree_with_text(
+        &tree,
+        None,
+        &yttt::ui::project_tree::ProjectTreeRenderText {
+            loading: "正在加载…".to_string(),
+            empty_directory: "空目录".to_string(),
+            retry: "重试".to_string(),
+        },
+    );
+
+    assert!(
+        render
+            .rows()
+            .iter()
+            .any(|row| row.synthetic && row.label == "正在加载…")
+    );
+}
+
+#[test]
 fn component_path_ids_and_selection_survive_refresh() {
     let mut tree = ProjectFileTree::new("/project");
     let root_request = tree.request_expand(Path::new("")).unwrap();

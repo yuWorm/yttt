@@ -8,6 +8,14 @@ use super::{
     DocumentId, ProjectEditorDocument, ProjectEditorWorkspaceState, ProjectWorkItemSession,
 };
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectFileLoadRequest {
+    pub document_id: DocumentId,
+    pub project_root: PathBuf,
+    pub relative_path: PathBuf,
+    pub generation: u64,
+}
+
 #[derive(Default)]
 pub struct ProjectEditorRuntime {
     workspace: ProjectEditorWorkspaceState,
@@ -17,6 +25,7 @@ pub struct ProjectEditorRuntime {
     tree_subscriptions: HashMap<ProjectId, Subscription>,
     pending_tree_generations: HashMap<ProjectId, u64>,
     pending_file_generations: HashMap<DocumentId, u64>,
+    next_file_generation: u64,
 }
 
 impl ProjectEditorRuntime {
@@ -130,8 +139,22 @@ impl ProjectEditorRuntime {
     }
 
     pub fn track_file_load(&mut self, document_id: DocumentId, generation: u64) {
+        self.next_file_generation = self.next_file_generation.max(generation);
         self.pending_file_generations
             .insert(document_id, generation);
+    }
+
+    pub fn begin_file_load(&mut self, document_id: DocumentId) -> Option<u64> {
+        if self.documents.contains_key(&document_id)
+            || self.pending_file_generations.contains_key(&document_id)
+        {
+            return None;
+        }
+        self.next_file_generation = self.next_file_generation.wrapping_add(1).max(1);
+        let generation = self.next_file_generation;
+        self.pending_file_generations
+            .insert(document_id, generation);
+        Some(generation)
     }
 
     pub fn file_load_is_current(&self, document_id: &DocumentId, generation: u64) -> bool {
