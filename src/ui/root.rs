@@ -43,8 +43,8 @@ enum SettingsNumberField {
 
 use crate::{
     commands::{
-        CommandDispatchError, CommandId, CommandRegistry, default_registry,
-        dispatch_workspace_command,
+        ActiveSurface, CommandContext, CommandDispatchError, CommandId, CommandRegistry,
+        default_registry, dispatch_workspace_command,
     },
     config::{
         default_layout::{DefaultLayoutState, DefaultLayoutTemplate, LayoutLoadWarning},
@@ -73,8 +73,9 @@ use crate::{
     },
     palette::{
         ActivePalette, CommandPaletteContext, PaletteItem, PaletteKind, RecentProject,
-        command_palette_items_with_text, pane_palette_items_with_text,
-        project_palette_items_with_text, tab_palette_items_with_text,
+        TabPaletteSnapshot, command_palette_items_with_text, decode_tab_palette_item_id,
+        pane_palette_items_with_text, project_palette_items_with_text, tab_palette_items_with_text,
+        unified_tab_palette_items,
     },
     runtime::{
         git_status::{ProjectGitStatus, read_project_git_status},
@@ -133,7 +134,10 @@ use crate::{
         settings::{SettingsGroupId, SettingsPageState, SettingsPanelStyle, settings_panel_style},
         sidebar::project_sidebar,
         split_view::{pointer_resize_for_drag_delta, split_child_basis},
-        tabs::{project_tabs, visible_terminal_work_item_tabs},
+        tabs::{
+            FileTabSnapshot, WorkbenchTabItem, project_tabs, visible_tab_items,
+            visible_work_item_tabs as merge_work_item_tabs,
+        },
         terminal_pane::{
             TerminalPaneContext, TerminalPaneEvent, TerminalPaneExitedEvent, TerminalPaneView,
         },
@@ -201,6 +205,7 @@ pub struct RootView {
     sidebar_collapsed: bool,
     active_split_resize_drag: Option<ActiveSplitResizeDrag>,
     pending_terminal_focus_pane_id: Option<String>,
+    pending_editor_focus_document_id: Option<crate::ui::editor::DocumentId>,
     terminal_panes: HashMap<String, Entity<TerminalPaneView>>,
     terminal_pane_subscriptions: HashMap<String, Subscription>,
     project_editor_runtime: ProjectEditorRuntime,
@@ -392,6 +397,7 @@ impl RootView {
             sidebar_collapsed: false,
             active_split_resize_drag: None,
             pending_terminal_focus_pane_id: None,
+            pending_editor_focus_document_id: None,
             terminal_panes: HashMap::new(),
             terminal_pane_subscriptions: HashMap::new(),
             project_editor_runtime,
@@ -417,6 +423,9 @@ impl RootView {
     pub fn select_project(&mut self, project_id: &ProjectId) -> Result<(), RootViewError> {
         self.workspace.select_project(project_id)?;
         self.refresh_selected_project_git_status();
+        if let Some(active) = self.active_work_item() {
+            self.apply_active_work_item(&active)?;
+        }
         Ok(())
     }
 
@@ -426,6 +435,40 @@ impl RootView {
 
     pub fn project_editor_runtime_mut(&mut self) -> &mut ProjectEditorRuntime {
         &mut self.project_editor_runtime
+    }
+
+    pub fn active_work_item(&self) -> Option<WorkItemId> {
+        let project_id = self.workspace.selected_project_id()?;
+        self.project_editor_runtime
+            .workspace()
+            .session(project_id)?
+            .active_work_item()
+            .cloned()
+    }
+
+    pub fn select_work_item(&mut self, item: WorkItemId) -> Result<bool, RootViewError> {
+        let Some((project_id, terminal_ids)) = self.selected_project_work_item_ids() else {
+            return Ok(false);
+        };
+        let selected = self
+            .project_editor_runtime
+            .workspace_mut()
+            .session_mut(&project_id)
+            .is_some_and(|session| session.select_work_item(item.clone(), &terminal_ids));
+        if !selected {
+            return Ok(false);
+        }
+
+        self.apply_active_work_item(&item)?;
+        Ok(true)
+    }
+
+    pub fn select_next_work_item(&mut self) -> Result<Option<WorkItemId>, RootViewError> {
+        self.select_relative_work_item(true)
+    }
+
+    pub fn select_previous_work_item(&mut self) -> Result<Option<WorkItemId>, RootViewError> {
+        self.select_relative_work_item(false)
     }
 
     pub fn sidebar_is_collapsed(&self) -> bool {
@@ -514,14 +557,19 @@ impl RootView {
                     .map(|project| project.id.clone());
                 if let Some(project_id) = project_id {
                     self.select_project(&project_id)?;
-                    self.queue_selected_terminal_focus();
                 } else if item.command == CommandId::ProjectOpenRecent {
                     self.open_project_path(PathBuf::from(&item.id))?;
                 }
             }
             PaletteKind::Tab => {
-                self.workspace.select_tab(&item.id)?;
-                self.queue_selected_terminal_focus();
+                let project_id = self
+                    .workspace
+                    .selected_project_id()
+                    .cloned()
+                    .ok_or(WorkspaceError::NoSelectedProject)?;
+                if let Some(work_item) = decode_tab_palette_item_id(&item.id, &project_id) {
+                    self.select_work_item(work_item)?;
+                }
             }
             PaletteKind::Pane => {
                 self.focus_visible_terminal_pane(&item.id)?;
@@ -656,8 +704,8 @@ impl RootView {
         }
 
         self.select_project(&project_id)?;
-        if let Err(error) = self.workspace.select_tab(&event.tab_id) {
-            return self.fail_workspace_error(error);
+        if !self.select_work_item(WorkItemId::Terminal(event.tab_id.clone()))? {
+            return self.fail_workspace_error(WorkspaceError::TabNotFound(event.tab_id.clone()));
         }
         if let Err(error) = self.workspace.focus_pane(&event.pane_id) {
             return self.fail_workspace_error(error);
@@ -673,19 +721,33 @@ impl RootView {
         tab_id: &str,
         click_count: usize,
     ) -> Result<(), RootViewError> {
-        self.workspace.select_tab(tab_id)?;
-        if click_count >= 2 {
+        self.handle_work_item_tab_click(WorkItemId::Terminal(tab_id.to_string()), click_count)
+    }
+
+    pub fn handle_work_item_tab_click(
+        &mut self,
+        work_item: WorkItemId,
+        click_count: usize,
+    ) -> Result<(), RootViewError> {
+        if !self.select_work_item(work_item.clone())? {
+            return Ok(());
+        }
+        if click_count >= 2 && matches!(work_item, WorkItemId::Terminal(_)) {
             self.run_command(CommandId::TabRename)?;
-        } else {
-            self.queue_selected_terminal_focus();
         }
         self.load_error = None;
         Ok(())
     }
 
     pub fn close_project_tab(&mut self, tab_id: &str) -> Result<(), RootViewError> {
-        self.workspace.select_tab(tab_id)?;
-        self.run_command(CommandId::TabClose)
+        self.close_work_item_tab(WorkItemId::Terminal(tab_id.to_string()))
+    }
+
+    pub fn close_work_item_tab(&mut self, work_item: WorkItemId) -> Result<(), RootViewError> {
+        if self.select_work_item(work_item)? {
+            self.run_command(CommandId::TabClose)?;
+        }
+        Ok(())
     }
 
     pub fn resize_focused_split_from_pointer_delta(
@@ -1400,7 +1462,7 @@ impl RootView {
         if self.pending_terminal_focus_pane_id.as_deref() == Some(event.pane_id.as_str()) {
             self.pending_terminal_focus_pane_id = None;
         }
-        self.queue_selected_terminal_focus();
+        self.reconcile_active_terminal_with_workspace()?;
         self.load_error = None;
 
         Ok(outcome)
@@ -1416,6 +1478,10 @@ impl RootView {
         self.pending_terminal_focus_pane_id.as_deref()
     }
 
+    pub fn pending_editor_focus_document_id(&self) -> Option<&crate::ui::editor::DocumentId> {
+        self.pending_editor_focus_document_id.as_ref()
+    }
+
     pub fn workspace_arrow_keydown_command(
         key: &str,
         platform: bool,
@@ -1423,6 +1489,27 @@ impl RootView {
         alt: bool,
         shift: bool,
     ) -> Option<CommandId> {
+        Self::workspace_arrow_keydown_command_for_owner(
+            InputOwnerKind::Workspace,
+            key,
+            platform,
+            control,
+            alt,
+            shift,
+        )
+    }
+
+    pub fn workspace_arrow_keydown_command_for_owner(
+        owner: InputOwnerKind,
+        key: &str,
+        platform: bool,
+        control: bool,
+        alt: bool,
+        shift: bool,
+    ) -> Option<CommandId> {
+        if owner != InputOwnerKind::Workspace {
+            return None;
+        }
         if !(platform || control) || !alt {
             return None;
         }
@@ -1449,12 +1536,14 @@ impl RootView {
     }
 
     pub fn run_command(&mut self, command_id: CommandId) -> Result<(), RootViewError> {
-        let availability = command_id.availability(self.workspace.selected_project_id().is_some());
+        let availability = command_id.availability_for_context(self.command_context());
         if !availability.enabled {
             self.load_error = Some(
-                self.ui_text
-                    .get(UiTextKey::CommandDisabledOpenProjectFirst)
-                    .to_string(),
+                self.localized_command_disabled_reason(
+                    availability
+                        .disabled_reason
+                        .unwrap_or("Command is unavailable"),
+                ),
             );
             return Ok(());
         }
@@ -1476,10 +1565,32 @@ impl RootView {
                 self.open_palette(PaletteKind::Project);
                 Ok(())
             }
+            CommandId::ProjectPanelToggle => {
+                if let Some(project_id) = self.workspace.selected_project_id().cloned() {
+                    if let Some(session) = self
+                        .project_editor_runtime
+                        .workspace_mut()
+                        .session_mut(&project_id)
+                    {
+                        session.toggle_project_panel();
+                    }
+                }
+                Ok(())
+            }
+            CommandId::ProjectPanelRefresh => Ok(()),
             CommandId::TabPalette => {
                 self.open_palette(PaletteKind::Tab);
                 Ok(())
             }
+            CommandId::TabNext => {
+                self.select_next_work_item()?;
+                Ok(())
+            }
+            CommandId::TabPrev => {
+                self.select_previous_work_item()?;
+                Ok(())
+            }
+            CommandId::TabClose => self.close_active_work_item(),
             CommandId::PanePalette => {
                 self.open_palette(PaletteKind::Pane);
                 Ok(())
@@ -1521,8 +1632,8 @@ impl RootView {
             }
             CommandId::TabNew => {
                 let shell = self.resolved_terminal_shell();
-                let _tab_id = self.workspace.create_shell_tab_with_command(shell)?;
-                self.queue_selected_terminal_focus();
+                let tab_id = self.workspace.create_shell_tab_with_command(shell)?;
+                self.select_work_item(WorkItemId::Terminal(tab_id))?;
                 Ok(())
             }
             CommandId::LayoutDefaultEdit => self.open_default_layout_editor(),
@@ -1593,6 +1704,7 @@ impl RootView {
             }
             _ => {
                 dispatch_workspace_command(&mut self.workspace, command_id)?;
+                self.reconcile_active_terminal_with_workspace()?;
                 if should_focus_terminal_after_command(command_id) {
                     self.queue_selected_terminal_focus();
                 }
@@ -1771,11 +1883,13 @@ impl RootView {
                 &self.recent_projects,
                 &self.ui_text,
             ),
-            PaletteKind::Tab => {
-                tab_palette_items_with_text(&self.workspace, &self.ui_text).unwrap_or_default()
-            }
+            PaletteKind::Tab => self.selected_work_item_palette_items(),
             PaletteKind::Pane => {
-                pane_palette_items_with_text(&self.workspace, &self.ui_text).unwrap_or_default()
+                if matches!(self.active_work_item(), Some(WorkItemId::File(_))) {
+                    Vec::new()
+                } else {
+                    pane_palette_items_with_text(&self.workspace, &self.ui_text).unwrap_or_default()
+                }
             }
         }
     }
@@ -1783,7 +1897,7 @@ impl RootView {
     fn command_palette_items(&self) -> Vec<PaletteItem> {
         let mut items = command_palette_items_with_text(
             &self.command_registry,
-            CommandPaletteContext::from_workspace(&self.workspace),
+            CommandPaletteContext::from_command_context(self.command_context()),
             &self.ui_text,
         );
 
@@ -1792,6 +1906,36 @@ impl RootView {
         }
 
         items
+    }
+
+    fn selected_work_item_palette_items(&self) -> Vec<PaletteItem> {
+        let Some(project_id) = self.workspace.selected_project_id() else {
+            return Vec::new();
+        };
+        let Some(project) = self.workspace.project(project_id) else {
+            return Vec::new();
+        };
+        let mut snapshots = tab_palette_items_with_text(&self.workspace, &self.ui_text)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|item| {
+                TabPaletteSnapshot::terminal(item.id, item.title, item.subtitle, item.status)
+            })
+            .collect::<Vec<_>>();
+        let active = self.active_work_item();
+        if let Some(session) = self.project_editor_runtime.workspace().session(project_id) {
+            snapshots.extend(session.file_ids().iter().cloned().map(|document_id| {
+                let relative_path = document_id
+                    .canonical_path
+                    .strip_prefix(&project.path)
+                    .unwrap_or(&document_id.canonical_path)
+                    .to_path_buf();
+                let status = (active.as_ref() == Some(&WorkItemId::File(document_id.clone())))
+                    .then(|| self.ui_text.get(UiTextKey::PaletteStatusActive).to_string());
+                TabPaletteSnapshot::file(document_id, relative_path, status)
+            }));
+        }
+        unified_tab_palette_items(&snapshots)
     }
 
     fn display_keybinding_for_command(&self, command: CommandId) -> Option<String> {
@@ -1826,6 +1970,51 @@ impl RootView {
         self.project_git_statuses.remove(project_id);
         self.remove_terminal_panes_for_project(project_id.as_str());
         self.project_editor_runtime.close_project(project_id);
+        if self
+            .pending_editor_focus_document_id
+            .as_ref()
+            .is_some_and(|document_id| &document_id.project_id == project_id)
+        {
+            self.pending_editor_focus_document_id = None;
+        }
+    }
+
+    fn close_active_work_item(&mut self) -> Result<(), RootViewError> {
+        let Some(active) = self.active_work_item() else {
+            return Ok(());
+        };
+        match active {
+            WorkItemId::File(document_id) => {
+                let Some((project_id, terminal_ids)) = self.selected_project_work_item_ids() else {
+                    return Ok(());
+                };
+                let next = self
+                    .project_editor_runtime
+                    .workspace_mut()
+                    .session_mut(&project_id)
+                    .and_then(|session| session.close_file(&document_id, &terminal_ids));
+                self.project_editor_runtime.remove_document(&document_id);
+                if let Some(next) = next {
+                    self.apply_active_work_item(&next)?;
+                } else {
+                    self.sync_input_owner_state();
+                }
+                Ok(())
+            }
+            WorkItemId::Terminal(tab_id) => {
+                self.workspace.select_tab(&tab_id)?;
+                dispatch_workspace_command(&mut self.workspace, CommandId::TabClose)?;
+                let selected_tab_id = self
+                    .workspace
+                    .selected_project_id()
+                    .and_then(|project_id| self.workspace.project(project_id))
+                    .map(|project| project.selected_tab_id.clone());
+                if let Some(selected_tab_id) = selected_tab_id {
+                    self.select_work_item(WorkItemId::Terminal(selected_tab_id))?;
+                }
+                Ok(())
+            }
+        }
     }
 
     fn open_selected_tab_rename_dialog(&mut self) -> Result<(), RootViewError> {
@@ -2013,6 +2202,118 @@ impl RootView {
         }
     }
 
+    fn selected_project_work_item_ids(&self) -> Option<(ProjectId, Vec<String>)> {
+        let project_id = self.workspace.selected_project_id()?.clone();
+        let terminal_ids = self
+            .workspace
+            .project(&project_id)?
+            .layout
+            .tabs
+            .iter()
+            .map(|tab| tab.id.clone())
+            .collect();
+        Some((project_id, terminal_ids))
+    }
+
+    fn select_relative_work_item(
+        &mut self,
+        forward: bool,
+    ) -> Result<Option<WorkItemId>, RootViewError> {
+        let Some((project_id, terminal_ids)) = self.selected_project_work_item_ids() else {
+            return Ok(None);
+        };
+        let next = self
+            .project_editor_runtime
+            .workspace_mut()
+            .session_mut(&project_id)
+            .and_then(|session| {
+                if forward {
+                    session.select_next(&terminal_ids)
+                } else {
+                    session.select_previous(&terminal_ids)
+                }
+            });
+        if let Some(item) = &next {
+            self.apply_active_work_item(item)?;
+        }
+        Ok(next)
+    }
+
+    fn apply_active_work_item(&mut self, item: &WorkItemId) -> Result<(), RootViewError> {
+        match item {
+            WorkItemId::Terminal(tab_id) => {
+                self.workspace.select_tab(tab_id)?;
+                self.pending_editor_focus_document_id = None;
+                self.queue_selected_terminal_focus();
+            }
+            WorkItemId::File(document_id) => {
+                self.pending_terminal_focus_pane_id = None;
+                self.pending_editor_focus_document_id = Some(document_id.clone());
+            }
+        }
+        self.sync_input_owner_state();
+        Ok(())
+    }
+
+    fn reconcile_active_terminal_with_workspace(&mut self) -> Result<(), RootViewError> {
+        if !matches!(self.active_work_item(), Some(WorkItemId::Terminal(_))) {
+            return Ok(());
+        }
+        let Some((project_id, terminal_ids)) = self.selected_project_work_item_ids() else {
+            return Ok(());
+        };
+        let selected_terminal = self.workspace.project(&project_id).and_then(|project| {
+            terminal_ids
+                .contains(&project.selected_tab_id)
+                .then(|| WorkItemId::Terminal(project.selected_tab_id.clone()))
+        });
+        let next = if let Some(selected_terminal) = selected_terminal {
+            self.project_editor_runtime
+                .workspace_mut()
+                .session_mut(&project_id)
+                .and_then(|session| {
+                    session
+                        .select_work_item(selected_terminal.clone(), &terminal_ids)
+                        .then_some(selected_terminal)
+                })
+        } else {
+            self.project_editor_runtime
+                .workspace_mut()
+                .session_mut(&project_id)
+                .and_then(|session| session.select_next(&terminal_ids))
+        };
+        if let Some(next) = next {
+            self.apply_active_work_item(&next)?;
+        } else {
+            self.pending_terminal_focus_pane_id = None;
+            self.pending_editor_focus_document_id = None;
+            self.sync_input_owner_state();
+        }
+        Ok(())
+    }
+
+    fn command_context(&self) -> CommandContext {
+        CommandContext {
+            has_selected_project: self.workspace.selected_project_id().is_some(),
+            active_surface: match self.active_work_item() {
+                Some(WorkItemId::Terminal(_)) => ActiveSurface::Terminal,
+                Some(WorkItemId::File(_)) => ActiveSurface::File,
+                None => ActiveSurface::None,
+            },
+        }
+    }
+
+    fn localized_command_disabled_reason(&self, reason: &str) -> String {
+        let key = match reason {
+            "Open a project first" => UiTextKey::CommandDisabledOpenProjectFirst,
+            "Focus a project file first" => UiTextKey::CommandDisabledFocusProjectFileFirst,
+            "Open a terminal or file first" => UiTextKey::CommandDisabledOpenWorkItemFirst,
+            "Switch to a terminal tab first" => UiTextKey::CommandDisabledSwitchTerminalFirst,
+            _ => UiTextKey::CommandUnavailable,
+        };
+        self.ui_text.get(key).to_string()
+    }
+
     fn refresh_project_git_status(&mut self, project_id: &ProjectId, project_path: &Path) {
         if let Some(status) = read_project_git_status(project_path) {
             self.project_git_statuses.insert(project_id.clone(), status);
@@ -2107,6 +2408,15 @@ impl RootView {
             InputOwnerRegistration::blocking(
                 InputOwnerKind::Palette,
                 InputScopeId::new(palette_input_scope_id(active_palette.kind)),
+            )
+        } else if let Some(WorkItemId::File(document_id)) = self.active_work_item() {
+            InputOwnerRegistration::blocking(
+                InputOwnerKind::Editor,
+                InputScopeId::new(format!(
+                    "editor.project_file:{}:{}",
+                    document_id.project_id.as_str(),
+                    document_id.canonical_path.display()
+                )),
             )
         } else {
             InputOwnerRegistration::workspace()
@@ -2612,6 +2922,75 @@ impl RootView {
             .bg(self.theme_runtime.ui.terminal_background)
             .text_color(self.theme_runtime.ui.text)
             .child(self.terminal_split_view_for_layout(&layout, &tree_input, window, cx))
+    }
+
+    fn active_work_item_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let Some(WorkItemId::File(document_id)) = self.active_work_item() else {
+            return self.active_terminal_split_view(window, cx);
+        };
+        let document = self.project_editor_runtime.document(&document_id).cloned();
+        if self.pending_editor_focus_document_id.as_ref() == Some(&document_id)
+            && self.foreground_input_owner_kind() == InputOwnerKind::Editor
+        {
+            if let Some(document) = &document {
+                document.update(cx, |document, document_cx| {
+                    document.focus(window, document_cx);
+                });
+                self.pending_editor_focus_document_id = None;
+            }
+        }
+
+        div()
+            .debug_selector(|| "active-file-editor".to_string())
+            .flex()
+            .flex_1()
+            .bg(self.theme_runtime.ui.surface)
+            .children(document)
+    }
+
+    fn workbench_tab_items(&self, cx: &Context<Self>) -> Vec<WorkbenchTabItem> {
+        let terminal_items = visible_tab_items(&self.workspace);
+        let Some(project_id) = self.workspace.selected_project_id() else {
+            return Vec::new();
+        };
+        let Some(project) = self.workspace.project(project_id) else {
+            return Vec::new();
+        };
+        let file_items = self
+            .project_editor_runtime
+            .workspace()
+            .session(project_id)
+            .map(|session| {
+                session
+                    .file_ids()
+                    .iter()
+                    .map(|document_id| FileTabSnapshot {
+                        id: document_id.clone(),
+                        relative_path: document_id
+                            .canonical_path
+                            .strip_prefix(&project.path)
+                            .unwrap_or(&document_id.canonical_path)
+                            .to_path_buf(),
+                        dirty: self
+                            .project_editor_runtime
+                            .document(document_id)
+                            .is_some_and(|document| document.read(cx).model().is_dirty()),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let active = self.active_work_item();
+        merge_work_item_tabs(&terminal_items, &file_items, active.as_ref())
+    }
+
+    pub fn selected_project_panel_visible(&self) -> bool {
+        let Some(project_id) = self.workspace.selected_project_id() else {
+            return false;
+        };
+        self.project_editor_runtime
+            .workspace()
+            .session(project_id)
+            .is_some_and(|session| session.project_panel_visible())
     }
 
     fn terminal_split_view_for_layout(
@@ -3610,7 +3989,8 @@ impl RootView {
         }
 
         if self.active_palette.is_none() {
-            if let Some(command_id) = Self::workspace_arrow_keydown_command(
+            if let Some(command_id) = Self::workspace_arrow_keydown_command_for_owner(
+                self.foreground_input_owner_kind(),
                 &event.keystroke.key,
                 event.keystroke.modifiers.platform,
                 event.keystroke.modifiers.control,
@@ -3769,7 +4149,9 @@ impl Render for RootView {
         let body = if self.workspace.opened_projects().is_empty() {
             empty_workspace(cx, &self.ui_text, &self.theme_runtime.ui)
         } else {
-            let split_view = self.active_terminal_split_view(window, cx);
+            let tab_items = self.workbench_tab_items(cx);
+            let project_panel_visible = self.selected_project_panel_visible();
+            let split_view = self.active_work_item_view(window, cx);
 
             div()
                 .flex()
@@ -3809,32 +4191,22 @@ impl Render for RootView {
                         .flex_col()
                         .flex_1()
                         .child(project_tabs(
-                            visible_terminal_work_item_tabs(&self.workspace),
+                            tab_items,
                             self.theme_runtime.ui,
-                            false,
+                            project_panel_visible,
                             |work_item| {
-                                let tab_id = match work_item {
-                                    WorkItemId::Terminal(tab_id) => Some(tab_id),
-                                    WorkItemId::File(_) => None,
-                                };
                                 cx.listener(move |this, event: &ClickEvent, _window, cx| {
-                                    if let Some(tab_id) = &tab_id {
-                                        let _ = this
-                                            .handle_project_tab_click(tab_id, event.click_count());
-                                    }
+                                    let _ = this.handle_work_item_tab_click(
+                                        work_item.clone(),
+                                        event.click_count(),
+                                    );
                                     cx.notify();
                                 })
                             },
                             |work_item| {
-                                let tab_id = match work_item {
-                                    WorkItemId::Terminal(tab_id) => Some(tab_id),
-                                    WorkItemId::File(_) => None,
-                                };
                                 cx.listener(move |this, _event: &ClickEvent, _window, cx| {
                                     cx.stop_propagation();
-                                    if let Some(tab_id) = &tab_id {
-                                        let _ = this.close_project_tab(tab_id);
-                                    }
+                                    let _ = this.close_work_item_tab(work_item.clone());
                                     cx.notify();
                                 })
                             },
@@ -3850,7 +4222,10 @@ impl Render for RootView {
                                 let _ = this.run_command(CommandId::PaneSplitHorizontal);
                                 cx.notify();
                             }),
-                            cx.listener(|_, _, _window, _cx| {}),
+                            cx.listener(|this, _, _window, cx| {
+                                let _ = this.run_command(CommandId::ProjectPanelToggle);
+                                cx.notify();
+                            }),
                         ))
                         .child(split_view),
                 )

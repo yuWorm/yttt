@@ -309,6 +309,7 @@ where
 
     let mut tab = div()
         .id(("project-tab", index))
+        .debug_selector(move || format!("project-tab-{index}"))
         .group(group_name.clone())
         .flex()
         .items_center()

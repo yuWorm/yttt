@@ -1,9 +1,12 @@
 use std::{
+    cell::RefCell,
     fs,
     path::{Path, PathBuf},
+    rc::Rc,
+    time::SystemTime,
 };
 
-use gpui::Keystroke;
+use gpui::{AppContext as _, Keystroke, Subscription};
 use tempfile::tempdir;
 use yttt::{
     commands::CommandId,
@@ -22,7 +25,11 @@ use yttt::{
     runtime::notification::{NotificationEvent, NotificationKind},
     runtime::terminal::{ExitReason, ProcessStatus},
     ui::components::SelectableState,
-    ui::editor::{DocumentId, EditorDiagnosticSeverity, EditorLanguageId, WorkItemId},
+    ui::editor::{
+        CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, DiskFingerprint, DocumentId,
+        EditorAppearance, EditorDiagnosticSeverity, EditorLanguageId, ProjectEditorDocument,
+        ProjectEditorModel, WorkItemId,
+    },
     ui::i18n::{Locale, UiText},
     ui::palette::visible_palette_rows,
     ui::sidebar::visible_project_items,
@@ -499,7 +506,7 @@ fn root_view_project_switch_preserves_each_editor_session() {
         .unwrap();
     assert_eq!(
         first_session.active_work_item(),
-        Some(&WorkItemId::File(opened_file))
+        Some(&WorkItemId::File(opened_file.clone()))
     );
     assert!(!first_session.project_panel_visible());
     assert_eq!(first_session.project_panel_width(), 401.0);
@@ -509,6 +516,277 @@ fn root_view_project_switch_preserves_each_editor_session() {
             .session(&second)
             .is_some()
     );
+    assert_eq!(root.pending_editor_focus_document_id(), Some(&opened_file));
+    assert!(root.pending_terminal_focus_pane_id().is_none());
+}
+
+#[test]
+fn root_view_tab_navigation_crosses_terminal_and_file_work_items() {
+    let mut root = RootView::dev_fixture();
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let document_id = root
+        .project_editor_runtime_mut()
+        .workspace_mut()
+        .session_mut(&project_id)
+        .unwrap()
+        .open_file(PathBuf::from("/tmp/yttt/src/main.rs"));
+
+    root.select_work_item(WorkItemId::Terminal("agent".to_string()))
+        .unwrap();
+    root.run_command(CommandId::TabNext).unwrap();
+
+    assert_eq!(
+        root.active_work_item(),
+        Some(WorkItemId::File(document_id.clone()))
+    );
+    assert_eq!(
+        root.workspace()
+            .project(&project_id)
+            .unwrap()
+            .selected_tab_id,
+        "agent"
+    );
+
+    root.run_command(CommandId::TabNext).unwrap();
+    assert_eq!(
+        root.active_work_item(),
+        Some(WorkItemId::Terminal("dev".to_string()))
+    );
+    assert_eq!(
+        root.workspace()
+            .project(&project_id)
+            .unwrap()
+            .selected_tab_id,
+        "dev"
+    );
+
+    root.run_command(CommandId::TabPrev).unwrap();
+    assert_eq!(root.active_work_item(), Some(WorkItemId::File(document_id)));
+}
+
+#[test]
+fn root_view_tab_close_dispatches_to_the_active_file_work_item() {
+    let mut root = RootView::dev_fixture();
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let document_id = root
+        .project_editor_runtime_mut()
+        .workspace_mut()
+        .session_mut(&project_id)
+        .unwrap()
+        .open_file(PathBuf::from("/tmp/yttt/src/main.rs"));
+    let terminal_count = root
+        .workspace()
+        .project(&project_id)
+        .unwrap()
+        .layout
+        .tabs
+        .len();
+
+    root.run_command(CommandId::TabClose).unwrap();
+
+    let session = root
+        .project_editor_runtime()
+        .workspace()
+        .session(&project_id)
+        .unwrap();
+    assert!(!session.file_ids().contains(&document_id));
+    assert_eq!(
+        session.active_work_item(),
+        Some(&WorkItemId::Terminal("agent".to_string()))
+    );
+    assert_eq!(
+        root.workspace()
+            .project(&project_id)
+            .unwrap()
+            .layout
+            .tabs
+            .len(),
+        terminal_count
+    );
+}
+
+#[test]
+fn root_view_tab_palette_lists_and_selects_file_work_items() {
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let document_id = root
+        .project_editor_runtime_mut()
+        .workspace_mut()
+        .session_mut(&project_id)
+        .unwrap()
+        .open_file(PathBuf::from("/tmp/yttt/src/main.rs"));
+    root.select_work_item(WorkItemId::Terminal("dev".to_string()))
+        .unwrap();
+
+    root.open_palette(PaletteKind::Tab);
+    let items = root.active_palette_items();
+    let file_item = items
+        .iter()
+        .find(|item| item.id == "file:/tmp/yttt/src/main.rs")
+        .unwrap();
+    assert_eq!(file_item.title, "main.rs");
+    assert_eq!(file_item.subtitle.as_deref(), Some("src/main.rs"));
+
+    root.set_palette_query("main.rs");
+    root.confirm_palette_selection().unwrap();
+
+    assert_eq!(root.active_work_item(), Some(WorkItemId::File(document_id)));
+    assert_eq!(
+        root.workspace()
+            .project(&project_id)
+            .unwrap()
+            .selected_tab_id,
+        "dev"
+    );
+}
+
+#[test]
+fn root_view_active_file_owns_input_without_leaking_to_terminal() {
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let document_id = root
+        .project_editor_runtime_mut()
+        .workspace_mut()
+        .session_mut(&project_id)
+        .unwrap()
+        .open_file(PathBuf::from("/tmp/yttt/src/main.rs"));
+
+    root.select_work_item(WorkItemId::File(document_id.clone()))
+        .unwrap();
+
+    assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Editor);
+    assert_eq!(
+        root.foreground_input_scope_id().as_deref(),
+        Some("editor.project_file:/tmp/yttt:/tmp/yttt/src/main.rs")
+    );
+    assert!(!root.terminal_input_allowed());
+    assert_eq!(root.pending_editor_focus_document_id(), Some(&document_id));
+
+    root.select_work_item(WorkItemId::Terminal("dev".to_string()))
+        .unwrap();
+    assert_eq!(
+        root.foreground_input_owner_kind(),
+        InputOwnerKind::Workspace
+    );
+    assert!(root.terminal_input_allowed());
+    assert!(root.pending_editor_focus_document_id().is_none());
+}
+
+#[gpui::test]
+fn root_view_renders_active_file_document_and_consumes_focus(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut workspace = workspace_with_sample_project();
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    workspace.select_project(&project_id).unwrap();
+    let document_id = DocumentId {
+        project_id: project_id.clone(),
+        canonical_path: PathBuf::from("/tmp/yttt/src/main.rs"),
+    };
+    let expected_document_id = document_id.clone();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|root_cx| {
+            let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths);
+            root.project_editor_runtime_mut()
+                .workspace_mut()
+                .session_mut(&project_id)
+                .unwrap()
+                .open_file(document_id.canonical_path.clone());
+            let editor = CodeEditorState::new(
+                &document_id.canonical_path,
+                CodeEditorConfig::new("main.rs", CodeEditorLanguageMode::Auto),
+                "fn main() {}",
+            );
+            let model = ProjectEditorModel::new(
+                document_id.clone(),
+                editor,
+                DiskFingerprint {
+                    exists: true,
+                    byte_len: 12,
+                    modified: Some(SystemTime::UNIX_EPOCH),
+                    content_hash: 1,
+                },
+            );
+            let document = root_cx.new(|document_cx| {
+                ProjectEditorDocument::new(model, EditorAppearance::default(), window, document_cx)
+            });
+            root.project_editor_runtime_mut().insert_document(
+                document_id.clone(),
+                document,
+                Subscription::new(|| {}),
+            );
+            root.select_work_item(WorkItemId::File(document_id))
+                .unwrap();
+            root
+        });
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+
+    assert!(cx.debug_bounds("active-file-editor").is_some());
+    assert!(cx.debug_bounds("project-tab-2").is_some());
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).active_work_item(),
+            Some(WorkItemId::File(expected_document_id))
+        );
+        assert!(root.read(app).pending_editor_focus_document_id().is_none());
+    });
+}
+
+#[test]
+fn root_view_file_surface_blocks_terminal_only_commands() {
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let document_id = root
+        .project_editor_runtime_mut()
+        .workspace_mut()
+        .session_mut(&project_id)
+        .unwrap()
+        .open_file(PathBuf::from("/tmp/yttt/src/main.rs"));
+    let before = root
+        .workspace()
+        .project(&project_id)
+        .unwrap()
+        .layout
+        .clone();
+
+    root.run_command(CommandId::TabNew).unwrap();
+    root.run_command(CommandId::TabRename).unwrap();
+    root.run_command(CommandId::PaneSplitVertical).unwrap();
+
+    assert_eq!(
+        root.workspace().project(&project_id).unwrap().layout,
+        before
+    );
+    assert_eq!(root.active_work_item(), Some(WorkItemId::File(document_id)));
+    assert!(root.visible_tab_rename_dialog_title().is_none());
+    assert_eq!(
+        root.visible_error_message(),
+        Some("Switch to a terminal tab first")
+    );
+}
+
+#[test]
+fn root_view_file_surface_has_no_pane_palette_items() {
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let document_id = root
+        .project_editor_runtime_mut()
+        .workspace_mut()
+        .session_mut(&project_id)
+        .unwrap()
+        .open_file(PathBuf::from("/tmp/yttt/src/main.rs"));
+    root.select_work_item(WorkItemId::File(document_id))
+        .unwrap();
+
+    root.open_palette(PaletteKind::Pane);
+
+    assert!(root.active_palette_items().is_empty());
 }
 
 #[test]
@@ -2047,6 +2325,21 @@ fn root_view_terminal_exit_closes_single_pane_tab() {
 }
 
 #[test]
+fn root_view_terminal_exit_reconciles_active_work_item() {
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
+    root.select_work_item(WorkItemId::Terminal("agent".to_string()))
+        .unwrap();
+
+    root.handle_terminal_pane_exit(terminal_pane_exited_event("agent", "codex"))
+        .unwrap();
+
+    assert_eq!(
+        root.active_work_item(),
+        Some(WorkItemId::Terminal("dev".to_string()))
+    );
+}
+
+#[test]
 fn root_view_terminal_exit_keeps_project_open_when_last_tab_closes() {
     let mut workspace = Workspace::new();
     workspace
@@ -2199,6 +2492,33 @@ fn root_view_focus_notification_target_queues_terminal_focus() {
 }
 
 #[test]
+fn root_view_focus_notification_target_leaves_active_file_for_terminal() {
+    let mut root = RootView::dev_fixture();
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let document_id = root
+        .project_editor_runtime_mut()
+        .workspace_mut()
+        .session_mut(&project_id)
+        .unwrap()
+        .open_file(PathBuf::from("/tmp/yttt/src/main.rs"));
+    root.select_work_item(WorkItemId::File(document_id))
+        .unwrap();
+
+    root.focus_notification_target(&notification_event())
+        .unwrap();
+
+    assert_eq!(
+        root.active_work_item(),
+        Some(WorkItemId::Terminal("agent".to_string()))
+    );
+    assert_eq!(
+        root.foreground_input_owner_kind(),
+        InputOwnerKind::Workspace
+    );
+    assert_eq!(root.pending_terminal_focus_pane_id(), Some("codex"));
+}
+
+#[test]
 fn workspace_arrow_keydown_fallback_maps_to_pane_commands() {
     assert_eq!(
         RootView::workspace_arrow_keydown_command("right", true, false, true, false),
@@ -2214,6 +2534,17 @@ fn workspace_arrow_keydown_fallback_maps_to_pane_commands() {
     );
     assert_eq!(
         RootView::workspace_arrow_keydown_command("right", true, false, false, false),
+        None
+    );
+    assert_eq!(
+        RootView::workspace_arrow_keydown_command_for_owner(
+            InputOwnerKind::Editor,
+            "right",
+            true,
+            false,
+            true,
+            false,
+        ),
         None
     );
 }

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use crate::{
     commands::{ActiveSurface, CommandContext, CommandId, CommandRegistry},
     model::{
+        ids::ProjectId,
         layout::LayoutNode,
         workspace::{AgentStatus, OpenedProject, PaneProcessState, TabStartState, Workspace},
     },
@@ -296,6 +297,19 @@ pub fn tab_palette_items_with_text(
 
 pub fn unified_tab_palette_items(snapshots: &[TabPaletteSnapshot]) -> Vec<PaletteItem> {
     tab_palette_items_from_snapshots(snapshots, true)
+}
+
+pub fn decode_tab_palette_item_id(id: &str, project_id: &ProjectId) -> Option<WorkItemId> {
+    if let Some(tab_id) = id.strip_prefix("terminal:") {
+        return (!tab_id.is_empty()).then(|| WorkItemId::Terminal(tab_id.to_string()));
+    }
+    let canonical_path = id.strip_prefix("file:")?;
+    (!canonical_path.is_empty()).then(|| {
+        WorkItemId::File(DocumentId {
+            project_id: project_id.clone(),
+            canonical_path: PathBuf::from(canonical_path),
+        })
+    })
 }
 
 fn tab_palette_items_from_snapshots(
