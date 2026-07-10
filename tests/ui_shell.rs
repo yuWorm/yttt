@@ -25,7 +25,7 @@ use yttt::ui::primitives::{
     panel::{YtttPanelKind, yttt_panel_style},
     row::{YtttRowKind, yttt_row_style},
     select::yttt_select_style,
-    sidebar::yttt_sidebar_style,
+    sidebar::{SidebarSide, SidebarWidthState, resize_sidebar_width, yttt_sidebar_style},
     status::{YtttStatusTone, yttt_status_dot_style},
     switch::yttt_switch_style,
     tabs::yttt_tabbar_style,
@@ -153,8 +153,12 @@ fn sidebar_and_tabs_use_compact_zed_like_density() {
     let tabs = project_tabs_style(theme);
 
     assert!(sidebar.width <= gpui::px(220.0));
+    assert_eq!(sidebar.default_width, sidebar.width);
+    assert_eq!(sidebar.min_width, gpui::px(160.0));
+    assert_eq!(sidebar.max_width, gpui::px(420.0));
     assert!(sidebar.collapsed_width < sidebar.width);
     assert_eq!(sidebar.border_width, gpui::px(1.0));
+    assert_eq!(sidebar.resize_hit_area_width, gpui::px(5.0));
     assert_eq!(sidebar.item_height, gpui::px(28.0));
     assert_eq!(sidebar.item_padding_x, gpui::px(8.0));
     assert_eq!(sidebar.background, theme.app_background);
@@ -167,6 +171,51 @@ fn sidebar_and_tabs_use_compact_zed_like_density() {
     assert_eq!(tabs.leading_icon, ProjectTabLeadingIcon::Terminal);
     assert_eq!(tabs.status_indicator, ProjectTabStatusIndicator::Dot);
     assert_ne!(tabs.active_background, tabs.inactive_background);
+}
+
+#[test]
+fn right_sidebar_grows_when_dragged_left() {
+    assert_eq!(
+        resize_sidebar_width(SidebarSide::Right, 280.0, -40.0, 200.0, 520.0),
+        320.0
+    );
+}
+
+#[test]
+fn sidebar_resize_clamps_at_both_bounds() {
+    assert_eq!(
+        resize_sidebar_width(SidebarSide::Left, 400.0, 80.0, 160.0, 420.0),
+        420.0
+    );
+    assert_eq!(
+        resize_sidebar_width(SidebarSide::Left, 170.0, -80.0, 160.0, 420.0),
+        160.0
+    );
+    assert_eq!(
+        resize_sidebar_width(SidebarSide::Right, 510.0, -80.0, 200.0, 520.0),
+        520.0
+    );
+    assert_eq!(
+        resize_sidebar_width(SidebarSide::Right, 210.0, 80.0, 200.0, 520.0),
+        200.0
+    );
+}
+
+#[test]
+fn sidebar_inactive_width_does_not_overwrite_expanded_width() {
+    let mut left = SidebarWidthState::new(SidebarSide::Left, 216.0, 160.0, 420.0, 46.0);
+    left.set_active(false);
+    assert_eq!(left.visible_width(), 46.0);
+    assert_eq!(left.expanded_width(), 216.0);
+    left.set_active(true);
+    assert_eq!(left.visible_width(), 216.0);
+
+    let mut right = SidebarWidthState::new(SidebarSide::Right, 280.0, 200.0, 520.0, 0.0);
+    right.set_active(false);
+    assert_eq!(right.visible_width(), 0.0);
+    assert_eq!(right.expanded_width(), 280.0);
+    right.set_active(true);
+    assert_eq!(right.visible_width(), 280.0);
 }
 
 #[test]
@@ -720,7 +769,14 @@ fn yttt_sidebar_style_matches_project_sidebar_density() {
     let project = project_sidebar_style(theme);
 
     assert_eq!(primitive.width, project.width);
+    assert_eq!(primitive.default_width, project.default_width);
+    assert_eq!(primitive.min_width, project.min_width);
+    assert_eq!(primitive.max_width, project.max_width);
     assert_eq!(primitive.collapsed_width, project.collapsed_width);
+    assert_eq!(
+        primitive.resize_hit_area_width,
+        project.resize_hit_area_width
+    );
     assert_eq!(primitive.item_height, gpui::px(28.0));
     assert_eq!(primitive.item_padding_x, gpui::px(8.0));
     assert_eq!(primitive.background, theme.app_background);

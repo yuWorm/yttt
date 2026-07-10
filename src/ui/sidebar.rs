@@ -20,7 +20,10 @@ use crate::ui::{
     primitives::{
         icon_button::YtttIconButtonKind,
         row::{YtttRowKind, yttt_row_style},
-        sidebar::yttt_sidebar_style,
+        sidebar::{
+            PROJECT_SIDEBAR_MAX_WIDTH, PROJECT_SIDEBAR_MIN_WIDTH, resize_sidebar_width,
+            yttt_sidebar_style,
+        },
     },
     theme::WorkbenchTheme,
 };
@@ -49,8 +52,12 @@ pub struct ProjectSidebarItem {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProjectSidebarStyle {
     pub width: Pixels,
+    pub default_width: Pixels,
+    pub min_width: Pixels,
+    pub max_width: Pixels,
     pub collapsed_width: Pixels,
     pub border_width: Pixels,
+    pub resize_hit_area_width: Pixels,
     pub item_height: Pixels,
     pub item_padding_x: Pixels,
     pub background: Rgba,
@@ -62,8 +69,12 @@ pub fn project_sidebar_style(theme: WorkbenchTheme) -> ProjectSidebarStyle {
     let primitive = yttt_sidebar_style(theme);
     ProjectSidebarStyle {
         width: primitive.width,
+        default_width: primitive.default_width,
+        min_width: primitive.min_width,
+        max_width: primitive.max_width,
         collapsed_width: primitive.collapsed_width,
         border_width: primitive.border_width,
+        resize_hit_area_width: primitive.resize_hit_area_width,
         item_height: primitive.item_height,
         item_padding_x: primitive.item_padding_x,
         background: primitive.background,
@@ -99,6 +110,7 @@ pub fn project_sidebar<SelectH, SelectF, ContextH, ContextF, ToggleH>(
     theme: WorkbenchTheme,
     text: UiText,
     action_context: FocusHandle,
+    expanded_width: f32,
     collapsed: bool,
     on_toggle_sidebar: ToggleH,
     mut on_select_project: SelectF,
@@ -115,7 +127,13 @@ where
     let width = if collapsed {
         style.collapsed_width
     } else {
-        style.width
+        gpui::px(resize_sidebar_width(
+            crate::ui::primitives::sidebar::SidebarSide::Left,
+            expanded_width,
+            0.0,
+            PROJECT_SIDEBAR_MIN_WIDTH,
+            PROJECT_SIDEBAR_MAX_WIDTH,
+        ))
     };
     let mut sidebar = div()
         .flex()

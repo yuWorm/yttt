@@ -3736,6 +3736,7 @@ impl Render for RootView {
                     self.theme_runtime.ui,
                     self.ui_text,
                     focus_handle.clone(),
+                    self.app_settings.project_panel.project_sidebar_width,
                     self.sidebar_collapsed,
                     cx.listener(|this, _, _window, cx| {
                         this.toggle_sidebar();
