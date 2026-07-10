@@ -1,4 +1,7 @@
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use gpui::Keystroke;
 use tempfile::tempdir;
@@ -12,7 +15,7 @@ use yttt::{
         workspace::{AgentStatus, PaneProcessState, Workspace},
     },
     palette::{ActivePalette, PaletteItem, PaletteKind},
-    runtime::git_status::{GitStatusSummary, parse_git_status_porcelain},
+    runtime::git_status::{GitFileStatus, GitStatusSummary, parse_git_status_porcelain},
     runtime::notification::{NotificationEvent, NotificationKind},
     runtime::terminal::{ExitReason, ProcessStatus},
     ui::components::SelectableState,
@@ -72,6 +75,35 @@ fn git_status_summary_counts_each_dirty_file_once() {
 
     assert_eq!(parsed.summary.added, 1);
     assert_eq!(parsed.summary.modified, 1);
+}
+
+#[test]
+fn git_status_parser_records_file_tones() {
+    let parsed = parse_git_status_porcelain(
+        "## main\n M src/main.rs\nA  src/lib.rs\n D old.rs\n?? notes.txt\nR  old.txt -> new.txt\n",
+    );
+
+    assert_eq!(
+        parsed.file_status(Path::new("src/main.rs")),
+        Some(GitFileStatus::Modified)
+    );
+    assert_eq!(
+        parsed.file_status(Path::new("src/lib.rs")),
+        Some(GitFileStatus::Added)
+    );
+    assert_eq!(
+        parsed.file_status(Path::new("old.rs")),
+        Some(GitFileStatus::Deleted)
+    );
+    assert_eq!(
+        parsed.file_status(Path::new("notes.txt")),
+        Some(GitFileStatus::Untracked)
+    );
+    assert_eq!(
+        parsed.file_status(Path::new("new.txt")),
+        Some(GitFileStatus::Modified)
+    );
+    assert_eq!(parsed.file_status(Path::new("old.txt")), None);
 }
 
 #[test]
