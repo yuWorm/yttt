@@ -40,6 +40,12 @@ enum SettingsNumberField {
     LineHeight,
     Padding,
     Scrollback,
+    EditorFontSize,
+    EditorLineHeight,
+    EditorTabSize,
+    EditorAutosaveDelay,
+    ProjectPanelWidth,
+    ProjectSidebarWidth,
 }
 
 use crate::{
@@ -111,8 +117,9 @@ use crate::{
             code_editor_input_state, project_relative_path, read_project_file, save_project_file,
         },
         font_options::{
-            terminal_font_family_option_for_setting, terminal_font_family_options_from_system,
-            terminal_font_family_setting_from_option,
+            font_family_option_for_setting, font_family_options_from_system,
+            font_family_setting_from_option, terminal_font_family_option_for_setting,
+            terminal_font_family_options_from_system, terminal_font_family_setting_from_option,
         },
         i18n::{Locale, UiText, UiTextKey},
         input_owner::{
@@ -217,6 +224,10 @@ pub struct RootView {
     settings_editor_language_select_subscription: Option<Subscription>,
     settings_font_family_select: Option<Entity<SettingsStringSelectState>>,
     settings_font_family_select_subscription: Option<Subscription>,
+    settings_editor_font_family_select: Option<Entity<SettingsStringSelectState>>,
+    settings_editor_font_family_select_subscription: Option<Subscription>,
+    settings_editor_autosave_select: Option<Entity<SettingsStringSelectState>>,
+    settings_editor_autosave_select_subscription: Option<Subscription>,
     settings_number_inputs: HashMap<SettingsNumberField, Entity<InputState>>,
     settings_number_input_subscriptions: HashMap<SettingsNumberField, Vec<Subscription>>,
     layout_toml_editor: Option<LayoutEditorSession>,
@@ -453,6 +464,10 @@ impl RootView {
             settings_editor_language_select_subscription: None,
             settings_font_family_select: None,
             settings_font_family_select_subscription: None,
+            settings_editor_font_family_select: None,
+            settings_editor_font_family_select_subscription: None,
+            settings_editor_autosave_select: None,
+            settings_editor_autosave_select_subscription: None,
             settings_number_inputs: HashMap::new(),
             settings_number_input_subscriptions: HashMap::new(),
             layout_toml_editor: None,
@@ -523,6 +538,25 @@ impl RootView {
         self.project_editor_runtime
             .track_tree_load(project_id.clone(), request.generation);
         Some(request)
+    }
+
+    fn refresh_expanded_project_tree_states(
+        &mut self,
+        project_id: &ProjectId,
+    ) -> Vec<DirectoryLoadRequest> {
+        let Some(session) = self
+            .project_editor_runtime
+            .workspace_mut()
+            .session_mut(project_id)
+        else {
+            return Vec::new();
+        };
+        let requests = session.file_tree_mut().refresh_expanded();
+        if let Some(request) = requests.first() {
+            self.project_editor_runtime
+                .track_tree_load(project_id.clone(), request.generation);
+        }
+        requests
     }
 
     pub fn apply_project_tree_snapshot(
@@ -682,7 +716,7 @@ impl RootView {
             .workspace
             .project(&project_id)
             .map(|project| project.path.clone());
-        if let Some(request) = self.refresh_project_tree_state(&project_id) {
+        for request in self.refresh_expanded_project_tree_states(&project_id) {
             self.spawn_project_directory_scan(project_id.clone(), request, window, cx);
         }
         self.check_project_documents_for_external_changes(&project_id, window, cx);
@@ -692,15 +726,19 @@ impl RootView {
     }
 
     fn queue_project_tree_refresh(&mut self, project_id: ProjectId) {
-        if let Some(request) = self.refresh_project_tree_state(&project_id) {
-            self.pending_project_tree_loads.push((project_id, request));
+        for request in self.refresh_expanded_project_tree_states(&project_id) {
+            self.pending_project_tree_loads
+                .push((project_id.clone(), request));
         }
     }
 
     fn flush_pending_project_tree_loads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let pending = std::mem::take(&mut self.pending_project_tree_loads);
+        let mut checked_projects = HashSet::new();
         for (project_id, request) in pending {
-            self.check_project_documents_for_external_changes(&project_id, window, cx);
+            if checked_projects.insert(project_id.clone()) {
+                self.check_project_documents_for_external_changes(&project_id, window, cx);
+            }
             self.spawn_project_directory_scan(project_id, request, window, cx);
         }
     }
@@ -1863,12 +1901,32 @@ impl RootView {
         self.app_settings.project_panel.project_sidebar_width
     }
 
+    pub fn set_project_sidebar_width(&mut self, width: f32) -> Result<(), RootViewError> {
+        self.app_settings.project_panel.project_sidebar_width =
+            width.clamp(PROJECT_SIDEBAR_MIN_WIDTH, PROJECT_SIDEBAR_MAX_WIDTH);
+        self.save_app_settings_and_refresh_runtime()
+    }
+
     pub fn selected_project_panel_width(&self) -> Option<f32> {
         let project_id = self.workspace.selected_project_id()?;
         self.project_editor_runtime
             .workspace()
             .session(project_id)
             .map(|session| session.project_panel_width())
+    }
+
+    pub fn set_project_panel_width(&mut self, width: f32) -> Result<(), RootViewError> {
+        let width = width.clamp(PROJECT_FILE_PANEL_MIN_WIDTH, PROJECT_FILE_PANEL_MAX_WIDTH);
+        self.app_settings.project_panel.width = width;
+        if let Some(project_id) = self.workspace.selected_project_id().cloned()
+            && let Some(session) = self
+                .project_editor_runtime
+                .workspace_mut()
+                .session_mut(&project_id)
+        {
+            session.set_project_panel_width(width);
+        }
+        self.save_app_settings_and_refresh_runtime()
     }
 
     pub fn resize_sidebar_from_pointer_delta(
@@ -2365,6 +2423,88 @@ impl RootView {
         self.save_app_settings_and_refresh_runtime()
     }
 
+    pub fn set_editor_font_family(
+        &mut self,
+        font_family: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), RootViewError> {
+        self.app_settings.editor.font_family = font_family.to_string();
+        self.save_app_settings_and_refresh_runtime()?;
+        self.sync_editor_document_appearances(window, cx);
+        Ok(())
+    }
+
+    pub fn set_editor_font_size(
+        &mut self,
+        font_size: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), RootViewError> {
+        self.app_settings.editor.font_size = font_size.clamp(6.0, 72.0);
+        self.save_app_settings_and_refresh_runtime()?;
+        self.sync_editor_document_appearances(window, cx);
+        Ok(())
+    }
+
+    pub fn set_editor_line_height(
+        &mut self,
+        line_height: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), RootViewError> {
+        self.app_settings.editor.line_height = line_height.max(1.0);
+        self.save_app_settings_and_refresh_runtime()?;
+        self.sync_editor_document_appearances(window, cx);
+        Ok(())
+    }
+
+    pub fn set_editor_tab_size(&mut self, tab_size: usize) -> Result<(), RootViewError> {
+        self.app_settings.editor.tab_size = tab_size.clamp(1, 16);
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_editor_soft_wrap(
+        &mut self,
+        soft_wrap: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), RootViewError> {
+        self.app_settings.editor.soft_wrap = soft_wrap;
+        self.save_app_settings_and_refresh_runtime()?;
+        self.sync_editor_document_appearances(window, cx);
+        Ok(())
+    }
+
+    pub fn set_editor_line_numbers(
+        &mut self,
+        line_numbers: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), RootViewError> {
+        self.app_settings.editor.line_numbers = line_numbers;
+        self.save_app_settings_and_refresh_runtime()?;
+        self.sync_editor_document_appearances(window, cx);
+        Ok(())
+    }
+
+    pub fn set_editor_autosave(&mut self, autosave: EditorAutosave) -> Result<(), RootViewError> {
+        self.app_settings.editor.autosave = autosave;
+        self.save_app_settings_and_refresh_runtime()?;
+        if autosave == EditorAutosave::Off {
+            self.project_editor_runtime.cancel_all_autosave_tasks();
+        }
+        Ok(())
+    }
+
+    pub fn set_editor_autosave_delay_ms(
+        &mut self,
+        autosave_delay_ms: u64,
+    ) -> Result<(), RootViewError> {
+        self.app_settings.editor.autosave_delay_ms = autosave_delay_ms.max(50);
+        self.save_app_settings_and_refresh_runtime()
+    }
+
     pub fn set_editor_default_language(
         &mut self,
         default_language: &str,
@@ -2380,6 +2520,32 @@ impl RootView {
 
     pub fn set_editor_lsp_command(&mut self, command: &str) -> Result<(), RootViewError> {
         self.app_settings.editor.lsp.command = command.trim().to_string();
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_project_panel_show_hidden(
+        &mut self,
+        show_hidden: bool,
+    ) -> Result<(), RootViewError> {
+        self.app_settings.project_panel.show_hidden = show_hidden;
+        self.save_app_settings_and_refresh_runtime()?;
+        let project_ids = self
+            .workspace
+            .opened_projects()
+            .iter()
+            .map(|project| project.id.clone())
+            .collect::<Vec<_>>();
+        for project_id in project_ids {
+            self.queue_project_tree_refresh(project_id);
+        }
+        Ok(())
+    }
+
+    pub fn set_project_panel_default_open(
+        &mut self,
+        default_open: bool,
+    ) -> Result<(), RootViewError> {
+        self.app_settings.project_panel.default_open = default_open;
         self.save_app_settings_and_refresh_runtime()
     }
 
@@ -3724,6 +3890,10 @@ impl RootView {
         self.settings_editor_language_select_subscription = None;
         self.settings_font_family_select = None;
         self.settings_font_family_select_subscription = None;
+        self.settings_editor_font_family_select = None;
+        self.settings_editor_font_family_select_subscription = None;
+        self.settings_editor_autosave_select = None;
+        self.settings_editor_autosave_select_subscription = None;
         self.settings_number_inputs.clear();
         self.settings_number_input_subscriptions.clear();
     }
@@ -3906,6 +4076,29 @@ impl RootView {
         }
     }
 
+    fn sync_editor_document_appearances(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let appearance = EditorAppearance::from(&self.app_settings.editor);
+        let project_ids = self
+            .workspace
+            .opened_projects()
+            .iter()
+            .map(|project| project.id.clone())
+            .collect::<Vec<_>>();
+        let documents = project_ids
+            .iter()
+            .flat_map(|project_id| {
+                self.project_editor_runtime
+                    .documents_for_project(project_id)
+                    .map(|(_, document)| document.clone())
+            })
+            .collect::<Vec<_>>();
+        for document in documents {
+            document.update(cx, |document, document_cx| {
+                document.set_appearance(appearance.clone(), window, document_cx);
+            });
+        }
+    }
+
     fn sync_gpui_component_theme(&self, cx: &mut Context<Self>) {
         ComponentTheme::global_mut(cx).apply_config(&Rc::new(
             self.theme_runtime.to_gpui_component_theme_config(),
@@ -4005,12 +4198,34 @@ impl RootView {
     }
 
     fn settings_number_value(&self, field: SettingsNumberField) -> String {
-        let terminal = &self.app_settings.terminal;
         match field {
-            SettingsNumberField::FontSize => format!("{:.1}", terminal.font_size),
-            SettingsNumberField::LineHeight => format!("{:.2}", terminal.line_height),
-            SettingsNumberField::Padding => format!("{:.1}", terminal.padding),
-            SettingsNumberField::Scrollback => terminal.scrollback.to_string(),
+            SettingsNumberField::FontSize => {
+                format!("{:.1}", self.app_settings.terminal.font_size)
+            }
+            SettingsNumberField::LineHeight => {
+                format!("{:.2}", self.app_settings.terminal.line_height)
+            }
+            SettingsNumberField::Padding => {
+                format!("{:.1}", self.app_settings.terminal.padding)
+            }
+            SettingsNumberField::Scrollback => self.app_settings.terminal.scrollback.to_string(),
+            SettingsNumberField::EditorFontSize => {
+                format!("{:.1}", self.app_settings.editor.font_size)
+            }
+            SettingsNumberField::EditorLineHeight => {
+                format!("{:.2}", self.app_settings.editor.line_height)
+            }
+            SettingsNumberField::EditorTabSize => self.app_settings.editor.tab_size.to_string(),
+            SettingsNumberField::EditorAutosaveDelay => {
+                self.app_settings.editor.autosave_delay_ms.to_string()
+            }
+            SettingsNumberField::ProjectPanelWidth => {
+                format!("{:.0}", self.app_settings.project_panel.width)
+            }
+            SettingsNumberField::ProjectSidebarWidth => format!(
+                "{:.0}",
+                self.app_settings.project_panel.project_sidebar_width
+            ),
         }
     }
 
@@ -4018,6 +4233,8 @@ impl RootView {
         &mut self,
         field: SettingsNumberField,
         value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> Result<(), RootViewError> {
         let value = value.trim();
         match field {
@@ -4039,6 +4256,36 @@ impl RootView {
             SettingsNumberField::Scrollback => {
                 if let Ok(value) = value.parse::<usize>() {
                     self.set_terminal_scrollback(value)?;
+                }
+            }
+            SettingsNumberField::EditorFontSize => {
+                if let Ok(value) = value.parse::<f32>() {
+                    self.set_editor_font_size(value, window, cx)?;
+                }
+            }
+            SettingsNumberField::EditorLineHeight => {
+                if let Ok(value) = value.parse::<f32>() {
+                    self.set_editor_line_height(value, window, cx)?;
+                }
+            }
+            SettingsNumberField::EditorTabSize => {
+                if let Ok(value) = value.parse::<usize>() {
+                    self.set_editor_tab_size(value)?;
+                }
+            }
+            SettingsNumberField::EditorAutosaveDelay => {
+                if let Ok(value) = value.parse::<u64>() {
+                    self.set_editor_autosave_delay_ms(value)?;
+                }
+            }
+            SettingsNumberField::ProjectPanelWidth => {
+                if let Ok(value) = value.parse::<f32>() {
+                    self.set_project_panel_width(value)?;
+                }
+            }
+            SettingsNumberField::ProjectSidebarWidth => {
+                if let Ok(value) = value.parse::<f32>() {
+                    self.set_project_sidebar_width(value)?;
                 }
             }
         }
@@ -4083,6 +4330,56 @@ impl RootView {
                     .parse::<isize>()
                     .unwrap_or(self.app_settings.terminal.scrollback as isize);
                 ((value + (sign as isize) * 1000).max(1000)).to_string()
+            }
+            SettingsNumberField::EditorFontSize => {
+                let value = value
+                    .trim()
+                    .parse::<f32>()
+                    .unwrap_or(self.app_settings.editor.font_size);
+                format!("{:.1}", (value + sign).clamp(6.0, 72.0))
+            }
+            SettingsNumberField::EditorLineHeight => {
+                let value = value
+                    .trim()
+                    .parse::<f32>()
+                    .unwrap_or(self.app_settings.editor.line_height);
+                format!("{:.2}", (value + sign * 0.05).max(1.0))
+            }
+            SettingsNumberField::EditorTabSize => {
+                let value = value
+                    .trim()
+                    .parse::<isize>()
+                    .unwrap_or(self.app_settings.editor.tab_size as isize);
+                (value + sign as isize).clamp(1, 16).to_string()
+            }
+            SettingsNumberField::EditorAutosaveDelay => {
+                let value = value
+                    .trim()
+                    .parse::<isize>()
+                    .unwrap_or(self.app_settings.editor.autosave_delay_ms as isize);
+                (value + (sign as isize) * 50).max(50).to_string()
+            }
+            SettingsNumberField::ProjectPanelWidth => {
+                let value = value
+                    .trim()
+                    .parse::<f32>()
+                    .unwrap_or(self.app_settings.project_panel.width);
+                format!(
+                    "{:.0}",
+                    (value + sign * 10.0)
+                        .clamp(PROJECT_FILE_PANEL_MIN_WIDTH, PROJECT_FILE_PANEL_MAX_WIDTH)
+                )
+            }
+            SettingsNumberField::ProjectSidebarWidth => {
+                let value = value
+                    .trim()
+                    .parse::<f32>()
+                    .unwrap_or(self.app_settings.project_panel.project_sidebar_width);
+                format!(
+                    "{:.0}",
+                    (value + sign * 10.0)
+                        .clamp(PROJECT_SIDEBAR_MIN_WIDTH, PROJECT_SIDEBAR_MAX_WIDTH)
+                )
             }
         }
     }
@@ -4398,6 +4695,76 @@ impl RootView {
                 cx.subscribe_in(&select, window, Self::on_settings_font_family_select_event);
             self.settings_font_family_select = Some(select.clone());
             self.settings_font_family_select_subscription = Some(subscription);
+            select
+        }
+    }
+
+    fn settings_editor_font_family_select(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SettingsStringSelectState> {
+        let selected = font_family_option_for_setting(&self.app_settings.editor.font_family);
+        let items = font_family_options_from_system(
+            &self.app_settings.editor.font_family,
+            cx.text_system().all_font_names(),
+        );
+
+        if let Some(select) = &self.settings_editor_font_family_select {
+            select.clone()
+        } else {
+            let selected_index = selected_index_for_settings_option(&items, &selected);
+            let select = cx.new(|cx| {
+                SelectState::new(SearchableVec::new(items), selected_index, window, cx)
+                    .searchable(true)
+            });
+            let subscription = cx.subscribe_in(
+                &select,
+                window,
+                Self::on_settings_editor_font_family_select_event,
+            );
+            self.settings_editor_font_family_select = Some(select.clone());
+            self.settings_editor_font_family_select_subscription = Some(subscription);
+            select
+        }
+    }
+
+    fn editor_autosave_label(&self, autosave: EditorAutosave) -> &'static str {
+        self.ui_text.get(match autosave {
+            EditorAutosave::Off => UiTextKey::SettingsEditorAutosaveOff,
+            EditorAutosave::OnFocusChange => UiTextKey::SettingsEditorAutosaveOnFocusChange,
+            EditorAutosave::AfterDelay => UiTextKey::SettingsEditorAutosaveAfterDelay,
+        })
+    }
+
+    fn settings_editor_autosave_select(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SettingsStringSelectState> {
+        let items = [
+            EditorAutosave::Off,
+            EditorAutosave::OnFocusChange,
+            EditorAutosave::AfterDelay,
+        ]
+        .into_iter()
+        .map(|autosave| self.editor_autosave_label(autosave).to_string())
+        .collect::<Vec<_>>();
+        let selected = self.editor_autosave_label(self.app_settings.editor.autosave);
+
+        if let Some(select) = &self.settings_editor_autosave_select {
+            select.clone()
+        } else {
+            let selected_index = selected_index_for_settings_option(&items, selected);
+            let select = cx
+                .new(|cx| SelectState::new(SearchableVec::new(items), selected_index, window, cx));
+            let subscription = cx.subscribe_in(
+                &select,
+                window,
+                Self::on_settings_editor_autosave_select_event,
+            );
+            self.settings_editor_autosave_select = Some(select.clone());
+            self.settings_editor_autosave_select_subscription = Some(subscription);
             select
         }
     }
@@ -5274,11 +5641,54 @@ impl RootView {
         cx.notify();
     }
 
+    fn on_settings_editor_font_family_select_event(
+        &mut self,
+        _select: &Entity<SettingsStringSelectState>,
+        event: &SelectEvent<SearchableVec<String>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(Some(value)) = event else {
+            return;
+        };
+        let font_family = font_family_setting_from_option(value);
+        if let Err(error) = self.set_editor_font_family(&font_family, window, cx) {
+            self.load_error = Some(error.to_string());
+        }
+        cx.notify();
+    }
+
+    fn on_settings_editor_autosave_select_event(
+        &mut self,
+        _select: &Entity<SettingsStringSelectState>,
+        event: &SelectEvent<SearchableVec<String>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(Some(value)) = event else {
+            return;
+        };
+        let autosave = [
+            EditorAutosave::Off,
+            EditorAutosave::OnFocusChange,
+            EditorAutosave::AfterDelay,
+        ]
+        .into_iter()
+        .find(|autosave| self.editor_autosave_label(*autosave) == value);
+        let Some(autosave) = autosave else {
+            return;
+        };
+        if let Err(error) = self.set_editor_autosave(autosave) {
+            self.load_error = Some(error.to_string());
+        }
+        cx.notify();
+    }
+
     fn on_settings_number_input_event(
         &mut self,
         input: &Entity<InputState>,
         event: &InputEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match event {
@@ -5287,7 +5697,7 @@ impl RootView {
                     return;
                 };
                 let value = input.read(cx).value().to_string();
-                if let Err(error) = self.apply_settings_number_value(field, &value) {
+                if let Err(error) = self.apply_settings_number_value(field, &value, window, cx) {
                     self.load_error = Some(error.to_string());
                 }
                 self.sync_gpui_component_theme(cx);
@@ -5314,7 +5724,7 @@ impl RootView {
         input.update(cx, |input, cx| {
             input.set_value(stepped.clone(), window, cx);
         });
-        if let Err(error) = self.apply_settings_number_value(field, &stepped) {
+        if let Err(error) = self.apply_settings_number_value(field, &stepped, window, cx) {
             self.load_error = Some(error.to_string());
         }
         self.sync_gpui_component_theme(cx);
@@ -6609,6 +7019,7 @@ fn settings_rows(
         SettingsGroupId::General => settings_general_rows(root, style, window, cx),
         SettingsGroupId::Appearance => settings_appearance_rows(root, style, window, cx),
         SettingsGroupId::Languages => settings_language_rows(root, style, window, cx),
+        SettingsGroupId::Editor => settings_editor_rows(root, style, window, cx),
         SettingsGroupId::Terminal => settings_terminal_rows(root, style, window, cx),
         SettingsGroupId::DefaultLayout => settings_default_layout_rows(root, style, cx),
         SettingsGroupId::Keybindings => settings_keybinding_rows(root, style, cx),
@@ -6816,6 +7227,209 @@ fn settings_language_rows(
             text.get(UiTextKey::SettingsLanguageServerCommandDescription),
             settings_value(lsp_command, theme).into_any_element(),
         ))
+}
+
+fn settings_editor_rows(
+    root: &mut RootView,
+    style: SettingsPanelStyle,
+    window: &mut Window,
+    cx: &mut Context<RootView>,
+) -> Div {
+    let theme = root.theme_runtime.ui;
+    let text = root.ui_text;
+    let font_select = root.settings_editor_font_family_select(window, cx);
+    let autosave_select = root.settings_editor_autosave_select(window, cx);
+    let font_size_input =
+        root.settings_number_input(SettingsNumberField::EditorFontSize, window, cx);
+    let line_height_input =
+        root.settings_number_input(SettingsNumberField::EditorLineHeight, window, cx);
+    let tab_size_input = root.settings_number_input(SettingsNumberField::EditorTabSize, window, cx);
+    let autosave_delay_input =
+        root.settings_number_input(SettingsNumberField::EditorAutosaveDelay, window, cx);
+    let project_panel_width_input =
+        root.settings_number_input(SettingsNumberField::ProjectPanelWidth, window, cx);
+    let project_sidebar_width_input =
+        root.settings_number_input(SettingsNumberField::ProjectSidebarWidth, window, cx);
+
+    div()
+        .flex()
+        .flex_col()
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsEditorFontFamily),
+                text.get(UiTextKey::SettingsEditorFontFamilyDescription),
+                settings_select_control(
+                    font_select,
+                    theme,
+                    true,
+                    text.get(UiTextKey::SettingsSearchFont),
+                )
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-editor-font-family-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsEditorFontSize),
+                text.get(UiTextKey::SettingsEditorFontSizeDescription),
+                settings_number_control(font_size_input, style).into_any_element(),
+            )
+            .debug_selector(|| "settings-editor-font-size-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsEditorLineHeight),
+                text.get(UiTextKey::SettingsEditorLineHeightDescription),
+                settings_number_control(line_height_input, style).into_any_element(),
+            )
+            .debug_selector(|| "settings-editor-line-height-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsEditorTabSize),
+                text.get(UiTextKey::SettingsEditorTabSizeDescription),
+                settings_number_control(tab_size_input, style).into_any_element(),
+            )
+            .debug_selector(|| "settings-editor-tab-size-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsEditorSoftWrap),
+                text.get(UiTextKey::SettingsEditorSoftWrapDescription),
+                settings_switch(
+                    "settings-editor-soft-wrap",
+                    root.app_settings.editor.soft_wrap,
+                    theme,
+                    cx.listener(|this, checked: &bool, window, cx| {
+                        if let Err(error) = this.set_editor_soft_wrap(*checked, window, cx) {
+                            this.load_error = Some(error.to_string());
+                        }
+                        cx.notify();
+                    }),
+                )
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-editor-soft-wrap-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsEditorLineNumbers),
+                text.get(UiTextKey::SettingsEditorLineNumbersDescription),
+                settings_switch(
+                    "settings-editor-line-numbers",
+                    root.app_settings.editor.line_numbers,
+                    theme,
+                    cx.listener(|this, checked: &bool, window, cx| {
+                        if let Err(error) = this.set_editor_line_numbers(*checked, window, cx) {
+                            this.load_error = Some(error.to_string());
+                        }
+                        cx.notify();
+                    }),
+                )
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-editor-line-numbers-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsEditorAutosave),
+                text.get(UiTextKey::SettingsEditorAutosaveDescription),
+                settings_select_control(
+                    autosave_select,
+                    theme,
+                    false,
+                    text.get(UiTextKey::SettingsEditorAutosave),
+                )
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-editor-autosave-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsEditorAutosaveDelay),
+                text.get(UiTextKey::SettingsEditorAutosaveDelayDescription),
+                settings_number_control(autosave_delay_input, style).into_any_element(),
+            )
+            .debug_selector(|| "settings-editor-autosave-delay-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsProjectPanelDefaultOpen),
+                text.get(UiTextKey::SettingsProjectPanelDefaultOpenDescription),
+                settings_switch(
+                    "settings-project-panel-default-open",
+                    root.app_settings.project_panel.default_open,
+                    theme,
+                    cx.listener(|this, checked: &bool, _window, cx| {
+                        if let Err(error) = this.set_project_panel_default_open(*checked) {
+                            this.load_error = Some(error.to_string());
+                        }
+                        cx.notify();
+                    }),
+                )
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-project-panel-default-open-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsProjectPanelShowHidden),
+                text.get(UiTextKey::SettingsProjectPanelShowHiddenDescription),
+                settings_switch(
+                    "settings-project-panel-show-hidden",
+                    root.app_settings.project_panel.show_hidden,
+                    theme,
+                    cx.listener(|this, checked: &bool, _window, cx| {
+                        if let Err(error) = this.set_project_panel_show_hidden(*checked) {
+                            this.load_error = Some(error.to_string());
+                        }
+                        cx.notify();
+                    }),
+                )
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-project-panel-show-hidden-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsProjectPanelWidth),
+                text.get(UiTextKey::SettingsProjectPanelWidthDescription),
+                settings_number_control(project_panel_width_input, style).into_any_element(),
+            )
+            .debug_selector(|| "settings-project-panel-width-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsProjectSidebarWidth),
+                text.get(UiTextKey::SettingsProjectSidebarWidthDescription),
+                settings_number_control(project_sidebar_width_input, style).into_any_element(),
+            )
+            .debug_selector(|| "settings-project-sidebar-width-row".to_string()),
+        )
 }
 
 fn settings_terminal_rows(

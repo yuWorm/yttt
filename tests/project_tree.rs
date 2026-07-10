@@ -169,6 +169,36 @@ fn refresh_preserves_expansion_and_ignores_stale_results() {
 }
 
 #[test]
+fn refresh_expanded_requests_every_open_directory() {
+    let mut tree = ProjectFileTree::new("/project");
+    let root_request = tree.request_expand(Path::new("")).unwrap();
+    tree.apply_snapshot(
+        root_request.generation,
+        snapshot("", [entry("src", ProjectTreeEntryKind::Directory)]),
+    );
+    let src_request = tree.request_expand(Path::new("src")).unwrap();
+    tree.apply_snapshot(
+        src_request.generation,
+        snapshot("src", [entry("src/main.rs", ProjectTreeEntryKind::File)]),
+    );
+
+    let requests = tree.refresh_expanded();
+
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.relative_directory.as_path())
+            .collect::<Vec<_>>(),
+        vec![Path::new(""), Path::new("src")]
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.generation == tree.generation())
+    );
+}
+
+#[test]
 fn directory_errors_are_local_and_retryable() {
     let mut tree = ProjectFileTree::new("/project");
     let root_request = tree.request_expand(Path::new("")).unwrap();

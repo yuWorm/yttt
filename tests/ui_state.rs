@@ -12,7 +12,7 @@ use yttt::{
     commands::CommandId,
     config::{
         paths::AppConfigPaths,
-        settings::{AppSettings, LanguageSetting, save_settings},
+        settings::{AppSettings, EditorAutosave, LanguageSetting, save_settings},
     },
     model::{
         layout::PaneKind,
@@ -1510,6 +1510,254 @@ fn root_view_autosave_off_does_not_save_on_focus_change(cx: &mut gpui::TestAppCo
 }
 
 #[gpui::test]
+fn editor_display_settings_update_open_documents_without_replacing_state(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let (temp, _project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
+    let document_id = cx.read(|app| document.read(app).model().document_id().clone());
+    let document_entity_id = document.entity_id();
+    let input = cx.read(|app| document.read(app).input().clone());
+    let input_entity_id = input.entity_id();
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("keep this live edit", window, input_cx);
+    });
+    cx.run_until_parked();
+
+    root.update_in(cx, |root, window, cx| {
+        root.set_editor_font_family("JetBrains Mono", window, cx)
+            .unwrap();
+        root.set_editor_font_size(17.0, window, cx).unwrap();
+        root.set_editor_line_height(1.65, window, cx).unwrap();
+        root.set_editor_soft_wrap(true, window, cx).unwrap();
+        root.set_editor_line_numbers(false, window, cx).unwrap();
+    });
+
+    cx.read(|app| {
+        let current = root
+            .read(app)
+            .project_editor_runtime()
+            .document(&document_id)
+            .unwrap();
+        assert_eq!(current.entity_id(), document_entity_id);
+        let document = current.read(app);
+        assert_eq!(document.input().entity_id(), input_entity_id);
+        assert_eq!(document.model().value(), "keep this live edit");
+        assert_eq!(document.model().saved_value(), "old");
+        assert!(document.model().is_dirty());
+        assert_eq!(document.appearance().font_family, "JetBrains Mono");
+        assert_eq!(document.appearance().font_size, 17.0);
+        assert_eq!(document.appearance().line_height, 1.65);
+        assert!(document.appearance().soft_wrap);
+        assert!(!document.appearance().line_numbers);
+    });
+
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let loaded = yttt::config::settings::load_or_create_settings(&paths).unwrap();
+    assert_eq!(loaded.settings.editor.font_family, "JetBrains Mono");
+    assert_eq!(loaded.settings.editor.font_size, 17.0);
+    assert_eq!(loaded.settings.editor.line_height, 1.65);
+    assert!(loaded.settings.editor.soft_wrap);
+    assert!(!loaded.settings.editor.line_numbers);
+}
+
+#[gpui::test]
+fn editor_tab_size_applies_only_to_files_opened_after_the_setting_changes(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let (_temp, project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
+    let project_id = cx.read(|app| document.read(app).model().document_id().project_id.clone());
+    fs::write(project_dir.join("next.txt"), "next").unwrap();
+
+    root.update(cx, |root, cx| {
+        root.set_editor_tab_size(2).unwrap();
+        root.run_command(CommandId::ProjectPanelRefresh).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+
+    cx.read(|app| {
+        assert_eq!(document.read(app).model().editor().config().tab_size(), 4);
+    });
+    let tree = cx
+        .read(|app| {
+            root.read(app)
+                .project_editor_runtime()
+                .tree(&project_id)
+                .cloned()
+        })
+        .unwrap();
+    tree.update(cx, |tree, tree_cx| {
+        assert!(tree.activate_path(Path::new("next.txt"), tree_cx));
+    });
+    cx.run_until_parked();
+
+    let next_id = DocumentId {
+        project_id,
+        canonical_path: fs::canonicalize(project_dir.join("next.txt")).unwrap(),
+    };
+    cx.read(|app| {
+        let next = root
+            .read(app)
+            .project_editor_runtime()
+            .document(&next_id)
+            .unwrap()
+            .read(app);
+        assert_eq!(next.model().editor().config().tab_size(), 2);
+    });
+}
+
+#[gpui::test]
+fn showing_hidden_files_refreshes_existing_project_trees(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (_temp, project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
+    let project_id = cx.read(|app| document.read(app).model().document_id().project_id.clone());
+    let tree = cx
+        .read(|app| {
+            root.read(app)
+                .project_editor_runtime()
+                .tree(&project_id)
+                .cloned()
+        })
+        .unwrap();
+    fs::create_dir(project_dir.join("src")).unwrap();
+    fs::write(project_dir.join("src/.secret"), "hidden").unwrap();
+    root.update(cx, |root, cx| {
+        root.run_command(CommandId::ProjectPanelRefresh).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    tree.update(cx, |tree, tree_cx| {
+        assert!(tree.activate_path(Path::new("src"), tree_cx));
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        assert!(
+            tree.read(app)
+                .snapshot()
+                .row_for_path(Path::new("src/.secret"))
+                .is_none()
+        );
+    });
+
+    root.update(cx, |root, cx| {
+        root.set_project_panel_show_hidden(true).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    cx.read(|app| {
+        assert!(
+            tree.read(app)
+                .snapshot()
+                .row_for_path(Path::new("src/.secret"))
+                .is_some()
+        );
+    });
+}
+
+#[gpui::test]
+fn disabling_autosave_cancels_pending_delayed_tasks(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (temp, _project_dir, root, document, cx) =
+        project_file_autosave_fixture(cx, "after_delay", 10_000);
+    let document_id = cx.read(|app| document.read(app).model().document_id().clone());
+    let input = cx.read(|app| document.read(app).input().clone());
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("pending delayed edit", window, input_cx);
+    });
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert!(
+            root.read(app)
+                .project_editor_runtime()
+                .autosave_task_is_scheduled(&document_id)
+        );
+    });
+
+    root.update(cx, |root, _cx| {
+        root.set_editor_autosave_delay_ms(250).unwrap();
+        root.set_editor_autosave(EditorAutosave::Off).unwrap();
+    });
+
+    cx.read(|app| {
+        assert_eq!(root.read(app).editor_autosave(), EditorAutosave::Off);
+        assert!(
+            !root
+                .read(app)
+                .project_editor_runtime()
+                .autosave_task_is_scheduled(&document_id)
+        );
+    });
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let loaded = yttt::config::settings::load_or_create_settings(&paths).unwrap();
+    assert_eq!(loaded.settings.editor.autosave, EditorAutosave::Off);
+    assert_eq!(loaded.settings.editor.autosave_delay_ms, 250);
+}
+
+#[test]
+fn project_panel_settings_update_selected_and_future_sessions_only() {
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut workspace = Workspace::new();
+    let first = workspace
+        .open_project(PathBuf::from("/tmp/settings-panel-first"), sample_layout())
+        .unwrap();
+    let second = workspace
+        .open_project(PathBuf::from("/tmp/settings-panel-second"), sample_layout())
+        .unwrap();
+    workspace.select_project(&first).unwrap();
+    let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths.clone());
+
+    root.set_project_panel_default_open(false).unwrap();
+    root.set_project_panel_width(360.0).unwrap();
+    root.set_project_sidebar_width(250.0).unwrap();
+
+    let first_session = root
+        .project_editor_runtime()
+        .workspace()
+        .session(&first)
+        .unwrap();
+    let second_session = root
+        .project_editor_runtime()
+        .workspace()
+        .session(&second)
+        .unwrap();
+    assert!(first_session.project_panel_visible());
+    assert_eq!(first_session.project_panel_width(), 360.0);
+    assert!(second_session.project_panel_visible());
+    assert_eq!(second_session.project_panel_width(), 280.0);
+    assert_eq!(root.project_sidebar_width(), 250.0);
+
+    let mut future_workspace = Workspace::new();
+    let future = future_workspace
+        .open_project(PathBuf::from("/tmp/settings-panel-future"), sample_layout())
+        .unwrap();
+    let future_root =
+        RootView::with_workspace_for_test_and_config_paths(future_workspace, paths.clone());
+    let future_session = future_root
+        .project_editor_runtime()
+        .workspace()
+        .session(&future)
+        .unwrap();
+    assert!(!future_session.project_panel_visible());
+    assert_eq!(future_session.project_panel_width(), 360.0);
+    assert_eq!(future_root.project_sidebar_width(), 250.0);
+
+    let loaded = yttt::config::settings::load_or_create_settings(&paths).unwrap();
+    assert!(!loaded.settings.project_panel.default_open);
+    assert_eq!(loaded.settings.project_panel.width, 360.0);
+    assert_eq!(loaded.settings.project_panel.project_sidebar_width, 250.0);
+}
+
+#[gpui::test]
 fn closing_dirty_file_requires_a_decision(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let (_temp, _project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
@@ -2262,6 +2510,7 @@ fn root_view_settings_open_command_opens_settings_page() {
             "General",
             "Appearance",
             "Languages",
+            "Editor",
             "Terminal",
             "Default Layout",
             "Keybindings"
@@ -2295,6 +2544,42 @@ fn root_view_settings_can_select_and_close_group() {
 
     assert!(!root.settings_is_open());
     assert_eq!(root.selected_settings_group_title(), Some("Terminal"));
+}
+
+#[gpui::test]
+fn editor_settings_group_renders_all_effective_controls(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| RootView::dev_fixture());
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.open_settings();
+        root.select_settings_group("editor").unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+
+    for selector in [
+        "settings-editor-font-family-row",
+        "settings-editor-font-size-row",
+        "settings-editor-line-height-row",
+        "settings-editor-tab-size-row",
+        "settings-editor-soft-wrap-row",
+        "settings-editor-line-numbers-row",
+        "settings-editor-autosave-row",
+        "settings-editor-autosave-delay-row",
+        "settings-project-panel-default-open-row",
+        "settings-project-panel-show-hidden-row",
+        "settings-project-panel-width-row",
+        "settings-project-sidebar-width-row",
+    ] {
+        assert!(cx.debug_bounds(selector).is_some(), "missing {selector}");
+    }
 }
 
 #[test]
@@ -2377,7 +2662,15 @@ fn root_view_language_setting_updates_settings_labels() {
 
     assert_eq!(
         root.visible_settings_group_titles(),
-        vec!["通用", "外观", "语言", "终端", "默认布局", "快捷键"]
+        vec![
+            "通用",
+            "外观",
+            "语言",
+            "编辑器",
+            "终端",
+            "默认布局",
+            "快捷键"
+        ]
     );
     assert_eq!(root.selected_settings_group_title(), Some("通用"));
 

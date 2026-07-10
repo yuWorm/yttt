@@ -40,6 +40,7 @@ pub enum SettingsGroupId {
     General,
     Appearance,
     Languages,
+    Editor,
     Terminal,
     DefaultLayout,
     Keybindings,
@@ -50,6 +51,7 @@ impl SettingsGroupId {
         Self::General,
         Self::Appearance,
         Self::Languages,
+        Self::Editor,
         Self::Terminal,
         Self::DefaultLayout,
         Self::Keybindings,
@@ -60,6 +62,7 @@ impl SettingsGroupId {
             Self::General => "general",
             Self::Appearance => "appearance",
             Self::Languages => "languages",
+            Self::Editor => "editor",
             Self::Terminal => "terminal",
             Self::DefaultLayout => "default-layout",
             Self::Keybindings => "keybindings",
@@ -71,6 +74,7 @@ impl SettingsGroupId {
             Self::General => UiTextKey::SettingsGroupGeneral,
             Self::Appearance => UiTextKey::SettingsGroupAppearance,
             Self::Languages => UiTextKey::SettingsGroupLanguages,
+            Self::Editor => UiTextKey::SettingsGroupEditor,
             Self::Terminal => UiTextKey::SettingsGroupTerminal,
             Self::DefaultLayout => UiTextKey::SettingsGroupDefaultLayout,
             Self::Keybindings => UiTextKey::SettingsGroupKeybindings,
@@ -82,6 +86,7 @@ impl SettingsGroupId {
             Self::General => UiTextKey::SettingsGroupGeneralDescription,
             Self::Appearance => UiTextKey::SettingsGroupAppearanceDescription,
             Self::Languages => UiTextKey::SettingsGroupLanguagesDescription,
+            Self::Editor => UiTextKey::SettingsGroupEditorDescription,
             Self::Terminal => UiTextKey::SettingsGroupTerminalDescription,
             Self::DefaultLayout => UiTextKey::SettingsGroupDefaultLayoutDescription,
             Self::Keybindings => UiTextKey::SettingsGroupKeybindingsDescription,
@@ -162,6 +167,56 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
             row(
                 UiTextKey::SettingsLanguageServerCommand,
                 UiTextKey::SettingsLanguageServerCommandDescription,
+            ),
+        ],
+        SettingsGroupId::Editor => vec![
+            row(
+                UiTextKey::SettingsEditorFontFamily,
+                UiTextKey::SettingsEditorFontFamilyDescription,
+            ),
+            row(
+                UiTextKey::SettingsEditorFontSize,
+                UiTextKey::SettingsEditorFontSizeDescription,
+            ),
+            row(
+                UiTextKey::SettingsEditorLineHeight,
+                UiTextKey::SettingsEditorLineHeightDescription,
+            ),
+            row(
+                UiTextKey::SettingsEditorTabSize,
+                UiTextKey::SettingsEditorTabSizeDescription,
+            ),
+            row(
+                UiTextKey::SettingsEditorSoftWrap,
+                UiTextKey::SettingsEditorSoftWrapDescription,
+            ),
+            row(
+                UiTextKey::SettingsEditorLineNumbers,
+                UiTextKey::SettingsEditorLineNumbersDescription,
+            ),
+            row(
+                UiTextKey::SettingsEditorAutosave,
+                UiTextKey::SettingsEditorAutosaveDescription,
+            ),
+            row(
+                UiTextKey::SettingsEditorAutosaveDelay,
+                UiTextKey::SettingsEditorAutosaveDelayDescription,
+            ),
+            row(
+                UiTextKey::SettingsProjectPanelDefaultOpen,
+                UiTextKey::SettingsProjectPanelDefaultOpenDescription,
+            ),
+            row(
+                UiTextKey::SettingsProjectPanelShowHidden,
+                UiTextKey::SettingsProjectPanelShowHiddenDescription,
+            ),
+            row(
+                UiTextKey::SettingsProjectPanelWidth,
+                UiTextKey::SettingsProjectPanelWidthDescription,
+            ),
+            row(
+                UiTextKey::SettingsProjectSidebarWidth,
+                UiTextKey::SettingsProjectSidebarWidthDescription,
             ),
         ],
         SettingsGroupId::Terminal => vec![

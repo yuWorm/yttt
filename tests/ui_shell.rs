@@ -5,7 +5,8 @@ use yttt::ui::components::{
     SelectableState, notification_tone_for_toast, selectable_state_classes,
 };
 use yttt::ui::font_options::{
-    SYSTEM_FONT_FAMILY_LABEL, terminal_font_family_option_for_setting,
+    SYSTEM_FONT_FAMILY_LABEL, font_family_option_for_setting, font_family_options_from_system,
+    font_family_setting_from_option, terminal_font_family_option_for_setting,
     terminal_font_family_options_from_system, terminal_font_family_setting_from_option,
 };
 use yttt::ui::i18n::{Locale, UiText};
@@ -545,16 +546,52 @@ fn settings_rows_are_grouped_by_user_facing_sections() {
 }
 
 #[test]
+fn editor_settings_rows_expose_effective_controls() {
+    let text = UiText::english();
+    let rows = settings_rows_for_group(SettingsGroupId::Editor, &text);
+    let titles = rows.iter().map(|row| row.title).collect::<Vec<_>>();
+
+    assert_eq!(
+        titles,
+        vec![
+            "Font family",
+            "Font size",
+            "Line height",
+            "Tab size",
+            "Soft wrap",
+            "Line numbers",
+            "Autosave",
+            "Autosave delay",
+            "Open file tree by default",
+            "Show hidden files",
+            "File tree width",
+            "Project sidebar width",
+        ]
+    );
+
+    let language_titles = settings_rows_for_group(SettingsGroupId::Languages, &text)
+        .into_iter()
+        .map(|row| row.title)
+        .collect::<Vec<_>>();
+    assert!(!language_titles.contains(&"Font family"));
+    assert!(!language_titles.contains(&"Autosave"));
+}
+
+#[test]
 fn settings_rows_are_localized() {
     let text = UiText::new(Locale::Chinese);
     let general_rows = settings_rows_for_group(SettingsGroupId::General, &text);
     let language_rows = settings_rows_for_group(SettingsGroupId::Languages, &text);
+    let editor_rows = settings_rows_for_group(SettingsGroupId::Editor, &text);
     let terminal_rows = settings_rows_for_group(SettingsGroupId::Terminal, &text);
 
     assert!(general_rows.iter().any(|row| row.title == "语言"));
     assert!(general_rows.iter().any(|row| row.title == "系统通知"));
     assert!(language_rows.iter().any(|row| row.title == "语言检测"));
     assert!(language_rows.iter().any(|row| row.title == "默认代码语言"));
+    assert!(editor_rows.iter().any(|row| row.title == "字体"));
+    assert!(editor_rows.iter().any(|row| row.title == "自动保存"));
+    assert!(editor_rows.iter().any(|row| row.title == "显示隐藏文件"));
     assert!(terminal_rows.iter().any(|row| row.title == "默认 Shell"));
     assert!(
         terminal_rows
@@ -641,6 +678,19 @@ fn font_option_maps_system_default_to_empty_setting() {
     assert_eq!(
         terminal_font_family_setting_from_option("JetBrains Mono"),
         "JetBrains Mono"
+    );
+}
+
+#[test]
+fn generic_font_options_are_shared_by_editor_and_terminal_settings() {
+    assert_eq!(
+        font_family_options_from_system("Custom Font", ["Beta", "Alpha"]),
+        vec![SYSTEM_FONT_FAMILY_LABEL, "Custom Font", "Alpha", "Beta"]
+    );
+    assert_eq!(font_family_option_for_setting(""), SYSTEM_FONT_FAMILY_LABEL);
+    assert_eq!(
+        font_family_setting_from_option(SYSTEM_FONT_FAMILY_LABEL),
+        ""
     );
 }
 

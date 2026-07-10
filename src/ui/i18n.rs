@@ -170,6 +170,8 @@ pub enum UiTextKey {
     SettingsGroupAppearanceDescription,
     SettingsGroupLanguages,
     SettingsGroupLanguagesDescription,
+    SettingsGroupEditor,
+    SettingsGroupEditorDescription,
     SettingsGroupTerminal,
     SettingsGroupTerminalDescription,
     SettingsGroupProjectLayout,
@@ -204,6 +206,33 @@ pub enum UiTextKey {
     SettingsLanguageServerCommand,
     SettingsLanguageServerCommandDescription,
     SettingsSearchCodeLanguage,
+    SettingsEditorFontFamily,
+    SettingsEditorFontFamilyDescription,
+    SettingsEditorFontSize,
+    SettingsEditorFontSizeDescription,
+    SettingsEditorLineHeight,
+    SettingsEditorLineHeightDescription,
+    SettingsEditorTabSize,
+    SettingsEditorTabSizeDescription,
+    SettingsEditorSoftWrap,
+    SettingsEditorSoftWrapDescription,
+    SettingsEditorLineNumbers,
+    SettingsEditorLineNumbersDescription,
+    SettingsEditorAutosave,
+    SettingsEditorAutosaveDescription,
+    SettingsEditorAutosaveOff,
+    SettingsEditorAutosaveOnFocusChange,
+    SettingsEditorAutosaveAfterDelay,
+    SettingsEditorAutosaveDelay,
+    SettingsEditorAutosaveDelayDescription,
+    SettingsProjectPanelDefaultOpen,
+    SettingsProjectPanelDefaultOpenDescription,
+    SettingsProjectPanelShowHidden,
+    SettingsProjectPanelShowHiddenDescription,
+    SettingsProjectPanelWidth,
+    SettingsProjectPanelWidthDescription,
+    SettingsProjectSidebarWidth,
+    SettingsProjectSidebarWidthDescription,
     SettingsDefaultShell,
     SettingsDefaultShellDescription,
     SettingsSelectShell,
@@ -476,6 +505,8 @@ fn english(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsGroupLanguagesDescription => {
             "Code language detection and language server defaults"
         }
+        UiTextKey::SettingsGroupEditor => "Editor",
+        UiTextKey::SettingsGroupEditorDescription => "Text editing and project file tree behavior",
         UiTextKey::SettingsGroupTerminal => "Terminal",
         UiTextKey::SettingsGroupTerminalDescription => "Shell, font, and terminal runtime defaults",
         UiTextKey::SettingsGroupProjectLayout => "Project Layout",
@@ -532,6 +563,47 @@ fn english(key: UiTextKey) -> &'static str {
             "Command reserved for the default language server integration."
         }
         UiTextKey::SettingsSearchCodeLanguage => "Search language...",
+        UiTextKey::SettingsEditorFontFamily => "Font family",
+        UiTextKey::SettingsEditorFontFamilyDescription => "Font used by project file editors.",
+        UiTextKey::SettingsEditorFontSize => "Font size",
+        UiTextKey::SettingsEditorFontSizeDescription => "Editor font size in pixels.",
+        UiTextKey::SettingsEditorLineHeight => "Line height",
+        UiTextKey::SettingsEditorLineHeightDescription => "Editor line height multiplier.",
+        UiTextKey::SettingsEditorTabSize => "Tab size",
+        UiTextKey::SettingsEditorTabSizeDescription => {
+            "Number of spaces per tab. Reopen already-open files to apply this change."
+        }
+        UiTextKey::SettingsEditorSoftWrap => "Soft wrap",
+        UiTextKey::SettingsEditorSoftWrapDescription => {
+            "Wrap long editor lines to the available width."
+        }
+        UiTextKey::SettingsEditorLineNumbers => "Line numbers",
+        UiTextKey::SettingsEditorLineNumbersDescription => "Show line numbers in project files.",
+        UiTextKey::SettingsEditorAutosave => "Autosave",
+        UiTextKey::SettingsEditorAutosaveDescription => "Choose when edited files are saved.",
+        UiTextKey::SettingsEditorAutosaveOff => "Off",
+        UiTextKey::SettingsEditorAutosaveOnFocusChange => "On focus change",
+        UiTextKey::SettingsEditorAutosaveAfterDelay => "After delay",
+        UiTextKey::SettingsEditorAutosaveDelay => "Autosave delay",
+        UiTextKey::SettingsEditorAutosaveDelayDescription => {
+            "Delay in milliseconds used by delayed autosave."
+        }
+        UiTextKey::SettingsProjectPanelDefaultOpen => "Open file tree by default",
+        UiTextKey::SettingsProjectPanelDefaultOpenDescription => {
+            "Show the file tree when a project is opened for the first time."
+        }
+        UiTextKey::SettingsProjectPanelShowHidden => "Show hidden files",
+        UiTextKey::SettingsProjectPanelShowHiddenDescription => {
+            "Include hidden files and directories in project trees."
+        }
+        UiTextKey::SettingsProjectPanelWidth => "File tree width",
+        UiTextKey::SettingsProjectPanelWidthDescription => {
+            "Default width of the right project file tree."
+        }
+        UiTextKey::SettingsProjectSidebarWidth => "Project sidebar width",
+        UiTextKey::SettingsProjectSidebarWidthDescription => {
+            "Width of the left opened-project sidebar."
+        }
         UiTextKey::SettingsDefaultShell => "Default shell",
         UiTextKey::SettingsDefaultShellDescription => {
             "Shell command used when creating new terminal tabs."
@@ -775,6 +847,8 @@ fn chinese(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsGroupAppearanceDescription => "界面和终端主题",
         UiTextKey::SettingsGroupLanguages => "语言",
         UiTextKey::SettingsGroupLanguagesDescription => "代码语言检测和语言服务器默认值",
+        UiTextKey::SettingsGroupEditor => "编辑器",
+        UiTextKey::SettingsGroupEditorDescription => "文本编辑和项目文件树行为",
         UiTextKey::SettingsGroupTerminal => "终端",
         UiTextKey::SettingsGroupTerminalDescription => "Shell、字体和终端运行默认值",
         UiTextKey::SettingsGroupProjectLayout => "项目布局",
@@ -811,6 +885,37 @@ fn chinese(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsLanguageServerCommand => "语言服务器命令",
         UiTextKey::SettingsLanguageServerCommandDescription => "为默认语言服务器集成预留的命令。",
         UiTextKey::SettingsSearchCodeLanguage => "搜索语言...",
+        UiTextKey::SettingsEditorFontFamily => "字体",
+        UiTextKey::SettingsEditorFontFamilyDescription => "项目文件编辑器使用的字体。",
+        UiTextKey::SettingsEditorFontSize => "字体大小",
+        UiTextKey::SettingsEditorFontSizeDescription => "编辑器字体的像素大小。",
+        UiTextKey::SettingsEditorLineHeight => "行高",
+        UiTextKey::SettingsEditorLineHeightDescription => "编辑器行高倍数。",
+        UiTextKey::SettingsEditorTabSize => "Tab 宽度",
+        UiTextKey::SettingsEditorTabSizeDescription => {
+            "每个 Tab 对应的空格数；已打开的文件需要重新打开后生效。"
+        }
+        UiTextKey::SettingsEditorSoftWrap => "自动换行",
+        UiTextKey::SettingsEditorSoftWrapDescription => "按编辑器可用宽度换行显示长行。",
+        UiTextKey::SettingsEditorLineNumbers => "行号",
+        UiTextKey::SettingsEditorLineNumbersDescription => "在项目文件中显示行号。",
+        UiTextKey::SettingsEditorAutosave => "自动保存",
+        UiTextKey::SettingsEditorAutosaveDescription => "选择编辑文件的自动保存时机。",
+        UiTextKey::SettingsEditorAutosaveOff => "关闭",
+        UiTextKey::SettingsEditorAutosaveOnFocusChange => "焦点切换时",
+        UiTextKey::SettingsEditorAutosaveAfterDelay => "延迟后",
+        UiTextKey::SettingsEditorAutosaveDelay => "自动保存延迟",
+        UiTextKey::SettingsEditorAutosaveDelayDescription => "延迟自动保存使用的毫秒数。",
+        UiTextKey::SettingsProjectPanelDefaultOpen => "默认打开文件树",
+        UiTextKey::SettingsProjectPanelDefaultOpenDescription => "首次打开项目时显示文件树。",
+        UiTextKey::SettingsProjectPanelShowHidden => "显示隐藏文件",
+        UiTextKey::SettingsProjectPanelShowHiddenDescription => {
+            "在项目文件树中包含隐藏文件和目录。"
+        }
+        UiTextKey::SettingsProjectPanelWidth => "文件树宽度",
+        UiTextKey::SettingsProjectPanelWidthDescription => "右侧项目文件树的默认宽度。",
+        UiTextKey::SettingsProjectSidebarWidth => "项目侧栏宽度",
+        UiTextKey::SettingsProjectSidebarWidthDescription => "左侧已打开项目侧栏的宽度。",
         UiTextKey::SettingsDefaultShell => "默认 Shell",
         UiTextKey::SettingsDefaultShellDescription => "创建新终端标签页时使用的 Shell 命令。",
         UiTextKey::SettingsSelectShell => "选择 Shell",

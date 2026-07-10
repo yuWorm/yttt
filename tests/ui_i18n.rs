@@ -195,3 +195,31 @@ fn ui_text_returns_layout_default_and_project_command_labels() {
         "请先打开项目"
     );
 }
+
+#[test]
+fn ui_text_returns_editor_settings_labels() {
+    let english = UiText::english();
+    let chinese = UiText::new(Locale::Chinese);
+
+    assert_eq!(english.get(UiTextKey::SettingsGroupEditor), "Editor");
+    assert_eq!(english.get(UiTextKey::SettingsEditorTabSize), "Tab size");
+    assert!(
+        english
+            .get(UiTextKey::SettingsEditorTabSizeDescription)
+            .contains("Reopen already-open files")
+    );
+    assert_eq!(
+        english.get(UiTextKey::SettingsEditorAutosaveAfterDelay),
+        "After delay"
+    );
+    assert_eq!(chinese.get(UiTextKey::SettingsGroupEditor), "编辑器");
+    assert_eq!(chinese.get(UiTextKey::SettingsEditorSoftWrap), "自动换行");
+    assert_eq!(
+        chinese.get(UiTextKey::SettingsProjectPanelShowHidden),
+        "显示隐藏文件"
+    );
+    assert_eq!(
+        chinese.get(UiTextKey::SettingsProjectSidebarWidth),
+        "项目侧栏宽度"
+    );
+}

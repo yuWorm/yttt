@@ -168,6 +168,25 @@ impl ProjectFileTree {
         }
     }
 
+    pub fn refresh_expanded(&mut self) -> Vec<DirectoryLoadRequest> {
+        self.generation = self.generation.wrapping_add(1);
+        self.directories.clear();
+        self.loading.clear();
+        self.errors.clear();
+        self.expanded.insert(PathBuf::new());
+        self.expanded
+            .iter()
+            .cloned()
+            .map(|relative_directory| {
+                self.loading.insert(relative_directory.clone());
+                DirectoryLoadRequest {
+                    relative_directory,
+                    generation: self.generation,
+                }
+            })
+            .collect()
+    }
+
     pub fn reset_root(&mut self, root: impl Into<PathBuf>) -> DirectoryLoadRequest {
         self.root = root.into();
         self.expanded.clear();

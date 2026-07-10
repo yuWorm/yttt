@@ -1,6 +1,6 @@
 pub const SYSTEM_FONT_FAMILY_LABEL: &str = "System default";
 
-pub fn terminal_font_family_options_from_system(
+pub fn font_family_options_from_system(
     current: &str,
     system_fonts: impl IntoIterator<Item = impl Into<String>>,
 ) -> Vec<String> {
@@ -23,7 +23,7 @@ pub fn terminal_font_family_options_from_system(
     values
 }
 
-pub fn terminal_font_family_option_for_setting(font_family: &str) -> String {
+pub fn font_family_option_for_setting(font_family: &str) -> String {
     let font_family = font_family.trim();
     if font_family.is_empty() {
         SYSTEM_FONT_FAMILY_LABEL.to_string()
@@ -32,10 +32,25 @@ pub fn terminal_font_family_option_for_setting(font_family: &str) -> String {
     }
 }
 
-pub fn terminal_font_family_setting_from_option(option: &str) -> String {
+pub fn font_family_setting_from_option(option: &str) -> String {
     if option == SYSTEM_FONT_FAMILY_LABEL {
         String::new()
     } else {
         option.to_string()
     }
+}
+
+pub fn terminal_font_family_options_from_system(
+    current: &str,
+    system_fonts: impl IntoIterator<Item = impl Into<String>>,
+) -> Vec<String> {
+    font_family_options_from_system(current, system_fonts)
+}
+
+pub fn terminal_font_family_option_for_setting(font_family: &str) -> String {
+    font_family_option_for_setting(font_family)
+}
+
+pub fn terminal_font_family_setting_from_option(option: &str) -> String {
+    font_family_setting_from_option(option)
 }
