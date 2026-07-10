@@ -1109,7 +1109,7 @@ fn root_view_terminal_input_owner_tracks_foreground_overlays() {
     assert!(!root.terminal_input_allowed());
 
     root.open_layout_toml_editor().unwrap();
-    assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Editor);
+    assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Dialog);
     assert!(!root.terminal_input_allowed());
 
     root.cancel_layout_toml_editor();
@@ -1183,6 +1183,15 @@ fn root_view_workspace_keybindings_are_blocked_by_foreground_owner() {
             .len(),
         initial_tab_count
     );
+}
+
+#[test]
+fn root_view_layout_editor_blocks_project_file_save_binding() {
+    let mut root = RootView::dev_fixture();
+    root.open_layout_toml_editor().unwrap();
+
+    assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Dialog);
+    assert!(!root.dispatch_runtime_keybinding(&Keystroke::parse("cmd-s").unwrap()));
 }
 
 #[test]

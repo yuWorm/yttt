@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use gpui::Keystroke;
 use tempfile::tempdir;
-use yttt::commands::{CommandId, default_registry, dispatch_workspace_command};
+use yttt::commands::{
+    ActiveSurface, CommandContext, CommandId, default_registry, dispatch_workspace_command,
+};
 use yttt::config::{
     keybindings::{
         KeybindingLoadWarning, KeybindingsConfig, default_keybindings, load_keybindings,
@@ -14,6 +16,9 @@ use yttt::model::layout::LayoutNode;
 use yttt::model::workspace::{TabStartState, Workspace};
 use yttt::ui::actions::{
     app_startup_keybindings, default_ui_keybinding_specs, runtime_command_for_keystroke,
+};
+use yttt::ui::interaction::{
+    input_owner::InputOwnerKind, key_dispatch::workspace_command_for_keystroke,
 };
 use yttt::ui::keybinding_display::{KeybindingDisplayPlatform, display_keybindings_for_platform};
 use yttt::ui::keybindings_editor::{KeybindingEditError, KeybindingsEditorState};
@@ -28,6 +33,166 @@ fn default_registry_contains_core_commands() {
     assert!(registry.contains(CommandId::TabRename));
     assert!(registry.contains(CommandId::CommandPaletteOpen));
     assert!(registry.contains(CommandId::SettingsOpen));
+}
+
+#[test]
+fn file_and_project_panel_commands_are_registered() {
+    let registry = default_registry();
+
+    for (command, id) in [
+        (CommandId::FileSave, "file.save"),
+        (CommandId::ProjectPanelToggle, "project_panel.toggle"),
+        (CommandId::ProjectPanelRefresh, "project_panel.refresh"),
+    ] {
+        assert!(registry.contains(command));
+        assert_eq!(command.as_str(), id);
+    }
+
+    let config = default_keybindings();
+    assert_has_config_binding(&config, "cmd-s", "file.save");
+    assert_has_config_binding(&config, "ctrl-s", "file.save");
+    assert_has_config_binding(&config, "cmd-shift-e", "project_panel.toggle");
+    assert_has_config_binding(&config, "ctrl-shift-e", "project_panel.toggle");
+    assert_has_ui_binding("cmd-s", "file.save");
+    assert_has_ui_binding("ctrl-s", "file.save");
+    assert_has_ui_binding("cmd-shift-e", "project_panel.toggle");
+    assert_has_ui_binding("ctrl-shift-e", "project_panel.toggle");
+    assert!(config.conflicts().is_empty());
+}
+
+#[test]
+fn command_availability_tracks_active_surface() {
+    let no_project = CommandContext {
+        has_selected_project: false,
+        active_surface: ActiveSurface::None,
+    };
+    let no_surface = CommandContext {
+        has_selected_project: true,
+        active_surface: ActiveSurface::None,
+    };
+    let terminal = CommandContext {
+        has_selected_project: true,
+        active_surface: ActiveSurface::Terminal,
+    };
+    let file = CommandContext {
+        has_selected_project: true,
+        active_surface: ActiveSurface::File,
+    };
+
+    assert!(
+        !CommandId::FileSave
+            .availability_for_context(no_project)
+            .enabled
+    );
+    assert!(
+        !CommandId::FileSave
+            .availability_for_context(no_surface)
+            .enabled
+    );
+    assert!(
+        !CommandId::FileSave
+            .availability_for_context(terminal)
+            .enabled
+    );
+    assert!(CommandId::FileSave.availability_for_context(file).enabled);
+    assert!(!CommandId::FileSave.availability(true).enabled);
+
+    for command in [
+        CommandId::ProjectPanelToggle,
+        CommandId::ProjectPanelRefresh,
+    ] {
+        assert!(!command.availability_for_context(no_project).enabled);
+        assert!(command.availability_for_context(no_surface).enabled);
+        assert!(command.availability_for_context(terminal).enabled);
+        assert!(command.availability_for_context(file).enabled);
+    }
+
+    for command in [CommandId::TabClose, CommandId::TabNext, CommandId::TabPrev] {
+        assert!(!command.availability_for_context(no_surface).enabled);
+        assert!(command.availability_for_context(terminal).enabled);
+        assert!(command.availability_for_context(file).enabled);
+    }
+
+    for command in [
+        CommandId::TabNew,
+        CommandId::TabRename,
+        CommandId::PaneSplitHorizontal,
+        CommandId::PaneSplitVertical,
+        CommandId::PaneClose,
+        CommandId::PaneFocusLeft,
+        CommandId::PaneFocusRight,
+        CommandId::PaneFocusUp,
+        CommandId::PaneFocusDown,
+        CommandId::PaneResizeLeft,
+        CommandId::PaneResizeRight,
+        CommandId::PaneResizeUp,
+        CommandId::PaneResizeDown,
+        CommandId::PaneRename,
+        CommandId::PanePalette,
+    ] {
+        assert!(command.availability_for_context(terminal).enabled);
+        assert!(!command.availability_for_context(file).enabled);
+    }
+}
+
+#[test]
+fn editor_owner_allows_only_safe_workspace_commands() {
+    for command in [
+        CommandId::FileSave,
+        CommandId::TabClose,
+        CommandId::TabNext,
+        CommandId::TabPrev,
+        CommandId::ProjectPanelToggle,
+        CommandId::ProjectPanelRefresh,
+        CommandId::CommandPaletteOpen,
+        CommandId::ProjectPalette,
+        CommandId::TabPalette,
+    ] {
+        let actual = workspace_command_for_keystroke(
+            InputOwnerKind::Editor,
+            &Keystroke::parse("cmd-s").unwrap(),
+            |_| Some(command),
+            |_| true,
+        );
+        assert_eq!(actual, Some(command), "{command:?} should be editor-safe");
+    }
+
+    for command in [
+        CommandId::TabNew,
+        CommandId::TabRename,
+        CommandId::PaneSplitHorizontal,
+        CommandId::PaneSplitVertical,
+        CommandId::PaneClose,
+        CommandId::PaneFocusLeft,
+        CommandId::PaneResizeRight,
+        CommandId::PaneRename,
+        CommandId::PanePalette,
+    ] {
+        let actual = workspace_command_for_keystroke(
+            InputOwnerKind::Editor,
+            &Keystroke::parse("cmd-d").unwrap(),
+            |_| Some(command),
+            |_| false,
+        );
+        assert_eq!(actual, None, "{command:?} must stay editor-owned");
+    }
+}
+
+#[test]
+fn modal_input_owners_block_project_file_save() {
+    for owner in [
+        InputOwnerKind::Settings,
+        InputOwnerKind::Dialog,
+        InputOwnerKind::Palette,
+    ] {
+        let actual = workspace_command_for_keystroke(
+            owner,
+            &Keystroke::parse("cmd-s").unwrap(),
+            |_| Some(CommandId::FileSave),
+            |_| false,
+        );
+        assert_eq!(actual, None, "{owner:?} must block project-file save");
+    }
 }
 
 #[test]

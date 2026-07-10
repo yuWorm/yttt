@@ -1,13 +1,16 @@
 use std::path::PathBuf;
 
 use crate::{
-    commands::{CommandId, CommandRegistry},
+    commands::{ActiveSurface, CommandContext, CommandId, CommandRegistry},
     model::{
         layout::LayoutNode,
         workspace::{AgentStatus, OpenedProject, PaneProcessState, TabStartState, Workspace},
     },
-    ui::agent_status::{is_agent_pane, pane_agent_status, project_agent_status, tab_agent_status},
-    ui::i18n::{UiText, UiTextKey},
+    ui::{
+        agent_status::{is_agent_pane, pane_agent_status, project_agent_status, tab_agent_status},
+        editor::{DocumentId, WorkItemId},
+        i18n::{UiText, UiTextKey},
+    },
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +37,47 @@ pub struct PaletteItem {
 pub struct RecentProject {
     pub title: String,
     pub path: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TabPaletteSnapshot {
+    id: WorkItemId,
+    title: String,
+    subtitle: Option<String>,
+    status: Option<String>,
+}
+
+impl TabPaletteSnapshot {
+    pub fn terminal(
+        tab_id: impl Into<String>,
+        title: impl Into<String>,
+        subtitle: Option<String>,
+        status: Option<String>,
+    ) -> Self {
+        Self {
+            id: WorkItemId::Terminal(tab_id.into()),
+            title: title.into(),
+            subtitle,
+            status,
+        }
+    }
+
+    pub fn file(document_id: DocumentId, relative_path: PathBuf, status: Option<String>) -> Self {
+        let title = relative_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| relative_path.to_string_lossy().into_owned());
+        Self {
+            id: WorkItemId::File(document_id),
+            title,
+            subtitle: Some(relative_path.to_string_lossy().into_owned()),
+            status,
+        }
+    }
+
+    pub fn id(&self) -> &WorkItemId {
+        &self.id
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,12 +146,33 @@ impl ActivePalette {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CommandPaletteContext {
     pub has_selected_project: bool,
+    pub active_surface: ActiveSurface,
 }
 
 impl CommandPaletteContext {
     pub fn from_workspace(workspace: &Workspace) -> Self {
+        let has_selected_project = workspace.selected_project_id().is_some();
+        Self::from_command_context(CommandContext {
+            has_selected_project,
+            active_surface: if has_selected_project {
+                ActiveSurface::Terminal
+            } else {
+                ActiveSurface::None
+            },
+        })
+    }
+
+    pub fn from_command_context(context: CommandContext) -> Self {
         Self {
-            has_selected_project: workspace.selected_project_id().is_some(),
+            has_selected_project: context.has_selected_project,
+            active_surface: context.active_surface,
+        }
+    }
+
+    pub fn command_context(self) -> CommandContext {
+        CommandContext {
+            has_selected_project: self.has_selected_project,
+            active_surface: self.active_surface,
         }
     }
 }
@@ -128,7 +193,9 @@ pub fn command_palette_items_with_text(
         .commands()
         .iter()
         .map(|command| {
-            let availability = command.id.availability(context.has_selected_project);
+            let availability = command
+                .id
+                .availability_for_context(context.command_context());
             PaletteItem {
                 id: command.id.as_str().to_string(),
                 title: ui_text.get(command_title_key(command.id)).to_string(),
@@ -137,11 +204,8 @@ pub fn command_palette_items_with_text(
                 keybinding: None,
                 command: command.id,
                 enabled: availability.enabled,
-                disabled_reason: command_disabled_reason_key(
-                    command.id,
-                    context.has_selected_project,
-                )
-                .map(|key| ui_text.get(key).to_string()),
+                disabled_reason: command_disabled_reason_key(availability.disabled_reason)
+                    .map(|key| ui_text.get(key).to_string()),
             }
         })
         .collect()
@@ -199,39 +263,68 @@ pub fn tab_palette_items_with_text(
     let selected_project_id = workspace.selected_project_id()?;
     let project = workspace.project(selected_project_id)?;
 
-    Some(
-        project
-            .layout
-            .tabs
-            .iter()
-            .map(|tab| {
-                let tab_state = project.tab_state(&tab.id);
-                let pane_count = tab_state
-                    .map(|state| state.pane_states.len())
-                    .unwrap_or_else(|| pane_count(&tab.layout));
-                let agent_status = tab_agent_status(project, &tab.id);
-                let status = tab_state.map(|state| {
-                    tab_status(
-                        tab.id == project.selected_tab_id,
-                        state.start_state,
-                        agent_status,
-                        ui_text,
-                    )
-                });
+    let snapshots = project
+        .layout
+        .tabs
+        .iter()
+        .map(|tab| {
+            let tab_state = project.tab_state(&tab.id);
+            let pane_count = tab_state
+                .map(|state| state.pane_states.len())
+                .unwrap_or_else(|| pane_count(&tab.layout));
+            let agent_status = tab_agent_status(project, &tab.id);
+            let status = tab_state.map(|state| {
+                tab_status(
+                    tab.id == project.selected_tab_id,
+                    state.start_state,
+                    agent_status,
+                    ui_text,
+                )
+            });
 
-                PaletteItem {
-                    id: tab.id.clone(),
-                    title: tab.title.clone(),
-                    subtitle: Some(pane_count_label(pane_count, ui_text)),
-                    status,
-                    keybinding: None,
-                    command: CommandId::TabPalette,
-                    enabled: true,
-                    disabled_reason: None,
-                }
-            })
-            .collect(),
-    )
+            TabPaletteSnapshot::terminal(
+                tab.id.clone(),
+                tab.title.clone(),
+                Some(pane_count_label(pane_count, ui_text)),
+                status,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    Some(tab_palette_items_from_snapshots(&snapshots, false))
+}
+
+pub fn unified_tab_palette_items(snapshots: &[TabPaletteSnapshot]) -> Vec<PaletteItem> {
+    tab_palette_items_from_snapshots(snapshots, true)
+}
+
+fn tab_palette_items_from_snapshots(
+    snapshots: &[TabPaletteSnapshot],
+    prefix_ids: bool,
+) -> Vec<PaletteItem> {
+    snapshots
+        .iter()
+        .map(|snapshot| PaletteItem {
+            id: tab_palette_item_id(&snapshot.id, prefix_ids),
+            title: snapshot.title.clone(),
+            subtitle: snapshot.subtitle.clone(),
+            status: snapshot.status.clone(),
+            keybinding: None,
+            command: CommandId::TabPalette,
+            enabled: true,
+            disabled_reason: None,
+        })
+        .collect()
+}
+
+fn tab_palette_item_id(id: &WorkItemId, prefix_ids: bool) -> String {
+    match id {
+        WorkItemId::Terminal(tab_id) if prefix_ids => format!("terminal:{tab_id}"),
+        WorkItemId::Terminal(tab_id) => tab_id.clone(),
+        WorkItemId::File(document_id) => {
+            format!("file:{}", document_id.canonical_path.to_string_lossy())
+        }
+    }
 }
 
 pub fn pane_palette_items(workspace: &Workspace) -> Option<Vec<PaletteItem>> {
@@ -292,6 +385,9 @@ fn command_title_key(command_id: CommandId) -> UiTextKey {
         CommandId::ProjectOpenRecent => UiTextKey::CommandProjectOpenRecentTitle,
         CommandId::ProjectClose => UiTextKey::CommandProjectCloseTitle,
         CommandId::ProjectPalette => UiTextKey::CommandProjectPaletteTitle,
+        CommandId::ProjectPanelToggle => UiTextKey::CommandProjectPanelToggleTitle,
+        CommandId::ProjectPanelRefresh => UiTextKey::CommandProjectPanelRefreshTitle,
+        CommandId::FileSave => UiTextKey::CommandFileSaveTitle,
         CommandId::TabNew => UiTextKey::CommandTabNewTitle,
         CommandId::TabClose => UiTextKey::CommandTabCloseTitle,
         CommandId::TabRename => UiTextKey::CommandTabRenameTitle,
@@ -332,6 +428,9 @@ fn command_description_key(command_id: CommandId) -> UiTextKey {
         CommandId::ProjectOpenRecent => UiTextKey::CommandProjectOpenRecentDescription,
         CommandId::ProjectClose => UiTextKey::CommandProjectCloseDescription,
         CommandId::ProjectPalette => UiTextKey::CommandProjectPaletteDescription,
+        CommandId::ProjectPanelToggle => UiTextKey::CommandProjectPanelToggleDescription,
+        CommandId::ProjectPanelRefresh => UiTextKey::CommandProjectPanelRefreshDescription,
+        CommandId::FileSave => UiTextKey::CommandFileSaveDescription,
         CommandId::TabNew => UiTextKey::CommandTabNewDescription,
         CommandId::TabClose => UiTextKey::CommandTabCloseDescription,
         CommandId::TabRename => UiTextKey::CommandTabRenameDescription,
@@ -370,22 +469,16 @@ fn command_description_key(command_id: CommandId) -> UiTextKey {
     }
 }
 
-fn command_disabled_reason_key(
-    command_id: CommandId,
-    has_selected_project: bool,
-) -> Option<UiTextKey> {
-    match command_id {
-        CommandId::ProjectOpen | CommandId::ProjectOpenRecent => None,
-        CommandId::CommandPaletteOpen
-        | CommandId::ProjectPalette
-        | CommandId::SettingsOpen
-        | CommandId::SettingsKeybindings
-        | CommandId::SettingsNotifications
-        | CommandId::LayoutDefaultEdit
-        | CommandId::LayoutDefaultReset
-        | CommandId::LayoutDefaultReload => None,
-        _ if has_selected_project => None,
-        _ => Some(UiTextKey::CommandDisabledOpenProjectFirst),
+fn command_disabled_reason_key(reason: Option<&str>) -> Option<UiTextKey> {
+    match reason {
+        None => None,
+        Some("Open a project first") => Some(UiTextKey::CommandDisabledOpenProjectFirst),
+        Some("Focus a project file first") => Some(UiTextKey::CommandDisabledFocusProjectFileFirst),
+        Some("Open a terminal or file first") => Some(UiTextKey::CommandDisabledOpenWorkItemFirst),
+        Some("Switch to a terminal tab first") => {
+            Some(UiTextKey::CommandDisabledSwitchTerminalFirst)
+        }
+        Some(_) => Some(UiTextKey::CommandUnavailable),
     }
 }
 

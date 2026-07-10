@@ -1,14 +1,19 @@
 use std::path::PathBuf;
 
 use yttt::{
-    commands::{CommandId, default_registry},
-    model::workspace::{AgentStatus, Workspace},
+    commands::{ActiveSurface, CommandContext, CommandId, default_registry},
+    model::{
+        ids::ProjectId,
+        workspace::{AgentStatus, Workspace},
+    },
     palette::{
         ActivePalette, CommandPaletteContext, PaletteItem, PaletteKind, RecentProject,
-        command_palette_items, pane_palette_items, project_palette_items, tab_palette_items,
+        TabPaletteSnapshot, command_palette_items, pane_palette_items, project_palette_items,
+        tab_palette_items, unified_tab_palette_items,
     },
     ui::{
         components::SelectableState,
+        editor::DocumentId,
         palette::visible_palette_rows,
         picker::{PalettePickerDelegate, PickerDelegate, PickerItem, PickerState},
     },
@@ -61,6 +66,57 @@ fn command_palette_disables_workspace_commands_without_project() {
     assert_eq!(
         split.disabled_reason.as_deref(),
         Some("Open a project first")
+    );
+}
+
+#[test]
+fn command_palette_uses_active_file_surface_availability() {
+    let registry = default_registry();
+    let context = CommandPaletteContext::from_command_context(CommandContext {
+        has_selected_project: true,
+        active_surface: ActiveSurface::File,
+    });
+
+    let items = command_palette_items(&registry, context);
+
+    for command in [
+        CommandId::FileSave,
+        CommandId::TabClose,
+        CommandId::ProjectPanelToggle,
+        CommandId::ProjectPanelRefresh,
+    ] {
+        assert!(
+            items
+                .iter()
+                .find(|item| item.command == command)
+                .unwrap()
+                .enabled,
+            "{command:?} should be enabled for an active file"
+        );
+    }
+    for command in [
+        CommandId::TabNew,
+        CommandId::TabRename,
+        CommandId::PaneSplitVertical,
+        CommandId::PaneFocusLeft,
+    ] {
+        assert!(
+            !items
+                .iter()
+                .find(|item| item.command == command)
+                .unwrap()
+                .enabled,
+            "{command:?} should be disabled for an active file"
+        );
+    }
+    assert_eq!(
+        items
+            .iter()
+            .find(|item| item.command == CommandId::TabNew)
+            .unwrap()
+            .disabled_reason
+            .as_deref(),
+        Some("Switch to a terminal tab first")
     );
 }
 
@@ -158,6 +214,49 @@ fn tab_palette_contains_current_project_tabs() {
     assert!(items.iter().any(|item| item.title == "Agent"
         && item.subtitle.as_deref() == Some("1 pane")
         && item.status.as_deref() == Some("lazy")));
+}
+
+#[test]
+fn unified_tab_palette_prefixes_ids_and_shows_file_relative_paths() {
+    let document_id = DocumentId {
+        project_id: ProjectId::new("project-a"),
+        canonical_path: PathBuf::from("/tmp/yttt/src/main.rs"),
+    };
+    let snapshots = vec![
+        TabPaletteSnapshot::terminal(
+            "dev",
+            "Dev",
+            Some("2 panes".to_string()),
+            Some("active · started".to_string()),
+        ),
+        TabPaletteSnapshot::file(
+            document_id,
+            PathBuf::from("src/main.rs"),
+            Some("unsaved".to_string()),
+        ),
+    ];
+
+    let items = unified_tab_palette_items(&snapshots);
+
+    assert_eq!(items[0].id, "terminal:dev");
+    assert_eq!(items[0].title, "Dev");
+    assert_eq!(items[0].subtitle.as_deref(), Some("2 panes"));
+    assert_eq!(items[1].id, "file:/tmp/yttt/src/main.rs");
+    assert_eq!(items[1].title, "main.rs");
+    assert_eq!(items[1].subtitle.as_deref(), Some("src/main.rs"));
+    assert_eq!(items[1].status.as_deref(), Some("unsaved"));
+
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+    let legacy_items = tab_palette_items(&workspace).unwrap();
+    assert!(legacy_items.iter().any(|item| item.id == "dev"));
+    assert!(
+        legacy_items
+            .iter()
+            .all(|item| !item.id.starts_with("terminal:"))
+    );
 }
 
 #[test]

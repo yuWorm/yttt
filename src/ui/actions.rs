@@ -19,6 +19,9 @@ actions!(
         OpenProject,
         ProjectClose,
         OpenProjectPalette,
+        ProjectPanelToggle,
+        ProjectPanelRefresh,
+        FileSave,
         OpenTabPalette,
         OpenPanePalette,
         PaletteSelectNext,
@@ -86,6 +89,22 @@ const DEFAULT_UI_KEYBINDING_SPECS: &[UiKeybindingSpec] = &[
     UiKeybindingSpec {
         keys: Cow::Borrowed("ctrl-,"),
         command: CommandId::SettingsOpen,
+    },
+    UiKeybindingSpec {
+        keys: Cow::Borrowed("cmd-s"),
+        command: CommandId::FileSave,
+    },
+    UiKeybindingSpec {
+        keys: Cow::Borrowed("ctrl-s"),
+        command: CommandId::FileSave,
+    },
+    UiKeybindingSpec {
+        keys: Cow::Borrowed("cmd-shift-e"),
+        command: CommandId::ProjectPanelToggle,
+    },
+    UiKeybindingSpec {
+        keys: Cow::Borrowed("ctrl-shift-e"),
+        command: CommandId::ProjectPanelToggle,
     },
     UiKeybindingSpec {
         keys: Cow::Borrowed("cmd-shift-o"),

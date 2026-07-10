@@ -8,12 +8,28 @@ const PANE_RESIZE_DELTA: f32 = 0.05;
 const DEFAULT_RENAMED_TAB_TITLE: &str = "Renamed Tab";
 const DEFAULT_RENAMED_PANE_TITLE: &str = "Renamed Pane";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActiveSurface {
+    None,
+    Terminal,
+    File,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommandContext {
+    pub has_selected_project: bool,
+    pub active_surface: ActiveSurface,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CommandId {
     ProjectOpen,
     ProjectOpenRecent,
     ProjectClose,
     ProjectPalette,
+    ProjectPanelToggle,
+    ProjectPanelRefresh,
+    FileSave,
     TabNew,
     TabClose,
     TabRename,
@@ -53,6 +69,9 @@ impl CommandId {
         Self::ProjectOpenRecent,
         Self::ProjectClose,
         Self::ProjectPalette,
+        Self::ProjectPanelToggle,
+        Self::ProjectPanelRefresh,
+        Self::FileSave,
         Self::TabNew,
         Self::TabClose,
         Self::TabRename,
@@ -92,6 +111,9 @@ impl CommandId {
             Self::ProjectOpenRecent => "project.open_recent",
             Self::ProjectClose => "project.close",
             Self::ProjectPalette => "project.palette",
+            Self::ProjectPanelToggle => "project_panel.toggle",
+            Self::ProjectPanelRefresh => "project_panel.refresh",
+            Self::FileSave => "file.save",
             Self::TabNew => "tab.new",
             Self::TabClose => "tab.close",
             Self::TabRename => "tab.rename",
@@ -143,6 +165,13 @@ impl CommandId {
             Self::ProjectPalette => {
                 presentation("Open Project Palette", "Switch opened or recent projects")
             }
+            Self::ProjectPanelToggle => {
+                presentation("Toggle Project Files", "Show or hide the project file tree")
+            }
+            Self::ProjectPanelRefresh => {
+                presentation("Refresh Project Files", "Refresh the project file tree")
+            }
+            Self::FileSave => presentation("Save File", "Save the active project file"),
             Self::TabNew => presentation("New Tab", "Create a shell tab in the selected project"),
             Self::TabClose => presentation("Close Tab", "Close the selected tab"),
             Self::TabRename => presentation("Rename Tab", "Rename the selected tab"),
@@ -231,6 +260,17 @@ impl CommandId {
     }
 
     pub fn availability(self, has_selected_project: bool) -> CommandAvailability {
+        self.availability_for_context(CommandContext {
+            has_selected_project,
+            active_surface: if has_selected_project {
+                ActiveSurface::Terminal
+            } else {
+                ActiveSurface::None
+            },
+        })
+    }
+
+    pub fn availability_for_context(self, context: CommandContext) -> CommandAvailability {
         match self {
             Self::CommandPaletteOpen
             | Self::ProjectOpen
@@ -243,12 +283,37 @@ impl CommandId {
             | Self::LayoutDefaultReset
             | Self::LayoutDefaultReload => enabled(),
             Self::ProjectClose
-            | Self::TabNew
-            | Self::TabClose
-            | Self::TabRename
-            | Self::TabNext
-            | Self::TabPrev
+            | Self::ProjectPanelToggle
+            | Self::ProjectPanelRefresh
             | Self::TabPalette
+            | Self::LayoutProjectEdit
+            | Self::LayoutSaveCurrent
+            | Self::LayoutExportProjectConfig
+            | Self::LayoutResetLocalOverride
+            | Self::LayoutOpenFile => require_project(context),
+            Self::FileSave => {
+                if !context.has_selected_project {
+                    disabled("Open a project first")
+                } else if context.active_surface == ActiveSurface::File {
+                    enabled()
+                } else {
+                    disabled("Focus a project file first")
+                }
+            }
+            Self::TabClose | Self::TabNext | Self::TabPrev => {
+                if !context.has_selected_project {
+                    disabled("Open a project first")
+                } else if matches!(
+                    context.active_surface,
+                    ActiveSurface::Terminal | ActiveSurface::File
+                ) {
+                    enabled()
+                } else {
+                    disabled("Open a terminal or file first")
+                }
+            }
+            Self::TabNew
+            | Self::TabRename
             | Self::PaneSplitHorizontal
             | Self::PaneSplitVertical
             | Self::PaneClose
@@ -261,16 +326,13 @@ impl CommandId {
             | Self::PaneResizeUp
             | Self::PaneResizeDown
             | Self::PaneRename
-            | Self::PanePalette
-            | Self::LayoutProjectEdit
-            | Self::LayoutSaveCurrent
-            | Self::LayoutExportProjectConfig
-            | Self::LayoutResetLocalOverride
-            | Self::LayoutOpenFile => {
-                if has_selected_project {
+            | Self::PanePalette => {
+                if !context.has_selected_project {
+                    disabled("Open a project first")
+                } else if context.active_surface == ActiveSurface::Terminal {
                     enabled()
                 } else {
-                    disabled("Open a project first")
+                    disabled("Switch to a terminal tab first")
                 }
             }
         }
@@ -292,6 +354,14 @@ fn disabled(reason: &'static str) -> CommandAvailability {
     CommandAvailability {
         enabled: false,
         disabled_reason: Some(reason),
+    }
+}
+
+fn require_project(context: CommandContext) -> CommandAvailability {
+    if context.has_selected_project {
+        enabled()
+    } else {
+        disabled("Open a project first")
     }
 }
 

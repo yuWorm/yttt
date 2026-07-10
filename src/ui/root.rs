@@ -2051,7 +2051,7 @@ impl RootView {
                 .as_ref()
                 .map(|session| session.target().input_scope_id())
                 .unwrap_or("editor.project_layout");
-            InputOwnerRegistration::blocking(InputOwnerKind::Editor, InputScopeId::new(scope))
+            InputOwnerRegistration::blocking(InputOwnerKind::Dialog, InputScopeId::new(scope))
         } else if self.settings_page.is_open {
             InputOwnerRegistration::blocking(
                 InputOwnerKind::Settings,
