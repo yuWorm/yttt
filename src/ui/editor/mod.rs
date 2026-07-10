@@ -2,6 +2,7 @@ mod document;
 mod file_io;
 mod language;
 mod language_catalog;
+mod runtime;
 mod state;
 mod view;
 mod workspace;
@@ -19,6 +20,7 @@ pub use language_catalog::{
     EditorLanguageCatalog, EditorLanguageDefinition, EditorLanguageId, EditorLanguageResolution,
     EditorLanguageResolutionSource,
 };
+pub use runtime::ProjectEditorRuntime;
 pub use state::{
     CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, EditorDiagnostic,
     EditorDiagnosticSeverity, EditorLanguageService, EditorRange,

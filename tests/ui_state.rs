@@ -7,7 +7,10 @@ use gpui::Keystroke;
 use tempfile::tempdir;
 use yttt::{
     commands::CommandId,
-    config::{paths::AppConfigPaths, settings::LanguageSetting},
+    config::{
+        paths::AppConfigPaths,
+        settings::{AppSettings, LanguageSetting, save_settings},
+    },
     model::{
         layout::PaneKind,
         layout::SplitDirection,
@@ -409,6 +412,147 @@ fn root_view_open_project_path_records_visible_load_error() {
     assert!(item.title.contains("failed to parse project layout"));
     assert_eq!(item.context, "Error");
     assert_eq!(item.tone, ToastTone::Error);
+}
+
+#[test]
+fn root_view_creates_project_work_item_session_on_open() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("editor-session-project");
+    fs::create_dir(&project_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut settings = AppSettings::default();
+    settings.project_panel.default_open = false;
+    settings.project_panel.width = 336.0;
+    save_settings(&paths, &settings).unwrap();
+    let mut root = RootView::with_config_paths(paths);
+
+    root.open_project_path(&project_dir).unwrap();
+
+    let project_id = root.workspace().selected_project_id().unwrap();
+    let project = root.workspace().project(project_id).unwrap();
+    let session = root
+        .project_editor_runtime()
+        .workspace()
+        .session(project_id)
+        .unwrap();
+    assert_eq!(session.file_tree().root(), project.path);
+    assert_eq!(
+        session.active_work_item(),
+        Some(&WorkItemId::Terminal(project.selected_tab_id.clone()))
+    );
+    assert!(!session.project_panel_visible());
+    assert_eq!(session.project_panel_width(), 336.0);
+}
+
+#[test]
+fn root_view_prebuilt_workspace_creates_all_project_work_item_sessions() {
+    let mut workspace = Workspace::new();
+    let first = workspace
+        .open_project(PathBuf::from("/tmp/editor-first"), sample_layout())
+        .unwrap();
+    let second = workspace
+        .open_project(PathBuf::from("/tmp/editor-second"), sample_layout())
+        .unwrap();
+    let (_temp, root) = english_test_root_with_workspace(workspace);
+
+    let state = root.project_editor_runtime().workspace();
+    assert_eq!(state.len(), 2);
+    assert_eq!(
+        state.session(&first).unwrap().active_work_item(),
+        Some(&WorkItemId::Terminal("dev".to_string()))
+    );
+    assert_eq!(
+        state.session(&second).unwrap().active_work_item(),
+        Some(&WorkItemId::Terminal("dev".to_string()))
+    );
+}
+
+#[test]
+fn root_view_project_switch_preserves_each_editor_session() {
+    let mut workspace = Workspace::new();
+    let first = workspace
+        .open_project(PathBuf::from("/tmp/editor-first"), sample_layout())
+        .unwrap();
+    let second = workspace
+        .open_project(PathBuf::from("/tmp/editor-second"), sample_layout())
+        .unwrap();
+    let (_temp, mut root) = english_test_root_with_workspace(workspace);
+    let opened_file = {
+        let session = root
+            .project_editor_runtime_mut()
+            .workspace_mut()
+            .session_mut(&first)
+            .unwrap();
+        session.set_project_panel_visible(false);
+        session.set_project_panel_width(401.0);
+        session.open_file(PathBuf::from("/tmp/editor-first/src/main.rs"))
+    };
+
+    root.select_project(&first).unwrap();
+    root.select_project(&second).unwrap();
+    root.select_project(&first).unwrap();
+
+    let first_session = root
+        .project_editor_runtime()
+        .workspace()
+        .session(&first)
+        .unwrap();
+    assert_eq!(
+        first_session.active_work_item(),
+        Some(&WorkItemId::File(opened_file))
+    );
+    assert!(!first_session.project_panel_visible());
+    assert_eq!(first_session.project_panel_width(), 401.0);
+    assert!(
+        root.project_editor_runtime()
+            .workspace()
+            .session(&second)
+            .is_some()
+    );
+}
+
+#[test]
+fn root_view_confirmed_project_close_removes_only_its_editor_runtime() {
+    let mut workspace = Workspace::new();
+    let first = workspace
+        .open_project(PathBuf::from("/tmp/editor-first"), sample_layout())
+        .unwrap();
+    let second = workspace
+        .open_project(PathBuf::from("/tmp/editor-second"), sample_layout())
+        .unwrap();
+    workspace.select_project(&first).unwrap();
+    workspace
+        .mark_pane_running(&first, "dev", "server")
+        .unwrap();
+    let (_temp, mut root) = english_test_root_with_workspace(workspace);
+    let first_document = DocumentId {
+        project_id: first.clone(),
+        canonical_path: PathBuf::from("/tmp/editor-first/src/main.rs"),
+    };
+    let second_document = DocumentId {
+        project_id: second.clone(),
+        canonical_path: PathBuf::from("/tmp/editor-second/src/main.rs"),
+    };
+    root.project_editor_runtime_mut()
+        .track_tree_load(first.clone(), 7);
+    root.project_editor_runtime_mut()
+        .track_tree_load(second.clone(), 11);
+    root.project_editor_runtime_mut()
+        .track_file_load(first_document.clone(), 13);
+    root.project_editor_runtime_mut()
+        .track_file_load(second_document.clone(), 17);
+
+    root.run_command(CommandId::ProjectClose).unwrap();
+    assert!(root.has_pending_project_close());
+    root.confirm_pending_project_close().unwrap();
+
+    let runtime = root.project_editor_runtime();
+    assert!(runtime.workspace().session(&first).is_none());
+    assert!(runtime.workspace().session(&second).is_some());
+    assert!(!runtime.tree_load_is_current(&first, 7));
+    assert!(runtime.tree_load_is_current(&second, 11));
+    assert!(!runtime.file_load_is_current(&first_document, 13));
+    assert!(runtime.file_load_is_current(&second_document, 17));
 }
 
 #[test]

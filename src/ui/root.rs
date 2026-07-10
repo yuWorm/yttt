@@ -101,8 +101,8 @@ use crate::{
         },
         editor::{
             CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, EditorDiagnostic,
-            EditorDiagnosticSeverity, EditorLanguageCatalog, EditorLanguageId, WorkItemId,
-            code_editor_input_state,
+            EditorDiagnosticSeverity, EditorLanguageCatalog, EditorLanguageId,
+            ProjectEditorRuntime, WorkItemId, code_editor_input_state,
         },
         font_options::{
             terminal_font_family_option_for_setting, terminal_font_family_options_from_system,
@@ -203,6 +203,7 @@ pub struct RootView {
     pending_terminal_focus_pane_id: Option<String>,
     terminal_panes: HashMap<String, Entity<TerminalPaneView>>,
     terminal_pane_subscriptions: HashMap<String, Subscription>,
+    project_editor_runtime: ProjectEditorRuntime,
     project_git_statuses: HashMap<ProjectId, ProjectGitStatus>,
     toast_queue: ToastQueue,
     system_notifier: NoopSystemNotifier,
@@ -320,6 +321,20 @@ impl RootView {
             layout_load_warning_message(default_layout_state.warnings()),
         );
         let system_notifications_enabled = app_settings.notifications.system;
+        let mut project_editor_runtime = ProjectEditorRuntime::default();
+        for project in workspace.opened_projects() {
+            let selected_terminal_id = project
+                .layout
+                .tab(&project.selected_tab_id)
+                .map(|_| project.selected_tab_id.clone());
+            project_editor_runtime.open_project(
+                project.id.clone(),
+                project.path.clone(),
+                selected_terminal_id,
+                app_settings.project_panel.default_open,
+                app_settings.project_panel.width,
+            );
+        }
 
         Self {
             workspace,
@@ -379,6 +394,7 @@ impl RootView {
             pending_terminal_focus_pane_id: None,
             terminal_panes: HashMap::new(),
             terminal_pane_subscriptions: HashMap::new(),
+            project_editor_runtime,
             project_git_statuses: HashMap::new(),
             toast_queue: ToastQueue::default(),
             system_notifier: NoopSystemNotifier,
@@ -396,6 +412,20 @@ impl RootView {
 
     pub fn workspace_mut(&mut self) -> &mut Workspace {
         &mut self.workspace
+    }
+
+    pub fn select_project(&mut self, project_id: &ProjectId) -> Result<(), RootViewError> {
+        self.workspace.select_project(project_id)?;
+        self.refresh_selected_project_git_status();
+        Ok(())
+    }
+
+    pub fn project_editor_runtime(&self) -> &ProjectEditorRuntime {
+        &self.project_editor_runtime
+    }
+
+    pub fn project_editor_runtime_mut(&mut self) -> &mut ProjectEditorRuntime {
+        &mut self.project_editor_runtime
     }
 
     pub fn sidebar_is_collapsed(&self) -> bool {
@@ -483,8 +513,7 @@ impl RootView {
                     .find(|project| project.id.as_str() == item.id)
                     .map(|project| project.id.clone());
                 if let Some(project_id) = project_id {
-                    self.workspace.select_project(&project_id)?;
-                    self.refresh_selected_project_git_status();
+                    self.select_project(&project_id)?;
                     self.queue_selected_terminal_focus();
                 } else if item.command == CommandId::ProjectOpenRecent {
                     self.open_project_path(PathBuf::from(&item.id))?;
@@ -626,7 +655,7 @@ impl RootView {
             ));
         }
 
-        self.workspace.select_project(&project_id)?;
+        self.select_project(&project_id)?;
         if let Err(error) = self.workspace.select_tab(&event.tab_id) {
             return self.fail_workspace_error(error);
         }
@@ -1643,9 +1672,7 @@ impl RootView {
             .ok_or(WorkspaceError::NoSelectedProject)?;
         let closed = self.workspace.confirm_close_project(&project_id)?;
         self.pending_close_project_id = None;
-        self.layout_source_messages.remove(&closed.project_id);
-        self.project_git_statuses.remove(&closed.project_id);
-        self.remove_terminal_panes_for_project(closed.project_id.as_str());
+        self.cleanup_closed_project(&closed.project_id);
         self.sync_input_owner_state();
         Ok(())
     }
@@ -1673,6 +1700,20 @@ impl RootView {
                 };
                 let opened_path = opened.path.clone();
                 let project_id = self.workspace.open_project(opened.path, opened.layout)?;
+                let selected_terminal_id =
+                    self.workspace.project(&project_id).and_then(|project| {
+                        project
+                            .layout
+                            .tab(&project.selected_tab_id)
+                            .map(|_| project.selected_tab_id.clone())
+                    });
+                self.project_editor_runtime.open_project(
+                    project_id.clone(),
+                    opened_path.clone(),
+                    selected_terminal_id,
+                    self.app_settings.project_panel.default_open,
+                    self.app_settings.project_panel.width,
+                );
                 self.refresh_project_git_status(&project_id, &opened_path);
                 self.queue_selected_terminal_focus();
                 self.layout_source_messages
@@ -1769,9 +1810,7 @@ impl RootView {
         match &decision {
             CloseProjectDecision::Closed(closed) => {
                 self.pending_close_project_id = None;
-                self.layout_source_messages.remove(&closed.project_id);
-                self.project_git_statuses.remove(&closed.project_id);
-                self.remove_terminal_panes_for_project(closed.project_id.as_str());
+                self.cleanup_closed_project(&closed.project_id);
             }
             CloseProjectDecision::NeedsConfirmation { project_id, .. } => {
                 self.pending_close_project_id = Some(project_id.clone());
@@ -1780,6 +1819,13 @@ impl RootView {
         self.sync_input_owner_state();
 
         Ok(decision)
+    }
+
+    fn cleanup_closed_project(&mut self, project_id: &ProjectId) {
+        self.layout_source_messages.remove(project_id);
+        self.project_git_statuses.remove(project_id);
+        self.remove_terminal_panes_for_project(project_id.as_str());
+        self.project_editor_runtime.close_project(project_id);
     }
 
     fn open_selected_tab_rename_dialog(&mut self) -> Result<(), RootViewError> {
@@ -3745,16 +3791,14 @@ impl Render for RootView {
                     |project_id| {
                         let project_id = ProjectId::new(project_id);
                         cx.listener(move |this, _, _window, cx| {
-                            let _ = this.workspace.select_project(&project_id);
-                            this.refresh_selected_project_git_status();
+                            let _ = this.select_project(&project_id);
                             cx.notify();
                         })
                     },
                     |project_id| {
                         let project_id = ProjectId::new(project_id);
                         cx.listener(move |this, _: &MouseDownEvent, _window, cx| {
-                            let _ = this.workspace.select_project(&project_id);
-                            this.refresh_selected_project_git_status();
+                            let _ = this.select_project(&project_id);
                             cx.notify();
                         })
                     },
