@@ -3,6 +3,7 @@ mod language;
 mod language_catalog;
 mod state;
 mod view;
+mod workspace;
 
 pub use file_io::{
     CurrentDiskState, DiskFingerprint, LoadedProjectFile, MAX_PROJECT_FILE_BYTES,
@@ -18,3 +19,4 @@ pub use state::{
     EditorDiagnosticSeverity, EditorLanguageService, EditorRange,
 };
 pub use view::code_editor_input_state;
+pub use workspace::{DocumentId, ProjectEditorWorkspaceState, ProjectWorkItemSession, WorkItemId};
