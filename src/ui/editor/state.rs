@@ -103,6 +103,7 @@ pub struct CodeEditorConfig {
     language_mode: CodeEditorLanguageMode,
     placeholder: String,
     rows: usize,
+    tab_size: usize,
     soft_wrap: bool,
     line_number: bool,
 }
@@ -114,6 +115,7 @@ impl CodeEditorConfig {
             language_mode: language.into(),
             placeholder: String::new(),
             rows: 24,
+            tab_size: 4,
             soft_wrap: false,
             line_number: true,
         }
@@ -139,6 +141,10 @@ impl CodeEditorConfig {
         self.rows
     }
 
+    pub fn tab_size(&self) -> usize {
+        self.tab_size
+    }
+
     pub fn soft_wrap(&self) -> bool {
         self.soft_wrap
     }
@@ -154,6 +160,11 @@ impl CodeEditorConfig {
 
     pub fn with_rows(mut self, rows: usize) -> Self {
         self.rows = rows;
+        self
+    }
+
+    pub fn with_tab_size(mut self, tab_size: usize) -> Self {
+        self.tab_size = tab_size;
         self
     }
 
@@ -233,6 +244,10 @@ impl CodeEditorState {
         &self.value
     }
 
+    pub fn saved_value(&self) -> &str {
+        &self.saved_value
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.value != self.saved_value
     }
@@ -268,7 +283,19 @@ impl CodeEditorState {
     }
 
     pub fn mark_saved(&mut self) {
-        self.saved_value = self.value.clone();
+        self.mark_value_saved(self.value.clone());
+    }
+
+    pub fn mark_value_saved(&mut self, value: impl Into<String>) {
+        self.saved_value = value.into();
+        self.clear_error();
+        self.clear_diagnostics();
+    }
+
+    pub fn replace_from_disk(&mut self, value: impl Into<String>) {
+        let value = value.into();
+        self.value = value.clone();
+        self.saved_value = value;
         self.clear_error();
         self.clear_diagnostics();
     }

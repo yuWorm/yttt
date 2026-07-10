@@ -39,6 +39,56 @@ fn code_editor_state_tracks_value_dirty_and_errors() {
 }
 
 #[test]
+fn code_editor_config_exposes_configured_tab_size() {
+    let config =
+        CodeEditorConfig::new("Project file", CodeEditorLanguageMode::Auto).with_tab_size(8);
+
+    assert_eq!(config.tab_size(), 8);
+}
+
+#[test]
+fn marking_captured_value_saved_keeps_newer_edits_dirty() {
+    let mut editor = CodeEditorState::new(
+        "/tmp/project.rs",
+        CodeEditorConfig::new("Project file", CodeEditorLanguageMode::Auto),
+        "old",
+    );
+    editor.set_value("first edit");
+    let captured = editor.value().to_string();
+    editor.set_value("newer edit");
+
+    editor.mark_value_saved(captured);
+
+    assert!(editor.is_dirty());
+    assert_eq!(editor.value(), "newer edit");
+    assert_eq!(editor.saved_value(), "first edit");
+}
+
+#[test]
+fn replacing_from_disk_resets_value_baseline_and_stale_feedback() {
+    let mut editor = CodeEditorState::new(
+        "/tmp/project.rs",
+        CodeEditorConfig::new("Project file", CodeEditorLanguageMode::Auto),
+        "old",
+    );
+    editor.set_value("dirty");
+    editor.set_error("save failed");
+    editor.set_diagnostics(vec![EditorDiagnostic::new(
+        EditorDiagnosticSeverity::Warning,
+        "disk",
+        "changed externally",
+    )]);
+
+    editor.replace_from_disk("fresh");
+
+    assert_eq!(editor.value(), "fresh");
+    assert_eq!(editor.saved_value(), "fresh");
+    assert!(!editor.is_dirty());
+    assert_eq!(editor.error(), None);
+    assert!(editor.diagnostics().is_empty());
+}
+
+#[test]
 fn code_editor_state_tracks_and_clears_diagnostics() {
     let mut state = CodeEditorState::new(
         "/tmp/layout.toml",
