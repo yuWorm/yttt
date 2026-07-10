@@ -1,14 +1,18 @@
 use std::{
-    fs,
+    fs, io,
     path::{Path, PathBuf},
 };
 
 use crate::{
-    config::paths::AppConfigPaths,
-    model::layout::{
-        LayoutError, LayoutNode, PaneConfig, PaneKind, ProjectConfig, ProjectLayout, TabConfig,
+    config::{
+        default_layout::{DefaultLayoutState, LayoutLoadWarning},
+        paths::AppConfigPaths,
+        personal_layout::{self, PersonalLayoutFileError},
     },
+    model::layout::{LayoutError, LayoutNode, PaneConfig, PaneKind, ProjectLayout},
 };
+
+pub use crate::config::personal_layout::PersonalLayout;
 
 #[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize, PartialEq)]
 pub struct LayoutOverride {
@@ -60,10 +64,18 @@ pub struct LayoutMerge {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LayoutSource {
+    GlobalDefault(PathBuf),
+    GlobalDefaultWithPersonalPatch { global: PathBuf, local: PathBuf },
     ProjectConfig(PathBuf),
-    ProjectConfigWithAppOverride { project: PathBuf, local: PathBuf },
-    AppLocalConfig(PathBuf),
-    CreatedAppLocalDefault(PathBuf),
+    ProjectConfigWithPersonalPatch { project: PathBuf, local: PathBuf },
+    PersonalReplace(PathBuf),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoadedProjectLayout {
+    pub layout: ProjectLayout,
+    pub source: LayoutSource,
+    pub warnings: Vec<LayoutLoadWarning>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -71,6 +83,7 @@ pub struct ProjectOpenConfig {
     pub path: PathBuf,
     pub layout: ProjectLayout,
     pub layout_source: LayoutSource,
+    pub warnings: Vec<LayoutLoadWarning>,
     pub recent_projects: RecentProjectsConfig,
 }
 
@@ -132,6 +145,25 @@ pub enum ProjectOpenError {
         path: PathBuf,
         source: std::io::Error,
     },
+    #[error("failed to serialize personal layout at {path}: {source}")]
+    SerializePersonalLayout {
+        path: PathBuf,
+        source: toml::ser::Error,
+    },
+    #[error("failed to write personal layout at {path}: {source}")]
+    WritePersonalLayout {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("failed to remove personal layout at {path}: {source}")]
+    RemovePersonalLayout {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("failed to parse personal layout at {path}: {message}")]
+    PersonalOverrideParse { path: PathBuf, message: String },
+    #[error("invalid personal layout at {path}: {message}")]
+    PersonalOverrideValidation { path: PathBuf, message: String },
     #[error("failed to read recent projects at {path}: {source}")]
     ReadRecentProjects {
         path: PathBuf,
@@ -154,9 +186,36 @@ pub enum ProjectOpenError {
     },
 }
 
+pub fn parse_personal_layout(
+    path: &Path,
+    source: &str,
+) -> Result<PersonalLayout, ProjectOpenError> {
+    personal_layout::parse(source).map_err(|error| match error {
+        PersonalLayoutFileError::Parse(message) => ProjectOpenError::PersonalOverrideParse {
+            path: path.to_path_buf(),
+            message,
+        },
+        PersonalLayoutFileError::Validation(message) => {
+            ProjectOpenError::PersonalOverrideValidation {
+                path: path.to_path_buf(),
+                message,
+            }
+        }
+    })
+}
+
+pub fn serialize_personal_patch(layout: &LayoutOverride) -> Result<String, toml::ser::Error> {
+    personal_layout::serialize_patch(layout)
+}
+
+pub fn serialize_personal_replace(layout: &ProjectLayout) -> Result<String, toml::ser::Error> {
+    personal_layout::serialize_replace(layout)
+}
+
 pub fn open_project_config(
     paths: &AppConfigPaths,
     project_path: &Path,
+    default_state: &mut DefaultLayoutState,
 ) -> Result<ProjectOpenConfig, ProjectOpenError> {
     let project_path =
         project_path
@@ -169,13 +228,14 @@ pub fn open_project_config(
         return Err(ProjectOpenError::NotDirectory(project_path));
     }
 
-    let (layout, layout_source) = load_project_layout(paths, &project_path)?;
-    let recent_projects = record_recent_project(paths, &project_path, &layout.project.name)?;
+    let loaded = load_project_layout(paths, &project_path, default_state)?;
+    let recent_projects = record_recent_project(paths, &project_path, &loaded.layout.project.name)?;
 
     Ok(ProjectOpenConfig {
         path: project_path,
-        layout,
-        layout_source,
+        layout: loaded.layout,
+        layout_source: loaded.source,
+        warnings: loaded.warnings,
         recent_projects,
     })
 }
@@ -202,8 +262,61 @@ pub fn save_local_layout(
     layout: &ProjectLayout,
 ) -> Result<PathBuf, ProjectOpenError> {
     let path = paths.local_layout_file(project_path);
-    write_project_layout(&path, layout)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| ProjectOpenError::CreateConfigDirectory {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    let source = serialize_personal_replace(layout).map_err(|source| {
+        ProjectOpenError::SerializePersonalLayout {
+            path: path.clone(),
+            source,
+        }
+    })?;
+    fs::write(&path, source).map_err(|source| ProjectOpenError::WritePersonalLayout {
+        path: path.clone(),
+        source,
+    })?;
     Ok(path)
+}
+
+pub fn reset_local_override(
+    paths: &AppConfigPaths,
+    project_path: &Path,
+) -> Result<(), ProjectOpenError> {
+    reset_local_override_with_file_system(paths, project_path, &StdLocalLayoutFileSystem)
+}
+
+fn reset_local_override_with_file_system(
+    paths: &AppConfigPaths,
+    project_path: &Path,
+    file_system: &dyn LocalLayoutFileSystem,
+) -> Result<(), ProjectOpenError> {
+    let path = paths.local_layout_file(project_path);
+    if !file_system.exists(&path) {
+        return Ok(());
+    }
+    file_system
+        .remove_file(&path)
+        .map_err(|source| ProjectOpenError::RemovePersonalLayout { path, source })
+}
+
+trait LocalLayoutFileSystem {
+    fn exists(&self, path: &Path) -> bool;
+    fn remove_file(&self, path: &Path) -> io::Result<()>;
+}
+
+struct StdLocalLayoutFileSystem;
+
+impl LocalLayoutFileSystem for StdLocalLayoutFileSystem {
+    fn exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
+
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        fs::remove_file(path)
+    }
 }
 
 pub fn export_project_layout(
@@ -288,34 +401,137 @@ fn merge_pane(pane: &mut PaneConfig, pane_override: &PaneOverride) {
 fn load_project_layout(
     paths: &AppConfigPaths,
     project_path: &Path,
-) -> Result<(ProjectLayout, LayoutSource), ProjectOpenError> {
+    default_state: &mut DefaultLayoutState,
+) -> Result<LoadedProjectLayout, ProjectOpenError> {
     let project_layout_file = paths.project_layout_file(project_path);
-    if project_layout_file.exists() {
-        let layout = read_project_layout(&project_layout_file)?;
-        let local_layout_file = paths.local_layout_file(project_path);
-        if local_layout_file.exists() {
-            if let Some((layout, layout_source)) =
-                read_local_project_override(&layout, &project_layout_file, &local_layout_file)?
-            {
-                return Ok((layout, layout_source));
-            }
-        }
-
-        return Ok((layout, LayoutSource::ProjectConfig(project_layout_file)));
-    }
+    let (base, base_source, mut warnings) = if project_layout_file.exists() {
+        (
+            read_project_layout(&project_layout_file)?,
+            LayoutSource::ProjectConfig(project_layout_file),
+            Vec::new(),
+        )
+    } else {
+        let _ = default_state.reload();
+        (
+            default_state
+                .template()
+                .materialize(project_name(project_path)),
+            LayoutSource::GlobalDefault(paths.default_layout_file()),
+            default_state.warnings().to_vec(),
+        )
+    };
 
     let local_layout_file = paths.local_layout_file(project_path);
-    if local_layout_file.exists() {
-        let layout = read_project_layout(&local_layout_file)?;
-        return Ok((layout, LayoutSource::AppLocalConfig(local_layout_file)));
+    if !local_layout_file.exists() {
+        return Ok(LoadedProjectLayout {
+            layout: base,
+            source: base_source,
+            warnings,
+        });
     }
 
-    let layout = default_project_layout(project_path);
-    write_default_layout(&local_layout_file, &layout)?;
-    Ok((
-        layout,
-        LayoutSource::CreatedAppLocalDefault(local_layout_file),
-    ))
+    let source = match fs::read_to_string(&local_layout_file) {
+        Ok(source) => source,
+        Err(error) => {
+            warnings.push(LayoutLoadWarning::PersonalOverrideRead {
+                path: local_layout_file,
+                message: error.to_string(),
+            });
+            return Ok(LoadedProjectLayout {
+                layout: base,
+                source: base_source,
+                warnings,
+            });
+        }
+    };
+
+    let personal = match parse_personal_layout(&local_layout_file, &source) {
+        Ok(personal) => personal,
+        Err(error) => {
+            warnings.push(personal_error_warning(error));
+            return Ok(LoadedProjectLayout {
+                layout: base,
+                source: base_source,
+                warnings,
+            });
+        }
+    };
+
+    match personal {
+        PersonalLayout::Replace(layout) => Ok(LoadedProjectLayout {
+            layout,
+            source: LayoutSource::PersonalReplace(local_layout_file),
+            warnings,
+        }),
+        PersonalLayout::Patch(patch) => match merge_layouts(&base, &patch) {
+            Ok(merged) => {
+                warnings.extend(merged.warnings.into_iter().map(|warning| match warning {
+                    MergeWarning::StaleTabOverride(tab_id) => LayoutLoadWarning::StaleOverrideTab {
+                        path: local_layout_file.clone(),
+                        tab_id,
+                    },
+                    MergeWarning::StalePaneOverride(pane_id) => {
+                        LayoutLoadWarning::StaleOverridePane {
+                            path: local_layout_file.clone(),
+                            pane_id,
+                        }
+                    }
+                }));
+                let source = match base_source {
+                    LayoutSource::GlobalDefault(global) => {
+                        LayoutSource::GlobalDefaultWithPersonalPatch {
+                            global,
+                            local: local_layout_file,
+                        }
+                    }
+                    LayoutSource::ProjectConfig(project) => {
+                        LayoutSource::ProjectConfigWithPersonalPatch {
+                            project,
+                            local: local_layout_file,
+                        }
+                    }
+                    _ => unreachable!("personal patch base must be project or global"),
+                };
+                Ok(LoadedProjectLayout {
+                    layout: merged.layout,
+                    source,
+                    warnings,
+                })
+            }
+            Err(error) => {
+                warnings.push(LayoutLoadWarning::PersonalOverrideValidation {
+                    path: local_layout_file,
+                    message: error.to_string(),
+                });
+                Ok(LoadedProjectLayout {
+                    layout: base,
+                    source: base_source,
+                    warnings,
+                })
+            }
+        },
+    }
+}
+
+fn project_name(project_path: &Path) -> String {
+    project_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Project")
+        .to_string()
+}
+
+fn personal_error_warning(error: ProjectOpenError) -> LayoutLoadWarning {
+    match error {
+        ProjectOpenError::PersonalOverrideParse { path, message } => {
+            LayoutLoadWarning::PersonalOverrideParse { path, message }
+        }
+        ProjectOpenError::PersonalOverrideValidation { path, message } => {
+            LayoutLoadWarning::PersonalOverrideValidation { path, message }
+        }
+        other => unreachable!("unexpected personal layout error: {other}"),
+    }
 }
 
 fn read_project_layout(path: &Path) -> Result<ProjectLayout, ProjectOpenError> {
@@ -327,45 +543,9 @@ fn read_project_layout(path: &Path) -> Result<ProjectLayout, ProjectOpenError> {
     parse_project_layout(path, &source)
 }
 
-fn read_local_project_override(
-    base: &ProjectLayout,
-    project_layout_file: &Path,
-    local_layout_file: &Path,
-) -> Result<Option<(ProjectLayout, LayoutSource)>, ProjectOpenError> {
-    let source = match fs::read_to_string(local_layout_file) {
-        Ok(source) => source,
-        Err(_error) => return Ok(None),
-    };
-
-    if let Ok(local_override) = toml::from_str::<LayoutOverride>(&source) {
-        let merged = merge_layouts(base, &local_override).map_err(|source| {
-            ProjectOpenError::InvalidProjectLayout {
-                path: local_layout_file.to_path_buf(),
-                source,
-            }
-        })?;
-        return Ok(Some((
-            merged.layout,
-            LayoutSource::ProjectConfigWithAppOverride {
-                project: project_layout_file.to_path_buf(),
-                local: local_layout_file.to_path_buf(),
-            },
-        )));
-    }
-
-    if let Ok(layout) = parse_project_layout(local_layout_file, &source) {
-        return Ok(Some((
-            layout,
-            LayoutSource::AppLocalConfig(local_layout_file.to_path_buf()),
-        )));
-    }
-
-    Ok(None)
-}
-
 fn parse_project_layout(path: &Path, source: &str) -> Result<ProjectLayout, ProjectOpenError> {
     let layout: ProjectLayout =
-        toml::from_str(&source).map_err(|source| ProjectOpenError::ParseProjectLayout {
+        toml::from_str(source).map_err(|source| ProjectOpenError::ParseProjectLayout {
             path: path.to_path_buf(),
             source,
         })?;
@@ -377,26 +557,6 @@ fn parse_project_layout(path: &Path, source: &str) -> Result<ProjectLayout, Proj
         })?;
 
     Ok(layout)
-}
-
-fn write_default_layout(path: &Path, layout: &ProjectLayout) -> Result<(), ProjectOpenError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| ProjectOpenError::CreateConfigDirectory {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
-
-    let source = toml::to_string_pretty(layout).map_err(|source| {
-        ProjectOpenError::SerializeDefaultLayout {
-            path: path.to_path_buf(),
-            source,
-        }
-    })?;
-    fs::write(path, source).map_err(|source| ProjectOpenError::WriteDefaultLayout {
-        path: path.to_path_buf(),
-        source,
-    })
 }
 
 fn write_project_layout(path: &Path, layout: &ProjectLayout) -> Result<(), ProjectOpenError> {
@@ -462,30 +622,51 @@ fn write_recent_projects(
         .map_err(|source| ProjectOpenError::WriteRecentProjects { path, source })
 }
 
-fn default_project_layout(project_path: &Path) -> ProjectLayout {
-    let name = project_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .unwrap_or("Project")
-        .to_string();
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, collections::HashSet, io};
 
-    ProjectLayout {
-        project: ProjectConfig {
-            name,
-            default_tab: Some("shell".to_string()),
-        },
-        tabs: vec![TabConfig {
-            id: "shell".to_string(),
-            title: "Shell".to_string(),
-            layout: LayoutNode::Pane(PaneConfig {
-                id: "shell".to_string(),
-                title: "Shell".to_string(),
-                command: "$SHELL".to_string(),
-                kind: PaneKind::Shell,
-                notify_on_exit: false,
-                detector: None,
-            }),
-        }],
+    use super::*;
+
+    #[derive(Default)]
+    struct FakeLocalLayoutFileSystem {
+        files: RefCell<HashSet<PathBuf>>,
+        remove_error: RefCell<Option<String>>,
+    }
+
+    impl LocalLayoutFileSystem for FakeLocalLayoutFileSystem {
+        fn exists(&self, path: &Path) -> bool {
+            self.files.borrow().contains(path)
+        }
+
+        fn remove_file(&self, path: &Path) -> io::Result<()> {
+            if let Some(message) = self.remove_error.borrow_mut().take() {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, message));
+            }
+            self.files.borrow_mut().remove(path);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn reset_local_override_remove_failure_keeps_personal_file() {
+        let paths = AppConfigPaths::from_config_dir("/config");
+        let project = Path::new("/project");
+        let path = paths.local_layout_file(project);
+        let file_system = FakeLocalLayoutFileSystem::default();
+        file_system.files.borrow_mut().insert(path.clone());
+        *file_system.remove_error.borrow_mut() = Some("remove denied".to_string());
+
+        let error =
+            reset_local_override_with_file_system(&paths, project, &file_system).unwrap_err();
+
+        assert!(file_system.exists(&path));
+        assert!(matches!(
+            error,
+            ProjectOpenError::RemovePersonalLayout {
+                path: error_path,
+                source,
+            } if error_path == path && source.to_string() == "remove denied"
+        ));
     }
 }

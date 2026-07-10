@@ -24,6 +24,10 @@ impl AppConfigPaths {
         project_path.join(".yttt").join("layout.toml")
     }
 
+    pub fn default_layout_file(&self) -> PathBuf {
+        self.config_dir.join("default-layout.toml")
+    }
+
     pub fn local_project_dir(&self, project_path: &Path) -> PathBuf {
         let project_path = project_path
             .canonicalize()

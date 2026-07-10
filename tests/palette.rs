@@ -65,6 +65,43 @@ fn command_palette_disables_workspace_commands_without_project() {
 }
 
 #[test]
+fn layout_default_palette_commands_are_enabled_without_project() {
+    let registry = default_registry();
+    let workspace = Workspace::new();
+    let items = command_palette_items(&registry, CommandPaletteContext::from_workspace(&workspace));
+
+    for command in [
+        CommandId::LayoutDefaultEdit,
+        CommandId::LayoutDefaultReset,
+        CommandId::LayoutDefaultReload,
+    ] {
+        let item = items.iter().find(|item| item.command == command).unwrap();
+        assert!(item.enabled);
+        assert!(item.disabled_reason.is_none());
+    }
+}
+
+#[test]
+fn layout_project_palette_commands_are_disabled_without_project() {
+    let registry = default_registry();
+    let workspace = Workspace::new();
+    let items = command_palette_items(&registry, CommandPaletteContext::from_workspace(&workspace));
+
+    for command in [
+        CommandId::LayoutProjectEdit,
+        CommandId::LayoutResetLocalOverride,
+        CommandId::LayoutOpenFile,
+    ] {
+        let item = items.iter().find(|item| item.command == command).unwrap();
+        assert!(!item.enabled);
+        assert_eq!(
+            item.disabled_reason.as_deref(),
+            Some("Open a project first")
+        );
+    }
+}
+
+#[test]
 fn project_palette_contains_opened_and_recent_projects() {
     let mut workspace = Workspace::new();
     workspace

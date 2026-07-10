@@ -347,7 +347,7 @@ fn root_view_layout_commands_write_current_project_files() {
 }
 
 #[test]
-fn root_view_exposes_created_app_local_layout_source() {
+fn root_view_exposes_global_default_layout_source() {
     let temp = tempdir().unwrap();
     let project_dir = temp.path().join("source-message-project");
     fs::create_dir(&project_dir).unwrap();
@@ -358,8 +358,36 @@ fn root_view_exposes_created_app_local_layout_source() {
 
     assert_eq!(
         root.visible_layout_source_message(),
-        Some("Layout source: created app-local default")
+        Some("Layout source: global default")
     );
+}
+
+#[test]
+fn root_view_project_open_surfaces_personal_layout_warning() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("personal-warning-project");
+    fs::create_dir_all(project_dir.join(".yttt")).unwrap();
+    fs::write(
+        project_dir.join(".yttt/layout.toml"),
+        toml::to_string_pretty(&sample_layout()).unwrap(),
+    )
+    .unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let local = paths.local_layout_file(&project_dir.canonicalize().unwrap());
+    fs::create_dir_all(local.parent().unwrap()).unwrap();
+    fs::write(
+        &local,
+        "version = 1\nmode = \"patch\"\nunknown = true\nlayout = {}",
+    )
+    .unwrap();
+    let mut root = RootView::with_config_paths(paths);
+
+    root.open_project_path(&project_dir).unwrap();
+
+    let notification = root.visible_error_notification_item().unwrap();
+    assert!(notification.title.contains("invalid personal layout"));
+    assert!(notification.title.contains(&local.display().to_string()));
+    assert_eq!(notification.tone, ToastTone::Error);
 }
 
 #[test]
@@ -371,6 +399,7 @@ fn root_view_layout_open_file_falls_back_to_app_local_layout() {
     let expected_layout_file = paths.local_layout_file(&project_dir.canonicalize().unwrap());
     let mut root = RootView::with_config_paths(paths);
     root.open_project_path(&project_dir).unwrap();
+    root.run_command(CommandId::LayoutSaveCurrent).unwrap();
 
     root.run_command(CommandId::LayoutOpenFile).unwrap();
 
@@ -387,16 +416,13 @@ fn root_view_layout_open_file_falls_back_to_app_local_layout() {
 }
 
 #[test]
-fn root_view_layout_toml_editor_opens_current_layout_file() {
+fn root_view_layout_default_editor_opens_without_project() {
     let temp = tempdir().unwrap();
-    let project_dir = temp.path().join("layout-editor-project");
-    fs::create_dir(&project_dir).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let expected_layout_file = paths.local_layout_file(&project_dir.canonicalize().unwrap());
+    let expected_layout_file = paths.default_layout_file();
     let mut root = RootView::with_config_paths(paths);
-    root.open_project_path(&project_dir).unwrap();
 
-    root.open_layout_toml_editor().unwrap();
+    root.run_command(CommandId::LayoutDefaultEdit).unwrap();
 
     assert!(root.layout_toml_editor_is_open());
     assert_eq!(
@@ -408,24 +434,26 @@ fn root_view_layout_toml_editor_opens_current_layout_file() {
             .unwrap()
             .contains("[project]")
     );
+    assert_eq!(root.layout_editor_target_kind(), Some("default"));
+    assert_eq!(
+        root.foreground_input_scope_id().as_deref(),
+        Some("editor.default_layout")
+    );
     assert_eq!(root.visible_layout_toml_editor_error(), None);
 }
 
 #[test]
-fn root_view_layout_toml_editor_saves_valid_toml() {
+fn root_view_layout_default_editor_saves_valid_toml() {
     let temp = tempdir().unwrap();
-    let project_dir = temp.path().join("layout-editor-save-project");
-    fs::create_dir(&project_dir).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let layout_file = paths.local_layout_file(&project_dir.canonicalize().unwrap());
+    let layout_file = paths.default_layout_file();
     let mut root = RootView::with_config_paths(paths);
-    root.open_project_path(&project_dir).unwrap();
-    root.open_layout_toml_editor().unwrap();
+    root.run_command(CommandId::LayoutDefaultEdit).unwrap();
 
     let updated = root
         .layout_toml_editor_value()
         .unwrap()
-        .replace("name = \"layout-editor-save-project\"", "name = \"saved\"");
+        .replace("title = \"Shell\"", "title = \"Saved Shell\"");
     root.set_layout_toml_editor_value(updated);
     root.save_layout_toml_editor().unwrap();
 
@@ -433,19 +461,16 @@ fn root_view_layout_toml_editor_saves_valid_toml() {
     assert!(
         fs::read_to_string(layout_file)
             .unwrap()
-            .contains("name = \"saved\"")
+            .contains("title = \"Saved Shell\"")
     );
 }
 
 #[test]
-fn root_view_layout_toml_editor_keeps_invalid_toml_open() {
+fn root_view_layout_default_editor_keeps_invalid_toml_open() {
     let temp = tempdir().unwrap();
-    let project_dir = temp.path().join("layout-editor-invalid-project");
-    fs::create_dir(&project_dir).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut root = RootView::with_config_paths(paths);
-    root.open_project_path(&project_dir).unwrap();
-    root.open_layout_toml_editor().unwrap();
+    root.run_command(CommandId::LayoutDefaultEdit).unwrap();
 
     root.set_layout_toml_editor_value("[project\n");
     root.save_layout_toml_editor().unwrap();
@@ -459,14 +484,11 @@ fn root_view_layout_toml_editor_keeps_invalid_toml_open() {
 }
 
 #[test]
-fn root_view_layout_toml_editor_records_parse_diagnostic() {
+fn root_view_layout_default_editor_records_parse_diagnostic() {
     let temp = tempdir().unwrap();
-    let project_dir = temp.path().join("layout-editor-diagnostic-project");
-    fs::create_dir(&project_dir).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut root = RootView::with_config_paths(paths);
-    root.open_project_path(&project_dir).unwrap();
-    root.open_layout_toml_editor().unwrap();
+    root.run_command(CommandId::LayoutDefaultEdit).unwrap();
 
     root.set_layout_toml_editor_value("[project\n");
     root.save_layout_toml_editor().unwrap();
@@ -483,14 +505,11 @@ fn root_view_layout_toml_editor_records_parse_diagnostic() {
 }
 
 #[test]
-fn root_view_layout_toml_editor_clears_diagnostics_after_valid_save() {
+fn root_view_layout_default_editor_clears_diagnostics_after_valid_save() {
     let temp = tempdir().unwrap();
-    let project_dir = temp.path().join("layout-editor-clear-diagnostic-project");
-    fs::create_dir(&project_dir).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut root = RootView::with_config_paths(paths);
-    root.open_project_path(&project_dir).unwrap();
-    root.open_layout_toml_editor().unwrap();
+    root.run_command(CommandId::LayoutDefaultEdit).unwrap();
 
     let valid = root.layout_toml_editor_value().unwrap().to_string();
     root.set_layout_toml_editor_value("[project\n");
@@ -501,6 +520,96 @@ fn root_view_layout_toml_editor_clears_diagnostics_after_valid_save() {
     root.save_layout_toml_editor().unwrap();
 
     assert!(root.visible_layout_toml_editor_diagnostics().is_empty());
+}
+
+#[test]
+fn root_view_layout_project_editor_selects_project_and_personal_formats() {
+    use yttt::config::layout_loader::{LayoutOverride, serialize_personal_patch};
+
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+
+    let shared_project = temp.path().join("shared-project");
+    fs::create_dir_all(shared_project.join(".yttt")).unwrap();
+    fs::write(
+        shared_project.join(".yttt/layout.toml"),
+        toml::to_string_pretty(&sample_layout()).unwrap(),
+    )
+    .unwrap();
+    let mut root = RootView::with_config_paths(paths.clone());
+    root.open_project_path(&shared_project).unwrap();
+    root.run_command(CommandId::LayoutProjectEdit).unwrap();
+    assert_eq!(root.layout_editor_target_kind(), Some("project_config"));
+    root.cancel_layout_toml_editor();
+
+    let personal_patch = paths.local_layout_file(&shared_project.canonicalize().unwrap());
+    fs::create_dir_all(personal_patch.parent().unwrap()).unwrap();
+    fs::write(
+        &personal_patch,
+        serialize_personal_patch(&LayoutOverride::default()).unwrap(),
+    )
+    .unwrap();
+    root.run_command(CommandId::LayoutProjectEdit).unwrap();
+    assert_eq!(root.layout_editor_target_kind(), Some("personal_patch"));
+    root.cancel_layout_toml_editor();
+
+    fs::write(
+        &personal_patch,
+        "version = 1\nmode = \"patch\"\nunknown = true\nlayout = {}",
+    )
+    .unwrap();
+    root.run_command(CommandId::LayoutProjectEdit).unwrap();
+    assert_eq!(root.layout_editor_target_kind(), Some("invalid_personal"));
+    assert!(!root.visible_layout_toml_editor_diagnostics().is_empty());
+
+    root.set_layout_toml_editor_value(
+        serialize_personal_patch(&LayoutOverride::default()).unwrap(),
+    );
+    root.save_layout_toml_editor().unwrap();
+    assert!(!root.layout_toml_editor_is_open());
+    assert!(
+        fs::read_to_string(personal_patch)
+            .unwrap()
+            .contains("mode = \"patch\"")
+    );
+}
+
+#[test]
+fn root_view_layout_project_editor_creates_personal_replace_for_inherited_project() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("inherited-project");
+    fs::create_dir(&project_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let expected = paths.local_layout_file(&project_dir.canonicalize().unwrap());
+    let mut root = RootView::with_config_paths(paths);
+    root.open_project_path(&project_dir).unwrap();
+
+    root.run_command(CommandId::LayoutProjectEdit).unwrap();
+
+    assert_eq!(root.layout_editor_target_kind(), Some("personal_replace"));
+    assert_eq!(root.layout_toml_editor_path(), Some(expected.as_path()));
+    assert!(
+        fs::read_to_string(expected)
+            .unwrap()
+            .contains("mode = \"replace\"")
+    );
+    assert_eq!(
+        root.foreground_input_scope_id().as_deref(),
+        Some("editor.project_layout")
+    );
+}
+
+#[test]
+fn root_view_layout_project_commands_without_project_show_localized_reason() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths);
+    root.set_language(LanguageSetting::Chinese).unwrap();
+
+    root.run_command(CommandId::LayoutProjectEdit).unwrap();
+
+    assert_eq!(root.visible_error_message(), Some("请先打开项目"));
+    assert!(!root.layout_toml_editor_is_open());
 }
 
 #[test]
@@ -580,7 +689,7 @@ fn root_view_settings_open_command_opens_settings_page() {
             "General",
             "Appearance",
             "Terminal",
-            "Project Layout",
+            "Default Layout",
             "Keybindings"
         ]
     );
@@ -694,7 +803,7 @@ fn root_view_language_setting_updates_settings_labels() {
 
     assert_eq!(
         root.visible_settings_group_titles(),
-        vec!["通用", "外观", "终端", "项目布局", "快捷键"]
+        vec!["通用", "外观", "终端", "默认布局", "快捷键"]
     );
     assert_eq!(root.selected_settings_group_title(), Some("通用"));
 
@@ -931,7 +1040,7 @@ fn root_view_exposes_foreground_input_scope_id() {
     root.open_layout_toml_editor().unwrap();
     assert_eq!(
         root.foreground_input_scope_id().as_deref(),
-        Some("editor.layout_toml")
+        Some("editor.default_layout")
     );
 }
 

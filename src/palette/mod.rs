@@ -311,8 +311,13 @@ fn command_title_key(command_id: CommandId) -> UiTextKey {
         CommandId::PaneResizeDown => UiTextKey::CommandPaneResizeDownTitle,
         CommandId::PaneRename => UiTextKey::CommandPaneRenameTitle,
         CommandId::PanePalette => UiTextKey::CommandPanePaletteTitle,
+        CommandId::LayoutDefaultEdit => UiTextKey::CommandLayoutDefaultEditTitle,
+        CommandId::LayoutDefaultReset => UiTextKey::CommandLayoutDefaultResetTitle,
+        CommandId::LayoutDefaultReload => UiTextKey::CommandLayoutDefaultReloadTitle,
+        CommandId::LayoutProjectEdit => UiTextKey::CommandLayoutProjectEditTitle,
         CommandId::LayoutSaveCurrent => UiTextKey::CommandLayoutSaveCurrentTitle,
         CommandId::LayoutExportProjectConfig => UiTextKey::CommandLayoutExportProjectConfigTitle,
+        CommandId::LayoutResetLocalOverride => UiTextKey::CommandLayoutResetLocalOverrideTitle,
         CommandId::LayoutOpenFile => UiTextKey::CommandLayoutOpenFileTitle,
         CommandId::CommandPaletteOpen => UiTextKey::CommandPaletteOpenTitle,
         CommandId::SettingsOpen => UiTextKey::CommandSettingsOpenTitle,
@@ -346,9 +351,16 @@ fn command_description_key(command_id: CommandId) -> UiTextKey {
         CommandId::PaneResizeDown => UiTextKey::CommandPaneResizeDownDescription,
         CommandId::PaneRename => UiTextKey::CommandPaneRenameDescription,
         CommandId::PanePalette => UiTextKey::CommandPanePaletteDescription,
+        CommandId::LayoutDefaultEdit => UiTextKey::CommandLayoutDefaultEditDescription,
+        CommandId::LayoutDefaultReset => UiTextKey::CommandLayoutDefaultResetDescription,
+        CommandId::LayoutDefaultReload => UiTextKey::CommandLayoutDefaultReloadDescription,
+        CommandId::LayoutProjectEdit => UiTextKey::CommandLayoutProjectEditDescription,
         CommandId::LayoutSaveCurrent => UiTextKey::CommandLayoutSaveCurrentDescription,
         CommandId::LayoutExportProjectConfig => {
             UiTextKey::CommandLayoutExportProjectConfigDescription
+        }
+        CommandId::LayoutResetLocalOverride => {
+            UiTextKey::CommandLayoutResetLocalOverrideDescription
         }
         CommandId::LayoutOpenFile => UiTextKey::CommandLayoutOpenFileDescription,
         CommandId::CommandPaletteOpen => UiTextKey::CommandPaletteOpenDescription,
@@ -368,7 +380,10 @@ fn command_disabled_reason_key(
         | CommandId::ProjectPalette
         | CommandId::SettingsOpen
         | CommandId::SettingsKeybindings
-        | CommandId::SettingsNotifications => None,
+        | CommandId::SettingsNotifications
+        | CommandId::LayoutDefaultEdit
+        | CommandId::LayoutDefaultReset
+        | CommandId::LayoutDefaultReload => None,
         _ if has_selected_project => None,
         _ => Some(UiTextKey::CommandDisabledOpenProjectFirst),
     }

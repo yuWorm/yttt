@@ -31,7 +31,7 @@ use yttt::ui::primitives::{
     tabs::yttt_tabbar_style,
 };
 use yttt::ui::settings::{SettingsGroupId, settings_panel_style, settings_rows_for_group};
-use yttt::ui::sidebar::project_sidebar_style;
+use yttt::ui::sidebar::{project_layout_context_commands, project_sidebar_style};
 use yttt::ui::tabs::{
     ProjectTabCloseButtonVisibility, ProjectTabLeadingIcon, ProjectTabStatusIndicator,
     project_tabs_style, tab_toolbar_icon,
@@ -40,7 +40,7 @@ use yttt::ui::terminal_pane::TerminalPaneView;
 use yttt::ui::theme::WorkbenchTheme;
 use yttt::ui::titlebar::TitlebarInfo;
 use yttt::ui::toast::ToastTone;
-use yttt::{model::layout::SplitDirection, ui::root::RootView};
+use yttt::{commands::CommandId, model::layout::SplitDirection, ui::root::RootView};
 
 #[test]
 fn workbench_theme_exposes_terminal_first_tokens() {
@@ -167,6 +167,20 @@ fn sidebar_and_tabs_use_compact_zed_like_density() {
     assert_eq!(tabs.leading_icon, ProjectTabLeadingIcon::Terminal);
     assert_eq!(tabs.status_indicator, ProjectTabStatusIndicator::Dot);
     assert_ne!(tabs.active_background, tabs.inactive_background);
+}
+
+#[test]
+fn project_sidebar_context_exposes_project_layout_commands() {
+    assert_eq!(
+        project_layout_context_commands(),
+        &[
+            CommandId::LayoutProjectEdit,
+            CommandId::LayoutSaveCurrent,
+            CommandId::LayoutExportProjectConfig,
+            CommandId::LayoutResetLocalOverride,
+            CommandId::LayoutOpenFile,
+        ]
+    );
 }
 
 #[test]
@@ -376,7 +390,7 @@ fn settings_rows_are_grouped_by_user_facing_sections() {
     let text = UiText::english();
     let general_rows = settings_rows_for_group(SettingsGroupId::General, &text);
     let terminal_rows = settings_rows_for_group(SettingsGroupId::Terminal, &text);
-    let layout_rows = settings_rows_for_group(SettingsGroupId::ProjectLayout, &text);
+    let layout_rows = settings_rows_for_group(SettingsGroupId::DefaultLayout, &text);
 
     assert!(general_rows.iter().any(|row| row.title == "Language"));
     assert!(terminal_rows.iter().any(|row| row.title == "Default shell"));
@@ -390,7 +404,27 @@ fn settings_rows_are_grouped_by_user_facing_sections() {
     assert!(
         layout_rows
             .iter()
-            .any(|row| row.title == "Edit layout TOML")
+            .any(|row| row.title == "Edit default layout TOML")
+    );
+    assert!(
+        layout_rows
+            .iter()
+            .any(|row| row.title == "Default layout file")
+    );
+    assert!(
+        layout_rows
+            .iter()
+            .any(|row| row.title == "Reload default layout")
+    );
+    assert!(
+        layout_rows
+            .iter()
+            .any(|row| row.title == "Reset default layout")
+    );
+    assert!(
+        !layout_rows
+            .iter()
+            .any(|row| row.title == "Save current layout")
     );
 }
 

@@ -16,6 +16,12 @@ project palette, not shown by default.
 
 ## Layout TOML
 
+Global default layout:
+
+```text
+<app config>/default-layout.toml
+```
+
 Shareable project layout:
 
 ```text
@@ -28,12 +34,35 @@ Personal app-local layout:
 <app config>/projects/<encoded-project-path>/layout.toml
 ```
 
-`layout.save_current` writes the app-local layout. It does not modify the repository.
+Layout precedence is:
+
+```text
+project .yttt/layout.toml, otherwise global default
+  -> personal mode = "patch" merges by stable tab/pane id
+  -> personal mode = "replace" replaces the selected base
+```
+
+Projects without `.yttt/layout.toml` do not receive a copied local snapshot. They read the
+latest global default when opened. Already-open projects keep their current tabs, panes, and
+terminal processes when the global default is saved, reloaded, or reset.
+
+`layout.default.edit`, `layout.default.reload`, and `layout.default.reset` manage the global
+default and work without an open project.
+
+`layout.save_current` writes the current runtime layout as a strict personal
+`mode = "replace"` file. It does not modify the repository.
 
 `layout.export_project_config` writes `<project>/.yttt/layout.toml` explicitly.
 
-`layout.open_file` opens the project layout when it exists. If the project layout does
-not exist but an app-local layout exists, it opens the app-local layout.
+`layout.project.edit` edits the highest-priority project source: an existing personal file,
+then project config, or a newly created personal replacement for an inherited project.
+Invalid personal files open as raw TOML with diagnostics and are not overwritten until valid.
+
+`layout.reset_local_override` deletes the personal file and restores inheritance the next
+time the project is opened. It does not replace the currently running workspace.
+
+`layout.open_file` reveals the personal file first, then project config, then the global
+default used by an inherited project.
 
 Example:
 
@@ -61,6 +90,57 @@ layout = { type = "pane", id = "codex", title = "Codex", command = "codex", kind
 
 `detector` is reserved for future output parsing. The current MVP does not parse agent
 output.
+
+### Global default example
+
+The global template intentionally has no project name. The project directory name is injected
+when the template is materialized.
+
+```toml
+[project]
+default_tab = "shell"
+
+[[tabs]]
+id = "shell"
+title = "Shell"
+layout = { type = "pane", id = "shell", title = "Shell", command = "$SHELL" }
+```
+
+### Personal layout V1
+
+Patch example:
+
+```toml
+version = 1
+mode = "patch"
+
+[layout.project]
+default_tab = "agent"
+
+[[layout.tabs]]
+id = "agent"
+title = "Personal Agent"
+```
+
+Replacement example:
+
+```toml
+version = 1
+mode = "replace"
+
+[layout.project]
+name = "yttt"
+default_tab = "shell"
+
+[[layout.tabs]]
+id = "shell"
+title = "Shell"
+layout = { type = "pane", id = "shell", title = "Shell", command = "$SHELL" }
+```
+
+The V1 header and every nested layout object reject unknown fields. Missing or unsupported
+`version`, unknown `mode`, and mode/body mismatches produce visible warnings rather than
+falling back to an older schema.
 
 ## Keybindings
 
@@ -98,6 +178,13 @@ pane.resize_right
 pane.resize_up
 pane.resize_down
 settings.notifications
+layout.default.edit
+layout.default.reload
+layout.default.reset
+layout.project.edit
+layout.save_current
+layout.export_project_config
+layout.reset_local_override
 ```
 
 ## Agent Status

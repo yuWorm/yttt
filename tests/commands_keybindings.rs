@@ -52,6 +52,40 @@ fn settings_open_command_is_available_without_project() {
 }
 
 #[test]
+fn layout_default_commands_are_registered_and_available_without_project() {
+    let registry = default_registry();
+
+    for (command, id) in [
+        (CommandId::LayoutDefaultEdit, "layout.default.edit"),
+        (CommandId::LayoutDefaultReset, "layout.default.reset"),
+        (CommandId::LayoutDefaultReload, "layout.default.reload"),
+    ] {
+        assert!(registry.contains(command));
+        assert_eq!(command.as_str(), id);
+        assert!(command.availability(false).enabled);
+    }
+}
+
+#[test]
+fn layout_project_commands_require_selected_project() {
+    for (command, id) in [
+        (CommandId::LayoutProjectEdit, "layout.project.edit"),
+        (
+            CommandId::LayoutResetLocalOverride,
+            "layout.reset_local_override",
+        ),
+    ] {
+        assert_eq!(command.as_str(), id);
+        assert!(!command.availability(false).enabled);
+        assert_eq!(
+            command.availability(false).disabled_reason,
+            Some("Open a project first")
+        );
+        assert!(command.availability(true).enabled);
+    }
+}
+
+#[test]
 fn parses_keybinding_toml() {
     let source = r#"
         [[bindings]]

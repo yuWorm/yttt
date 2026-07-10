@@ -1,12 +1,21 @@
 use gpui::{
-    App, ClickEvent, InteractiveElement as _, IntoElement, Pixels, Rgba,
-    StatefulInteractiveElement as _, Window, div, prelude::*,
+    App, ClickEvent, FocusHandle, InteractiveElement as _, IntoElement, MouseButton,
+    MouseDownEvent, Pixels, Rgba, StatefulInteractiveElement as _, Window, div, prelude::*,
 };
-use gpui_component::{Icon, IconName};
+use gpui_component::{
+    Icon, IconName,
+    menu::{ContextMenuExt as _, PopupMenuItem},
+};
 
+use crate::commands::CommandId;
 use crate::model::workspace::Workspace;
+use crate::ui::actions::{
+    LayoutExportProjectConfig, LayoutOpenFile, LayoutProjectEdit, LayoutResetLocalOverride,
+    LayoutSaveCurrent,
+};
 use crate::ui::agent_status::{agent_status_label, project_agent_status};
 use crate::ui::components::{SelectableState, workbench_icon_button};
+use crate::ui::i18n::{UiText, UiTextKey};
 use crate::ui::{
     primitives::{
         icon_button::YtttIconButtonKind,
@@ -15,6 +24,18 @@ use crate::ui::{
     },
     theme::WorkbenchTheme,
 };
+
+const PROJECT_LAYOUT_CONTEXT_COMMANDS: &[CommandId] = &[
+    CommandId::LayoutProjectEdit,
+    CommandId::LayoutSaveCurrent,
+    CommandId::LayoutExportProjectConfig,
+    CommandId::LayoutResetLocalOverride,
+    CommandId::LayoutOpenFile,
+];
+
+pub fn project_layout_context_commands() -> &'static [CommandId] {
+    PROJECT_LAYOUT_CONTEXT_COMMANDS
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectSidebarItem {
@@ -73,16 +94,21 @@ pub fn visible_project_items(workspace: &Workspace) -> Vec<ProjectSidebarItem> {
         .collect()
 }
 
-pub fn project_sidebar<SelectH, SelectF, ToggleH>(
+pub fn project_sidebar<SelectH, SelectF, ContextH, ContextF, ToggleH>(
     workspace: &Workspace,
     theme: WorkbenchTheme,
+    text: UiText,
+    action_context: FocusHandle,
     collapsed: bool,
     on_toggle_sidebar: ToggleH,
     mut on_select_project: SelectF,
+    mut on_context_project: ContextF,
 ) -> impl IntoElement
 where
     SelectH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     SelectF: FnMut(String) -> SelectH,
+    ContextH: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    ContextF: FnMut(String) -> ContextH,
     ToggleH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
     let style = project_sidebar_style(theme);
@@ -110,8 +136,17 @@ where
             None => compact_path(&item.path),
         };
         let on_click = on_select_project(item.id.clone());
+        let on_context = on_context_project(item.id.clone());
         sidebar = sidebar.child(project_sidebar_item(
-            index, item, suffix, collapsed, theme, on_click,
+            index,
+            item,
+            suffix,
+            collapsed,
+            theme,
+            text,
+            action_context.clone(),
+            on_click,
+            on_context,
         ));
     }
 
@@ -152,16 +187,20 @@ where
     ))
 }
 
-fn project_sidebar_item<H>(
+fn project_sidebar_item<H, C>(
     index: usize,
     item: ProjectSidebarItem,
     suffix: String,
     collapsed: bool,
     theme: WorkbenchTheme,
+    text: UiText,
+    action_context: FocusHandle,
     on_select_project: H,
+    on_context_project: C,
 ) -> impl IntoElement
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    C: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 {
     let row_style = yttt_row_style(YtttRowKind::Sidebar, item.state, true, theme);
 
@@ -178,6 +217,7 @@ where
         .bg(row_style.background)
         .hover(move |this| this.bg(row_style.hover_background))
         .on_click(on_select_project)
+        .on_mouse_down(MouseButton::Right, on_context_project)
         .child(
             div()
                 .flex()
@@ -205,6 +245,30 @@ where
                 .truncate()
                 .child(suffix)
         }))
+        .context_menu(move |menu, _, _| {
+            menu.action_context(action_context.clone())
+                .item(
+                    PopupMenuItem::new(text.get(UiTextKey::CommandLayoutProjectEditTitle))
+                        .action(Box::new(LayoutProjectEdit)),
+                )
+                .item(
+                    PopupMenuItem::new(text.get(UiTextKey::CommandLayoutSaveCurrentTitle))
+                        .action(Box::new(LayoutSaveCurrent)),
+                )
+                .item(
+                    PopupMenuItem::new(text.get(UiTextKey::CommandLayoutExportProjectConfigTitle))
+                        .action(Box::new(LayoutExportProjectConfig)),
+                )
+                .item(PopupMenuItem::separator())
+                .item(
+                    PopupMenuItem::new(text.get(UiTextKey::CommandLayoutResetLocalOverrideTitle))
+                        .action(Box::new(LayoutResetLocalOverride)),
+                )
+                .item(
+                    PopupMenuItem::new(text.get(UiTextKey::CommandLayoutOpenFileTitle))
+                        .action(Box::new(LayoutOpenFile)),
+                )
+        })
 }
 
 fn compact_path(path: &str) -> String {

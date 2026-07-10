@@ -33,8 +33,13 @@ pub enum CommandId {
     PaneResizeDown,
     PaneRename,
     PanePalette,
+    LayoutDefaultEdit,
+    LayoutDefaultReset,
+    LayoutDefaultReload,
+    LayoutProjectEdit,
     LayoutSaveCurrent,
     LayoutExportProjectConfig,
+    LayoutResetLocalOverride,
     LayoutOpenFile,
     CommandPaletteOpen,
     SettingsOpen,
@@ -67,8 +72,13 @@ impl CommandId {
         Self::PaneResizeDown,
         Self::PaneRename,
         Self::PanePalette,
+        Self::LayoutDefaultEdit,
+        Self::LayoutDefaultReset,
+        Self::LayoutDefaultReload,
+        Self::LayoutProjectEdit,
         Self::LayoutSaveCurrent,
         Self::LayoutExportProjectConfig,
+        Self::LayoutResetLocalOverride,
         Self::LayoutOpenFile,
         Self::CommandPaletteOpen,
         Self::SettingsOpen,
@@ -101,8 +111,13 @@ impl CommandId {
             Self::PaneResizeDown => "pane.resize_down",
             Self::PaneRename => "pane.rename",
             Self::PanePalette => "pane.palette",
+            Self::LayoutDefaultEdit => "layout.default.edit",
+            Self::LayoutDefaultReset => "layout.default.reset",
+            Self::LayoutDefaultReload => "layout.default.reload",
+            Self::LayoutProjectEdit => "layout.project.edit",
             Self::LayoutSaveCurrent => "layout.save_current",
             Self::LayoutExportProjectConfig => "layout.export_project_config",
+            Self::LayoutResetLocalOverride => "layout.reset_local_override",
             Self::LayoutOpenFile => "layout.open_file",
             Self::CommandPaletteOpen => "command_palette.open",
             Self::SettingsOpen => "settings.open",
@@ -169,6 +184,21 @@ impl CommandId {
             Self::PanePalette => {
                 presentation("Open Pane Palette", "Focus panes in the selected tab")
             }
+            Self::LayoutDefaultEdit => {
+                presentation("Edit Default Layout", "Edit the global default layout TOML")
+            }
+            Self::LayoutDefaultReset => presentation(
+                "Reset Default Layout",
+                "Reset the global default layout to the built-in template",
+            ),
+            Self::LayoutDefaultReload => presentation(
+                "Reload Default Layout",
+                "Reload the global default layout from disk",
+            ),
+            Self::LayoutProjectEdit => presentation(
+                "Edit Project Layout",
+                "Edit the selected project's effective layout source",
+            ),
             Self::LayoutSaveCurrent => presentation(
                 "Save Current Layout",
                 "Save the current layout as a local override",
@@ -176,6 +206,10 @@ impl CommandId {
             Self::LayoutExportProjectConfig => presentation(
                 "Export Project Layout",
                 "Write the current layout to the project config",
+            ),
+            Self::LayoutResetLocalOverride => presentation(
+                "Reset Personal Layout Override",
+                "Remove the selected project's personal layout override",
             ),
             Self::LayoutOpenFile => presentation(
                 "Open Layout File",
@@ -204,7 +238,10 @@ impl CommandId {
             | Self::ProjectPalette
             | Self::SettingsOpen
             | Self::SettingsKeybindings
-            | Self::SettingsNotifications => enabled(),
+            | Self::SettingsNotifications
+            | Self::LayoutDefaultEdit
+            | Self::LayoutDefaultReset
+            | Self::LayoutDefaultReload => enabled(),
             Self::ProjectClose
             | Self::TabNew
             | Self::TabClose
@@ -225,8 +262,10 @@ impl CommandId {
             | Self::PaneResizeDown
             | Self::PaneRename
             | Self::PanePalette
+            | Self::LayoutProjectEdit
             | Self::LayoutSaveCurrent
             | Self::LayoutExportProjectConfig
+            | Self::LayoutResetLocalOverride
             | Self::LayoutOpenFile => {
                 if has_selected_project {
                     enabled()

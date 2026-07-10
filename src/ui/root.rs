@@ -16,6 +16,9 @@ use yttt_terminal::input::keystroke_to_bytes;
 
 mod dialogs;
 mod helpers;
+pub mod layout_editor;
+#[cfg(test)]
+mod non_destructive_tests;
 use dialogs::*;
 use helpers::*;
 
@@ -44,12 +47,14 @@ use crate::{
         dispatch_workspace_command,
     },
     config::{
+        default_layout::{DefaultLayoutState, DefaultLayoutTemplate, LayoutLoadWarning},
         keybindings::{
             KeybindingLoadWarning, KeybindingsLoadError, ensure_keybindings_file, load_keybindings,
         },
         layout_loader::{
-            LayoutSource, ProjectOpenError, RecentProjectsConfig, export_project_layout,
-            load_recent_projects, open_project_config, save_local_layout,
+            LayoutSource, PersonalLayout, ProjectOpenError, RecentProjectsConfig,
+            export_project_layout, load_recent_projects, open_project_config,
+            parse_personal_layout, reset_local_override, save_local_layout,
         },
         paths::AppConfigPaths,
         settings::{
@@ -79,14 +84,15 @@ use crate::{
     },
     ui::{
         actions::{
-            LayoutExportProjectConfig, LayoutOpenFile, LayoutSaveCurrent, OpenCommandPalette,
-            OpenPanePalette, OpenProject, OpenProjectPalette, OpenTabPalette, PaletteCancel,
-            PaletteConfirm, PaletteSelectNext, PaletteSelectPrev, PaneClose, PaneFocusDown,
-            PaneFocusLeft, PaneFocusRight, PaneFocusUp, PaneRename, PaneResizeDown, PaneResizeLeft,
-            PaneResizeRight, PaneResizeUp, PaneSplitHorizontal, PaneSplitVertical, ProjectClose,
-            SettingsKeybindings, SettingsNotifications, SettingsOpen, TabClose, TabNew, TabNext,
-            TabPrev, TabRename, UiKeybindingSpec, WORKSPACE_CONTEXT, runtime_command_for_keystroke,
-            ui_keybinding_specs_from_config,
+            LayoutDefaultEdit, LayoutDefaultReload, LayoutDefaultReset, LayoutExportProjectConfig,
+            LayoutOpenFile, LayoutProjectEdit, LayoutResetLocalOverride, LayoutSaveCurrent,
+            OpenCommandPalette, OpenPanePalette, OpenProject, OpenProjectPalette, OpenTabPalette,
+            PaletteCancel, PaletteConfirm, PaletteSelectNext, PaletteSelectPrev, PaneClose,
+            PaneFocusDown, PaneFocusLeft, PaneFocusRight, PaneFocusUp, PaneRename, PaneResizeDown,
+            PaneResizeLeft, PaneResizeRight, PaneResizeUp, PaneSplitHorizontal, PaneSplitVertical,
+            ProjectClose, SettingsKeybindings, SettingsNotifications, SettingsOpen, TabClose,
+            TabNew, TabNext, TabPrev, TabRename, UiKeybindingSpec, WORKSPACE_CONTEXT,
+            runtime_command_for_keystroke, ui_keybinding_specs_from_config,
         },
         components::{
             ActionEmphasis, workbench_action_button, workbench_agent_notification,
@@ -119,6 +125,10 @@ use crate::{
             panel::{YtttPanelKind, yttt_panel_style},
             select::yttt_select_style,
         },
+        root::layout_editor::{
+            LayoutEditorSession, LayoutEditorTarget, ProjectLayoutEditorFormat,
+            write_layout_file_atomic,
+        },
         settings::{SettingsGroupId, SettingsPageState, SettingsPanelStyle, settings_panel_style},
         sidebar::project_sidebar,
         split_view::{pointer_resize_for_drag_delta, split_child_basis},
@@ -137,6 +147,7 @@ pub use crate::ui::overlay::overlay_input_capture_policy;
 pub struct RootView {
     workspace: Workspace,
     config_paths: AppConfigPaths,
+    default_layout_state: DefaultLayoutState,
     active_palette: Option<ActivePalette>,
     command_registry: CommandRegistry,
     recent_projects: Vec<RecentProject>,
@@ -179,7 +190,7 @@ pub struct RootView {
     settings_font_family_select_subscription: Option<Subscription>,
     settings_number_inputs: HashMap<SettingsNumberField, Entity<InputState>>,
     settings_number_input_subscriptions: HashMap<SettingsNumberField, Vec<Subscription>>,
-    layout_toml_editor: Option<CodeEditorState>,
+    layout_toml_editor: Option<LayoutEditorSession>,
     layout_toml_input: Option<Entity<InputState>>,
     layout_toml_input_subscription: Option<Subscription>,
     layout_toml_input_needs_focus: bool,
@@ -275,6 +286,7 @@ impl RootView {
     }
 
     fn with_workspace_and_config_paths(workspace: Workspace, config_paths: AppConfigPaths) -> Self {
+        let default_layout_state = DefaultLayoutState::load_or_create(&config_paths);
         let command_registry = default_registry();
         let recent_projects = load_recent_projects(&config_paths)
             .map(recent_projects_for_palette)
@@ -300,11 +312,16 @@ impl RootView {
                         .join("; ")
                 }),
         );
+        let load_error = combine_load_messages(
+            load_error,
+            layout_load_warning_message(default_layout_state.warnings()),
+        );
         let system_notifications_enabled = app_settings.notifications.system;
 
         Self {
             workspace,
             config_paths,
+            default_layout_state,
             active_palette: None,
             command_registry,
             recent_projects,
@@ -864,30 +881,42 @@ impl RootView {
     }
 
     pub fn layout_toml_editor_path(&self) -> Option<&Path> {
-        self.layout_toml_editor.as_ref().map(|editor| editor.path())
+        self.layout_toml_editor
+            .as_ref()
+            .map(|session| session.editor().path())
     }
 
     pub fn layout_toml_editor_value(&self) -> Option<&str> {
         self.layout_toml_editor
             .as_ref()
-            .map(|editor| editor.value())
+            .map(|session| session.editor().value())
     }
 
     pub fn visible_layout_toml_editor_error(&self) -> Option<&str> {
         self.layout_toml_editor
             .as_ref()
-            .and_then(|editor| editor.error())
+            .and_then(|session| session.editor().error())
     }
 
     pub fn visible_layout_toml_editor_diagnostics(&self) -> Vec<EditorDiagnostic> {
         self.layout_toml_editor
             .as_ref()
-            .map(|editor| editor.diagnostics().to_vec())
+            .map(|session| session.editor().diagnostics().to_vec())
             .unwrap_or_default()
     }
 
+    pub fn layout_editor_target_kind(&self) -> Option<&'static str> {
+        self.layout_toml_editor
+            .as_ref()
+            .map(|session| session.target().kind())
+    }
+
     pub fn open_layout_toml_editor(&mut self) -> Result<(), RootViewError> {
-        let path = self.ensure_layout_toml_edit_file()?;
+        self.open_default_layout_editor()
+    }
+
+    pub fn open_default_layout_editor(&mut self) -> Result<(), RootViewError> {
+        let path = self.default_layout_state.path().to_path_buf();
         let value = fs::read_to_string(&path).map_err(|source| {
             RootViewError::LayoutTomlEditor(format!(
                 "failed to read layout TOML at {}: {source}",
@@ -895,71 +924,172 @@ impl RootView {
             ))
         })?;
 
-        self.layout_toml_editor = Some(CodeEditorState::new(
-            path,
-            CodeEditorConfig::new("Edit layout TOML", "toml")
+        self.layout_toml_editor = Some(LayoutEditorSession::new(
+            LayoutEditorTarget::Default,
+            CodeEditorState::new(
+                path,
+                CodeEditorConfig::new("Edit default layout TOML", "toml")
+                    .placeholder_text("Edit layout TOML...")
+                    .with_rows(24)
+                    .with_soft_wrap(false),
+                value,
+            ),
+        ));
+        self.finish_opening_layout_editor();
+        Ok(())
+    }
+
+    pub fn open_project_layout_editor(&mut self) -> Result<(), RootViewError> {
+        let project_id = self
+            .workspace
+            .selected_project_id()
+            .cloned()
+            .ok_or(WorkspaceError::NoSelectedProject)?;
+        let project = self
+            .workspace
+            .project(&project_id)
+            .ok_or_else(|| WorkspaceError::ProjectNotFound(project_id.as_str().to_string()))?;
+        let project_path = project.path.clone();
+        let effective_layout = project.layout.clone();
+        let project_file = self.config_paths.project_layout_file(&project_path);
+        let personal_file = self.config_paths.local_layout_file(&project_path);
+
+        let (path, format, value, diagnostic) = if personal_file.exists() {
+            let value = read_layout_editor_source(&personal_file)?;
+            match parse_personal_layout(&personal_file, &value) {
+                Ok(PersonalLayout::Patch(_)) => (
+                    personal_file,
+                    ProjectLayoutEditorFormat::PersonalPatch,
+                    value,
+                    None,
+                ),
+                Ok(PersonalLayout::Replace(_)) => (
+                    personal_file,
+                    ProjectLayoutEditorFormat::PersonalReplace,
+                    value,
+                    None,
+                ),
+                Err(error) => {
+                    let message = error.to_string();
+                    (
+                        personal_file,
+                        ProjectLayoutEditorFormat::InvalidPersonal,
+                        value,
+                        Some(message),
+                    )
+                }
+            }
+        } else if project_file.exists() {
+            let value = read_layout_editor_source(&project_file)?;
+            (
+                project_file,
+                ProjectLayoutEditorFormat::ProjectConfig,
+                value,
+                None,
+            )
+        } else {
+            let path = save_local_layout(&self.config_paths, &project_path, &effective_layout)?;
+            let value = read_layout_editor_source(&path)?;
+            (
+                path,
+                ProjectLayoutEditorFormat::PersonalReplace,
+                value,
+                None,
+            )
+        };
+
+        let mut editor = CodeEditorState::new(
+            path.clone(),
+            CodeEditorConfig::new("Edit project layout TOML", "toml")
                 .placeholder_text("Edit layout TOML...")
                 .with_rows(24)
                 .with_soft_wrap(false),
             value,
+        );
+        if let Some(message) = diagnostic {
+            editor.set_error(message.clone());
+            editor.set_diagnostics(vec![EditorDiagnostic::new(
+                EditorDiagnosticSeverity::Error,
+                "personal-layout",
+                message,
+            )]);
+        }
+        self.layout_toml_editor = Some(LayoutEditorSession::new(
+            LayoutEditorTarget::Project {
+                project_id,
+                path,
+                format,
+            },
+            editor,
         ));
+        self.finish_opening_layout_editor();
+        Ok(())
+    }
+
+    fn finish_opening_layout_editor(&mut self) {
         self.reset_layout_toml_input();
         self.layout_toml_input_needs_focus = true;
         self.load_error = None;
         self.sync_input_owner_state();
-        Ok(())
     }
 
     pub fn set_layout_toml_editor_value(&mut self, value: impl Into<String>) {
-        if let Some(editor) = &mut self.layout_toml_editor {
-            editor.set_value(value);
+        if let Some(session) = &mut self.layout_toml_editor {
+            session.editor_mut().set_value(value);
             self.reset_layout_toml_input();
         }
     }
 
     pub fn save_layout_toml_editor(&mut self) -> Result<(), RootViewError> {
-        let Some(editor) = self.layout_toml_editor.clone() else {
+        let Some(session) = self.layout_toml_editor.clone() else {
             return Ok(());
         };
+        let editor = session.editor();
 
-        let layout = match toml::from_str::<ProjectLayout>(editor.value()) {
-            Ok(layout) => layout,
-            Err(error) => {
-                self.set_layout_toml_editor_error(
-                    "toml",
-                    format!("failed to parse layout TOML: {error}"),
-                );
-                return Ok(());
+        match session.target() {
+            LayoutEditorTarget::Default => {
+                let template = match toml::from_str::<DefaultLayoutTemplate>(editor.value()) {
+                    Ok(template) => template,
+                    Err(error) => {
+                        self.set_layout_toml_editor_error(
+                            "toml",
+                            format!("failed to parse layout TOML: {error}"),
+                        );
+                        return Ok(());
+                    }
+                };
+                if let Err(error) = template.validate() {
+                    self.set_layout_toml_editor_error(
+                        "layout",
+                        format!("invalid layout TOML: {error}"),
+                    );
+                    return Ok(());
+                }
+                if let Err(error) = self.default_layout_state.save(template) {
+                    let message = error.to_string();
+                    self.set_layout_toml_editor_error("layout", message.clone());
+                    self.load_error = Some(message);
+                    return Ok(());
+                }
             }
-        };
-        if let Err(error) = layout.validate() {
-            self.set_layout_toml_editor_error("layout", format!("invalid layout TOML: {error}"));
-            return Ok(());
+            LayoutEditorTarget::Project { path, format, .. } => {
+                if let Err((source, message)) =
+                    validate_project_editor_source(path, *format, editor.value())
+                {
+                    self.set_layout_toml_editor_error(source, message);
+                    return Ok(());
+                }
+                if let Err(error) = write_layout_file_atomic(path, editor.value()) {
+                    let message = error.to_string();
+                    self.set_layout_toml_editor_error("filesystem", message.clone());
+                    self.load_error = Some(message);
+                    return Ok(());
+                }
+            }
         }
 
-        if let Some(parent) = editor.path().parent() {
-            fs::create_dir_all(parent).map_err(|source| {
-                RootViewError::LayoutTomlEditor(format!(
-                    "failed to create layout directory {}: {source}",
-                    parent.display()
-                ))
-            })?;
-        }
-        fs::write(editor.path(), editor.value()).map_err(|source| {
-            RootViewError::LayoutTomlEditor(format!(
-                "failed to write layout TOML at {}: {source}",
-                editor.path().display()
-            ))
-        })?;
-
-        let selected_project_id = self.workspace.selected_project_id().cloned();
-        self.workspace.replace_selected_project_layout(layout)?;
-        if let Some(project_id) = selected_project_id {
-            self.remove_terminal_panes_for_project(project_id.as_str());
-        }
         self.layout_toml_editor = None;
         self.reset_layout_toml_input();
-        self.queue_selected_terminal_focus();
         self.load_error = None;
         self.sync_input_owner_state();
         Ok(())
@@ -1013,7 +1143,7 @@ impl RootView {
                 self.ui_text.get(UiTextKey::StatusLayoutFile),
                 path.display()
             ),
-            self.ui_text.get(UiTextKey::SettingsGroupProjectLayout),
+            self.ui_text.get(UiTextKey::SettingsGroupDefaultLayout),
         );
         self.load_error = None;
     }
@@ -1231,6 +1361,16 @@ impl RootView {
     }
 
     pub fn run_command(&mut self, command_id: CommandId) -> Result<(), RootViewError> {
+        let availability = command_id.availability(self.workspace.selected_project_id().is_some());
+        if !availability.enabled {
+            self.load_error = Some(
+                self.ui_text
+                    .get(UiTextKey::CommandDisabledOpenProjectFirst)
+                    .to_string(),
+            );
+            return Ok(());
+        }
+
         match command_id {
             CommandId::ProjectOpen => {
                 self.request_open_project();
@@ -1297,6 +1437,34 @@ impl RootView {
                 self.queue_selected_terminal_focus();
                 Ok(())
             }
+            CommandId::LayoutDefaultEdit => self.open_default_layout_editor(),
+            CommandId::LayoutDefaultReset => {
+                match self.default_layout_state.reset() {
+                    Ok(()) => {
+                        self.queue_status_notification(
+                            self.ui_text.get(UiTextKey::CommandLayoutDefaultResetTitle),
+                            self.default_layout_state.path().display().to_string(),
+                        );
+                        self.load_error = None;
+                    }
+                    Err(error) => self.load_error = Some(error.to_string()),
+                }
+                Ok(())
+            }
+            CommandId::LayoutDefaultReload => {
+                match self.default_layout_state.reload() {
+                    Ok(()) => {
+                        self.queue_status_notification(
+                            self.ui_text.get(UiTextKey::CommandLayoutDefaultReloadTitle),
+                            self.default_layout_state.path().display().to_string(),
+                        );
+                        self.load_error = None;
+                    }
+                    Err(error) => self.load_error = Some(error.to_string()),
+                }
+                Ok(())
+            }
+            CommandId::LayoutProjectEdit => self.open_project_layout_editor(),
             CommandId::LayoutSaveCurrent => {
                 let (project_path, layout) = self.selected_project_layout_snapshot()?;
                 save_local_layout(&self.config_paths, &project_path, &layout)?;
@@ -1307,21 +1475,31 @@ impl RootView {
                 export_project_layout(&self.config_paths, &project_path, &layout)?;
                 Ok(())
             }
+            CommandId::LayoutResetLocalOverride => {
+                let (project_path, _layout) = self.selected_project_layout_snapshot()?;
+                reset_local_override(&self.config_paths, &project_path)?;
+                self.queue_status_notification(
+                    self.ui_text
+                        .get(UiTextKey::CommandLayoutResetLocalOverrideTitle),
+                    project_path.display().to_string(),
+                );
+                self.load_error = None;
+                Ok(())
+            }
             CommandId::LayoutOpenFile => {
                 let (project_path, _layout) = self.selected_project_layout_snapshot()?;
                 let project_layout_file = self.config_paths.project_layout_file(&project_path);
                 let local_layout_file = self.config_paths.local_layout_file(&project_path);
-                if project_layout_file.exists() {
-                    self.show_layout_file_path_status(&project_layout_file);
-                    self.last_opened_layout_file = Some(project_layout_file);
-                } else if local_layout_file.exists() {
+                if local_layout_file.exists() {
                     self.show_layout_file_path_status(&local_layout_file);
                     self.last_opened_layout_file = Some(local_layout_file);
+                } else if project_layout_file.exists() {
+                    self.show_layout_file_path_status(&project_layout_file);
+                    self.last_opened_layout_file = Some(project_layout_file);
                 } else {
-                    self.load_error = Some(format!(
-                        "Layout file does not exist: {}",
-                        project_layout_file.display()
-                    ));
+                    let default_layout_file = self.default_layout_state.path().to_path_buf();
+                    self.show_layout_file_path_status(&default_layout_file);
+                    self.last_opened_layout_file = Some(default_layout_file);
                 }
                 Ok(())
             }
@@ -1422,9 +1600,18 @@ impl RootView {
         &mut self,
         project_path: impl AsRef<Path>,
     ) -> Result<(), RootViewError> {
-        match open_project_config(&self.config_paths, project_path.as_ref()) {
+        match open_project_config(
+            &self.config_paths,
+            project_path.as_ref(),
+            &mut self.default_layout_state,
+        ) {
             Ok(opened) => {
                 let source_message = layout_source_message(&opened.layout_source);
+                let warning_message = if opened.warnings.is_empty() {
+                    layout_load_warning_message(self.default_layout_state.warnings())
+                } else {
+                    layout_load_warning_message(&opened.warnings)
+                };
                 let opened_path = opened.path.clone();
                 let project_id = self.workspace.open_project(opened.path, opened.layout)?;
                 self.refresh_project_git_status(&project_id, &opened_path);
@@ -1432,7 +1619,7 @@ impl RootView {
                 self.layout_source_messages
                     .insert(project_id, source_message);
                 self.recent_projects = recent_projects_for_palette(opened.recent_projects);
-                self.load_error = None;
+                self.load_error = warning_message;
                 Ok(())
             }
             Err(error) => {
@@ -1594,23 +1781,9 @@ impl RootView {
         Ok((project.path.clone(), project.layout.clone()))
     }
 
-    fn ensure_layout_toml_edit_file(&self) -> Result<PathBuf, RootViewError> {
-        let (project_path, layout) = self.selected_project_layout_snapshot()?;
-        let project_layout_file = self.config_paths.project_layout_file(&project_path);
-        if project_layout_file.exists() {
-            return Ok(project_layout_file);
-        }
-
-        let local_layout_file = self.config_paths.local_layout_file(&project_path);
-        if local_layout_file.exists() {
-            return Ok(local_layout_file);
-        }
-
-        save_local_layout(&self.config_paths, &project_path, &layout).map_err(RootViewError::from)
-    }
-
     fn set_layout_toml_editor_error(&mut self, source: &'static str, error: String) {
-        if let Some(editor) = &mut self.layout_toml_editor {
+        if let Some(session) = &mut self.layout_toml_editor {
+            let editor = session.editor_mut();
             editor.set_error(error.clone());
             editor.set_diagnostics(vec![EditorDiagnostic::new(
                 EditorDiagnosticSeverity::Error,
@@ -1812,10 +1985,12 @@ impl RootView {
                 InputScopeId::new("dialog.close_project"),
             )
         } else if self.layout_toml_editor.is_some() {
-            InputOwnerRegistration::blocking(
-                InputOwnerKind::Editor,
-                InputScopeId::new("editor.layout_toml"),
-            )
+            let scope = self
+                .layout_toml_editor
+                .as_ref()
+                .map(|session| session.target().input_scope_id())
+                .unwrap_or("editor.project_layout");
+            InputOwnerRegistration::blocking(InputOwnerKind::Editor, InputScopeId::new(scope))
         } else if self.settings_page.is_open {
             InputOwnerRegistration::blocking(
                 InputOwnerKind::Settings,
@@ -2249,7 +2424,7 @@ impl RootView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<InputState>> {
-        let editor = self.layout_toml_editor.as_ref()?;
+        let editor = self.layout_toml_editor.as_ref()?.editor();
 
         let input = if let Some(input) = &self.layout_toml_input {
             input.clone()
@@ -2828,8 +3003,10 @@ impl RootView {
     ) {
         match event {
             InputEvent::Change => {
-                if let Some(editor) = &mut self.layout_toml_editor {
-                    editor.set_value(input.read(cx).value().to_string());
+                if let Some(session) = &mut self.layout_toml_editor {
+                    session
+                        .editor_mut()
+                        .set_value(input.read(cx).value().to_string());
                     cx.notify();
                 }
             }
@@ -3161,6 +3338,54 @@ impl RootView {
         self.flush_pending_status_notifications(window, cx);
     }
 
+    fn on_layout_default_edit(
+        &mut self,
+        _: &LayoutDefaultEdit,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::LayoutDefaultEdit, cx);
+    }
+
+    fn on_layout_default_reset(
+        &mut self,
+        _: &LayoutDefaultReset,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::LayoutDefaultReset, cx);
+        self.flush_pending_status_notifications(window, cx);
+    }
+
+    fn on_layout_default_reload(
+        &mut self,
+        _: &LayoutDefaultReload,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::LayoutDefaultReload, cx);
+        self.flush_pending_status_notifications(window, cx);
+    }
+
+    fn on_layout_project_edit(
+        &mut self,
+        _: &LayoutProjectEdit,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::LayoutProjectEdit, cx);
+    }
+
+    fn on_layout_reset_local_override(
+        &mut self,
+        _: &LayoutResetLocalOverride,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::LayoutResetLocalOverride, cx);
+        self.flush_pending_status_notifications(window, cx);
+    }
+
     fn on_layout_export_project_config(
         &mut self,
         _: &LayoutExportProjectConfig,
@@ -3282,6 +3507,51 @@ impl RootView {
     }
 }
 
+fn read_layout_editor_source(path: &Path) -> Result<String, RootViewError> {
+    fs::read_to_string(path).map_err(|source| {
+        RootViewError::LayoutTomlEditor(format!(
+            "failed to read layout TOML at {}: {source}",
+            path.display()
+        ))
+    })
+}
+
+fn validate_project_editor_source(
+    path: &Path,
+    format: ProjectLayoutEditorFormat,
+    source: &str,
+) -> Result<(), (&'static str, String)> {
+    match format {
+        ProjectLayoutEditorFormat::ProjectConfig => {
+            let layout = toml::from_str::<ProjectLayout>(source)
+                .map_err(|error| ("toml", format!("failed to parse layout TOML: {error}")))?;
+            layout
+                .validate()
+                .map_err(|error| ("layout", format!("invalid layout TOML: {error}")))
+        }
+        ProjectLayoutEditorFormat::PersonalPatch
+        | ProjectLayoutEditorFormat::PersonalReplace
+        | ProjectLayoutEditorFormat::InvalidPersonal => {
+            let personal = parse_personal_layout(path, source)
+                .map_err(|error| ("personal-layout", error.to_string()))?;
+            match (format, personal) {
+                (ProjectLayoutEditorFormat::PersonalPatch, PersonalLayout::Patch(_))
+                | (ProjectLayoutEditorFormat::PersonalReplace, PersonalLayout::Replace(_))
+                | (ProjectLayoutEditorFormat::InvalidPersonal, _) => Ok(()),
+                (ProjectLayoutEditorFormat::PersonalPatch, PersonalLayout::Replace(_)) => Err((
+                    "personal-layout",
+                    "personal layout editor requires mode = \"patch\"".to_string(),
+                )),
+                (ProjectLayoutEditorFormat::PersonalReplace, PersonalLayout::Patch(_)) => Err((
+                    "personal-layout",
+                    "personal layout editor requires mode = \"replace\"".to_string(),
+                )),
+                (ProjectLayoutEditorFormat::ProjectConfig, _) => unreachable!(),
+            }
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RootViewError {
     #[error("{0}")]
@@ -3351,6 +3621,8 @@ impl Render for RootView {
                 .child(project_sidebar(
                     &self.workspace,
                     self.theme_runtime.ui,
+                    self.ui_text,
+                    focus_handle.clone(),
                     self.sidebar_collapsed,
                     cx.listener(|this, _, _window, cx| {
                         this.toggle_sidebar();
@@ -3359,6 +3631,14 @@ impl Render for RootView {
                     |project_id| {
                         let project_id = ProjectId::new(project_id);
                         cx.listener(move |this, _, _window, cx| {
+                            let _ = this.workspace.select_project(&project_id);
+                            this.refresh_selected_project_git_status();
+                            cx.notify();
+                        })
+                    },
+                    |project_id| {
+                        let project_id = ProjectId::new(project_id);
+                        cx.listener(move |this, _: &MouseDownEvent, _window, cx| {
                             let _ = this.workspace.select_project(&project_id);
                             this.refresh_selected_project_git_status();
                             cx.notify();
@@ -3528,8 +3808,13 @@ impl Render for RootView {
             .on_action(cx.listener(Self::on_pane_resize_right))
             .on_action(cx.listener(Self::on_pane_resize_up))
             .on_action(cx.listener(Self::on_pane_resize_down))
+            .on_action(cx.listener(Self::on_layout_default_edit))
+            .on_action(cx.listener(Self::on_layout_default_reset))
+            .on_action(cx.listener(Self::on_layout_default_reload))
+            .on_action(cx.listener(Self::on_layout_project_edit))
             .on_action(cx.listener(Self::on_layout_save_current))
             .on_action(cx.listener(Self::on_layout_export_project_config))
+            .on_action(cx.listener(Self::on_layout_reset_local_override))
             .on_action(cx.listener(Self::on_layout_open_file))
             .on_action(cx.listener(Self::on_settings_open))
             .on_action(cx.listener(Self::on_settings_keybindings))
@@ -3554,9 +3839,10 @@ fn layout_toml_editor_overlay(
 ) -> Div {
     let theme = root.theme_runtime.ui;
     let editor_theme = root.theme_runtime.editor;
-    let Some(editor) = root.layout_toml_editor.as_ref() else {
+    let Some(session) = root.layout_toml_editor.as_ref() else {
         return div();
     };
+    let editor = session.editor();
     let title = editor.config().title().to_string();
     let path = editor.path().display().to_string();
     let error = editor.error().map(ToOwned::to_owned);
@@ -3906,7 +4192,7 @@ fn settings_rows(
         SettingsGroupId::General => settings_general_rows(root, style, window, cx),
         SettingsGroupId::Appearance => settings_appearance_rows(root, style, window, cx),
         SettingsGroupId::Terminal => settings_terminal_rows(root, style, window, cx),
-        SettingsGroupId::ProjectLayout => settings_project_layout_rows(root, style, cx),
+        SettingsGroupId::DefaultLayout => settings_default_layout_rows(root, style, cx),
         SettingsGroupId::Keybindings => settings_keybinding_rows(root, style, cx),
     }
 }
@@ -4141,18 +4427,14 @@ fn settings_terminal_rows(
         ))
 }
 
-fn settings_project_layout_rows(
+fn settings_default_layout_rows(
     root: &RootView,
     style: SettingsPanelStyle,
     cx: &mut Context<RootView>,
 ) -> Div {
     let theme = root.theme_runtime.ui;
     let text = root.ui_text;
-    let has_project = root.workspace.selected_project_id().is_some();
-    let layout_source = root
-        .visible_layout_source_message()
-        .unwrap_or(text.get(UiTextKey::SettingsOpenProjectFirst))
-        .to_string();
+    let path = root.default_layout_state.path().display().to_string();
 
     div()
         .flex()
@@ -4160,21 +4442,21 @@ fn settings_project_layout_rows(
         .child(setting_row(
             style,
             theme,
-            text.get(UiTextKey::SettingsLayoutSource),
-            text.get(UiTextKey::SettingsLayoutSourceDescription),
-            settings_value(layout_source, theme).into_any_element(),
+            text.get(UiTextKey::SettingsDefaultLayoutPath),
+            text.get(UiTextKey::SettingsDefaultLayoutPathDescription),
+            settings_value(path, theme).into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
-            text.get(UiTextKey::SettingsSaveCurrentLayout),
-            text.get(UiTextKey::SettingsSaveCurrentLayoutDescription),
+            text.get(UiTextKey::SettingsEditDefaultLayout),
+            text.get(UiTextKey::SettingsEditDefaultLayoutDescription),
             settings_command_button(
-                "settings-layout-save",
-                text.get(UiTextKey::SettingsSave),
-                has_project,
+                "settings-default-layout-edit",
+                text.get(UiTextKey::SettingsEdit),
+                true,
                 theme,
-                CommandId::LayoutSaveCurrent,
+                CommandId::LayoutDefaultEdit,
                 cx,
             )
             .into_any_element(),
@@ -4182,35 +4464,30 @@ fn settings_project_layout_rows(
         .child(setting_row(
             style,
             theme,
-            text.get(UiTextKey::SettingsExportProjectLayout),
-            text.get(UiTextKey::SettingsExportProjectLayoutDescription),
+            text.get(UiTextKey::SettingsReloadDefaultLayout),
+            text.get(UiTextKey::SettingsReloadDefaultLayoutDescription),
             settings_command_button(
-                "settings-layout-export",
-                text.get(UiTextKey::SettingsExport),
-                has_project,
-                theme,
-                CommandId::LayoutExportProjectConfig,
-                cx,
-            )
-            .into_any_element(),
-        ))
-        .child(setting_row(
-            style,
-            theme,
-            text.get(UiTextKey::SettingsEditLayoutToml),
-            text.get(UiTextKey::SettingsEditLayoutTomlDescription),
-            settings_button(
-                "settings-layout-edit",
+                "settings-default-layout-reload",
                 text.get(UiTextKey::SettingsOpen),
-                false,
+                true,
                 theme,
+                CommandId::LayoutDefaultReload,
                 cx,
-                cx.listener(move |this, _, _window, cx| {
-                    if has_project {
-                        let _ = this.open_layout_toml_editor();
-                    }
-                    cx.notify();
-                }),
+            )
+            .into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsResetDefaultLayout),
+            text.get(UiTextKey::SettingsResetDefaultLayoutDescription),
+            settings_command_button(
+                "settings-default-layout-reset",
+                text.get(UiTextKey::SettingsReset),
+                true,
+                theme,
+                CommandId::LayoutDefaultReset,
+                cx,
             )
             .into_any_element(),
         ))

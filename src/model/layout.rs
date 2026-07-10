@@ -17,6 +17,8 @@ impl ProjectLayout {
             }
 
             tab.layout.validate()?;
+            let mut pane_ids = HashSet::new();
+            tab.layout.validate_pane_ids(&tab.id, &mut pane_ids)?;
         }
 
         if let Some(default_tab) = &self.project.default_tab
@@ -71,6 +73,29 @@ impl LayoutNode {
 
                 split.left.validate()?;
                 split.right.validate()
+            }
+        }
+    }
+
+    fn validate_pane_ids(
+        &self,
+        tab_id: &str,
+        pane_ids: &mut HashSet<String>,
+    ) -> Result<(), LayoutError> {
+        match self {
+            Self::Pane(pane) => {
+                if pane_ids.insert(pane.id.clone()) {
+                    Ok(())
+                } else {
+                    Err(LayoutError::DuplicatePaneId {
+                        tab_id: tab_id.to_string(),
+                        pane_id: pane.id.clone(),
+                    })
+                }
+            }
+            Self::Split(split) => {
+                split.left.validate_pane_ids(tab_id, pane_ids)?;
+                split.right.validate_pane_ids(tab_id, pane_ids)
             }
         }
     }
@@ -141,6 +166,8 @@ pub enum PaneKind {
 pub enum LayoutError {
     #[error("duplicate tab id: {0}")]
     DuplicateTabId(String),
+    #[error("duplicate pane id in tab {tab_id}: {pane_id}")]
+    DuplicatePaneId { tab_id: String, pane_id: String },
     #[error("default tab does not exist: {0}")]
     MissingDefaultTab(String),
     #[error("split ratio must be between 0.05 and 0.95, got {0}")]

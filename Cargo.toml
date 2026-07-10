@@ -20,4 +20,5 @@ cocoa = "0.26"
 objc = "0.2"
 
 [dev-dependencies]
+gpui = { version = "0.2.2", features = ["test-support"] }
 tempfile = "3"

@@ -79,3 +79,34 @@ fn ui_text_returns_notification_action_labels() {
     assert_eq!(english.get(UiTextKey::OpenNotificationTarget), "Open");
     assert_eq!(chinese.get(UiTextKey::OpenNotificationTarget), "打开");
 }
+
+#[test]
+fn ui_text_returns_layout_default_and_project_command_labels() {
+    let english = UiText::english();
+    let chinese = UiText::new(Locale::Chinese);
+
+    assert_eq!(
+        english.get(UiTextKey::CommandLayoutDefaultEditTitle),
+        "Edit Default Layout"
+    );
+    assert_eq!(
+        english.get(UiTextKey::CommandLayoutProjectEditTitle),
+        "Edit Project Layout"
+    );
+    assert_eq!(
+        english.get(UiTextKey::CommandLayoutResetLocalOverrideTitle),
+        "Reset Personal Layout Override"
+    );
+    assert_eq!(
+        chinese.get(UiTextKey::CommandLayoutDefaultEditTitle),
+        "编辑默认布局"
+    );
+    assert_eq!(
+        chinese.get(UiTextKey::CommandLayoutProjectEditTitle),
+        "编辑项目布局"
+    );
+    assert_eq!(
+        chinese.get(UiTextKey::CommandDisabledOpenProjectFirst),
+        "请先打开项目"
+    );
+}

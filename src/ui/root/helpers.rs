@@ -162,13 +162,24 @@ pub(super) fn should_focus_terminal_after_command(command_id: CommandId) -> bool
 
 pub(super) fn layout_source_message(source: &LayoutSource) -> String {
     let source_name = match source {
+        LayoutSource::GlobalDefault(_) => "global default",
+        LayoutSource::GlobalDefaultWithPersonalPatch { .. } => "global default + personal patch",
         LayoutSource::ProjectConfig(_) => "project config",
-        LayoutSource::ProjectConfigWithAppOverride { .. } => "project config + app-local override",
-        LayoutSource::AppLocalConfig(_) => "app-local layout",
-        LayoutSource::CreatedAppLocalDefault(_) => "created app-local default",
+        LayoutSource::ProjectConfigWithPersonalPatch { .. } => "project config + personal patch",
+        LayoutSource::PersonalReplace(_) => "personal replacement",
     };
 
     format!("Layout source: {source_name}")
+}
+
+pub(super) fn layout_load_warning_message(warnings: &[LayoutLoadWarning]) -> Option<String> {
+    (!warnings.is_empty()).then(|| {
+        warnings
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ")
+    })
 }
 
 pub(super) fn load_keybindings_messages(

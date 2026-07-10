@@ -50,9 +50,24 @@ Project layout:
 <project>/.yttt/layout.toml
 ```
 
-App-local config uses `directories::ProjectDirs::from("dev", "yttt", "yttt")`.
-It stores recent projects, keybindings, and personal project layout files. If the platform
-config directory cannot be found, the fallback is `$XDG_CONFIG_HOME/yttt` or `./.yttt`.
+The config root is `$XDG_CONFIG_HOME/yttt` when set, otherwise `~/.config/yttt`, with
+`./.yttt` used only when neither location is available.
+
+Global default layout:
+
+```text
+<app-config>/default-layout.toml
+```
+
+Personal project layout:
+
+```text
+<app-config>/projects/<encoded-project-path>/layout.toml
+```
+
+Projects without `.yttt/layout.toml` dynamically inherit the global default. Personal
+project files use strict `version = 1` plus `mode = "patch" | "replace"`; unversioned
+legacy files are rejected with a visible warning.
 
 ## More Docs
 

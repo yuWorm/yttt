@@ -90,10 +90,20 @@ pub enum UiTextKey {
     CommandPaneRenameDescription,
     CommandPanePaletteTitle,
     CommandPanePaletteDescription,
+    CommandLayoutDefaultEditTitle,
+    CommandLayoutDefaultEditDescription,
+    CommandLayoutDefaultResetTitle,
+    CommandLayoutDefaultResetDescription,
+    CommandLayoutDefaultReloadTitle,
+    CommandLayoutDefaultReloadDescription,
+    CommandLayoutProjectEditTitle,
+    CommandLayoutProjectEditDescription,
     CommandLayoutSaveCurrentTitle,
     CommandLayoutSaveCurrentDescription,
     CommandLayoutExportProjectConfigTitle,
     CommandLayoutExportProjectConfigDescription,
+    CommandLayoutResetLocalOverrideTitle,
+    CommandLayoutResetLocalOverrideDescription,
     CommandLayoutOpenFileTitle,
     CommandLayoutOpenFileDescription,
     CommandPaletteOpenTitle,
@@ -122,6 +132,8 @@ pub enum UiTextKey {
     SettingsGroupTerminalDescription,
     SettingsGroupProjectLayout,
     SettingsGroupProjectLayoutDescription,
+    SettingsGroupDefaultLayout,
+    SettingsGroupDefaultLayoutDescription,
     SettingsGroupKeybindings,
     SettingsGroupKeybindingsDescription,
     SettingsLanguage,
@@ -166,6 +178,14 @@ pub enum UiTextKey {
     SettingsExportProjectLayoutDescription,
     SettingsEditLayoutToml,
     SettingsEditLayoutTomlDescription,
+    SettingsDefaultLayoutPath,
+    SettingsDefaultLayoutPathDescription,
+    SettingsEditDefaultLayout,
+    SettingsEditDefaultLayoutDescription,
+    SettingsReloadDefaultLayout,
+    SettingsReloadDefaultLayoutDescription,
+    SettingsResetDefaultLayout,
+    SettingsResetDefaultLayoutDescription,
     SettingsEditKeybindingsToml,
     SettingsEditKeybindingsTomlDescription,
     SettingsKeybindingDiagnostics,
@@ -301,6 +321,20 @@ fn english(key: UiTextKey) -> &'static str {
         UiTextKey::CommandPaneRenameDescription => "Rename the focused pane",
         UiTextKey::CommandPanePaletteTitle => "Open Pane Palette",
         UiTextKey::CommandPanePaletteDescription => "Focus panes in the selected tab",
+        UiTextKey::CommandLayoutDefaultEditTitle => "Edit Default Layout",
+        UiTextKey::CommandLayoutDefaultEditDescription => "Edit the global default layout TOML",
+        UiTextKey::CommandLayoutDefaultResetTitle => "Reset Default Layout",
+        UiTextKey::CommandLayoutDefaultResetDescription => {
+            "Reset the global default layout to the built-in template"
+        }
+        UiTextKey::CommandLayoutDefaultReloadTitle => "Reload Default Layout",
+        UiTextKey::CommandLayoutDefaultReloadDescription => {
+            "Reload the global default layout from disk"
+        }
+        UiTextKey::CommandLayoutProjectEditTitle => "Edit Project Layout",
+        UiTextKey::CommandLayoutProjectEditDescription => {
+            "Edit the selected project's effective layout source"
+        }
         UiTextKey::CommandLayoutSaveCurrentTitle => "Save Current Layout",
         UiTextKey::CommandLayoutSaveCurrentDescription => {
             "Save the current layout as a local override"
@@ -308,6 +342,10 @@ fn english(key: UiTextKey) -> &'static str {
         UiTextKey::CommandLayoutExportProjectConfigTitle => "Export Project Layout",
         UiTextKey::CommandLayoutExportProjectConfigDescription => {
             "Write the current layout to the project config"
+        }
+        UiTextKey::CommandLayoutResetLocalOverrideTitle => "Reset Personal Layout Override",
+        UiTextKey::CommandLayoutResetLocalOverrideDescription => {
+            "Remove the selected project's personal layout override"
         }
         UiTextKey::CommandLayoutOpenFileTitle => "Open Layout File",
         UiTextKey::CommandLayoutOpenFileDescription => {
@@ -343,6 +381,10 @@ fn english(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsGroupTerminalDescription => "Shell, font, and terminal runtime defaults",
         UiTextKey::SettingsGroupProjectLayout => "Project Layout",
         UiTextKey::SettingsGroupProjectLayoutDescription => "Project layout files and TOML editing",
+        UiTextKey::SettingsGroupDefaultLayout => "Default Layout",
+        UiTextKey::SettingsGroupDefaultLayoutDescription => {
+            "Global layout inherited by projects without project config"
+        }
         UiTextKey::SettingsGroupKeybindings => "Keybindings",
         UiTextKey::SettingsGroupKeybindingsDescription => {
             "Keyboard shortcuts and conflict diagnostics"
@@ -407,6 +449,20 @@ fn english(key: UiTextKey) -> &'static str {
         }
         UiTextKey::SettingsEditLayoutToml => "Edit layout TOML",
         UiTextKey::SettingsEditLayoutTomlDescription => "Edit the selected project layout file.",
+        UiTextKey::SettingsDefaultLayoutPath => "Default layout file",
+        UiTextKey::SettingsDefaultLayoutPathDescription => {
+            "Global default layout TOML used by projects without project config."
+        }
+        UiTextKey::SettingsEditDefaultLayout => "Edit default layout TOML",
+        UiTextKey::SettingsEditDefaultLayoutDescription => "Edit the global default layout file.",
+        UiTextKey::SettingsReloadDefaultLayout => "Reload default layout",
+        UiTextKey::SettingsReloadDefaultLayoutDescription => {
+            "Reload the global default layout from disk."
+        }
+        UiTextKey::SettingsResetDefaultLayout => "Reset default layout",
+        UiTextKey::SettingsResetDefaultLayoutDescription => {
+            "Replace the global default layout with the built-in template."
+        }
         UiTextKey::SettingsEditKeybindingsToml => "Edit keybindings TOML",
         UiTextKey::SettingsEditKeybindingsTomlDescription => "Open the user keybindings file.",
         UiTextKey::SettingsKeybindingDiagnostics => "Keybinding diagnostics",
@@ -519,10 +575,20 @@ fn chinese(key: UiTextKey) -> &'static str {
         UiTextKey::CommandPaneRenameDescription => "重命名当前面板",
         UiTextKey::CommandPanePaletteTitle => "打开面板切换器",
         UiTextKey::CommandPanePaletteDescription => "聚焦当前标签页中的面板",
+        UiTextKey::CommandLayoutDefaultEditTitle => "编辑默认布局",
+        UiTextKey::CommandLayoutDefaultEditDescription => "编辑全局默认布局 TOML",
+        UiTextKey::CommandLayoutDefaultResetTitle => "重置默认布局",
+        UiTextKey::CommandLayoutDefaultResetDescription => "将全局默认布局重置为内置模板",
+        UiTextKey::CommandLayoutDefaultReloadTitle => "重新加载默认布局",
+        UiTextKey::CommandLayoutDefaultReloadDescription => "从磁盘重新加载全局默认布局",
+        UiTextKey::CommandLayoutProjectEditTitle => "编辑项目布局",
+        UiTextKey::CommandLayoutProjectEditDescription => "编辑当前项目的有效布局来源",
         UiTextKey::CommandLayoutSaveCurrentTitle => "保存当前布局",
         UiTextKey::CommandLayoutSaveCurrentDescription => "将当前布局保存为本地覆盖",
         UiTextKey::CommandLayoutExportProjectConfigTitle => "导出项目布局",
         UiTextKey::CommandLayoutExportProjectConfigDescription => "将当前布局写入项目配置",
+        UiTextKey::CommandLayoutResetLocalOverrideTitle => "重置个人布局覆盖",
+        UiTextKey::CommandLayoutResetLocalOverrideDescription => "删除当前项目的个人布局覆盖",
         UiTextKey::CommandLayoutOpenFileTitle => "打开布局文件",
         UiTextKey::CommandLayoutOpenFileDescription => "显示当前项目的布局文件路径",
         UiTextKey::CommandPaletteOpenTitle => "打开命令面板",
@@ -551,6 +617,8 @@ fn chinese(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsGroupTerminalDescription => "Shell、字体和终端运行默认值",
         UiTextKey::SettingsGroupProjectLayout => "项目布局",
         UiTextKey::SettingsGroupProjectLayoutDescription => "项目布局文件和 TOML 编辑",
+        UiTextKey::SettingsGroupDefaultLayout => "默认布局",
+        UiTextKey::SettingsGroupDefaultLayoutDescription => "没有项目配置时继承的全局布局",
         UiTextKey::SettingsGroupKeybindings => "快捷键",
         UiTextKey::SettingsGroupKeybindingsDescription => "键盘快捷键和冲突诊断",
         UiTextKey::SettingsLanguage => "语言",
@@ -595,6 +663,16 @@ fn chinese(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsExportProjectLayoutDescription => "将当前布局写入项目配置。",
         UiTextKey::SettingsEditLayoutToml => "编辑布局 TOML",
         UiTextKey::SettingsEditLayoutTomlDescription => "编辑所选项目的布局文件。",
+        UiTextKey::SettingsDefaultLayoutPath => "默认布局文件",
+        UiTextKey::SettingsDefaultLayoutPathDescription => {
+            "没有项目配置时使用的全局默认布局 TOML。"
+        }
+        UiTextKey::SettingsEditDefaultLayout => "编辑默认布局 TOML",
+        UiTextKey::SettingsEditDefaultLayoutDescription => "编辑全局默认布局文件。",
+        UiTextKey::SettingsReloadDefaultLayout => "重新加载默认布局",
+        UiTextKey::SettingsReloadDefaultLayoutDescription => "从磁盘重新加载全局默认布局。",
+        UiTextKey::SettingsResetDefaultLayout => "重置默认布局",
+        UiTextKey::SettingsResetDefaultLayoutDescription => "使用内置模板替换全局默认布局。",
         UiTextKey::SettingsEditKeybindingsToml => "编辑快捷键 TOML",
         UiTextKey::SettingsEditKeybindingsTomlDescription => "打开用户快捷键文件。",
         UiTextKey::SettingsKeybindingDiagnostics => "快捷键诊断",

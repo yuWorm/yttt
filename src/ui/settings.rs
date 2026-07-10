@@ -40,7 +40,7 @@ pub enum SettingsGroupId {
     General,
     Appearance,
     Terminal,
-    ProjectLayout,
+    DefaultLayout,
     Keybindings,
 }
 
@@ -49,7 +49,7 @@ impl SettingsGroupId {
         Self::General,
         Self::Appearance,
         Self::Terminal,
-        Self::ProjectLayout,
+        Self::DefaultLayout,
         Self::Keybindings,
     ];
 
@@ -58,7 +58,7 @@ impl SettingsGroupId {
             Self::General => "general",
             Self::Appearance => "appearance",
             Self::Terminal => "terminal",
-            Self::ProjectLayout => "project-layout",
+            Self::DefaultLayout => "default-layout",
             Self::Keybindings => "keybindings",
         }
     }
@@ -68,7 +68,7 @@ impl SettingsGroupId {
             Self::General => UiTextKey::SettingsGroupGeneral,
             Self::Appearance => UiTextKey::SettingsGroupAppearance,
             Self::Terminal => UiTextKey::SettingsGroupTerminal,
-            Self::ProjectLayout => UiTextKey::SettingsGroupProjectLayout,
+            Self::DefaultLayout => UiTextKey::SettingsGroupDefaultLayout,
             Self::Keybindings => UiTextKey::SettingsGroupKeybindings,
         }
     }
@@ -78,7 +78,7 @@ impl SettingsGroupId {
             Self::General => UiTextKey::SettingsGroupGeneralDescription,
             Self::Appearance => UiTextKey::SettingsGroupAppearanceDescription,
             Self::Terminal => UiTextKey::SettingsGroupTerminalDescription,
-            Self::ProjectLayout => UiTextKey::SettingsGroupProjectLayoutDescription,
+            Self::DefaultLayout => UiTextKey::SettingsGroupDefaultLayoutDescription,
             Self::Keybindings => UiTextKey::SettingsGroupKeybindingsDescription,
         }
     }
@@ -171,22 +171,22 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 UiTextKey::SettingsClosePaneOnExitDescription,
             ),
         ],
-        SettingsGroupId::ProjectLayout => vec![
+        SettingsGroupId::DefaultLayout => vec![
             row(
-                UiTextKey::SettingsLayoutSource,
-                UiTextKey::SettingsLayoutSourceDescription,
+                UiTextKey::SettingsDefaultLayoutPath,
+                UiTextKey::SettingsDefaultLayoutPathDescription,
             ),
             row(
-                UiTextKey::SettingsSaveCurrentLayout,
-                UiTextKey::SettingsSaveCurrentLayoutDescription,
+                UiTextKey::SettingsEditDefaultLayout,
+                UiTextKey::SettingsEditDefaultLayoutDescription,
             ),
             row(
-                UiTextKey::SettingsExportProjectLayout,
-                UiTextKey::SettingsExportProjectLayoutDescription,
+                UiTextKey::SettingsReloadDefaultLayout,
+                UiTextKey::SettingsReloadDefaultLayoutDescription,
             ),
             row(
-                UiTextKey::SettingsEditLayoutToml,
-                UiTextKey::SettingsEditLayoutTomlDescription,
+                UiTextKey::SettingsResetDefaultLayout,
+                UiTextKey::SettingsResetDefaultLayoutDescription,
             ),
         ],
         SettingsGroupId::Keybindings => vec![
