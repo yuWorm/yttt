@@ -1,8 +1,13 @@
+mod file_io;
 mod language;
 mod language_catalog;
 mod state;
 mod view;
 
+pub use file_io::{
+    CurrentDiskState, DiskFingerprint, LoadedProjectFile, MAX_PROJECT_FILE_BYTES,
+    ProjectFileIoError, SaveMode, SaveProjectFileOutcome, read_project_file, save_project_file,
+};
 pub use language::register_builtin_editor_languages;
 pub use language_catalog::{
     EditorLanguageCatalog, EditorLanguageDefinition, EditorLanguageId, EditorLanguageResolution,
