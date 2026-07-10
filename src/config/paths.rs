@@ -56,6 +56,10 @@ impl AppConfigPaths {
     pub fn themes_dir(&self) -> PathBuf {
         self.config_dir.join("themes")
     }
+
+    pub fn icon_themes_dir(&self) -> PathBuf {
+        self.themes_dir().join("icons")
+    }
 }
 
 fn fallback_config_dir() -> PathBuf {

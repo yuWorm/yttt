@@ -72,6 +72,7 @@ language = "system"
 [theme]
 name = "yttt-dark"
 # terminal = "another-theme" # optional; omitted to follow the UI theme
+# icon_theme = "Material Icon Theme" # optional; defaults to built-in icons
 
 [notifications]
 system = false
@@ -134,6 +135,25 @@ selection = "#3f5f9f"
 `ui.selection` is the global text-selection color for inputs and code editors. It is independent
 from `ui.focus_ring`; if omitted, it defaults to the resolved `ui.focus_ring` value for
 backward-compatible existing themes.
+
+## Icon Themes
+
+Set `[theme].icon_theme` to an icon package directory, icon-theme family, or individual theme
+name. The Appearance settings page offers **Icon theme** with **Built-in** plus all installed
+package theme names. Choosing a theme saves `[theme].icon_theme` and immediately updates
+project-tree, file-tab, and editor-header icons. Packages use Zed-compatible JSON and SVG paths:
+
+```text
+<app config>/themes/icons/<package>/
+├── icon_themes/
+│   └── <theme>.json
+└── icons/
+    └── *.svg
+```
+
+The resolver supports exact file names, dotted suffixes such as `eslint.config.js`, extensions,
+named folders, generic open/closed folders, and expand/collapse chevrons. Invalid or missing
+icons fall back to the built-in component icons. SVG paths are constrained to the selected package.
 
 ## Layout TOML
 

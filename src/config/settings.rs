@@ -59,6 +59,7 @@ impl Default for GeneralSettings {
 pub struct ThemeSettings {
     pub name: String,
     pub terminal: Option<String>,
+    pub icon_theme: Option<String>,
 }
 
 impl Default for ThemeSettings {
@@ -66,6 +67,7 @@ impl Default for ThemeSettings {
         Self {
             name: "yttt-dark".to_string(),
             terminal: None,
+            icon_theme: None,
         }
     }
 }

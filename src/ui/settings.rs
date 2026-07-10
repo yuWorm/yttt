@@ -135,6 +135,10 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 UiTextKey::SettingsUiThemeDescription,
             ),
             row(
+                UiTextKey::SettingsIconTheme,
+                UiTextKey::SettingsIconThemeDescription,
+            ),
+            row(
                 UiTextKey::SettingsTerminalTheme,
                 UiTextKey::SettingsTerminalThemeDescription,
             ),

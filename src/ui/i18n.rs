@@ -187,6 +187,8 @@ pub enum UiTextKey {
     SettingsSystemNotificationsDescription,
     SettingsUiTheme,
     SettingsUiThemeDescription,
+    SettingsIconTheme,
+    SettingsIconThemeDescription,
     SettingsTerminalTheme,
     SettingsTerminalThemeDescription,
     SettingsSearchTheme,
@@ -530,6 +532,10 @@ fn english(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsUiThemeDescription => {
             "Theme used for YTTT chrome, panels, and controls."
         }
+        UiTextKey::SettingsIconTheme => "Icon theme",
+        UiTextKey::SettingsIconThemeDescription => {
+            "File, folder, and editor icons from installed Zed-compatible themes."
+        }
         UiTextKey::SettingsTerminalTheme => "Terminal theme",
         UiTextKey::SettingsTerminalThemeDescription => "Optional terminal colors override.",
         UiTextKey::SettingsSearchTheme => "Search theme...",
@@ -864,6 +870,10 @@ fn chinese(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSystemNotificationsDescription => "Agent 终端任务完成或失败时通知。",
         UiTextKey::SettingsUiTheme => "界面主题",
         UiTextKey::SettingsUiThemeDescription => "用于 YTTT 外壳、面板和控件的主题。",
+        UiTextKey::SettingsIconTheme => "图标主题",
+        UiTextKey::SettingsIconThemeDescription => {
+            "使用已安装的兼容 Zed 图标主题显示文件、文件夹和编辑器图标。"
+        }
         UiTextKey::SettingsTerminalTheme => "终端主题",
         UiTextKey::SettingsTerminalThemeDescription => "可选的终端颜色覆盖。",
         UiTextKey::SettingsSearchTheme => "搜索主题...",

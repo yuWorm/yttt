@@ -1,9 +1,15 @@
 use gpui::AssetSource;
+use tempfile::tempdir;
+use yttt::config::paths::AppConfigPaths;
 
 #[test]
 fn app_assets_include_gpui_component_icons_used_by_ui() {
+    let temp = tempdir().unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path());
+    let assets = yttt::ui::assets::app_assets(&config_paths);
+
     for path in yttt::ui::assets::REQUIRED_COMPONENT_ICON_ASSET_PATHS {
-        let asset = yttt::ui::assets::app_assets()
+        let asset = assets
             .load(path)
             .unwrap_or_else(|err| panic!("load {path}: {err}"));
 

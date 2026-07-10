@@ -21,8 +21,9 @@ use crate::{
 };
 
 pub fn run() {
+    let config_paths = AppConfigPaths::for_app();
     Application::new()
-        .with_assets(crate::ui::assets::app_assets())
+        .with_assets(crate::ui::assets::app_assets(&config_paths))
         .run(|cx: &mut App| {
             #[cfg(target_os = "macos")]
             crate::ui::macos::prepare_macos_app_runtime();

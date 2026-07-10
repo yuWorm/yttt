@@ -10,12 +10,15 @@ use gpui::{
     Styled as _, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName,
+    ActiveTheme as _,
     list::ListItem,
     tree::{TreeItem, TreeState, tree},
 };
 
-use crate::runtime::git_status::{GitFileStatus, ProjectGitStatus};
+use crate::{
+    runtime::git_status::{GitFileStatus, ProjectGitStatus},
+    ui::icon_theme::{IconTheme, icon_for_visual},
+};
 
 use super::{ProjectFileTree, ProjectTreeEntryKind, ProjectTreeLoadState, ProjectTreeVisibleRow};
 
@@ -259,10 +262,19 @@ fn stable_path_id(path: &Path) -> String {
 pub struct ProjectTreeView {
     tree: Entity<TreeState>,
     snapshot: ProjectTreeRenderSnapshot,
+    icon_theme: IconTheme,
 }
 
 impl ProjectTreeView {
     pub fn new(snapshot: ProjectTreeRenderSnapshot, cx: &mut Context<Self>) -> Self {
+        Self::new_with_icon_theme(snapshot, IconTheme::default(), cx)
+    }
+
+    pub fn new_with_icon_theme(
+        snapshot: ProjectTreeRenderSnapshot,
+        icon_theme: IconTheme,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let items = snapshot.tree_items();
         let selected_index = snapshot.selected_index();
         let tree = cx.new(|cx| TreeState::new(cx).items(items));
@@ -271,10 +283,23 @@ impl ProjectTreeView {
                 state.set_selected_index(selected_index, cx);
             });
         }
-        Self { tree, snapshot }
+        Self {
+            tree,
+            snapshot,
+            icon_theme,
+        }
     }
 
     pub fn sync(&mut self, snapshot: ProjectTreeRenderSnapshot, cx: &mut Context<Self>) {
+        self.sync_with_icon_theme(snapshot, self.icon_theme.clone(), cx);
+    }
+
+    pub fn sync_with_icon_theme(
+        &mut self,
+        snapshot: ProjectTreeRenderSnapshot,
+        icon_theme: IconTheme,
+        cx: &mut Context<Self>,
+    ) {
         let items = snapshot.tree_items();
         let selected_index = snapshot.selected_index();
         self.tree.update(cx, |state, cx| {
@@ -282,6 +307,7 @@ impl ProjectTreeView {
             state.set_selected_index(selected_index, cx);
         });
         self.snapshot = snapshot;
+        self.icon_theme = icon_theme;
         cx.notify();
     }
 
@@ -338,12 +364,21 @@ impl Render for ProjectTreeView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = self.snapshot.rows_by_id.clone();
         let view = cx.weak_entity();
+        let icon_theme = self.icon_theme.clone();
         div()
             .size_full()
             .child(tree(&self.tree, move |ix, entry, selected, _window, cx| {
                 let id = entry.item().id.as_str().to_string();
                 let row = rows.get(&id).cloned();
-                render_component_row(ix, entry.depth(), selected, row, view.clone(), cx)
+                render_component_row(
+                    ix,
+                    entry.depth(),
+                    selected,
+                    row,
+                    &icon_theme,
+                    view.clone(),
+                    cx,
+                )
             }))
     }
 }
@@ -353,6 +388,7 @@ fn render_component_row(
     depth: usize,
     selected: bool,
     row: Option<ProjectTreeRenderRow>,
+    icon_theme: &IconTheme,
     view: gpui::WeakEntity<ProjectTreeView>,
     cx: &mut App,
 ) -> ListItem {
@@ -372,21 +408,18 @@ fn render_component_row(
             );
     }
 
+    let path = row.relative_path.as_deref().unwrap_or(Path::new(""));
     let icon = match row.kind {
         Some(ProjectTreeEntryKind::Directory | ProjectTreeEntryKind::SymlinkDirectory) => {
-            if row.expanded {
-                IconName::FolderOpen
-            } else {
-                IconName::FolderClosed
-            }
+            icon_theme.resolve_directory(path, row.expanded)
         }
-        _ => IconName::File,
+        _ => icon_theme.resolve_file(path),
     };
-    let text_color = match row.git_status {
-        Some(GitFileStatus::Added | GitFileStatus::Untracked) => cx.theme().success,
-        Some(GitFileStatus::Modified) => cx.theme().warning,
-        Some(GitFileStatus::Deleted) => cx.theme().danger,
-        None => cx.theme().foreground,
+    let status_color = match row.git_status {
+        Some(GitFileStatus::Added | GitFileStatus::Untracked) => Some(cx.theme().success),
+        Some(GitFileStatus::Modified) => Some(cx.theme().warning),
+        Some(GitFileStatus::Deleted) => Some(cx.theme().danger),
+        None => None,
     };
     let hint = match &row.load_state {
         ProjectTreeLoadState::Loading => Some("…".to_string()),
@@ -407,22 +440,23 @@ fn render_component_row(
                 .gap_1()
                 .w_full()
                 .child(div().w(px(12.0)).children(is_directory.then(|| {
-                    Icon::new(if expanded {
-                        IconName::ChevronDown
-                    } else {
-                        IconName::ChevronRight
-                    })
-                    .size_3()
-                    .text_color(cx.theme().muted_foreground)
+                    icon_for_visual(
+                        icon_theme.resolve_chevron(expanded),
+                        cx.theme().muted_foreground,
+                    )
                 })))
-                .child(Icon::new(icon).size_3().text_color(text_color))
+                .child(icon_for_visual(icon, cx.theme().muted_foreground))
                 .child(
                     div()
                         .flex_1()
                         .truncate()
                         .text_sm()
-                        .text_color(text_color)
+                        .text_color(cx.theme().foreground)
                         .child(row.label),
+                )
+                .children(
+                    status_color
+                        .map(|color| div().flex_none().size(px(6.0)).rounded_full().bg(color)),
                 )
                 .children(hint.map(|hint| {
                     div()

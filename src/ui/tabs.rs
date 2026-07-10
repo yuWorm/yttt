@@ -10,6 +10,7 @@ use crate::{
     ui::{
         agent_status::{agent_status_label, tab_agent_status},
         components::{SelectableState, workbench_icon_button},
+        icon_theme::{IconTheme, IconVisual, icon_for_visual},
         primitives::{
             icon_button::YtttIconButtonKind,
             row::{YtttRowKind, yttt_row_style},
@@ -51,6 +52,7 @@ pub struct WorkbenchTabItem {
     pub status: Option<String>,
     pub status_tone: Option<ProjectTabStatusTone>,
     pub dirty: bool,
+    pub icon_path: Option<std::path::PathBuf>,
     pub state: SelectableState,
 }
 
@@ -181,6 +183,7 @@ pub fn visible_work_item_tabs(
                 status: item.status.clone(),
                 status_tone: Some(item.status_tone),
                 dirty: false,
+                icon_path: None,
             }
         })
         .chain(file_items.iter().map(|file| {
@@ -202,6 +205,7 @@ pub fn visible_work_item_tabs(
                 status: None,
                 status_tone: file.dirty.then_some(ProjectTabStatusTone::Dirty),
                 dirty: file.dirty,
+                icon_path: Some(file.relative_path.clone()),
             }
         }))
         .collect()
@@ -260,6 +264,7 @@ impl<NewH, SplitVH, SplitHH, ToggleTreeH> ProjectTabsToolbar<NewH, SplitVH, Spli
 pub fn project_tabs<SelectH, SelectF, CloseH, CloseF, NewH, SplitVH, SplitHH, ToggleTreeH>(
     items: Vec<WorkbenchTabItem>,
     theme: WorkbenchTheme,
+    icon_theme: IconTheme,
     mut on_select_tab: SelectF,
     mut on_close_tab: CloseF,
     toolbar: ProjectTabsToolbar<NewH, SplitVH, SplitHH, ToggleTreeH>,
@@ -296,6 +301,7 @@ where
         tab_row = tab_row.child(project_tab(
             index,
             item,
+            &icon_theme,
             theme,
             on_select_tab(select_tab_id),
             on_close_tab(close_tab_id),
@@ -326,6 +332,7 @@ where
 fn project_tab<SelectH, CloseH>(
     index: usize,
     item: WorkbenchTabItem,
+    icon_theme: &IconTheme,
     theme: WorkbenchTheme,
     on_select_tab: SelectH,
     on_close_tab: CloseH,
@@ -338,6 +345,19 @@ where
     let group_name = format!("project-tab-{index}");
     let tooltip = item.tooltip.clone();
     let kind = item.kind;
+    let icon = match kind {
+        WorkbenchTabKind::Terminal => Icon::new(IconName::SquareTerminal)
+            .size_3()
+            .text_color(row_style.subtitle)
+            .into_any_element(),
+        WorkbenchTabKind::File => icon_for_visual(
+            item.icon_path
+                .as_deref()
+                .map(|path| icon_theme.resolve_file(path))
+                .unwrap_or(IconVisual::Component(IconName::File)),
+            row_style.subtitle,
+        ),
+    };
     let dirty = item.dirty;
     let status_tone = item.status_tone;
 
@@ -359,14 +379,7 @@ where
         .hover(move |this| this.bg(row_style.hover_background))
         .on_click(on_select_tab)
         .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
-        .child(
-            Icon::new(match kind {
-                WorkbenchTabKind::Terminal => IconName::SquareTerminal,
-                WorkbenchTabKind::File => IconName::File,
-            })
-            .size_3()
-            .text_color(row_style.subtitle),
-        )
+        .child(icon)
         .child(
             div()
                 .flex_1()

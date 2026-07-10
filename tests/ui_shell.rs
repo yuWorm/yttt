@@ -10,6 +10,7 @@ use yttt::ui::font_options::{
     terminal_font_family_options_from_system, terminal_font_family_setting_from_option,
 };
 use yttt::ui::i18n::{Locale, UiText};
+use yttt::ui::icon_theme::IconTheme;
 use yttt::ui::overlay::{
     KeyboardCapture, overlay_input_capture_policy, popover_overlay_event_policy,
 };
@@ -207,6 +208,7 @@ impl gpui::Render for EmptyProjectTabs {
         project_tabs(
             Vec::new(),
             WorkbenchTheme::dark(),
+            IconTheme::default(),
             |_| |_, _, _| {},
             |_| |_, _, _| {},
             ProjectTabsToolbar::new(
@@ -499,6 +501,8 @@ fn settings_rows_are_grouped_by_user_facing_sections() {
     let layout_rows = settings_rows_for_group(SettingsGroupId::DefaultLayout, &text);
 
     assert!(general_rows.iter().any(|row| row.title == "Language"));
+    let appearance_rows = settings_rows_for_group(SettingsGroupId::Appearance, &text);
+    assert!(appearance_rows.iter().any(|row| row.title == "Icon theme"));
     assert!(
         language_rows
             .iter()

@@ -12,7 +12,9 @@ use yttt::{
     commands::CommandId,
     config::{
         paths::AppConfigPaths,
-        settings::{AppSettings, EditorAutosave, LanguageSetting, save_settings},
+        settings::{
+            AppSettings, EditorAutosave, LanguageSetting, load_or_create_settings, save_settings,
+        },
     },
     model::{
         layout::PaneKind,
@@ -2797,6 +2799,34 @@ fn root_view_terminal_close_on_exit_setting_persists() {
 
     assert!(!root.terminal_close_on_exit());
     assert!(!RootView::with_config_paths(paths).terminal_close_on_exit());
+}
+
+#[test]
+fn root_view_icon_theme_setting_persists_and_can_reset() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths.clone());
+
+    root.set_icon_theme_name(Some("Fixture dark")).unwrap();
+    assert_eq!(
+        load_or_create_settings(&paths)
+            .unwrap()
+            .settings
+            .theme
+            .icon_theme
+            .as_deref(),
+        Some("Fixture dark")
+    );
+
+    root.set_icon_theme_name(None).unwrap();
+    assert_eq!(
+        load_or_create_settings(&paths)
+            .unwrap()
+            .settings
+            .theme
+            .icon_theme,
+        None
+    );
 }
 
 #[test]

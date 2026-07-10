@@ -33,6 +33,7 @@ use std::{
 type SettingsStringSelectState = SelectState<SearchableVec<String>>;
 
 const TERMINAL_THEME_FOLLOW_UI: &str = "Follow UI theme";
+const ICON_THEME_BUILTIN: &str = "Built-in";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum SettingsNumberField {
@@ -122,6 +123,10 @@ use crate::{
             terminal_font_family_options_from_system, terminal_font_family_setting_from_option,
         },
         i18n::{Locale, UiText, UiTextKey},
+        icon_theme::{
+            IconTheme, available_icon_theme_names as load_icon_theme_names, icon_for_visual,
+            load_icon_theme,
+        },
         input_owner::{
             InputOwnerKind, InputOwnerRegistration, InputOwnerStack, InputScopeId,
             TerminalInputGate,
@@ -218,6 +223,8 @@ pub struct RootView {
     settings_shell_select_subscription: Option<Subscription>,
     settings_ui_theme_select: Option<Entity<SettingsStringSelectState>>,
     settings_ui_theme_select_subscription: Option<Subscription>,
+    settings_icon_theme_select: Option<Entity<SettingsStringSelectState>>,
+    settings_icon_theme_select_subscription: Option<Subscription>,
     settings_terminal_theme_select: Option<Entity<SettingsStringSelectState>>,
     settings_terminal_theme_select_subscription: Option<Subscription>,
     settings_editor_language_select: Option<Entity<SettingsStringSelectState>>,
@@ -251,6 +258,7 @@ pub struct RootView {
     ui_text: UiText,
     app_settings: AppSettings,
     theme_runtime: ThemeRuntime,
+    icon_theme: IconTheme,
     settings_page: SettingsPageState,
 }
 
@@ -376,6 +384,11 @@ impl RootView {
         let (app_settings, settings_warning_lines) = load_app_settings_messages(&config_paths);
         let (theme_runtime, theme_warning_lines) =
             load_theme_runtime_messages(&config_paths, &app_settings);
+        let (icon_theme, icon_theme_error) =
+            match load_icon_theme(&config_paths, app_settings.theme.icon_theme.as_deref()) {
+                Ok(icon_theme) => (icon_theme, None),
+                Err(error) => (IconTheme::default(), Some(error.to_string())),
+            };
         let load_error = combine_load_messages(
             load_error,
             settings_warning_lines
@@ -391,6 +404,7 @@ impl RootView {
                         .join("; ")
                 }),
         );
+        let load_error = combine_load_messages(load_error, icon_theme_error);
         let load_error = combine_load_messages(
             load_error,
             layout_load_warning_message(default_layout_state.warnings()),
@@ -458,6 +472,8 @@ impl RootView {
             settings_shell_select_subscription: None,
             settings_ui_theme_select: None,
             settings_ui_theme_select_subscription: None,
+            settings_icon_theme_select: None,
+            settings_icon_theme_select_subscription: None,
             settings_terminal_theme_select: None,
             settings_terminal_theme_select_subscription: None,
             settings_editor_language_select: None,
@@ -491,6 +507,7 @@ impl RootView {
             ui_text: ui_text_for_language(app_settings.general.language),
             app_settings,
             theme_runtime,
+            icon_theme,
             settings_page: SettingsPageState::default(),
         }
     }
@@ -630,7 +647,9 @@ impl RootView {
     ) -> Option<Entity<ProjectTreeView>> {
         if let Some(tree) = self.project_editor_runtime.tree(project_id).cloned() {
             if let Some(snapshot) = self.project_tree_render_snapshot(project_id) {
-                tree.update(cx, |tree, tree_cx| tree.sync(snapshot, tree_cx));
+                tree.update(cx, |tree, tree_cx| {
+                    tree.sync_with_icon_theme(snapshot, self.icon_theme.clone(), tree_cx)
+                });
             }
             return Some(tree);
         }
@@ -646,7 +665,9 @@ impl RootView {
                 .track_tree_load(project_id.clone(), request.generation);
         }
         let snapshot = self.project_tree_render_snapshot(project_id)?;
-        let tree = cx.new(|tree_cx| ProjectTreeView::new(snapshot, tree_cx));
+        let icon_theme = self.icon_theme.clone();
+        let tree =
+            cx.new(|tree_cx| ProjectTreeView::new_with_icon_theme(snapshot, icon_theme, tree_cx));
         let event_project_id = project_id.clone();
         let subscription = cx.subscribe_in(&tree, window, move |this, tree, event, window, cx| {
             this.on_project_tree_view_event(&event_project_id, tree, event, window, cx);
@@ -2362,6 +2383,11 @@ impl RootView {
         self.save_app_settings_and_refresh_runtime()
     }
 
+    pub fn set_icon_theme_name(&mut self, theme_name: Option<&str>) -> Result<(), RootViewError> {
+        self.app_settings.theme.icon_theme = theme_name.map(ToString::to_string);
+        self.save_app_settings_and_refresh_runtime()
+    }
+
     pub fn set_terminal_font_family(&mut self, font_family: &str) -> Result<(), RootViewError> {
         self.app_settings.terminal.font_family = font_family.to_string();
         self.save_app_settings_and_refresh_runtime()
@@ -3868,6 +3894,8 @@ impl RootView {
         self.settings_shell_select_subscription = None;
         self.settings_ui_theme_select = None;
         self.settings_ui_theme_select_subscription = None;
+        self.settings_icon_theme_select = None;
+        self.settings_icon_theme_select_subscription = None;
         self.settings_terminal_theme_select = None;
         self.settings_terminal_theme_select_subscription = None;
         self.settings_editor_language_select = None;
@@ -4042,6 +4070,16 @@ impl RootView {
                 self.load_error = Some(error.to_string());
             }
         }
+        match load_icon_theme(
+            &self.config_paths,
+            self.app_settings.theme.icon_theme.as_deref(),
+        ) {
+            Ok(icon_theme) => self.icon_theme = icon_theme,
+            Err(error) => {
+                self.icon_theme = IconTheme::default();
+                self.load_error = Some(error.to_string());
+            }
+        }
     }
 
     fn save_app_settings_and_refresh_runtime(&mut self) -> Result<(), RootViewError> {
@@ -4171,6 +4209,10 @@ impl RootView {
         load_theme_store(&self.config_paths)
             .map(|loaded| loaded.store.theme_names())
             .unwrap_or_else(|_| ThemeStore::builtin().theme_names())
+    }
+
+    fn available_icon_theme_names(&self) -> Vec<String> {
+        load_icon_theme_names(&self.config_paths).unwrap_or_default()
     }
 
     fn available_editor_language_names(&self) -> Vec<String> {
@@ -4592,6 +4634,39 @@ impl RootView {
         }
     }
 
+    fn settings_icon_theme_select(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SettingsStringSelectState> {
+        let mut items = vec![ICON_THEME_BUILTIN.to_string()];
+        for theme_name in self.available_icon_theme_names() {
+            push_unique_string(&mut items, theme_name);
+        }
+        let selected = self
+            .app_settings
+            .theme
+            .icon_theme
+            .clone()
+            .unwrap_or_else(|| ICON_THEME_BUILTIN.to_string());
+        push_unique_string(&mut items, selected.clone());
+
+        if let Some(select) = &self.settings_icon_theme_select {
+            select.clone()
+        } else {
+            let selected_index = selected_index_for_settings_option(&items, &selected);
+            let select = cx.new(|cx| {
+                SelectState::new(SearchableVec::new(items), selected_index, window, cx)
+                    .searchable(true)
+            });
+            let subscription =
+                cx.subscribe_in(&select, window, Self::on_settings_icon_theme_select_event);
+            self.settings_icon_theme_select = Some(select.clone());
+            self.settings_icon_theme_select_subscription = Some(subscription);
+            select
+        }
+    }
+
     fn settings_terminal_theme_select(
         &mut self,
         window: &mut Window,
@@ -4845,12 +4920,79 @@ impl RootView {
             self.pending_editor_focus_document_id = None;
         }
 
+        let display_path = self
+            .workspace
+            .project(&document_id.project_id)
+            .and_then(|project| document_id.canonical_path.strip_prefix(&project.path).ok())
+            .unwrap_or(&document_id.canonical_path)
+            .to_path_buf();
+        let (language, dirty) = document
+            .as_ref()
+            .map(|document| {
+                let document = document.read(cx);
+                (
+                    document.model().editor().language().to_string(),
+                    document.model().is_dirty(),
+                )
+            })
+            .unwrap_or_else(|| ("text".to_string(), false));
+
         div()
             .debug_selector(|| "active-file-editor".to_string())
             .flex()
+            .flex_col()
             .flex_1()
-            .bg(self.theme_runtime.ui.surface)
-            .children(document)
+            .min_h_0()
+            .bg(self.theme_runtime.editor.background)
+            .child(Self::project_editor_header(
+                &display_path,
+                &language,
+                dirty,
+                self.icon_theme.resolve_file(&document_id.canonical_path),
+                self.theme_runtime.ui,
+            ))
+            .child(div().flex_1().min_h_0().children(document))
+    }
+
+    fn project_editor_header(
+        display_path: &Path,
+        language: &str,
+        dirty: bool,
+        icon: crate::ui::icon_theme::IconVisual,
+        theme: WorkbenchTheme,
+    ) -> impl IntoElement {
+        div()
+            .id("project-editor-header")
+            .flex()
+            .flex_none()
+            .h(px(32.))
+            .items_center()
+            .gap_2()
+            .px_3()
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.surface_elevated)
+            .child(icon_for_visual(icon, theme.text_muted))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .truncate()
+                    .text_sm()
+                    .text_color(theme.text)
+                    .child(display_path.to_string_lossy().into_owned()),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(theme.text_muted)
+                    .child(language.to_string()),
+            )
+            .when(dirty, |this| {
+                this.child(div().size(px(6.)).rounded_full().bg(theme.accent))
+            })
     }
 
     fn workbench_tab_items(&self, cx: &Context<Self>) -> Vec<WorkbenchTabItem> {
@@ -5570,6 +5712,23 @@ impl RootView {
         }
         self.sync_gpui_component_theme(cx);
         self.sync_terminal_pane_configs(cx);
+        cx.notify();
+    }
+
+    fn on_settings_icon_theme_select_event(
+        &mut self,
+        _select: &Entity<SettingsStringSelectState>,
+        event: &SelectEvent<SearchableVec<String>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(Some(value)) = event else {
+            return;
+        };
+        let icon_theme = (value != ICON_THEME_BUILTIN).then_some(value.as_str());
+        if let Err(error) = self.set_icon_theme_name(icon_theme) {
+            self.load_error = Some(error.to_string());
+        }
         cx.notify();
     }
 
@@ -6424,6 +6583,7 @@ impl Render for RootView {
                         .child(project_tabs(
                             tab_items,
                             self.theme_runtime.ui,
+                            self.icon_theme.clone(),
                             |work_item| {
                                 cx.listener(move |this, event: &ClickEvent, _window, cx| {
                                     let _ = this.handle_work_item_tab_click(
@@ -6740,7 +6900,7 @@ fn layout_toml_editor_overlay(
                                     .rounded_sm()
                                     .bg(editor_theme.background)
                                     .overflow_hidden()
-                                    .child(Input::new(input).h_full().appearance(true)),
+                                    .child(Input::new(input).h_full().appearance(false)),
                             )
                             .when_some(error, |this, error| {
                                 this.child(
@@ -7058,6 +7218,7 @@ fn settings_appearance_rows(
     let text = root.ui_text;
     let ui_theme_select = root.settings_ui_theme_select(window, cx);
     let terminal_theme_select = root.settings_terminal_theme_select(window, cx);
+    let icon_theme_select = root.settings_icon_theme_select(window, cx);
 
     div()
         .flex()
@@ -7069,6 +7230,19 @@ fn settings_appearance_rows(
             text.get(UiTextKey::SettingsUiThemeDescription),
             settings_select_control(
                 ui_theme_select,
+                theme,
+                true,
+                text.get(UiTextKey::SettingsSearchTheme),
+            )
+            .into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsIconTheme),
+            text.get(UiTextKey::SettingsIconThemeDescription),
+            settings_select_control(
+                icon_theme_select,
                 theme,
                 true,
                 text.get(UiTextKey::SettingsSearchTheme),
