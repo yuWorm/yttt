@@ -4,7 +4,7 @@ use tempfile::tempdir;
 use yttt::config::{
     paths::AppConfigPaths,
     settings::{
-        AUTO_SHELL, AppSettings, LanguageSetting, SettingsLoadWarning,
+        AUTO_SHELL, AppSettings, EditorAutosave, LanguageSetting, SettingsLoadWarning,
         detect_shell_candidates_with, load_or_create_settings, resolve_default_shell,
         save_settings,
     },
@@ -53,6 +53,24 @@ fn settings_default_language_is_system() {
     let settings = AppSettings::default();
 
     assert_eq!(settings.general.language, LanguageSetting::System);
+}
+
+#[test]
+fn editor_and_project_panel_defaults_match_the_design() {
+    let settings = AppSettings::default();
+
+    assert_eq!(settings.editor.font_family, "");
+    assert_eq!(settings.editor.font_size, 14.0);
+    assert_eq!(settings.editor.line_height, 1.4);
+    assert_eq!(settings.editor.tab_size, 4);
+    assert!(!settings.editor.soft_wrap);
+    assert!(settings.editor.line_numbers);
+    assert_eq!(settings.editor.autosave, EditorAutosave::Off);
+    assert_eq!(settings.editor.autosave_delay_ms, 1000);
+    assert!(settings.project_panel.default_open);
+    assert!(!settings.project_panel.show_hidden);
+    assert_eq!(settings.project_panel.width, 280.0);
+    assert_eq!(settings.project_panel.project_sidebar_width, 216.0);
 }
 
 #[test]
@@ -155,6 +173,102 @@ fn settings_persist_editor_language_and_lsp_choices() {
     assert_eq!(loaded.settings.editor.default_language, "toml");
     assert!(loaded.settings.editor.lsp.enabled);
     assert_eq!(loaded.settings.editor.lsp.command, "taplo lsp stdio");
+}
+
+#[test]
+fn settings_persist_editor_and_project_panel_choices() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+
+    for autosave in [
+        EditorAutosave::Off,
+        EditorAutosave::OnFocusChange,
+        EditorAutosave::AfterDelay,
+    ] {
+        let mut settings = AppSettings::default();
+        settings.editor.font_family = "JetBrains Mono".to_string();
+        settings.editor.font_size = 16.0;
+        settings.editor.line_height = 1.6;
+        settings.editor.tab_size = 2;
+        settings.editor.soft_wrap = true;
+        settings.editor.line_numbers = false;
+        settings.editor.autosave = autosave;
+        settings.editor.autosave_delay_ms = 750;
+        settings.project_panel.default_open = false;
+        settings.project_panel.show_hidden = true;
+        settings.project_panel.width = 320.0;
+        settings.project_panel.project_sidebar_width = 240.0;
+
+        save_settings(&paths, &settings).unwrap();
+        let loaded = load_or_create_settings(&paths).unwrap();
+
+        assert_eq!(loaded.settings, settings);
+        assert!(loaded.warnings.is_empty());
+    }
+}
+
+#[test]
+fn invalid_editor_and_project_panel_values_are_normalized() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(
+        paths.settings_file(),
+        r#"
+[general]
+language = "zh-CN"
+
+[terminal]
+font_size = 15.0
+
+[editor]
+font_family = "  JetBrains Mono  "
+font_size = nan
+line_height = 0.5
+tab_size = 17
+autosave = "sometimes"
+autosave_delay_ms = 0
+
+[project_panel]
+width = 10000.0
+project_sidebar_width = 1.0
+"#,
+    )
+    .unwrap();
+
+    let loaded = load_or_create_settings(&paths).unwrap();
+
+    assert_eq!(loaded.settings.general.language, LanguageSetting::Chinese);
+    assert_eq!(loaded.settings.terminal.font_size, 15.0);
+    assert_eq!(loaded.settings.editor.font_family, "JetBrains Mono");
+    assert_eq!(loaded.settings.editor.font_size, 14.0);
+    assert_eq!(loaded.settings.editor.line_height, 1.4);
+    assert_eq!(loaded.settings.editor.tab_size, 4);
+    assert_eq!(loaded.settings.editor.autosave, EditorAutosave::Off);
+    assert_eq!(loaded.settings.editor.autosave_delay_ms, 1000);
+    assert_eq!(loaded.settings.project_panel.width, 520.0);
+    assert_eq!(loaded.settings.project_panel.project_sidebar_width, 160.0);
+
+    for warning in [
+        SettingsLoadWarning::InvalidEditorValue { field: "autosave" },
+        SettingsLoadWarning::InvalidEditorValue { field: "font_size" },
+        SettingsLoadWarning::InvalidEditorValue {
+            field: "line_height",
+        },
+        SettingsLoadWarning::InvalidEditorValue { field: "tab_size" },
+        SettingsLoadWarning::InvalidEditorValue {
+            field: "autosave_delay_ms",
+        },
+        SettingsLoadWarning::InvalidProjectPanelValue { field: "width" },
+        SettingsLoadWarning::InvalidProjectPanelValue {
+            field: "project_sidebar_width",
+        },
+    ] {
+        assert!(
+            loaded.warnings.contains(&warning),
+            "missing warning: {warning:?}"
+        );
+    }
 }
 
 #[test]

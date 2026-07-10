@@ -264,6 +264,9 @@ pub(super) fn format_settings_warning_line(warning: &SettingsLoadWarning) -> Str
         SettingsLoadWarning::InvalidEditorValue { field } => {
             format!("Settings editor.{field} is invalid; using default")
         }
+        SettingsLoadWarning::InvalidProjectPanelValue { field } => {
+            format!("Settings project_panel.{field} is invalid; using default")
+        }
     }
 }
 

@@ -13,6 +13,7 @@ pub struct AppSettings {
     pub notifications: NotificationSettings,
     pub terminal: TerminalSettings,
     pub editor: EditorSettings,
+    pub project_panel: ProjectPanelSettings,
 }
 
 impl Default for AppSettings {
@@ -23,6 +24,7 @@ impl Default for AppSettings {
             notifications: NotificationSettings::default(),
             terminal: TerminalSettings::default(),
             editor: EditorSettings::default(),
+            project_panel: ProjectPanelSettings::default(),
         }
     }
 }
@@ -110,9 +112,26 @@ impl Default for TerminalSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EditorAutosave {
+    #[default]
+    Off,
+    OnFocusChange,
+    AfterDelay,
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct EditorSettings {
+    pub font_family: String,
+    pub font_size: f32,
+    pub line_height: f32,
+    pub tab_size: usize,
+    pub soft_wrap: bool,
+    pub line_numbers: bool,
+    pub autosave: EditorAutosave,
+    pub autosave_delay_ms: u64,
     pub auto_detect_language: bool,
     pub default_language: String,
     pub lsp: EditorLspSettings,
@@ -121,6 +140,14 @@ pub struct EditorSettings {
 impl Default for EditorSettings {
     fn default() -> Self {
         Self {
+            font_family: String::new(),
+            font_size: 14.0,
+            line_height: 1.4,
+            tab_size: 4,
+            soft_wrap: false,
+            line_numbers: true,
+            autosave: EditorAutosave::Off,
+            autosave_delay_ms: 1000,
             auto_detect_language: true,
             default_language: "plain_text".to_string(),
             lsp: EditorLspSettings::default(),
@@ -144,6 +171,26 @@ impl Default for EditorLspSettings {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ProjectPanelSettings {
+    pub default_open: bool,
+    pub show_hidden: bool,
+    pub width: f32,
+    pub project_sidebar_width: f32,
+}
+
+impl Default for ProjectPanelSettings {
+    fn default() -> Self {
+        Self {
+            default_open: true,
+            show_hidden: false,
+            width: 280.0,
+            project_sidebar_width: 216.0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoadedSettings {
     pub settings: AppSettings,
@@ -156,6 +203,7 @@ pub enum SettingsLoadWarning {
     InvalidGeneralValue { field: &'static str },
     InvalidTerminalValue { field: &'static str },
     InvalidEditorValue { field: &'static str },
+    InvalidProjectPanelValue { field: &'static str },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -234,6 +282,7 @@ fn parse_settings_source(
     };
 
     normalize_general_settings(&mut value, warnings);
+    normalize_editor_settings(&mut value, warnings);
 
     match value.try_into::<AppSettings>() {
         Ok(settings) => settings,
@@ -264,6 +313,28 @@ fn normalize_general_settings(value: &mut toml::Value, warnings: &mut Vec<Settin
         toml::Value::String("system".to_string()),
     );
     warnings.push(SettingsLoadWarning::InvalidGeneralValue { field: "language" });
+}
+
+fn normalize_editor_settings(value: &mut toml::Value, warnings: &mut Vec<SettingsLoadWarning>) {
+    let Some(editor) = value.get_mut("editor").and_then(toml::Value::as_table_mut) else {
+        return;
+    };
+    let Some(autosave) = editor.get("autosave") else {
+        return;
+    };
+
+    if matches!(
+        autosave.as_str(),
+        Some("off" | "on_focus_change" | "after_delay")
+    ) {
+        return;
+    }
+
+    editor.insert(
+        "autosave".to_string(),
+        toml::Value::String("off".to_string()),
+    );
+    warnings.push(SettingsLoadWarning::InvalidEditorValue { field: "autosave" });
 }
 
 pub fn save_settings(
@@ -389,6 +460,28 @@ fn validate_settings(
     }
 
     let editor_defaults = EditorSettings::default();
+    settings.editor.font_family = settings.editor.font_family.trim().to_string();
+    if !settings.editor.font_size.is_finite() || !(6.0..=72.0).contains(&settings.editor.font_size)
+    {
+        settings.editor.font_size = editor_defaults.font_size;
+        warnings.push(SettingsLoadWarning::InvalidEditorValue { field: "font_size" });
+    }
+    if !settings.editor.line_height.is_finite() || settings.editor.line_height < 1.0 {
+        settings.editor.line_height = editor_defaults.line_height;
+        warnings.push(SettingsLoadWarning::InvalidEditorValue {
+            field: "line_height",
+        });
+    }
+    if !(1..=16).contains(&settings.editor.tab_size) {
+        settings.editor.tab_size = editor_defaults.tab_size;
+        warnings.push(SettingsLoadWarning::InvalidEditorValue { field: "tab_size" });
+    }
+    if settings.editor.autosave_delay_ms < 50 {
+        settings.editor.autosave_delay_ms = editor_defaults.autosave_delay_ms;
+        warnings.push(SettingsLoadWarning::InvalidEditorValue {
+            field: "autosave_delay_ms",
+        });
+    }
     if settings.editor.default_language.trim().is_empty() {
         settings.editor.default_language = editor_defaults.default_language;
         warnings.push(SettingsLoadWarning::InvalidEditorValue {
@@ -397,6 +490,29 @@ fn validate_settings(
     }
     settings.editor.default_language = settings.editor.default_language.trim().to_string();
     settings.editor.lsp.command = settings.editor.lsp.command.trim().to_string();
+
+    let project_panel_defaults = ProjectPanelSettings::default();
+    if !settings.project_panel.width.is_finite() {
+        settings.project_panel.width = project_panel_defaults.width;
+        warnings.push(SettingsLoadWarning::InvalidProjectPanelValue { field: "width" });
+    } else if !(200.0..=520.0).contains(&settings.project_panel.width) {
+        settings.project_panel.width = settings.project_panel.width.clamp(200.0, 520.0);
+        warnings.push(SettingsLoadWarning::InvalidProjectPanelValue { field: "width" });
+    }
+    if !settings.project_panel.project_sidebar_width.is_finite() {
+        settings.project_panel.project_sidebar_width = project_panel_defaults.project_sidebar_width;
+        warnings.push(SettingsLoadWarning::InvalidProjectPanelValue {
+            field: "project_sidebar_width",
+        });
+    } else if !(160.0..=420.0).contains(&settings.project_panel.project_sidebar_width) {
+        settings.project_panel.project_sidebar_width = settings
+            .project_panel
+            .project_sidebar_width
+            .clamp(160.0, 420.0);
+        warnings.push(SettingsLoadWarning::InvalidProjectPanelValue {
+            field: "project_sidebar_width",
+        });
+    }
 
     settings
 }
