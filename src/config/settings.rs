@@ -12,6 +12,7 @@ pub struct AppSettings {
     pub theme: ThemeSettings,
     pub notifications: NotificationSettings,
     pub terminal: TerminalSettings,
+    pub editor: EditorSettings,
 }
 
 impl Default for AppSettings {
@@ -21,6 +22,7 @@ impl Default for AppSettings {
             theme: ThemeSettings::default(),
             notifications: NotificationSettings::default(),
             terminal: TerminalSettings::default(),
+            editor: EditorSettings::default(),
         }
     }
 }
@@ -108,6 +110,40 @@ impl Default for TerminalSettings {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct EditorSettings {
+    pub auto_detect_language: bool,
+    pub default_language: String,
+    pub lsp: EditorLspSettings,
+}
+
+impl Default for EditorSettings {
+    fn default() -> Self {
+        Self {
+            auto_detect_language: true,
+            default_language: "plain_text".to_string(),
+            lsp: EditorLspSettings::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct EditorLspSettings {
+    pub enabled: bool,
+    pub command: String,
+}
+
+impl Default for EditorLspSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            command: String::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoadedSettings {
     pub settings: AppSettings,
@@ -119,6 +155,7 @@ pub enum SettingsLoadWarning {
     InvalidToml { path: PathBuf, message: String },
     InvalidGeneralValue { field: &'static str },
     InvalidTerminalValue { field: &'static str },
+    InvalidEditorValue { field: &'static str },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -350,6 +387,16 @@ fn validate_settings(
         settings.terminal.shell = defaults.shell;
         warnings.push(SettingsLoadWarning::InvalidTerminalValue { field: "shell" });
     }
+
+    let editor_defaults = EditorSettings::default();
+    if settings.editor.default_language.trim().is_empty() {
+        settings.editor.default_language = editor_defaults.default_language;
+        warnings.push(SettingsLoadWarning::InvalidEditorValue {
+            field: "default_language",
+        });
+    }
+    settings.editor.default_language = settings.editor.default_language.trim().to_string();
+    settings.editor.lsp.command = settings.editor.lsp.command.trim().to_string();
 
     settings
 }

@@ -39,6 +39,7 @@ pub fn settings_panel_style() -> SettingsPanelStyle {
 pub enum SettingsGroupId {
     General,
     Appearance,
+    Languages,
     Terminal,
     DefaultLayout,
     Keybindings,
@@ -48,6 +49,7 @@ impl SettingsGroupId {
     pub const ALL: &'static [Self] = &[
         Self::General,
         Self::Appearance,
+        Self::Languages,
         Self::Terminal,
         Self::DefaultLayout,
         Self::Keybindings,
@@ -57,6 +59,7 @@ impl SettingsGroupId {
         match self {
             Self::General => "general",
             Self::Appearance => "appearance",
+            Self::Languages => "languages",
             Self::Terminal => "terminal",
             Self::DefaultLayout => "default-layout",
             Self::Keybindings => "keybindings",
@@ -67,6 +70,7 @@ impl SettingsGroupId {
         match self {
             Self::General => UiTextKey::SettingsGroupGeneral,
             Self::Appearance => UiTextKey::SettingsGroupAppearance,
+            Self::Languages => UiTextKey::SettingsGroupLanguages,
             Self::Terminal => UiTextKey::SettingsGroupTerminal,
             Self::DefaultLayout => UiTextKey::SettingsGroupDefaultLayout,
             Self::Keybindings => UiTextKey::SettingsGroupKeybindings,
@@ -77,6 +81,7 @@ impl SettingsGroupId {
         match self {
             Self::General => UiTextKey::SettingsGroupGeneralDescription,
             Self::Appearance => UiTextKey::SettingsGroupAppearanceDescription,
+            Self::Languages => UiTextKey::SettingsGroupLanguagesDescription,
             Self::Terminal => UiTextKey::SettingsGroupTerminalDescription,
             Self::DefaultLayout => UiTextKey::SettingsGroupDefaultLayoutDescription,
             Self::Keybindings => UiTextKey::SettingsGroupKeybindingsDescription,
@@ -135,6 +140,28 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
             row(
                 UiTextKey::SettingsThemesDirectory,
                 UiTextKey::SettingsThemesDirectoryDescription,
+            ),
+        ],
+        SettingsGroupId::Languages => vec![
+            row(
+                UiTextKey::SettingsLanguageDetection,
+                UiTextKey::SettingsLanguageDetectionDescription,
+            ),
+            row(
+                UiTextKey::SettingsDefaultCodeLanguage,
+                UiTextKey::SettingsDefaultCodeLanguageDescription,
+            ),
+            row(
+                UiTextKey::SettingsSupportedLanguages,
+                UiTextKey::SettingsSupportedLanguagesDescription,
+            ),
+            row(
+                UiTextKey::SettingsLanguageServer,
+                UiTextKey::SettingsLanguageServerDescription,
+            ),
+            row(
+                UiTextKey::SettingsLanguageServerCommand,
+                UiTextKey::SettingsLanguageServerCommandDescription,
             ),
         ],
         SettingsGroupId::Terminal => vec![

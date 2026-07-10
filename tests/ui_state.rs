@@ -16,7 +16,7 @@ use yttt::{
     runtime::notification::{NotificationEvent, NotificationKind},
     runtime::terminal::{ExitReason, ProcessStatus},
     ui::components::SelectableState,
-    ui::editor::EditorDiagnosticSeverity,
+    ui::editor::{EditorDiagnosticSeverity, EditorLanguageId},
     ui::i18n::{Locale, UiText},
     ui::palette::visible_palette_rows,
     ui::sidebar::visible_project_items,
@@ -439,7 +439,33 @@ fn root_view_layout_default_editor_opens_without_project() {
         root.foreground_input_scope_id().as_deref(),
         Some("editor.default_layout")
     );
+    assert_eq!(
+        root.visible_layout_toml_editor_language_id(),
+        Some(EditorLanguageId::Toml)
+    );
     assert_eq!(root.visible_layout_toml_editor_error(), None);
+}
+
+#[test]
+fn root_view_persists_editor_language_settings() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = RootView::with_config_paths(paths.clone());
+
+    assert!(root.editor_auto_detect_language());
+    assert_eq!(root.editor_default_language(), "plain_text");
+    assert!(!root.editor_lsp_enabled());
+
+    root.set_editor_auto_detect_language(false).unwrap();
+    root.set_editor_default_language("toml").unwrap();
+    root.set_editor_lsp_enabled(true).unwrap();
+    root.set_editor_lsp_command("taplo lsp stdio").unwrap();
+
+    let loaded = yttt::config::settings::load_or_create_settings(&paths).unwrap();
+    assert!(!loaded.settings.editor.auto_detect_language);
+    assert_eq!(loaded.settings.editor.default_language, "toml");
+    assert!(loaded.settings.editor.lsp.enabled);
+    assert_eq!(loaded.settings.editor.lsp.command, "taplo lsp stdio");
 }
 
 #[test]
@@ -688,6 +714,7 @@ fn root_view_settings_open_command_opens_settings_page() {
         vec![
             "General",
             "Appearance",
+            "Languages",
             "Terminal",
             "Default Layout",
             "Keybindings"
@@ -803,7 +830,7 @@ fn root_view_language_setting_updates_settings_labels() {
 
     assert_eq!(
         root.visible_settings_group_titles(),
-        vec!["通用", "外观", "终端", "默认布局", "快捷键"]
+        vec!["通用", "外观", "语言", "终端", "默认布局", "快捷键"]
     );
     assert_eq!(root.selected_settings_group_title(), Some("通用"));
 

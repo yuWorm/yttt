@@ -128,6 +128,8 @@ pub enum UiTextKey {
     SettingsGroupGeneralDescription,
     SettingsGroupAppearance,
     SettingsGroupAppearanceDescription,
+    SettingsGroupLanguages,
+    SettingsGroupLanguagesDescription,
     SettingsGroupTerminal,
     SettingsGroupTerminalDescription,
     SettingsGroupProjectLayout,
@@ -151,6 +153,17 @@ pub enum UiTextKey {
     SettingsShowPath,
     SettingsThemesDirectory,
     SettingsThemesDirectoryDescription,
+    SettingsLanguageDetection,
+    SettingsLanguageDetectionDescription,
+    SettingsDefaultCodeLanguage,
+    SettingsDefaultCodeLanguageDescription,
+    SettingsSupportedLanguages,
+    SettingsSupportedLanguagesDescription,
+    SettingsLanguageServer,
+    SettingsLanguageServerDescription,
+    SettingsLanguageServerCommand,
+    SettingsLanguageServerCommandDescription,
+    SettingsSearchCodeLanguage,
     SettingsDefaultShell,
     SettingsDefaultShellDescription,
     SettingsSelectShell,
@@ -377,6 +390,10 @@ fn english(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsGroupGeneralDescription => "Application behavior and notifications",
         UiTextKey::SettingsGroupAppearance => "Appearance",
         UiTextKey::SettingsGroupAppearanceDescription => "UI and terminal themes",
+        UiTextKey::SettingsGroupLanguages => "Languages",
+        UiTextKey::SettingsGroupLanguagesDescription => {
+            "Code language detection and language server defaults"
+        }
         UiTextKey::SettingsGroupTerminal => "Terminal",
         UiTextKey::SettingsGroupTerminalDescription => "Shell, font, and terminal runtime defaults",
         UiTextKey::SettingsGroupProjectLayout => "Project Layout",
@@ -412,6 +429,27 @@ fn english(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsThemesDirectoryDescription => {
             "Open the folder containing user theme TOML files."
         }
+        UiTextKey::SettingsLanguageDetection => "Language detection",
+        UiTextKey::SettingsLanguageDetectionDescription => {
+            "Detect code editor language from filename, extension, and first line."
+        }
+        UiTextKey::SettingsDefaultCodeLanguage => "Default code language",
+        UiTextKey::SettingsDefaultCodeLanguageDescription => {
+            "Fallback language used when automatic detection is disabled or unknown."
+        }
+        UiTextKey::SettingsSupportedLanguages => "Supported languages",
+        UiTextKey::SettingsSupportedLanguagesDescription => {
+            "Built-in languages available to the code editor."
+        }
+        UiTextKey::SettingsLanguageServer => "Language server",
+        UiTextKey::SettingsLanguageServerDescription => {
+            "Reserve an LSP launch point for future diagnostics and completion."
+        }
+        UiTextKey::SettingsLanguageServerCommand => "Language server command",
+        UiTextKey::SettingsLanguageServerCommandDescription => {
+            "Command reserved for the default language server integration."
+        }
+        UiTextKey::SettingsSearchCodeLanguage => "Search language...",
         UiTextKey::SettingsDefaultShell => "Default shell",
         UiTextKey::SettingsDefaultShellDescription => {
             "Shell command used when creating new terminal tabs."
@@ -613,6 +651,8 @@ fn chinese(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsGroupGeneralDescription => "应用行为和通知",
         UiTextKey::SettingsGroupAppearance => "外观",
         UiTextKey::SettingsGroupAppearanceDescription => "界面和终端主题",
+        UiTextKey::SettingsGroupLanguages => "语言",
+        UiTextKey::SettingsGroupLanguagesDescription => "代码语言检测和语言服务器默认值",
         UiTextKey::SettingsGroupTerminal => "终端",
         UiTextKey::SettingsGroupTerminalDescription => "Shell、字体和终端运行默认值",
         UiTextKey::SettingsGroupProjectLayout => "项目布局",
@@ -636,6 +676,19 @@ fn chinese(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsShowPath => "显示路径",
         UiTextKey::SettingsThemesDirectory => "主题目录",
         UiTextKey::SettingsThemesDirectoryDescription => "打开用户主题 TOML 文件所在目录。",
+        UiTextKey::SettingsLanguageDetection => "语言检测",
+        UiTextKey::SettingsLanguageDetectionDescription => {
+            "根据文件名、扩展名和首行检测代码编辑器语言。"
+        }
+        UiTextKey::SettingsDefaultCodeLanguage => "默认代码语言",
+        UiTextKey::SettingsDefaultCodeLanguageDescription => "自动检测关闭或未知时使用的兜底语言。",
+        UiTextKey::SettingsSupportedLanguages => "支持的语言",
+        UiTextKey::SettingsSupportedLanguagesDescription => "代码编辑器内置可用语言。",
+        UiTextKey::SettingsLanguageServer => "语言服务器",
+        UiTextKey::SettingsLanguageServerDescription => "为后续诊断和补全预留 LSP 启动入口。",
+        UiTextKey::SettingsLanguageServerCommand => "语言服务器命令",
+        UiTextKey::SettingsLanguageServerCommandDescription => "为默认语言服务器集成预留的命令。",
+        UiTextKey::SettingsSearchCodeLanguage => "搜索语言...",
         UiTextKey::SettingsDefaultShell => "默认 Shell",
         UiTextKey::SettingsDefaultShellDescription => "创建新终端标签页时使用的 Shell 命令。",
         UiTextKey::SettingsSelectShell => "选择 Shell",

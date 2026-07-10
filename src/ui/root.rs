@@ -100,7 +100,8 @@ use crate::{
             workbench_status_notification, workbench_switch,
         },
         editor::{
-            CodeEditorConfig, CodeEditorState, EditorDiagnostic, EditorDiagnosticSeverity,
+            CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, EditorDiagnostic,
+            EditorDiagnosticSeverity, EditorLanguageCatalog, EditorLanguageId,
             code_editor_input_state,
         },
         font_options::{
@@ -186,6 +187,8 @@ pub struct RootView {
     settings_ui_theme_select_subscription: Option<Subscription>,
     settings_terminal_theme_select: Option<Entity<SettingsStringSelectState>>,
     settings_terminal_theme_select_subscription: Option<Subscription>,
+    settings_editor_language_select: Option<Entity<SettingsStringSelectState>>,
+    settings_editor_language_select_subscription: Option<Subscription>,
     settings_font_family_select: Option<Entity<SettingsStringSelectState>>,
     settings_font_family_select_subscription: Option<Subscription>,
     settings_number_inputs: HashMap<SettingsNumberField, Entity<InputState>>,
@@ -360,6 +363,8 @@ impl RootView {
             settings_ui_theme_select_subscription: None,
             settings_terminal_theme_select: None,
             settings_terminal_theme_select_subscription: None,
+            settings_editor_language_select: None,
+            settings_editor_language_select_subscription: None,
             settings_font_family_select: None,
             settings_font_family_select_subscription: None,
             settings_number_inputs: HashMap::new(),
@@ -712,6 +717,22 @@ impl RootView {
         self.app_settings.terminal.show_scrollbar
     }
 
+    pub fn editor_auto_detect_language(&self) -> bool {
+        self.app_settings.editor.auto_detect_language
+    }
+
+    pub fn editor_default_language(&self) -> &str {
+        &self.app_settings.editor.default_language
+    }
+
+    pub fn editor_lsp_enabled(&self) -> bool {
+        self.app_settings.editor.lsp.enabled
+    }
+
+    pub fn editor_lsp_command(&self) -> &str {
+        &self.app_settings.editor.lsp.command
+    }
+
     pub fn settings_is_open(&self) -> bool {
         self.settings_page.is_open
     }
@@ -799,6 +820,32 @@ impl RootView {
         show_scrollbar: bool,
     ) -> Result<(), RootViewError> {
         self.app_settings.terminal.show_scrollbar = show_scrollbar;
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_editor_auto_detect_language(
+        &mut self,
+        auto_detect_language: bool,
+    ) -> Result<(), RootViewError> {
+        self.app_settings.editor.auto_detect_language = auto_detect_language;
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_editor_default_language(
+        &mut self,
+        default_language: &str,
+    ) -> Result<(), RootViewError> {
+        self.app_settings.editor.default_language = default_language.trim().to_string();
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_editor_lsp_enabled(&mut self, enabled: bool) -> Result<(), RootViewError> {
+        self.app_settings.editor.lsp.enabled = enabled;
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_editor_lsp_command(&mut self, command: &str) -> Result<(), RootViewError> {
+        self.app_settings.editor.lsp.command = command.trim().to_string();
         self.save_app_settings_and_refresh_runtime()
     }
 
@@ -911,6 +958,12 @@ impl RootView {
             .map(|session| session.target().kind())
     }
 
+    pub fn visible_layout_toml_editor_language_id(&self) -> Option<EditorLanguageId> {
+        self.layout_toml_editor
+            .as_ref()
+            .map(|session| session.editor().language_id())
+    }
+
     pub fn open_layout_toml_editor(&mut self) -> Result<(), RootViewError> {
         self.open_default_layout_editor()
     }
@@ -928,10 +981,13 @@ impl RootView {
             LayoutEditorTarget::Default,
             CodeEditorState::new(
                 path,
-                CodeEditorConfig::new("Edit default layout TOML", "toml")
-                    .placeholder_text("Edit layout TOML...")
-                    .with_rows(24)
-                    .with_soft_wrap(false),
+                CodeEditorConfig::new(
+                    "Edit default layout TOML",
+                    CodeEditorLanguageMode::Explicit(EditorLanguageId::Toml),
+                )
+                .placeholder_text("Edit layout TOML...")
+                .with_rows(24)
+                .with_soft_wrap(false),
                 value,
             ),
         ));
@@ -1000,10 +1056,13 @@ impl RootView {
 
         let mut editor = CodeEditorState::new(
             path.clone(),
-            CodeEditorConfig::new("Edit project layout TOML", "toml")
-                .placeholder_text("Edit layout TOML...")
-                .with_rows(24)
-                .with_soft_wrap(false),
+            CodeEditorConfig::new(
+                "Edit project layout TOML",
+                CodeEditorLanguageMode::Explicit(EditorLanguageId::Toml),
+            )
+            .placeholder_text("Edit layout TOML...")
+            .with_rows(24)
+            .with_soft_wrap(false),
             value,
         );
         if let Some(message) = diagnostic {
@@ -1884,6 +1943,8 @@ impl RootView {
         self.settings_ui_theme_select_subscription = None;
         self.settings_terminal_theme_select = None;
         self.settings_terminal_theme_select_subscription = None;
+        self.settings_editor_language_select = None;
+        self.settings_editor_language_select_subscription = None;
         self.settings_font_family_select = None;
         self.settings_font_family_select_subscription = None;
         self.settings_number_inputs.clear();
@@ -2025,6 +2086,14 @@ impl RootView {
         load_theme_store(&self.config_paths)
             .map(|loaded| loaded.store.theme_names())
             .unwrap_or_else(|_| ThemeStore::builtin().theme_names())
+    }
+
+    fn available_editor_language_names(&self) -> Vec<String> {
+        EditorLanguageCatalog::builtin()
+            .all_languages()
+            .iter()
+            .map(|language| language.id.as_str().to_string())
+            .collect()
     }
 
     fn settings_number_value(&self, field: SettingsNumberField) -> String {
@@ -2365,6 +2434,34 @@ impl RootView {
             );
             self.settings_terminal_theme_select = Some(select.clone());
             self.settings_terminal_theme_select_subscription = Some(subscription);
+            select
+        }
+    }
+
+    fn settings_editor_language_select(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SettingsStringSelectState> {
+        let mut items = self.available_editor_language_names();
+        let selected = self.app_settings.editor.default_language.clone();
+        push_unique_string(&mut items, selected.clone());
+
+        if let Some(select) = &self.settings_editor_language_select {
+            select.clone()
+        } else {
+            let selected_index = selected_index_for_settings_option(&items, &selected);
+            let select = cx.new(|cx| {
+                SelectState::new(SearchableVec::new(items), selected_index, window, cx)
+                    .searchable(true)
+            });
+            let subscription = cx.subscribe_in(
+                &select,
+                window,
+                Self::on_settings_editor_language_select_event,
+            );
+            self.settings_editor_language_select = Some(select.clone());
+            self.settings_editor_language_select_subscription = Some(subscription);
             select
         }
     }
@@ -2924,6 +3021,22 @@ impl RootView {
         }
         self.sync_gpui_component_theme(cx);
         self.sync_terminal_pane_configs(cx);
+        cx.notify();
+    }
+
+    fn on_settings_editor_language_select_event(
+        &mut self,
+        _select: &Entity<SettingsStringSelectState>,
+        event: &SelectEvent<SearchableVec<String>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(Some(value)) = event else {
+            return;
+        };
+        if let Err(error) = self.set_editor_default_language(value) {
+            self.load_error = Some(error.to_string());
+        }
         cx.notify();
     }
 
@@ -4191,6 +4304,7 @@ fn settings_rows(
     match group {
         SettingsGroupId::General => settings_general_rows(root, style, window, cx),
         SettingsGroupId::Appearance => settings_appearance_rows(root, style, window, cx),
+        SettingsGroupId::Languages => settings_language_rows(root, style, window, cx),
         SettingsGroupId::Terminal => settings_terminal_rows(root, style, window, cx),
         SettingsGroupId::DefaultLayout => settings_default_layout_rows(root, style, cx),
         SettingsGroupId::Keybindings => settings_keybinding_rows(root, style, cx),
@@ -4317,6 +4431,86 @@ fn settings_appearance_rows(
                 }),
             )
             .into_any_element(),
+        ))
+}
+
+fn settings_language_rows(
+    root: &mut RootView,
+    style: SettingsPanelStyle,
+    window: &mut Window,
+    cx: &mut Context<RootView>,
+) -> Div {
+    let theme = root.theme_runtime.ui;
+    let text = root.ui_text;
+    let default_language_select = root.settings_editor_language_select(window, cx);
+    let supported_language_count = root.available_editor_language_names().len();
+    let lsp_command = if root.editor_lsp_command().is_empty() {
+        text.get(UiTextKey::SettingsUnbound).to_string()
+    } else {
+        root.editor_lsp_command().to_string()
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .child(setting_row(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsLanguageDetection),
+            text.get(UiTextKey::SettingsLanguageDetectionDescription),
+            settings_switch(
+                "settings-editor-auto-detect-language",
+                root.editor_auto_detect_language(),
+                theme,
+                cx.listener(|this, checked: &bool, _window, cx| {
+                    let _ = this.set_editor_auto_detect_language(*checked);
+                    cx.notify();
+                }),
+            )
+            .into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsDefaultCodeLanguage),
+            text.get(UiTextKey::SettingsDefaultCodeLanguageDescription),
+            settings_select_control(
+                default_language_select,
+                theme,
+                true,
+                text.get(UiTextKey::SettingsSearchCodeLanguage),
+            )
+            .into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSupportedLanguages),
+            text.get(UiTextKey::SettingsSupportedLanguagesDescription),
+            settings_value(supported_language_count.to_string(), theme).into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsLanguageServer),
+            text.get(UiTextKey::SettingsLanguageServerDescription),
+            settings_switch(
+                "settings-editor-lsp-enabled",
+                root.editor_lsp_enabled(),
+                theme,
+                cx.listener(|this, checked: &bool, _window, cx| {
+                    let _ = this.set_editor_lsp_enabled(*checked);
+                    cx.notify();
+                }),
+            )
+            .into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsLanguageServerCommand),
+            text.get(UiTextKey::SettingsLanguageServerCommandDescription),
+            settings_value(lsp_command, theme).into_any_element(),
         ))
 }
 
