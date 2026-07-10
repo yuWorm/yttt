@@ -32,6 +32,7 @@ use yttt::{
     },
     ui::i18n::{Locale, UiText},
     ui::palette::visible_palette_rows,
+    ui::primitives::sidebar::SidebarSide,
     ui::project_tree::{DirectorySnapshot, ProjectTreeEntry, ProjectTreeEntryKind},
     ui::sidebar::visible_project_items,
     ui::terminal_pane::{
@@ -227,6 +228,146 @@ fn root_view_toggles_sidebar_collapse_state() {
     root.toggle_sidebar();
 
     assert!(root.sidebar_is_collapsed());
+}
+
+#[test]
+fn root_view_right_sidebar_drag_updates_only_selected_project() {
+    let mut workspace = Workspace::new();
+    let first = workspace
+        .open_project(PathBuf::from("/tmp/sidebar-first"), sample_layout())
+        .unwrap();
+    let second = workspace
+        .open_project(PathBuf::from("/tmp/sidebar-second"), sample_layout())
+        .unwrap();
+    workspace.select_project(&first).unwrap();
+    let (_temp, mut root) = english_test_root_with_workspace(workspace);
+
+    assert_eq!(root.project_sidebar_width(), 216.0);
+    assert_eq!(root.selected_project_panel_width(), Some(280.0));
+    assert_eq!(
+        root.resize_sidebar_from_pointer_delta(SidebarSide::Right, -40.0),
+        Some(320.0)
+    );
+    assert_eq!(root.selected_project_panel_width(), Some(320.0));
+    assert_eq!(root.project_sidebar_width(), 216.0);
+
+    root.select_project(&second).unwrap();
+    assert_eq!(root.selected_project_panel_width(), Some(280.0));
+    root.select_project(&first).unwrap();
+    assert_eq!(root.selected_project_panel_width(), Some(320.0));
+}
+
+#[test]
+fn root_view_sidebar_drag_clamps_both_runtime_widths() {
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
+
+    assert_eq!(
+        root.resize_sidebar_from_pointer_delta(SidebarSide::Left, 10_000.0),
+        Some(420.0)
+    );
+    assert_eq!(
+        root.resize_sidebar_from_pointer_delta(SidebarSide::Left, -10_000.0),
+        Some(160.0)
+    );
+    assert_eq!(
+        root.resize_sidebar_from_pointer_delta(SidebarSide::Right, -10_000.0),
+        Some(520.0)
+    );
+    assert_eq!(
+        root.resize_sidebar_from_pointer_delta(SidebarSide::Right, 10_000.0),
+        Some(200.0)
+    );
+}
+
+#[test]
+fn root_view_sidebar_release_persists_defaults_without_rewriting_other_sessions() {
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut workspace = Workspace::new();
+    let first = workspace
+        .open_project(PathBuf::from("/tmp/sidebar-persist-first"), sample_layout())
+        .unwrap();
+    let second = workspace
+        .open_project(
+            PathBuf::from("/tmp/sidebar-persist-second"),
+            sample_layout(),
+        )
+        .unwrap();
+    workspace.select_project(&first).unwrap();
+    let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths.clone());
+
+    root.resize_sidebar_from_pointer_delta(SidebarSide::Right, -50.0);
+    let before_right_release = yttt::config::settings::load_or_create_settings(&paths).unwrap();
+    assert_eq!(before_right_release.settings.project_panel.width, 280.0);
+    root.persist_sidebar_width(SidebarSide::Right).unwrap();
+    root.resize_sidebar_from_pointer_delta(SidebarSide::Left, 34.0);
+    let before_left_release = yttt::config::settings::load_or_create_settings(&paths).unwrap();
+    assert_eq!(
+        before_left_release
+            .settings
+            .project_panel
+            .project_sidebar_width,
+        216.0
+    );
+    root.toggle_sidebar();
+    root.persist_sidebar_width(SidebarSide::Left).unwrap();
+
+    assert_eq!(root.selected_project_panel_width(), Some(330.0));
+    assert_eq!(root.project_sidebar_width(), 250.0);
+    root.run_command(CommandId::ProjectPanelToggle).unwrap();
+    assert!(!root.selected_project_panel_visible());
+    assert_eq!(root.selected_project_panel_width(), Some(330.0));
+    root.select_project(&second).unwrap();
+    assert_eq!(root.selected_project_panel_width(), Some(280.0));
+
+    let future_project = temp.path().join("future-sidebar-project");
+    fs::create_dir(&future_project).unwrap();
+    root.open_project_path(&future_project).unwrap();
+    assert_eq!(root.selected_project_panel_width(), Some(330.0));
+
+    let loaded = yttt::config::settings::load_or_create_settings(&paths).unwrap();
+    assert_eq!(loaded.settings.project_panel.width, 330.0);
+    assert_eq!(loaded.settings.project_panel.project_sidebar_width, 250.0);
+}
+
+#[gpui::test]
+fn root_view_renders_sidebar_resize_handles_only_for_visible_expanded_panels(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| RootView::dev_fixture());
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+
+    assert!(cx.debug_bounds("project-sidebar-resize-handle").is_some());
+    assert!(
+        cx.debug_bounds("project-file-panel-resize-handle")
+            .is_some()
+    );
+
+    root.update(cx, |root, cx| {
+        root.toggle_sidebar();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert!(root.read(app).sidebar_is_collapsed());
+        assert!(root.read(app).selected_project_panel_visible());
+    });
+
+    root.update(cx, |root, cx| {
+        root.run_command(CommandId::ProjectPanelToggle).unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert!(!root.read(app).selected_project_panel_visible());
+    });
 }
 
 #[test]

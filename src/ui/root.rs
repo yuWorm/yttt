@@ -128,6 +128,11 @@ use crate::{
             input::{YtttInputKind, yttt_input_style},
             panel::{YtttPanelKind, yttt_panel_style},
             select::yttt_select_style,
+            sidebar::{
+                PROJECT_FILE_PANEL_MAX_WIDTH, PROJECT_FILE_PANEL_MIN_WIDTH,
+                PROJECT_SIDEBAR_MAX_WIDTH, PROJECT_SIDEBAR_MIN_WIDTH,
+                SIDEBAR_RESIZE_HIT_AREA_WIDTH, SidebarSide, resize_sidebar_width,
+            },
         },
         project_tree::{
             DirectoryLoadRequest, DirectorySnapshot, ProjectTreeFsError, ProjectTreeLoadState,
@@ -210,6 +215,7 @@ pub struct RootView {
     layout_toml_input_needs_focus: bool,
     palette_scroll_handle: ScrollHandle,
     sidebar_collapsed: bool,
+    active_sidebar_resize_drag: Option<ActiveSidebarResizeDrag>,
     active_split_resize_drag: Option<ActiveSplitResizeDrag>,
     pending_terminal_focus_pane_id: Option<String>,
     pending_editor_focus_document_id: Option<crate::ui::editor::DocumentId>,
@@ -264,6 +270,12 @@ struct RenderTerminalTreeInput<'a> {
 #[derive(Clone, Copy, Debug)]
 struct ActiveSplitResizeDrag {
     direction: SplitDirection,
+    last_position: Point<Pixels>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ActiveSidebarResizeDrag {
+    side: SidebarSide,
     last_position: Point<Pixels>,
 }
 
@@ -403,6 +415,7 @@ impl RootView {
             layout_toml_input_needs_focus: false,
             palette_scroll_handle: ScrollHandle::new(),
             sidebar_collapsed: false,
+            active_sidebar_resize_drag: None,
             active_split_resize_drag: None,
             pending_terminal_focus_pane_id: None,
             pending_editor_focus_document_id: None,
@@ -924,6 +937,65 @@ impl RootView {
 
     pub fn toggle_sidebar(&mut self) {
         self.sidebar_collapsed = !self.sidebar_collapsed;
+    }
+
+    pub fn project_sidebar_width(&self) -> f32 {
+        self.app_settings.project_panel.project_sidebar_width
+    }
+
+    pub fn selected_project_panel_width(&self) -> Option<f32> {
+        let project_id = self.workspace.selected_project_id()?;
+        self.project_editor_runtime
+            .workspace()
+            .session(project_id)
+            .map(|session| session.project_panel_width())
+    }
+
+    pub fn resize_sidebar_from_pointer_delta(
+        &mut self,
+        side: SidebarSide,
+        pointer_delta_x: f32,
+    ) -> Option<f32> {
+        match side {
+            SidebarSide::Left => {
+                let width = resize_sidebar_width(
+                    side,
+                    self.app_settings.project_panel.project_sidebar_width,
+                    pointer_delta_x,
+                    PROJECT_SIDEBAR_MIN_WIDTH,
+                    PROJECT_SIDEBAR_MAX_WIDTH,
+                );
+                self.app_settings.project_panel.project_sidebar_width = width;
+                Some(width)
+            }
+            SidebarSide::Right => {
+                let project_id = self.workspace.selected_project_id()?.clone();
+                let session = self
+                    .project_editor_runtime
+                    .workspace_mut()
+                    .session_mut(&project_id)?;
+                let width = resize_sidebar_width(
+                    side,
+                    session.project_panel_width(),
+                    pointer_delta_x,
+                    PROJECT_FILE_PANEL_MIN_WIDTH,
+                    PROJECT_FILE_PANEL_MAX_WIDTH,
+                );
+                session.set_project_panel_width(width);
+                Some(width)
+            }
+        }
+    }
+
+    pub fn persist_sidebar_width(&mut self, side: SidebarSide) -> Result<(), RootViewError> {
+        if side == SidebarSide::Right {
+            let Some(width) = self.selected_project_panel_width() else {
+                return Ok(());
+            };
+            self.app_settings.project_panel.width = width;
+        }
+        save_settings(&self.config_paths, &self.app_settings)?;
+        Ok(())
     }
 
     pub fn theme_runtime(&self) -> &ThemeRuntime {
@@ -3532,17 +3604,17 @@ impl RootView {
         };
 
         let refresh_project_id = project_id;
+        let resize_handle = self.sidebar_resize_handle(SidebarSide::Right, cx);
         Some(
             div()
                 .debug_selector(|| "project-file-panel".to_string())
                 .flex()
                 .flex_col()
                 .flex_none()
+                .relative()
                 .h_full()
                 .w(px(panel_width))
                 .overflow_hidden()
-                .border_l_1()
-                .border_color(theme.border)
                 .bg(theme.sidebar_background)
                 .child(
                     div()
@@ -3594,7 +3666,8 @@ impl RootView {
                             )),
                         ),
                 )
-                .child(content),
+                .child(content)
+                .child(resize_handle),
         )
     }
 
@@ -3821,6 +3894,47 @@ impl RootView {
         handle.into_any_element()
     }
 
+    fn sidebar_resize_handle(&self, side: SidebarSide, cx: &mut Context<Self>) -> AnyElement {
+        let (id, offset) = match side {
+            SidebarSide::Left => ("project-sidebar-resize-handle", px(0.0)),
+            SidebarSide::Right => ("project-file-panel-resize-handle", px(0.0)),
+        };
+        let line_color = if self
+            .active_sidebar_resize_drag
+            .is_some_and(|drag| drag.side == side)
+        {
+            self.theme_runtime.ui.split_line_active
+        } else {
+            self.theme_runtime.ui.split_line
+        };
+        let handle = div()
+            .id(id)
+            .debug_selector(move || id.to_string())
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .w(px(SIDEBAR_RESIZE_HIT_AREA_WIDTH))
+            .cursor_ew_resize()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                    this.begin_sidebar_resize_drag(side, event.position);
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            )
+            .child(div().h_full().w(px(1.0)).bg(line_color));
+
+        match side {
+            SidebarSide::Left => handle.right(offset),
+            SidebarSide::Right => handle.left(offset),
+        }
+        .into_any_element()
+    }
+
     pub fn visible_split_handle_style(_direction: SplitDirection) -> SplitHandleStyle {
         let theme = WorkbenchTheme::dark();
         SplitHandleStyle {
@@ -3830,10 +3944,34 @@ impl RootView {
     }
 
     fn begin_split_resize_drag(&mut self, direction: SplitDirection, position: Point<Pixels>) {
+        self.active_sidebar_resize_drag = None;
         self.active_split_resize_drag = Some(ActiveSplitResizeDrag {
             direction,
             last_position: position,
         });
+    }
+
+    fn begin_sidebar_resize_drag(&mut self, side: SidebarSide, position: Point<Pixels>) {
+        self.active_split_resize_drag = None;
+        self.active_sidebar_resize_drag = Some(ActiveSidebarResizeDrag {
+            side,
+            last_position: position,
+        });
+    }
+
+    fn resize_from_sidebar_drag(&mut self, side: SidebarSide, position: Point<Pixels>) {
+        let Some(active_drag) = self.active_sidebar_resize_drag else {
+            self.begin_sidebar_resize_drag(side, position);
+            return;
+        };
+        if active_drag.side != side {
+            self.begin_sidebar_resize_drag(side, position);
+            return;
+        }
+
+        let delta_x = f32::from(position.x - active_drag.last_position.x);
+        self.resize_sidebar_from_pointer_delta(side, delta_x);
+        self.begin_sidebar_resize_drag(side, position);
     }
 
     fn resize_from_split_drag(&mut self, direction: SplitDirection, position: Point<Pixels>) {
@@ -3858,12 +3996,25 @@ impl RootView {
         }
     }
 
-    fn on_split_resize_mouse_move(
+    fn on_resize_mouse_move(
         &mut self,
         event: &MouseMoveEvent,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(active_drag) = self.active_sidebar_resize_drag {
+            if !event.dragging() {
+                self.active_sidebar_resize_drag = None;
+                cx.notify();
+                return;
+            }
+
+            self.resize_from_sidebar_drag(active_drag.side, event.position);
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+
         let Some(active_drag) = self.active_split_resize_drag else {
             cx.propagate();
             return;
@@ -3880,12 +4031,20 @@ impl RootView {
         cx.notify();
     }
 
-    fn on_split_resize_mouse_up(
+    fn on_resize_mouse_up(
         &mut self,
         _event: &MouseUpEvent,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(active_drag) = self.active_sidebar_resize_drag.take() {
+            if let Err(error) = self.persist_sidebar_width(active_drag.side) {
+                self.load_error = Some(error.to_string());
+            }
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         if self.active_split_resize_drag.take().is_some() {
             cx.stop_propagation();
             cx.notify();
@@ -4782,32 +4941,40 @@ impl Render for RootView {
                 .relative()
                 .bg(self.theme_runtime.ui.app_background)
                 .text_color(self.theme_runtime.ui.text)
-                .child(project_sidebar(
-                    &self.workspace,
-                    self.theme_runtime.ui,
-                    self.ui_text,
-                    focus_handle.clone(),
-                    self.app_settings.project_panel.project_sidebar_width,
-                    self.sidebar_collapsed,
-                    cx.listener(|this, _, _window, cx| {
-                        this.toggle_sidebar();
-                        cx.notify();
-                    }),
-                    |project_id| {
-                        let project_id = ProjectId::new(project_id);
-                        cx.listener(move |this, _, _window, cx| {
-                            let _ = this.select_project(&project_id);
+                .child({
+                    let sidebar = project_sidebar(
+                        &self.workspace,
+                        self.theme_runtime.ui,
+                        self.ui_text,
+                        focus_handle.clone(),
+                        self.app_settings.project_panel.project_sidebar_width,
+                        self.sidebar_collapsed,
+                        cx.listener(|this, _, _window, cx| {
+                            this.toggle_sidebar();
                             cx.notify();
-                        })
-                    },
-                    |project_id| {
-                        let project_id = ProjectId::new(project_id);
-                        cx.listener(move |this, _: &MouseDownEvent, _window, cx| {
-                            let _ = this.select_project(&project_id);
-                            cx.notify();
-                        })
-                    },
-                ))
+                        }),
+                        |project_id| {
+                            let project_id = ProjectId::new(project_id);
+                            cx.listener(move |this, _, _window, cx| {
+                                let _ = this.select_project(&project_id);
+                                cx.notify();
+                            })
+                        },
+                        |project_id| {
+                            let project_id = ProjectId::new(project_id);
+                            cx.listener(move |this, _: &MouseDownEvent, _window, cx| {
+                                let _ = this.select_project(&project_id);
+                                cx.notify();
+                            })
+                        },
+                    );
+                    let container = div().relative().flex_none().h_full().child(sidebar);
+                    if self.sidebar_collapsed {
+                        container
+                    } else {
+                        container.child(self.sidebar_resize_handle(SidebarSide::Left, cx))
+                    }
+                })
                 .child(
                     div()
                         .flex()
@@ -4957,11 +5124,8 @@ impl Render for RootView {
         root.track_focus(&focus_handle)
             .key_context(WORKSPACE_CONTEXT)
             .on_key_down(cx.listener(Self::on_key_down))
-            .on_mouse_move(cx.listener(Self::on_split_resize_mouse_move))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(Self::on_split_resize_mouse_up),
-            )
+            .on_mouse_move(cx.listener(Self::on_resize_mouse_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_resize_mouse_up))
             .on_action(cx.listener(Self::on_open_project))
             .on_action(cx.listener(Self::on_open_command_palette))
             .on_action(cx.listener(Self::on_open_project_palette))

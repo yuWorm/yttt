@@ -142,8 +142,9 @@ where
         .h_full()
         .w(width)
         .bg(style.background)
-        .border_r_1()
-        .border_color(theme.border)
+        .when(collapsed, |this| {
+            this.border_r_1().border_color(theme.border)
+        })
         .px_2()
         .py_3()
         .child(project_sidebar_header(collapsed, theme, on_toggle_sidebar));
