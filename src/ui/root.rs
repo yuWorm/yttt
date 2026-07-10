@@ -157,7 +157,7 @@ use crate::{
         sidebar::project_sidebar,
         split_view::{pointer_resize_for_drag_delta, split_child_basis},
         tabs::{
-            FileTabSnapshot, WorkbenchTabItem, project_tabs, visible_tab_items,
+            FileTabSnapshot, ProjectTabsToolbar, WorkbenchTabItem, project_tabs, visible_tab_items,
             visible_work_item_tabs as merge_work_item_tabs,
         },
         terminal_pane::{
@@ -6424,12 +6424,6 @@ impl Render for RootView {
                         .child(project_tabs(
                             tab_items,
                             self.theme_runtime.ui,
-                            project_panel_visible,
-                            self.ui_text.get(if project_panel_visible {
-                                UiTextKey::ProjectFilesHide
-                            } else {
-                                UiTextKey::ProjectFilesShow
-                            }),
                             |work_item| {
                                 cx.listener(move |this, event: &ClickEvent, _window, cx| {
                                     let _ = this.handle_work_item_tab_click(
@@ -6446,22 +6440,30 @@ impl Render for RootView {
                                     cx.notify();
                                 })
                             },
-                            cx.listener(|this, _, _window, cx| {
-                                let _ = this.run_command(CommandId::TabNew);
-                                cx.notify();
-                            }),
-                            cx.listener(|this, _, _window, cx| {
-                                let _ = this.run_command(CommandId::PaneSplitVertical);
-                                cx.notify();
-                            }),
-                            cx.listener(|this, _, _window, cx| {
-                                let _ = this.run_command(CommandId::PaneSplitHorizontal);
-                                cx.notify();
-                            }),
-                            cx.listener(|this, _, _window, cx| {
-                                let _ = this.run_command(CommandId::ProjectPanelToggle);
-                                cx.notify();
-                            }),
+                            ProjectTabsToolbar::new(
+                                project_panel_visible,
+                                self.ui_text.get(if project_panel_visible {
+                                    UiTextKey::ProjectFilesHide
+                                } else {
+                                    UiTextKey::ProjectFilesShow
+                                }),
+                                cx.listener(|this, _, _window, cx| {
+                                    let _ = this.run_command(CommandId::TabNew);
+                                    cx.notify();
+                                }),
+                                cx.listener(|this, _, _window, cx| {
+                                    let _ = this.run_command(CommandId::PaneSplitVertical);
+                                    cx.notify();
+                                }),
+                                cx.listener(|this, _, _window, cx| {
+                                    let _ = this.run_command(CommandId::PaneSplitHorizontal);
+                                    cx.notify();
+                                }),
+                                cx.listener(|this, _, _window, cx| {
+                                    let _ = this.run_command(CommandId::ProjectPanelToggle);
+                                    cx.notify();
+                                }),
+                            ),
                         ))
                         .child(split_view),
                 );

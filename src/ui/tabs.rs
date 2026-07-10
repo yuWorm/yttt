@@ -228,17 +228,41 @@ pub fn project_tree_toggle_tooltip(open: bool) -> &'static str {
     if open { "Hide Files" } else { "Show Files" }
 }
 
+pub struct ProjectTabsToolbar<NewH, SplitVH, SplitHH, ToggleTreeH> {
+    pub project_tree_open: bool,
+    pub project_tree_tooltip: SharedString,
+    pub on_new_tab: NewH,
+    pub on_split_vertical: SplitVH,
+    pub on_split_horizontal: SplitHH,
+    pub on_toggle_project_tree: ToggleTreeH,
+}
+
+impl<NewH, SplitVH, SplitHH, ToggleTreeH> ProjectTabsToolbar<NewH, SplitVH, SplitHH, ToggleTreeH> {
+    pub fn new(
+        project_tree_open: bool,
+        project_tree_tooltip: impl Into<SharedString>,
+        on_new_tab: NewH,
+        on_split_vertical: SplitVH,
+        on_split_horizontal: SplitHH,
+        on_toggle_project_tree: ToggleTreeH,
+    ) -> Self {
+        Self {
+            project_tree_open,
+            project_tree_tooltip: project_tree_tooltip.into(),
+            on_new_tab,
+            on_split_vertical,
+            on_split_horizontal,
+            on_toggle_project_tree,
+        }
+    }
+}
+
 pub fn project_tabs<SelectH, SelectF, CloseH, CloseF, NewH, SplitVH, SplitHH, ToggleTreeH>(
     items: Vec<WorkbenchTabItem>,
     theme: WorkbenchTheme,
-    project_tree_open: bool,
-    project_tree_tooltip: impl Into<SharedString>,
     mut on_select_tab: SelectF,
     mut on_close_tab: CloseF,
-    on_new_tab: NewH,
-    on_split_vertical: SplitVH,
-    on_split_horizontal: SplitHH,
-    on_toggle_project_tree: ToggleTreeH,
+    toolbar: ProjectTabsToolbar<NewH, SplitVH, SplitHH, ToggleTreeH>,
 ) -> impl IntoElement
 where
     SelectH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -251,6 +275,14 @@ where
     ToggleTreeH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
     let style = project_tabs_style(theme);
+    let ProjectTabsToolbar {
+        project_tree_open,
+        project_tree_tooltip,
+        on_new_tab,
+        on_split_vertical,
+        on_split_horizontal,
+        on_toggle_project_tree,
+    } = toolbar;
 
     let mut tab_row = div()
         .id("project-tab-row")
@@ -285,7 +317,7 @@ where
             on_split_vertical,
             on_split_horizontal,
             project_tree_open,
-            project_tree_tooltip.into(),
+            project_tree_tooltip,
             on_toggle_project_tree,
         ))
         .into_any_element()

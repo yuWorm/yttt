@@ -35,8 +35,8 @@ use yttt::ui::settings::{SettingsGroupId, settings_panel_style, settings_rows_fo
 use yttt::ui::sidebar::{project_layout_context_commands, project_sidebar_style};
 use yttt::ui::tabs::{
     ProjectTabCloseButtonVisibility, ProjectTabLeadingIcon, ProjectTabStatusIndicator,
-    ProjectTabToolbarPlacement, project_tabs, project_tabs_style, project_tree_toggle_icon,
-    project_tree_toggle_tooltip, tab_toolbar_icon,
+    ProjectTabToolbarPlacement, ProjectTabsToolbar, project_tabs, project_tabs_style,
+    project_tree_toggle_icon, project_tree_toggle_tooltip, tab_toolbar_icon,
 };
 use yttt::ui::terminal_pane::TerminalPaneView;
 use yttt::ui::theme::WorkbenchTheme;
@@ -196,6 +196,8 @@ fn tab_project_tree_toggle_reflects_panel_state() {
 
 struct EmptyProjectTabs;
 
+fn noop_tab_toolbar_click(_: &gpui::ClickEvent, _: &mut gpui::Window, _: &mut gpui::App) {}
+
 impl gpui::Render for EmptyProjectTabs {
     fn render(
         &mut self,
@@ -205,14 +207,16 @@ impl gpui::Render for EmptyProjectTabs {
         project_tabs(
             Vec::new(),
             WorkbenchTheme::dark(),
-            false,
-            project_tree_toggle_tooltip(false),
             |_| |_, _, _| {},
             |_| |_, _, _| {},
-            |_, _, _| {},
-            |_, _, _| {},
-            |_, _, _| {},
-            |_, _, _| {},
+            ProjectTabsToolbar::new(
+                false,
+                project_tree_toggle_tooltip(false),
+                noop_tab_toolbar_click,
+                noop_tab_toolbar_click,
+                noop_tab_toolbar_click,
+                noop_tab_toolbar_click,
+            ),
         )
     }
 }
