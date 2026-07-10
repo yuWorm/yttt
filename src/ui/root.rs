@@ -827,14 +827,9 @@ impl RootView {
         relative_path: &Path,
     ) -> Option<ProjectFileLoadRequest> {
         let project_root = self.workspace.project(project_id)?.path.clone();
-        if self
-            .project_editor_runtime
+        self.project_editor_runtime
             .workspace()
-            .session(project_id)
-            .is_none()
-        {
-            return None;
-        }
+            .session(project_id)?;
         let document_id = crate::ui::editor::DocumentId {
             project_id: project_id.clone(),
             canonical_path: project_root.join(relative_path),
@@ -1038,13 +1033,8 @@ impl RootView {
             let dirty_documents = self
                 .project_editor_runtime
                 .documents_for_project(&project_id)
-                .filter_map(|(document_id, document)| {
-                    document
-                        .read(cx)
-                        .model()
-                        .is_dirty()
-                        .then(|| document_id.clone())
-                })
+                .filter(|(_, document)| document.read(cx).model().is_dirty())
+                .map(|(document_id, _)| document_id.clone())
                 .collect::<Vec<_>>();
             let running_pane_count = self.project_running_pane_count(&project_id);
             if !dirty_documents.is_empty() || running_pane_count > 0 {
@@ -1094,13 +1084,8 @@ impl RootView {
             .flat_map(|project_id| {
                 self.project_editor_runtime
                     .documents_for_project(project_id)
-                    .filter_map(|(document_id, document)| {
-                        document
-                            .read(cx)
-                            .model()
-                            .is_dirty()
-                            .then(|| document_id.clone())
-                    })
+                    .filter(|(_, document)| document.read(cx).model().is_dirty())
+                    .map(|(document_id, _)| document_id.clone())
             })
             .collect::<Vec<_>>();
         let running_pane_count = project_ids
@@ -3175,14 +3160,13 @@ impl RootView {
                 Ok(())
             }
             CommandId::ProjectPanelToggle => {
-                if let Some(project_id) = self.workspace.selected_project_id().cloned() {
-                    if let Some(session) = self
+                if let Some(project_id) = self.workspace.selected_project_id().cloned()
+                    && let Some(session) = self
                         .project_editor_runtime
                         .workspace_mut()
                         .session_mut(&project_id)
-                    {
-                        session.toggle_project_panel();
-                    }
+                {
+                    session.toggle_project_panel();
                 }
                 Ok(())
             }
@@ -4850,13 +4834,12 @@ impl RootView {
         let document = self.project_editor_runtime.document(&document_id).cloned();
         if self.pending_editor_focus_document_id.as_ref() == Some(&document_id)
             && self.foreground_input_owner_kind() == InputOwnerKind::Editor
+            && let Some(document) = &document
         {
-            if let Some(document) = &document {
-                document.update(cx, |document, document_cx| {
-                    document.focus(window, document_cx);
-                });
-                self.pending_editor_focus_document_id = None;
-            }
+            document.update(cx, |document, document_cx| {
+                document.focus(window, document_cx);
+            });
+            self.pending_editor_focus_document_id = None;
         }
 
         div()
