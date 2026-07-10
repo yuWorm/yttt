@@ -4836,8 +4836,11 @@ impl RootView {
             && self.foreground_input_owner_kind() == InputOwnerKind::Editor
             && let Some(document) = &document
         {
-            document.update(cx, |document, document_cx| {
-                document.focus(window, document_cx);
+            let document = document.clone();
+            window.defer(cx, move |window, cx| {
+                document.update(cx, |document, document_cx| {
+                    document.focus(window, document_cx);
+                });
             });
             self.pending_editor_focus_document_id = None;
         }

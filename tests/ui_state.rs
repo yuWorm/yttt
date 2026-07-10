@@ -1510,6 +1510,37 @@ fn root_view_autosave_off_does_not_save_on_focus_change(cx: &mut gpui::TestAppCo
 }
 
 #[gpui::test]
+fn focusing_a_real_editor_document_does_not_reenter_root_render(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (_temp, _project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
+    let document_id = cx.read(|app| document.read(app).model().document_id().clone());
+    let other_input = cx.update(|window, app| {
+        app.new(|input_cx| gpui_component::input::InputState::new(window, input_cx))
+    });
+    other_input.update_in(cx, |input, window, input_cx| {
+        input.focus(window, input_cx);
+    });
+    cx.run_until_parked();
+
+    root.update(cx, |root, cx| {
+        root.select_work_item(WorkItemId::File(document_id.clone()))
+            .unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+
+    cx.read(|app| {
+        let root = root.read(app);
+        assert_eq!(
+            root.active_work_item(),
+            Some(WorkItemId::File(document_id.clone()))
+        );
+        assert!(root.pending_editor_focus_document_id().is_none());
+    });
+}
+
+#[gpui::test]
 fn editor_display_settings_update_open_documents_without_replacing_state(
     cx: &mut gpui::TestAppContext,
 ) {
