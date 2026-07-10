@@ -6,13 +6,116 @@ The workspace hierarchy is:
 
 ```text
 Project
-  -> Tabs
-    -> Split Tree
-      -> Terminal Pane
+  -> Work Item Tabs
+    -> Terminal Tab
+      -> Split Tree
+        -> Terminal Pane
+    -> File Tab
 ```
 
 The sidebar shows only currently opened projects. Recent projects are reachable from the
 project palette, not shown by default.
+
+## Project Files and Editor
+
+Terminal tabs and project files share one tab strip. Opening a file creates a file tab;
+opening the same canonical path again selects the existing tab. Switching projects does not
+close tabs: each project restores its own active work item, open file tabs, file-tree
+expansion, panel visibility, and panel width.
+
+The folder button is fixed after the scrollable tab area. It remains visible even when tabs
+overflow, toggles the right project tree, and is visibly active only while that tree is open.
+The left project sidebar is resized from its right edge; the right file tree is resized from
+its left edge. Widths are persisted when a drag ends. The left sidebar keeps its expanded
+width while collapsed, and hiding the right tree does not overwrite its saved width.
+
+Directories load lazily. Refresh invalidates stale scans and reloads the root plus all
+expanded directories. Git status decorates paths when available. Hidden entries are governed
+by `project_panel.show_hidden`.
+
+### Saving and external changes
+
+`file.save` saves the active file. Autosave modes are:
+
+- `off`: only explicit saves write the file.
+- `on_focus_change`: save when the file loses focus, the work item changes, or the project
+  changes.
+- `after_delay`: save after `editor.autosave_delay_ms` without a newer edit.
+
+Writes use a temporary file plus rename and verify the last known disk fingerprint first.
+If a file changed on disk, choose Reload, Overwrite, or Cancel. If it was deleted, choose
+Recreate or Cancel. A clean file changed externally reloads automatically; a dirty file is
+never silently replaced.
+
+Closing a dirty file offers Save, Discard, and Cancel. Project and app close combine all
+dirty files with running terminal processes into one decision: Save All and Continue,
+Discard and Continue, or Cancel. A save failure leaves the file, project, or window open.
+
+### File editing limits
+
+- Only regular UTF-8 text files are opened.
+- The maximum file size is 10 MiB.
+- Canonical paths must remain inside the project root.
+- Symlinked directories are shown but not traversed.
+- There is no continuous filesystem watcher; focus, project-tree refresh, and save boundaries
+  perform external-change checks.
+- The tree does not create, rename, move, duplicate, or delete filesystem entries.
+
+## Settings TOML
+
+The settings file is `<app config>/settings.toml`. These are the complete defaults:
+
+```toml
+[general]
+language = "system"
+
+[theme]
+name = "yttt-dark"
+# terminal = "another-theme" # optional; omitted to follow the UI theme
+
+[notifications]
+system = false
+
+[terminal]
+shell = "auto"
+font_family = ""
+font_size = 13.0
+line_height = 1.15
+padding = 6.0
+scrollback = 10000
+close_on_exit = true
+show_scrollbar = true
+
+[editor]
+font_family = ""
+font_size = 14.0
+line_height = 1.4
+tab_size = 4
+soft_wrap = false
+line_numbers = true
+autosave = "off"
+autosave_delay_ms = 1000
+auto_detect_language = true
+default_language = "plain_text"
+
+[editor.lsp]
+enabled = false
+command = ""
+
+[project_panel]
+default_open = true
+show_hidden = false
+width = 280.0
+project_sidebar_width = 216.0
+```
+
+Editor font family, font size, line height, soft wrap, and line numbers update all open files
+without replacing their text or saved baseline. `tab_size` applies to files opened after the
+change; reopen an existing file to apply it. Changing autosave to `off` cancels pending delayed
+saves. `default_open` affects new project sessions. Editing `width` updates the selected
+project and the default for future projects, while other open projects retain their own
+widths. Valid width ranges are 200–520 px for the right tree and 160–420 px for the left
+sidebar.
 
 ## Layout TOML
 
@@ -164,9 +267,12 @@ Important default commands:
 ```text
 command_palette.open
 project.palette
+project_panel.toggle
+project_panel.refresh
 tab.palette
 pane.palette
 tab.new
+file.save
 pane.split_vertical
 pane.split_horizontal
 pane.focus_left
@@ -228,14 +334,25 @@ Run these before marking a product phase complete:
 - Terminal panes resize with the split area.
 - Command, project, tab, and pane palettes can be opened from keyboard.
 - Sidebar project rows are clickable.
-- Tab rows are clickable.
+- Left and right sidebars drag in the correct direction and restore their saved widths.
+- The folder button remains fixed after the tab scroll area and reflects tree visibility.
+- Terminal and file tab rows are clickable; reopening a file deduplicates its tab.
+- Project switching preserves each project's file tabs and file-tree state.
+- Hidden-file changes and refresh reload expanded directories.
+- Editor font, size, line height, soft wrap, and line numbers update open files without losing
+  text; tab size applies after reopening.
+- Manual save and both autosave modes write files.
+- External modification and deletion show the appropriate conflict choices.
+- Dirty file, dirty project with running terminals, and window close all protect unsaved data.
 - Pane focus can be changed from keyboard and pointer.
 - Invalid layout TOML produces a visible error.
 - Closing a project with running panes asks for confirmation.
 
 ## Known Limits
 
-- No file explorer or editor.
+- The project tree and text editor are not a general-purpose file manager or full IDE.
+- File editing is limited to regular UTF-8 files up to 10 MiB, without a continuous watcher or
+  create/rename/move/delete operations.
 - No client/server terminal runtime.
 - No live process restore after restart.
 - No output parser for agent internal state.

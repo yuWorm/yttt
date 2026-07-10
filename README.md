@@ -3,16 +3,32 @@
 `yttt` is a Rust desktop terminal workbench built with GPUI, `gpui-component`, and a
 project-owned `yttt-terminal` crate based on `alacritty_terminal`.
 
-The product direction is project-first and terminal-first:
+The product direction is project-first and terminal-first, with lightweight project-file
+editing built into the same workbench:
 
 - Open a local project directory.
-- Work in terminal tabs.
+- Work in unified terminal and file tabs.
+- Browse project files from a lazy tree on the right.
+- Edit and save UTF-8 text files without leaving the terminal workflow.
 - Split panes inside a tab.
 - Save personal layouts locally.
 - Export shareable project layouts explicitly.
 - Track process-level agent CLI exits for tools such as Codex and Claude Code.
 
-It is not a file explorer, not an editor, and not a client/server tmux clone.
+It is not a client/server tmux clone or a full file manager. The editor is intentionally
+focused on project text files and keeps terminal work as the primary workflow.
+
+## Project Files and Editor
+
+Each project keeps its own terminal/file tabs, active work item, file-tree expansion state,
+tree visibility, and tree width. Switching projects preserves those sessions. The folder
+button fixed at the end of the tab bar toggles the right project tree and shows an active
+state while the tree is open.
+
+The left project sidebar and right file tree can both be resized by dragging their inner
+edges. Manual save, focus-change autosave, delayed autosave, external-change conflicts, and
+dirty file/project/window close protection are supported. See [Usage](docs/usage.md) for
+commands, settings, and detailed behavior.
 
 ## Run
 
@@ -81,4 +97,9 @@ legacy files are rejected with a visible warning.
 - Agent state is process-level only; output parsing is intentionally not implemented.
 - System notification click routing is not wired to the OS yet.
 - Sessions and running processes are not restored after app restart.
+- Project editing accepts UTF-8 text files up to 10 MiB; binary and invalid UTF-8 files are
+  rejected.
+- There is no continuous filesystem watcher. External changes are checked on focus, refresh,
+  and save boundaries.
+- The project tree does not create, rename, move, or delete files and directories.
 - Packaging and release automation are not implemented.
