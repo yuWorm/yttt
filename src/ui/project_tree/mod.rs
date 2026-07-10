@@ -1,5 +1,6 @@
 mod fs;
 mod state;
+mod view;
 
 pub use fs::{
     DirectorySnapshot, ProjectTreeEntry, ProjectTreeEntryKind, ProjectTreeFsError,
@@ -7,4 +8,7 @@ pub use fs::{
 };
 pub use state::{
     DirectoryLoadRequest, ProjectFileTree, ProjectTreeLoadState, ProjectTreeVisibleRow,
+};
+pub use view::{
+    ProjectTreeRenderRow, ProjectTreeRenderSnapshot, ProjectTreeView, ProjectTreeViewEvent,
 };

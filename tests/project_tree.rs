@@ -1,9 +1,14 @@
-use std::{ffi::OsString, fs, path::Path};
+use std::{cell::RefCell, ffi::OsString, fs, path::Path, rc::Rc};
 
+use gpui::AppContext as _;
 use tempfile::tempdir;
-use yttt::ui::project_tree::{
-    DirectorySnapshot, ProjectFileTree, ProjectTreeEntry, ProjectTreeEntryKind, ProjectTreeFsError,
-    ProjectTreeLoadState, scan_project_directory,
+use yttt::{
+    runtime::git_status::{GitFileStatus, parse_git_status_porcelain},
+    ui::project_tree::{
+        DirectorySnapshot, ProjectFileTree, ProjectTreeEntry, ProjectTreeEntryKind,
+        ProjectTreeFsError, ProjectTreeLoadState, ProjectTreeRenderSnapshot, ProjectTreeView,
+        ProjectTreeViewEvent, scan_project_directory,
+    },
 };
 
 #[test]
@@ -224,6 +229,151 @@ fn visible_rows_mark_the_selected_path() {
 
     assert_eq!(rows.len(), 1);
     assert!(rows[0].selected);
+}
+
+#[test]
+fn component_items_keep_empty_directories_expandable() {
+    let mut tree = ProjectFileTree::new("/project");
+    let root_request = tree.request_expand(Path::new("")).unwrap();
+    tree.apply_snapshot(
+        root_request.generation,
+        snapshot("", [entry("empty", ProjectTreeEntryKind::Directory)]),
+    );
+
+    let unloaded = ProjectTreeRenderSnapshot::from_tree(&tree, None);
+    let unloaded_items = unloaded.tree_items();
+    let unloaded_item = &unloaded_items[0];
+    assert!(unloaded_item.is_folder());
+    assert_eq!(unloaded_item.children.len(), 1);
+    assert!(unloaded_item.children[0].is_disabled());
+
+    let empty_request = tree.request_expand(Path::new("empty")).unwrap();
+    tree.apply_snapshot(empty_request.generation, snapshot("empty", []));
+    let loaded_empty = ProjectTreeRenderSnapshot::from_tree(&tree, None);
+    let loaded_items = loaded_empty.tree_items();
+    let loaded_item = &loaded_items[0];
+    assert!(loaded_item.is_folder());
+    assert!(loaded_item.is_expanded());
+    assert_eq!(loaded_item.children.len(), 1);
+    assert!(loaded_item.children[0].is_disabled());
+}
+
+#[test]
+fn component_path_ids_and_selection_survive_refresh() {
+    let mut tree = ProjectFileTree::new("/project");
+    let root_request = tree.request_expand(Path::new("")).unwrap();
+    tree.apply_snapshot(
+        root_request.generation,
+        snapshot(
+            "",
+            [
+                entry("src", ProjectTreeEntryKind::Directory),
+                entry("README.md", ProjectTreeEntryKind::File),
+            ],
+        ),
+    );
+    tree.select(Some(Path::new("README.md").to_path_buf()));
+    let before = ProjectTreeRenderSnapshot::from_tree(&tree, None);
+    let before_id = before
+        .row_for_path(Path::new("README.md"))
+        .unwrap()
+        .id
+        .clone();
+    assert_eq!(before.selected_index(), Some(1));
+
+    let refresh = tree.refresh();
+    tree.apply_snapshot(
+        refresh.generation,
+        snapshot(
+            "",
+            [
+                entry("src", ProjectTreeEntryKind::Directory),
+                entry("README.md", ProjectTreeEntryKind::File),
+            ],
+        ),
+    );
+    let after = ProjectTreeRenderSnapshot::from_tree(&tree, None);
+
+    assert_eq!(
+        after.row_for_path(Path::new("README.md")).unwrap().id,
+        before_id
+    );
+    assert_eq!(after.selected_index(), Some(1));
+}
+
+#[test]
+fn component_rows_include_git_status_tones() {
+    let mut tree = ProjectFileTree::new("/project");
+    let request = tree.request_expand(Path::new("")).unwrap();
+    tree.apply_snapshot(
+        request.generation,
+        snapshot("", [entry("src/main.rs", ProjectTreeEntryKind::File)]),
+    );
+    let git = parse_git_status_porcelain("## main\n M src/main.rs\n");
+
+    let render = ProjectTreeRenderSnapshot::from_tree(&tree, Some(&git));
+
+    assert_eq!(
+        render
+            .row_for_path(Path::new("src/main.rs"))
+            .unwrap()
+            .git_status,
+        Some(GitFileStatus::Modified)
+    );
+}
+
+#[gpui::test]
+fn project_tree_view_emits_file_and_directory_events(cx: &mut gpui::TestAppContext) {
+    let mut tree = ProjectFileTree::new("/project");
+    let request = tree.request_expand(Path::new("")).unwrap();
+    tree.apply_snapshot(
+        request.generation,
+        snapshot(
+            "",
+            [
+                entry("src", ProjectTreeEntryKind::Directory),
+                entry("README.md", ProjectTreeEntryKind::File),
+            ],
+        ),
+    );
+    tree.select(Some(Path::new("README.md").to_path_buf()));
+    let render = ProjectTreeRenderSnapshot::from_tree(&tree, None);
+    let view = cx.new(|cx| ProjectTreeView::new(render, cx));
+    cx.read(|app| {
+        let tree_state = view.read(app).tree_state().clone();
+        assert_eq!(tree_state.read(app).selected_index(), Some(1));
+    });
+    tree.select(Some(Path::new("src").to_path_buf()));
+    let synced = ProjectTreeRenderSnapshot::from_tree(&tree, None);
+    view.update(cx, |view, entity_cx| view.sync(synced, entity_cx));
+    cx.read(|app| {
+        let tree_state = view.read(app).tree_state().clone();
+        assert_eq!(tree_state.read(app).selected_index(), Some(0));
+    });
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let subscription = view.update(cx, |_, entity_cx| {
+        let events = events.clone();
+        entity_cx.subscribe(&view, move |_, _, event, _| {
+            events.borrow_mut().push(event.clone());
+        })
+    });
+
+    view.update(cx, |view, entity_cx| {
+        assert!(view.activate_path(Path::new("README.md"), entity_cx));
+        assert!(view.activate_path(Path::new("src"), entity_cx));
+    });
+
+    assert_eq!(
+        events.borrow().as_slice(),
+        [
+            ProjectTreeViewEvent::OpenFile(Path::new("README.md").to_path_buf()),
+            ProjectTreeViewEvent::ToggleDirectory {
+                path: Path::new("src").to_path_buf(),
+                expanded: true,
+            },
+        ]
+    );
+    drop(subscription);
 }
 
 fn entry(path: &str, kind: ProjectTreeEntryKind) -> ProjectTreeEntry {
