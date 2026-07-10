@@ -34,7 +34,8 @@ use yttt::ui::settings::{SettingsGroupId, settings_panel_style, settings_rows_fo
 use yttt::ui::sidebar::{project_layout_context_commands, project_sidebar_style};
 use yttt::ui::tabs::{
     ProjectTabCloseButtonVisibility, ProjectTabLeadingIcon, ProjectTabStatusIndicator,
-    project_tabs_style, tab_toolbar_icon,
+    ProjectTabToolbarPlacement, project_tabs, project_tabs_style, project_tree_toggle_icon,
+    project_tree_toggle_tooltip, tab_toolbar_icon,
 };
 use yttt::ui::terminal_pane::TerminalPaneView;
 use yttt::ui::theme::WorkbenchTheme;
@@ -168,9 +169,58 @@ fn sidebar_and_tabs_use_compact_zed_like_density() {
         tabs.close_button_visibility,
         ProjectTabCloseButtonVisibility::Hover
     );
-    assert_eq!(tabs.leading_icon, ProjectTabLeadingIcon::Terminal);
+    assert_eq!(tabs.leading_icon, ProjectTabLeadingIcon::PerItem);
     assert_eq!(tabs.status_indicator, ProjectTabStatusIndicator::Dot);
+    assert!(tabs.dirty_marker_uses_close_slot);
+    assert_eq!(
+        tabs.toolbar_placement,
+        ProjectTabToolbarPlacement::FixedAfterScrollableTabs
+    );
     assert_ne!(tabs.active_background, tabs.inactive_background);
+}
+
+#[test]
+fn tab_project_tree_toggle_reflects_panel_state() {
+    assert_eq!(
+        discriminant(&project_tree_toggle_icon(false)),
+        discriminant(&gpui_component::IconName::FolderClosed)
+    );
+    assert_eq!(
+        discriminant(&project_tree_toggle_icon(true)),
+        discriminant(&gpui_component::IconName::FolderOpen)
+    );
+    assert_eq!(project_tree_toggle_tooltip(false), "Show Files");
+    assert_eq!(project_tree_toggle_tooltip(true), "Hide Files");
+}
+
+struct EmptyProjectTabs;
+
+impl gpui::Render for EmptyProjectTabs {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        project_tabs(
+            Vec::new(),
+            WorkbenchTheme::dark(),
+            false,
+            |_| |_, _, _| {},
+            |_| |_, _, _| {},
+            |_, _, _| {},
+            |_, _, _| {},
+            |_, _, _| {},
+            |_, _, _| {},
+        )
+    }
+}
+
+#[gpui::test]
+fn empty_tabs_keep_project_tree_toggle_visible(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (_view, cx) = cx.add_window_view(|_, _| EmptyProjectTabs);
+
+    assert!(cx.debug_bounds("project-tree-toggle").is_some());
 }
 
 #[test]

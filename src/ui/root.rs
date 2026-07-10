@@ -101,7 +101,7 @@ use crate::{
         },
         editor::{
             CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, EditorDiagnostic,
-            EditorDiagnosticSeverity, EditorLanguageCatalog, EditorLanguageId,
+            EditorDiagnosticSeverity, EditorLanguageCatalog, EditorLanguageId, WorkItemId,
             code_editor_input_state,
         },
         font_options::{
@@ -133,7 +133,7 @@ use crate::{
         settings::{SettingsGroupId, SettingsPageState, SettingsPanelStyle, settings_panel_style},
         sidebar::project_sidebar,
         split_view::{pointer_resize_for_drag_delta, split_child_basis},
-        tabs::project_tabs,
+        tabs::{project_tabs, visible_terminal_work_item_tabs},
         terminal_pane::{
             TerminalPaneContext, TerminalPaneEvent, TerminalPaneExitedEvent, TerminalPaneView,
         },
@@ -3765,19 +3765,32 @@ impl Render for RootView {
                         .flex_col()
                         .flex_1()
                         .child(project_tabs(
-                            &self.workspace,
+                            visible_terminal_work_item_tabs(&self.workspace),
                             self.theme_runtime.ui,
-                            |tab_id| {
+                            false,
+                            |work_item| {
+                                let tab_id = match work_item {
+                                    WorkItemId::Terminal(tab_id) => Some(tab_id),
+                                    WorkItemId::File(_) => None,
+                                };
                                 cx.listener(move |this, event: &ClickEvent, _window, cx| {
-                                    let _ =
-                                        this.handle_project_tab_click(&tab_id, event.click_count());
+                                    if let Some(tab_id) = &tab_id {
+                                        let _ = this
+                                            .handle_project_tab_click(tab_id, event.click_count());
+                                    }
                                     cx.notify();
                                 })
                             },
-                            |tab_id| {
+                            |work_item| {
+                                let tab_id = match work_item {
+                                    WorkItemId::Terminal(tab_id) => Some(tab_id),
+                                    WorkItemId::File(_) => None,
+                                };
                                 cx.listener(move |this, _event: &ClickEvent, _window, cx| {
                                     cx.stop_propagation();
-                                    let _ = this.close_project_tab(&tab_id);
+                                    if let Some(tab_id) = &tab_id {
+                                        let _ = this.close_project_tab(tab_id);
+                                    }
                                     cx.notify();
                                 })
                             },
@@ -3793,6 +3806,7 @@ impl Render for RootView {
                                 let _ = this.run_command(CommandId::PaneSplitHorizontal);
                                 cx.notify();
                             }),
+                            cx.listener(|_, _, _window, _cx| {}),
                         ))
                         .child(split_view),
                 )

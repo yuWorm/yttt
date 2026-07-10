@@ -1,9 +1,10 @@
 use gpui::{
-    App, ClickEvent, InteractiveElement as _, IntoElement, Pixels, Rgba,
+    App, ClickEvent, Div, InteractiveElement as _, IntoElement, Pixels, Rgba, Stateful,
     StatefulInteractiveElement as _, Window, div, prelude::*, px, rgba,
 };
-use gpui_component::{Icon, IconName};
+use gpui_component::{Icon, IconName, tooltip::Tooltip};
 
+use crate::ui::editor::{DocumentId, WorkItemId};
 use crate::{
     model::workspace::{TabStartState, Workspace},
     ui::{
@@ -28,6 +29,31 @@ pub struct ProjectTabItem {
     pub state: SelectableState,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkbenchTabKind {
+    Terminal,
+    File,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileTabSnapshot {
+    pub id: DocumentId,
+    pub relative_path: std::path::PathBuf,
+    pub dirty: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkbenchTabItem {
+    pub id: WorkItemId,
+    pub kind: WorkbenchTabKind,
+    pub title: String,
+    pub tooltip: String,
+    pub status: Option<String>,
+    pub status_tone: Option<ProjectTabStatusTone>,
+    pub dirty: bool,
+    pub state: SelectableState,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProjectTabsStyle {
     pub height: Pixels,
@@ -39,6 +65,8 @@ pub struct ProjectTabsStyle {
     pub close_button_visibility: ProjectTabCloseButtonVisibility,
     pub leading_icon: ProjectTabLeadingIcon,
     pub status_indicator: ProjectTabStatusIndicator,
+    pub dirty_marker_uses_close_slot: bool,
+    pub toolbar_placement: ProjectTabToolbarPlacement,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,11 +77,17 @@ pub enum ProjectTabCloseButtonVisibility {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectTabLeadingIcon {
     Terminal,
+    PerItem,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectTabStatusIndicator {
     Dot,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectTabToolbarPlacement {
+    FixedAfterScrollableTabs,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,6 +97,7 @@ pub enum ProjectTabStatusTone {
     AgentRunning,
     AgentCompleted,
     AgentFailed,
+    Dirty,
 }
 
 pub fn project_tabs_style(theme: WorkbenchTheme) -> ProjectTabsStyle {
@@ -75,8 +110,10 @@ pub fn project_tabs_style(theme: WorkbenchTheme) -> ProjectTabsStyle {
         inactive_background: primitive.inactive_background,
         hover_background: primitive.hover_background,
         close_button_visibility: ProjectTabCloseButtonVisibility::Hover,
-        leading_icon: ProjectTabLeadingIcon::Terminal,
+        leading_icon: ProjectTabLeadingIcon::PerItem,
         status_indicator: ProjectTabStatusIndicator::Dot,
+        dirty_marker_uses_close_slot: true,
+        toolbar_placement: ProjectTabToolbarPlacement::FixedAfterScrollableTabs,
     }
 }
 
@@ -122,29 +159,97 @@ pub fn visible_tab_items(workspace: &Workspace) -> Vec<ProjectTabItem> {
         .collect()
 }
 
-pub fn project_tabs<SelectH, SelectF, CloseH, CloseF, NewH, SplitVH, SplitHH>(
-    workspace: &Workspace,
+pub fn visible_work_item_tabs(
+    terminal_items: &[ProjectTabItem],
+    file_items: &[FileTabSnapshot],
+    active_work_item: Option<&WorkItemId>,
+) -> Vec<WorkbenchTabItem> {
+    terminal_items
+        .iter()
+        .map(|item| {
+            let id = WorkItemId::Terminal(item.id.clone());
+            WorkbenchTabItem {
+                state: if active_work_item == Some(&id) {
+                    SelectableState::Active
+                } else {
+                    SelectableState::Inactive
+                },
+                id,
+                kind: WorkbenchTabKind::Terminal,
+                title: item.title.clone(),
+                tooltip: item.status.clone().unwrap_or_else(|| item.title.clone()),
+                status: item.status.clone(),
+                status_tone: Some(item.status_tone),
+                dirty: false,
+            }
+        })
+        .chain(file_items.iter().map(|file| {
+            let id = WorkItemId::File(file.id.clone());
+            WorkbenchTabItem {
+                state: if active_work_item == Some(&id) {
+                    SelectableState::Active
+                } else {
+                    SelectableState::Inactive
+                },
+                id,
+                kind: WorkbenchTabKind::File,
+                title: file
+                    .relative_path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| file.relative_path.to_string_lossy().into_owned()),
+                tooltip: file.relative_path.to_string_lossy().into_owned(),
+                status: None,
+                status_tone: file.dirty.then_some(ProjectTabStatusTone::Dirty),
+                dirty: file.dirty,
+            }
+        }))
+        .collect()
+}
+
+pub fn visible_terminal_work_item_tabs(workspace: &Workspace) -> Vec<WorkbenchTabItem> {
+    let terminal_items = visible_tab_items(workspace);
+    let active = workspace
+        .selected_project_id()
+        .and_then(|project_id| workspace.project(project_id))
+        .map(|project| WorkItemId::Terminal(project.selected_tab_id.clone()));
+    visible_work_item_tabs(&terminal_items, &[], active.as_ref())
+}
+
+pub fn project_tree_toggle_icon(open: bool) -> IconName {
+    if open {
+        IconName::FolderOpen
+    } else {
+        IconName::FolderClosed
+    }
+}
+
+pub fn project_tree_toggle_tooltip(open: bool) -> &'static str {
+    if open { "Hide Files" } else { "Show Files" }
+}
+
+pub fn project_tabs<SelectH, SelectF, CloseH, CloseF, NewH, SplitVH, SplitHH, ToggleTreeH>(
+    items: Vec<WorkbenchTabItem>,
     theme: WorkbenchTheme,
+    project_tree_open: bool,
     mut on_select_tab: SelectF,
     mut on_close_tab: CloseF,
     on_new_tab: NewH,
     on_split_vertical: SplitVH,
     on_split_horizontal: SplitHH,
+    on_toggle_project_tree: ToggleTreeH,
 ) -> impl IntoElement
 where
     SelectH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    SelectF: FnMut(String) -> SelectH,
+    SelectF: FnMut(WorkItemId) -> SelectH,
     CloseH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    CloseF: FnMut(String) -> CloseH,
+    CloseF: FnMut(WorkItemId) -> CloseH,
     NewH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     SplitVH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     SplitHH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ToggleTreeH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
     let style = project_tabs_style(theme);
-    let items = visible_tab_items(workspace);
-    if items.is_empty() {
-        return div().into_any_element();
-    }
 
     let mut tab_row = div()
         .id("project-tab-row")
@@ -178,13 +283,15 @@ where
             on_new_tab,
             on_split_vertical,
             on_split_horizontal,
+            project_tree_open,
+            on_toggle_project_tree,
         ))
         .into_any_element()
 }
 
 fn project_tab<SelectH, CloseH>(
     index: usize,
-    item: ProjectTabItem,
+    item: WorkbenchTabItem,
     theme: WorkbenchTheme,
     on_select_tab: SelectH,
     on_close_tab: CloseH,
@@ -194,9 +301,13 @@ where
     CloseH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
     let row_style = yttt_row_style(YtttRowKind::Tab, item.state, true, theme);
-    let group_name = format!("project-tab-{}", item.id);
+    let group_name = format!("project-tab-{index}");
+    let tooltip = item.tooltip.clone();
+    let kind = item.kind;
+    let dirty = item.dirty;
+    let status_tone = item.status_tone;
 
-    div()
+    let mut tab = div()
         .id(("project-tab", index))
         .group(group_name.clone())
         .flex()
@@ -212,10 +323,14 @@ where
         .text_xs()
         .hover(move |this| this.bg(row_style.hover_background))
         .on_click(on_select_tab)
+        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
         .child(
-            Icon::new(IconName::SquareTerminal)
-                .size_3()
-                .text_color(row_style.subtitle),
+            Icon::new(match kind {
+                WorkbenchTabKind::Terminal => IconName::SquareTerminal,
+                WorkbenchTabKind::File => IconName::File,
+            })
+            .size_3()
+            .text_color(row_style.subtitle),
         )
         .child(
             div()
@@ -223,9 +338,22 @@ where
                 .truncate()
                 .text_color(row_style.title)
                 .child(item.title),
-        )
-        .child(tab_status_dot(item.status_tone, theme))
-        .child(tab_close_button(index, group_name, theme, on_close_tab))
+        );
+
+    tab = match kind {
+        WorkbenchTabKind::Terminal => tab
+            .children(status_tone.map(|tone| tab_status_dot(tone, theme)))
+            .child(tab_close_button(index, group_name, theme, on_close_tab)),
+        WorkbenchTabKind::File => tab.child(file_tab_close_slot(
+            index,
+            group_name,
+            dirty,
+            theme,
+            on_close_tab,
+        )),
+    };
+
+    tab
 }
 
 fn tab_status_dot(tone: ProjectTabStatusTone, theme: WorkbenchTheme) -> impl IntoElement {
@@ -235,6 +363,7 @@ fn tab_status_dot(tone: ProjectTabStatusTone, theme: WorkbenchTheme) -> impl Int
         ProjectTabStatusTone::AgentRunning => YtttStatusTone::Running,
         ProjectTabStatusTone::AgentCompleted => YtttStatusTone::Success,
         ProjectTabStatusTone::AgentFailed => YtttStatusTone::Error,
+        ProjectTabStatusTone::Dirty => YtttStatusTone::Warning,
     };
     let style = yttt_status_dot_style(tone, theme);
 
@@ -251,7 +380,7 @@ fn tab_close_button<CloseH>(
     group_name: String,
     theme: WorkbenchTheme,
     on_close_tab: CloseH,
-) -> impl IntoElement
+) -> Stateful<Div>
 where
     CloseH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
@@ -266,17 +395,54 @@ where
     .group_hover(group_name, |this| this.visible())
 }
 
-fn tab_toolbar<NewH, SplitVH, SplitHH>(
+fn file_tab_close_slot<CloseH>(
+    index: usize,
+    group_name: String,
+    dirty: bool,
+    theme: WorkbenchTheme,
+    on_close_tab: CloseH,
+) -> impl IntoElement
+where
+    CloseH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+{
+    let dirty_style = yttt_status_dot_style(YtttStatusTone::Warning, theme);
+    div()
+        .relative()
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_none()
+        .size(px(24.0))
+        .children(dirty.then(|| {
+            div()
+                .size(dirty_style.size)
+                .rounded_full()
+                .bg(dirty_style.color)
+                .group_hover(group_name.clone(), |this| this.invisible())
+        }))
+        .child(
+            tab_close_button(index, group_name, theme, on_close_tab)
+                .absolute()
+                .top_0()
+                .left_0(),
+        )
+}
+
+fn tab_toolbar<NewH, SplitVH, SplitHH, ToggleTreeH>(
     theme: WorkbenchTheme,
     on_new_tab: NewH,
     on_split_vertical: SplitVH,
     on_split_horizontal: SplitHH,
+    project_tree_open: bool,
+    on_toggle_project_tree: ToggleTreeH,
 ) -> impl IntoElement
 where
     NewH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     SplitVH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     SplitHH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ToggleTreeH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
+    let tooltip = project_tree_toggle_tooltip(project_tree_open);
     div()
         .flex()
         .items_center()
@@ -302,6 +468,18 @@ where
             theme,
             on_split_horizontal,
         ))
+        .child(
+            tab_toolbar_button(
+                "project-tree-toggle",
+                project_tree_toggle_icon(project_tree_open),
+                theme,
+                on_toggle_project_tree,
+            )
+            .when(project_tree_open, |this| {
+                this.bg(theme.active_surface).text_color(theme.text)
+            })
+            .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx)),
+        )
 }
 
 pub fn tab_toolbar_icon(direction: crate::model::layout::SplitDirection) -> IconName {
@@ -316,11 +494,12 @@ fn tab_toolbar_button<H>(
     icon: IconName,
     theme: WorkbenchTheme,
     on_click: H,
-) -> impl IntoElement
+) -> Stateful<Div>
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
     workbench_icon_button(id, icon, YtttIconButtonKind::Toolbar, theme, on_click)
+        .debug_selector(|| id.to_string())
 }
 
 fn tab_start_state_label(state: TabStartState) -> &'static str {

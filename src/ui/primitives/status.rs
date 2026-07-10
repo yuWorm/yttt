@@ -7,6 +7,7 @@ pub enum YtttStatusTone {
     Neutral,
     Running,
     Success,
+    Warning,
     Error,
 }
 
@@ -21,6 +22,7 @@ pub fn yttt_status_dot_style(tone: YtttStatusTone, theme: WorkbenchTheme) -> Ytt
         YtttStatusTone::Neutral => theme.text_subtle,
         YtttStatusTone::Running => theme.accent,
         YtttStatusTone::Success => theme.success,
+        YtttStatusTone::Warning => theme.warning,
         YtttStatusTone::Error => theme.danger,
     };
 

@@ -19,7 +19,7 @@ use yttt::{
     runtime::notification::{NotificationEvent, NotificationKind},
     runtime::terminal::{ExitReason, ProcessStatus},
     ui::components::SelectableState,
-    ui::editor::{EditorDiagnosticSeverity, EditorLanguageId},
+    ui::editor::{DocumentId, EditorDiagnosticSeverity, EditorLanguageId, WorkItemId},
     ui::i18n::{Locale, UiText},
     ui::palette::visible_palette_rows,
     ui::sidebar::visible_project_items,
@@ -41,7 +41,10 @@ use yttt::{
             pointer_resize_for_drag_delta, resize_command_for_drag_delta, root_split_child_basis,
             visible_pane_titles,
         },
-        tabs::{visible_tab_items, visible_tab_titles},
+        tabs::{
+            FileTabSnapshot, WorkbenchTabKind, visible_tab_items, visible_tab_titles,
+            visible_work_item_tabs,
+        },
     },
 };
 
@@ -104,6 +107,59 @@ fn git_status_parser_records_file_tones() {
         Some(GitFileStatus::Modified)
     );
     assert_eq!(parsed.file_status(Path::new("old.txt")), None);
+}
+
+#[test]
+fn visible_work_item_tabs_merge_terminal_and_file_items() {
+    let workspace = RootView::dev_fixture().workspace().clone();
+    let terminal_items = visible_tab_items(&workspace);
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    let first_file = DocumentId {
+        project_id: project_id.clone(),
+        canonical_path: PathBuf::from("/tmp/yttt/src/main.rs"),
+    };
+    let second_file = DocumentId {
+        project_id,
+        canonical_path: PathBuf::from("/tmp/yttt/README.md"),
+    };
+    let files = vec![
+        FileTabSnapshot {
+            id: first_file.clone(),
+            relative_path: PathBuf::from("src/main.rs"),
+            dirty: true,
+        },
+        FileTabSnapshot {
+            id: second_file.clone(),
+            relative_path: PathBuf::from("README.md"),
+            dirty: false,
+        },
+    ];
+
+    let items = visible_work_item_tabs(
+        &terminal_items,
+        &files,
+        Some(&WorkItemId::File(second_file.clone())),
+    );
+
+    assert_eq!(items.len(), terminal_items.len() + 2);
+    assert!(
+        items[..terminal_items.len()]
+            .iter()
+            .all(|item| item.kind == WorkbenchTabKind::Terminal)
+    );
+    let first = &items[terminal_items.len()];
+    assert_eq!(first.id, WorkItemId::File(first_file));
+    assert_eq!(first.kind, WorkbenchTabKind::File);
+    assert_eq!(first.title, "main.rs");
+    assert_eq!(first.tooltip, "src/main.rs");
+    assert!(first.dirty);
+    assert_eq!(first.state, SelectableState::Inactive);
+    let second = &items[terminal_items.len() + 1];
+    assert_eq!(second.id, WorkItemId::File(second_file));
+    assert_eq!(second.title, "README.md");
+    assert_eq!(second.tooltip, "README.md");
+    assert!(!second.dirty);
+    assert_eq!(second.state, SelectableState::Active);
 }
 
 #[test]
