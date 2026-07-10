@@ -152,6 +152,22 @@ pub fn read_project_file(
     })
 }
 
+pub fn project_relative_path(
+    root: &Path,
+    canonical_path: &Path,
+) -> Result<PathBuf, ProjectFileIoError> {
+    let canonical_root = fs::canonicalize(root).map_err(|source| ProjectFileIoError::Io {
+        path: root.to_path_buf(),
+        source,
+    })?;
+    let relative_path = canonical_path.strip_prefix(&canonical_root).map_err(|_| {
+        ProjectFileIoError::PathOutsideProject {
+            path: canonical_path.to_path_buf(),
+        }
+    })?;
+    normalize_relative_path(relative_path)
+}
+
 pub fn save_project_file(
     root: &Path,
     relative_path: &Path,

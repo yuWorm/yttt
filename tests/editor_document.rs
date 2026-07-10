@@ -59,6 +59,20 @@ fn failed_current_save_returns_to_idle_and_keeps_document_dirty() {
     assert_eq!(model.editor().error(), Some("disk full"));
 }
 
+#[test]
+fn canceling_a_conflicted_save_returns_to_idle_without_changing_text() {
+    let mut model = project_model("old", fingerprint(3, 1));
+    model.on_input_changed("memory text");
+    let request = model.begin_save();
+
+    assert!(model.cancel_save(&request));
+
+    assert_eq!(model.save_state(), &ProjectEditorSaveState::Idle);
+    assert_eq!(model.value(), "memory text");
+    assert!(model.is_dirty());
+    assert_eq!(model.editor().error(), None);
+}
+
 #[gpui::test]
 fn project_editor_document_syncs_input_changes_and_emits_changed(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);

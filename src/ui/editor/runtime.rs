@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use gpui::{Entity, Subscription};
+use gpui::{Entity, Subscription, Task};
 
 use crate::{model::ids::ProjectId, ui::project_tree::ProjectTreeView};
 
@@ -26,6 +26,8 @@ pub struct ProjectEditorRuntime {
     pending_tree_generations: HashMap<ProjectId, u64>,
     pending_file_generations: HashMap<DocumentId, u64>,
     next_file_generation: u64,
+    autosave_tasks: HashMap<DocumentId, Task<()>>,
+    follow_up_autosaves: HashMap<DocumentId, u64>,
 }
 
 impl ProjectEditorRuntime {
@@ -62,6 +64,10 @@ impl ProjectEditorRuntime {
             .retain(|document_id, _| &document_id.project_id != project_id);
         self.pending_file_generations
             .retain(|document_id, _| &document_id.project_id != project_id);
+        self.autosave_tasks
+            .retain(|document_id, _| &document_id.project_id != project_id);
+        self.follow_up_autosaves
+            .retain(|document_id, _| &document_id.project_id != project_id);
         self.trees.remove(project_id);
         self.tree_subscriptions.remove(project_id);
         self.pending_tree_generations.remove(project_id);
@@ -89,6 +95,8 @@ impl ProjectEditorRuntime {
     ) -> Option<Entity<ProjectEditorDocument>> {
         self.document_subscriptions.remove(document_id);
         self.pending_file_generations.remove(document_id);
+        self.autosave_tasks.remove(document_id);
+        self.follow_up_autosaves.remove(document_id);
         self.documents.remove(document_id)
     }
 
@@ -167,5 +175,30 @@ impl ProjectEditorRuntime {
         }
         self.pending_file_generations.remove(document_id);
         true
+    }
+
+    pub fn replace_autosave_task(&mut self, document_id: DocumentId, task: Task<()>) {
+        self.autosave_tasks.insert(document_id, task);
+    }
+
+    pub fn cancel_autosave_task(&mut self, document_id: &DocumentId) -> bool {
+        self.autosave_tasks.remove(document_id).is_some()
+    }
+
+    pub fn autosave_task_is_scheduled(&self, document_id: &DocumentId) -> bool {
+        self.autosave_tasks.contains_key(document_id)
+    }
+
+    pub fn cancel_all_autosave_tasks(&mut self) {
+        self.autosave_tasks.clear();
+        self.follow_up_autosaves.clear();
+    }
+
+    pub fn request_follow_up_autosave(&mut self, document_id: DocumentId, generation: u64) {
+        self.follow_up_autosaves.insert(document_id, generation);
+    }
+
+    pub fn take_follow_up_autosave(&mut self, document_id: &DocumentId) -> Option<u64> {
+        self.follow_up_autosaves.remove(document_id)
     }
 }

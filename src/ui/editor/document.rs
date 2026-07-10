@@ -179,6 +179,19 @@ impl ProjectEditorModel {
         true
     }
 
+    pub fn cancel_save(&mut self, request: &SaveRequest) -> bool {
+        if request.document_id != self.document_id
+            || self.save_state
+                != (ProjectEditorSaveState::Saving {
+                    generation: request.generation,
+                })
+        {
+            return false;
+        }
+        self.save_state = ProjectEditorSaveState::Idle;
+        true
+    }
+
     pub fn replace_from_disk(
         &mut self,
         value: impl Into<String>,
@@ -246,6 +259,22 @@ impl ProjectEditorDocument {
             input.set_line_number(appearance.line_numbers, window, input_cx);
         });
         self.appearance = appearance;
+        cx.notify();
+    }
+
+    pub fn replace_from_disk(
+        &mut self,
+        value: impl Into<String>,
+        disk_fingerprint: DiskFingerprint,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let value = value.into();
+        self.model
+            .replace_from_disk(value.clone(), disk_fingerprint);
+        self.input.update(cx, |input, input_cx| {
+            input.set_value(value, window, input_cx)
+        });
         cx.notify();
     }
 

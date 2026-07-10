@@ -3,7 +3,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     rc::Rc,
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use gpui::{AppContext as _, Keystroke, Subscription};
@@ -28,7 +28,7 @@ use yttt::{
     ui::editor::{
         CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, DiskFingerprint, DocumentId,
         EditorAppearance, EditorDiagnosticSeverity, EditorLanguageId, ProjectEditorDocument,
-        ProjectEditorModel, WorkItemId,
+        ProjectEditorModel, WorkItemId, read_project_file,
     },
     ui::i18n::{Locale, UiText},
     ui::palette::visible_palette_rows,
@@ -41,13 +41,7 @@ use yttt::{
     },
     ui::toast::{ToastTone, toast_item_for_event, visible_toast_items},
     ui::{
-        input_owner::{InputOwnerKind, InputOwnerStack, TerminalInputGate},
-        interaction::input_owner::{
-            InputOwnerRegistration, InputOwnerToken, InputScopeId, TerminalInputPolicy,
-        },
-        interaction::key_dispatch::workspace_command_for_keystroke,
-    },
-    ui::{
+        app::register_workbench_close_guard,
         root::RootView,
         split_view::{
             pointer_resize_for_drag_delta, resize_command_for_drag_delta, root_split_child_basis,
@@ -57,6 +51,13 @@ use yttt::{
             FileTabSnapshot, WorkbenchTabKind, visible_tab_items, visible_tab_titles,
             visible_work_item_tabs,
         },
+    },
+    ui::{
+        input_owner::{InputOwnerKind, InputOwnerStack, TerminalInputGate},
+        interaction::input_owner::{
+            InputOwnerRegistration, InputOwnerToken, InputScopeId, TerminalInputPolicy,
+        },
+        interaction::key_dispatch::workspace_command_for_keystroke,
     },
 };
 
@@ -1029,6 +1030,749 @@ fn root_view_renders_active_file_document_and_consumes_focus(cx: &mut gpui::Test
         );
         assert!(root.read(app).pending_editor_focus_document_id().is_none());
     });
+}
+
+#[gpui::test]
+fn root_view_file_save_preserves_newer_in_flight_edit(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("save-project");
+    fs::create_dir(&project_dir).unwrap();
+    fs::write(project_dir.join("notes.txt"), "old").unwrap();
+    let loaded = read_project_file(&project_dir, Path::new("notes.txt")).unwrap();
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(project_dir.clone(), sample_layout())
+        .unwrap();
+    let document_id = DocumentId {
+        project_id: project_id.clone(),
+        canonical_path: loaded.canonical_path.clone(),
+    };
+    let expected_document_id = document_id.clone();
+    let paths = english_test_config_paths(&temp);
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|root_cx| {
+            let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths);
+            root.project_editor_runtime_mut()
+                .workspace_mut()
+                .session_mut(&project_id)
+                .unwrap()
+                .open_file(document_id.canonical_path.clone());
+            let model = ProjectEditorModel::new(
+                document_id.clone(),
+                CodeEditorState::new(
+                    &document_id.canonical_path,
+                    CodeEditorConfig::new("notes.txt", CodeEditorLanguageMode::Auto),
+                    loaded.text,
+                ),
+                loaded.fingerprint,
+            );
+            let document = root_cx.new(|document_cx| {
+                ProjectEditorDocument::new(model, EditorAppearance::default(), window, document_cx)
+            });
+            root.project_editor_runtime_mut().insert_document(
+                document_id.clone(),
+                document,
+                Subscription::new(|| {}),
+            );
+            root.select_work_item(WorkItemId::File(document_id))
+                .unwrap();
+            root
+        });
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    let document = cx
+        .read(|app| {
+            root.read(app)
+                .project_editor_runtime()
+                .document(&expected_document_id)
+                .cloned()
+        })
+        .unwrap();
+    let input = cx.read(|app| document.read(app).input().clone());
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("saved text", window, input_cx);
+    });
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert!(document.read(app).model().is_dirty());
+        assert_eq!(
+            root.read(app).active_work_item(),
+            Some(WorkItemId::File(expected_document_id.clone()))
+        );
+    });
+
+    root.update(cx, |root, cx| {
+        root.run_command(CommandId::FileSave).unwrap();
+        assert_eq!(root.pending_document_save_count(), 1);
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+
+    cx.read(|app| {
+        assert_eq!(root.read(app).pending_document_save_count(), 0);
+        assert_eq!(root.read(app).visible_error_message(), None);
+    });
+
+    assert_eq!(
+        fs::read_to_string(project_dir.join("notes.txt")).unwrap(),
+        "saved text"
+    );
+    cx.read(|app| {
+        assert!(!document.read(app).model().is_dirty());
+    });
+
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("captured edit", window, input_cx);
+    });
+    cx.run_until_parked();
+    root.update_in(cx, |root, window, root_cx| {
+        root.save_active_document(window, root_cx);
+    });
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("newer edit", window, input_cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        fs::read_to_string(project_dir.join("notes.txt")).unwrap(),
+        "captured edit"
+    );
+    cx.read(|app| {
+        let model = document.read(app).model();
+        assert_eq!(model.value(), "newer edit");
+        assert_eq!(model.saved_value(), "captured edit");
+        assert!(model.is_dirty());
+    });
+
+    fs::remove_dir_all(&project_dir).unwrap();
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("unsaved after failure", window, input_cx);
+    });
+    cx.run_until_parked();
+    root.update_in(cx, |root, window, root_cx| {
+        root.save_active_document(window, root_cx);
+    });
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert!(document.read(app).model().is_dirty());
+        assert!(
+            document
+                .read(app)
+                .model()
+                .editor()
+                .error()
+                .is_some_and(|error| error.contains("Save failed"))
+        );
+        assert!(
+            root.read(app)
+                .visible_error_message()
+                .is_some_and(|error| error.contains("Save failed"))
+        );
+    });
+}
+
+#[gpui::test]
+fn root_view_file_save_requires_resolution_after_external_change(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("conflict-project");
+    fs::create_dir(&project_dir).unwrap();
+    fs::write(project_dir.join("notes.txt"), "old").unwrap();
+    let loaded = read_project_file(&project_dir, Path::new("notes.txt")).unwrap();
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(project_dir.clone(), sample_layout())
+        .unwrap();
+    let document_id = DocumentId {
+        project_id: project_id.clone(),
+        canonical_path: loaded.canonical_path.clone(),
+    };
+    let expected_document_id = document_id.clone();
+    let paths = english_test_config_paths(&temp);
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|root_cx| {
+            let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths);
+            root.project_editor_runtime_mut()
+                .workspace_mut()
+                .session_mut(&project_id)
+                .unwrap()
+                .open_file(document_id.canonical_path.clone());
+            let model = ProjectEditorModel::new(
+                document_id.clone(),
+                CodeEditorState::new(
+                    &document_id.canonical_path,
+                    CodeEditorConfig::new("notes.txt", CodeEditorLanguageMode::Auto),
+                    loaded.text,
+                ),
+                loaded.fingerprint,
+            );
+            let document = root_cx.new(|document_cx| {
+                ProjectEditorDocument::new(model, EditorAppearance::default(), window, document_cx)
+            });
+            root.project_editor_runtime_mut().insert_document(
+                document_id.clone(),
+                document,
+                Subscription::new(|| {}),
+            );
+            root.select_work_item(WorkItemId::File(document_id))
+                .unwrap();
+            root
+        });
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    let document = cx
+        .read(|app| {
+            root.read(app)
+                .project_editor_runtime()
+                .document(&expected_document_id)
+                .cloned()
+        })
+        .unwrap();
+    let input = cx.read(|app| document.read(app).input().clone());
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("memory text", window, input_cx);
+    });
+    cx.run_until_parked();
+    fs::write(project_dir.join("notes.txt"), "external text").unwrap();
+
+    root.update(cx, |root, cx| {
+        root.run_command(CommandId::FileSave).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+
+    assert_eq!(
+        fs::read_to_string(project_dir.join("notes.txt")).unwrap(),
+        "external text"
+    );
+    cx.read(|app| {
+        assert!(root.read(app).has_pending_file_conflict());
+        assert!(document.read(app).model().is_dirty());
+        assert_eq!(
+            root.read(app).visible_file_conflict_dialog_actions(),
+            vec!["Cancel", "Reload", "Overwrite"]
+        );
+        assert_eq!(
+            root.read(app).foreground_input_owner_kind(),
+            InputOwnerKind::Dialog
+        );
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("file-conflict-dialog").is_some());
+
+    root.update_in(cx, |root, window, cx| {
+        root.reload_pending_file_conflict(window, cx);
+    });
+    cx.run_until_parked();
+
+    cx.read(|app| {
+        assert!(!root.read(app).has_pending_file_conflict());
+        assert_eq!(document.read(app).model().value(), "external text");
+        assert_eq!(input.read(app).value().to_string(), "external text");
+        assert!(!document.read(app).model().is_dirty());
+    });
+
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("second memory text", window, input_cx);
+    });
+    cx.run_until_parked();
+    fs::write(project_dir.join("notes.txt"), "second external text").unwrap();
+    root.update(cx, |root, cx| {
+        root.run_command(CommandId::FileSave).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert!(root.read(app).has_pending_file_conflict());
+    });
+
+    root.update_in(cx, |root, window, cx| {
+        root.overwrite_pending_file_conflict(window, cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        fs::read_to_string(project_dir.join("notes.txt")).unwrap(),
+        "second memory text"
+    );
+    cx.read(|app| {
+        assert!(!root.read(app).has_pending_file_conflict());
+        assert!(!document.read(app).model().is_dirty());
+    });
+
+    fs::write(project_dir.join("notes.txt"), "clean external reload").unwrap();
+    root.update(cx, |root, cx| {
+        root.run_command(CommandId::FileSave).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert!(!root.read(app).has_pending_file_conflict());
+        assert_eq!(document.read(app).model().value(), "clean external reload");
+        assert!(!document.read(app).model().is_dirty());
+    });
+
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("recreated text", window, input_cx);
+    });
+    cx.run_until_parked();
+    fs::remove_file(project_dir.join("notes.txt")).unwrap();
+    root.update(cx, |root, cx| {
+        root.run_command(CommandId::FileSave).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert!(root.read(app).pending_file_conflict_is_missing());
+        assert_eq!(
+            root.read(app).visible_file_conflict_dialog_actions(),
+            vec!["Cancel", "Recreate file"]
+        );
+    });
+    root.update_in(cx, |root, window, cx| {
+        root.overwrite_pending_file_conflict(window, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        fs::read_to_string(project_dir.join("notes.txt")).unwrap(),
+        "recreated text"
+    );
+
+    fs::write(project_dir.join("notes.txt"), "refresh boundary text").unwrap();
+    root.update(cx, |root, cx| {
+        root.run_command(CommandId::ProjectPanelRefresh).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(document.read(app).model().value(), "refresh boundary text");
+        assert!(!document.read(app).model().is_dirty());
+        assert!(!root.read(app).has_pending_file_conflict());
+    });
+
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("dirty refresh text", window, input_cx);
+    });
+    cx.run_until_parked();
+    fs::write(project_dir.join("notes.txt"), "external refresh conflict").unwrap();
+    root.update(cx, |root, cx| {
+        root.run_command(CommandId::ProjectPanelRefresh).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert!(root.read(app).has_pending_file_conflict());
+        assert!(document.read(app).model().is_dirty());
+    });
+    root.update(cx, |root, cx| {
+        root.cancel_pending_file_conflict(cx);
+        cx.notify();
+    });
+    cx.read(|app| {
+        assert!(!root.read(app).has_pending_file_conflict());
+        assert_eq!(document.read(app).model().value(), "dirty refresh text");
+        assert!(document.read(app).model().is_dirty());
+    });
+}
+
+#[gpui::test]
+fn root_view_delayed_autosave_discards_stale_generation(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (_temp, project_dir, root, document, cx) =
+        project_file_autosave_fixture(cx, "after_delay", 50);
+    let input = cx.read(|app| document.read(app).input().clone());
+
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("first delayed edit", window, input_cx);
+        input.set_value("latest delayed edit", window, input_cx);
+    });
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).editor_autosave(),
+            yttt::config::settings::EditorAutosave::AfterDelay
+        );
+        assert!(
+            root.read(app)
+                .project_editor_runtime()
+                .autosave_task_is_scheduled(document.read(app).model().document_id())
+        );
+    });
+    cx.executor().advance_clock(Duration::from_millis(50));
+    cx.run_until_parked();
+
+    assert_eq!(
+        fs::read_to_string(project_dir.join("notes.txt")).unwrap(),
+        "latest delayed edit"
+    );
+    cx.read(|app| {
+        assert!(!document.read(app).model().is_dirty());
+        assert_eq!(
+            root.read(app).active_work_item(),
+            Some(WorkItemId::File(
+                document.read(app).model().document_id().clone()
+            ))
+        );
+    });
+
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("captured overlapping save", window, input_cx);
+    });
+    cx.run_until_parked();
+    root.update_in(cx, |root, window, root_cx| {
+        root.save_active_document(window, root_cx);
+    });
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("latest overlapping autosave", window, input_cx);
+    });
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(50));
+    cx.run_until_parked();
+    assert_eq!(
+        fs::read_to_string(project_dir.join("notes.txt")).unwrap(),
+        "latest overlapping autosave"
+    );
+    cx.read(|app| {
+        assert!(!document.read(app).model().is_dirty());
+    });
+}
+
+#[gpui::test]
+fn root_view_focus_change_autosave_saves_dirty_file(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (_temp, project_dir, root, document, cx) =
+        project_file_autosave_fixture(cx, "on_focus_change", 1000);
+    let input = cx.read(|app| document.read(app).input().clone());
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("focus change edit", window, input_cx);
+    });
+    cx.run_until_parked();
+
+    root.update(cx, |root, cx| {
+        root.select_work_item(WorkItemId::Terminal("dev".to_string()))
+            .unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+
+    assert_eq!(
+        fs::read_to_string(project_dir.join("notes.txt")).unwrap(),
+        "focus change edit"
+    );
+    cx.read(|app| {
+        assert!(!document.read(app).model().is_dirty());
+    });
+}
+
+#[gpui::test]
+fn root_view_autosave_off_does_not_save_on_focus_change(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (_temp, project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 5);
+    let input = cx.read(|app| document.read(app).input().clone());
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("manual only edit", window, input_cx);
+    });
+    cx.run_until_parked();
+
+    root.update(cx, |root, cx| {
+        root.select_work_item(WorkItemId::Terminal("dev".to_string()))
+            .unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+
+    assert_eq!(
+        fs::read_to_string(project_dir.join("notes.txt")).unwrap(),
+        "old"
+    );
+    cx.read(|app| {
+        assert!(document.read(app).model().is_dirty());
+    });
+}
+
+#[gpui::test]
+fn closing_dirty_file_requires_a_decision(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (_temp, _project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
+    let document_id = cx.read(|app| document.read(app).model().document_id().clone());
+    let input = cx.read(|app| document.read(app).input().clone());
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("unsaved close edit", window, input_cx);
+    });
+    cx.run_until_parked();
+
+    root.update(cx, |root, cx| {
+        root.run_command(CommandId::TabClose).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert!(root.read(app).has_pending_dirty_close());
+        assert_eq!(
+            root.read(app).visible_dirty_close_actions(),
+            vec!["Cancel", "Discard", "Save"]
+        );
+        assert!(
+            root.read(app)
+                .project_editor_runtime()
+                .document(&document_id)
+                .is_some()
+        );
+        assert_eq!(
+            root.read(app).active_work_item(),
+            Some(WorkItemId::File(document_id.clone()))
+        );
+    });
+    assert!(cx.debug_bounds("dirty-close-dialog").is_some());
+
+    root.update(cx, |root, cx| {
+        root.cancel_pending_dirty_close();
+        cx.notify();
+    });
+    cx.read(|app| {
+        assert!(!root.read(app).has_pending_dirty_close());
+        assert_eq!(
+            root.read(app).active_work_item(),
+            Some(WorkItemId::File(document_id.clone()))
+        );
+    });
+
+    root.update(cx, |root, cx| {
+        root.run_command(CommandId::TabClose).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    root.update_in(cx, |root, window, cx| {
+        root.discard_pending_dirty_close(window, cx);
+    });
+    cx.read(|app| {
+        assert!(!root.read(app).has_pending_dirty_close());
+        assert!(
+            root.read(app)
+                .project_editor_runtime()
+                .document(&document_id)
+                .is_none()
+        );
+        assert_eq!(
+            root.read(app).active_work_item(),
+            Some(WorkItemId::Terminal("agent".to_string()))
+        );
+    });
+}
+
+#[gpui::test]
+fn saving_a_dirty_file_continues_the_pending_close(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (_temp, project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
+    let document_id = cx.read(|app| document.read(app).model().document_id().clone());
+    let input = cx.read(|app| document.read(app).input().clone());
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("save before close", window, input_cx);
+    });
+    cx.run_until_parked();
+    root.update(cx, |root, cx| {
+        root.run_command(CommandId::TabClose).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+
+    root.update_in(cx, |root, window, cx| {
+        root.save_pending_dirty_close(window, cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        fs::read_to_string(project_dir.join("notes.txt")).unwrap(),
+        "save before close"
+    );
+    cx.read(|app| {
+        assert!(!root.read(app).has_pending_dirty_close());
+        assert!(
+            root.read(app)
+                .project_editor_runtime()
+                .document(&document_id)
+                .is_none()
+        );
+        assert_eq!(
+            root.read(app).active_work_item(),
+            Some(WorkItemId::Terminal("agent".to_string()))
+        );
+    });
+}
+
+#[gpui::test]
+fn failed_save_keeps_dirty_file_and_pending_close_open(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (_temp, project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
+    let document_id = cx.read(|app| document.read(app).model().document_id().clone());
+    let input = cx.read(|app| document.read(app).input().clone());
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("cannot save this edit", window, input_cx);
+    });
+    cx.run_until_parked();
+    root.update(cx, |root, cx| {
+        root.run_command(CommandId::TabClose).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    fs::remove_dir_all(&project_dir).unwrap();
+
+    root.update_in(cx, |root, window, cx| {
+        root.save_pending_dirty_close(window, cx);
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    cx.read(|app| {
+        let root = root.read(app);
+        assert!(root.has_pending_dirty_close());
+        assert!(
+            root.project_editor_runtime()
+                .document(&document_id)
+                .is_some()
+        );
+        assert!(document.read(app).model().is_dirty());
+        assert!(
+            root.visible_error_message()
+                .is_some_and(|error| error.contains("Save failed"))
+        );
+    });
+    assert!(cx.debug_bounds("dirty-close-dialog").is_some());
+}
+
+#[gpui::test]
+fn closing_project_combines_dirty_files_and_running_processes(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (_temp, _project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
+    let project_id = cx.read(|app| document.read(app).model().document_id().project_id.clone());
+    let input = cx.read(|app| document.read(app).input().clone());
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("unsaved project edit", window, input_cx);
+    });
+    root.update(cx, |root, cx| {
+        root.workspace_mut()
+            .mark_pane_running(&project_id, "dev", "server")
+            .unwrap();
+        root.run_command(CommandId::ProjectClose).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+
+    cx.read(|app| {
+        let root = root.read(app);
+        assert!(root.workspace().project(&project_id).is_some());
+        assert!(root.has_pending_project_close());
+        assert!(root.has_pending_dirty_close());
+        assert_eq!(
+            root.visible_dirty_close_dialog_text().as_deref(),
+            Some("Close project?\n1 unsaved file: notes.txt\n1 running process")
+        );
+        assert_eq!(
+            root.visible_dirty_close_actions(),
+            vec!["Cancel", "Discard and Continue", "Save All and Continue"]
+        );
+    });
+
+    root.update_in(cx, |root, window, cx| {
+        root.discard_pending_dirty_close(window, cx);
+    });
+
+    cx.read(|app| {
+        let root = root.read(app);
+        assert!(root.workspace().project(&project_id).is_none());
+        assert!(!root.has_pending_project_close());
+        assert!(!root.has_pending_dirty_close());
+    });
+}
+
+#[gpui::test]
+fn saving_dirty_project_files_continues_the_pending_project_close(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (_temp, project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
+    let project_id = cx.read(|app| document.read(app).model().document_id().project_id.clone());
+    let input = cx.read(|app| document.read(app).input().clone());
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("save project before close", window, input_cx);
+    });
+    root.update(cx, |root, cx| {
+        root.workspace_mut()
+            .mark_pane_running(&project_id, "dev", "server")
+            .unwrap();
+        root.run_command(CommandId::ProjectClose).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+
+    root.update_in(cx, |root, window, cx| {
+        root.save_pending_dirty_close(window, cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        fs::read_to_string(project_dir.join("notes.txt")).unwrap(),
+        "save project before close"
+    );
+    cx.read(|app| {
+        let root = root.read(app);
+        assert!(root.workspace().project(&project_id).is_none());
+        assert!(!root.has_pending_project_close());
+        assert!(!root.has_pending_dirty_close());
+    });
+}
+
+#[gpui::test]
+fn closing_window_with_dirty_file_is_blocked_by_the_workbench_guard(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (_temp, _project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
+    let input = cx.read(|app| document.read(app).input().clone());
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_value("unsaved window edit", window, input_cx);
+    });
+    cx.run_until_parked();
+
+    assert!(!cx.simulate_close());
+    cx.run_until_parked();
+
+    cx.read(|app| {
+        let root = root.read(app);
+        assert!(root.has_pending_dirty_close());
+        assert_eq!(
+            root.visible_dirty_close_actions(),
+            vec!["Cancel", "Discard and Continue", "Save All and Continue"]
+        );
+    });
+
+    let allowed_retry = root.update_in(cx, |root, window, cx| {
+        root.discard_pending_dirty_close(window, cx);
+        root.request_window_close(cx)
+    });
+    assert!(allowed_retry);
+    cx.read(|app| assert!(!root.read(app).has_pending_dirty_close()));
 }
 
 #[test]
@@ -3152,6 +3896,78 @@ language = "en"
     )
     .unwrap();
     paths
+}
+
+fn project_file_autosave_fixture<'a>(
+    cx: &'a mut gpui::TestAppContext,
+    autosave: &str,
+    delay_ms: u64,
+) -> (
+    tempfile::TempDir,
+    PathBuf,
+    gpui::Entity<RootView>,
+    gpui::Entity<ProjectEditorDocument>,
+    &'a mut gpui::VisualTestContext,
+) {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join(format!("autosave-{autosave}"));
+    fs::create_dir(&project_dir).unwrap();
+    fs::write(project_dir.join("notes.txt"), "old").unwrap();
+    let paths = english_test_config_paths(&temp);
+    fs::write(
+        paths.settings_file(),
+        format!(
+            r#"
+[general]
+language = "en"
+
+[editor]
+autosave = "{autosave}"
+autosave_delay_ms = {delay_ms}
+"#
+        ),
+    )
+    .unwrap();
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(project_dir.clone(), sample_layout())
+        .unwrap();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| RootView::with_workspace_for_test_and_config_paths(workspace, paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        register_workbench_close_guard(window, cx, &root);
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    cx.run_until_parked();
+    let tree = cx
+        .read(|app| {
+            root.read(app)
+                .project_editor_runtime()
+                .tree(&project_id)
+                .cloned()
+        })
+        .unwrap();
+    tree.update(cx, |tree, tree_cx| {
+        assert!(tree.activate_path(Path::new("notes.txt"), tree_cx));
+    });
+    cx.run_until_parked();
+    let document_id = DocumentId {
+        project_id,
+        canonical_path: fs::canonicalize(project_dir.join("notes.txt")).unwrap(),
+    };
+    let document = cx
+        .read(|app| {
+            root.read(app)
+                .project_editor_runtime()
+                .document(&document_id)
+                .cloned()
+        })
+        .unwrap();
+
+    (temp, project_dir, root, document, cx)
 }
 
 fn sample_layout() -> yttt::model::layout::ProjectLayout {

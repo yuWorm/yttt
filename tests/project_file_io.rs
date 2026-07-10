@@ -3,7 +3,7 @@ use std::{fs, path::Path};
 use tempfile::tempdir;
 use yttt::ui::editor::{
     CurrentDiskState, MAX_PROJECT_FILE_BYTES, ProjectFileIoError, SaveMode, SaveProjectFileOutcome,
-    read_project_file, save_project_file,
+    project_relative_path, read_project_file, save_project_file,
 };
 
 #[test]
@@ -23,6 +23,20 @@ fn read_project_file_returns_text_paths_and_fingerprint() {
     assert!(loaded.fingerprint.exists);
     assert_eq!(loaded.fingerprint.byte_len, 13);
     assert!(loaded.fingerprint.modified.is_some());
+}
+
+#[test]
+fn project_relative_path_uses_the_canonical_project_root() {
+    let root = tempdir().unwrap();
+    fs::create_dir_all(root.path().join("src")).unwrap();
+    let file = root.path().join("src/main.rs");
+    fs::write(&file, "fn main() {}").unwrap();
+    let root_with_parent_components = root.path().join("src/..");
+
+    assert_eq!(
+        project_relative_path(&root_with_parent_components, &file.canonicalize().unwrap()).unwrap(),
+        Path::new("src/main.rs")
+    );
 }
 
 #[test]

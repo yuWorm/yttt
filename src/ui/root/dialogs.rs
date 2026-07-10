@@ -151,6 +151,211 @@ pub(super) fn keybinding_edit_dialog(
     )
 }
 
+pub(super) fn file_conflict_dialog(
+    cx: &mut Context<RootView>,
+    ui_text: &UiText,
+    theme: WorkbenchTheme,
+    path: String,
+    missing: bool,
+) -> Div {
+    let dialog = yttt_dialog_style(theme);
+    let title = ui_text.get(if missing {
+        UiTextKey::FileDeletedOnDisk
+    } else {
+        UiTextKey::FileChangedOnDisk
+    });
+    let overwrite_label = ui_text.get(if missing {
+        UiTextKey::FileRecreate
+    } else {
+        UiTextKey::FileOverwrite
+    });
+    let mut actions = div().flex().justify_end().gap_2().child(yttt_dialog_button(
+        cx,
+        "cancel-file-conflict",
+        ui_text.get(UiTextKey::Cancel),
+        YtttButtonVariant::Secondary,
+        theme,
+        cx.listener(|this, _, _window, cx| {
+            this.cancel_pending_file_conflict(cx);
+            cx.notify();
+        }),
+    ));
+    if !missing {
+        actions = actions.child(yttt_dialog_button(
+            cx,
+            "reload-file-conflict",
+            ui_text.get(UiTextKey::FileReload),
+            YtttButtonVariant::Secondary,
+            theme,
+            cx.listener(|this, _, window, cx| {
+                this.reload_pending_file_conflict(window, cx);
+            }),
+        ));
+    }
+    actions = actions.child(yttt_dialog_button(
+        cx,
+        "overwrite-file-conflict",
+        overwrite_label,
+        YtttButtonVariant::Danger,
+        theme,
+        cx.listener(|this, _, window, cx| {
+            this.overwrite_pending_file_conflict(window, cx);
+        }),
+    ));
+
+    capture_overlay_input(
+        div()
+            .debug_selector(|| "file-conflict-dialog".to_string())
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(dialog.overlay)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .w(dialog.max_width)
+                    .rounded(dialog.radius)
+                    .border_1()
+                    .border_color(dialog.border)
+                    .bg(dialog.background)
+                    .p(dialog.padding)
+                    .text_color(dialog.text)
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(title),
+                    )
+                    .child(workbench_inline_notification(
+                        ToastItem {
+                            title: path,
+                            context: ui_text.get(UiTextKey::StatusWarningContext).to_string(),
+                            tone: ToastTone::Warning,
+                        },
+                        theme,
+                    ))
+                    .child(actions),
+            ),
+    )
+}
+
+pub(super) fn dirty_close_dialog(
+    cx: &mut Context<RootView>,
+    ui_text: &UiText,
+    theme: WorkbenchTheme,
+    title: String,
+    details: Vec<String>,
+    file_intent: bool,
+    has_save_error: bool,
+) -> Div {
+    let dialog = yttt_dialog_style(theme);
+    let save_label = ui_text.get(if file_intent {
+        UiTextKey::FileSaveAction
+    } else {
+        UiTextKey::SaveAllAndContinue
+    });
+    let discard_label = ui_text.get(if file_intent {
+        UiTextKey::Discard
+    } else {
+        UiTextKey::DiscardAndContinue
+    });
+    let summary = details.join("\n");
+    let mut content = div()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .w(dialog.max_width)
+        .rounded(dialog.radius)
+        .border_1()
+        .border_color(dialog.border)
+        .bg(dialog.background)
+        .p(dialog.padding)
+        .text_color(dialog.text)
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(title),
+        );
+    if !summary.is_empty() {
+        content = content.child(workbench_inline_notification(
+            ToastItem {
+                title: summary,
+                context: ui_text.get(UiTextKey::StatusWarningContext).to_string(),
+                tone: ToastTone::Warning,
+            },
+            theme,
+        ));
+    }
+    if has_save_error {
+        content = content.child(
+            div()
+                .text_xs()
+                .text_color(dialog.hint)
+                .child(ui_text.get(UiTextKey::CloseSaveFailureGuidance)),
+        );
+    }
+    content = content.child(
+        div()
+            .flex()
+            .justify_end()
+            .gap_2()
+            .child(yttt_dialog_button(
+                cx,
+                "cancel-dirty-close",
+                ui_text.get(UiTextKey::Cancel),
+                YtttButtonVariant::Secondary,
+                theme,
+                cx.listener(|this, _, _window, cx| {
+                    this.cancel_pending_dirty_close();
+                    cx.notify();
+                }),
+            ))
+            .child(yttt_dialog_button(
+                cx,
+                "discard-dirty-close",
+                discard_label,
+                YtttButtonVariant::Danger,
+                theme,
+                cx.listener(|this, _, window, cx| {
+                    this.discard_pending_dirty_close(window, cx);
+                }),
+            ))
+            .child(yttt_dialog_button(
+                cx,
+                "save-dirty-close",
+                save_label,
+                YtttButtonVariant::Primary,
+                theme,
+                cx.listener(|this, _, window, cx| {
+                    this.save_pending_dirty_close(window, cx);
+                }),
+            )),
+    );
+
+    capture_overlay_input(
+        div()
+            .debug_selector(|| "dirty-close-dialog".to_string())
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(dialog.overlay)
+            .child(content),
+    )
+}
+
 pub(super) fn close_project_dialog(
     cx: &mut Context<RootView>,
     ui_text: &UiText,

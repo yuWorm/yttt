@@ -42,6 +42,53 @@ fn ui_text_returns_close_project_dialog_labels() {
 }
 
 #[test]
+fn ui_text_returns_close_protection_labels() {
+    let english = UiText::new(Locale::English);
+    let chinese = UiText::new(Locale::Chinese);
+
+    assert_eq!(
+        english.get(UiTextKey::UnsavedChangesTitle),
+        "Unsaved changes"
+    );
+    assert_eq!(english.get(UiTextKey::CloseWindowTitle), "Close YTTT?");
+    assert_eq!(english.get(UiTextKey::UnsavedFileSingular), "unsaved file");
+    assert_eq!(english.get(UiTextKey::UnsavedFilePlural), "unsaved files");
+    assert_eq!(
+        english.get(UiTextKey::RunningProcessSingular),
+        "running process"
+    );
+    assert_eq!(
+        english.get(UiTextKey::RunningProcessPlural),
+        "running processes"
+    );
+    assert_eq!(
+        english.get(UiTextKey::SaveAllAndContinue),
+        "Save All and Continue"
+    );
+    assert_eq!(english.get(UiTextKey::Discard), "Discard");
+    assert_eq!(
+        english.get(UiTextKey::DiscardAndContinue),
+        "Discard and Continue"
+    );
+    assert_eq!(
+        english.get(UiTextKey::CloseSaveFailureGuidance),
+        "Fix the save error or discard the changes to continue."
+    );
+
+    assert_eq!(chinese.get(UiTextKey::UnsavedChangesTitle), "未保存的更改");
+    assert_eq!(chinese.get(UiTextKey::CloseWindowTitle), "关闭 YTTT？");
+    assert_eq!(chinese.get(UiTextKey::UnsavedFileSingular), "个未保存文件");
+    assert_eq!(chinese.get(UiTextKey::RunningProcessPlural), "个运行中进程");
+    assert_eq!(chinese.get(UiTextKey::SaveAllAndContinue), "全部保存并继续");
+    assert_eq!(chinese.get(UiTextKey::Discard), "丢弃");
+    assert_eq!(chinese.get(UiTextKey::DiscardAndContinue), "丢弃并继续");
+    assert_eq!(
+        chinese.get(UiTextKey::CloseSaveFailureGuidance),
+        "请修复保存错误，或丢弃更改后继续。"
+    );
+}
+
+#[test]
 fn ui_text_returns_rename_tab_dialog_labels() {
     let english = UiText::new(Locale::English);
     let chinese = UiText::new(Locale::Chinese);
@@ -94,6 +141,18 @@ fn ui_text_returns_project_file_tree_and_open_error_labels() {
     assert_eq!(
         chinese.get(UiTextKey::ProjectFileOutsideProject),
         "文件位于项目目录之外"
+    );
+    assert_eq!(english.get(UiTextKey::FileSaved), "Saved");
+    assert_eq!(
+        english.get(UiTextKey::FileChangedOnDisk),
+        "File changed on disk"
+    );
+    assert_eq!(english.get(UiTextKey::FileRecreate), "Recreate file");
+    assert_eq!(chinese.get(UiTextKey::FileSaveFailed), "保存失败");
+    assert_eq!(chinese.get(UiTextKey::FileReload), "重新加载");
+    assert_eq!(
+        chinese.get(UiTextKey::FileDeletedOnDisk),
+        "文件已从磁盘删除"
     );
 }
 

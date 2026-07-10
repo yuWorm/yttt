@@ -1,6 +1,9 @@
 use std::rc::Rc;
 
-use gpui::{App, AppContext, Application, Bounds, Pixels, WindowBounds, WindowOptions, px, size};
+use gpui::{
+    App, AppContext, Application, Bounds, Entity, Pixels, Window, WindowBounds, WindowOptions, px,
+    size,
+};
 use gpui_component::{Root as ComponentRoot, Theme, TitleBar};
 
 use crate::{
@@ -59,10 +62,19 @@ pub fn run() {
                 view.update(cx, |root, _| {
                     root.set_keybinding_interceptor_subscription(keybinding_subscription);
                 });
+                register_workbench_close_guard(window, cx, &view);
                 cx.new(|cx| ComponentRoot::new(view, window, cx))
             })
             .expect("failed to open yttt window");
         });
+}
+
+pub fn register_workbench_close_guard(window: &Window, cx: &App, view: &Entity<RootView>) {
+    let view = view.downgrade();
+    window.on_window_should_close(cx, move |_window, cx| {
+        view.update(cx, |root, cx| root.request_window_close(cx))
+            .unwrap_or(true)
+    });
 }
 
 fn load_app_theme_runtime(config_paths: &AppConfigPaths) -> ThemeRuntime {
