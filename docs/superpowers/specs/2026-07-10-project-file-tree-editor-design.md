@@ -443,9 +443,11 @@ project_sidebar_width = 216.0
 
 运行时应用：
 
-- 字体、字号、行高、tab size、soft wrap 和 line numbers 立即应用到全部打开编辑器。
-- 应用显示设置时不能替换文本、saved baseline、undo/selection 状态；如果底层组件能力有限，计划阶段
-  必须选择不会丢编辑状态的更新 API。
+- 字体、字号、行高、soft wrap 和 line numbers 立即应用到全部打开编辑器。
+- `gpui-component 0.5.1` 没有公开的运行时 tab-size setter，因此 `tab_size` 保存后立即用于新打开
+  的文件，已经打开的文件在关闭并重新打开后生效。这是本阶段唯一不实时更新的编辑器显示设置。
+- 应用显示设置时不能替换文本、saved baseline、undo/selection 状态；不得为了实时改变
+  `tab_size` 而重建 `InputState` 或维护组件库 fork。
 - autosave 模式立即影响后续输入与 focus 事件。
 - `show_hidden` 变化触发可见树重算/刷新。
 - `default_open` 只影响以后创建的项目会话。
