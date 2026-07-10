@@ -1,3 +1,4 @@
+mod document;
 mod file_io;
 mod language;
 mod language_catalog;
@@ -5,6 +6,10 @@ mod state;
 mod view;
 mod workspace;
 
+pub use document::{
+    EditorAppearance, ProjectEditorDocument, ProjectEditorDocumentEvent, ProjectEditorModel,
+    ProjectEditorSaveState, SaveRequest,
+};
 pub use file_io::{
     CurrentDiskState, DiskFingerprint, LoadedProjectFile, MAX_PROJECT_FILE_BYTES,
     ProjectFileIoError, SaveMode, SaveProjectFileOutcome, read_project_file, save_project_file,
