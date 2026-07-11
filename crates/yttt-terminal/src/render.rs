@@ -434,6 +434,106 @@ impl TerminalRenderer {
         merged
     }
 
+    pub(crate) fn cursor_bounds(
+        &self,
+        bounds: Bounds<Pixels>,
+        padding: Edges<Pixels>,
+        term: &Term<GpuiEventProxy>,
+    ) -> Option<Bounds<Pixels>> {
+        let grid = term.grid();
+        let cursor_point = grid.cursor.point;
+        let cursor_screen_line = cursor_point.line.0 + grid.display_offset() as i32;
+
+        if cursor_screen_line < 0 || cursor_screen_line >= grid.screen_lines() as i32 {
+            return None;
+        }
+
+        Some(Bounds {
+            origin: Point {
+                x: bounds.origin.x + padding.left + self.cell_width * cursor_point.column.0 as f32,
+                y: bounds.origin.y + padding.top + self.cell_height * cursor_screen_line as f32,
+            },
+            size: Size {
+                width: self.cell_width,
+                height: self.cell_height,
+            },
+        })
+    }
+
+    pub(crate) fn paint_ime_text(
+        &self,
+        cursor_bounds: Bounds<Pixels>,
+        term: &Term<GpuiEventProxy>,
+        text: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+
+        let colors = term.colors();
+        let foreground = self.palette.resolve(
+            Color::Named(alacritty_terminal::vte::ansi::NamedColor::Foreground),
+            colors,
+        );
+        let background = self.palette.resolve(
+            Color::Named(alacritty_terminal::vte::ansi::NamedColor::Background),
+            colors,
+        );
+        let text_run = TextRun {
+            len: text.len(),
+            font: Font {
+                family: self.font_family.clone().into(),
+                features: FontFeatures::default(),
+                fallbacks: None,
+                weight: FontWeight::NORMAL,
+                style: FontStyle::Normal,
+            },
+            color: foreground,
+            background_color: None,
+            underline: Some(UnderlineStyle {
+                thickness: px(1.0),
+                color: Some(foreground),
+                wavy: false,
+            }),
+            strikethrough: None,
+        };
+        let shaped_line =
+            window
+                .text_system()
+                .shape_line(text.into(), self.font_size, &[text_run], None);
+        let ime_bounds = Bounds {
+            origin: cursor_bounds.origin,
+            size: Size {
+                width: shaped_line.width.max(self.cell_width),
+                height: self.cell_height,
+            },
+        };
+        window.paint_quad(quad(
+            ime_bounds,
+            px(0.0),
+            background,
+            Edges::<Pixels>::default(),
+            transparent_black(),
+            Default::default(),
+        ));
+
+        let base_height = self.cell_height / self.line_height_multiplier;
+        let vertical_offset = (self.cell_height - base_height) / 2.0;
+        let _ = shaped_line.paint(
+            Point {
+                x: cursor_bounds.origin.x,
+                y: cursor_bounds.origin.y + vertical_offset,
+            },
+            self.cell_height,
+            TextAlign::Left,
+            None,
+            window,
+            cx,
+        );
+    }
+
     /// Paint terminal content to the window.
     ///
     /// This is the main rendering method that draws the terminal grid,
@@ -644,27 +744,11 @@ impl TerminalRenderer {
         }
 
         // Paint cursor
-        let cursor_point = grid.cursor.point;
-        let cursor_screen_line = cursor_point.line.0 + display_offset;
-        if cursor_screen_line >= 0 && cursor_screen_line < num_lines as i32 {
-            let cursor_x = origin.x + self.cell_width * (cursor_point.column.0 as f32);
-            let cursor_y = origin.y + self.cell_height * (cursor_screen_line as f32);
-
+        if let Some(cursor_bounds) = self.cursor_bounds(bounds, padding, term) {
             let cursor_color = self.palette.resolve(
                 Color::Named(alacritty_terminal::vte::ansi::NamedColor::Cursor),
                 colors,
             );
-
-            let cursor_bounds = Bounds {
-                origin: Point {
-                    x: cursor_x,
-                    y: cursor_y,
-                },
-                size: Size {
-                    width: self.cell_width,
-                    height: self.cell_height,
-                },
-            };
 
             window.paint_quad(quad(
                 cursor_bounds,

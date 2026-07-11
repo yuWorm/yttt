@@ -430,6 +430,9 @@ pub struct TerminalView {
 
     /// Whether the left mouse button is currently selecting terminal text.
     selecting: bool,
+
+    /// Text currently being composed by the platform input method.
+    ime_state: TerminalImeState,
 }
 
 #[derive(Clone, Copy)]
@@ -440,6 +443,33 @@ struct TerminalViewport {
     cell_height: Pixels,
     cols: usize,
     rows: usize,
+    cursor_bounds: Option<Bounds<Pixels>>,
+}
+
+#[derive(Default)]
+struct TerminalImeState {
+    marked_text: Option<String>,
+}
+
+impl TerminalImeState {
+    fn marked_text_range(&self) -> Option<std::ops::Range<usize>> {
+        self.marked_text
+            .as_ref()
+            .map(|text| 0..text.encode_utf16().count())
+    }
+
+    fn set_marked_text(&mut self, text: &str) {
+        self.marked_text = Some(text.to_owned());
+    }
+
+    fn clear_marked_text(&mut self) {
+        self.marked_text = None;
+    }
+
+    fn commit_text<'a>(&mut self, text: &'a str) -> Option<&'a str> {
+        self.clear_marked_text();
+        (!text.is_empty()).then_some(text)
+    }
 }
 
 impl TerminalView {
@@ -561,6 +591,7 @@ impl TerminalView {
             exit_callback: None,
             viewport: Arc::new(parking_lot::Mutex::new(None)),
             selecting: false,
+            ime_state: TerminalImeState::default(),
         }
     }
 
@@ -813,6 +844,13 @@ impl TerminalView {
         {
             keystroke.modifiers.control && keystroke.modifiers.shift
         }
+    }
+
+    fn ime_cursor_bounds(&self, range_utf16: std::ops::Range<usize>) -> Option<Bounds<Pixels>> {
+        let viewport = (*self.viewport.lock())?;
+        let mut bounds = viewport.cursor_bounds?;
+        bounds.origin.x += viewport.cell_width * range_utf16.start as f32;
+        Some(bounds)
     }
 
     /// Handle keyboard input events.
@@ -1080,6 +1118,88 @@ impl TerminalView {
     }
 }
 
+impl EntityInputHandler for TerminalView {
+    fn text_for_range(
+        &mut self,
+        _range: std::ops::Range<usize>,
+        _adjusted_range: &mut Option<std::ops::Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<String> {
+        None
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _ignore_disabled_input: bool,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        Some(UTF16Selection {
+            range: 0..0,
+            reversed: false,
+        })
+    }
+
+    fn marked_text_range(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<std::ops::Range<usize>> {
+        self.ime_state.marked_text_range()
+    }
+
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.ime_state.clear_marked_text();
+        cx.notify();
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        _range: Option<std::ops::Range<usize>>,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(text) = self.ime_state.commit_text(text) {
+            self.write_stdin(text.as_bytes());
+        }
+        window.invalidate_character_coordinates();
+        cx.notify();
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        _range: Option<std::ops::Range<usize>>,
+        new_text: &str,
+        _new_selected_range: Option<std::ops::Range<usize>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ime_state.set_marked_text(new_text);
+        cx.notify();
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        range_utf16: std::ops::Range<usize>,
+        _element_bounds: Bounds<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        self.ime_cursor_bounds(range_utf16)
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        _point: Point<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        None
+    }
+}
+
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Process any pending events
@@ -1092,6 +1212,9 @@ impl Render for TerminalView {
         let padding = self.config.padding;
         let show_scrollbar = self.config.show_scrollbar;
         let viewport = self.viewport.clone();
+        let terminal = cx.entity();
+        let focus_handle = self.focus_handle.clone();
+        let marked_text = self.ime_state.marked_text.clone();
         let scrollbar_gutter = px(6.0);
 
         div()
@@ -1138,6 +1261,7 @@ impl Render for TerminalView {
                             cell_height: measured_renderer.cell_height,
                             cols,
                             rows,
+                            cursor_bounds: None,
                         });
 
                         // Helper struct implementing Dimensions for resize
@@ -1178,6 +1302,12 @@ impl Render for TerminalView {
                             term.resize(TermSize { cols, rows });
                         }
 
+                        let cursor_bounds =
+                            measured_renderer.cursor_bounds(bounds, effective_padding, &term);
+                        if let Some(viewport) = viewport.lock().as_mut() {
+                            viewport.cursor_bounds = cursor_bounds;
+                        }
+
                         // Paint the terminal with measured dimensions
                         measured_renderer.paint(
                             bounds,
@@ -1187,6 +1317,23 @@ impl Render for TerminalView {
                             window,
                             cx,
                         );
+                        if let (Some(cursor_bounds), Some(marked_text)) =
+                            (cursor_bounds, marked_text.as_deref())
+                        {
+                            measured_renderer.paint_ime_text(
+                                cursor_bounds,
+                                &term,
+                                marked_text,
+                                window,
+                                cx,
+                            );
+                        }
+                        drop(term);
+                        window.handle_input(
+                            &focus_handle,
+                            ElementInputHandler::new(bounds, terminal.clone()),
+                            cx,
+                        );
                     },
                 )
                 .size_full(),
@@ -1194,5 +1341,26 @@ impl Render for TerminalView {
     }
 }
 
-// Tests are omitted due to macro expansion issues with the test attribute
-// in this configuration. Integration tests can be added separately.
+#[cfg(test)]
+mod tests {
+    use super::{TerminalImeState, TerminalView};
+    use gpui::EntityInputHandler;
+
+    #[test]
+    fn ime_composition_waits_for_commit() {
+        let mut ime_state = TerminalImeState::default();
+
+        ime_state.set_marked_text("你😀");
+        assert_eq!(ime_state.marked_text_range(), Some(0..3));
+
+        assert_eq!(ime_state.commit_text("中文"), Some("中文"));
+        assert_eq!(ime_state.marked_text_range(), None);
+        assert_eq!(ime_state.commit_text(""), None);
+    }
+
+    #[test]
+    fn terminal_view_implements_gpui_text_input() {
+        fn assert_input_handler<T: EntityInputHandler>() {}
+        assert_input_handler::<TerminalView>();
+    }
+}
