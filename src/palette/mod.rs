@@ -22,6 +22,7 @@ pub enum PaletteKind {
     Project,
     Tab,
     Pane,
+    GitBranch,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -403,6 +404,8 @@ fn command_title_key(command_id: CommandId) -> UiTextKey {
         CommandId::ProjectPalette => UiTextKey::CommandProjectPaletteTitle,
         CommandId::ProjectPanelToggle => UiTextKey::CommandProjectPanelToggleTitle,
         CommandId::ProjectPanelRefresh => UiTextKey::CommandProjectPanelRefreshTitle,
+        CommandId::GitBranchSwitch => UiTextKey::CommandGitBranchSwitchTitle,
+        CommandId::GitDiffOpen => UiTextKey::CommandGitDiffOpenTitle,
         CommandId::FileSave => UiTextKey::CommandFileSaveTitle,
         CommandId::TabNew => UiTextKey::CommandTabNewTitle,
         CommandId::TabClose => UiTextKey::CommandTabCloseTitle,
@@ -446,6 +449,8 @@ fn command_description_key(command_id: CommandId) -> UiTextKey {
         CommandId::ProjectPalette => UiTextKey::CommandProjectPaletteDescription,
         CommandId::ProjectPanelToggle => UiTextKey::CommandProjectPanelToggleDescription,
         CommandId::ProjectPanelRefresh => UiTextKey::CommandProjectPanelRefreshDescription,
+        CommandId::GitBranchSwitch => UiTextKey::CommandGitBranchSwitchDescription,
+        CommandId::GitDiffOpen => UiTextKey::CommandGitDiffOpenDescription,
         CommandId::FileSave => UiTextKey::CommandFileSaveDescription,
         CommandId::TabNew => UiTextKey::CommandTabNewDescription,
         CommandId::TabClose => UiTextKey::CommandTabCloseDescription,

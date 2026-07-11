@@ -17,6 +17,7 @@ use yttt_terminal::input::keystroke_to_bytes;
 mod action_handlers;
 mod dialogs;
 mod document_lifecycle;
+mod git;
 mod helpers;
 pub mod layout_editor;
 mod layout_editor_controller;
@@ -31,6 +32,7 @@ pub mod shell;
 mod state;
 mod surface;
 use dialogs::*;
+use git::*;
 use helpers::*;
 use render::{push_component_notification, split_child};
 use settings::{settings_button, settings_overlay};
@@ -104,7 +106,10 @@ use crate::{
         unified_tab_palette_items,
     },
     runtime::{
-        git_status::read_project_git_status,
+        git_status::{
+            read_project_git_branches, read_project_git_diff, read_project_git_status,
+            switch_project_git_branch,
+        },
         notification::{
             NoopSystemNotifier, NotificationEvent, NotificationKind, maybe_notify_system,
         },
@@ -125,15 +130,15 @@ use crate::{
         },
         i18n::{Locale, UiText, UiTextKey},
         interaction::actions::{
-            FileSave, LayoutDefaultEdit, LayoutDefaultReload, LayoutDefaultReset,
-            LayoutExportProjectConfig, LayoutOpenFile, LayoutProjectEdit, LayoutResetLocalOverride,
-            LayoutSaveCurrent, OpenCommandPalette, OpenPanePalette, OpenProject,
-            OpenProjectPalette, OpenTabPalette, PaletteCancel, PaletteConfirm, PaletteSelectNext,
-            PaletteSelectPrev, PaneClose, PaneFocusDown, PaneFocusLeft, PaneFocusRight,
-            PaneFocusUp, PaneRename, PaneResizeDown, PaneResizeLeft, PaneResizeRight, PaneResizeUp,
-            PaneSplitHorizontal, PaneSplitVertical, ProjectClose, SettingsKeybindings,
-            SettingsNotifications, SettingsOpen, TabClose, TabNew, TabNext, TabPrev, TabRename,
-            UiKeybindingSpec, WORKSPACE_CONTEXT, runtime_command_for_keystroke,
+            FileSave, GitBranchSwitch, GitDiffOpen, LayoutDefaultEdit, LayoutDefaultReload,
+            LayoutDefaultReset, LayoutExportProjectConfig, LayoutOpenFile, LayoutProjectEdit,
+            LayoutResetLocalOverride, LayoutSaveCurrent, OpenCommandPalette, OpenPanePalette,
+            OpenProject, OpenProjectPalette, OpenTabPalette, PaletteCancel, PaletteConfirm,
+            PaletteSelectNext, PaletteSelectPrev, PaneClose, PaneFocusDown, PaneFocusLeft,
+            PaneFocusRight, PaneFocusUp, PaneRename, PaneResizeDown, PaneResizeLeft,
+            PaneResizeRight, PaneResizeUp, PaneSplitHorizontal, PaneSplitVertical, ProjectClose,
+            SettingsKeybindings, SettingsNotifications, SettingsOpen, TabClose, TabNew, TabNext,
+            TabPrev, TabRename, UiKeybindingSpec, WORKSPACE_CONTEXT, runtime_command_for_keystroke,
             ui_keybinding_specs_from_config,
         },
         interaction::input_owner::{
@@ -234,6 +239,7 @@ fn palette_input_scope_id(kind: PaletteKind) -> &'static str {
         PaletteKind::Project => "palette.project",
         PaletteKind::Tab => "palette.tab",
         PaletteKind::Pane => "palette.pane",
+        PaletteKind::GitBranch => "palette.git_branch",
     }
 }
 
@@ -1186,6 +1192,8 @@ impl WorkbenchView {
                 }
                 Ok(())
             }
+            CommandId::GitBranchSwitch => self.open_git_branch_switcher(),
+            CommandId::GitDiffOpen => self.open_git_diff_panel(),
             CommandId::FileSave => {
                 if let Some(WorkItemId::File(document_id)) = self.active_work_item()
                     && !self.documents.pending_document_saves.contains(&document_id)
@@ -1597,6 +1605,31 @@ impl WorkbenchView {
         {
             self.documents.pending_file_conflict = None;
         }
+        if self.palette.git_branch_project_id.as_ref() == Some(project_id) {
+            self.palette.git_branch_generation = self.palette.git_branch_generation.wrapping_add(1);
+            self.palette.git_branch_project_id = None;
+            self.palette.git_branches.clear();
+            self.palette.pending_git_branch_load = None;
+            self.palette.pending_git_branch_switch = None;
+            if self
+                .palette
+                .active_palette
+                .as_ref()
+                .is_some_and(|palette| palette.kind == PaletteKind::GitBranch)
+            {
+                self.close_palette();
+            }
+        }
+        if self
+            .overlays
+            .git_diff_panel
+            .as_ref()
+            .is_some_and(|panel| &panel.project_id == project_id)
+        {
+            self.overlays.git_diff_generation = self.overlays.git_diff_generation.wrapping_add(1);
+            self.overlays.git_diff_panel = None;
+            self.overlays.pending_git_diff_load = None;
+        }
         self.remove_terminal_panes_for_project(project_id.as_str());
         self.project
             .project_editor_runtime
@@ -1825,6 +1858,43 @@ impl WorkbenchView {
         }
     }
 
+    fn queue_default_active_work_item_focus(&mut self) -> bool {
+        let Some(item) = self.active_work_item() else {
+            return false;
+        };
+        let owner_accepts_focus = matches!(
+            (&item, self.foreground_input_owner_kind()),
+            (WorkItemId::Terminal(_), InputOwnerKind::Workspace)
+                | (WorkItemId::File(_), InputOwnerKind::Editor)
+        );
+        owner_accepts_focus && self.queue_work_item_focus(&item)
+    }
+
+    fn queue_work_item_focus(&mut self, item: &WorkItemId) -> bool {
+        match item {
+            WorkItemId::Terminal(tab_id) => {
+                self.project.pending_editor_focus_document_id = None;
+                let pane_id = self
+                    .workspace
+                    .selected_project_id()
+                    .and_then(|project_id| self.workspace.project(project_id))
+                    .and_then(|project| project.tab_state(tab_id))
+                    .and_then(|tab| tab.focused_pane_id.clone());
+                let Some(pane_id) = pane_id else {
+                    self.terminal.pending_terminal_focus_pane_id = None;
+                    return false;
+                };
+                self.queue_terminal_focus(&pane_id);
+                true
+            }
+            WorkItemId::File(document_id) => {
+                self.terminal.pending_terminal_focus_pane_id = None;
+                self.project.pending_editor_focus_document_id = Some(document_id.clone());
+                true
+            }
+        }
+    }
+
     fn selected_project_work_item_ids(&self) -> Option<(ProjectId, Vec<String>)> {
         let project_id = self.workspace.selected_project_id()?.clone();
         let terminal_ids = self
@@ -1864,17 +1934,10 @@ impl WorkbenchView {
     }
 
     fn apply_active_work_item(&mut self, item: &WorkItemId) -> Result<(), WorkbenchError> {
-        match item {
-            WorkItemId::Terminal(tab_id) => {
-                self.workspace.select_tab(tab_id)?;
-                self.project.pending_editor_focus_document_id = None;
-                self.queue_selected_terminal_focus();
-            }
-            WorkItemId::File(document_id) => {
-                self.terminal.pending_terminal_focus_pane_id = None;
-                self.project.pending_editor_focus_document_id = Some(document_id.clone());
-            }
+        if let WorkItemId::Terminal(tab_id) = item {
+            self.workspace.select_tab(tab_id)?;
         }
+        self.queue_work_item_focus(item);
         self.sync_input_owner_state();
         Ok(())
     }
@@ -1999,6 +2062,11 @@ impl WorkbenchView {
                 .map(|session| session.target().input_scope_id())
                 .unwrap_or("editor.project_layout");
             InputOwnerRegistration::blocking(InputOwnerKind::Dialog, InputScopeId::new(scope))
+        } else if self.overlays.git_diff_panel.is_some() {
+            InputOwnerRegistration::blocking(
+                InputOwnerKind::Dialog,
+                InputScopeId::new("overlay.git_diff"),
+            )
         } else if self.settings.settings_page.is_open {
             InputOwnerRegistration::blocking(
                 InputOwnerKind::Settings,

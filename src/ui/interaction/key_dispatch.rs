@@ -42,6 +42,8 @@ fn editor_runtime_command_allowed(command: CommandId) -> bool {
             | CommandId::TabPrev
             | CommandId::ProjectPanelToggle
             | CommandId::ProjectPanelRefresh
+            | CommandId::GitBranchSwitch
+            | CommandId::GitDiffOpen
             | CommandId::CommandPaletteOpen
             | CommandId::ProjectOpenRecent
             | CommandId::ProjectPalette

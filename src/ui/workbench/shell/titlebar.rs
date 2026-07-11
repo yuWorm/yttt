@@ -1,4 +1,4 @@
-use gpui::{IntoElement, div, prelude::*, rgb};
+use gpui::{App, ClickEvent, IntoElement, Window, div, prelude::*, rgb};
 use gpui_component::{StyledExt, TitleBar};
 
 use crate::ui::theme::WorkbenchTheme;
@@ -43,7 +43,16 @@ pub fn compact_path_for_titlebar(path: &str) -> String {
     }
 }
 
-pub fn workbench_titlebar(info: TitlebarInfo, theme: WorkbenchTheme) -> impl IntoElement {
+pub fn workbench_titlebar<BranchH, DiffH>(
+    info: TitlebarInfo,
+    theme: WorkbenchTheme,
+    on_branch_click: BranchH,
+    on_diff_click: DiffH,
+) -> impl IntoElement
+where
+    BranchH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    DiffH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+{
     TitleBar::new()
         .bg(theme.titlebar_background)
         .border_color(theme.border)
@@ -58,17 +67,59 @@ pub fn workbench_titlebar(info: TitlebarInfo, theme: WorkbenchTheme) -> impl Int
                 .text_color(theme.text)
                 .bg(theme.titlebar_background)
                 .child(div().font_semibold().child(info.project_name))
-                .children(info.compact_path.map(|path| titlebar_meta(path, theme)))
-                .children(info.git_branch.map(|branch| titlebar_meta(branch, theme)))
+                .children(info.compact_path.map(|path| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(titlebar_separator(theme))
+                        .child(titlebar_meta(path, theme))
+                }))
+                .children(info.git_branch.map(|branch| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(titlebar_separator(theme))
+                        .child(
+                            div()
+                                .id("titlebar-git-branch")
+                                .debug_selector(|| "titlebar-git-branch".to_string())
+                                .cursor_pointer()
+                                .rounded_sm()
+                                .px_1()
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .hover(move |this| {
+                                    this.bg(theme.hover_surface).text_color(theme.text)
+                                })
+                                .on_click(on_branch_click)
+                                .child(format!("⎇ {branch}")),
+                        )
+                }))
                 .children(info.git_counters.map(|counters| {
                     div()
-                        .rounded_sm()
-                        .border_1()
-                        .border_color(theme.border)
-                        .px_1()
-                        .text_xs()
-                        .text_color(rgb(0xc8d3df))
-                        .child(counters)
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(titlebar_separator(theme))
+                        .child(
+                            div()
+                                .id("titlebar-git-changes")
+                                .debug_selector(|| "titlebar-git-changes".to_string())
+                                .cursor_pointer()
+                                .rounded_sm()
+                                .border_1()
+                                .border_color(theme.border)
+                                .px_1()
+                                .text_xs()
+                                .text_color(rgb(0xc8d3df))
+                                .hover(move |this| {
+                                    this.bg(theme.hover_surface).border_color(theme.accent)
+                                })
+                                .on_click(on_diff_click)
+                                .child(counters),
+                        )
                 })),
         )
 }
@@ -79,4 +130,8 @@ fn titlebar_meta(value: String, theme: WorkbenchTheme) -> impl IntoElement {
         .text_xs()
         .text_color(theme.text_muted)
         .child(value)
+}
+
+fn titlebar_separator(theme: WorkbenchTheme) -> impl IntoElement {
+    div().text_xs().text_color(theme.text_subtle).child("—")
 }

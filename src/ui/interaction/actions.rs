@@ -21,6 +21,8 @@ actions!(
         OpenProjectPalette,
         ProjectPanelToggle,
         ProjectPanelRefresh,
+        GitBranchSwitch,
+        GitDiffOpen,
         FileSave,
         OpenTabPalette,
         OpenPanePalette,

@@ -146,6 +146,11 @@ impl WorkbenchView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.overlays.git_diff_panel.is_some() {
+            self.close_git_diff_panel();
+            cx.notify();
+            return;
+        }
         if self.overlays.layout_toml_editor.is_some() {
             self.cancel_layout_toml_editor();
             cx.notify();
@@ -430,6 +435,24 @@ impl WorkbenchView {
         cx.notify();
     }
 
+    pub(super) fn on_git_branch_switch(
+        &mut self,
+        _: &GitBranchSwitch,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::GitBranchSwitch, cx);
+    }
+
+    pub(super) fn on_git_diff_open(
+        &mut self,
+        _: &GitDiffOpen,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::GitDiffOpen, cx);
+    }
+
     pub(super) fn on_settings_open(
         &mut self,
         _: &SettingsOpen,
@@ -481,6 +504,7 @@ impl WorkbenchView {
             || self.overlays.pending_tab_rename.is_some()
             || self.overlays.pending_keybinding_edit.is_some()
             || self.overlays.layout_toml_editor.is_some()
+            || self.overlays.git_diff_panel.is_some()
         {
             cx.propagate();
             return;

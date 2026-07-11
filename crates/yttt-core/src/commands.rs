@@ -29,6 +29,8 @@ pub enum CommandId {
     ProjectPalette,
     ProjectPanelToggle,
     ProjectPanelRefresh,
+    GitBranchSwitch,
+    GitDiffOpen,
     FileSave,
     TabNew,
     TabClose,
@@ -72,6 +74,8 @@ impl CommandId {
         Self::ProjectPanelToggle,
         Self::ProjectPanelRefresh,
         Self::FileSave,
+        Self::GitBranchSwitch,
+        Self::GitDiffOpen,
         Self::TabNew,
         Self::TabClose,
         Self::TabRename,
@@ -113,6 +117,8 @@ impl CommandId {
             Self::ProjectPalette => "project.palette",
             Self::ProjectPanelToggle => "project_panel.toggle",
             Self::ProjectPanelRefresh => "project_panel.refresh",
+            Self::GitBranchSwitch => "git.branch.switch",
+            Self::GitDiffOpen => "git.diff.open",
             Self::FileSave => "file.save",
             Self::TabNew => "tab.new",
             Self::TabClose => "tab.close",
@@ -171,6 +177,13 @@ impl CommandId {
             Self::ProjectPanelRefresh => {
                 presentation("Refresh Project Files", "Refresh the project file tree")
             }
+            Self::GitBranchSwitch => {
+                presentation("Switch Git Branch", "Choose and check out a Git branch")
+            }
+            Self::GitDiffOpen => presentation(
+                "Show Git Changes",
+                "Open the selected project's working tree diff",
+            ),
             Self::FileSave => presentation("Save File", "Save the active project file"),
             Self::TabNew => presentation("New Tab", "Create a shell tab in the selected project"),
             Self::TabClose => presentation("Close Tab", "Close the selected tab"),
@@ -285,6 +298,8 @@ impl CommandId {
             Self::ProjectClose
             | Self::ProjectPanelToggle
             | Self::ProjectPanelRefresh
+            | Self::GitBranchSwitch
+            | Self::GitDiffOpen
             | Self::TabPalette
             | Self::LayoutProjectEdit
             | Self::LayoutSaveCurrent

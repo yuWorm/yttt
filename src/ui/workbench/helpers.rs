@@ -29,6 +29,7 @@ pub(super) fn opens_palette_command(command_id: CommandId) -> bool {
             | CommandId::ProjectPalette
             | CommandId::TabPalette
             | CommandId::PanePalette
+            | CommandId::GitBranchSwitch
     )
 }
 

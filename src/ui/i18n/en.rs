@@ -42,6 +42,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::PalettePlaceholderProject => "Switch project...",
         UiTextKey::PalettePlaceholderTab => "Switch tab...",
         UiTextKey::PalettePlaceholderPane => "Switch pane...",
+        UiTextKey::PalettePlaceholderGitBranch => "Switch Git branch...",
         UiTextKey::PaletteRun => "Run",
         UiTextKey::PaletteClose => "Close",
         UiTextKey::PaletteStatusOpen => "open",
@@ -76,6 +77,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandProjectPanelToggleDescription => "Show or hide the project file tree",
         UiTextKey::CommandProjectPanelRefreshTitle => "Refresh Project Files",
         UiTextKey::CommandProjectPanelRefreshDescription => "Refresh the project file tree",
+        UiTextKey::CommandGitBranchSwitchTitle => "Switch Git Branch",
+        UiTextKey::CommandGitBranchSwitchDescription => "Choose and check out a Git branch",
+        UiTextKey::CommandGitDiffOpenTitle => "Show Git Changes",
+        UiTextKey::CommandGitDiffOpenDescription => "Open the selected project's working tree diff",
         UiTextKey::CommandFileSaveTitle => "Save File",
         UiTextKey::CommandFileSaveDescription => "Save the active project file",
         UiTextKey::CommandTabNewTitle => "New Tab",
@@ -162,6 +167,14 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandSettingsNotificationsDescription => {
             "Toggle system notifications for agent exits"
         }
+        UiTextKey::GitBranchesLoading => "Loading Git branches…",
+        UiTextKey::GitBranchSwitchFailed => "Could not switch Git branch",
+        UiTextKey::GitBranchLocal => "Local branch",
+        UiTextKey::GitBranchRemote => "Remote branch",
+        UiTextKey::GitBranchAlreadyActive => "Already active",
+        UiTextKey::GitDiffTitle => "Git Changes",
+        UiTextKey::GitDiffLoading => "Loading working tree diff…",
+        UiTextKey::GitDiffClean => "Working tree is clean",
         UiTextKey::CloseProjectTitle => "Close project?",
         UiTextKey::CloseProjectBody => "Running terminal processes will be stopped.",
         UiTextKey::UnsavedChangesTitle => "Unsaved changes",

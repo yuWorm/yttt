@@ -4549,3 +4549,72 @@ fn multi_agent_layout() -> yttt::model::layout::ProjectLayout {
     )
     .unwrap()
 }
+
+#[test]
+fn git_commands_are_registered_in_action_and_keybinding_panels() {
+    let mut root = WorkbenchView::dev_fixture();
+    root.open_palette(PaletteKind::Command);
+    let command_ids = root
+        .active_palette_items()
+        .into_iter()
+        .map(|item| item.command)
+        .collect::<Vec<_>>();
+    assert!(command_ids.contains(&CommandId::GitBranchSwitch));
+    assert!(command_ids.contains(&CommandId::GitDiffOpen));
+
+    let keybinding_commands = root
+        .visible_keybinding_rows()
+        .into_iter()
+        .map(|row| row.command)
+        .collect::<Vec<_>>();
+    assert!(keybinding_commands.contains(&CommandId::GitBranchSwitch));
+    assert!(keybinding_commands.contains(&CommandId::GitDiffOpen));
+}
+
+#[test]
+fn git_commands_open_branch_selector_and_diff_panel() {
+    let mut root = WorkbenchView::dev_fixture();
+
+    root.run_command(CommandId::GitBranchSwitch).unwrap();
+    assert_eq!(
+        root.active_palette().map(|palette| palette.kind),
+        Some(PaletteKind::GitBranch)
+    );
+
+    root.run_command(CommandId::GitDiffOpen).unwrap();
+    assert!(root.active_palette().is_none());
+    assert!(root.git_diff_panel_is_open());
+    assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Dialog);
+    assert!(!root.terminal_input_allowed());
+
+    root.close_git_diff_panel();
+    assert!(!root.git_diff_panel_is_open());
+    assert_eq!(
+        root.foreground_input_owner_kind(),
+        InputOwnerKind::Workspace
+    );
+}
+
+#[test]
+fn configured_git_keybinding_dispatches_from_the_workbench() {
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
+    root.set_keybinding_command_keys(CommandId::GitDiffOpen, vec!["cmd-shift-g".to_string()])
+        .unwrap();
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let document_id = root
+        .project_editor_runtime_mut()
+        .workspace_mut()
+        .session_mut(&project_id)
+        .unwrap()
+        .open_file(PathBuf::from("/tmp/yttt/src/main.rs"));
+    root.select_work_item(WorkItemId::File(document_id))
+        .unwrap();
+    assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Editor);
+
+    assert_eq!(
+        root.runtime_command_for_keystroke(&Keystroke::parse("cmd-shift-g").unwrap()),
+        Some(CommandId::GitDiffOpen)
+    );
+    assert!(root.dispatch_runtime_keybinding(&Keystroke::parse("cmd-shift-g").unwrap()));
+    assert!(root.git_diff_panel_is_open());
+}

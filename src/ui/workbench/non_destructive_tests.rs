@@ -31,6 +31,71 @@ fn assert_runtime_unchanged(root: &WorkbenchView, expected: &RuntimeSnapshot) {
 }
 
 #[gpui::test]
+fn active_terminal_content_receives_default_focus(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(project_path, dev_fixture_layout())
+        .unwrap();
+
+    let (root, mut cx) = cx.add_window_view(|_, _| {
+        WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
+    });
+    cx.run_until_parked();
+
+    cx.update(|window, cx| {
+        let root = root.read(cx);
+        let workbench_focus = root
+            .focus_handle
+            .as_ref()
+            .expect("render must initialize the workbench focus handle");
+        assert!(
+            workbench_focus.contains_focused(window, cx),
+            "the active tab content must be inside the focused workbench subtree"
+        );
+        assert!(
+            !workbench_focus.is_focused(window),
+            "focus must land on the active tab content, not the workbench fallback"
+        );
+        assert!(
+            root.terminal.pending_terminal_focus_pane_id.is_none(),
+            "render must consume the active terminal focus request"
+        );
+    });
+}
+
+#[gpui::test]
+fn titlebar_renders_branch_and_changes_actions(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(project_path, dev_fixture_layout())
+        .unwrap();
+
+    let (_root, mut cx) = cx.add_window_view(|_, _| {
+        let mut root =
+            WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths);
+        root.project.project_git_statuses.insert(
+            project_id,
+            crate::runtime::git_status::parse_git_status_porcelain("## main\n M src/main.rs\n"),
+        );
+        root
+    });
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("titlebar-git-branch").is_some());
+    assert!(cx.debug_bounds("titlebar-git-changes").is_some());
+}
+
+#[gpui::test]
 fn layout_default_does_not_drop_terminal_entities(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();

@@ -2,6 +2,7 @@ use super::*;
 
 impl Render for WorkbenchView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.flush_pending_git_operations(window, cx);
         self.flush_pending_project_tree_loads(window, cx);
         self.flush_pending_document_saves(window, cx);
         self.flush_pending_focus_change_autosaves(window, cx);
@@ -9,6 +10,8 @@ impl Render for WorkbenchView {
         self.flush_pending_project_close_requests(cx);
         self.sync_input_owner_state();
         let focus_handle = self.workbench_focus_handle(cx);
+        let default_active_content_focus_requested = !focus_handle.contains_focused(window, cx)
+            && self.queue_default_active_work_item_focus();
 
         let body = if self.workspace.opened_projects().is_empty() {
             empty_workspace(cx, &self.ui_text, &self.theme_runtime.ui)
@@ -119,6 +122,18 @@ impl Render for WorkbenchView {
                 workbench
             }
         };
+        let default_active_content_focus_scheduled = default_active_content_focus_requested
+            && match self.active_work_item() {
+                Some(WorkItemId::Terminal(_)) => {
+                    self.terminal.pending_terminal_focus_pane_id.is_none()
+                }
+                Some(WorkItemId::File(document_id)) => self
+                    .project
+                    .pending_editor_focus_document_id
+                    .as_ref()
+                    .is_none_or(|pending| pending != &document_id),
+                None => false,
+            };
 
         let mut root = div()
             .flex()
@@ -130,6 +145,14 @@ impl Render for WorkbenchView {
             .child(workbench_titlebar(
                 self.visible_titlebar_info(),
                 self.theme_runtime.ui,
+                cx.listener(|this, _, _window, cx| {
+                    let _ = this.run_command(CommandId::GitBranchSwitch);
+                    cx.notify();
+                }),
+                cx.listener(|this, _, _window, cx| {
+                    let _ = this.run_command(CommandId::GitDiffOpen);
+                    cx.notify();
+                }),
             ))
             .child(body);
 
@@ -172,6 +195,9 @@ impl Render for WorkbenchView {
             if let Some(input) = self.layout_toml_input(window, cx) {
                 root = root.child(layout_toml_editor_overlay(self, &input, cx));
             }
+        }
+        if let Some(panel) = self.render_git_diff_panel(cx) {
+            root = root.child(panel);
         }
         if self.overlays.pending_tab_rename.is_some() {
             if let Some(input) = self.tab_rename_input(window, cx) {
@@ -233,7 +259,10 @@ impl Render for WorkbenchView {
             root = root.child(dialog_layer);
         }
 
-        if self.should_auto_focus_workspace() && !focus_handle.contains_focused(window, cx) {
+        if self.should_auto_focus_workspace()
+            && !focus_handle.contains_focused(window, cx)
+            && !default_active_content_focus_scheduled
+        {
             focus_handle.focus(window, cx);
         }
 
@@ -258,6 +287,8 @@ impl Render for WorkbenchView {
             .on_action(cx.listener(Self::on_tab_next))
             .on_action(cx.listener(Self::on_tab_prev))
             .on_action(cx.listener(Self::on_file_save))
+            .on_action(cx.listener(Self::on_git_branch_switch))
+            .on_action(cx.listener(Self::on_git_diff_open))
             .on_action(cx.listener(Self::on_pane_split_vertical))
             .on_action(cx.listener(Self::on_pane_split_horizontal))
             .on_action(cx.listener(Self::on_pane_close))

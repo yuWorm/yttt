@@ -92,6 +92,10 @@ impl WorkbenchView {
             PaletteKind::Pane => {
                 self.focus_visible_terminal_pane(&item.id)?;
             }
+            PaletteKind::GitBranch => {
+                self.queue_git_branch_switch(&item.id);
+                return Ok(());
+            }
         }
 
         self.close_palette();
@@ -135,6 +139,7 @@ impl WorkbenchView {
                     pane_palette_items_with_text(&self.workspace, &self.ui_text).unwrap_or_default()
                 }
             }
+            PaletteKind::GitBranch => self.git_branch_palette_items(),
         }
     }
 
