@@ -295,6 +295,26 @@ fn personal_layout_v1_parses_replace_and_validates_domain_layout() {
 }
 
 #[test]
+fn personal_layout_loads_legacy_unversioned_patch() {
+    let path = std::path::Path::new("/tmp/personal-layout.toml");
+    let patch = LayoutOverride {
+        tabs: vec![TabOverride {
+            id: "dev".to_string(),
+            title: Some("Legacy Development".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let source = toml::to_string_pretty(&patch).unwrap();
+
+    let PersonalLayout::Patch(parsed) = parse_personal_layout(path, &source).unwrap() else {
+        panic!("expected legacy patch personal layout");
+    };
+
+    assert_eq!(parsed, patch);
+}
+
+#[test]
 fn personal_layout_v1_maps_toml_syntax_errors_to_parse_errors() {
     let path = std::path::Path::new("/tmp/personal-layout.toml");
 
@@ -728,7 +748,7 @@ fn personal_layout_precedence_replace_wins_over_global_and_project_bases() {
 }
 
 #[test]
-fn personal_layout_warning_preserves_base_and_rejects_legacy_file() {
+fn personal_layout_legacy_replace_loads_over_project_base() {
     let temp = tempdir().unwrap();
     let project_dir = temp.path().join("invalid-personal");
     fs::create_dir_all(project_dir.join(".yttt")).unwrap();
@@ -742,20 +762,15 @@ fn personal_layout_warning_preserves_base_and_rejects_legacy_file() {
     let canonical_project = project_dir.canonicalize().unwrap();
     let local = paths.local_layout_file(&canonical_project);
     fs::create_dir_all(local.parent().unwrap()).unwrap();
-    fs::write(&local, toml::to_string_pretty(&sample_layout()).unwrap()).unwrap();
+    let mut legacy_layout = sample_layout();
+    legacy_layout.project.name = "legacy personal".to_string();
+    fs::write(&local, toml::to_string_pretty(&legacy_layout).unwrap()).unwrap();
 
     let opened = open_project_config(&paths, &project_dir, &mut default_state).unwrap();
 
-    assert_eq!(opened.layout, sample_layout());
-    assert_eq!(
-        opened.layout_source,
-        LayoutSource::ProjectConfig(paths.project_layout_file(&opened.path))
-    );
-    assert!(matches!(
-        opened.warnings.as_slice(),
-        [LayoutLoadWarning::PersonalOverrideValidation { path, message }]
-            if path == &local && message.contains("version")
-    ));
+    assert_eq!(opened.layout, legacy_layout);
+    assert_eq!(opened.layout_source, LayoutSource::PersonalReplace(local));
+    assert!(opened.warnings.is_empty());
 }
 
 #[test]
@@ -954,6 +969,32 @@ fn config_personal_replace_reports_personal_source() {
         opened.layout_source,
         LayoutSource::PersonalReplace(local_layout_file)
     );
+}
+
+#[test]
+fn config_legacy_unversioned_personal_replace_loads_without_warning() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("legacy-local-source");
+    fs::create_dir(&project_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let local_layout_file = paths.local_layout_file(&project_dir.canonicalize().unwrap());
+    fs::create_dir_all(local_layout_file.parent().unwrap()).unwrap();
+    let mut legacy_layout = sample_layout();
+    legacy_layout.project.name = "legacy personal".to_string();
+    fs::write(
+        &local_layout_file,
+        toml::to_string_pretty(&legacy_layout).unwrap(),
+    )
+    .unwrap();
+
+    let opened = open_project_for_test(&paths, &project_dir);
+
+    assert_eq!(opened.layout.project.name, "legacy personal");
+    assert_eq!(
+        opened.layout_source,
+        LayoutSource::PersonalReplace(local_layout_file)
+    );
+    assert!(opened.warnings.is_empty());
 }
 
 #[test]

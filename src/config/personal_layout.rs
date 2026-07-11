@@ -29,6 +29,10 @@ pub(crate) fn parse(source: &str) -> Result<PersonalLayout, PersonalLayoutFileEr
         PersonalLayoutFileError::Validation("personal layout must be a TOML table".to_string())
     })?;
 
+    if let Some(legacy) = parse_legacy(source, table) {
+        return legacy;
+    }
+
     let version = table
         .get("version")
         .and_then(toml::Value::as_integer)
@@ -74,6 +78,32 @@ pub(crate) fn parse(source: &str) -> Result<PersonalLayout, PersonalLayoutFileEr
             "unsupported personal layout mode: {other}"
         ))),
     }
+}
+
+fn parse_legacy(
+    source: &str,
+    table: &toml::Table,
+) -> Option<Result<PersonalLayout, PersonalLayoutFileError>> {
+    if table.is_empty()
+        || table
+            .keys()
+            .any(|key| key.as_str() != "project" && key.as_str() != "tabs")
+    {
+        return None;
+    }
+
+    if let Ok(layout) = toml::from_str::<ProjectLayout>(source) {
+        return Some(
+            layout
+                .validate()
+                .map(|_| PersonalLayout::Replace(layout))
+                .map_err(|error| PersonalLayoutFileError::Validation(error.to_string())),
+        );
+    }
+
+    toml::from_str::<LayoutOverride>(source)
+        .ok()
+        .map(|layout| Ok(PersonalLayout::Patch(layout)))
 }
 
 pub(crate) fn serialize_patch(layout: &LayoutOverride) -> Result<String, toml::ser::Error> {
