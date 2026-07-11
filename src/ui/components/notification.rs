@@ -50,6 +50,7 @@ fn workbench_notification(
     let context = SharedString::from(item.context);
 
     Notification::new()
+        .always_show_close_button(true)
         .w(style.width)
         .border(style.border_width)
         .border_color(style.border)

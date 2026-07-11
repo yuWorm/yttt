@@ -1,14 +1,15 @@
-use std::mem::discriminant;
+use std::{cell::Cell, mem::discriminant, rc::Rc, time::Duration};
 use yttt::config::{paths::AppConfigPaths, settings::TerminalSettings};
 use yttt::ui::app::workbench_window_options;
 use yttt::ui::components::{
     SelectableState, notification_tone_for_toast, selectable_state_classes,
+    workbench_agent_notification,
 };
 use yttt::ui::i18n::{Locale, UiText};
 use yttt::ui::interaction::overlay::{
     KeyboardCapture, overlay_input_capture_policy, popover_overlay_event_policy,
 };
-use yttt::ui::notifications::ToastTone;
+use yttt::ui::notifications::{ToastItem, ToastTone};
 use yttt::ui::palette::surface::{
     PaletteFooterAction, PaletteRowTone, palette_footer_actions, palette_input_placeholder,
     palette_panel_style, palette_row_style, palette_scroll_anchor_index,
@@ -242,6 +243,45 @@ fn empty_tabs_keep_project_tree_toggle_visible(cx: &mut gpui::TestAppContext) {
     let (_view, cx) = cx.add_window_view(|_, _| EmptyProjectTabs);
 
     assert!(cx.debug_bounds("project-tree-toggle").is_some());
+}
+
+#[gpui::test]
+fn agent_notifications_have_a_visible_working_close_button(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let closed = Rc::new(Cell::new(false));
+    let closed_for_callback = closed.clone();
+    let (_notification, cx) = cx.add_window_view(move |_, _| {
+        workbench_agent_notification(
+            ToastItem {
+                title: "Codex completed".to_string(),
+                context: "yttt / Agent".to_string(),
+                tone: ToastTone::Success,
+            },
+            "Open",
+            WorkbenchTheme::one_dark(),
+        )
+        .autohide(false)
+        .on_close(move |_, _| closed_for_callback.set(true))
+    });
+    cx.background_executor
+        .advance_clock(Duration::from_millis(300));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    cx.simulate_click(
+        gpui::point(gpui::px(346.0), gpui::px(14.0)),
+        gpui::Modifiers::none(),
+    );
+    cx.background_executor
+        .advance_clock(Duration::from_millis(200));
+    cx.run_until_parked();
+
+    assert!(
+        closed.get(),
+        "clicking the close button should dismiss the notification"
+    );
 }
 
 #[test]

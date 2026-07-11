@@ -71,6 +71,7 @@ pub struct Notification {
     message: Option<SharedString>,
     icon: Option<Icon>,
     autohide: bool,
+    always_show_close_button: bool,
     action_builder: Option<Rc<dyn Fn(&mut Self, &mut Window, &mut Context<Self>) -> Button>>,
     content_builder: Option<Rc<dyn Fn(&mut Self, &mut Window, &mut Context<Self>) -> AnyElement>>,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
@@ -129,6 +130,7 @@ impl Notification {
             type_: None,
             icon: None,
             autohide: true,
+            always_show_close_button: false,
             action_builder: None,
             content_builder: None,
             on_click: None,
@@ -213,6 +215,12 @@ impl Notification {
     /// Set the auto hide of the notification, default is true.
     pub fn autohide(mut self, autohide: bool) -> Self {
         self.autohide = autohide;
+        self
+    }
+
+    /// Keep the close button visible instead of revealing it only on hover.
+    pub fn always_show_close_button(mut self, always_show: bool) -> Self {
+        self.always_show_close_button = always_show;
         self
     }
 
@@ -302,6 +310,7 @@ impl Render for Notification {
             .map(|builder| builder(self, window, cx).small().mr_3p5());
 
         let closing = self.closing;
+        let always_show_close_button = self.always_show_close_button;
         let icon = match self.type_ {
             None => self.icon.clone(),
             Some(type_) => Some(type_.icon(cx)),
@@ -346,8 +355,9 @@ impl Render for Notification {
                     .absolute()
                     .top_1()
                     .right_1()
-                    .invisible()
-                    .group_hover("", |this| this.visible())
+                    .when(!always_show_close_button, |this| {
+                        this.invisible().group_hover("", |this| this.visible())
+                    })
                     .child(
                         Button::new("close")
                             .icon(IconName::Close)
