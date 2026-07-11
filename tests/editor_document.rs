@@ -144,6 +144,7 @@ fn project_editor_document_tracks_breadcrumbs_at_the_cursor(cx: &mut gpui::TestA
     let (_root, cx) = cx.add_window_view(move |window, entity_cx| {
         let document = entity_cx.new(|document_cx| {
             ProjectEditorDocument::new(model, EditorAppearance::default(), window, document_cx)
+                .with_breadcrumb_header("src/app.rs")
         });
         *document_slot_for_window.borrow_mut() = Some(document.clone());
         gpui_component::Root::new(document, window, entity_cx)
@@ -155,6 +156,20 @@ fn project_editor_document_tracks_breadcrumbs_at_the_cursor(cx: &mut gpui::TestA
         input.set_cursor_position(gpui_component::input::Position::new(1, 4), window, input_cx);
     });
     cx.run_until_parked();
+    assert_eq!(
+        cx.read(|app| document.read(app).breadcrumb_header().to_string()),
+        "src/app.rs"
+    );
+    assert_eq!(
+        cx.read(|app| document
+            .read(app)
+            .model()
+            .editor()
+            .config()
+            .title()
+            .to_string()),
+        "main.rs"
+    );
 
     let breadcrumb_names = cx.read(|app| {
         document

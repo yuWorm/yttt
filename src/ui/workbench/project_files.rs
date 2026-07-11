@@ -466,6 +466,7 @@ impl WorkbenchView {
             } else {
                 CodeEditorLanguageMode::from(self.app_settings.editor.default_language.clone())
             };
+            let breadcrumb_header = loaded.relative_path.to_string_lossy().into_owned();
             let title = loaded
                 .relative_path
                 .file_name()
@@ -483,6 +484,7 @@ impl WorkbenchView {
             let appearance = EditorAppearance::from(&self.app_settings.editor);
             let document = cx.new(|document_cx| {
                 ProjectEditorDocument::new(model, appearance, window, document_cx)
+                    .with_breadcrumb_header(breadcrumb_header)
             });
             let subscription =
                 cx.subscribe_in(&document, window, Self::on_project_editor_document_event);

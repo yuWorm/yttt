@@ -1,5 +1,6 @@
 [workspace]
 members = [".", "crates/yttt-core", "crates/yttt-terminal", "crates/yttt-ui"]
+exclude = ["vendor/gpui-component"]
 resolver = "3"
 
 [package]
@@ -10,8 +11,8 @@ edition = "2024"
 [dependencies]
 anyhow = "1"
 gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
-gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "1505b1487131adbb443f6c69e87847db35bfa2d1", features = ["tree-sitter-languages"] }
-gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "1505b1487131adbb443f6c69e87847db35bfa2d1", package = "gpui-component-assets" }
+gpui-component = { path = "vendor/gpui-component/crates/ui", features = ["tree-sitter-languages"] }
+gpui-component-assets = { path = "vendor/gpui-component/crates/assets" }
 tree-sitter = "0.26"
 tree-sitter-bash = "0.23.3"
 tree-sitter-c = "0.24.1"

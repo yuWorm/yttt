@@ -3,8 +3,8 @@ use gpui::{
     ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Subscription, Window,
     div, px, relative,
 };
-use gpui_component::ActiveTheme as _;
 use gpui_component::input::{Input, InputEvent, InputState, Position, Search};
+use gpui_component::{ActiveTheme as _, Icon, IconName};
 
 use crate::config::settings::EditorSettings;
 
@@ -213,6 +213,7 @@ pub struct ProjectEditorDocument {
     model: ProjectEditorModel,
     input: Entity<InputState>,
     appearance: EditorAppearance,
+    breadcrumb_header: String,
     symbols: Vec<EditorSymbol>,
     breadcrumbs: Vec<EditorSymbol>,
     breadcrumb_cursor_line: usize,
@@ -229,6 +230,7 @@ impl ProjectEditorDocument {
     ) -> Self {
         let input = cx.new(|cx| code_editor_input_state(window, cx, model.editor()));
         let symbols = document_symbols(model.editor().language_id(), model.value());
+        let breadcrumb_header = model.editor().config().title().to_string();
         let breadcrumbs = breadcrumbs_at(&symbols, 0);
         input.update(cx, |input, input_cx| {
             input.set_soft_wrap(appearance.soft_wrap, window, input_cx);
@@ -240,12 +242,22 @@ impl ProjectEditorDocument {
             model,
             input,
             appearance,
+            breadcrumb_header,
             symbols,
             breadcrumbs,
             breadcrumb_cursor_line: 0,
             _input_subscription: input_subscription,
             _input_observer: input_observer,
         }
+    }
+
+    pub fn with_breadcrumb_header(mut self, breadcrumb_header: impl Into<String>) -> Self {
+        self.breadcrumb_header = breadcrumb_header.into();
+        self
+    }
+
+    pub fn breadcrumb_header(&self) -> &str {
+        &self.breadcrumb_header
     }
 
     pub fn model(&self) -> &ProjectEditorModel {
@@ -380,40 +392,29 @@ impl EventEmitter<ProjectEditorDocumentEvent> for ProjectEditorDocument {}
 
 impl Render for ProjectEditorDocument {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut breadcrumbs = div()
-            .id("editor-breadcrumbs")
+        let breadcrumb_hover = cx.theme().foreground;
+        let mut breadcrumb_items = div()
+            .id("editor-breadcrumb-items")
             .flex()
-            .flex_none()
-            .h(px(28.0))
+            .flex_1()
+            .min_w_0()
+            .h_full()
             .items_center()
             .gap_1()
-            .px_2()
             .overflow_hidden()
-            .text_sm()
-            .child(self.model.editor().config().title().to_string());
-        let input = self.input.clone();
-        breadcrumbs = breadcrumbs.child(
-            div()
-                .id("editor-search")
-                .ml_auto()
-                .cursor_pointer()
-                .hover(|style| style.opacity(0.7))
-                .child("Find")
-                .on_click(move |_, window, cx| {
-                    input.update(cx, |input, input_cx| input.focus(window, input_cx));
-                    window.dispatch_action(Box::new(Search), cx);
-                }),
-        );
+            .text_color(cx.theme().muted_foreground)
+            .child(self.breadcrumb_header.clone());
         for symbol in self.breadcrumbs.clone() {
             let symbol_id = format!(
                 "editor-breadcrumb-{}-{}",
                 symbol.start_line, symbol.start_column
             );
-            breadcrumbs = breadcrumbs.child("›").child(
+            breadcrumb_items = breadcrumb_items.child("›").child(
                 div()
                     .id(symbol_id)
+                    .flex_none()
                     .cursor_pointer()
-                    .hover(|style| style.opacity(0.7))
+                    .hover(move |style| style.text_color(breadcrumb_hover))
                     .child(symbol.name.clone())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.focus_symbol(symbol.clone(), window, cx);
@@ -421,11 +422,46 @@ impl Render for ProjectEditorDocument {
             );
         }
 
+        let input = self.input.clone();
+        let search_hover = cx.theme().accent;
+        let breadcrumbs = div()
+            .id("editor-breadcrumbs")
+            .debug_selector(|| "editor-breadcrumbs".to_string())
+            .flex()
+            .flex_none()
+            .h(px(32.0))
+            .items_center()
+            .gap_2()
+            .px_2()
+            .overflow_hidden()
+            .bg(cx.theme().tokens.popover)
+            .text_sm()
+            .child(breadcrumb_items)
+            .child(
+                div()
+                    .id("editor-search")
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .size(px(28.0))
+                    .rounded(px(4.0))
+                    .text_color(cx.theme().muted_foreground)
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(search_hover))
+                    .child(Icon::new(IconName::Search).size_3())
+                    .on_click(move |_, window, cx| {
+                        input.update(cx, |input, input_cx| input.focus(window, input_cx));
+                        window.dispatch_action(Box::new(Search), cx);
+                    }),
+            );
+
         let input = Input::new(&self.input)
             .flex_1()
             .min_h_0()
             .w_full()
             .appearance(false)
+            .flush_search_panel(true)
             .text_size(px(self.appearance.font_size))
             .line_height(relative(self.appearance.line_height));
         let input = if self.appearance.font_family.is_empty() {
