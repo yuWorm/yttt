@@ -2,25 +2,25 @@ use super::*;
 
 impl WorkbenchView {
     pub fn active_palette(&self) -> Option<&ActivePalette> {
-        self.active_palette.as_ref()
+        self.palette.active_palette.as_ref()
     }
 
     pub fn open_palette(&mut self, kind: PaletteKind) {
-        self.active_palette = Some(ActivePalette::new(kind));
+        self.palette.active_palette = Some(ActivePalette::new(kind));
         self.reset_palette_input();
-        self.palette_scroll_handle = ScrollHandle::new();
-        self.palette_input_needs_focus = true;
+        self.palette.scroll_handle = ScrollHandle::new();
+        self.palette.input_needs_focus = true;
         self.sync_input_owner_state();
     }
 
     pub fn close_palette(&mut self) {
-        self.active_palette = None;
+        self.palette.active_palette = None;
         self.reset_palette_input();
         self.sync_input_owner_state();
     }
 
     pub fn set_palette_query(&mut self, query: impl Into<String>) {
-        if let Some(active_palette) = &mut self.active_palette {
+        if let Some(active_palette) = &mut self.palette.active_palette {
             active_palette.query = query.into();
             active_palette.selected_index = 0;
             self.reset_palette_input();
@@ -28,7 +28,7 @@ impl WorkbenchView {
     }
 
     pub fn sync_palette_query_from_input_value(&mut self, query: impl Into<String>) -> bool {
-        let Some(active_palette) = &mut self.active_palette else {
+        let Some(active_palette) = &mut self.palette.active_palette else {
             return false;
         };
 
@@ -41,7 +41,7 @@ impl WorkbenchView {
     }
 
     pub fn confirm_palette_selection(&mut self) -> Result<(), WorkbenchError> {
-        let Some(active_palette) = self.active_palette.clone() else {
+        let Some(active_palette) = self.palette.active_palette.clone() else {
             return Ok(());
         };
         let items = self.palette_items(active_palette.kind);
@@ -99,7 +99,7 @@ impl WorkbenchView {
     }
 
     pub fn active_palette_items(&self) -> Vec<PaletteItem> {
-        let Some(active_palette) = &self.active_palette else {
+        let Some(active_palette) = &self.palette.active_palette else {
             return Vec::new();
         };
 
@@ -107,7 +107,7 @@ impl WorkbenchView {
     }
 
     pub fn visible_palette_titles(&self) -> Vec<String> {
-        let Some(active_palette) = &self.active_palette else {
+        let Some(active_palette) = &self.palette.active_palette else {
             return Vec::new();
         };
         let items = self.palette_items(active_palette.kind);
@@ -124,7 +124,7 @@ impl WorkbenchView {
             PaletteKind::Command => self.command_palette_items(),
             PaletteKind::Project => project_palette_items_with_text(
                 &self.workspace,
-                &self.recent_projects,
+                &self.palette.recent_projects,
                 &self.ui_text,
             ),
             PaletteKind::Tab => self.selected_work_item_palette_items(),
@@ -167,7 +167,12 @@ impl WorkbenchView {
             })
             .collect::<Vec<_>>();
         let active = self.active_work_item();
-        if let Some(session) = self.project_editor_runtime.workspace().session(project_id) {
+        if let Some(session) = self
+            .project
+            .project_editor_runtime
+            .workspace()
+            .session(project_id)
+        {
             snapshots.extend(session.file_ids().iter().cloned().map(|document_id| {
                 let relative_path = document_id
                     .canonical_path
@@ -184,16 +189,21 @@ impl WorkbenchView {
 
     pub(super) fn display_keybinding_for_command(&self, command: CommandId) -> Option<String> {
         primary_display_keybinding_for_current_platform(
-            &self.keybindings_editor.command_keys(command),
+            &self.settings.keybindings_editor.command_keys(command),
         )
     }
 
     pub(super) fn select_next_palette_item(&mut self) -> bool {
-        let Some(kind) = self.active_palette.as_ref().map(|palette| palette.kind) else {
+        let Some(kind) = self
+            .palette
+            .active_palette
+            .as_ref()
+            .map(|palette| palette.kind)
+        else {
             return false;
         };
         let items = self.palette_items(kind);
-        let Some(active_palette) = &mut self.active_palette else {
+        let Some(active_palette) = &mut self.palette.active_palette else {
             return false;
         };
 
@@ -202,11 +212,16 @@ impl WorkbenchView {
     }
 
     pub(super) fn select_prev_palette_item(&mut self) -> bool {
-        let Some(kind) = self.active_palette.as_ref().map(|palette| palette.kind) else {
+        let Some(kind) = self
+            .palette
+            .active_palette
+            .as_ref()
+            .map(|palette| palette.kind)
+        else {
             return false;
         };
         let items = self.palette_items(kind);
-        let Some(active_palette) = &mut self.active_palette else {
+        let Some(active_palette) = &mut self.palette.active_palette else {
             return false;
         };
 
@@ -215,7 +230,7 @@ impl WorkbenchView {
     }
 
     pub(super) fn append_palette_query(&mut self, value: char) -> bool {
-        let Some(active_palette) = &mut self.active_palette else {
+        let Some(active_palette) = &mut self.palette.active_palette else {
             return false;
         };
 
@@ -225,7 +240,7 @@ impl WorkbenchView {
     }
 
     pub(super) fn pop_palette_query(&mut self) -> bool {
-        let Some(active_palette) = &mut self.active_palette else {
+        let Some(active_palette) = &mut self.palette.active_palette else {
             return false;
         };
 
@@ -235,13 +250,14 @@ impl WorkbenchView {
     }
 
     pub(super) fn reset_palette_input(&mut self) {
-        self.palette_input = None;
-        self.palette_input_subscription = None;
-        self.palette_input_needs_focus = false;
+        self.palette.input = None;
+        self.palette.input_subscription = None;
+        self.palette.input_needs_focus = false;
     }
 
     pub(super) fn palette_input_contains_focus(&self, window: &Window, cx: &Context<Self>) -> bool {
-        self.palette_input
+        self.palette
+            .input
             .as_ref()
             .is_some_and(|input| input.read(cx).focus_handle(cx).contains_focused(window, cx))
     }
@@ -251,8 +267,8 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<InputState>> {
-        let active_palette = self.active_palette.as_ref()?;
-        let input = if let Some(input) = &self.palette_input {
+        let active_palette = self.palette.active_palette.as_ref()?;
+        let input = if let Some(input) = &self.palette.input {
             input.clone()
         } else {
             let placeholder = palette_input_placeholder(active_palette.kind, &self.ui_text);
@@ -263,14 +279,14 @@ impl WorkbenchView {
                     .default_value(query)
             });
             let subscription = cx.subscribe_in(&input, window, Self::on_palette_input_event);
-            self.palette_input = Some(input.clone());
-            self.palette_input_subscription = Some(subscription);
+            self.palette.input = Some(input.clone());
+            self.palette.input_subscription = Some(subscription);
             input
         };
 
-        if self.palette_input_needs_focus {
+        if self.palette.input_needs_focus {
             input.update(cx, |input, cx| input.focus(window, cx));
-            self.palette_input_needs_focus = false;
+            self.palette.input_needs_focus = false;
         }
 
         Some(input)

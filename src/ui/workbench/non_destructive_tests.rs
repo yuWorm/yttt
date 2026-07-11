@@ -16,6 +16,7 @@ fn runtime_snapshot(root: &WorkbenchView) -> RuntimeSnapshot {
     RuntimeSnapshot {
         layout: root.workspace.project(project_id).unwrap().layout.clone(),
         terminal_entities: root
+            .terminal
             .terminal_panes
             .iter()
             .map(|(key, pane)| (key.clone(), pane.entity_id()))

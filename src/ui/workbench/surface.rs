@@ -40,8 +40,12 @@ impl WorkbenchView {
         let Some(WorkItemId::File(document_id)) = self.active_work_item() else {
             return self.active_terminal_split_view(window, cx);
         };
-        let document = self.project_editor_runtime.document(&document_id).cloned();
-        if self.pending_editor_focus_document_id.as_ref() == Some(&document_id)
+        let document = self
+            .project
+            .project_editor_runtime
+            .document(&document_id)
+            .cloned();
+        if self.project.pending_editor_focus_document_id.as_ref() == Some(&document_id)
             && self.foreground_input_owner_kind() == InputOwnerKind::Editor
             && let Some(document) = &document
         {
@@ -51,7 +55,7 @@ impl WorkbenchView {
                     document.focus(window, document_cx);
                 });
             });
-            self.pending_editor_focus_document_id = None;
+            self.project.pending_editor_focus_document_id = None;
         }
 
         let display_path = self
@@ -138,6 +142,7 @@ impl WorkbenchView {
             return Vec::new();
         };
         let file_items = self
+            .project
             .project_editor_runtime
             .workspace()
             .session(project_id)
@@ -153,6 +158,7 @@ impl WorkbenchView {
                             .unwrap_or(&document_id.canonical_path)
                             .to_path_buf(),
                         dirty: self
+                            .project
                             .project_editor_runtime
                             .document(document_id)
                             .is_some_and(|document| document.read(cx).model().is_dirty()),
@@ -168,7 +174,8 @@ impl WorkbenchView {
         let Some(project_id) = self.workspace.selected_project_id() else {
             return false;
         };
-        self.project_editor_runtime
+        self.project
+            .project_editor_runtime
             .workspace()
             .session(project_id)
             .is_some_and(|session| session.project_panel_visible())
@@ -189,6 +196,7 @@ impl WorkbenchView {
             .clone();
         let tree = self.ensure_project_tree_view(&project_id, window, cx)?;
         let session = self
+            .project
             .project_editor_runtime
             .workspace()
             .session(&project_id)?;
@@ -398,7 +406,7 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) -> Div {
         let key = terminal_pane_key(input.project_id, input.tab_id, &input.pane.id);
-        let pane_view = if let Some(pane_view) = self.terminal_panes.get(&key) {
+        let pane_view = if let Some(pane_view) = self.terminal.terminal_panes.get(&key) {
             pane_view.clone()
         } else {
             let context = TerminalPaneContext {
@@ -409,27 +417,29 @@ impl WorkbenchView {
                 tab_title: input.tab_title.to_string(),
                 pane: input.pane.clone(),
                 is_focused: input.is_focused,
-                terminal_input_gate: self.terminal_input_gate.clone(),
+                terminal_input_gate: self.terminal.terminal_input_gate.clone(),
             };
             let terminal_config = self.theme_runtime.to_terminal_config();
             let theme = self.theme_runtime.ui;
             let pane_view = cx.new(|cx| TerminalPaneView::new(context, terminal_config, theme, cx));
             let subscription = cx.subscribe_in(&pane_view, window, Self::on_terminal_pane_event);
-            self.terminal_pane_subscriptions
+            self.terminal
+                .terminal_pane_subscriptions
                 .insert(key.clone(), subscription);
-            self.terminal_panes.insert(key, pane_view.clone());
+            self.terminal.terminal_panes.insert(key, pane_view.clone());
             pane_view
         };
 
         let pane_id = input.pane.id.clone();
         if self
+            .terminal
             .pending_terminal_focus_pane_id
             .as_deref()
             .is_some_and(|pending| pending == pane_id)
             && self.should_auto_focus_workspace()
             && pane_view.update(cx, |pane, cx| pane.focus_terminal(window, cx))
         {
-            self.pending_terminal_focus_pane_id = None;
+            self.terminal.pending_terminal_focus_pane_id = None;
         }
 
         let border_color = if input.is_focused {
@@ -484,9 +494,11 @@ impl WorkbenchView {
             }
         }
 
-        self.terminal_panes
+        self.terminal
+            .terminal_panes
             .retain(|key, _pane| live_keys.contains(key));
-        self.terminal_pane_subscriptions
+        self.terminal
+            .terminal_pane_subscriptions
             .retain(|key, _subscription| live_keys.contains(key));
     }
 

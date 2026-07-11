@@ -6,7 +6,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let pending = std::mem::take(&mut self.pending_document_saves);
+        let pending = std::mem::take(&mut self.documents.pending_document_saves);
         for document_id in pending {
             self.save_document(document_id, false, SaveContinuation::None, window, cx);
         }
@@ -17,7 +17,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let pending = std::mem::take(&mut self.pending_focus_change_autosaves);
+        let pending = std::mem::take(&mut self.documents.pending_focus_change_autosaves);
         for document_id in pending {
             self.autosave_document(document_id, None, window, cx);
         }
@@ -28,15 +28,16 @@ impl WorkbenchView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let pending = std::mem::take(&mut self.pending_file_close_requests);
+        let pending = std::mem::take(&mut self.documents.pending_file_close_requests);
         for document_id in pending {
             let is_dirty = self
+                .project
                 .project_editor_runtime
                 .document(&document_id)
                 .is_some_and(|document| document.read(cx).model().is_dirty());
             if is_dirty {
-                if self.pending_dirty_close.is_none() {
-                    self.pending_dirty_close = Some(PendingDirtyClose {
+                if self.documents.pending_dirty_close.is_none() {
+                    self.documents.pending_dirty_close = Some(PendingDirtyClose {
                         intent: DirtyCloseIntent::File(document_id.clone()),
                         dirty_documents: vec![document_id],
                         running_pane_count: 0,
@@ -51,12 +52,13 @@ impl WorkbenchView {
     }
 
     pub(super) fn flush_pending_project_close_requests(&mut self, cx: &mut Context<Self>) {
-        let pending = std::mem::take(&mut self.pending_project_close_requests);
+        let pending = std::mem::take(&mut self.documents.pending_project_close_requests);
         for project_id in pending {
             if self.workspace.project(&project_id).is_none() {
                 continue;
             }
             let dirty_documents = self
+                .project
                 .project_editor_runtime
                 .documents_for_project(&project_id)
                 .filter(|(_, document)| document.read(cx).model().is_dirty())
@@ -64,9 +66,9 @@ impl WorkbenchView {
                 .collect::<Vec<_>>();
             let running_pane_count = self.project_running_pane_count(&project_id);
             if !dirty_documents.is_empty() || running_pane_count > 0 {
-                if self.pending_dirty_close.is_none() {
-                    self.pending_close_project_id = None;
-                    self.pending_dirty_close = Some(PendingDirtyClose {
+                if self.documents.pending_dirty_close.is_none() {
+                    self.overlays.pending_close_project_id = None;
+                    self.documents.pending_dirty_close = Some(PendingDirtyClose {
                         intent: DirtyCloseIntent::Project(project_id),
                         dirty_documents,
                         running_pane_count,
@@ -79,7 +81,7 @@ impl WorkbenchView {
                         self.cleanup_closed_project(&closed.project_id)
                     }
                     Ok(CloseProjectDecision::NeedsConfirmation { project_id, .. }) => {
-                        self.pending_close_project_id = Some(project_id);
+                        self.overlays.pending_close_project_id = Some(project_id);
                     }
                     Err(error) => self.load_error = Some(error.to_string()),
                 }
@@ -89,14 +91,14 @@ impl WorkbenchView {
     }
 
     pub fn has_pending_dirty_close(&self) -> bool {
-        self.pending_dirty_close.is_some()
+        self.documents.pending_dirty_close.is_some()
     }
 
     pub fn request_window_close(&mut self, cx: &mut Context<Self>) -> bool {
-        if std::mem::take(&mut self.allow_window_close_once) {
+        if std::mem::take(&mut self.documents.allow_window_close_once) {
             return true;
         }
-        if self.pending_dirty_close.is_some() {
+        if self.documents.pending_dirty_close.is_some() {
             return false;
         }
         let project_ids = self
@@ -108,7 +110,8 @@ impl WorkbenchView {
         let dirty_documents = project_ids
             .iter()
             .flat_map(|project_id| {
-                self.project_editor_runtime
+                self.project
+                    .project_editor_runtime
                     .documents_for_project(project_id)
                     .filter(|(_, document)| document.read(cx).model().is_dirty())
                     .map(|(document_id, _)| document_id.clone())
@@ -121,8 +124,8 @@ impl WorkbenchView {
         if dirty_documents.is_empty() && running_pane_count == 0 {
             return true;
         }
-        self.pending_close_project_id = None;
-        self.pending_dirty_close = Some(PendingDirtyClose {
+        self.overlays.pending_close_project_id = None;
+        self.documents.pending_dirty_close = Some(PendingDirtyClose {
             intent: DirtyCloseIntent::Window,
             dirty_documents,
             running_pane_count,
@@ -134,7 +137,7 @@ impl WorkbenchView {
     }
 
     pub fn visible_dirty_close_actions(&self) -> Vec<String> {
-        let Some(pending) = self.pending_dirty_close.as_ref() else {
+        let Some(pending) = self.documents.pending_dirty_close.as_ref() else {
             return Vec::new();
         };
         let save = if matches!(pending.intent, DirtyCloseIntent::File(_)) {
@@ -155,7 +158,7 @@ impl WorkbenchView {
     }
 
     pub fn visible_dirty_close_dialog_text(&self) -> Option<String> {
-        let pending = self.pending_dirty_close.as_ref()?;
+        let pending = self.documents.pending_dirty_close.as_ref()?;
         let title = match &pending.intent {
             DirtyCloseIntent::File(_) => self.ui_text.get(UiTextKey::UnsavedChangesTitle),
             DirtyCloseIntent::Project(_) => self.ui_text.get(UiTextKey::CloseProjectTitle),
@@ -193,13 +196,19 @@ impl WorkbenchView {
     }
 
     pub(super) fn dirty_close_has_save_error(&self, cx: &Context<Self>) -> bool {
-        self.pending_dirty_close.as_ref().is_some_and(|pending| {
-            pending.dirty_documents.iter().any(|document_id| {
-                self.project_editor_runtime
-                    .document(document_id)
-                    .is_some_and(|document| document.read(cx).model().editor().error().is_some())
+        self.documents
+            .pending_dirty_close
+            .as_ref()
+            .is_some_and(|pending| {
+                pending.dirty_documents.iter().any(|document_id| {
+                    self.project
+                        .project_editor_runtime
+                        .document(document_id)
+                        .is_some_and(|document| {
+                            document.read(cx).model().editor().error().is_some()
+                        })
+                })
             })
-        })
     }
 
     pub(super) fn localized_close_count(
@@ -217,12 +226,12 @@ impl WorkbenchView {
     }
 
     pub fn cancel_pending_dirty_close(&mut self) {
-        self.pending_dirty_close = None;
+        self.documents.pending_dirty_close = None;
         self.sync_input_owner_state();
     }
 
     pub fn save_pending_dirty_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pending) = &mut self.pending_dirty_close else {
+        let Some(pending) = &mut self.documents.pending_dirty_close else {
             return;
         };
         let document_ids = pending.dirty_documents.clone();
@@ -248,7 +257,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(pending) = self.pending_dirty_close.take() else {
+        let Some(pending) = self.documents.pending_dirty_close.take() else {
             return;
         };
         match pending.intent {
@@ -264,7 +273,7 @@ impl WorkbenchView {
                 }
             }
             DirtyCloseIntent::Window => {
-                self.allow_window_close_once = true;
+                self.documents.allow_window_close_once = true;
                 window.remove_window();
             }
         }
@@ -273,7 +282,7 @@ impl WorkbenchView {
     }
 
     pub fn discard_pending_dirty_close(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pending) = self.pending_dirty_close.take() else {
+        let Some(pending) = self.documents.pending_dirty_close.take() else {
             return;
         };
         match pending.intent {
@@ -289,7 +298,7 @@ impl WorkbenchView {
                 }
             }
             DirtyCloseIntent::Window => {
-                self.allow_window_close_once = true;
+                self.documents.allow_window_close_once = true;
                 _window.remove_window();
             }
         }
@@ -302,9 +311,14 @@ impl WorkbenchView {
         document_id: crate::ui::editor::DocumentId,
     ) {
         if self.app_settings.editor.autosave == EditorAutosave::OnFocusChange
-            && !self.pending_focus_change_autosaves.contains(&document_id)
+            && !self
+                .documents
+                .pending_focus_change_autosaves
+                .contains(&document_id)
         {
-            self.pending_focus_change_autosaves.push(document_id);
+            self.documents
+                .pending_focus_change_autosaves
+                .push(document_id);
         }
     }
 
@@ -316,7 +330,8 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) {
         if self.app_settings.editor.autosave != EditorAutosave::AfterDelay {
-            self.project_editor_runtime
+            self.project
+                .project_editor_runtime
                 .cancel_autosave_task(&document_id);
             return;
         }
@@ -330,7 +345,8 @@ impl WorkbenchView {
                 }
             });
         });
-        self.project_editor_runtime
+        self.project
+            .project_editor_runtime
             .replace_autosave_task(document_id, task);
     }
 
@@ -342,13 +358,19 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) {
         if self
+            .documents
             .pending_file_conflict
             .as_ref()
             .is_some_and(|conflict| conflict.document_id == document_id)
         {
             return;
         }
-        let Some(document) = self.project_editor_runtime.document(&document_id).cloned() else {
+        let Some(document) = self
+            .project
+            .project_editor_runtime
+            .document(&document_id)
+            .cloned()
+        else {
             return;
         };
         let (generation, dirty, saving) = {
@@ -363,7 +385,8 @@ impl WorkbenchView {
             return;
         }
         if saving {
-            self.project_editor_runtime
+            self.project
+                .project_editor_runtime
                 .request_follow_up_autosave(document_id, generation);
             return;
         }
@@ -377,6 +400,7 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) {
         if let Some(generation) = self
+            .project
             .project_editor_runtime
             .take_follow_up_autosave(document_id)
         {
@@ -399,7 +423,12 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(document) = self.project_editor_runtime.document(&document_id).cloned() else {
+        let Some(document) = self
+            .project
+            .project_editor_runtime
+            .document(&document_id)
+            .cloned()
+        else {
             return;
         };
         let request = document.update(cx, |document, _cx| {
@@ -440,6 +469,7 @@ impl WorkbenchView {
                 .get(UiTextKey::ProjectFileOutsideProject)
                 .to_string();
             if let Some(document) = self
+                .project
                 .project_editor_runtime
                 .document(&request.document_id)
                 .cloned()
@@ -482,6 +512,7 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) {
         let Some(document) = self
+            .project
             .project_editor_runtime
             .document(&request.document_id)
             .cloned()
@@ -489,6 +520,7 @@ impl WorkbenchView {
             return;
         };
         let continuation = if self
+            .documents
             .pending_dirty_close
             .as_ref()
             .is_some_and(|pending| pending.saving_documents.contains(&request.document_id))
@@ -506,11 +538,12 @@ impl WorkbenchView {
                     return;
                 }
                 if self
+                    .documents
                     .pending_file_conflict
                     .as_ref()
                     .is_some_and(|conflict| conflict.document_id == request.document_id)
                 {
-                    self.pending_file_conflict = None;
+                    self.documents.pending_file_conflict = None;
                 }
                 let file_name = request
                     .document_id
@@ -528,7 +561,8 @@ impl WorkbenchView {
                 self.run_follow_up_autosave(&request.document_id, window, cx);
             }
             Ok(SaveProjectFileOutcome::Conflict(current_disk)) => {
-                self.project_editor_runtime
+                self.project
+                    .project_editor_runtime
                     .take_follow_up_autosave(&request.document_id);
                 let is_dirty = document.read(cx).model().is_dirty();
                 if !is_dirty && matches!(current_disk, CurrentDiskState::Present(_)) {
@@ -538,7 +572,7 @@ impl WorkbenchView {
                     self.spawn_project_file_reload(request.document_id, None, window, cx);
                     return;
                 }
-                self.pending_file_conflict = Some(PendingFileConflict {
+                self.documents.pending_file_conflict = Some(PendingFileConflict {
                     document_id: request.document_id.clone(),
                     request,
                     current_disk,
@@ -548,7 +582,8 @@ impl WorkbenchView {
                 self.sync_input_owner_state();
             }
             Err(error) => {
-                self.project_editor_runtime
+                self.project
+                    .project_editor_runtime
                     .take_follow_up_autosave(&request.document_id);
                 let message = format!(
                     "{}: {}",
@@ -559,7 +594,7 @@ impl WorkbenchView {
                     document.model_mut().fail_save(&request, message.clone());
                 });
                 if continuation == SaveContinuation::CompletePendingClose
-                    && let Some(pending) = &mut self.pending_dirty_close
+                    && let Some(pending) = &mut self.documents.pending_dirty_close
                 {
                     pending.saving_documents.remove(&request.document_id);
                 }
@@ -579,10 +614,11 @@ impl WorkbenchView {
             SaveContinuation::None => {}
             SaveContinuation::CompletePendingClose => {
                 let still_dirty = self
+                    .project
                     .project_editor_runtime
                     .document(document_id)
                     .is_some_and(|document| document.read(cx).model().is_dirty());
-                let should_finish = if let Some(pending) = &mut self.pending_dirty_close {
+                let should_finish = if let Some(pending) = &mut self.documents.pending_dirty_close {
                     pending.saving_documents.remove(document_id);
                     if !still_dirty {
                         pending
@@ -609,7 +645,7 @@ impl WorkbenchView {
     ) {
         let Some(project_root) = self.project_file_root(&document_id) else {
             if let Some(conflict) = restore_conflict_on_error {
-                self.pending_file_conflict = Some(conflict);
+                self.documents.pending_file_conflict = Some(conflict);
             }
             return;
         };
@@ -621,7 +657,11 @@ impl WorkbenchView {
         cx.spawn_in(window, async move |this, cx| {
             let result = io_task.await;
             let _ = this.update_in(cx, |root, window, cx| {
-                let document = root.project_editor_runtime.document(&document_id).cloned();
+                let document = root
+                    .project
+                    .project_editor_runtime
+                    .document(&document_id)
+                    .cloned();
                 match (document, result) {
                     (Some(document), Ok(loaded)) => {
                         document.update(cx, |document, document_cx| {
@@ -632,14 +672,14 @@ impl WorkbenchView {
                                 document_cx,
                             );
                         });
-                        root.pending_file_conflict = None;
+                        root.documents.pending_file_conflict = None;
                         root.load_error = None;
                         root.sync_input_owner_state();
                     }
                     (Some(_document), Err(error)) => {
                         let message = root.localized_project_file_error(&error);
                         if let Some(conflict) = restore_conflict_on_error {
-                            root.pending_file_conflict = Some(conflict);
+                            root.documents.pending_file_conflict = Some(conflict);
                         }
                         root.load_error = Some(message);
                     }
@@ -658,6 +698,7 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) {
         let document_ids = self
+            .project
             .project_editor_runtime
             .documents_for_project(project_id)
             .map(|(document_id, _)| document_id.clone())
@@ -674,13 +715,19 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) {
         if self
+            .documents
             .pending_file_conflict
             .as_ref()
             .is_some_and(|conflict| conflict.document_id == document_id)
         {
             return;
         }
-        let Some(document) = self.project_editor_runtime.document(&document_id).cloned() else {
+        let Some(document) = self
+            .project
+            .project_editor_runtime
+            .document(&document_id)
+            .cloned()
+        else {
             return;
         };
         let (expected_fingerprint, save_is_idle) = {
@@ -705,13 +752,18 @@ impl WorkbenchView {
             let result = io_task.await;
             let _ = this.update_in(cx, |root, window, cx| {
                 if root
+                    .documents
                     .pending_file_conflict
                     .as_ref()
                     .is_some_and(|conflict| conflict.document_id == document_id)
                 {
                     return;
                 }
-                let Some(document) = root.project_editor_runtime.document(&document_id).cloned()
+                let Some(document) = root
+                    .project
+                    .project_editor_runtime
+                    .document(&document_id)
+                    .cloned()
                 else {
                     return;
                 };
@@ -728,7 +780,7 @@ impl WorkbenchView {
                     Ok(loaded) if document.read(cx).model().is_dirty() => {
                         let request =
                             document.update(cx, |document, _| document.model_mut().begin_save());
-                        root.pending_file_conflict = Some(PendingFileConflict {
+                        root.documents.pending_file_conflict = Some(PendingFileConflict {
                             document_id: document_id.clone(),
                             request,
                             current_disk: CurrentDiskState::Present(loaded.fingerprint),
@@ -753,7 +805,7 @@ impl WorkbenchView {
                     {
                         let request =
                             document.update(cx, |document, _| document.model_mut().begin_save());
-                        root.pending_file_conflict = Some(PendingFileConflict {
+                        root.documents.pending_file_conflict = Some(PendingFileConflict {
                             document_id: document_id.clone(),
                             request,
                             current_disk: CurrentDiskState::Missing,
@@ -773,11 +825,11 @@ impl WorkbenchView {
     }
 
     pub fn has_pending_file_conflict(&self) -> bool {
-        self.pending_file_conflict.is_some()
+        self.documents.pending_file_conflict.is_some()
     }
 
     pub fn visible_file_conflict_dialog_text(&self) -> Option<String> {
-        let conflict = self.pending_file_conflict.as_ref()?;
+        let conflict = self.documents.pending_file_conflict.as_ref()?;
         let title = if matches!(conflict.current_disk, CurrentDiskState::Missing) {
             self.ui_text.get(UiTextKey::FileDeletedOnDisk)
         } else {
@@ -790,7 +842,7 @@ impl WorkbenchView {
     }
 
     pub fn visible_file_conflict_dialog_actions(&self) -> Vec<String> {
-        let Some(conflict) = self.pending_file_conflict.as_ref() else {
+        let Some(conflict) = self.documents.pending_file_conflict.as_ref() else {
             return Vec::new();
         };
         let mut actions = vec![self.ui_text.get(UiTextKey::Cancel).to_string()];
@@ -812,17 +864,18 @@ impl WorkbenchView {
     }
 
     pub fn pending_document_save_count(&self) -> usize {
-        self.pending_document_saves.len()
+        self.documents.pending_document_saves.len()
     }
 
     pub fn pending_file_conflict_is_missing(&self) -> bool {
-        self.pending_file_conflict
+        self.documents
+            .pending_file_conflict
             .as_ref()
             .is_some_and(|conflict| matches!(conflict.current_disk, CurrentDiskState::Missing))
     }
 
     pub fn overwrite_pending_file_conflict(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(conflict) = self.pending_file_conflict.take() else {
+        let Some(conflict) = self.documents.pending_file_conflict.take() else {
             return;
         };
         self.spawn_project_file_save_request(
@@ -837,11 +890,11 @@ impl WorkbenchView {
     }
 
     pub fn reload_pending_file_conflict(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(mut conflict) = self.pending_file_conflict.take() else {
+        let Some(mut conflict) = self.documents.pending_file_conflict.take() else {
             return;
         };
         if conflict.continuation == SaveContinuation::CompletePendingClose {
-            self.pending_dirty_close = None;
+            self.documents.pending_dirty_close = None;
             conflict.continuation = SaveContinuation::None;
         }
         let document_id = conflict.document_id.clone();
@@ -851,10 +904,11 @@ impl WorkbenchView {
     }
 
     pub fn cancel_pending_file_conflict(&mut self, cx: &mut Context<Self>) {
-        let Some(conflict) = self.pending_file_conflict.take() else {
+        let Some(conflict) = self.documents.pending_file_conflict.take() else {
             return;
         };
         if let Some(document) = self
+            .project
             .project_editor_runtime
             .document(&conflict.document_id)
             .cloned()
@@ -864,7 +918,7 @@ impl WorkbenchView {
             });
         }
         if conflict.continuation == SaveContinuation::CompletePendingClose
-            && let Some(pending) = &mut self.pending_dirty_close
+            && let Some(pending) = &mut self.documents.pending_dirty_close
         {
             pending.saving_documents.remove(&conflict.document_id);
         }

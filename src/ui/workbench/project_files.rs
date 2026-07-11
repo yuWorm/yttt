@@ -6,12 +6,14 @@ impl WorkbenchView {
         project_id: &ProjectId,
     ) -> Option<DirectoryLoadRequest> {
         let request = self
+            .project
             .project_editor_runtime
             .workspace_mut()
             .session_mut(project_id)?
             .file_tree_mut()
             .refresh();
-        self.project_editor_runtime
+        self.project
+            .project_editor_runtime
             .track_tree_load(project_id.clone(), request.generation);
         Some(request)
     }
@@ -21,6 +23,7 @@ impl WorkbenchView {
         project_id: &ProjectId,
     ) -> Vec<DirectoryLoadRequest> {
         let Some(session) = self
+            .project
             .project_editor_runtime
             .workspace_mut()
             .session_mut(project_id)
@@ -29,7 +32,8 @@ impl WorkbenchView {
         };
         let requests = session.file_tree_mut().refresh_expanded();
         if let Some(request) = requests.first() {
-            self.project_editor_runtime
+            self.project
+                .project_editor_runtime
                 .track_tree_load(project_id.clone(), request.generation);
         }
         requests
@@ -42,12 +46,14 @@ impl WorkbenchView {
         snapshot: DirectorySnapshot,
     ) -> bool {
         if !self
+            .project
             .project_editor_runtime
             .tree_load_is_current(project_id, generation)
         {
             return false;
         }
-        self.project_editor_runtime
+        self.project
+            .project_editor_runtime
             .workspace_mut()
             .session_mut(project_id)
             .is_some_and(|session| session.file_tree_mut().apply_snapshot(generation, snapshot))
@@ -61,12 +67,14 @@ impl WorkbenchView {
         error: impl Into<String>,
     ) -> bool {
         if !self
+            .project
             .project_editor_runtime
             .tree_load_is_current(project_id, generation)
         {
             return false;
         }
-        self.project_editor_runtime
+        self.project
+            .project_editor_runtime
             .workspace_mut()
             .session_mut(project_id)
             .is_some_and(|session| {
@@ -81,12 +89,13 @@ impl WorkbenchView {
         project_id: &ProjectId,
     ) -> Option<ProjectTreeRenderSnapshot> {
         let session = self
+            .project
             .project_editor_runtime
             .workspace()
             .session(project_id)?;
         Some(ProjectTreeRenderSnapshot::from_tree_with_text(
             session.file_tree(),
-            self.project_git_statuses.get(project_id),
+            self.project.project_git_statuses.get(project_id),
             &ProjectTreeRenderText {
                 loading: self.ui_text.get(UiTextKey::ProjectFilesLoading).to_string(),
                 empty_directory: self
@@ -104,7 +113,12 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<ProjectTreeView>> {
-        if let Some(tree) = self.project_editor_runtime.tree(project_id).cloned() {
+        if let Some(tree) = self
+            .project
+            .project_editor_runtime
+            .tree(project_id)
+            .cloned()
+        {
             if let Some(snapshot) = self.project_tree_render_snapshot(project_id) {
                 tree.update(cx, |tree, tree_cx| {
                     tree.sync_with_icon_theme(snapshot, self.icon_theme.clone(), tree_cx)
@@ -114,13 +128,15 @@ impl WorkbenchView {
         }
 
         let request = self
+            .project
             .project_editor_runtime
             .workspace_mut()
             .session_mut(project_id)?
             .file_tree_mut()
             .request_expand(Path::new(""));
         if let Some(request) = &request {
-            self.project_editor_runtime
+            self.project
+                .project_editor_runtime
                 .track_tree_load(project_id.clone(), request.generation);
         }
         let snapshot = self.project_tree_render_snapshot(project_id)?;
@@ -131,8 +147,11 @@ impl WorkbenchView {
         let subscription = cx.subscribe_in(&tree, window, move |this, tree, event, window, cx| {
             this.on_project_tree_view_event(&event_project_id, tree, event, window, cx);
         });
-        self.project_editor_runtime
-            .insert_tree(project_id.clone(), tree.clone(), subscription);
+        self.project.project_editor_runtime.insert_tree(
+            project_id.clone(),
+            tree.clone(),
+            subscription,
+        );
         if let Some(request) = request {
             self.spawn_project_directory_scan(project_id.clone(), request, window, cx);
         }
@@ -150,6 +169,7 @@ impl WorkbenchView {
         match event {
             ProjectTreeViewEvent::ToggleDirectory { path, expanded } => {
                 let request = self
+                    .project
                     .project_editor_runtime
                     .workspace_mut()
                     .session_mut(project_id)
@@ -164,13 +184,15 @@ impl WorkbenchView {
                         }
                     });
                 if let Some(request) = request {
-                    self.project_editor_runtime
+                    self.project
+                        .project_editor_runtime
                         .track_tree_load(project_id.clone(), request.generation);
                     self.spawn_project_directory_scan(project_id.clone(), request, window, cx);
                 }
             }
             ProjectTreeViewEvent::OpenFile(path) => {
                 if let Some(session) = self
+                    .project
                     .project_editor_runtime
                     .workspace_mut()
                     .session_mut(project_id)
@@ -207,7 +229,8 @@ impl WorkbenchView {
 
     pub(super) fn queue_project_tree_refresh(&mut self, project_id: ProjectId) {
         for request in self.refresh_expanded_project_tree_states(&project_id) {
-            self.pending_project_tree_loads
+            self.project
+                .pending_project_tree_loads
                 .push((project_id.clone(), request));
         }
     }
@@ -217,7 +240,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let pending = std::mem::take(&mut self.pending_project_tree_loads);
+        let pending = std::mem::take(&mut self.project.pending_project_tree_loads);
         let mut checked_projects = HashSet::new();
         for (project_id, request) in pending {
             if checked_projects.insert(project_id.clone()) {
@@ -235,6 +258,7 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) {
         if !self
+            .project
             .project_editor_runtime
             .tree_load_is_current(&project_id, request.generation)
         {
@@ -311,7 +335,8 @@ impl WorkbenchView {
         relative_path: &Path,
     ) -> Option<ProjectFileLoadRequest> {
         let project_root = self.workspace.project(project_id)?.path.clone();
-        self.project_editor_runtime
+        self.project
+            .project_editor_runtime
             .workspace()
             .session(project_id)?;
         let document_id = crate::ui::editor::DocumentId {
@@ -319,6 +344,7 @@ impl WorkbenchView {
             canonical_path: project_root.join(relative_path),
         };
         let generation = self
+            .project
             .project_editor_runtime
             .begin_file_load(document_id.clone())?;
         Some(ProjectFileLoadRequest {
@@ -330,7 +356,8 @@ impl WorkbenchView {
     }
 
     pub fn cancel_project_file_open(&mut self, request: &ProjectFileLoadRequest) -> bool {
-        self.project_editor_runtime
+        self.project
+            .project_editor_runtime
             .finish_file_load(&request.document_id, request.generation)
     }
 
@@ -340,6 +367,7 @@ impl WorkbenchView {
         error: impl Into<String>,
     ) -> bool {
         if !self
+            .project
             .project_editor_runtime
             .finish_file_load(&request.document_id, request.generation)
         {
@@ -364,8 +392,13 @@ impl WorkbenchView {
                     canonical_path: project.path.join(&relative_path),
                 });
         if let Some(document_id) = requested_document_id
-            && (self.project_editor_runtime.document(&document_id).is_some()
+            && (self
+                .project
+                .project_editor_runtime
+                .document(&document_id)
+                .is_some()
                 || self
+                    .project
                     .project_editor_runtime
                     .workspace()
                     .session(&project_id)
@@ -408,6 +441,7 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) -> bool {
         if !self
+            .project
             .project_editor_runtime
             .finish_file_load(&request.document_id, request.generation)
             || self
@@ -421,7 +455,12 @@ impl WorkbenchView {
             project_id: request.document_id.project_id.clone(),
             canonical_path: loaded.canonical_path.clone(),
         };
-        if self.project_editor_runtime.document(&document_id).is_none() {
+        if self
+            .project
+            .project_editor_runtime
+            .document(&document_id)
+            .is_none()
+        {
             let language_mode = if self.app_settings.editor.auto_detect_language {
                 CodeEditorLanguageMode::Auto
             } else {
@@ -447,19 +486,22 @@ impl WorkbenchView {
             });
             let subscription =
                 cx.subscribe_in(&document, window, Self::on_project_editor_document_event);
-            self.project_editor_runtime.insert_document(
+            self.project.project_editor_runtime.insert_document(
                 document_id.clone(),
                 document,
                 subscription,
             );
         }
         let opened_id = self
+            .project
             .project_editor_runtime
             .workspace_mut()
             .session_mut(&document_id.project_id)
             .map(|session| session.open_file(document_id.canonical_path.clone()));
         let Some(opened_id) = opened_id else {
-            self.project_editor_runtime.remove_document(&document_id);
+            self.project
+                .project_editor_runtime
+                .remove_document(&document_id);
             return false;
         };
         let _ = self.select_work_item(WorkItemId::File(opened_id));

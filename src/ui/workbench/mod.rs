@@ -28,14 +28,20 @@ mod render;
 mod resize;
 mod settings;
 pub mod shell;
+mod state;
 mod surface;
 use dialogs::*;
 use helpers::*;
 use render::{push_component_notification, split_child};
 use settings::{settings_button, settings_overlay};
+use state::{
+    documents::DocumentLifecycleState, overlays::OverlayControllerState,
+    palette::PaletteControllerState, project::ProjectControllerState,
+    settings::SettingsControllerState, terminal::TerminalControllerState,
+};
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     fs,
     path::{Path, PathBuf},
     rc::Rc,
@@ -98,7 +104,7 @@ use crate::{
         unified_tab_palette_items,
     },
     runtime::{
-        git_status::{ProjectGitStatus, read_project_git_status},
+        git_status::read_project_git_status,
         notification::{
             NoopSystemNotifier, NotificationEvent, NotificationKind, maybe_notify_system,
         },
@@ -131,8 +137,7 @@ use crate::{
             ui_keybinding_specs_from_config,
         },
         interaction::input_owner::{
-            InputOwnerKind, InputOwnerRegistration, InputOwnerStack, InputScopeId,
-            TerminalInputGate,
+            InputOwnerKind, InputOwnerRegistration, InputScopeId, TerminalInputGate,
         },
         interaction::key_dispatch::workspace_command_for_keystroke,
         interaction::overlay::capture_overlay_input,
@@ -163,7 +168,7 @@ use crate::{
         },
         settings::keybinding_display::primary_display_keybinding_for_current_platform,
         settings::keybindings::{KeybindingEditError, KeybindingRow, KeybindingsEditorState},
-        settings::{SettingsGroupId, SettingsPageState, SettingsPanelStyle, settings_panel_style},
+        settings::{SettingsGroupId, SettingsPanelStyle, settings_panel_style},
         terminal::pane::{
             TerminalPaneContext, TerminalPaneEvent, TerminalPaneExitedEvent, TerminalPaneView,
         },
@@ -192,78 +197,22 @@ pub struct WorkbenchView {
     workspace: Workspace,
     config_paths: AppConfigPaths,
     default_layout_state: DefaultLayoutState,
-    active_palette: Option<ActivePalette>,
+    palette: PaletteControllerState,
     command_registry: CommandRegistry,
-    recent_projects: Vec<RecentProject>,
     load_error: Option<String>,
-    layout_source_messages: HashMap<ProjectId, String>,
-    keybinding_warning_lines: Vec<String>,
-    keybindings_editor: KeybindingsEditorState,
+    project: ProjectControllerState,
+    settings: SettingsControllerState,
     last_opened_layout_file: Option<PathBuf>,
     last_opened_keybindings_file: Option<PathBuf>,
-    pending_close_project_id: Option<ProjectId>,
-    pending_document_saves: Vec<crate::ui::editor::DocumentId>,
-    pending_focus_change_autosaves: Vec<crate::ui::editor::DocumentId>,
-    pending_file_close_requests: Vec<crate::ui::editor::DocumentId>,
-    pending_project_close_requests: Vec<ProjectId>,
-    pending_file_conflict: Option<PendingFileConflict>,
-    pending_dirty_close: Option<PendingDirtyClose>,
-    allow_window_close_once: bool,
+    overlays: OverlayControllerState,
+    documents: DocumentLifecycleState,
     pending_open_project_request: bool,
     pending_status_notifications: Vec<ToastItem>,
-    pending_tab_rename: Option<PendingTabRename>,
-    pending_keybinding_edit: Option<PendingKeybindingEdit>,
-    keybinding_interceptor_subscription: Option<Subscription>,
     focus_handle: Option<FocusHandle>,
-    input_owner_stack: InputOwnerStack,
-    terminal_input_gate: TerminalInputGate,
-    palette_input: Option<Entity<InputState>>,
-    palette_input_subscription: Option<Subscription>,
-    palette_input_needs_focus: bool,
-    tab_rename_input: Option<Entity<InputState>>,
-    tab_rename_input_subscription: Option<Subscription>,
-    tab_rename_input_needs_focus: bool,
-    keybinding_edit_input: Option<Entity<InputState>>,
-    keybinding_edit_input_subscription: Option<Subscription>,
-    keybinding_edit_input_needs_focus: bool,
-    settings_search_input: Option<Entity<InputState>>,
-    settings_search_input_subscription: Option<Subscription>,
-    settings_search_input_needs_focus: bool,
-    settings_language_select: Option<Entity<SettingsStringSelectState>>,
-    settings_language_select_subscription: Option<Subscription>,
-    settings_shell_select: Option<Entity<SettingsStringSelectState>>,
-    settings_shell_select_subscription: Option<Subscription>,
-    settings_ui_theme_select: Option<Entity<SettingsStringSelectState>>,
-    settings_ui_theme_select_subscription: Option<Subscription>,
-    settings_icon_theme_select: Option<Entity<SettingsStringSelectState>>,
-    settings_icon_theme_select_subscription: Option<Subscription>,
-    settings_terminal_theme_select: Option<Entity<SettingsStringSelectState>>,
-    settings_terminal_theme_select_subscription: Option<Subscription>,
-    settings_editor_language_select: Option<Entity<SettingsStringSelectState>>,
-    settings_editor_language_select_subscription: Option<Subscription>,
-    settings_font_family_select: Option<Entity<SettingsStringSelectState>>,
-    settings_font_family_select_subscription: Option<Subscription>,
-    settings_editor_font_family_select: Option<Entity<SettingsStringSelectState>>,
-    settings_editor_font_family_select_subscription: Option<Subscription>,
-    settings_editor_autosave_select: Option<Entity<SettingsStringSelectState>>,
-    settings_editor_autosave_select_subscription: Option<Subscription>,
-    settings_number_inputs: HashMap<SettingsNumberField, Entity<InputState>>,
-    settings_number_input_subscriptions: HashMap<SettingsNumberField, Vec<Subscription>>,
-    layout_toml_editor: Option<LayoutEditorSession>,
-    layout_toml_input: Option<Entity<InputState>>,
-    layout_toml_input_subscription: Option<Subscription>,
-    layout_toml_input_needs_focus: bool,
-    palette_scroll_handle: ScrollHandle,
+    terminal: TerminalControllerState,
     sidebar_collapsed: bool,
     active_sidebar_resize_drag: Option<ActiveSidebarResizeDrag>,
     active_split_resize_drag: Option<ActiveSplitResizeDrag>,
-    pending_terminal_focus_pane_id: Option<String>,
-    pending_editor_focus_document_id: Option<crate::ui::editor::DocumentId>,
-    terminal_panes: HashMap<String, Entity<TerminalPaneView>>,
-    terminal_pane_subscriptions: HashMap<String, Subscription>,
-    project_editor_runtime: ProjectEditorRuntime,
-    pending_project_tree_loads: Vec<(ProjectId, DirectoryLoadRequest)>,
-    project_git_statuses: HashMap<ProjectId, ProjectGitStatus>,
     toast_queue: ToastQueue,
     system_notifier: NoopSystemNotifier,
     system_notifications_enabled: bool,
@@ -271,7 +220,6 @@ pub struct WorkbenchView {
     app_settings: AppSettings,
     theme_runtime: ThemeRuntime,
     icon_theme: IconTheme,
-    settings_page: SettingsPageState,
 }
 
 const EMPTY_WORKSPACE_ACTIONS: [UiTextKey; 3] = [
@@ -441,78 +389,25 @@ impl WorkbenchView {
             workspace,
             config_paths,
             default_layout_state,
-            active_palette: None,
+            palette: PaletteControllerState::new(recent_projects),
             command_registry,
-            recent_projects,
             load_error,
-            layout_source_messages: HashMap::new(),
-            keybinding_warning_lines,
-            keybindings_editor,
+            project: ProjectControllerState {
+                project_editor_runtime,
+                ..Default::default()
+            },
+            settings: SettingsControllerState::new(keybinding_warning_lines, keybindings_editor),
             last_opened_layout_file: None,
             last_opened_keybindings_file: None,
-            pending_close_project_id: None,
-            pending_document_saves: Vec::new(),
-            pending_focus_change_autosaves: Vec::new(),
-            pending_file_close_requests: Vec::new(),
-            pending_project_close_requests: Vec::new(),
-            pending_file_conflict: None,
-            pending_dirty_close: None,
-            allow_window_close_once: false,
+            overlays: OverlayControllerState::default(),
+            documents: DocumentLifecycleState::default(),
             pending_open_project_request: false,
             pending_status_notifications: Vec::new(),
-            pending_tab_rename: None,
-            pending_keybinding_edit: None,
-            keybinding_interceptor_subscription: None,
             focus_handle: None,
-            input_owner_stack: InputOwnerStack::default(),
-            terminal_input_gate: TerminalInputGate::default(),
-            palette_input: None,
-            palette_input_subscription: None,
-            palette_input_needs_focus: false,
-            tab_rename_input: None,
-            tab_rename_input_subscription: None,
-            tab_rename_input_needs_focus: false,
-            keybinding_edit_input: None,
-            keybinding_edit_input_subscription: None,
-            keybinding_edit_input_needs_focus: false,
-            settings_search_input: None,
-            settings_search_input_subscription: None,
-            settings_search_input_needs_focus: false,
-            settings_language_select: None,
-            settings_language_select_subscription: None,
-            settings_shell_select: None,
-            settings_shell_select_subscription: None,
-            settings_ui_theme_select: None,
-            settings_ui_theme_select_subscription: None,
-            settings_icon_theme_select: None,
-            settings_icon_theme_select_subscription: None,
-            settings_terminal_theme_select: None,
-            settings_terminal_theme_select_subscription: None,
-            settings_editor_language_select: None,
-            settings_editor_language_select_subscription: None,
-            settings_font_family_select: None,
-            settings_font_family_select_subscription: None,
-            settings_editor_font_family_select: None,
-            settings_editor_font_family_select_subscription: None,
-            settings_editor_autosave_select: None,
-            settings_editor_autosave_select_subscription: None,
-            settings_number_inputs: HashMap::new(),
-            settings_number_input_subscriptions: HashMap::new(),
-            layout_toml_editor: None,
-            layout_toml_input: None,
-            layout_toml_input_subscription: None,
-            layout_toml_input_needs_focus: false,
-            palette_scroll_handle: ScrollHandle::new(),
+            terminal: TerminalControllerState::default(),
             sidebar_collapsed: false,
             active_sidebar_resize_drag: None,
             active_split_resize_drag: None,
-            pending_terminal_focus_pane_id: None,
-            pending_editor_focus_document_id: None,
-            terminal_panes: HashMap::new(),
-            terminal_pane_subscriptions: HashMap::new(),
-            project_editor_runtime,
-            pending_project_tree_loads: Vec::new(),
-            project_git_statuses: HashMap::new(),
             toast_queue: ToastQueue::default(),
             system_notifier: NoopSystemNotifier,
             system_notifications_enabled,
@@ -520,7 +415,6 @@ impl WorkbenchView {
             app_settings,
             theme_runtime,
             icon_theme,
-            settings_page: SettingsPageState::default(),
         }
     }
 
@@ -547,16 +441,17 @@ impl WorkbenchView {
     }
 
     pub fn project_editor_runtime(&self) -> &ProjectEditorRuntime {
-        &self.project_editor_runtime
+        &self.project.project_editor_runtime
     }
 
     pub fn project_editor_runtime_mut(&mut self) -> &mut ProjectEditorRuntime {
-        &mut self.project_editor_runtime
+        &mut self.project.project_editor_runtime
     }
 
     pub fn active_work_item(&self) -> Option<WorkItemId> {
         let project_id = self.workspace.selected_project_id()?;
-        self.project_editor_runtime
+        self.project
+            .project_editor_runtime
             .workspace()
             .session(project_id)?
             .active_work_item()
@@ -573,6 +468,7 @@ impl WorkbenchView {
             return Ok(false);
         };
         let selected = self
+            .project
             .project_editor_runtime
             .workspace_mut()
             .session_mut(&project_id)
@@ -613,7 +509,8 @@ impl WorkbenchView {
 
     pub fn selected_project_panel_width(&self) -> Option<f32> {
         let project_id = self.workspace.selected_project_id()?;
-        self.project_editor_runtime
+        self.project
+            .project_editor_runtime
             .workspace()
             .session(project_id)
             .map(|session| session.project_panel_width())
@@ -624,6 +521,7 @@ impl WorkbenchView {
         self.app_settings.project_panel.width = width;
         if let Some(project_id) = self.workspace.selected_project_id().cloned()
             && let Some(session) = self
+                .project
                 .project_editor_runtime
                 .workspace_mut()
                 .session_mut(&project_id)
@@ -653,6 +551,7 @@ impl WorkbenchView {
             SidebarSide::Right => {
                 let project_id = self.workspace.selected_project_id()?.clone();
                 let session = self
+                    .project
                     .project_editor_runtime
                     .workspace_mut()
                     .session_mut(&project_id)?;
@@ -685,25 +584,28 @@ impl WorkbenchView {
     }
 
     pub fn visible_tab_rename_dialog_title(&self) -> Option<String> {
-        self.pending_tab_rename
+        self.overlays
+            .pending_tab_rename
             .as_ref()
             .map(|_| self.ui_text.get(UiTextKey::RenameTabTitle).to_string())
     }
 
     pub fn pending_tab_rename_value(&self) -> Option<String> {
-        self.pending_tab_rename
+        self.overlays
+            .pending_tab_rename
             .as_ref()
             .map(|rename| rename.value.clone())
     }
 
     pub fn pending_keybinding_edit_value(&self) -> Option<String> {
-        self.pending_keybinding_edit
+        self.overlays
+            .pending_keybinding_edit
             .as_ref()
             .map(|edit| edit.value.clone())
     }
 
     pub fn confirm_tab_rename_dialog(&mut self, title: &str) -> Result<(), WorkbenchError> {
-        let Some(rename) = self.pending_tab_rename.clone() else {
+        let Some(rename) = self.overlays.pending_tab_rename.clone() else {
             return Ok(());
         };
 
@@ -730,17 +632,21 @@ impl WorkbenchView {
         &mut self,
         command: CommandId,
     ) -> Result<(), WorkbenchError> {
-        let value = self.keybindings_editor.command_keys(command).join(", ");
-        self.pending_keybinding_edit = Some(PendingKeybindingEdit { command, value });
+        let value = self
+            .settings
+            .keybindings_editor
+            .command_keys(command)
+            .join(", ");
+        self.overlays.pending_keybinding_edit = Some(PendingKeybindingEdit { command, value });
         self.reset_keybinding_edit_input();
-        self.keybinding_edit_input_needs_focus = true;
+        self.overlays.keybinding_edit_input_needs_focus = true;
         self.load_error = None;
         self.sync_input_owner_state();
         Ok(())
     }
 
     pub fn confirm_keybinding_edit_dialog(&mut self, value: &str) -> Result<(), WorkbenchError> {
-        let Some(edit) = self.pending_keybinding_edit.clone() else {
+        let Some(edit) = self.overlays.pending_keybinding_edit.clone() else {
             return Ok(());
         };
         self.set_keybinding_command_keys(edit.command, parse_keybinding_edit_value(value))?;
@@ -877,7 +783,8 @@ impl WorkbenchView {
 
     pub fn visible_layout_source_message(&self) -> Option<&str> {
         let selected_project_id = self.workspace.selected_project_id()?;
-        self.layout_source_messages
+        self.project
+            .layout_source_messages
             .get(selected_project_id)
             .map(String::as_str)
     }
@@ -887,12 +794,13 @@ impl WorkbenchView {
     }
 
     pub fn foreground_input_owner_kind(&self) -> InputOwnerKind {
-        self.input_owner_stack.active_owner().active_kind()
+        self.overlays.input_owner_stack.active_owner().active_kind()
     }
 
     pub fn foreground_input_scope_id(&self) -> Option<String> {
         Some(
-            self.input_owner_stack
+            self.overlays
+                .input_owner_stack
                 .active_owner()
                 .active_scope_id()
                 .as_str()
@@ -901,7 +809,8 @@ impl WorkbenchView {
     }
 
     pub fn terminal_input_allowed(&self) -> bool {
-        self.input_owner_stack
+        self.overlays
+            .input_owner_stack
             .active_owner()
             .terminal_input_allowed()
     }
@@ -911,8 +820,8 @@ impl WorkbenchView {
             return false;
         }
 
-        if self.pending_terminal_focus_pane_id.as_deref() == Some(pane_id) {
-            self.pending_terminal_focus_pane_id = None;
+        if self.terminal.pending_terminal_focus_pane_id.as_deref() == Some(pane_id) {
+            self.terminal.pending_terminal_focus_pane_id = None;
             true
         } else {
             false
@@ -920,7 +829,7 @@ impl WorkbenchView {
     }
 
     pub fn should_use_palette_text_fallback(&self, input_is_focused: bool) -> bool {
-        self.active_palette.is_some() && !input_is_focused
+        self.palette.active_palette.is_some() && !input_is_focused
     }
 
     pub fn visible_notification_settings_message(&self) -> &'static str {
@@ -970,18 +879,22 @@ impl WorkbenchView {
     }
 
     pub fn visible_keybinding_warning_lines(&self) -> Vec<&str> {
-        self.keybinding_warning_lines
+        self.settings
+            .keybinding_warning_lines
             .iter()
             .map(String::as_str)
             .collect()
     }
 
     pub fn visible_keybinding_rows(&self) -> Vec<KeybindingRow> {
-        self.keybindings_editor.rows()
+        self.settings.keybindings_editor.rows()
     }
 
     pub fn runtime_keybinding_specs(&self) -> Vec<UiKeybindingSpec> {
-        ui_keybinding_specs_from_config(self.keybindings_editor.config(), &self.command_registry)
+        ui_keybinding_specs_from_config(
+            self.settings.keybindings_editor.config(),
+            &self.command_registry,
+        )
     }
 
     pub fn runtime_command_for_keystroke(&self, keystroke: &Keystroke) -> Option<CommandId> {
@@ -989,7 +902,7 @@ impl WorkbenchView {
     }
 
     pub(crate) fn set_keybinding_interceptor_subscription(&mut self, subscription: Subscription) {
-        self.keybinding_interceptor_subscription = Some(subscription);
+        self.settings.keybinding_interceptor_subscription = Some(subscription);
     }
 
     pub fn dispatch_runtime_keybinding(&mut self, keystroke: &Keystroke) -> bool {
@@ -1018,10 +931,12 @@ impl WorkbenchView {
         command: CommandId,
         keys: Vec<String>,
     ) -> Result<(), WorkbenchError> {
-        let previous = self.keybindings_editor.clone();
-        self.keybindings_editor.set_command_keys(command, keys);
+        let previous = self.settings.keybindings_editor.clone();
+        self.settings
+            .keybindings_editor
+            .set_command_keys(command, keys);
         if let Err(error) = self.save_keybindings_editor() {
-            self.keybindings_editor = previous;
+            self.settings.keybindings_editor = previous;
             return Err(error);
         }
         Ok(())
@@ -1031,7 +946,9 @@ impl WorkbenchView {
         &mut self,
         command: CommandId,
     ) -> Result<(), WorkbenchError> {
-        self.keybindings_editor.delete_command_keys(command);
+        self.settings
+            .keybindings_editor
+            .delete_command_keys(command);
         self.save_keybindings_editor()
     }
 
@@ -1039,7 +956,7 @@ impl WorkbenchView {
         &mut self,
         command: CommandId,
     ) -> Result<(), WorkbenchError> {
-        self.keybindings_editor.reset_command_keys(command);
+        self.settings.keybindings_editor.reset_command_keys(command);
         self.save_keybindings_editor()
     }
 
@@ -1067,7 +984,7 @@ impl WorkbenchView {
                 git_counters: None,
             };
         };
-        let git_status = self.project_git_statuses.get(selected_project_id);
+        let git_status = self.project.project_git_statuses.get(selected_project_id);
 
         TitlebarInfo {
             project_name: project.layout.project.name.clone(),
@@ -1127,11 +1044,11 @@ impl WorkbenchView {
             self.workspace
                 .close_pane_for_exit(&project_id, &event.tab_id, &event.pane_id)?;
         let key = terminal_pane_key(&event.project_id, &event.tab_id, &event.pane_id);
-        self.terminal_panes.remove(&key);
-        self.terminal_pane_subscriptions.remove(&key);
+        self.terminal.terminal_panes.remove(&key);
+        self.terminal.terminal_pane_subscriptions.remove(&key);
 
-        if self.pending_terminal_focus_pane_id.as_deref() == Some(event.pane_id.as_str()) {
-            self.pending_terminal_focus_pane_id = None;
+        if self.terminal.pending_terminal_focus_pane_id.as_deref() == Some(event.pane_id.as_str()) {
+            self.terminal.pending_terminal_focus_pane_id = None;
         }
         self.reconcile_active_terminal_with_workspace()?;
         self.load_error = None;
@@ -1146,11 +1063,11 @@ impl WorkbenchView {
     }
 
     pub fn pending_terminal_focus_pane_id(&self) -> Option<&str> {
-        self.pending_terminal_focus_pane_id.as_deref()
+        self.terminal.pending_terminal_focus_pane_id.as_deref()
     }
 
     pub fn pending_editor_focus_document_id(&self) -> Option<&crate::ui::editor::DocumentId> {
-        self.pending_editor_focus_document_id.as_ref()
+        self.project.pending_editor_focus_document_id.as_ref()
     }
 
     pub fn workspace_arrow_keydown_command(
@@ -1239,6 +1156,7 @@ impl WorkbenchView {
             CommandId::ProjectPanelToggle => {
                 if let Some(project_id) = self.workspace.selected_project_id().cloned()
                     && let Some(session) = self
+                        .project
                         .project_editor_runtime
                         .workspace_mut()
                         .session_mut(&project_id)
@@ -1255,9 +1173,9 @@ impl WorkbenchView {
             }
             CommandId::FileSave => {
                 if let Some(WorkItemId::File(document_id)) = self.active_work_item()
-                    && !self.pending_document_saves.contains(&document_id)
+                    && !self.documents.pending_document_saves.contains(&document_id)
                 {
-                    self.pending_document_saves.push(document_id);
+                    self.documents.pending_document_saves.push(document_id);
                 }
                 Ok(())
             }
@@ -1397,8 +1315,9 @@ impl WorkbenchView {
     }
 
     pub fn has_pending_project_close(&self) -> bool {
-        self.pending_close_project_id.is_some()
+        self.overlays.pending_close_project_id.is_some()
             || self
+                .documents
                 .pending_dirty_close
                 .as_ref()
                 .is_some_and(|pending| matches!(pending.intent, DirtyCloseIntent::Project(_)))
@@ -1426,13 +1345,14 @@ impl WorkbenchView {
 
     pub fn visible_close_project_dialog_text(&self) -> Option<String> {
         if self
+            .documents
             .pending_dirty_close
             .as_ref()
             .is_some_and(|pending| matches!(pending.intent, DirtyCloseIntent::Project(_)))
         {
             return self.visible_dirty_close_dialog_text();
         }
-        self.pending_close_project_id.as_ref().map(|_| {
+        self.overlays.pending_close_project_id.as_ref().map(|_| {
             format!(
                 "{}\n{}",
                 self.ui_text.get(UiTextKey::CloseProjectTitle),
@@ -1443,13 +1363,14 @@ impl WorkbenchView {
 
     pub fn visible_close_project_dialog_actions(&self) -> Vec<String> {
         if self
+            .documents
             .pending_dirty_close
             .as_ref()
             .is_some_and(|pending| matches!(pending.intent, DirtyCloseIntent::Project(_)))
         {
             return self.visible_dirty_close_actions();
         }
-        if self.pending_close_project_id.is_some() {
+        if self.overlays.pending_close_project_id.is_some() {
             vec![
                 self.ui_text.get(UiTextKey::Cancel).to_string(),
                 self.ui_text.get(UiTextKey::CloseProjectAction).to_string(),
@@ -1480,18 +1401,19 @@ impl WorkbenchView {
 
     pub fn confirm_pending_project_close(&mut self) -> Result<(), WorkbenchError> {
         let project_id = self
+            .overlays
             .pending_close_project_id
             .clone()
             .ok_or(WorkspaceError::NoSelectedProject)?;
         let closed = self.workspace.confirm_close_project(&project_id)?;
-        self.pending_close_project_id = None;
+        self.overlays.pending_close_project_id = None;
         self.cleanup_closed_project(&closed.project_id);
         self.sync_input_owner_state();
         Ok(())
     }
 
     pub fn cancel_pending_project_close(&mut self) {
-        self.pending_close_project_id = None;
+        self.overlays.pending_close_project_id = None;
         self.sync_input_owner_state();
     }
 
@@ -1520,7 +1442,7 @@ impl WorkbenchView {
                             .tab(&project.selected_tab_id)
                             .map(|_| project.selected_tab_id.clone())
                     });
-                self.project_editor_runtime.open_project(
+                self.project.project_editor_runtime.open_project(
                     project_id.clone(),
                     opened_path.clone(),
                     selected_terminal_id,
@@ -1529,9 +1451,10 @@ impl WorkbenchView {
                 );
                 self.refresh_project_git_status(&project_id, &opened_path);
                 self.queue_selected_terminal_focus();
-                self.layout_source_messages
+                self.project
+                    .layout_source_messages
                     .insert(project_id, source_message);
-                self.recent_projects = recent_projects_for_palette(opened.recent_projects);
+                self.palette.recent_projects = recent_projects_for_palette(opened.recent_projects);
                 self.load_error = warning_message;
                 Ok(())
             }
@@ -1583,13 +1506,20 @@ impl WorkbenchView {
             .cloned()
             .ok_or(WorkspaceError::NoSelectedProject)?;
         if self
+            .project
             .project_editor_runtime
             .documents_for_project(&project_id)
             .next()
             .is_some()
         {
-            if !self.pending_project_close_requests.contains(&project_id) {
-                self.pending_project_close_requests.push(project_id.clone());
+            if !self
+                .documents
+                .pending_project_close_requests
+                .contains(&project_id)
+            {
+                self.documents
+                    .pending_project_close_requests
+                    .push(project_id.clone());
             }
             return Ok(CloseProjectDecision::NeedsConfirmation {
                 project_id: project_id.clone(),
@@ -1599,11 +1529,11 @@ impl WorkbenchView {
         let decision = self.workspace.request_close_project(&project_id)?;
         match &decision {
             CloseProjectDecision::Closed(closed) => {
-                self.pending_close_project_id = None;
+                self.overlays.pending_close_project_id = None;
                 self.cleanup_closed_project(&closed.project_id);
             }
             CloseProjectDecision::NeedsConfirmation { project_id, .. } => {
-                self.pending_close_project_id = Some(project_id.clone());
+                self.overlays.pending_close_project_id = Some(project_id.clone());
             }
         }
         self.sync_input_owner_state();
@@ -1628,33 +1558,42 @@ impl WorkbenchView {
     }
 
     fn cleanup_closed_project(&mut self, project_id: &ProjectId) {
-        self.layout_source_messages.remove(project_id);
-        self.project_git_statuses.remove(project_id);
-        self.pending_project_tree_loads
+        self.project.layout_source_messages.remove(project_id);
+        self.project.project_git_statuses.remove(project_id);
+        self.project
+            .pending_project_tree_loads
             .retain(|(pending_project_id, _)| pending_project_id != project_id);
-        self.pending_document_saves
+        self.documents
+            .pending_document_saves
             .retain(|document_id| &document_id.project_id != project_id);
-        self.pending_focus_change_autosaves
+        self.documents
+            .pending_focus_change_autosaves
             .retain(|document_id| &document_id.project_id != project_id);
-        self.pending_file_close_requests
+        self.documents
+            .pending_file_close_requests
             .retain(|document_id| &document_id.project_id != project_id);
-        self.pending_project_close_requests
+        self.documents
+            .pending_project_close_requests
             .retain(|pending_project_id| pending_project_id != project_id);
         if self
+            .documents
             .pending_file_conflict
             .as_ref()
             .is_some_and(|conflict| &conflict.document_id.project_id == project_id)
         {
-            self.pending_file_conflict = None;
+            self.documents.pending_file_conflict = None;
         }
         self.remove_terminal_panes_for_project(project_id.as_str());
-        self.project_editor_runtime.close_project(project_id);
+        self.project
+            .project_editor_runtime
+            .close_project(project_id);
         if self
+            .project
             .pending_editor_focus_document_id
             .as_ref()
             .is_some_and(|document_id| &document_id.project_id == project_id)
         {
-            self.pending_editor_focus_document_id = None;
+            self.project.pending_editor_focus_document_id = None;
         }
     }
 
@@ -1664,9 +1603,18 @@ impl WorkbenchView {
         };
         match active {
             WorkItemId::File(document_id) => {
-                if self.project_editor_runtime.document(&document_id).is_some() {
-                    if !self.pending_file_close_requests.contains(&document_id) {
-                        self.pending_file_close_requests.push(document_id);
+                if self
+                    .project
+                    .project_editor_runtime
+                    .document(&document_id)
+                    .is_some()
+                {
+                    if !self
+                        .documents
+                        .pending_file_close_requests
+                        .contains(&document_id)
+                    {
+                        self.documents.pending_file_close_requests.push(document_id);
                     }
                     Ok(())
                 } else {
@@ -1697,17 +1645,21 @@ impl WorkbenchView {
             return Ok(());
         };
         let next = self
+            .project
             .project_editor_runtime
             .workspace_mut()
             .session_mut(&project_id)
             .and_then(|session| session.close_file(document_id, &terminal_ids));
-        self.project_editor_runtime.remove_document(document_id);
+        self.project
+            .project_editor_runtime
+            .remove_document(document_id);
         if self
+            .documents
             .pending_file_conflict
             .as_ref()
             .is_some_and(|conflict| &conflict.document_id == document_id)
         {
-            self.pending_file_conflict = None;
+            self.documents.pending_file_conflict = None;
         }
         if let Some(next) = next {
             self.apply_active_work_item(&next)?;
@@ -1736,29 +1688,31 @@ impl WorkbenchView {
         let value = tab.title.clone();
 
         self.close_palette();
-        self.pending_tab_rename = Some(PendingTabRename { tab_id, value });
+        self.overlays.pending_tab_rename = Some(PendingTabRename { tab_id, value });
         self.reset_tab_rename_input();
-        self.tab_rename_input_needs_focus = true;
+        self.overlays.tab_rename_input_needs_focus = true;
         self.load_error = None;
         self.sync_input_owner_state();
         Ok(())
     }
 
     fn clear_tab_rename_dialog(&mut self) {
-        self.pending_tab_rename = None;
+        self.overlays.pending_tab_rename = None;
         self.reset_tab_rename_input();
     }
 
     fn clear_keybinding_edit_dialog(&mut self) {
-        self.pending_keybinding_edit = None;
+        self.overlays.pending_keybinding_edit = None;
         self.reset_keybinding_edit_input();
     }
 
     fn remove_terminal_panes_for_project(&mut self, project_id: &str) {
         let prefix = format!("{project_id}:");
-        self.terminal_panes
+        self.terminal
+            .terminal_panes
             .retain(|key, _pane| !key.starts_with(&prefix));
-        self.terminal_pane_subscriptions
+        self.terminal
+            .terminal_pane_subscriptions
             .retain(|key, _subscription| !key.starts_with(&prefix));
     }
 
@@ -1776,7 +1730,7 @@ impl WorkbenchView {
     }
 
     fn set_layout_toml_editor_error(&mut self, source: &'static str, error: String) {
-        if let Some(session) = &mut self.layout_toml_editor {
+        if let Some(session) = &mut self.overlays.layout_toml_editor {
             let editor = session.editor_mut();
             editor.set_error(error.clone());
             editor.set_diagnostics(vec![EditorDiagnostic::new(
@@ -1803,51 +1757,52 @@ impl WorkbenchView {
     }
 
     fn reset_tab_rename_input(&mut self) {
-        self.tab_rename_input = None;
-        self.tab_rename_input_subscription = None;
-        self.tab_rename_input_needs_focus = false;
+        self.overlays.tab_rename_input = None;
+        self.overlays.tab_rename_input_subscription = None;
+        self.overlays.tab_rename_input_needs_focus = false;
     }
 
     fn reset_keybinding_edit_input(&mut self) {
-        self.keybinding_edit_input = None;
-        self.keybinding_edit_input_subscription = None;
-        self.keybinding_edit_input_needs_focus = false;
+        self.overlays.keybinding_edit_input = None;
+        self.overlays.keybinding_edit_input_subscription = None;
+        self.overlays.keybinding_edit_input_needs_focus = false;
     }
 
     fn reset_settings_search_input(&mut self) {
-        self.settings_search_input = None;
-        self.settings_search_input_subscription = None;
-        self.settings_search_input_needs_focus = false;
-        self.settings_language_select = None;
-        self.settings_language_select_subscription = None;
-        self.settings_shell_select = None;
-        self.settings_shell_select_subscription = None;
-        self.settings_ui_theme_select = None;
-        self.settings_ui_theme_select_subscription = None;
-        self.settings_icon_theme_select = None;
-        self.settings_icon_theme_select_subscription = None;
-        self.settings_terminal_theme_select = None;
-        self.settings_terminal_theme_select_subscription = None;
-        self.settings_editor_language_select = None;
-        self.settings_editor_language_select_subscription = None;
-        self.settings_font_family_select = None;
-        self.settings_font_family_select_subscription = None;
-        self.settings_editor_font_family_select = None;
-        self.settings_editor_font_family_select_subscription = None;
-        self.settings_editor_autosave_select = None;
-        self.settings_editor_autosave_select_subscription = None;
-        self.settings_number_inputs.clear();
-        self.settings_number_input_subscriptions.clear();
+        self.settings.settings_search_input = None;
+        self.settings.settings_search_input_subscription = None;
+        self.settings.settings_search_input_needs_focus = false;
+        self.settings.settings_language_select = None;
+        self.settings.settings_language_select_subscription = None;
+        self.settings.settings_shell_select = None;
+        self.settings.settings_shell_select_subscription = None;
+        self.settings.settings_ui_theme_select = None;
+        self.settings.settings_ui_theme_select_subscription = None;
+        self.settings.settings_icon_theme_select = None;
+        self.settings.settings_icon_theme_select_subscription = None;
+        self.settings.settings_terminal_theme_select = None;
+        self.settings.settings_terminal_theme_select_subscription = None;
+        self.settings.settings_editor_language_select = None;
+        self.settings.settings_editor_language_select_subscription = None;
+        self.settings.settings_font_family_select = None;
+        self.settings.settings_font_family_select_subscription = None;
+        self.settings.settings_editor_font_family_select = None;
+        self.settings
+            .settings_editor_font_family_select_subscription = None;
+        self.settings.settings_editor_autosave_select = None;
+        self.settings.settings_editor_autosave_select_subscription = None;
+        self.settings.settings_number_inputs.clear();
+        self.settings.settings_number_input_subscriptions.clear();
     }
 
     fn reset_layout_toml_input(&mut self) {
-        self.layout_toml_input = None;
-        self.layout_toml_input_subscription = None;
-        self.layout_toml_input_needs_focus = false;
+        self.overlays.layout_toml_input = None;
+        self.overlays.layout_toml_input_subscription = None;
+        self.overlays.layout_toml_input_needs_focus = false;
     }
 
     fn queue_terminal_focus(&mut self, pane_id: &str) {
-        self.pending_terminal_focus_pane_id = Some(pane_id.to_string());
+        self.terminal.pending_terminal_focus_pane_id = Some(pane_id.to_string());
     }
 
     fn queue_selected_terminal_focus(&mut self) {
@@ -1877,6 +1832,7 @@ impl WorkbenchView {
             return Ok(None);
         };
         let next = self
+            .project
             .project_editor_runtime
             .workspace_mut()
             .session_mut(&project_id)
@@ -1897,12 +1853,12 @@ impl WorkbenchView {
         match item {
             WorkItemId::Terminal(tab_id) => {
                 self.workspace.select_tab(tab_id)?;
-                self.pending_editor_focus_document_id = None;
+                self.project.pending_editor_focus_document_id = None;
                 self.queue_selected_terminal_focus();
             }
             WorkItemId::File(document_id) => {
-                self.pending_terminal_focus_pane_id = None;
-                self.pending_editor_focus_document_id = Some(document_id.clone());
+                self.terminal.pending_terminal_focus_pane_id = None;
+                self.project.pending_editor_focus_document_id = Some(document_id.clone());
             }
         }
         self.sync_input_owner_state();
@@ -1922,7 +1878,8 @@ impl WorkbenchView {
                 .then(|| WorkItemId::Terminal(project.selected_tab_id.clone()))
         });
         let next = if let Some(selected_terminal) = selected_terminal {
-            self.project_editor_runtime
+            self.project
+                .project_editor_runtime
                 .workspace_mut()
                 .session_mut(&project_id)
                 .and_then(|session| {
@@ -1931,7 +1888,8 @@ impl WorkbenchView {
                         .then_some(selected_terminal)
                 })
         } else {
-            self.project_editor_runtime
+            self.project
+                .project_editor_runtime
                 .workspace_mut()
                 .session_mut(&project_id)
                 .and_then(|session| session.select_next(&terminal_ids))
@@ -1939,8 +1897,8 @@ impl WorkbenchView {
         if let Some(next) = next {
             self.apply_active_work_item(&next)?;
         } else {
-            self.pending_terminal_focus_pane_id = None;
-            self.pending_editor_focus_document_id = None;
+            self.terminal.pending_terminal_focus_pane_id = None;
+            self.project.pending_editor_focus_document_id = None;
             self.sync_input_owner_state();
         }
         Ok(())
@@ -1970,9 +1928,11 @@ impl WorkbenchView {
 
     fn refresh_project_git_status(&mut self, project_id: &ProjectId, project_path: &Path) {
         if let Some(status) = read_project_git_status(project_path) {
-            self.project_git_statuses.insert(project_id.clone(), status);
+            self.project
+                .project_git_statuses
+                .insert(project_id.clone(), status);
         } else {
-            self.project_git_statuses.remove(project_id);
+            self.project.project_git_statuses.remove(project_id);
         }
     }
 
@@ -1992,44 +1952,45 @@ impl WorkbenchView {
     }
 
     fn current_input_owner_registration(&self) -> InputOwnerRegistration {
-        if self.pending_keybinding_edit.is_some() {
+        if self.overlays.pending_keybinding_edit.is_some() {
             InputOwnerRegistration::blocking(
                 InputOwnerKind::KeybindingRecorder,
                 InputScopeId::new("recorder.keybinding"),
             )
-        } else if self.pending_file_conflict.is_some() {
+        } else if self.documents.pending_file_conflict.is_some() {
             InputOwnerRegistration::blocking(
                 InputOwnerKind::Dialog,
                 InputScopeId::new("dialog.file_conflict"),
             )
-        } else if self.pending_dirty_close.is_some() {
+        } else if self.documents.pending_dirty_close.is_some() {
             InputOwnerRegistration::blocking(
                 InputOwnerKind::Dialog,
                 InputScopeId::new("dialog.dirty_close"),
             )
-        } else if self.pending_tab_rename.is_some() {
+        } else if self.overlays.pending_tab_rename.is_some() {
             InputOwnerRegistration::blocking(
                 InputOwnerKind::Dialog,
                 InputScopeId::new("dialog.rename_tab"),
             )
-        } else if self.pending_close_project_id.is_some() {
+        } else if self.overlays.pending_close_project_id.is_some() {
             InputOwnerRegistration::blocking(
                 InputOwnerKind::Dialog,
                 InputScopeId::new("dialog.close_project"),
             )
-        } else if self.layout_toml_editor.is_some() {
+        } else if self.overlays.layout_toml_editor.is_some() {
             let scope = self
+                .overlays
                 .layout_toml_editor
                 .as_ref()
                 .map(|session| session.target().input_scope_id())
                 .unwrap_or("editor.project_layout");
             InputOwnerRegistration::blocking(InputOwnerKind::Dialog, InputScopeId::new(scope))
-        } else if self.settings_page.is_open {
+        } else if self.settings.settings_page.is_open {
             InputOwnerRegistration::blocking(
                 InputOwnerKind::Settings,
                 InputScopeId::new("settings"),
             )
-        } else if let Some(active_palette) = &self.active_palette {
+        } else if let Some(active_palette) = &self.palette.active_palette {
             InputOwnerRegistration::blocking(
                 InputOwnerKind::Palette,
                 InputScopeId::new(palette_input_scope_id(active_palette.kind)),
@@ -2049,13 +2010,14 @@ impl WorkbenchView {
     }
 
     fn sync_input_owner_state(&mut self) {
-        self.input_owner_stack.clear();
+        self.overlays.input_owner_stack.clear();
         let registration = self.current_input_owner_registration();
         if registration.kind() != InputOwnerKind::Workspace {
-            self.input_owner_stack.push_owner(registration);
+            self.overlays.input_owner_stack.push_owner(registration);
         }
-        self.terminal_input_gate
-            .sync_from_snapshot(&self.input_owner_stack.active_owner());
+        self.terminal
+            .terminal_input_gate
+            .sync_from_snapshot(&self.overlays.input_owner_stack.active_owner());
     }
 
     fn selected_focused_pane_id(&self) -> Option<&str> {
@@ -2071,8 +2033,8 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<InputState>> {
-        let rename = self.pending_tab_rename.as_ref()?;
-        let input = if let Some(input) = &self.tab_rename_input {
+        let rename = self.overlays.pending_tab_rename.as_ref()?;
+        let input = if let Some(input) = &self.overlays.tab_rename_input {
             input.clone()
         } else {
             let value = rename.value.clone();
@@ -2083,14 +2045,14 @@ impl WorkbenchView {
                     .default_value(value)
             });
             let subscription = cx.subscribe_in(&input, window, Self::on_tab_rename_input_event);
-            self.tab_rename_input = Some(input.clone());
-            self.tab_rename_input_subscription = Some(subscription);
+            self.overlays.tab_rename_input = Some(input.clone());
+            self.overlays.tab_rename_input_subscription = Some(subscription);
             input
         };
 
-        if self.tab_rename_input_needs_focus {
+        if self.overlays.tab_rename_input_needs_focus {
             input.update(cx, |input, cx| input.focus(window, cx));
-            self.tab_rename_input_needs_focus = false;
+            self.overlays.tab_rename_input_needs_focus = false;
         }
 
         Some(input)
@@ -2101,8 +2063,8 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<InputState>> {
-        let edit = self.pending_keybinding_edit.as_ref()?;
-        let input = if let Some(input) = &self.keybinding_edit_input {
+        let edit = self.overlays.pending_keybinding_edit.as_ref()?;
+        let input = if let Some(input) = &self.overlays.keybinding_edit_input {
             input.clone()
         } else {
             let value = edit.value.clone();
@@ -2113,14 +2075,14 @@ impl WorkbenchView {
             });
             let subscription =
                 cx.subscribe_in(&input, window, Self::on_keybinding_edit_input_event);
-            self.keybinding_edit_input = Some(input.clone());
-            self.keybinding_edit_input_subscription = Some(subscription);
+            self.overlays.keybinding_edit_input = Some(input.clone());
+            self.overlays.keybinding_edit_input_subscription = Some(subscription);
             input
         };
 
-        if self.keybinding_edit_input_needs_focus {
+        if self.overlays.keybinding_edit_input_needs_focus {
             input.update(cx, |input, cx| input.focus(window, cx));
-            self.keybinding_edit_input_needs_focus = false;
+            self.overlays.keybinding_edit_input_needs_focus = false;
         }
 
         Some(input)
@@ -2135,7 +2097,7 @@ impl WorkbenchView {
     ) {
         match event {
             InputEvent::Change => {
-                if let Some(rename) = &mut self.pending_tab_rename {
+                if let Some(rename) = &mut self.overlays.pending_tab_rename {
                     rename.value = input.read(cx).value().to_string();
                     cx.notify();
                 }
@@ -2157,7 +2119,7 @@ impl WorkbenchView {
     ) {
         match event {
             InputEvent::Change => {
-                if let Some(edit) = &mut self.pending_keybinding_edit {
+                if let Some(edit) = &mut self.overlays.pending_keybinding_edit {
                     edit.value = input.read(cx).value().to_string();
                     cx.notify();
                 }
@@ -2176,6 +2138,7 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) -> Result<(), WorkbenchError> {
         let value = self
+            .overlays
             .tab_rename_input
             .as_ref()
             .map(|input| input.read(cx).value().to_string())
@@ -2190,6 +2153,7 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) -> Result<(), WorkbenchError> {
         let value = self
+            .overlays
             .keybinding_edit_input
             .as_ref()
             .map(|input| input.read(cx).value().to_string())

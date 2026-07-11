@@ -2,42 +2,48 @@ use super::*;
 
 impl WorkbenchView {
     pub fn layout_toml_editor_is_open(&self) -> bool {
-        self.layout_toml_editor.is_some()
+        self.overlays.layout_toml_editor.is_some()
     }
 
     pub fn layout_toml_editor_path(&self) -> Option<&Path> {
-        self.layout_toml_editor
+        self.overlays
+            .layout_toml_editor
             .as_ref()
             .map(|session| session.editor().path())
     }
 
     pub fn layout_toml_editor_value(&self) -> Option<&str> {
-        self.layout_toml_editor
+        self.overlays
+            .layout_toml_editor
             .as_ref()
             .map(|session| session.editor().value())
     }
 
     pub fn visible_layout_toml_editor_error(&self) -> Option<&str> {
-        self.layout_toml_editor
+        self.overlays
+            .layout_toml_editor
             .as_ref()
             .and_then(|session| session.editor().error())
     }
 
     pub fn visible_layout_toml_editor_diagnostics(&self) -> Vec<EditorDiagnostic> {
-        self.layout_toml_editor
+        self.overlays
+            .layout_toml_editor
             .as_ref()
             .map(|session| session.editor().diagnostics().to_vec())
             .unwrap_or_default()
     }
 
     pub fn layout_editor_target_kind(&self) -> Option<&'static str> {
-        self.layout_toml_editor
+        self.overlays
+            .layout_toml_editor
             .as_ref()
             .map(|session| session.target().kind())
     }
 
     pub fn visible_layout_toml_editor_language_id(&self) -> Option<EditorLanguageId> {
-        self.layout_toml_editor
+        self.overlays
+            .layout_toml_editor
             .as_ref()
             .map(|session| session.editor().language_id())
     }
@@ -55,7 +61,7 @@ impl WorkbenchView {
             ))
         })?;
 
-        self.layout_toml_editor = Some(LayoutEditorSession::new(
+        self.overlays.layout_toml_editor = Some(LayoutEditorSession::new(
             LayoutEditorTarget::Default,
             CodeEditorState::new(
                 path,
@@ -151,7 +157,7 @@ impl WorkbenchView {
                 message,
             )]);
         }
-        self.layout_toml_editor = Some(LayoutEditorSession::new(
+        self.overlays.layout_toml_editor = Some(LayoutEditorSession::new(
             LayoutEditorTarget::Project {
                 project_id,
                 path,
@@ -165,20 +171,20 @@ impl WorkbenchView {
 
     pub(super) fn finish_opening_layout_editor(&mut self) {
         self.reset_layout_toml_input();
-        self.layout_toml_input_needs_focus = true;
+        self.overlays.layout_toml_input_needs_focus = true;
         self.load_error = None;
         self.sync_input_owner_state();
     }
 
     pub fn set_layout_toml_editor_value(&mut self, value: impl Into<String>) {
-        if let Some(session) = &mut self.layout_toml_editor {
+        if let Some(session) = &mut self.overlays.layout_toml_editor {
             session.editor_mut().set_value(value);
             self.reset_layout_toml_input();
         }
     }
 
     pub fn save_layout_toml_editor(&mut self) -> Result<(), WorkbenchError> {
-        let Some(session) = self.layout_toml_editor.clone() else {
+        let Some(session) = self.overlays.layout_toml_editor.clone() else {
             return Ok(());
         };
         let editor = session.editor();
@@ -225,7 +231,7 @@ impl WorkbenchView {
             }
         }
 
-        self.layout_toml_editor = None;
+        self.overlays.layout_toml_editor = None;
         self.reset_layout_toml_input();
         self.load_error = None;
         self.sync_input_owner_state();
@@ -233,7 +239,7 @@ impl WorkbenchView {
     }
 
     pub fn cancel_layout_toml_editor(&mut self) {
-        self.layout_toml_editor = None;
+        self.overlays.layout_toml_editor = None;
         self.reset_layout_toml_input();
         self.queue_selected_terminal_focus();
         self.sync_input_owner_state();
@@ -244,21 +250,21 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<InputState>> {
-        let editor = self.layout_toml_editor.as_ref()?.editor();
+        let editor = self.overlays.layout_toml_editor.as_ref()?.editor();
 
-        let input = if let Some(input) = &self.layout_toml_input {
+        let input = if let Some(input) = &self.overlays.layout_toml_input {
             input.clone()
         } else {
             let input = cx.new(|cx| code_editor_input_state(window, cx, editor));
             let subscription = cx.subscribe_in(&input, window, Self::on_layout_toml_input_event);
-            self.layout_toml_input = Some(input.clone());
-            self.layout_toml_input_subscription = Some(subscription);
+            self.overlays.layout_toml_input = Some(input.clone());
+            self.overlays.layout_toml_input_subscription = Some(subscription);
             input
         };
 
-        if self.layout_toml_input_needs_focus {
+        if self.overlays.layout_toml_input_needs_focus {
             input.update(cx, |input, cx| input.focus(window, cx));
-            self.layout_toml_input_needs_focus = false;
+            self.overlays.layout_toml_input_needs_focus = false;
         }
 
         Some(input)
@@ -273,7 +279,7 @@ impl WorkbenchView {
     ) {
         match event {
             InputEvent::Change => {
-                if let Some(session) = &mut self.layout_toml_editor {
+                if let Some(session) = &mut self.overlays.layout_toml_editor {
                     session
                         .editor_mut()
                         .set_value(input.read(cx).value().to_string());

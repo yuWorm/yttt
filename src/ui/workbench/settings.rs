@@ -37,19 +37,19 @@ impl WorkbenchView {
     }
 
     pub fn settings_is_open(&self) -> bool {
-        self.settings_page.is_open
+        self.settings.settings_page.is_open
     }
 
     pub fn open_settings(&mut self) {
         self.close_palette();
-        self.settings_page.is_open = true;
-        self.settings_search_input_needs_focus = true;
+        self.settings.settings_page.is_open = true;
+        self.settings.settings_search_input_needs_focus = true;
         self.load_error = None;
         self.sync_input_owner_state();
     }
 
     pub fn close_settings(&mut self) {
-        self.settings_page.is_open = false;
+        self.settings.settings_page.is_open = false;
         self.reset_settings_search_input();
         self.sync_input_owner_state();
     }
@@ -214,7 +214,9 @@ impl WorkbenchView {
         self.app_settings.editor.autosave = autosave;
         self.save_app_settings_and_refresh_runtime()?;
         if autosave == EditorAutosave::Off {
-            self.project_editor_runtime.cancel_all_autosave_tasks();
+            self.project
+                .project_editor_runtime
+                .cancel_all_autosave_tasks();
         }
         Ok(())
     }
@@ -272,28 +274,34 @@ impl WorkbenchView {
     }
 
     pub fn set_settings_search_query(&mut self, query: impl Into<String>) {
-        self.settings_page.search_query = query.into();
+        self.settings.settings_page.search_query = query.into();
         let selected_group_visible = self
+            .settings
             .settings_page
             .visible_groups(&self.ui_text)
             .iter()
-            .any(|group| group.id == self.settings_page.selected_group);
+            .any(|group| group.id == self.settings.settings_page.selected_group);
         if !selected_group_visible
-            && let Some(first_group) = self.settings_page.visible_groups(&self.ui_text).first()
+            && let Some(first_group) = self
+                .settings
+                .settings_page
+                .visible_groups(&self.ui_text)
+                .first()
         {
-            self.settings_page.selected_group = first_group.id;
+            self.settings.settings_page.selected_group = first_group.id;
         }
     }
 
     pub fn select_settings_group(&mut self, group_id: &str) -> Result<(), String> {
         let group = SettingsGroupId::from_id(group_id)
             .ok_or_else(|| format!("Unknown settings group: {group_id}"))?;
-        self.settings_page.selected_group = group;
+        self.settings.settings_page.selected_group = group;
         Ok(())
     }
 
     pub fn visible_settings_group_titles(&self) -> Vec<&'static str> {
-        self.settings_page
+        self.settings
+            .settings_page
             .visible_groups(&self.ui_text)
             .into_iter()
             .map(|group| group.title)
@@ -301,7 +309,12 @@ impl WorkbenchView {
     }
 
     pub fn selected_settings_group_title(&self) -> Option<&'static str> {
-        Some(self.settings_page.selected_group.title(&self.ui_text))
+        Some(
+            self.settings
+                .settings_page
+                .selected_group
+                .title(&self.ui_text),
+        )
     }
 
     pub(super) fn refresh_theme_runtime_from_settings(&mut self) {
@@ -334,7 +347,7 @@ impl WorkbenchView {
     pub(super) fn sync_terminal_pane_configs(&mut self, cx: &mut Context<Self>) {
         let terminal_config = self.theme_runtime.to_terminal_config();
         let theme = self.theme_runtime.ui;
-        for pane in self.terminal_panes.values() {
+        for pane in self.terminal.terminal_panes.values() {
             pane.update(cx, |pane, cx| {
                 pane.update_terminal_appearance(terminal_config.clone(), theme, cx);
             });
@@ -356,7 +369,8 @@ impl WorkbenchView {
         let documents = project_ids
             .iter()
             .flat_map(|project_id| {
-                self.project_editor_runtime
+                self.project
+                    .project_editor_runtime
                     .documents_for_project(project_id)
                     .map(|(_, document)| document.clone())
             })
@@ -375,8 +389,8 @@ impl WorkbenchView {
     }
 
     pub(super) fn save_keybindings_editor(&mut self) -> Result<(), WorkbenchError> {
-        self.keybindings_editor.save(&self.config_paths)?;
-        self.keybinding_warning_lines.clear();
+        self.settings.keybindings_editor.save(&self.config_paths)?;
+        self.settings.keybinding_warning_lines.clear();
         Ok(())
     }
 
@@ -594,7 +608,8 @@ impl WorkbenchView {
         &self,
         input: &Entity<InputState>,
     ) -> Option<SettingsNumberField> {
-        self.settings_number_inputs
+        self.settings
+            .settings_number_inputs
             .iter()
             .find_map(|(field, entity)| (entity.entity_id() == input.entity_id()).then_some(*field))
     }
@@ -604,14 +619,14 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<InputState>> {
-        if !self.settings_page.is_open {
+        if !self.settings.settings_page.is_open {
             return None;
         }
 
-        let input = if let Some(input) = &self.settings_search_input {
+        let input = if let Some(input) = &self.settings.settings_search_input {
             input.clone()
         } else {
-            let query = self.settings_page.search_query.clone();
+            let query = self.settings.settings_page.search_query.clone();
             let input = cx.new(|cx| {
                 InputState::new(window, cx)
                     .placeholder(self.ui_text.get(UiTextKey::SettingsSearchPlaceholder))
@@ -619,14 +634,14 @@ impl WorkbenchView {
             });
             let subscription =
                 cx.subscribe_in(&input, window, Self::on_settings_search_input_event);
-            self.settings_search_input = Some(input.clone());
-            self.settings_search_input_subscription = Some(subscription);
+            self.settings.settings_search_input = Some(input.clone());
+            self.settings.settings_search_input_subscription = Some(subscription);
             input
         };
 
-        if self.settings_search_input_needs_focus {
+        if self.settings.settings_search_input_needs_focus {
             input.update(cx, |input, cx| input.focus(window, cx));
-            self.settings_search_input_needs_focus = false;
+            self.settings.settings_search_input_needs_focus = false;
         }
 
         Some(input)
@@ -640,7 +655,7 @@ impl WorkbenchView {
         let items = language_setting_labels();
         let selected = language_setting_label(self.app_settings.general.language).to_string();
 
-        if let Some(select) = &self.settings_language_select {
+        if let Some(select) = &self.settings.settings_language_select {
             select.clone()
         } else {
             let selected_index = selected_index_for_settings_option(&items, &selected);
@@ -648,8 +663,8 @@ impl WorkbenchView {
                 .new(|cx| SelectState::new(SearchableVec::new(items), selected_index, window, cx));
             let subscription =
                 cx.subscribe_in(&select, window, Self::on_settings_language_select_event);
-            self.settings_language_select = Some(select.clone());
-            self.settings_language_select_subscription = Some(subscription);
+            self.settings.settings_language_select = Some(select.clone());
+            self.settings.settings_language_select_subscription = Some(subscription);
             select
         }
     }
@@ -672,7 +687,7 @@ impl WorkbenchView {
             push_unique_string(&mut items, selected.clone());
         }
 
-        if let Some(select) = &self.settings_shell_select {
+        if let Some(select) = &self.settings.settings_shell_select {
             select.clone()
         } else {
             let selected_index = selected_index_for_settings_option(&items, &selected);
@@ -680,8 +695,8 @@ impl WorkbenchView {
                 .new(|cx| SelectState::new(SearchableVec::new(items), selected_index, window, cx));
             let subscription =
                 cx.subscribe_in(&select, window, Self::on_settings_shell_select_event);
-            self.settings_shell_select = Some(select.clone());
-            self.settings_shell_select_subscription = Some(subscription);
+            self.settings.settings_shell_select = Some(select.clone());
+            self.settings.settings_shell_select_subscription = Some(subscription);
             select
         }
     }
@@ -694,7 +709,7 @@ impl WorkbenchView {
         let items = self.available_theme_names();
         let selected = self.theme_runtime.theme_name.clone();
 
-        if let Some(select) = &self.settings_ui_theme_select {
+        if let Some(select) = &self.settings.settings_ui_theme_select {
             select.clone()
         } else {
             let selected_index = selected_index_for_settings_option(&items, &selected);
@@ -704,8 +719,8 @@ impl WorkbenchView {
             });
             let subscription =
                 cx.subscribe_in(&select, window, Self::on_settings_ui_theme_select_event);
-            self.settings_ui_theme_select = Some(select.clone());
-            self.settings_ui_theme_select_subscription = Some(subscription);
+            self.settings.settings_ui_theme_select = Some(select.clone());
+            self.settings.settings_ui_theme_select_subscription = Some(subscription);
             select
         }
     }
@@ -727,7 +742,7 @@ impl WorkbenchView {
             .unwrap_or_else(|| ICON_THEME_BUILTIN.to_string());
         push_unique_string(&mut items, selected.clone());
 
-        if let Some(select) = &self.settings_icon_theme_select {
+        if let Some(select) = &self.settings.settings_icon_theme_select {
             select.clone()
         } else {
             let selected_index = selected_index_for_settings_option(&items, &selected);
@@ -737,8 +752,8 @@ impl WorkbenchView {
             });
             let subscription =
                 cx.subscribe_in(&select, window, Self::on_settings_icon_theme_select_event);
-            self.settings_icon_theme_select = Some(select.clone());
-            self.settings_icon_theme_select_subscription = Some(subscription);
+            self.settings.settings_icon_theme_select = Some(select.clone());
+            self.settings.settings_icon_theme_select_subscription = Some(subscription);
             select
         }
     }
@@ -759,7 +774,7 @@ impl WorkbenchView {
             .clone()
             .unwrap_or_else(|| TERMINAL_THEME_FOLLOW_UI.to_string());
 
-        if let Some(select) = &self.settings_terminal_theme_select {
+        if let Some(select) = &self.settings.settings_terminal_theme_select {
             select.clone()
         } else {
             let selected_index = selected_index_for_settings_option(&items, &selected);
@@ -772,8 +787,8 @@ impl WorkbenchView {
                 window,
                 Self::on_settings_terminal_theme_select_event,
             );
-            self.settings_terminal_theme_select = Some(select.clone());
-            self.settings_terminal_theme_select_subscription = Some(subscription);
+            self.settings.settings_terminal_theme_select = Some(select.clone());
+            self.settings.settings_terminal_theme_select_subscription = Some(subscription);
             select
         }
     }
@@ -787,7 +802,7 @@ impl WorkbenchView {
         let selected = self.app_settings.editor.default_language.clone();
         push_unique_string(&mut items, selected.clone());
 
-        if let Some(select) = &self.settings_editor_language_select {
+        if let Some(select) = &self.settings.settings_editor_language_select {
             select.clone()
         } else {
             let selected_index = selected_index_for_settings_option(&items, &selected);
@@ -800,8 +815,8 @@ impl WorkbenchView {
                 window,
                 Self::on_settings_editor_language_select_event,
             );
-            self.settings_editor_language_select = Some(select.clone());
-            self.settings_editor_language_select_subscription = Some(subscription);
+            self.settings.settings_editor_language_select = Some(select.clone());
+            self.settings.settings_editor_language_select_subscription = Some(subscription);
             select
         }
     }
@@ -818,7 +833,7 @@ impl WorkbenchView {
             cx.text_system().all_font_names(),
         );
 
-        if let Some(select) = &self.settings_font_family_select {
+        if let Some(select) = &self.settings.settings_font_family_select {
             select.clone()
         } else {
             let selected_index = selected_index_for_settings_option(&items, &selected);
@@ -828,8 +843,8 @@ impl WorkbenchView {
             });
             let subscription =
                 cx.subscribe_in(&select, window, Self::on_settings_font_family_select_event);
-            self.settings_font_family_select = Some(select.clone());
-            self.settings_font_family_select_subscription = Some(subscription);
+            self.settings.settings_font_family_select = Some(select.clone());
+            self.settings.settings_font_family_select_subscription = Some(subscription);
             select
         }
     }
@@ -845,7 +860,7 @@ impl WorkbenchView {
             cx.text_system().all_font_names(),
         );
 
-        if let Some(select) = &self.settings_editor_font_family_select {
+        if let Some(select) = &self.settings.settings_editor_font_family_select {
             select.clone()
         } else {
             let selected_index = selected_index_for_settings_option(&items, &selected);
@@ -858,8 +873,9 @@ impl WorkbenchView {
                 window,
                 Self::on_settings_editor_font_family_select_event,
             );
-            self.settings_editor_font_family_select = Some(select.clone());
-            self.settings_editor_font_family_select_subscription = Some(subscription);
+            self.settings.settings_editor_font_family_select = Some(select.clone());
+            self.settings
+                .settings_editor_font_family_select_subscription = Some(subscription);
             select
         }
     }
@@ -887,7 +903,7 @@ impl WorkbenchView {
         .collect::<Vec<_>>();
         let selected = self.editor_autosave_label(self.app_settings.editor.autosave);
 
-        if let Some(select) = &self.settings_editor_autosave_select {
+        if let Some(select) = &self.settings.settings_editor_autosave_select {
             select.clone()
         } else {
             let selected_index = selected_index_for_settings_option(&items, selected);
@@ -898,8 +914,8 @@ impl WorkbenchView {
                 window,
                 Self::on_settings_editor_autosave_select_event,
             );
-            self.settings_editor_autosave_select = Some(select.clone());
-            self.settings_editor_autosave_select_subscription = Some(subscription);
+            self.settings.settings_editor_autosave_select = Some(select.clone());
+            self.settings.settings_editor_autosave_select_subscription = Some(subscription);
             select
         }
     }
@@ -910,7 +926,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<InputState> {
-        if let Some(input) = self.settings_number_inputs.get(&field) {
+        if let Some(input) = self.settings.settings_number_inputs.get(&field) {
             return input.clone();
         }
 
@@ -920,8 +936,11 @@ impl WorkbenchView {
             cx.subscribe_in(&input, window, Self::on_settings_number_input_event);
         let step_subscription =
             cx.subscribe_in(&input, window, Self::on_settings_number_step_event);
-        self.settings_number_inputs.insert(field, input.clone());
-        self.settings_number_input_subscriptions
+        self.settings
+            .settings_number_inputs
+            .insert(field, input.clone());
+        self.settings
+            .settings_number_input_subscriptions
             .insert(field, vec![input_subscription, step_subscription]);
         input
     }

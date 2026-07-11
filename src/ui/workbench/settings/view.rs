@@ -45,6 +45,7 @@ fn settings_sidebar(
 ) -> Div {
     let theme = root.theme_runtime.ui;
     let groups = root
+        .settings
         .settings_page
         .visible_groups(&root.ui_text)
         .into_iter()
@@ -132,7 +133,7 @@ fn settings_content(
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
     let theme = root.theme_runtime.ui;
-    let group = root.settings_page.selected_group;
+    let group = root.settings.settings_page.selected_group;
 
     div()
         .flex()
@@ -811,11 +812,11 @@ fn settings_keybinding_rows(
 ) -> Div {
     let theme = root.theme_runtime.ui;
     let text = root.ui_text;
-    let diagnostics = if root.keybinding_warning_lines.is_empty() {
+    let diagnostics = if root.settings.keybinding_warning_lines.is_empty() {
         text.get(UiTextKey::SettingsNoKeybindingConflicts)
             .to_string()
     } else {
-        root.keybinding_warning_lines.join("; ")
+        root.settings.keybinding_warning_lines.join("; ")
     };
 
     let mut rows = div()

@@ -118,19 +118,19 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.pending_tab_rename.is_some() {
+        if self.overlays.pending_tab_rename.is_some() {
             let _ = self.confirm_tab_rename_dialog_from_input(cx);
             cx.notify();
             return;
         }
 
-        if self.pending_close_project_id.is_some() {
+        if self.overlays.pending_close_project_id.is_some() {
             let _ = self.confirm_pending_project_close();
             cx.notify();
             return;
         }
 
-        if self.active_palette.is_some() {
+        if self.palette.active_palette.is_some() {
             let _ = self.confirm_palette_selection();
             self.handle_pending_open_project_request(cx);
             self.flush_pending_status_notifications(window, cx);
@@ -146,28 +146,28 @@ impl WorkbenchView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.layout_toml_editor.is_some() {
+        if self.overlays.layout_toml_editor.is_some() {
             self.cancel_layout_toml_editor();
             cx.notify();
             return;
         }
 
-        if self.pending_tab_rename.is_some() {
+        if self.overlays.pending_tab_rename.is_some() {
             self.cancel_tab_rename_dialog();
             cx.notify();
             return;
         }
 
-        if self.pending_close_project_id.is_some() {
+        if self.overlays.pending_close_project_id.is_some() {
             self.cancel_pending_project_close();
             cx.notify();
             return;
         }
 
-        if self.active_palette.is_some() {
+        if self.palette.active_palette.is_some() {
             self.close_palette();
             cx.notify();
-        } else if self.settings_page.is_open {
+        } else if self.settings.settings_page.is_open {
             self.close_settings();
             cx.notify();
         } else {
@@ -477,10 +477,10 @@ impl WorkbenchView {
         command_id: CommandId,
         cx: &mut Context<Self>,
     ) {
-        if self.active_palette.is_some()
-            || self.pending_tab_rename.is_some()
-            || self.pending_keybinding_edit.is_some()
-            || self.layout_toml_editor.is_some()
+        if self.palette.active_palette.is_some()
+            || self.overlays.pending_tab_rename.is_some()
+            || self.overlays.pending_keybinding_edit.is_some()
+            || self.overlays.layout_toml_editor.is_some()
         {
             cx.propagate();
             return;
@@ -496,12 +496,12 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.layout_toml_editor.is_some() {
+        if self.overlays.layout_toml_editor.is_some() {
             cx.propagate();
             return;
         }
 
-        if self.active_palette.is_none() {
+        if self.palette.active_palette.is_none() {
             if let Some(command_id) = Self::workspace_arrow_keydown_command_for_owner(
                 self.foreground_input_owner_kind(),
                 &event.keystroke.key,

@@ -133,7 +133,7 @@ impl Render for WorkbenchView {
             ))
             .child(body);
 
-        if let Some(active_palette) = self.active_palette.clone() {
+        if let Some(active_palette) = self.palette.active_palette.clone() {
             let items = self.palette_items(active_palette.kind);
             if let Some(query_input) = self.palette_query_input(window, cx) {
                 root = root.child(palette_overlay(
@@ -141,11 +141,11 @@ impl Render for WorkbenchView {
                     &items,
                     &self.ui_text,
                     &query_input,
-                    &self.palette_scroll_handle,
+                    &self.palette.scroll_handle,
                     self.theme_runtime.ui,
                     |selected_index| {
                         cx.listener(move |this, _, window, cx| {
-                            if let Some(active_palette) = &mut this.active_palette {
+                            if let Some(active_palette) = &mut this.palette.active_palette {
                                 active_palette.selected_index = selected_index;
                             }
                             let _ = this.confirm_palette_selection();
@@ -163,17 +163,17 @@ impl Render for WorkbenchView {
                 self.theme_runtime.ui,
             ));
         }
-        if self.settings_page.is_open {
+        if self.settings.settings_page.is_open {
             if let Some(search_input) = self.settings_search_input(window, cx) {
                 root = root.child(settings_overlay(self, &search_input, window, cx));
             }
         }
-        if self.layout_toml_editor.is_some() {
+        if self.overlays.layout_toml_editor.is_some() {
             if let Some(input) = self.layout_toml_input(window, cx) {
                 root = root.child(layout_toml_editor_overlay(self, &input, cx));
             }
         }
-        if self.pending_tab_rename.is_some() {
+        if self.overlays.pending_tab_rename.is_some() {
             if let Some(input) = self.tab_rename_input(window, cx) {
                 root = root.child(tab_rename_dialog(
                     cx,
@@ -183,7 +183,7 @@ impl Render for WorkbenchView {
                 ));
             }
         }
-        if self.pending_keybinding_edit.is_some() {
+        if self.overlays.pending_keybinding_edit.is_some() {
             if let Some(input) = self.keybinding_edit_input(window, cx) {
                 root = root.child(keybinding_edit_dialog(cx, &input, self.theme_runtime.ui));
             }
@@ -193,6 +193,7 @@ impl Render for WorkbenchView {
             let title = lines.next().unwrap_or_default().to_string();
             let details = lines.map(str::to_string).collect::<Vec<_>>();
             let file_intent = self
+                .documents
                 .pending_dirty_close
                 .as_ref()
                 .is_some_and(|pending| matches!(pending.intent, DirtyCloseIntent::File(_)));
@@ -206,14 +207,14 @@ impl Render for WorkbenchView {
                 self.dirty_close_has_save_error(cx),
             ));
         }
-        if self.pending_close_project_id.is_some() {
+        if self.overlays.pending_close_project_id.is_some() {
             root = root.child(close_project_dialog(
                 cx,
                 &self.ui_text,
                 self.theme_runtime.ui,
             ));
         }
-        if let Some(conflict) = self.pending_file_conflict.as_ref() {
+        if let Some(conflict) = self.documents.pending_file_conflict.as_ref() {
             root = root.child(file_conflict_dialog(
                 cx,
                 &self.ui_text,
@@ -300,7 +301,7 @@ fn layout_toml_editor_overlay(
 ) -> Div {
     let theme = root.theme_runtime.ui;
     let editor_theme = root.theme_runtime.editor;
-    let Some(session) = root.layout_toml_editor.as_ref() else {
+    let Some(session) = root.overlays.layout_toml_editor.as_ref() else {
         return div();
     };
     let editor = session.editor();
