@@ -122,8 +122,9 @@ use crate::{
     ui::{
         components::{
             ActionEmphasis, workbench_action_button, workbench_agent_notification,
-            workbench_inline_notification, workbench_keybinding_badge, workbench_settings_row,
-            workbench_status_notification, workbench_switch,
+            workbench_closable_inline_notification, workbench_inline_notification,
+            workbench_keybinding_badge, workbench_settings_row, workbench_status_notification,
+            workbench_switch,
         },
         editor::{
             CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, CurrentDiskState,
@@ -779,6 +780,10 @@ impl WorkbenchView {
             .iter()
             .map(|item| item.title.clone())
             .collect()
+    }
+
+    pub fn dismiss_error_notification(&mut self) {
+        self.load_error = None;
     }
 
     pub fn visible_error_message(&self) -> Option<&str> {

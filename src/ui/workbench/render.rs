@@ -184,6 +184,10 @@ impl Render for WorkbenchView {
             root = root.child(error_notification_overlay(
                 error_item,
                 self.theme_runtime.ui,
+                cx.listener(|this, _, _window, cx| {
+                    this.dismiss_error_notification();
+                    cx.notify();
+                }),
             ));
         }
         if self.settings.settings_page.is_open {
@@ -472,12 +476,17 @@ fn layout_toml_editor_overlay(
     )
 }
 
-fn error_notification_overlay(item: ToastItem, theme: WorkbenchTheme) -> Div {
+fn error_notification_overlay<H>(item: ToastItem, theme: WorkbenchTheme, on_close: H) -> Div
+where
+    H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+{
     div()
         .absolute()
         .top(px(48.0))
         .right(px(12.0))
-        .child(workbench_inline_notification(item, theme))
+        .child(workbench_closable_inline_notification(
+            item, theme, on_close,
+        ))
 }
 
 pub(super) fn push_component_notification(

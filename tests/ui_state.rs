@@ -374,6 +374,39 @@ fn root_view_renders_sidebar_resize_handles_only_for_visible_expanded_panels(
     });
 }
 
+#[gpui::test]
+fn root_view_error_notification_close_button_dismisses_error(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::dev_fixture());
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        let mut event = notification_event();
+        event.pane_id = "missing-pane".to_string();
+        assert!(root.focus_notification_target(&event).is_err());
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+
+    let close = cx
+        .debug_bounds("error-notification-close")
+        .expect("error notification should expose a visible close button");
+    cx.simulate_click(close.center(), gpui::Modifiers::none());
+    cx.refresh().unwrap();
+
+    cx.read(|app| {
+        assert!(
+            root.read(app).visible_error_message().is_none(),
+            "clicking the close button should dismiss the error notification"
+        );
+    });
+}
+
 #[test]
 fn input_owner_stack_restores_parent_after_nested_owner_closes() {
     let mut stack = InputOwnerStack::default();

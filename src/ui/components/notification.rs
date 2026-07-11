@@ -21,6 +21,33 @@ pub fn workbench_status_notification(item: ToastItem, theme: WorkbenchTheme) -> 
 }
 
 pub fn workbench_inline_notification(item: ToastItem, theme: WorkbenchTheme) -> Div {
+    workbench_inline_notification_with_close(item, theme, None)
+}
+
+pub fn workbench_closable_inline_notification<H>(
+    item: ToastItem,
+    theme: WorkbenchTheme,
+    on_close: H,
+) -> Div
+where
+    H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+{
+    let close_button = workbench_icon_button(
+        "error-notification-close",
+        IconName::Close,
+        YtttIconButtonKind::TabClose,
+        theme,
+        on_close,
+    )
+    .debug_selector(|| "error-notification-close".to_string());
+    workbench_inline_notification_with_close(item, theme, Some(close_button))
+}
+
+fn workbench_inline_notification_with_close(
+    item: ToastItem,
+    theme: WorkbenchTheme,
+    close_button: Option<Stateful<Div>>,
+) -> Div {
     let tone = notification_tone_for_toast(item.tone);
     let style = yttt_notification_style(tone, theme);
     let icon = notification_icon(tone);
@@ -35,7 +62,14 @@ pub fn workbench_inline_notification(item: ToastItem, theme: WorkbenchTheme) -> 
         .rounded(style.radius)
         .px(style.padding_x)
         .py(style.padding_y)
-        .child(notification_content(title, context, None, icon, style))
+        .child(notification_content(
+            title,
+            context,
+            None,
+            icon,
+            style,
+            close_button,
+        ))
 }
 
 fn workbench_notification(
@@ -65,6 +99,7 @@ fn workbench_notification(
                 action_label.clone(),
                 icon.clone(),
                 style,
+                None,
             )
             .into_any_element()
         })
@@ -84,6 +119,7 @@ fn notification_content(
     action_label: Option<SharedString>,
     icon: IconName,
     style: crate::ui::primitives::notification::YtttNotificationStyle,
+    close_button: Option<Stateful<Div>>,
 ) -> Div {
     div()
         .flex()
@@ -128,4 +164,5 @@ fn notification_content(
                     .child(action_label),
             )
         })
+        .when_some(close_button, |this, close_button| this.child(close_button))
 }
