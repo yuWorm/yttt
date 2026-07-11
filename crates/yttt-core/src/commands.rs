@@ -327,8 +327,16 @@ impl CommandId {
                     disabled("Open a terminal or file first")
                 }
             }
-            Self::TabNew
-            | Self::TabRename
+            Self::TabNew => {
+                if !context.has_selected_project {
+                    disabled("Open a project first")
+                } else if context.active_surface == ActiveSurface::File {
+                    disabled("Switch to a terminal tab first")
+                } else {
+                    enabled()
+                }
+            }
+            Self::TabRename
             | Self::PaneSplitHorizontal
             | Self::PaneSplitVertical
             | Self::PaneClose

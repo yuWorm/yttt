@@ -3878,7 +3878,7 @@ fn root_view_terminal_exit_reconciles_active_work_item() {
 }
 
 #[test]
-fn root_view_terminal_exit_keeps_project_open_when_last_tab_closes() {
+fn root_view_terminal_exit_keeps_project_open_and_allows_new_tab() {
     let mut workspace = Workspace::new();
     workspace
         .open_project(PathBuf::from("/tmp/single"), single_tab_layout())
@@ -3899,6 +3899,19 @@ fn root_view_terminal_exit_keeps_project_open_when_last_tab_closes() {
     assert!(visible_tab_titles(root.workspace()).is_empty());
     assert!(root.visible_terminal_pane_contexts().is_empty());
     assert!(root.selected_project_is_empty());
+
+    root.run_command(CommandId::TabNew).unwrap();
+
+    let project_id = root.workspace().selected_project_id().unwrap();
+    let project = root.workspace().project(project_id).unwrap();
+    assert_eq!(project.layout.tabs.len(), 1);
+    assert_eq!(project.selected_tab_id, "tab-1");
+    assert_eq!(
+        root.active_work_item(),
+        Some(WorkItemId::Terminal("tab-1".to_string()))
+    );
+    assert!(!root.selected_project_is_empty());
+    assert_eq!(root.visible_error_message(), None);
 }
 
 #[test]

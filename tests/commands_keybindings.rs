@@ -109,6 +109,19 @@ fn command_availability_tracks_active_surface() {
         assert!(command.availability_for_context(file).enabled);
     }
 
+    assert!(
+        !CommandId::TabNew
+            .availability_for_context(no_project)
+            .enabled
+    );
+    assert!(
+        CommandId::TabNew
+            .availability_for_context(no_surface)
+            .enabled
+    );
+    assert!(CommandId::TabNew.availability_for_context(terminal).enabled);
+    assert!(!CommandId::TabNew.availability_for_context(file).enabled);
+
     for command in [CommandId::TabClose, CommandId::TabNext, CommandId::TabPrev] {
         assert!(!command.availability_for_context(no_surface).enabled);
         assert!(command.availability_for_context(terminal).enabled);
@@ -116,7 +129,6 @@ fn command_availability_tracks_active_surface() {
     }
 
     for command in [
-        CommandId::TabNew,
         CommandId::TabRename,
         CommandId::PaneSplitHorizontal,
         CommandId::PaneSplitVertical,
