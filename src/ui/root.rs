@@ -6747,7 +6747,7 @@ impl Render for RootView {
         }
 
         if self.should_auto_focus_workspace() && !focus_handle.contains_focused(window, cx) {
-            focus_handle.focus(window);
+            focus_handle.focus(window, cx);
         }
 
         root.track_focus(&focus_handle)
@@ -6802,7 +6802,7 @@ fn split_child(child: Div, basis: f32) -> Div {
         .flex()
         .flex_col()
         .flex_basis(relative(basis))
-        .flex_shrink()
+        .flex_shrink(1.0)
         .overflow_hidden()
         .child(child)
 }

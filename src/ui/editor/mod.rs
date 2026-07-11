@@ -1,3 +1,4 @@
+mod breadcrumbs;
 mod document;
 mod file_io;
 mod language;
@@ -7,6 +8,7 @@ mod state;
 mod view;
 mod workspace;
 
+pub use breadcrumbs::{EditorSymbol, EditorSymbolKind, breadcrumbs_at, document_symbols};
 pub use document::{
     EditorAppearance, ProjectEditorDocument, ProjectEditorDocumentEvent, ProjectEditorModel,
     ProjectEditorSaveState, SaveRequest,

@@ -26,9 +26,26 @@ button fixed at the end of the tab bar toggles the right project tree and shows 
 state while the tree is open.
 
 The left project sidebar and right file tree can both be resized by dragging their inner
-edges. Manual save, focus-change autosave, delayed autosave, external-change conflicts, and
-dirty file/project/window close protection are supported. See [Usage](docs/usage.md) for
-commands, settings, and detailed behavior.
+edges. File tabs provide language-aware highlighting, structural breadcrumbs, gutter folding,
+and in-file search alongside manual save, focus-change autosave, delayed autosave,
+external-change conflicts, and dirty file/project/window close protection. See
+[Usage](docs/usage.md) for commands, settings, and detailed behavior.
+
+Supported source highlighting includes Bash, C, C#, C++, Fish, GDScript, Go, Java,
+JavaScript, Kotlin, Lua, PHP, Python, Ruby, Rust, Scala, Swift, TypeScript, and Zig.
+Breadcrumbs follow the cursor through enclosing declarations; select one to move to that
+declaration. Fold multiline structures from the line-number gutter—the header and closing line
+remain visible while only the body hides. Open in-file search with the **Find** toolbar control,
+`⌘F` on macOS, or `Ctrl+F` elsewhere.
+
+### Editor Smoke Check
+
+- In a supported multiline source file, move into a nested declaration and select its breadcrumb;
+  the path must update and the click must move the cursor to the declaration.
+- Fold and unfold a multiline structural region in the line-number gutter; its header and closing
+  line must remain visible.
+- Open Find with the **Find** toolbar control, `⌘F` on macOS, and `Ctrl+F` elsewhere; confirm
+  next and previous navigate highlighted matches.
 
 ## Run
 

@@ -58,8 +58,7 @@ impl Render for TerminalApp {
 }
 
 fn main() -> Result<()> {
-    let app = gpui::Application::new();
-
+    let app = gpui_platform::application();
     app.run(move |cx| {
         // Get shell from environment
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
@@ -171,7 +170,7 @@ fn main() -> Result<()> {
                     });
 
                     // Focus the terminal so it receives key events
-                    terminal.read(cx).focus_handle().focus(window);
+                    terminal.read(cx).focus_handle().focus(window, cx);
 
                     // Wrap in TerminalApp to handle font size shortcuts
                     cx.new(|_cx| TerminalApp::new(terminal))

@@ -1,3 +1,4 @@
+use gpui::AppContext as _;
 use std::{cell::RefCell, path::PathBuf, rc::Rc, time::SystemTime};
 
 use yttt::{
@@ -101,7 +102,8 @@ fn project_editor_document_syncs_input_changes_and_emits_changed(cx: &mut gpui::
     });
 
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("changed", window, input_cx);
+        input.set_value("", window, input_cx);
+        input.replace("changed", window, input_cx);
     });
     document.update_in(cx, |document, window, entity_cx| {
         document.set_appearance(
@@ -131,6 +133,41 @@ fn project_editor_document_syncs_input_changes_and_emits_changed(cx: &mut gpui::
         [ProjectEditorDocumentEvent::Changed { generation: 1 }]
     ));
     drop(subscription);
+}
+
+#[gpui::test]
+fn project_editor_document_tracks_breadcrumbs_at_the_cursor(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let model = project_model("mod app {\n    fn render() {}\n}\n", fingerprint(3, 1));
+    let document_slot = Rc::new(RefCell::new(None));
+    let document_slot_for_window = document_slot.clone();
+    let (_root, cx) = cx.add_window_view(move |window, entity_cx| {
+        let document = entity_cx.new(|document_cx| {
+            ProjectEditorDocument::new(model, EditorAppearance::default(), window, document_cx)
+        });
+        *document_slot_for_window.borrow_mut() = Some(document.clone());
+        gpui_component::Root::new(document, window, entity_cx)
+    });
+    let document = document_slot.borrow_mut().take().unwrap();
+    let input = cx.read(|app| document.read(app).input().clone());
+
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_cursor_position(gpui_component::input::Position::new(1, 4), window, input_cx);
+    });
+    cx.run_until_parked();
+
+    let breadcrumb_names = cx.read(|app| {
+        document
+            .read(app)
+            .breadcrumbs()
+            .iter()
+            .map(|symbol| symbol.name.clone())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        breadcrumb_names,
+        vec!["app".to_string(), "render".to_string()]
+    );
 }
 
 fn project_model(value: &str, disk_fingerprint: DiskFingerprint) -> ProjectEditorModel {

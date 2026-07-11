@@ -1,12 +1,17 @@
 use gpui::{
-    AppContext as _, Context, Entity, EventEmitter, IntoElement, Render, Styled as _, Subscription,
-    Window, px, relative,
+    AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Subscription, Window,
+    div, px, relative,
 };
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::ActiveTheme as _;
+use gpui_component::input::{Input, InputEvent, InputState, Position, Search};
 
 use crate::config::settings::EditorSettings;
 
-use super::{CodeEditorState, DiskFingerprint, DocumentId, code_editor_input_state};
+use super::{
+    CodeEditorState, DiskFingerprint, DocumentId, EditorSymbol, breadcrumbs_at,
+    code_editor_input_state, document_symbols,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EditorAppearance {
@@ -208,7 +213,11 @@ pub struct ProjectEditorDocument {
     model: ProjectEditorModel,
     input: Entity<InputState>,
     appearance: EditorAppearance,
+    symbols: Vec<EditorSymbol>,
+    breadcrumbs: Vec<EditorSymbol>,
+    breadcrumb_cursor_line: usize,
     _input_subscription: Subscription,
+    _input_observer: Subscription,
 }
 
 impl ProjectEditorDocument {
@@ -219,16 +228,23 @@ impl ProjectEditorDocument {
         cx: &mut Context<Self>,
     ) -> Self {
         let input = cx.new(|cx| code_editor_input_state(window, cx, model.editor()));
+        let symbols = document_symbols(model.editor().language_id(), model.value());
+        let breadcrumbs = breadcrumbs_at(&symbols, 0);
         input.update(cx, |input, input_cx| {
             input.set_soft_wrap(appearance.soft_wrap, window, input_cx);
             input.set_line_number(appearance.line_numbers, window, input_cx);
         });
         let input_subscription = cx.subscribe_in(&input, window, Self::on_input_event);
+        let input_observer = cx.observe_in(&input, window, Self::on_input_notify);
         Self {
             model,
             input,
             appearance,
+            symbols,
+            breadcrumbs,
+            breadcrumb_cursor_line: 0,
             _input_subscription: input_subscription,
+            _input_observer: input_observer,
         }
     }
 
@@ -246,6 +262,14 @@ impl ProjectEditorDocument {
 
     pub fn appearance(&self) -> &EditorAppearance {
         &self.appearance
+    }
+
+    pub fn symbols(&self) -> &[EditorSymbol] {
+        &self.symbols
+    }
+
+    pub fn breadcrumbs(&self) -> &[EditorSymbol] {
+        &self.breadcrumbs
     }
 
     pub fn set_appearance(
@@ -275,6 +299,7 @@ impl ProjectEditorDocument {
         self.input.update(cx, |input, input_cx| {
             input.set_value(value, window, input_cx)
         });
+        self.refresh_breadcrumbs(0);
         cx.notify();
     }
 
@@ -292,11 +317,17 @@ impl ProjectEditorDocument {
     ) {
         match event {
             InputEvent::Change => {
+                let (value, cursor_line) = {
+                    let input = input.read(cx);
+                    (
+                        input.value().to_string(),
+                        input.cursor_position().line as usize,
+                    )
+                };
                 let previous_generation = self.model.generation();
-                let generation = self
-                    .model
-                    .on_input_changed(input.read(cx).value().to_string());
+                let generation = self.model.on_input_changed(value);
                 if generation != previous_generation {
+                    self.refresh_breadcrumbs(cursor_line);
                     cx.emit(ProjectEditorDocumentEvent::Changed { generation });
                     cx.notify();
                 }
@@ -310,22 +341,107 @@ impl ProjectEditorDocument {
             InputEvent::PressEnter { .. } => {}
         }
     }
+
+    fn on_input_notify(
+        &mut self,
+        input: Entity<InputState>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cursor_line = input.read(cx).cursor_position().line as usize;
+        if cursor_line != self.breadcrumb_cursor_line {
+            self.breadcrumb_cursor_line = cursor_line;
+            self.breadcrumbs = breadcrumbs_at(&self.symbols, cursor_line);
+            cx.notify();
+        }
+    }
+
+    fn refresh_breadcrumbs(&mut self, cursor_line: usize) {
+        self.breadcrumb_cursor_line = cursor_line;
+        self.symbols = document_symbols(self.model.editor().language_id(), self.model.value());
+        self.breadcrumbs = breadcrumbs_at(&self.symbols, cursor_line);
+    }
+
+    fn focus_symbol(&mut self, symbol: EditorSymbol, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.update(cx, |input, input_cx| {
+            input.set_cursor_position(
+                Position::new(symbol.start_line as u32, symbol.start_column as u32),
+                window,
+                input_cx,
+            );
+        });
+        self.breadcrumb_cursor_line = symbol.start_line;
+        self.breadcrumbs = breadcrumbs_at(&self.symbols, symbol.start_line);
+        cx.notify();
+    }
 }
 
 impl EventEmitter<ProjectEditorDocumentEvent> for ProjectEditorDocument {}
 
 impl Render for ProjectEditorDocument {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut breadcrumbs = div()
+            .id("editor-breadcrumbs")
+            .flex()
+            .flex_none()
+            .h(px(28.0))
+            .items_center()
+            .gap_1()
+            .px_2()
+            .overflow_hidden()
+            .text_sm()
+            .child(self.model.editor().config().title().to_string());
+        let input = self.input.clone();
+        breadcrumbs = breadcrumbs.child(
+            div()
+                .id("editor-search")
+                .ml_auto()
+                .cursor_pointer()
+                .hover(|style| style.opacity(0.7))
+                .child("Find")
+                .on_click(move |_, window, cx| {
+                    input.update(cx, |input, input_cx| input.focus(window, input_cx));
+                    window.dispatch_action(Box::new(Search), cx);
+                }),
+        );
+        for symbol in self.breadcrumbs.clone() {
+            let symbol_id = format!(
+                "editor-breadcrumb-{}-{}",
+                symbol.start_line, symbol.start_column
+            );
+            breadcrumbs = breadcrumbs.child("›").child(
+                div()
+                    .id(symbol_id)
+                    .cursor_pointer()
+                    .hover(|style| style.opacity(0.7))
+                    .child(symbol.name.clone())
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.focus_symbol(symbol.clone(), window, cx);
+                    })),
+            );
+        }
+
         let input = Input::new(&self.input)
+            .flex_1()
+            .min_h_0()
             .w_full()
-            .h_full()
             .appearance(false)
             .text_size(px(self.appearance.font_size))
             .line_height(relative(self.appearance.line_height));
-        if self.appearance.font_family.is_empty() {
+        let input = if self.appearance.font_family.is_empty() {
             input
         } else {
             input.font_family(self.appearance.font_family.clone())
-        }
+        };
+
+        div()
+            .id("project-editor-document")
+            .flex()
+            .flex_col()
+            .size_full()
+            .text_color(cx.theme().foreground)
+            .min_h_0()
+            .child(breadcrumbs)
+            .child(input)
     }
 }

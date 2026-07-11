@@ -1,8 +1,7 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, AppContext, Application, Bounds, Entity, Pixels, Window, WindowBounds, WindowOptions, px,
-    size,
+    App, AppContext, Bounds, Entity, Pixels, Window, WindowBounds, WindowOptions, px, size,
 };
 use gpui_component::{Root as ComponentRoot, Theme, TitleBar};
 
@@ -22,7 +21,7 @@ use crate::{
 
 pub fn run() {
     let config_paths = AppConfigPaths::for_app();
-    Application::new()
+    gpui_platform::application()
         .with_assets(crate::ui::assets::app_assets(&config_paths))
         .run(|cx: &mut App| {
             #[cfg(target_os = "macos")]

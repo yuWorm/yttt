@@ -265,7 +265,8 @@ impl TerminalPaneView {
         };
 
         cx.defer_in(window, move |_this, window, cx| {
-            terminal.read(cx).focus_handle().focus(window);
+            let focus_handle = terminal.read(cx).focus_handle().clone();
+            focus_handle.focus(window, cx);
         });
         true
     }

@@ -1,4 +1,7 @@
-use gpui_component::highlighter::LanguageRegistry;
+use gpui_component::{
+    highlighter::LanguageRegistry,
+    input::{DisplayMap, FoldRange, Rope},
+};
 use yttt::ui::editor::{
     CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, EditorDiagnostic,
     EditorDiagnosticSeverity, EditorLanguageCatalog, EditorLanguageId,
@@ -12,6 +15,31 @@ fn toml_language_registration_registers_toml_highlighter() {
     assert!(LanguageRegistry::singleton().language("toml").is_some());
 }
 
+#[test]
+fn extended_language_registration_adds_fish_and_gdscript_highlighters() {
+    register_builtin_editor_languages();
+
+    assert!(LanguageRegistry::singleton().language("fish").is_some());
+    assert!(LanguageRegistry::singleton().language("gdscript").is_some());
+}
+
+#[gpui::test]
+fn code_editor_fold_projection_hides_folded_lines(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        let text = Rope::from_str("fn render() {\n    if enabled {\n        draw();\n    }\n}\n");
+        let mut display_map = DisplayMap::new(gpui::Font::default(), gpui::px(14.0), None);
+        display_map.set_text(&text, cx);
+        display_map.set_fold_candidates(vec![FoldRange::new(0, 4)]);
+        display_map.set_folded(0, true);
+
+        assert!(display_map.is_folded_at(0));
+        assert!(!display_map.is_buffer_line_hidden(0));
+        assert!(display_map.is_buffer_line_hidden(1));
+        assert!(display_map.is_buffer_line_hidden(2));
+        assert!(display_map.is_buffer_line_hidden(3));
+        assert!(!display_map.is_buffer_line_hidden(4));
+    });
+}
 #[test]
 fn code_editor_state_tracks_value_dirty_and_errors() {
     let mut state = CodeEditorState::new(
@@ -159,6 +187,40 @@ fn language_catalog_resolves_builtin_languages_from_path_and_content() {
     assert_eq!(unknown.language_id, EditorLanguageId::PlainText);
     assert_eq!(unknown.highlighter_name, "text");
     assert_eq!(unknown.source, EditorLanguageResolutionSource::Fallback);
+}
+
+#[test]
+fn language_catalog_resolves_expanded_editor_languages() {
+    register_builtin_editor_languages();
+    let catalog = EditorLanguageCatalog::builtin();
+    let cases = [
+        ("main.go", EditorLanguageId::Go, "go"),
+        ("main.py", EditorLanguageId::Python, "python"),
+        ("main.c", EditorLanguageId::C, "c"),
+        ("main.cpp", EditorLanguageId::Cpp, "cpp"),
+        ("main.cs", EditorLanguageId::CSharp, "csharp"),
+        ("Main.java", EditorLanguageId::Java, "java"),
+        ("main.kt", EditorLanguageId::Kotlin, "kotlin"),
+        ("main.scala", EditorLanguageId::Scala, "scala"),
+        ("main.rb", EditorLanguageId::Ruby, "ruby"),
+        ("main.php", EditorLanguageId::Php, "php"),
+        ("main.lua", EditorLanguageId::Lua, "lua"),
+        ("main.swift", EditorLanguageId::Swift, "swift"),
+        ("main.zig", EditorLanguageId::Zig, "zig"),
+        ("config.fish", EditorLanguageId::Fish, "fish"),
+        ("player.gd", EditorLanguageId::Gdscript, "gdscript"),
+    ];
+
+    for (path, expected_language, expected_highlighter) in cases {
+        let resolution = catalog.resolve_for_path(path, None);
+        assert_eq!(resolution.language_id, expected_language, "{path}");
+        assert_eq!(resolution.highlighter_name, expected_highlighter, "{path}");
+        assert_eq!(
+            resolution.source,
+            EditorLanguageResolutionSource::Extension,
+            "{path}"
+        );
+    }
 }
 
 #[test]

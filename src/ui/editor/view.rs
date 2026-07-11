@@ -19,4 +19,5 @@ pub fn code_editor_input_state(
         .line_number(editor.config().line_number())
         .rows(editor.config().rows())
         .soft_wrap(editor.config().soft_wrap())
+        .folding(true)
 }

@@ -65,7 +65,6 @@ use std::io::{Read, Write};
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
-
 /// Configuration for terminal creation and runtime updates.
 ///
 /// This struct defines the terminal's appearance and behavior, including
@@ -514,38 +513,29 @@ impl TerminalView {
         // Create focus handle
         let focus_handle = cx.focus_handle();
 
-        // Create async channel for bytes (push-based notification)
-        // Using flume instead of smol::channel because flume is executor-agnostic
-        // and properly wakes GPUI's async executor when data arrives
+        // Create async channel for bytes (push-based notification).
+        // The reader owns no GPUI state; the foreground task remains the only
+        // context that mutates the terminal view.
         let (bytes_tx, bytes_rx) = flume::unbounded::<Vec<u8>>();
 
-        // Spawn background thread to read from stdout
-        // This thread sends bytes through the async channel
         thread::spawn(move || {
             Self::read_stdout_blocking(stdout_reader, bytes_tx);
         });
 
-        // Spawn async task that awaits on the channel and notifies the view
-        // This is push-based: the task blocks until bytes arrive, then immediately notifies
         let reader_task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
-                // Wait for bytes from the background reader (blocks until data arrives)
                 match bytes_rx.recv_async().await {
                     Ok(bytes) => {
-                        // Process bytes and notify the view
                         let result = this.update(cx, |view: &mut Self, cx: &mut Context<Self>| {
                             view.state.process_bytes(&bytes);
                             cx.notify();
                         });
                         if result.is_err() {
-                            // View was dropped, exit
                             break;
                         }
                     }
                     Err(_) => {
-                        // Channel closed - PTY has finished, send Exit event
                         let _ = exit_event_tx.send(TerminalEvent::Exit);
-                        // Notify view to process the Exit event
                         let _ = this.update(cx, |_view, cx: &mut Context<Self>| {
                             cx.notify();
                         });
@@ -716,35 +706,18 @@ impl TerminalView {
         self
     }
 
-    /// Background thread that reads from stdout.
-    ///
-    /// This function runs in a background thread, continuously reading bytes
-    /// from the stdout reader and sending them through the async channel.
-    /// The async channel allows the main async task to be woken up immediately
-    /// when data arrives (push-based).
+
+    /// Continuously reads PTY output on a dedicated OS thread.
     fn read_stdout_blocking<R: Read + Send + 'static>(
         mut stdout_reader: R,
         bytes_tx: flume::Sender<Vec<u8>>,
     ) {
-        let mut buffer = [0u8; 4096];
-
+        let mut buffer = [0_u8; 4096];
         loop {
             match stdout_reader.read(&mut buffer) {
-                Ok(0) => {
-                    // EOF - channel will be dropped, signaling completion
-                    break;
-                }
-                Ok(n) => {
-                    // Send bytes to the async task
-                    let bytes = buffer[..n].to_vec();
-                    if bytes_tx.send(bytes).is_err() {
-                        break; // Channel closed
-                    }
-                }
-                Err(_) => {
-                    // Read error
-                    break;
-                }
+                Ok(0) | Err(_) => break,
+                Ok(count) if bytes_tx.send(buffer[..count].to_vec()).is_err() => break,
+                Ok(_) => {}
             }
         }
     }
@@ -883,7 +856,7 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         // Request focus when clicking the terminal
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
 
         let Some(point) = self.point_for_position(event.position) else {
             return;

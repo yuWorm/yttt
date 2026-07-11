@@ -33,6 +33,22 @@ Directories load lazily. Refresh invalidates stale scans and reloads the root pl
 expanded directories. Git status decorates paths when available. Hidden entries are governed
 by `project_panel.show_hidden`.
 
+### Code navigation, folding, and search
+
+The editor resolves its language from the explicit editor setting, file name, or file
+extension. Language-aware highlighting covers plain text, TOML, JSON, JSONC, YAML, Markdown,
+Bash, C, C#, C++, Fish, GDScript, Go, Java, JavaScript, Kotlin, Lua, PHP, Python, Ruby,
+Rust, Scala, Swift, TypeScript, and Zig.
+
+When the language has a syntax tree, cursor-following breadcrumbs show the enclosing symbols
+above the document. Select a breadcrumb to move the cursor to that declaration. Multiline
+structural regions provide fold controls in the line-number gutter; folding preserves the header
+and closing line, and hides only the body.
+
+Use the **Find** toolbar button, `⌘F` on macOS, or `Ctrl+F` elsewhere to open the in-file
+search control. Search matches are highlighted and the current match can be traversed with
+the control's navigation buttons.
+
 ### Saving and external changes
 
 `file.save` saves the active file. Autosave modes are:
@@ -379,6 +395,12 @@ Run these before marking a product phase complete:
 - Hidden-file changes and refresh reload expanded directories.
 - Editor font, size, line height, soft wrap, and line numbers update open files without losing
   text; tab size applies after reopening.
+- Open a supported source file; its breadcrumb trail follows the cursor, and selecting a
+  breadcrumb moves the cursor to that symbol.
+- Fold and unfold a multiline structural region from the line-number gutter; the header and
+  closing line remain visible.
+- Press `⌘F` on macOS, `Ctrl+F` elsewhere, or select the **Find** toolbar control in a file tab;
+  the in-file search control opens and navigates between matches.
 - Manual save and both autosave modes write files.
 - External modification and deletion show the appropriate conflict choices.
 - Dirty file, dirty project with running terminals, and window close all protect unsaved data.

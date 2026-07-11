@@ -114,7 +114,7 @@ fn split_child(child: Div, basis: f32) -> Div {
         .flex()
         .flex_col()
         .flex_basis(relative(basis))
-        .flex_shrink()
+        .flex_shrink(1.0)
         .overflow_hidden()
         .child(child)
 }

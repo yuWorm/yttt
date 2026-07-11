@@ -259,6 +259,8 @@ impl EditorTheme {
             editor_active_line: Some(self.active_line.into()),
             editor_line_number: Some(self.line_number.into()),
             editor_active_line_number: Some(self.active_line_number.into()),
+            editor_invisible: Some(self.line_number.into()),
+            editor_gutter_background: Some(self.background.into()),
             status: Default::default(),
             syntax,
         }

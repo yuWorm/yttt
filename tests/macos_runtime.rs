@@ -1,5 +1,18 @@
 #[test]
 #[cfg(target_os = "macos")]
+fn application_platform_exposes_system_fonts() {
+    let font_names = gpui_platform::current_platform(true)
+        .text_system()
+        .all_font_names();
+
+    assert!(
+        !font_names.is_empty(),
+        "gpui_platform must enable font-kit; NoopTextSystem renders all text invisibly"
+    );
+}
+
+#[test]
+#[cfg(target_os = "macos")]
 fn fallback_app_icon_path_points_to_existing_icns() {
     let path = yttt::ui::macos::fallback_app_icon_path();
 

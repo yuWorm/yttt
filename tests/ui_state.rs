@@ -689,7 +689,7 @@ fn root_view_file_tree_loads_and_opens_a_project_file(cx: &mut gpui::TestAppCont
     let paths = english_test_config_paths(&temp);
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(project_dir.clone(), sample_layout())
+        .open_project(project_dir.clone(), file_editor_layout())
         .unwrap();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
@@ -1097,7 +1097,7 @@ fn root_view_file_save_preserves_newer_in_flight_edit(cx: &mut gpui::TestAppCont
         .unwrap();
     let input = cx.read(|app| document.read(app).input().clone());
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("saved text", window, input_cx);
+        replace_editor_value(input, "saved text", window, input_cx);
     });
     cx.run_until_parked();
     cx.read(|app| {
@@ -1130,14 +1130,14 @@ fn root_view_file_save_preserves_newer_in_flight_edit(cx: &mut gpui::TestAppCont
     });
 
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("captured edit", window, input_cx);
+        replace_editor_value(input, "captured edit", window, input_cx);
     });
     cx.run_until_parked();
     root.update_in(cx, |root, window, root_cx| {
         root.save_active_document(window, root_cx);
     });
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("newer edit", window, input_cx);
+        replace_editor_value(input, "newer edit", window, input_cx);
     });
     cx.run_until_parked();
 
@@ -1154,7 +1154,7 @@ fn root_view_file_save_preserves_newer_in_flight_edit(cx: &mut gpui::TestAppCont
 
     fs::remove_dir_all(&project_dir).unwrap();
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("unsaved after failure", window, input_cx);
+        replace_editor_value(input, "unsaved after failure", window, input_cx);
     });
     cx.run_until_parked();
     root.update_in(cx, |root, window, root_cx| {
@@ -1242,7 +1242,7 @@ fn root_view_file_save_requires_resolution_after_external_change(cx: &mut gpui::
         .unwrap();
     let input = cx.read(|app| document.read(app).input().clone());
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("memory text", window, input_cx);
+        replace_editor_value(input, "memory text", window, input_cx);
     });
     cx.run_until_parked();
     fs::write(project_dir.join("notes.txt"), "external text").unwrap();
@@ -1287,7 +1287,7 @@ fn root_view_file_save_requires_resolution_after_external_change(cx: &mut gpui::
     });
 
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("second memory text", window, input_cx);
+        replace_editor_value(input, "second memory text", window, input_cx);
     });
     cx.run_until_parked();
     fs::write(project_dir.join("notes.txt"), "second external text").unwrap();
@@ -1329,7 +1329,7 @@ fn root_view_file_save_requires_resolution_after_external_change(cx: &mut gpui::
     });
 
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("recreated text", window, input_cx);
+        replace_editor_value(input, "recreated text", window, input_cx);
     });
     cx.run_until_parked();
     fs::remove_file(project_dir.join("notes.txt")).unwrap();
@@ -1369,7 +1369,7 @@ fn root_view_file_save_requires_resolution_after_external_change(cx: &mut gpui::
     });
 
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("dirty refresh text", window, input_cx);
+        replace_editor_value(input, "dirty refresh text", window, input_cx);
     });
     cx.run_until_parked();
     fs::write(project_dir.join("notes.txt"), "external refresh conflict").unwrap();
@@ -1402,8 +1402,8 @@ fn root_view_delayed_autosave_discards_stale_generation(cx: &mut gpui::TestAppCo
     let input = cx.read(|app| document.read(app).input().clone());
 
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("first delayed edit", window, input_cx);
-        input.set_value("latest delayed edit", window, input_cx);
+        replace_editor_value(input, "first delayed edit", window, input_cx);
+        replace_editor_value(input, "latest delayed edit", window, input_cx);
     });
     cx.run_until_parked();
     cx.read(|app| {
@@ -1435,14 +1435,14 @@ fn root_view_delayed_autosave_discards_stale_generation(cx: &mut gpui::TestAppCo
     });
 
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("captured overlapping save", window, input_cx);
+        replace_editor_value(input, "captured overlapping save", window, input_cx);
     });
     cx.run_until_parked();
     root.update_in(cx, |root, window, root_cx| {
         root.save_active_document(window, root_cx);
     });
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("latest overlapping autosave", window, input_cx);
+        replace_editor_value(input, "latest overlapping autosave", window, input_cx);
     });
     cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_millis(50));
@@ -1463,13 +1463,54 @@ fn root_view_focus_change_autosave_saves_dirty_file(cx: &mut gpui::TestAppContex
         project_file_autosave_fixture(cx, "on_focus_change", 1000);
     let input = cx.read(|app| document.read(app).input().clone());
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("focus change edit", window, input_cx);
+        replace_editor_value(input, "focus change edit", window, input_cx);
     });
     cx.run_until_parked();
+    cx.read(|app| {
+        assert!(document.read(app).model().is_dirty());
+        assert_eq!(
+            root.read(app).editor_autosave(),
+            yttt::config::settings::EditorAutosave::OnFocusChange
+        );
+    });
+    let notes_document_id = cx.read(|app| document.read(app).model().document_id().clone());
 
+    let project_id = cx.read(|app| document.read(app).model().document_id().project_id.clone());
+    fs::write(project_dir.join("other.txt"), "other").unwrap();
     root.update(cx, |root, cx| {
-        root.select_work_item(WorkItemId::Terminal("dev".to_string()))
-            .unwrap();
+        root.run_command(CommandId::ProjectPanelRefresh).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+
+    let tree = cx
+        .read(|app| {
+            root.read(app)
+                .project_editor_runtime()
+                .tree(&project_id)
+                .cloned()
+        })
+        .unwrap();
+    tree.update(cx, |tree, tree_cx| {
+        assert!(tree.activate_path(Path::new("other.txt"), tree_cx));
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    let other_document_id = DocumentId {
+        project_id: project_id.clone(),
+        canonical_path: fs::canonicalize(project_dir.join("other.txt")).unwrap(),
+    };
+    root.update(cx, |root, cx| {
+        assert!(
+            root.select_work_item(WorkItemId::File(notes_document_id.clone()))
+                .unwrap()
+        );
+        assert!(
+            root.select_work_item(WorkItemId::File(other_document_id.clone()))
+                .unwrap()
+        );
         cx.notify();
     });
     cx.refresh().unwrap();
@@ -1490,13 +1531,47 @@ fn root_view_autosave_off_does_not_save_on_focus_change(cx: &mut gpui::TestAppCo
     let (_temp, project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 5);
     let input = cx.read(|app| document.read(app).input().clone());
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("manual only edit", window, input_cx);
+        replace_editor_value(input, "manual only edit", window, input_cx);
     });
     cx.run_until_parked();
+    let notes_document_id = cx.read(|app| document.read(app).model().document_id().clone());
 
+    let project_id = cx.read(|app| document.read(app).model().document_id().project_id.clone());
+    fs::write(project_dir.join("other.txt"), "other").unwrap();
     root.update(cx, |root, cx| {
-        root.select_work_item(WorkItemId::Terminal("dev".to_string()))
-            .unwrap();
+        root.run_command(CommandId::ProjectPanelRefresh).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+
+    let tree = cx
+        .read(|app| {
+            root.read(app)
+                .project_editor_runtime()
+                .tree(&project_id)
+                .cloned()
+        })
+        .unwrap();
+    tree.update(cx, |tree, tree_cx| {
+        assert!(tree.activate_path(Path::new("other.txt"), tree_cx));
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    let other_document_id = DocumentId {
+        project_id: project_id.clone(),
+        canonical_path: fs::canonicalize(project_dir.join("other.txt")).unwrap(),
+    };
+    root.update(cx, |root, cx| {
+        assert!(
+            root.select_work_item(WorkItemId::File(notes_document_id.clone()))
+                .unwrap()
+        );
+        assert!(
+            root.select_work_item(WorkItemId::File(other_document_id.clone()))
+                .unwrap()
+        );
         cx.notify();
     });
     cx.refresh().unwrap();
@@ -1553,7 +1628,7 @@ fn editor_display_settings_update_open_documents_without_replacing_state(
     let input = cx.read(|app| document.read(app).input().clone());
     let input_entity_id = input.entity_id();
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("keep this live edit", window, input_cx);
+        replace_editor_value(input, "keep this live edit", window, input_cx);
     });
     cx.run_until_parked();
 
@@ -1704,7 +1779,7 @@ fn disabling_autosave_cancels_pending_delayed_tasks(cx: &mut gpui::TestAppContex
     let document_id = cx.read(|app| document.read(app).model().document_id().clone());
     let input = cx.read(|app| document.read(app).input().clone());
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("pending delayed edit", window, input_cx);
+        replace_editor_value(input, "pending delayed edit", window, input_cx);
     });
     cx.run_until_parked();
     cx.read(|app| {
@@ -1793,11 +1868,11 @@ fn project_panel_settings_update_selected_and_future_sessions_only() {
 #[gpui::test]
 fn closing_dirty_file_requires_a_decision(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
-    let (_temp, _project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
+    let (_temp, _project_dir, root, document, cx) = project_file_terminal_fixture(cx, "off", 50);
     let document_id = cx.read(|app| document.read(app).model().document_id().clone());
     let input = cx.read(|app| document.read(app).input().clone());
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("unsaved close edit", window, input_cx);
+        replace_editor_value(input, "unsaved close edit", window, input_cx);
     });
     cx.run_until_parked();
 
@@ -1865,11 +1940,11 @@ fn closing_dirty_file_requires_a_decision(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn saving_a_dirty_file_continues_the_pending_close(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
-    let (_temp, project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
+    let (_temp, project_dir, root, document, cx) = project_file_terminal_fixture(cx, "off", 50);
     let document_id = cx.read(|app| document.read(app).model().document_id().clone());
     let input = cx.read(|app| document.read(app).input().clone());
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("save before close", window, input_cx);
+        replace_editor_value(input, "save before close", window, input_cx);
     });
     cx.run_until_parked();
     root.update(cx, |root, cx| {
@@ -1910,7 +1985,7 @@ fn failed_save_keeps_dirty_file_and_pending_close_open(cx: &mut gpui::TestAppCon
     let document_id = cx.read(|app| document.read(app).model().document_id().clone());
     let input = cx.read(|app| document.read(app).input().clone());
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("cannot save this edit", window, input_cx);
+        replace_editor_value(input, "cannot save this edit", window, input_cx);
     });
     cx.run_until_parked();
     root.update(cx, |root, cx| {
@@ -1947,11 +2022,11 @@ fn failed_save_keeps_dirty_file_and_pending_close_open(cx: &mut gpui::TestAppCon
 #[gpui::test]
 fn closing_project_combines_dirty_files_and_running_processes(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
-    let (_temp, _project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
+    let (_temp, _project_dir, root, document, cx) = project_file_terminal_fixture(cx, "off", 50);
     let project_id = cx.read(|app| document.read(app).model().document_id().project_id.clone());
     let input = cx.read(|app| document.read(app).input().clone());
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("unsaved project edit", window, input_cx);
+        replace_editor_value(input, "unsaved project edit", window, input_cx);
     });
     root.update(cx, |root, cx| {
         root.workspace_mut()
@@ -1993,11 +2068,11 @@ fn closing_project_combines_dirty_files_and_running_processes(cx: &mut gpui::Tes
 #[gpui::test]
 fn saving_dirty_project_files_continues_the_pending_project_close(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
-    let (_temp, project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
+    let (_temp, project_dir, root, document, cx) = project_file_terminal_fixture(cx, "off", 50);
     let project_id = cx.read(|app| document.read(app).model().document_id().project_id.clone());
     let input = cx.read(|app| document.read(app).input().clone());
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("save project before close", window, input_cx);
+        replace_editor_value(input, "save project before close", window, input_cx);
     });
     root.update(cx, |root, cx| {
         root.workspace_mut()
@@ -2032,7 +2107,7 @@ fn closing_window_with_dirty_file_is_blocked_by_the_workbench_guard(cx: &mut gpu
     let (_temp, _project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
     let input = cx.read(|app| document.read(app).input().clone());
     input.update_in(cx, |input, window, input_cx| {
-        input.set_value("unsaved window edit", window, input_cx);
+        replace_editor_value(input, "unsaved window edit", window, input_cx);
     });
     cx.run_until_parked();
 
@@ -4252,6 +4327,16 @@ language = "en"
     paths
 }
 
+fn replace_editor_value(
+    input: &mut gpui_component::input::InputState,
+    value: &str,
+    window: &mut gpui::Window,
+    cx: &mut gpui::Context<gpui_component::input::InputState>,
+) {
+    input.set_value("", window, cx);
+    input.replace(value, window, cx);
+}
+
 fn project_file_autosave_fixture<'a>(
     cx: &'a mut gpui::TestAppContext,
     autosave: &str,
@@ -4263,10 +4348,40 @@ fn project_file_autosave_fixture<'a>(
     gpui::Entity<ProjectEditorDocument>,
     &'a mut gpui::VisualTestContext,
 ) {
+    project_file_fixture(cx, autosave, delay_ms, file_editor_layout())
+}
+
+fn project_file_terminal_fixture<'a>(
+    cx: &'a mut gpui::TestAppContext,
+    autosave: &str,
+    delay_ms: u64,
+) -> (
+    tempfile::TempDir,
+    PathBuf,
+    gpui::Entity<RootView>,
+    gpui::Entity<ProjectEditorDocument>,
+    &'a mut gpui::VisualTestContext,
+) {
+    project_file_fixture(cx, autosave, delay_ms, sample_layout())
+}
+
+fn project_file_fixture<'a>(
+    cx: &'a mut gpui::TestAppContext,
+    autosave: &str,
+    delay_ms: u64,
+    layout: yttt::model::layout::ProjectLayout,
+) -> (
+    tempfile::TempDir,
+    PathBuf,
+    gpui::Entity<RootView>,
+    gpui::Entity<ProjectEditorDocument>,
+    &'a mut gpui::VisualTestContext,
+) {
     let temp = tempdir().unwrap();
     let project_dir = temp.path().join(format!("autosave-{autosave}"));
     fs::create_dir(&project_dir).unwrap();
     fs::write(project_dir.join("notes.txt"), "old").unwrap();
+    let canonical_file = fs::canonicalize(project_dir.join("notes.txt")).unwrap();
     let paths = english_test_config_paths(&temp);
     fs::write(
         paths.settings_file(),
@@ -4283,13 +4398,21 @@ autosave_delay_ms = {delay_ms}
     )
     .unwrap();
     let mut workspace = Workspace::new();
-    let project_id = workspace
-        .open_project(project_dir.clone(), sample_layout())
-        .unwrap();
+    let project_id = workspace.open_project(project_dir.clone(), layout).unwrap();
+    let preselected_project_id = project_id.clone();
+    let preselected_file = canonical_file.clone();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| RootView::with_workspace_for_test_and_config_paths(workspace, paths));
+        let root = cx.new(|_| {
+            let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths);
+            root.project_editor_runtime_mut()
+                .workspace_mut()
+                .session_mut(&preselected_project_id)
+                .unwrap()
+                .open_file(preselected_file);
+            root
+        });
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         register_workbench_close_guard(window, cx, &root);
         gpui_component::Root::new(root, window, cx)
@@ -4310,7 +4433,7 @@ autosave_delay_ms = {delay_ms}
     cx.run_until_parked();
     let document_id = DocumentId {
         project_id,
-        canonical_path: fs::canonicalize(project_dir.join("notes.txt")).unwrap(),
+        canonical_path: canonical_file,
     };
     let document = cx
         .read(|app| {
@@ -4322,6 +4445,16 @@ autosave_delay_ms = {delay_ms}
         .unwrap();
 
     (temp, project_dir, root, document, cx)
+}
+
+fn file_editor_layout() -> yttt::model::layout::ProjectLayout {
+    toml::from_str(
+        r#"
+        [project]
+        name = "file-editor"
+    "#,
+    )
+    .unwrap()
 }
 
 fn sample_layout() -> yttt::model::layout::ProjectLayout {
