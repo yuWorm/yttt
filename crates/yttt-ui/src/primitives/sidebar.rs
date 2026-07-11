@@ -1,6 +1,6 @@
 use gpui::{Pixels, Rgba, px};
 
-use crate::ui::theme::WorkbenchTheme;
+use crate::theme::WorkbenchTheme;
 
 pub const PROJECT_SIDEBAR_MIN_WIDTH: f32 = 160.0;
 pub const PROJECT_SIDEBAR_MAX_WIDTH: f32 = 420.0;

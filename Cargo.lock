@@ -9108,7 +9108,17 @@ dependencies = [
  "tree-sitter-typescript",
  "tree-sitter-zig",
  "uuid",
+ "yttt-core",
  "yttt-terminal",
+ "yttt-ui",
+]
+
+[[package]]
+name = "yttt-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -9124,6 +9134,14 @@ dependencies = [
  "parking_lot",
  "portable-pty",
  "ropey 1.6.1",
+]
+
+[[package]]
+name = "yttt-ui"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
 ]
 
 [[package]]

@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "crates/yttt-core", "crates/yttt-terminal", "crates/yttt-ui"]
+resolver = "3"
+
 [package]
 name = "yttt"
 version = "0.1.0"
@@ -29,7 +33,9 @@ tree-sitter-swift = "0.7.0"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-zig = "1.1.2"
 tree-sitter-toml-ng = "0.7"
+yttt-core = { path = "crates/yttt-core" }
 yttt-terminal = { path = "crates/yttt-terminal" }
+yttt-ui = { path = "crates/yttt-ui" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

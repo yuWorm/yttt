@@ -1,6 +1,6 @@
-pub mod commands;
+pub use yttt_core::commands;
 pub mod config;
-pub mod model;
+pub use yttt_core::model;
 pub mod palette;
 pub mod runtime;
 pub mod ui;

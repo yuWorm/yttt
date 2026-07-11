@@ -1,6 +1,6 @@
 use gpui::{Pixels, Rgba, px};
 
-use crate::ui::theme::WorkbenchTheme;
+use crate::theme::WorkbenchTheme;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct YtttTabBarStyle {

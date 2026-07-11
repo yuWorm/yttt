@@ -706,7 +706,6 @@ impl TerminalView {
         self
     }
 
-
     /// Continuously reads PTY output on a dedicated OS thread.
     fn read_stdout_blocking<R: Read + Send + 'static>(
         mut stdout_reader: R,

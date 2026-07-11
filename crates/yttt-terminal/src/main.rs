@@ -170,7 +170,8 @@ fn main() -> Result<()> {
                     });
 
                     // Focus the terminal so it receives key events
-                    terminal.read(cx).focus_handle().focus(window, cx);
+                    let focus_handle = terminal.read(cx).focus_handle().clone();
+                    focus_handle.focus(window, cx);
 
                     // Wrap in TerminalApp to handle font size shortcuts
                     cx.new(|_cx| TerminalApp::new(terminal))

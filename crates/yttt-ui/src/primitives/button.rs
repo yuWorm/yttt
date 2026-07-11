@@ -4,7 +4,7 @@ use gpui_component::{
     button::{Button, ButtonCustomVariant, ButtonVariants},
 };
 
-use crate::ui::theme::WorkbenchTheme;
+use crate::theme::WorkbenchTheme;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum YtttButtonVariant {

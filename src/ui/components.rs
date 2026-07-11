@@ -22,12 +22,7 @@ use crate::ui::{
     theme::WorkbenchTheme,
     toast::{ToastItem, ToastTone},
 };
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SelectableState {
-    Active,
-    Inactive,
-}
+pub use yttt_ui::SelectableState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActionEmphasis {

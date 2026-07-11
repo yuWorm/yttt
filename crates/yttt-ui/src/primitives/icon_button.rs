@@ -1,6 +1,6 @@
 use gpui::{Pixels, Rgba, px, rgba};
 
-use crate::ui::theme::WorkbenchTheme;
+use crate::theme::WorkbenchTheme;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum YtttIconButtonKind {

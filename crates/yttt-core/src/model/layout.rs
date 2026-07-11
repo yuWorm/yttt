@@ -111,7 +111,7 @@ impl LayoutNode {
         }
     }
 
-    pub(crate) fn find_pane_mut(&mut self, id: &str) -> Option<&mut PaneConfig> {
+    pub fn find_pane_mut(&mut self, id: &str) -> Option<&mut PaneConfig> {
         match self {
             Self::Pane(pane) if pane.id == id => Some(pane),
             Self::Pane(_) => None,

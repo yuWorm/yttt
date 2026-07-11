@@ -1,6 +1,6 @@
 use gpui::{Pixels, Rgba, px};
 
-use crate::ui::{components::SelectableState, theme::WorkbenchTheme};
+use crate::{SelectableState, theme::WorkbenchTheme};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum YtttRowKind {

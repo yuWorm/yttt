@@ -17,7 +17,7 @@ pub mod overlay;
 pub mod palette;
 pub mod palette_surface;
 pub mod picker;
-pub mod primitives;
+pub use yttt_ui::primitives;
 pub mod project_tree;
 pub mod root;
 pub mod settings;

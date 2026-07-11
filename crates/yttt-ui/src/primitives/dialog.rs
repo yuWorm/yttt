@@ -1,6 +1,6 @@
 use gpui::{Pixels, Rgba};
 
-use crate::ui::{
+use crate::{
     primitives::panel::{YtttPanelKind, yttt_panel_style},
     theme::WorkbenchTheme,
 };
