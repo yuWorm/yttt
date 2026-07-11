@@ -8,10 +8,6 @@ impl WorkbenchView {
         self.system_notifications_enabled
     }
 
-    pub fn terminal_close_on_exit(&self) -> bool {
-        self.app_settings.terminal.close_on_exit
-    }
-
     pub fn terminal_show_scrollbar(&self) -> bool {
         self.app_settings.terminal.show_scrollbar
     }
@@ -77,6 +73,31 @@ impl WorkbenchView {
         self.app_settings.terminal.shell = shell.to_string();
         self.save_app_settings_and_refresh_runtime()
     }
+    pub fn add_custom_terminal_shell(&mut self, shell: &str) -> Result<bool, WorkbenchError> {
+        let shell = shell.trim();
+        if shell.is_empty() {
+            return Ok(false);
+        }
+
+        if self
+            .app_settings
+            .terminal
+            .custom_shells
+            .iter()
+            .all(|existing| existing != shell)
+        {
+            self.app_settings
+                .terminal
+                .custom_shells
+                .push(shell.to_string());
+        }
+        self.app_settings.terminal.shell = shell.to_string();
+        self.save_app_settings_and_refresh_runtime()?;
+        self.settings.settings_shell_select = None;
+        self.settings.settings_shell_select_subscription = None;
+        self.settings.settings_custom_shell_input = None;
+        Ok(true)
+    }
 
     pub fn set_ui_theme_name(&mut self, theme_name: &str) -> Result<(), WorkbenchError> {
         self.app_settings.theme.name = theme_name.to_string();
@@ -118,14 +139,6 @@ impl WorkbenchView {
 
     pub fn set_terminal_scrollback(&mut self, scrollback: usize) -> Result<(), WorkbenchError> {
         self.app_settings.terminal.scrollback = scrollback;
-        self.save_app_settings_and_refresh_runtime()
-    }
-
-    pub fn set_terminal_close_on_exit(
-        &mut self,
-        close_on_exit: bool,
-    ) -> Result<(), WorkbenchError> {
-        self.app_settings.terminal.close_on_exit = close_on_exit;
         self.save_app_settings_and_refresh_runtime()
     }
 
@@ -669,12 +682,32 @@ impl WorkbenchView {
         }
     }
 
+    pub(super) fn settings_custom_shell_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(input) = &self.settings.settings_custom_shell_input {
+            return input.clone();
+        }
+
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(self.ui_text.get(UiTextKey::SettingsCustomShellPlaceholder))
+        });
+        self.settings.settings_custom_shell_input = Some(input.clone());
+        input
+    }
+
     pub(super) fn settings_shell_select(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<SettingsStringSelectState> {
         let mut items = vec!["Auto".to_string()];
+        for shell in &self.app_settings.terminal.custom_shells {
+            push_unique_string(&mut items, shell.clone());
+        }
         for shell in detect_shell_candidates() {
             push_unique_string(&mut items, shell);
         }

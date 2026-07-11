@@ -297,9 +297,15 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::SettingsDefaultShell => "Default shell",
         UiTextKey::SettingsDefaultShellDescription => {
-            "Shell command used when creating new terminal tabs."
+            "Shell used by layout panes in shell execution mode and new terminal tabs."
         }
         UiTextKey::SettingsSelectShell => "Select shell",
+        UiTextKey::SettingsCustomShell => "Custom shell",
+        UiTextKey::SettingsCustomShellDescription => {
+            "Add an executable path or command name to the saved shell list."
+        }
+        UiTextKey::SettingsCustomShellPlaceholder => "Shell path or command",
+        UiTextKey::SettingsAddShell => "Add",
         UiTextKey::SettingsFontFamily => "Font family",
         UiTextKey::SettingsFontFamilyDescription => "Terminal font family.",
         UiTextKey::SettingsSearchFont => "Search font...",
@@ -314,10 +320,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsScrollbar => "Scrollbar",
         UiTextKey::SettingsScrollbarDescription => {
             "Show a thin scrollback indicator in terminal panes."
-        }
-        UiTextKey::SettingsClosePaneOnExit => "Close pane on exit",
-        UiTextKey::SettingsClosePaneOnExitDescription => {
-            "Automatically close terminal panes when their process exits."
         }
         UiTextKey::SettingsLayoutSource => "Layout source",
         UiTextKey::SettingsLayoutSourceDescription => "Current project layout source.",

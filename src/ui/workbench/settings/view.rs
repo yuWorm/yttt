@@ -641,11 +641,39 @@ fn settings_terminal_rows(
     let theme = root.theme_runtime.ui;
     let text = root.ui_text;
     let shell_select = root.settings_shell_select(window, cx);
+    let custom_shell_input = root.settings_custom_shell_input(window, cx);
     let font_select = root.settings_font_family_select(window, cx);
     let font_size_input = root.settings_number_input(SettingsNumberField::FontSize, window, cx);
     let line_height_input = root.settings_number_input(SettingsNumberField::LineHeight, window, cx);
     let padding_input = root.settings_number_input(SettingsNumberField::Padding, window, cx);
     let scrollback_input = root.settings_number_input(SettingsNumberField::Scrollback, window, cx);
+    let custom_shell_input_for_add = custom_shell_input.clone();
+    let custom_shell_control = div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .w(style.control_width)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .h(style.control_height)
+                .child(Input::new(&custom_shell_input).small().appearance(true)),
+        )
+        .child(settings_button(
+            "settings-add-custom-shell",
+            text.get(UiTextKey::SettingsAddShell),
+            false,
+            theme,
+            cx,
+            cx.listener(move |this, _, _window, cx| {
+                let shell = custom_shell_input_for_add.read(cx).value().to_string();
+                if let Err(error) = this.add_custom_terminal_shell(&shell) {
+                    this.load_error = Some(error.to_string());
+                }
+                cx.notify();
+            }),
+        ));
 
     div()
         .flex()
@@ -662,6 +690,13 @@ fn settings_terminal_rows(
                 text.get(UiTextKey::SettingsSelectShell),
             )
             .into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsCustomShell),
+            text.get(UiTextKey::SettingsCustomShellDescription),
+            custom_shell_control.into_any_element(),
         ))
         .child(setting_row(
             style,
@@ -716,22 +751,6 @@ fn settings_terminal_rows(
                 cx.listener(|this, checked: &bool, _window, cx| {
                     let _ = this.set_terminal_show_scrollbar(*checked);
                     this.sync_terminal_pane_configs(cx);
-                    cx.notify();
-                }),
-            )
-            .into_any_element(),
-        ))
-        .child(setting_row(
-            style,
-            theme,
-            text.get(UiTextKey::SettingsClosePaneOnExit),
-            text.get(UiTextKey::SettingsClosePaneOnExitDescription),
-            settings_switch(
-                "settings-close-on-exit",
-                root.terminal_close_on_exit(),
-                theme,
-                cx.listener(|this, checked: &bool, _window, cx| {
-                    let _ = this.set_terminal_close_on_exit(*checked);
                     cx.notify();
                 }),
             )

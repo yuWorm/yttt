@@ -3,8 +3,8 @@ use crate::{
         LayoutNodeOverride, LayoutOverride, PaneOverride, ProjectOverride, TabOverride,
     },
     model::layout::{
-        LayoutNode, PaneConfig, PaneKind, ProjectConfig, ProjectLayout, SplitConfig,
-        SplitDirection, TabConfig,
+        LayoutNode, PaneConfig, PaneKind, ProcessExitBehavior, ProjectConfig, ProjectLayout,
+        SplitConfig, SplitDirection, TabConfig, TerminalExecutionMode,
     },
 };
 
@@ -227,6 +227,12 @@ struct StrictPaneOverride {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    args: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    execution_mode: Option<TerminalExecutionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exit_behavior: Option<ProcessExitBehavior>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     kind: Option<PaneKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     notify_on_exit: Option<bool>,
@@ -240,6 +246,9 @@ impl From<StrictPaneOverride> for PaneOverride {
             id: value.id,
             title: value.title,
             command: value.command,
+            args: value.args,
+            execution_mode: value.execution_mode,
+            exit_behavior: value.exit_behavior,
             kind: value.kind,
             notify_on_exit: value.notify_on_exit,
             detector: value.detector,
@@ -253,6 +262,9 @@ impl From<&PaneOverride> for StrictPaneOverride {
             id: value.id.clone(),
             title: value.title.clone(),
             command: value.command.clone(),
+            args: value.args.clone(),
+            execution_mode: value.execution_mode,
+            exit_behavior: value.exit_behavior,
             kind: value.kind.clone(),
             notify_on_exit: value.notify_on_exit,
             detector: value.detector.clone(),
@@ -370,6 +382,12 @@ struct StrictPaneConfig {
     id: String,
     title: String,
     command: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    args: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_shell_execution_mode")]
+    execution_mode: TerminalExecutionMode,
+    #[serde(default, skip_serializing_if = "is_close_exit_behavior")]
+    exit_behavior: ProcessExitBehavior,
     #[serde(default, skip_serializing_if = "is_shell_kind")]
     kind: PaneKind,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -384,6 +402,9 @@ impl From<StrictPaneConfig> for PaneConfig {
             id: value.id,
             title: value.title,
             command: value.command,
+            args: value.args,
+            execution_mode: value.execution_mode,
+            exit_behavior: value.exit_behavior,
             kind: value.kind,
             notify_on_exit: value.notify_on_exit,
             detector: value.detector,
@@ -397,6 +418,9 @@ impl From<&PaneConfig> for StrictPaneConfig {
             id: value.id.clone(),
             title: value.title.clone(),
             command: value.command.clone(),
+            args: value.args.clone(),
+            execution_mode: value.execution_mode,
+            exit_behavior: value.exit_behavior,
             kind: value.kind.clone(),
             notify_on_exit: value.notify_on_exit,
             detector: value.detector.clone(),
@@ -437,6 +461,14 @@ impl From<&SplitConfig> for StrictSplitConfig {
 
 fn is_shell_kind(kind: &PaneKind) -> bool {
     kind == &PaneKind::Shell
+}
+
+fn is_shell_execution_mode(mode: &TerminalExecutionMode) -> bool {
+    mode == &TerminalExecutionMode::Shell
+}
+
+fn is_close_exit_behavior(behavior: &ProcessExitBehavior) -> bool {
+    behavior == &ProcessExitBehavior::Close
 }
 
 fn is_false(value: &bool) -> bool {

@@ -17,8 +17,7 @@ use yttt::{
         },
     },
     model::{
-        layout::PaneKind,
-        layout::SplitDirection,
+        layout::{PaneKind, ProcessExitBehavior, SplitDirection, TerminalExecutionMode},
         split_tree::ResizeDirection,
         workspace::{AgentStatus, PaneProcessState, Workspace},
     },
@@ -38,8 +37,9 @@ use yttt::{
     ui::primitives::sidebar::SidebarSide,
     ui::project_tree::{DirectorySnapshot, ProjectTreeEntry, ProjectTreeEntryKind},
     ui::terminal::pane::{
-        PaneLifecycle, TerminalPaneExitInput, TerminalPaneExitedEvent, TerminalSpawnFailure,
-        notification_for_terminal_pane_exit, pane_lifecycle_label, spawn_failure_lines,
+        PaneLifecycle, TerminalPaneExitInput, TerminalPaneExitedEvent, TerminalPaneStartedEvent,
+        TerminalSpawnFailure, notification_for_terminal_pane_exit, pane_lifecycle_label,
+        spawn_failure_lines,
     },
     ui::workbench::shell::sidebar::visible_project_items,
     ui::{
@@ -734,19 +734,41 @@ fn root_view_file_tree_loads_and_opens_a_project_file(cx: &mut gpui::TestAppCont
         project_id,
         canonical_path: fs::canonicalize(project_dir.join("src/main.rs")).unwrap(),
     };
-    cx.read(|app| {
+    let document = cx.read(|app| {
         assert_eq!(
             root.read(app).active_work_item(),
             Some(WorkItemId::File(expected_document_id.clone()))
         );
-        assert!(
-            root.read(app)
-                .project_editor_runtime()
-                .document(&expected_document_id)
-                .is_some()
-        );
+        let document = root
+            .read(app)
+            .project_editor_runtime()
+            .document(&expected_document_id)
+            .cloned()
+            .expect("opened project file should create an editor document");
+        assert_eq!(document.read(app).breadcrumb_header(), "src/main.rs");
+        document
     });
+    document.update_in(cx, |document, window, document_cx| {
+        document.focus(window, document_cx);
+        window.dispatch_action(Box::new(gpui_component::input::Search), document_cx);
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
     assert!(cx.debug_bounds("active-file-editor").is_some());
+    assert!(cx.debug_bounds("project-editor-header").is_none());
+    let breadcrumbs = cx
+        .debug_bounds("editor-breadcrumbs")
+        .expect("merged breadcrumb toolbar should be visible");
+    let search = cx
+        .debug_bounds("search-panel")
+        .expect("search panel should be visible");
+    assert_eq!(breadcrumbs.origin.x, search.origin.x);
+    assert_eq!(breadcrumbs.size.width, search.size.width);
+    assert_eq!(
+        breadcrumbs.origin.y + breadcrumbs.size.height,
+        search.origin.y
+    );
 }
 
 #[test]
@@ -2869,17 +2891,19 @@ fn root_view_closes_requested_tab_by_id() {
 }
 
 #[test]
-fn root_view_terminal_close_on_exit_setting_persists() {
+fn root_view_custom_terminal_shell_setting_persists() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut root = WorkbenchView::with_config_paths(paths.clone());
 
-    assert!(root.terminal_close_on_exit());
+    assert!(root.add_custom_terminal_shell("/opt/tools/fish").unwrap());
 
-    root.set_terminal_close_on_exit(false).unwrap();
-
-    assert!(!root.terminal_close_on_exit());
-    assert!(!WorkbenchView::with_config_paths(paths).terminal_close_on_exit());
+    let loaded = load_or_create_settings(&paths).unwrap();
+    assert_eq!(loaded.settings.terminal.shell, "/opt/tools/fish");
+    assert_eq!(
+        loaded.settings.terminal.custom_shells,
+        vec!["/opt/tools/fish"]
+    );
 }
 
 #[test]
@@ -2926,7 +2950,16 @@ fn root_view_terminal_shell_setting_changes_new_shell_tabs() {
     let project = root.workspace().project(project_id).unwrap();
     let tab = project.layout.tab(&project.selected_tab_id).unwrap();
     let pane = tab.layout.find_pane("shell").unwrap();
-    assert_eq!(pane.command, "/bin/bash");
+    assert_eq!(pane.command, "");
+    assert_eq!(pane.execution_mode, TerminalExecutionMode::Shell);
+    assert_eq!(
+        root.visible_terminal_pane_contexts()
+            .into_iter()
+            .find(|context| context.pane.id == "shell")
+            .unwrap()
+            .shell,
+        "/bin/bash"
+    );
 }
 
 #[test]
@@ -3825,6 +3858,7 @@ fn root_view_terminal_exit_keeps_project_open_when_last_tab_closes() {
         pane_id: "shell".to_string(),
         status: ProcessStatus::Exited { code: Some(0) },
         exit_reason: ExitReason::Completed,
+        exit_behavior: ProcessExitBehavior::Close,
     })
     .unwrap();
 
@@ -3835,26 +3869,15 @@ fn root_view_terminal_exit_keeps_project_open_when_last_tab_closes() {
 }
 
 #[test]
-fn root_view_terminal_exit_keeps_split_pane_when_close_on_exit_is_disabled() {
-    let temp = tempdir().unwrap();
-    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    fs::create_dir_all(paths.config_dir()).unwrap();
-    fs::write(
-        paths.settings_file(),
-        r#"
-[terminal]
-close_on_exit = false
-"#,
-    )
-    .unwrap();
-    let mut workspace = Workspace::new();
-    workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
-        .unwrap();
-    let mut root = WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths);
+fn root_view_terminal_exit_keeps_split_pane_for_manual_restart() {
+    let mut root = WorkbenchView::dev_fixture();
 
     let outcome = root
-        .handle_terminal_pane_exit(terminal_pane_exited_event("dev", "server"))
+        .handle_terminal_pane_exit(terminal_pane_exited_event_with_behavior(
+            "dev",
+            "server",
+            ProcessExitBehavior::ManualRestart,
+        ))
         .unwrap();
 
     assert_eq!(
@@ -3878,60 +3901,46 @@ close_on_exit = false
 }
 
 #[test]
-fn root_view_terminal_exit_keeps_single_pane_tab_when_close_on_exit_is_disabled() {
-    let temp = tempdir().unwrap();
-    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    fs::create_dir_all(paths.config_dir()).unwrap();
-    fs::write(
-        paths.settings_file(),
-        r#"
-[terminal]
-close_on_exit = false
-"#,
-    )
-    .unwrap();
-    let mut workspace = Workspace::new();
-    workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
-        .unwrap();
-    let mut root = WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths);
+fn root_view_auto_restart_exit_transitions_back_to_running() {
+    let mut root = WorkbenchView::dev_fixture();
     root.workspace_mut().select_tab("agent").unwrap();
 
-    root.handle_terminal_pane_exit(terminal_pane_exited_event("agent", "codex"))
-        .unwrap();
+    root.handle_terminal_pane_exit(terminal_pane_exited_event_with_behavior(
+        "agent",
+        "codex",
+        ProcessExitBehavior::AutoRestart,
+    ))
+    .unwrap();
 
     assert_eq!(visible_tab_titles(root.workspace()), vec!["Dev", "Agent"]);
-    let project_id = root.workspace().selected_project_id().unwrap();
-    let project = root.workspace().project(project_id).unwrap();
-    assert_eq!(project.selected_tab_id, "agent");
-    let codex = project
-        .tab_state("agent")
-        .unwrap()
-        .pane_states
-        .iter()
-        .find(|pane| pane.pane_id == "codex")
-        .unwrap();
-    assert_eq!(codex.process_state, PaneProcessState::Exited);
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let project = root.workspace().project(&project_id).unwrap();
+    assert_eq!(
+        project.tab_state("agent").unwrap().pane_states[0].process_state,
+        PaneProcessState::Exited
+    );
+
+    root.handle_terminal_pane_started(TerminalPaneStartedEvent {
+        project_id: project_id.as_str().to_string(),
+        tab_id: "agent".to_string(),
+        pane_id: "codex".to_string(),
+    })
+    .unwrap();
+
+    let project = root.workspace().project(&project_id).unwrap();
+    assert_eq!(
+        project.tab_state("agent").unwrap().pane_states[0].process_state,
+        PaneProcessState::Running
+    );
 }
 
 #[test]
-fn root_view_terminal_exit_keeps_last_tab_when_close_on_exit_is_disabled() {
-    let temp = tempdir().unwrap();
-    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    fs::create_dir_all(paths.config_dir()).unwrap();
-    fs::write(
-        paths.settings_file(),
-        r#"
-[terminal]
-close_on_exit = false
-"#,
-    )
-    .unwrap();
+fn root_view_terminal_exit_keeps_last_tab_for_manual_restart() {
     let mut workspace = Workspace::new();
     workspace
         .open_project(PathBuf::from("/tmp/single"), single_tab_layout())
         .unwrap();
-    let mut root = WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths);
+    let mut root = WorkbenchView::with_workspace_for_test(workspace);
 
     root.handle_terminal_pane_exit(TerminalPaneExitedEvent {
         project_id: "/tmp/single".to_string(),
@@ -3939,6 +3948,7 @@ close_on_exit = false
         pane_id: "shell".to_string(),
         status: ProcessStatus::Exited { code: Some(0) },
         exit_reason: ExitReason::Completed,
+        exit_behavior: ProcessExitBehavior::ManualRestart,
     })
     .unwrap();
 
@@ -4175,11 +4185,13 @@ fn terminal_pane_exit_event_preserves_process_identity() {
         pane_id: "server".to_string(),
         status: ProcessStatus::Exited { code: Some(0) },
         exit_reason: ExitReason::Completed,
+        exit_behavior: ProcessExitBehavior::ManualRestart,
     };
 
     assert_eq!(event.project_id, "/tmp/yttt");
     assert_eq!(event.tab_id, "dev");
     assert_eq!(event.pane_id, "server");
+    assert_eq!(event.exit_behavior, ProcessExitBehavior::ManualRestart);
 }
 
 #[test]
@@ -4251,12 +4263,21 @@ fn terminal_pane_exit_input(
 }
 
 fn terminal_pane_exited_event(tab_id: &str, pane_id: &str) -> TerminalPaneExitedEvent {
+    terminal_pane_exited_event_with_behavior(tab_id, pane_id, ProcessExitBehavior::Close)
+}
+
+fn terminal_pane_exited_event_with_behavior(
+    tab_id: &str,
+    pane_id: &str,
+    exit_behavior: ProcessExitBehavior,
+) -> TerminalPaneExitedEvent {
     TerminalPaneExitedEvent {
         project_id: "/tmp/yttt".to_string(),
         tab_id: tab_id.to_string(),
         pane_id: pane_id.to_string(),
         status: ProcessStatus::Exited { code: Some(0) },
         exit_reason: ExitReason::Completed,
+        exit_behavior,
     }
 }
 

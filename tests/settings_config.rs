@@ -1,12 +1,12 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tempfile::tempdir;
 use yttt::config::{
     paths::AppConfigPaths,
     settings::{
         AUTO_SHELL, AppSettings, EditorAutosave, LanguageSetting, SettingsLoadWarning,
-        detect_shell_candidates_with, load_or_create_settings, resolve_default_shell,
-        save_settings,
+        ShellPlatform, detect_shell_candidates_with, load_or_create_settings,
+        resolve_default_shell, save_settings,
     },
 };
 
@@ -34,11 +34,11 @@ fn missing_settings_file_writes_defaults() {
     assert!(!loaded.settings.notifications.system);
     assert_eq!(loaded.settings.terminal.font_family, "");
     assert_eq!(loaded.settings.terminal.shell, AUTO_SHELL);
+    assert!(loaded.settings.terminal.custom_shells.is_empty());
     assert_eq!(loaded.settings.terminal.font_size, 13.0);
     assert_eq!(loaded.settings.terminal.line_height, 1.15);
     assert_eq!(loaded.settings.terminal.padding, 6.0);
     assert_eq!(loaded.settings.terminal.scrollback, 10000);
-    assert!(loaded.settings.terminal.close_on_exit);
     assert!(loaded.settings.terminal.show_scrollbar);
     assert!(loaded.settings.editor.auto_detect_language);
     assert_eq!(loaded.settings.editor.default_language, "plain_text");
@@ -129,6 +129,8 @@ fn settings_persist_notification_and_terminal_shell_choices() {
     let mut settings = AppSettings::default();
     settings.notifications.system = true;
     settings.terminal.shell = "/bin/zsh".to_string();
+    settings.terminal.custom_shells =
+        vec!["/opt/homebrew/bin/fish".to_string(), "/bin/zsh".to_string()];
     settings.terminal.font_size = 15.0;
 
     save_settings(&paths, &settings).unwrap();
@@ -136,23 +138,25 @@ fn settings_persist_notification_and_terminal_shell_choices() {
 
     assert!(loaded.settings.notifications.system);
     assert_eq!(loaded.settings.terminal.shell, "/bin/zsh");
+    assert_eq!(
+        loaded.settings.terminal.custom_shells,
+        vec!["/opt/homebrew/bin/fish", "/bin/zsh"]
+    );
     assert_eq!(loaded.settings.terminal.font_size, 15.0);
 }
 
 #[test]
-fn settings_persist_language_and_close_on_exit() {
+fn settings_persist_language_and_terminal_scrollbar() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
     let mut settings = AppSettings::default();
     settings.general.language = LanguageSetting::Chinese;
-    settings.terminal.close_on_exit = false;
     settings.terminal.show_scrollbar = false;
 
     save_settings(&paths, &settings).unwrap();
     let loaded = load_or_create_settings(&paths).unwrap();
 
     assert_eq!(loaded.settings.general.language, LanguageSetting::Chinese);
-    assert!(!loaded.settings.terminal.close_on_exit);
     assert!(!loaded.settings.terminal.show_scrollbar);
 }
 
@@ -287,10 +291,19 @@ fn settings_allow_lsp_enabled_without_command_for_reserved_slot() {
 }
 
 #[test]
-fn shell_detection_prioritizes_shell_env_then_common_system_shells() {
-    let candidates = detect_shell_candidates_with(Some("/opt/homebrew/bin/fish"), |path| {
-        matches!(path, "/opt/homebrew/bin/fish" | "/bin/zsh" | "/bin/bash")
-    });
+fn macos_shell_detection_prioritizes_shell_env_then_system_shells() {
+    let candidates = detect_shell_candidates_with(
+        ShellPlatform::MacOs,
+        Some("/opt/homebrew/bin/fish"),
+        None,
+        &[],
+        |path| {
+            matches!(
+                path.to_str(),
+                Some("/opt/homebrew/bin/fish" | "/bin/zsh" | "/bin/bash" | "/bin/sh")
+            )
+        },
+    );
 
     assert_eq!(
         candidates,
@@ -298,23 +311,51 @@ fn shell_detection_prioritizes_shell_env_then_common_system_shells() {
             "/opt/homebrew/bin/fish".to_string(),
             "/bin/zsh".to_string(),
             "/bin/bash".to_string(),
-            "sh".to_string()
+            "/bin/sh".to_string(),
         ]
     );
 }
 
 #[test]
-fn shell_detection_skips_missing_shell_env_value() {
-    let candidates = detect_shell_candidates_with(Some("/tmp/not-a-shell"), |path| {
-        matches!(path, "/bin/zsh" | "/bin/bash")
-    });
+fn linux_shell_detection_skips_missing_shell_env_value() {
+    let candidates = detect_shell_candidates_with(
+        ShellPlatform::Linux,
+        Some("/tmp/not-a-shell"),
+        None,
+        &[],
+        |path| matches!(path.to_str(), Some("/bin/bash" | "/bin/sh")),
+    );
+
+    assert_eq!(
+        candidates,
+        vec!["/bin/bash".to_string(), "/bin/sh".to_string()]
+    );
+}
+
+#[test]
+fn windows_shell_detection_uses_comspec_and_path_candidates() {
+    let path_entries = vec![
+        PathBuf::from("C:/Program Files/PowerShell/7"),
+        PathBuf::from("C:/Windows/System32"),
+    ];
+    let candidates = detect_shell_candidates_with(
+        ShellPlatform::Windows,
+        None,
+        Some("C:/Windows/System32/cmd.exe"),
+        &path_entries,
+        |path| {
+            matches!(
+                path.to_str(),
+                Some("C:/Windows/System32/cmd.exe" | "C:/Program Files/PowerShell/7/pwsh.exe")
+            )
+        },
+    );
 
     assert_eq!(
         candidates,
         vec![
-            "/bin/zsh".to_string(),
-            "/bin/bash".to_string(),
-            "sh".to_string()
+            "C:/Windows/System32/cmd.exe".to_string(),
+            "C:/Program Files/PowerShell/7/pwsh.exe".to_string(),
         ]
     );
 }

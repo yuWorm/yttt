@@ -2,8 +2,10 @@ use std::path::PathBuf;
 
 use crate::model::{
     ids::ProjectId,
-    layout::TabConfig,
-    layout::{LayoutNode, PaneConfig, PaneKind, ProjectLayout, SplitConfig, SplitDirection},
+    layout::{
+        LayoutNode, PaneConfig, PaneKind, ProcessExitBehavior, ProjectLayout, SplitConfig,
+        SplitDirection, TabConfig, TerminalExecutionMode,
+    },
     split_tree::{FocusDirection, ResizeDirection},
 };
 
@@ -236,7 +238,7 @@ impl Workspace {
     }
 
     pub fn create_shell_tab(&mut self) -> Result<String, WorkspaceError> {
-        self.create_shell_tab_with_command("$SHELL")
+        self.create_shell_tab_with_command("")
     }
 
     pub fn create_shell_tab_with_command(
@@ -255,6 +257,9 @@ impl Workspace {
                 id: pane_id.clone(),
                 title: "shell".to_string(),
                 command,
+                args: Vec::new(),
+                execution_mode: TerminalExecutionMode::Shell,
+                exit_behavior: ProcessExitBehavior::Close,
                 kind: PaneKind::Shell,
                 notify_on_exit: false,
                 detector: None,
@@ -352,7 +357,10 @@ impl Workspace {
         let new_pane = PaneConfig {
             id: new_pane_id.clone(),
             title: format!("Pane {new_pane_number}"),
-            command: "$SHELL".to_string(),
+            command: String::new(),
+            args: Vec::new(),
+            execution_mode: TerminalExecutionMode::Shell,
+            exit_behavior: ProcessExitBehavior::Close,
             kind: PaneKind::Shell,
             notify_on_exit: false,
             detector: None,

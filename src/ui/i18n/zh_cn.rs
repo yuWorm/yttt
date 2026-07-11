@@ -240,8 +240,16 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsProjectSidebarWidth => "项目侧栏宽度",
         UiTextKey::SettingsProjectSidebarWidthDescription => "左侧已打开项目侧栏的宽度。",
         UiTextKey::SettingsDefaultShell => "默认 Shell",
-        UiTextKey::SettingsDefaultShellDescription => "创建新终端标签页时使用的 Shell 命令。",
+        UiTextKey::SettingsDefaultShellDescription => {
+            "供 Shell 执行模式的布局面板和新终端标签页使用。"
+        }
         UiTextKey::SettingsSelectShell => "选择 Shell",
+        UiTextKey::SettingsCustomShell => "自定义 Shell",
+        UiTextKey::SettingsCustomShellDescription => {
+            "将可执行文件路径或命令名称添加到已保存的 Shell 列表。"
+        }
+        UiTextKey::SettingsCustomShellPlaceholder => "Shell 路径或命令",
+        UiTextKey::SettingsAddShell => "添加",
         UiTextKey::SettingsFontFamily => "字体族",
         UiTextKey::SettingsFontFamilyDescription => "终端字体族。",
         UiTextKey::SettingsSearchFont => "搜索字体...",
@@ -255,8 +263,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsScrollbackDescription => "保留在内存中的终端行数。",
         UiTextKey::SettingsScrollbar => "滚动条",
         UiTextKey::SettingsScrollbarDescription => "在终端面板中显示细滚动指示器。",
-        UiTextKey::SettingsClosePaneOnExit => "退出后关闭面板",
-        UiTextKey::SettingsClosePaneOnExitDescription => "终端进程退出后自动关闭面板。",
         UiTextKey::SettingsLayoutSource => "布局来源",
         UiTextKey::SettingsLayoutSourceDescription => "当前项目布局来源。",
         UiTextKey::SettingsOpenProjectFirst => "请先打开项目",

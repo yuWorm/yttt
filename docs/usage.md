@@ -95,12 +95,12 @@ system = false
 
 [terminal]
 shell = "auto"
+custom_shells = []
 font_family = ""
 font_size = 13.0
 line_height = 1.15
 padding = 6.0
 scrollback = 10000
-close_on_exit = true
 show_scrollbar = true
 
 [editor]
@@ -133,6 +133,11 @@ saves. `default_open` affects new project sessions. Editing `width` updates the 
 project and the default for future projects, while other open projects retain their own
 widths. Valid width ranges are 200–520 px for the right tree and 160–420 px for the left
 sidebar.
+
+`terminal.shell = "auto"` selects the first detected shell for the current platform. Detection
+covers `SHELL` and common macOS/Linux shells, plus `COMSPEC`, PowerShell, `cmd.exe`, and shells
+available on `PATH` on Windows. Add executable paths or command names through Settings; they are
+stored in `terminal.custom_shells`, and selecting one stores it in `terminal.shell`.
 
 ## Theme TOML
 
@@ -236,14 +241,23 @@ title = "Dev"
 type = "split"
 direction = "horizontal"
 ratio = 0.65
-left = { type = "pane", id = "server", title = "server", command = "npm run dev" }
-right = { type = "pane", id = "shell", title = "shell", command = "$SHELL" }
+left = { type = "pane", id = "server", title = "server", command = "npm", args = ["run", "dev"], execution_mode = "command", exit_behavior = "auto_restart" }
+right = { type = "pane", id = "shell", title = "shell", command = "", execution_mode = "shell", exit_behavior = "manual_restart" }
 
 [[tabs]]
 id = "agent"
 title = "Agent"
-layout = { type = "pane", id = "codex", title = "Codex", command = "codex", kind = "agent", notify_on_exit = true, detector = "codex" }
+layout = { type = "pane", id = "codex", title = "Codex", command = "codex", execution_mode = "command", exit_behavior = "manual_restart", kind = "agent", notify_on_exit = true, detector = "codex" }
 ```
+
+`execution_mode = "shell"` starts the default shell and passes the pane `command` to it; an empty
+command opens an interactive shell. `execution_mode = "command"` executes `command` directly as
+the program and passes `args` without shell expansion.
+
+`exit_behavior` accepts `close`, `auto_restart`, or `manual_restart`. Automatic restarts wait
+500 ms before starting a fresh PTY, avoiding a tight respawn loop. Manual restart keeps the pane
+visible and shows a Restart action. Existing layouts may omit `args`, `execution_mode`, and
+`exit_behavior`; their defaults are `[]`, `shell`, and `close`.
 
 `detector` is reserved for future output parsing. The current MVP does not parse agent
 output.
@@ -260,7 +274,7 @@ default_tab = "shell"
 [[tabs]]
 id = "shell"
 title = "Shell"
-layout = { type = "pane", id = "shell", title = "Shell", command = "$SHELL" }
+layout = { type = "pane", id = "shell", title = "Shell", command = "" }
 ```
 
 ### Personal layout V1
@@ -292,7 +306,7 @@ default_tab = "shell"
 [[layout.tabs]]
 id = "shell"
 title = "Shell"
-layout = { type = "pane", id = "shell", title = "Shell", command = "$SHELL" }
+layout = { type = "pane", id = "shell", title = "Shell", command = "" }
 ```
 
 The V1 header and every nested layout object reject unknown fields. Missing or unsupported

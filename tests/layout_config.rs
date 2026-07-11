@@ -11,7 +11,7 @@ use yttt::config::{
     },
     paths::AppConfigPaths,
 };
-use yttt::model::layout::{LayoutError, ProjectLayout};
+use yttt::model::layout::{LayoutError, ProcessExitBehavior, ProjectLayout, TerminalExecutionMode};
 
 #[test]
 fn parses_project_layout_with_split_and_agent_pane() {
@@ -28,8 +28,8 @@ fn parses_project_layout_with_split_and_agent_pane() {
         type = "split"
         direction = "horizontal"
         ratio = 0.65
-        left = { type = "pane", id = "server", title = "server", command = "npm run dev" }
-        right = { type = "pane", id = "shell", title = "shell", command = "$SHELL" }
+        left = { type = "pane", id = "server", title = "server", command = "npm", args = ["run", "dev"], execution_mode = "command", exit_behavior = "auto_restart" }
+        right = { type = "pane", id = "shell", title = "shell", command = "", exit_behavior = "manual_restart" }
 
         [[tabs]]
         id = "agent"
@@ -50,6 +50,18 @@ fn parses_project_layout_with_split_and_agent_pane() {
     assert_eq!(layout.project.default_tab.as_deref(), Some("dev"));
     assert_eq!(layout.tabs.len(), 2);
     assert_eq!(layout.tabs[1].layout.pane_id(), Some("codex"));
+    let server = layout.tabs[0].layout.find_pane("server").unwrap();
+    assert_eq!(server.args, vec!["run", "dev"]);
+    assert_eq!(server.execution_mode, TerminalExecutionMode::Command);
+    assert_eq!(server.exit_behavior, ProcessExitBehavior::AutoRestart);
+    assert_eq!(
+        layout.tabs[0]
+            .layout
+            .find_pane("shell")
+            .unwrap()
+            .exit_behavior,
+        ProcessExitBehavior::ManualRestart
+    );
 }
 
 #[test]
@@ -515,7 +527,10 @@ fn local_override_renames_tab_and_command_by_id() {
             layout: Some(LayoutNodeOverride::Pane(PaneOverride {
                 id: "server".to_string(),
                 title: None,
-                command: Some("pnpm dev".to_string()),
+                command: Some("pnpm".to_string()),
+                args: Some(vec!["dev".to_string()]),
+                execution_mode: Some(TerminalExecutionMode::Command),
+                exit_behavior: Some(ProcessExitBehavior::ManualRestart),
                 kind: None,
                 notify_on_exit: None,
                 detector: Some("codex".to_string()),
@@ -528,7 +543,11 @@ fn local_override_renames_tab_and_command_by_id() {
     let dev = result.layout.tab("dev").unwrap();
 
     assert_eq!(dev.title, "Development");
-    assert_eq!(dev.layout.find_pane("server").unwrap().command, "pnpm dev");
+    assert_eq!(dev.layout.find_pane("server").unwrap().command, "pnpm");
+    let server = dev.layout.find_pane("server").unwrap();
+    assert_eq!(server.args, vec!["dev"]);
+    assert_eq!(server.execution_mode, TerminalExecutionMode::Command);
+    assert_eq!(server.exit_behavior, ProcessExitBehavior::ManualRestart);
     assert_eq!(
         dev.layout.find_pane("server").unwrap().detector.as_deref(),
         Some("codex")
@@ -1034,8 +1053,8 @@ fn sample_layout() -> ProjectLayout {
         type = "split"
         direction = "horizontal"
         ratio = 0.65
-        left = { type = "pane", id = "server", title = "server", command = "npm run dev" }
-        right = { type = "pane", id = "shell", title = "shell", command = "$SHELL" }
+        left = { type = "pane", id = "server", title = "server", command = "npm", args = ["run", "dev"], execution_mode = "command", exit_behavior = "auto_restart" }
+        right = { type = "pane", id = "shell", title = "shell", command = "" }
 
         [[tabs]]
         id = "agent"

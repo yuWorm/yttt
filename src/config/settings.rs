@@ -90,12 +90,12 @@ pub const AUTO_SHELL: &str = "auto";
 #[serde(default)]
 pub struct TerminalSettings {
     pub shell: String,
+    pub custom_shells: Vec<String>,
     pub font_family: String,
     pub font_size: f32,
     pub line_height: f32,
     pub padding: f32,
     pub scrollback: usize,
-    pub close_on_exit: bool,
     pub show_scrollbar: bool,
 }
 
@@ -103,12 +103,12 @@ impl Default for TerminalSettings {
     fn default() -> Self {
         Self {
             shell: AUTO_SHELL.to_string(),
+            custom_shells: Vec::new(),
             font_family: String::new(),
             font_size: 13.0,
             line_height: 1.15,
             padding: 6.0,
             scrollback: 10000,
-            close_on_exit: true,
             show_scrollbar: true,
         }
     }
@@ -364,31 +364,139 @@ pub fn save_settings(
     Ok(path)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShellPlatform {
+    Windows,
+    MacOs,
+    Linux,
+}
+
+impl ShellPlatform {
+    fn current() -> Self {
+        if cfg!(target_os = "windows") {
+            Self::Windows
+        } else if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else {
+            Self::Linux
+        }
+    }
+}
+
 pub fn detect_shell_candidates() -> Vec<String> {
     let shell_env = std::env::var("SHELL").ok();
-    detect_shell_candidates_with(shell_env.as_deref(), |path| Path::new(path).exists())
+    let comspec_env = std::env::var("COMSPEC").ok();
+    let path_entries = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .unwrap_or_default();
+    detect_shell_candidates_with(
+        ShellPlatform::current(),
+        shell_env.as_deref(),
+        comspec_env.as_deref(),
+        &path_entries,
+        Path::exists,
+    )
 }
 
 pub fn detect_shell_candidates_with(
+    platform: ShellPlatform,
     shell_env: Option<&str>,
-    exists: impl Fn(&str) -> bool,
+    comspec_env: Option<&str>,
+    path_entries: &[PathBuf],
+    exists: impl Fn(&Path) -> bool,
 ) -> Vec<String> {
     let mut candidates = Vec::new();
-    if let Some(shell_env) = shell_env
-        .map(str::trim)
-        .filter(|shell| !shell.is_empty() && exists(shell))
-    {
-        push_unique(&mut candidates, shell_env);
-    }
 
-    for shell in ["/bin/zsh", "/bin/bash"] {
-        if exists(shell) {
-            push_unique(&mut candidates, shell);
+    match platform {
+        ShellPlatform::Windows => {
+            push_existing_shell(&mut candidates, comspec_env, &exists);
+            push_path_shells(
+                &mut candidates,
+                path_entries,
+                &["pwsh.exe", "powershell.exe", "cmd.exe", "bash.exe"],
+                &exists,
+            );
+            if candidates.is_empty() {
+                push_unique(&mut candidates, "cmd.exe");
+            }
+        }
+        ShellPlatform::MacOs => {
+            push_existing_shell(&mut candidates, shell_env, &exists);
+            for shell in [
+                "/bin/zsh",
+                "/bin/bash",
+                "/bin/sh",
+                "/opt/homebrew/bin/fish",
+                "/usr/local/bin/fish",
+            ] {
+                push_existing_shell(&mut candidates, Some(shell), &exists);
+            }
+            push_path_shells(
+                &mut candidates,
+                path_entries,
+                &["zsh", "bash", "fish", "sh"],
+                &exists,
+            );
+            if candidates.is_empty() {
+                push_unique(&mut candidates, "sh");
+            }
+        }
+        ShellPlatform::Linux => {
+            push_existing_shell(&mut candidates, shell_env, &exists);
+            for shell in [
+                "/bin/bash",
+                "/usr/bin/bash",
+                "/bin/zsh",
+                "/usr/bin/zsh",
+                "/usr/bin/fish",
+                "/bin/fish",
+                "/bin/sh",
+            ] {
+                push_existing_shell(&mut candidates, Some(shell), &exists);
+            }
+            push_path_shells(
+                &mut candidates,
+                path_entries,
+                &["bash", "zsh", "fish", "sh"],
+                &exists,
+            );
+            if candidates.is_empty() {
+                push_unique(&mut candidates, "sh");
+            }
         }
     }
-    push_unique(&mut candidates, "sh");
 
     candidates
+}
+
+fn push_existing_shell(
+    candidates: &mut Vec<String>,
+    shell: Option<&str>,
+    exists: &impl Fn(&Path) -> bool,
+) {
+    let Some(shell) = shell.map(str::trim).filter(|shell| !shell.is_empty()) else {
+        return;
+    };
+    if exists(Path::new(shell)) {
+        push_unique(candidates, shell);
+    }
+}
+
+fn push_path_shells(
+    candidates: &mut Vec<String>,
+    path_entries: &[PathBuf],
+    executable_names: &[&str],
+    exists: &impl Fn(&Path) -> bool,
+) {
+    for executable_name in executable_names {
+        if let Some(path) = path_entries
+            .iter()
+            .map(|directory| directory.join(executable_name))
+            .find(|path| exists(path))
+        {
+            push_unique(candidates, &path.to_string_lossy());
+        }
+    }
 }
 
 pub fn resolve_default_shell(shell: &str, candidates: &[String]) -> String {
@@ -459,6 +567,13 @@ fn validate_settings(
     if settings.terminal.shell.trim().is_empty() {
         settings.terminal.shell = defaults.shell;
         warnings.push(SettingsLoadWarning::InvalidTerminalValue { field: "shell" });
+    }
+    let custom_shells = std::mem::take(&mut settings.terminal.custom_shells);
+    for shell in custom_shells {
+        let shell = shell.trim();
+        if !shell.is_empty() {
+            push_unique(&mut settings.terminal.custom_shells, shell);
+        }
     }
 
     let editor_defaults = EditorSettings::default();

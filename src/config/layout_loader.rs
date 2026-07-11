@@ -9,7 +9,10 @@ use crate::{
         paths::AppConfigPaths,
         personal_layout::{self, PersonalLayoutFileError},
     },
-    model::layout::{LayoutError, LayoutNode, PaneConfig, PaneKind, ProjectLayout},
+    model::layout::{
+        LayoutError, LayoutNode, PaneConfig, PaneKind, ProcessExitBehavior, ProjectLayout,
+        TerminalExecutionMode,
+    },
 };
 
 pub use crate::config::personal_layout::PersonalLayout;
@@ -45,6 +48,9 @@ pub struct PaneOverride {
     pub id: String,
     pub title: Option<String>,
     pub command: Option<String>,
+    pub args: Option<Vec<String>>,
+    pub execution_mode: Option<TerminalExecutionMode>,
+    pub exit_behavior: Option<ProcessExitBehavior>,
     pub kind: Option<PaneKind>,
     pub notify_on_exit: Option<bool>,
     pub detector: Option<String>,
@@ -386,6 +392,15 @@ fn merge_pane(pane: &mut PaneConfig, pane_override: &PaneOverride) {
     }
     if let Some(command) = &pane_override.command {
         pane.command = command.clone();
+    }
+    if let Some(args) = &pane_override.args {
+        pane.args = args.clone();
+    }
+    if let Some(execution_mode) = pane_override.execution_mode {
+        pane.execution_mode = execution_mode;
+    }
+    if let Some(exit_behavior) = pane_override.exit_behavior {
+        pane.exit_behavior = exit_behavior;
     }
     if let Some(kind) = &pane_override.kind {
         pane.kind = kind.clone();

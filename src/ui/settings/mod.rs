@@ -233,6 +233,10 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 UiTextKey::SettingsDefaultShellDescription,
             ),
             row(
+                UiTextKey::SettingsCustomShell,
+                UiTextKey::SettingsCustomShellDescription,
+            ),
+            row(
                 UiTextKey::SettingsFontFamily,
                 UiTextKey::SettingsFontFamilyDescription,
             ),
@@ -255,10 +259,6 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
             row(
                 UiTextKey::SettingsScrollbar,
                 UiTextKey::SettingsScrollbarDescription,
-            ),
-            row(
-                UiTextKey::SettingsClosePaneOnExit,
-                UiTextKey::SettingsClosePaneOnExitDescription,
             ),
         ],
         SettingsGroupId::DefaultLayout => vec![

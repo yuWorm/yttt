@@ -58,23 +58,6 @@ impl WorkbenchView {
             self.project.pending_editor_focus_document_id = None;
         }
 
-        let display_path = self
-            .workspace
-            .project(&document_id.project_id)
-            .and_then(|project| document_id.canonical_path.strip_prefix(&project.path).ok())
-            .unwrap_or(&document_id.canonical_path)
-            .to_path_buf();
-        let (language, dirty) = document
-            .as_ref()
-            .map(|document| {
-                let document = document.read(cx);
-                (
-                    document.model().editor().language().to_string(),
-                    document.model().is_dirty(),
-                )
-            })
-            .unwrap_or_else(|| ("text".to_string(), false));
-
         div()
             .debug_selector(|| "active-file-editor".to_string())
             .flex()
@@ -82,55 +65,7 @@ impl WorkbenchView {
             .flex_1()
             .min_h_0()
             .bg(self.theme_runtime.editor.background)
-            .child(Self::project_editor_header(
-                &display_path,
-                &language,
-                dirty,
-                self.icon_theme.resolve_file(&document_id.canonical_path),
-                self.theme_runtime.ui,
-            ))
             .child(div().flex_1().min_h_0().children(document))
-    }
-
-    pub(super) fn project_editor_header(
-        display_path: &Path,
-        language: &str,
-        dirty: bool,
-        icon: crate::ui::theme::icons::IconVisual,
-        theme: WorkbenchTheme,
-    ) -> impl IntoElement {
-        div()
-            .id("project-editor-header")
-            .flex()
-            .flex_none()
-            .h(px(32.))
-            .items_center()
-            .gap_2()
-            .px_3()
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.surface_elevated)
-            .child(icon_for_visual(icon, theme.text_muted))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .truncate()
-                    .text_sm()
-                    .text_color(theme.text)
-                    .child(display_path.to_string_lossy().into_owned()),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_xs()
-                    .text_color(theme.text_muted)
-                    .child(language.to_string()),
-            )
-            .when(dirty, |this| {
-                this.child(div().size(px(6.)).rounded_full().bg(theme.accent))
-            })
     }
 
     pub(super) fn workbench_tab_items(&self, cx: &Context<Self>) -> Vec<WorkbenchTabItem> {
@@ -416,12 +351,22 @@ impl WorkbenchView {
                 tab_id: input.tab_id.to_string(),
                 tab_title: input.tab_title.to_string(),
                 pane: input.pane.clone(),
+                shell: self.resolved_terminal_shell(),
                 is_focused: input.is_focused,
                 terminal_input_gate: self.terminal.terminal_input_gate.clone(),
             };
             let terminal_config = self.theme_runtime.to_terminal_config();
             let theme = self.theme_runtime.ui;
             let pane_view = cx.new(|cx| TerminalPaneView::new(context, terminal_config, theme, cx));
+            if pane_view.read(cx).is_running()
+                && let Err(error) = self.workspace.mark_pane_running(
+                    &ProjectId::new(input.project_id),
+                    input.tab_id,
+                    &input.pane.id,
+                )
+            {
+                self.load_error = Some(error.to_string());
+            }
             let subscription = cx.subscribe_in(&pane_view, window, Self::on_terminal_pane_event);
             self.terminal
                 .terminal_pane_subscriptions
@@ -515,6 +460,12 @@ impl WorkbenchView {
                 let event = event.clone();
                 self.handle_terminal_notification(event.clone());
                 push_component_notification(root, event, _window, cx);
+                cx.notify();
+            }
+            TerminalPaneEvent::Started(event) => {
+                if let Err(error) = self.handle_terminal_pane_started(event.clone()) {
+                    self.load_error = Some(error.to_string());
+                }
                 cx.notify();
             }
             TerminalPaneEvent::Exited(event) => {

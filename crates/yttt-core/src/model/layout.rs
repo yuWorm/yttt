@@ -131,6 +131,12 @@ pub struct PaneConfig {
     pub id: String,
     pub title: String,
     pub command: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub execution_mode: TerminalExecutionMode,
+    #[serde(default)]
+    pub exit_behavior: ProcessExitBehavior,
     #[serde(default)]
     pub kind: PaneKind,
     #[serde(default)]
@@ -160,6 +166,23 @@ pub enum PaneKind {
     #[default]
     Shell,
     Agent,
+}
+
+#[derive(Clone, Copy, Debug, Default, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalExecutionMode {
+    #[default]
+    Shell,
+    Command,
+}
+
+#[derive(Clone, Copy, Debug, Default, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessExitBehavior {
+    #[default]
+    Close,
+    AutoRestart,
+    ManualRestart,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]

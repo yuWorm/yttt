@@ -29,19 +29,49 @@ pub enum ExitReason {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TerminalExecution {
+    Shell { shell: String, command: String },
+    Command { program: String, args: Vec<String> },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalSpawnRequest {
     pub pane_id: String,
-    pub command: String,
+    pub execution: TerminalExecution,
     pub cwd: PathBuf,
     pub cols: u16,
     pub rows: u16,
 }
 
 impl TerminalSpawnRequest {
-    pub fn for_shell(pane_id: impl Into<String>, command: impl Into<String>) -> Self {
+    pub fn for_shell(
+        pane_id: impl Into<String>,
+        shell: impl Into<String>,
+        command: impl Into<String>,
+    ) -> Self {
         Self {
             pane_id: pane_id.into(),
-            command: command.into(),
+            execution: TerminalExecution::Shell {
+                shell: shell.into(),
+                command: command.into(),
+            },
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            cols: 80,
+            rows: 24,
+        }
+    }
+
+    pub fn for_command(
+        pane_id: impl Into<String>,
+        program: impl Into<String>,
+        args: Vec<String>,
+    ) -> Self {
+        Self {
+            pane_id: pane_id.into(),
+            execution: TerminalExecution::Command {
+                program: program.into(),
+                args,
+            },
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             cols: 80,
             rows: 24,
@@ -73,7 +103,7 @@ pub struct PortablePtyIo {
 
 pub struct PortablePtySession {
     _pane_id: String,
-    _command: String,
+    _execution: TerminalExecution,
     _cwd: PathBuf,
     master: PortablePtyMaster,
     child: Box<dyn Child + Send + Sync>,
@@ -153,7 +183,7 @@ impl TerminalRuntime for PortablePtyRuntime {
             pixel_height: 0,
         })?;
         let portable_pty::PtyPair { slave, master } = pair;
-        let command_builder = shell_command(&request.command, &request.cwd);
+        let command_builder = command_builder(&request.execution, &request.cwd)?;
         let child = slave.spawn_command(command_builder)?;
         drop(slave);
 
@@ -167,7 +197,7 @@ impl TerminalRuntime for PortablePtyRuntime {
             handle,
             PortablePtyProcess {
                 _pane_id: request.pane_id,
-                _command: request.command,
+                _execution: request.execution,
                 _cwd: request.cwd,
                 _master: master,
                 child,
@@ -213,7 +243,7 @@ impl TerminalRuntime for FakeTerminalRuntime {
             handle,
             FakeProcess {
                 _pane_id: request.pane_id,
-                _command: request.command,
+                _execution: request.execution,
                 cwd: request.cwd,
                 status: ProcessStatus::Running,
             },
@@ -244,7 +274,7 @@ pub fn spawn_portable_pty_session(
         pixel_height: 0,
     })?;
     let portable_pty::PtyPair { slave, master } = pair;
-    let command_builder = shell_command(&request.command, &request.cwd);
+    let command_builder = command_builder(&request.execution, &request.cwd)?;
     let child = slave.spawn_command(command_builder)?;
     drop(slave);
 
@@ -254,7 +284,7 @@ pub fn spawn_portable_pty_session(
 
     Ok(PortablePtySession {
         _pane_id: request.pane_id,
-        _command: request.command,
+        _execution: request.execution,
         _cwd: request.cwd,
         master,
         child,
@@ -317,41 +347,150 @@ impl PortablePtyResizeHandle {
 
 struct FakeProcess {
     _pane_id: String,
-    _command: String,
+    _execution: TerminalExecution,
     cwd: PathBuf,
     status: ProcessStatus,
 }
 
 struct PortablePtyProcess {
     _pane_id: String,
-    _command: String,
+    _execution: TerminalExecution,
     _cwd: PathBuf,
     _master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
     status: ProcessStatus,
 }
 
-fn shell_command(command: &str, cwd: &Path) -> CommandBuilder {
-    #[cfg(windows)]
-    {
-        let mut builder = CommandBuilder::new("cmd");
-        builder.arg("/C");
-        builder.arg(command);
-        builder.cwd(cwd);
-        builder
-    }
+fn command_builder(execution: &TerminalExecution, cwd: &Path) -> anyhow::Result<CommandBuilder> {
+    let mut builder = match execution {
+        TerminalExecution::Shell { shell, command } => {
+            let shell = shell.trim();
+            if shell.is_empty() {
+                anyhow::bail!("shell executable cannot be empty");
+            }
 
-    #[cfg(not(windows))]
-    {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
-        let mut builder = CommandBuilder::new(shell);
-        builder.arg("-lc");
-        builder.arg(command);
-        builder.cwd(cwd);
-        builder
+            let mut builder = CommandBuilder::new(shell);
+            if !command.trim().is_empty() {
+                for arg in shell_execution_args(shell, command) {
+                    builder.arg(arg);
+                }
+            }
+            builder
+        }
+        TerminalExecution::Command { program, args } => {
+            let program = program.trim();
+            if program.is_empty() {
+                anyhow::bail!("command executable cannot be empty");
+            }
+
+            let mut builder = CommandBuilder::new(program);
+            builder.args(args);
+            builder
+        }
+    };
+    builder.cwd(cwd);
+    Ok(builder)
+}
+
+fn shell_execution_args(shell: &str, command: &str) -> Vec<String> {
+    let shell_name = shell
+        .replace('\\', "/")
+        .rsplit('/')
+        .next()
+        .unwrap_or(shell)
+        .to_ascii_lowercase();
+
+    if matches!(shell_name.as_str(), "cmd" | "cmd.exe") {
+        vec![
+            "/D".to_string(),
+            "/S".to_string(),
+            "/C".to_string(),
+            command.to_string(),
+        ]
+    } else if matches!(
+        shell_name.as_str(),
+        "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe"
+    ) {
+        vec![
+            "-NoLogo".to_string(),
+            "-Command".to_string(),
+            command.to_string(),
+        ]
+    } else if matches!(
+        shell_name.as_str(),
+        "bash" | "bash.exe" | "zsh" | "zsh.exe" | "fish" | "fish.exe"
+    ) {
+        vec!["-lc".to_string(), command.to_string()]
+    } else {
+        vec!["-c".to_string(), command.to_string()]
     }
 }
 
 fn exit_status_code(status: portable_pty::ExitStatus) -> i32 {
     status.exit_code() as i32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_execution_preserves_program_and_argument_boundaries() {
+        let execution = TerminalExecution::Command {
+            program: "npm".to_string(),
+            args: vec!["run".to_string(), "dev server".to_string()],
+        };
+
+        assert_eq!(
+            argv(command_builder(&execution, Path::new("/tmp")).unwrap()),
+            vec!["npm", "run", "dev server"]
+        );
+    }
+
+    #[test]
+    fn shell_execution_uses_shell_specific_command_flags() {
+        let sh = TerminalExecution::Shell {
+            shell: "/bin/sh".to_string(),
+            command: "echo ok".to_string(),
+        };
+        let powershell = TerminalExecution::Shell {
+            shell: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe".to_string(),
+            command: "Write-Output ok".to_string(),
+        };
+
+        assert_eq!(
+            argv(command_builder(&sh, Path::new("/tmp")).unwrap()),
+            vec!["/bin/sh", "-c", "echo ok"]
+        );
+        assert_eq!(
+            argv(command_builder(&powershell, Path::new("/tmp")).unwrap()),
+            vec![
+                "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                "-NoLogo",
+                "-Command",
+                "Write-Output ok",
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_shell_command_starts_an_interactive_shell() {
+        let execution = TerminalExecution::Shell {
+            shell: "/bin/zsh".to_string(),
+            command: String::new(),
+        };
+
+        assert_eq!(
+            argv(command_builder(&execution, Path::new("/tmp")).unwrap()),
+            vec!["/bin/zsh"]
+        );
+    }
+
+    fn argv(builder: CommandBuilder) -> Vec<String> {
+        builder
+            .get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
 }

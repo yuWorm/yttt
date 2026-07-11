@@ -5,7 +5,8 @@ use std::{
 
 use crate::config::paths::AppConfigPaths;
 use crate::model::layout::{
-    LayoutError, LayoutNode, PaneConfig, PaneKind, ProjectConfig, ProjectLayout, TabConfig,
+    LayoutError, LayoutNode, PaneConfig, PaneKind, ProcessExitBehavior, ProjectConfig,
+    ProjectLayout, TabConfig, TerminalExecutionMode,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,7 +75,10 @@ impl DefaultLayoutTemplate {
                 layout: LayoutNode::Pane(PaneConfig {
                     id: "shell".to_string(),
                     title: "Shell".to_string(),
-                    command: "$SHELL".to_string(),
+                    command: String::new(),
+                    args: Vec::new(),
+                    execution_mode: TerminalExecutionMode::Shell,
+                    exit_behavior: ProcessExitBehavior::Close,
                     kind: PaneKind::Shell,
                     notify_on_exit: false,
                     detector: None,

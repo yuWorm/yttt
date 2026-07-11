@@ -91,7 +91,7 @@ use crate::{
     },
     model::{
         ids::ProjectId,
-        layout::{LayoutNode, PaneConfig, ProjectLayout, SplitDirection},
+        layout::{LayoutNode, PaneConfig, ProcessExitBehavior, ProjectLayout, SplitDirection},
         workspace::{
             AgentStatus, CloseProjectDecision, CloseProjectError, PaneExitCloseOutcome, Workspace,
             WorkspaceError,
@@ -170,11 +170,11 @@ use crate::{
         settings::keybindings::{KeybindingEditError, KeybindingRow, KeybindingsEditorState},
         settings::{SettingsGroupId, SettingsPanelStyle, settings_panel_style},
         terminal::pane::{
-            TerminalPaneContext, TerminalPaneEvent, TerminalPaneExitedEvent, TerminalPaneView,
+            TerminalPaneContext, TerminalPaneEvent, TerminalPaneExitedEvent,
+            TerminalPaneStartedEvent, TerminalPaneView,
         },
         theme::icons::{
-            IconTheme, available_icon_theme_names as load_icon_theme_names, icon_for_visual,
-            load_icon_theme,
+            IconTheme, available_icon_theme_names as load_icon_theme_names, load_icon_theme,
         },
         theme::{ThemeRuntime, WorkbenchTheme},
         workbench::layout_editor::{
@@ -1005,12 +1005,14 @@ impl WorkbenchView {
 
         let mut contexts = Vec::new();
         let focused_pane_id = self.selected_focused_pane_id().map(ToOwned::to_owned);
+        let shell = self.resolved_terminal_shell();
         collect_terminal_pane_contexts(
             &project_id,
             &project_path,
             &project_title,
             &tab_id,
             &tab_title,
+            &shell,
             &layout,
             focused_pane_id.as_deref(),
             &mut contexts,
@@ -1028,12 +1030,25 @@ impl WorkbenchView {
             .unwrap_or(false)
     }
 
+    pub fn handle_terminal_pane_started(
+        &mut self,
+        event: TerminalPaneStartedEvent,
+    ) -> Result<(), WorkbenchError> {
+        self.workspace.mark_pane_running(
+            &ProjectId::new(event.project_id),
+            &event.tab_id,
+            &event.pane_id,
+        )?;
+        self.load_error = None;
+        Ok(())
+    }
+
     pub fn handle_terminal_pane_exit(
         &mut self,
         event: TerminalPaneExitedEvent,
     ) -> Result<PaneExitCloseOutcome, WorkbenchError> {
         let project_id = ProjectId::new(event.project_id.clone());
-        if !self.app_settings.terminal.close_on_exit {
+        if event.exit_behavior != ProcessExitBehavior::Close {
             self.workspace
                 .record_pane_exited(&project_id, &event.tab_id, &event.pane_id)?;
             self.load_error = None;
@@ -1232,8 +1247,7 @@ impl WorkbenchView {
                 Ok(())
             }
             CommandId::TabNew => {
-                let shell = self.resolved_terminal_shell();
-                let tab_id = self.workspace.create_shell_tab_with_command(shell)?;
+                let tab_id = self.workspace.create_shell_tab()?;
                 self.select_work_item(WorkItemId::Terminal(tab_id))?;
                 Ok(())
             }

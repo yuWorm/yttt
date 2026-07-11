@@ -357,8 +357,8 @@ pub use colors::{ColorPalette, ColorPaletteBuilder};
 pub use event::{GpuiEventProxy, TerminalEvent};
 pub use pty::{
     ExitReason, FakeTerminalRuntime, PortablePtyIo, PortablePtyResizeHandle, PortablePtyRuntime,
-    PortablePtySession, ProcessHandle, ProcessStatus, TerminalRuntime, TerminalSpawnRequest,
-    spawn_portable_pty_session,
+    PortablePtySession, ProcessHandle, ProcessStatus, TerminalExecution, TerminalRuntime,
+    TerminalSpawnRequest, spawn_portable_pty_session,
 };
 pub use render::TerminalRenderer;
 pub use terminal::TerminalState;

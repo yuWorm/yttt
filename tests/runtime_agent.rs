@@ -13,7 +13,7 @@ fn fake_runtime_marks_process_running_then_exited() {
     let mut runtime = FakeTerminalRuntime::default();
 
     let pane = runtime
-        .spawn(TerminalSpawnRequest::for_shell("server", "echo ok"))
+        .spawn(TerminalSpawnRequest::for_shell("server", "sh", "echo ok"))
         .unwrap();
     assert_eq!(runtime.status(pane), Some(ProcessStatus::Running));
 
@@ -28,7 +28,7 @@ fn fake_runtime_marks_process_running_then_exited() {
 #[test]
 fn fake_runtime_records_spawn_cwd() {
     let mut runtime = FakeTerminalRuntime::default();
-    let request = TerminalSpawnRequest::for_shell("server", "pwd").cwd("/tmp/yttt");
+    let request = TerminalSpawnRequest::for_shell("server", "sh", "pwd").cwd("/tmp/yttt");
 
     let pane = runtime.spawn(request).unwrap();
 
