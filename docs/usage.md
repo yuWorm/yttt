@@ -398,6 +398,8 @@ Run these before marking a product phase complete:
   `target/dev-app/yttt.app` for UI-tool-friendly smoke testing.
 - On macOS, `scripts/run-dev-app.sh --fixture agent` opens the agent exit fixture
   through the same `.app` wrapper.
+- On macOS, `scripts/build-macos-bundle.sh` creates the ad-hoc-signed release bundle at
+  `target/macos/yttt.app`.
 - Terminal panes accept input and render output.
 - Terminal panes resize with the split area.
 - Command, project, tab, and pane palettes can be opened from keyboard.
@@ -432,5 +434,5 @@ Run these before marking a product phase complete:
 - No output parser for agent internal state.
 - No GUI layout editor.
 - No OS-level notification click handler yet.
-- No packaged release artifact yet. `scripts/run-dev-app.sh` is a development smoke
-  wrapper, not a release package.
+- `scripts/build-macos-bundle.sh` produces an ad-hoc-signed `.app`; Developer ID signing,
+  notarization, and disk-image packaging are not implemented.

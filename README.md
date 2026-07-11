@@ -75,6 +75,17 @@ scripts/run-dev-app.sh --fixture dev
 scripts/run-dev-app.sh --fixture agent
 ```
 
+Build a release macOS application bundle:
+
+```bash
+scripts/build-macos-bundle.sh
+open target/macos/yttt.app
+```
+
+The script runs a locked release build, copies the application icon, writes the native
+`Info.plist`, and ad-hoc signs `target/macos/yttt.app`. Use `--help` to package an existing
+binary, select another output path, or skip signing.
+
 ## Key Paths
 
 Project layout:
