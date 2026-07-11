@@ -4,6 +4,7 @@ use std::{
 };
 
 use crate::config::paths::AppConfigPaths;
+use crate::ui::theme::DEFAULT_THEME_NAME;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -65,7 +66,7 @@ pub struct ThemeSettings {
 impl Default for ThemeSettings {
     fn default() -> Self {
         Self {
-            name: "yttt-dark".to_string(),
+            name: DEFAULT_THEME_NAME.to_string(),
             terminal: None,
             icon_theme: None,
         }

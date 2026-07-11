@@ -29,7 +29,7 @@ fn missing_settings_file_writes_defaults() {
     let loaded = load_or_create_settings(&paths).unwrap();
 
     assert_eq!(loaded.settings.general.language, LanguageSetting::System);
-    assert_eq!(loaded.settings.theme.name, "yttt-dark");
+    assert_eq!(loaded.settings.theme.name, "one-dark-theme");
     assert_eq!(loaded.settings.theme.terminal, None);
     assert!(!loaded.settings.notifications.system);
     assert_eq!(loaded.settings.terminal.font_family, "");

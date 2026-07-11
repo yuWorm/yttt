@@ -3,6 +3,7 @@ mod document;
 mod file_io;
 mod language;
 mod language_catalog;
+mod readonly_code_view;
 mod runtime;
 mod state;
 mod view;
@@ -23,6 +24,7 @@ pub use language_catalog::{
     EditorLanguageCatalog, EditorLanguageDefinition, EditorLanguageId, EditorLanguageResolution,
     EditorLanguageResolutionSource,
 };
+pub use readonly_code_view::{ReadonlyCodeRow, ReadonlyCodeRowKind, ReadonlyCodeView};
 pub use runtime::{ProjectEditorRuntime, ProjectFileLoadRequest};
 pub use state::{
     CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, EditorDiagnostic,

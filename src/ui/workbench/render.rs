@@ -196,7 +196,7 @@ impl Render for WorkbenchView {
                 root = root.child(layout_toml_editor_overlay(self, &input, cx));
             }
         }
-        if let Some(panel) = self.render_git_diff_panel(cx) {
+        if let Some(panel) = self.render_git_diff_panel(window, cx) {
             root = root.child(panel);
         }
         if self.overlays.pending_tab_rename.is_some() {

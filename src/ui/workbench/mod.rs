@@ -1,14 +1,16 @@
 use gpui::{
-    AnyElement, ClickEvent, Context, Div, Entity, FocusHandle, Focusable as _, FontWeight,
-    InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement as _, PathPromptOptions, Pixels, Point, Render,
-    ScrollHandle, SharedString, Subscription, Window, div, prelude::*, px, relative, rgba,
+    AnyElement, App, ClickEvent, ClipboardItem, Context, Div, Entity, FocusHandle, Focusable as _,
+    FontWeight, HighlightStyle, InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
+    PathPromptOptions, Pixels, Point, Render, Rgba, ScrollHandle, SharedString, Stateful,
+    Subscription, UniformListScrollHandle, Window, div, prelude::*, px, relative, rgba,
 };
 use gpui_component::{
-    Disableable as _, IconName, IndexPath, Root as ComponentRoot, Sizable as _,
+    ActiveTheme as _, Disableable as _, IconName, IndexPath, Root as ComponentRoot, Sizable as _,
     Theme as ComponentTheme, WindowExt as _,
     button::Button,
-    input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent, StepAction},
+    highlighter::SyntaxHighlighter,
+    input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent, Rope, StepAction},
     scroll::ScrollableElement as _,
     select::{SearchableVec, Select, SelectEvent, SelectState},
 };
@@ -43,10 +45,12 @@ use state::{
 };
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, BTreeSet, HashSet},
     fs,
+    ops::Range,
     path::{Path, PathBuf},
     rc::Rc,
+    sync::Arc,
     time::Duration,
 };
 
@@ -107,7 +111,8 @@ use crate::{
     },
     runtime::{
         git_status::{
-            read_project_git_branches, read_project_git_diff, read_project_git_status,
+            GitDiffLine, GitDiffLineKind, GitDiffMode, GitDiffResult, GitFileChangeKind,
+            read_project_git_branches, read_project_git_diff_result, read_project_git_status,
             switch_project_git_branch,
         },
         notification::{
@@ -125,8 +130,9 @@ use crate::{
             EditorAppearance, EditorDiagnostic, EditorDiagnosticSeverity, EditorLanguageCatalog,
             EditorLanguageId, LoadedProjectFile, ProjectEditorDocument, ProjectEditorDocumentEvent,
             ProjectEditorModel, ProjectEditorRuntime, ProjectEditorSaveState, ProjectFileIoError,
-            ProjectFileLoadRequest, SaveMode, SaveProjectFileOutcome, SaveRequest, WorkItemId,
-            code_editor_input_state, project_relative_path, read_project_file, save_project_file,
+            ProjectFileLoadRequest, ReadonlyCodeRow, ReadonlyCodeView, SaveMode,
+            SaveProjectFileOutcome, SaveRequest, WorkItemId, code_editor_input_state,
+            project_relative_path, read_project_file, save_project_file,
         },
         i18n::{Locale, UiText, UiTextKey},
         interaction::actions::{
@@ -181,7 +187,7 @@ use crate::{
         theme::icons::{
             IconTheme, available_icon_theme_names as load_icon_theme_names, load_icon_theme,
         },
-        theme::{ThemeRuntime, WorkbenchTheme},
+        theme::{EditorTheme, ThemeRuntime, WorkbenchTheme},
         workbench::layout_editor::{
             LayoutEditorSession, LayoutEditorTarget, ProjectLayoutEditorFormat,
             write_layout_file_atomic,

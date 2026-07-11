@@ -1,6 +1,7 @@
 pub mod icons;
+mod one_dark;
 
-use gpui::{Edges, Rgba, px, rgb};
+use gpui::{Edges, Rgba, px};
 use gpui_component::{
     ThemeConfig, ThemeConfigColors, ThemeMode,
     highlighter::{HighlightThemeStyle, SyntaxColors, ThemeStyle},
@@ -13,6 +14,8 @@ use crate::config::{
     theme::ThemeStore,
 };
 
+pub const DEFAULT_THEME_NAME: &str = "one-dark-theme";
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppTheme {
     pub name: String,
@@ -23,15 +26,8 @@ pub struct AppTheme {
 }
 
 impl AppTheme {
-    pub fn builtin_dark() -> Self {
-        let ui = WorkbenchTheme::dark();
-        Self {
-            name: "yttt-dark".to_string(),
-            mode: ThemeMode::Dark,
-            editor: EditorTheme::from_workbench_theme(ui),
-            terminal: TerminalTheme::from_workbench_theme(ui),
-            ui,
-        }
+    pub fn one_dark() -> Self {
+        one_dark::theme()
     }
 }
 
@@ -49,9 +45,9 @@ impl ThemeRuntime {
     pub fn resolve(settings: &AppSettings, store: &ThemeStore) -> Self {
         let selected = store
             .theme(&settings.theme.name)
-            .or_else(|| store.theme("yttt-dark"))
+            .or_else(|| store.theme(DEFAULT_THEME_NAME))
             .cloned()
-            .unwrap_or_else(AppTheme::builtin_dark);
+            .unwrap_or_else(AppTheme::one_dark);
         let terminal = settings
             .theme
             .terminal
@@ -163,17 +159,6 @@ pub struct EditorTheme {
 }
 
 impl EditorTheme {
-    pub fn from_workbench_theme(theme: WorkbenchTheme) -> Self {
-        Self {
-            background: theme.terminal_background,
-            foreground: theme.text,
-            active_line: theme.surface,
-            line_number: theme.text_subtle,
-            active_line_number: theme.text_muted,
-            syntax: EditorSyntaxTheme::dark(),
-        }
-    }
-
     pub fn to_highlight_theme_style(self) -> HighlightThemeStyle {
         let mut syntax = SyntaxColors::default();
         syntax.boolean = Some(theme_style(self.syntax.boolean));
@@ -229,29 +214,6 @@ pub struct EditorSyntaxTheme {
     pub variable_special: Rgba,
 }
 
-impl EditorSyntaxTheme {
-    pub fn dark() -> Self {
-        Self {
-            boolean: rgb(0xff9e64),
-            comment: rgb(0x697386),
-            comment_doc: rgb(0x7d8794),
-            constant: rgb(0xffcb6b),
-            constructor: rgb(0xffcb6b),
-            function: rgb(0x82aaff),
-            keyword: rgb(0xc792ea),
-            number: rgb(0xf78c6c),
-            operator: rgb(0x89ddff),
-            property: rgb(0x82aaff),
-            punctuation: rgb(0x89ddff),
-            string: rgb(0xecc48d),
-            string_escape: rgb(0x89ddff),
-            type_: rgb(0xffcb6b),
-            variable: rgb(0xe6e8eb),
-            variable_special: rgb(0xffcb6b),
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct TerminalTheme {
     pub background: Rgba,
@@ -264,18 +226,6 @@ pub struct TerminalTheme {
 }
 
 impl TerminalTheme {
-    pub fn from_workbench_theme(theme: WorkbenchTheme) -> Self {
-        Self {
-            background: theme.terminal_background,
-            foreground: theme.text,
-            cursor: Some(theme.text),
-            selection_background: Some(theme.active_surface),
-            normal: AnsiColors::default_normal(),
-            bright: AnsiColors::default_bright(),
-            indexed_colors: Vec::new(),
-        }
-    }
-
     pub fn to_color_palette(&self) -> ColorPalette {
         let (background_r, background_g, background_b) = color_bytes(self.background);
         let (foreground_r, foreground_g, foreground_b) = color_bytes(self.foreground);
@@ -340,34 +290,6 @@ pub struct AnsiColors {
     pub white: Rgba,
 }
 
-impl AnsiColors {
-    pub fn default_normal() -> Self {
-        Self {
-            black: rgb(0x000000),
-            red: rgb(0xcc0000),
-            green: rgb(0x4e9a06),
-            yellow: rgb(0xc4a000),
-            blue: rgb(0x3465a4),
-            magenta: rgb(0x75507b),
-            cyan: rgb(0x06989a),
-            white: rgb(0xd3d7cf),
-        }
-    }
-
-    pub fn default_bright() -> Self {
-        Self {
-            black: rgb(0x555753),
-            red: rgb(0xef2929),
-            green: rgb(0x8ae234),
-            yellow: rgb(0xfce94f),
-            blue: rgb(0x729fcf),
-            magenta: rgb(0xad7fa8),
-            cyan: rgb(0x34e2e2),
-            white: rgb(0xeeeeec),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IndexedColor {
     pub index: u8,
@@ -378,7 +300,12 @@ fn color_hex(color: Rgba) -> String {
     let r = (color.r.clamp(0.0, 1.0) * 255.0).round() as u8;
     let g = (color.g.clamp(0.0, 1.0) * 255.0).round() as u8;
     let b = (color.b.clamp(0.0, 1.0) * 255.0).round() as u8;
-    format!("#{r:02x}{g:02x}{b:02x}")
+    let a = (color.a.clamp(0.0, 1.0) * 255.0).round() as u8;
+    if a == u8::MAX {
+        format!("#{r:02x}{g:02x}{b:02x}")
+    } else {
+        format!("#{r:02x}{g:02x}{b:02x}{a:02x}")
+    }
 }
 
 fn color_bytes(color: Rgba) -> (u8, u8, u8) {

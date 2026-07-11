@@ -520,6 +520,16 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.overlays.git_diff_panel.is_some() {
+            if self.handle_git_diff_key_down(event, cx) {
+                cx.stop_propagation();
+                cx.notify();
+            } else {
+                cx.propagate();
+            }
+            return;
+        }
+
         if self.overlays.layout_toml_editor.is_some() {
             cx.propagate();
             return;

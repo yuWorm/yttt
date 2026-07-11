@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_png="$repo_root/assets/app-icon/source/yttt-icon.png"
 png_dir="$repo_root/assets/app-icon/png"

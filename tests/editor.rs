@@ -243,7 +243,7 @@ fn code_editor_state_resolves_language_from_path_with_catalog() {
     let state = CodeEditorState::new_with_catalog(
         "/tmp/settings.toml",
         CodeEditorConfig::new("Settings", CodeEditorLanguageMode::Auto),
-        "theme = \"yttt-dark\"",
+        "theme = \"one-dark-theme\"",
         &catalog,
     );
 

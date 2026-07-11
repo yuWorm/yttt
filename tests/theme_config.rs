@@ -5,13 +5,13 @@ use yttt::config::{
     settings::AppSettings,
     theme::{ThemeStore, load_theme_store},
 };
-use yttt::ui::theme::ThemeRuntime;
+use yttt::ui::theme::{AnsiColors, ThemeRuntime};
 
 #[test]
-fn theme_store_contains_builtin_yttt_dark() {
+fn theme_store_contains_builtin_one_dark_theme() {
     let store = ThemeStore::builtin();
 
-    assert!(store.theme("yttt-dark").is_some());
+    assert!(store.theme("one-dark-theme").is_some());
 }
 
 #[test]
@@ -63,7 +63,7 @@ background = "#20232a"
 
     assert_eq!(
         loaded.store.theme_names(),
-        vec!["yttt-dark".to_string(), "zed-like".to_string()]
+        vec!["one-dark-theme".to_string(), "zed-like".to_string()]
     );
 }
 
@@ -74,7 +74,7 @@ fn theme_runtime_resolves_ui_and_terminal_from_theme_name() {
 
     let runtime = ThemeRuntime::resolve(&settings, &store);
 
-    assert_eq!(runtime.theme_name, "yttt-dark");
+    assert_eq!(runtime.theme_name, "one-dark-theme");
     assert_eq!(runtime.terminal_settings.font_size, 13.0);
     assert_eq!(runtime.ui.terminal_background, runtime.terminal.background);
 }
@@ -84,7 +84,7 @@ fn workbench_theme_maps_to_gpui_component_theme_config() {
     let runtime = ThemeRuntime::default();
     let config = runtime.to_gpui_component_theme_config();
 
-    assert_eq!(config.name.as_ref(), "yttt-dark");
+    assert_eq!(config.name.as_ref(), "one-dark-theme");
     assert_eq!(config.mode, gpui_component::ThemeMode::Dark);
     assert!(config.colors.background.is_some());
     assert!(config.colors.border.is_some());
@@ -96,7 +96,7 @@ fn workbench_theme_maps_to_gpui_component_theme_config() {
             .as_ref()
             .map(|color| color.to_string())
             .as_deref(),
-        Some("#7aa2f7")
+        Some("#3e4452")
     );
     assert_eq!(
         config
@@ -105,7 +105,7 @@ fn workbench_theme_maps_to_gpui_component_theme_config() {
             .as_ref()
             .map(|color| color.to_string())
             .as_deref(),
-        Some("#7aa2f7")
+        Some("#67769640")
     );
     assert!(config.colors.title_bar.is_some());
     assert!(config.colors.list_active.is_some());
@@ -116,7 +116,7 @@ fn workbench_theme_maps_to_gpui_component_theme_config() {
             .as_ref()
             .map(|color| color.to_string())
             .as_deref(),
-        Some("#23272e")
+        Some("#1e2227")
     );
     assert_eq!(
         config
@@ -125,7 +125,7 @@ fn workbench_theme_maps_to_gpui_component_theme_config() {
             .as_ref()
             .map(|color| color.to_string())
             .as_deref(),
-        Some("#e6e8eb")
+        Some("#abb2bf")
     );
 }
 
@@ -204,7 +204,7 @@ focus_ring = "#112233"
     assert!(loaded.warnings.is_empty());
 }
 #[test]
-fn builtin_theme_maps_editor_highlight_theme() {
+fn builtin_one_dark_theme_maps_editor_and_terminal_palettes() {
     let runtime = ThemeRuntime::default();
     let config = runtime.to_gpui_component_theme_config();
     let highlight = config
@@ -213,14 +213,81 @@ fn builtin_theme_maps_editor_highlight_theme() {
 
     assert_eq!(
         highlight.editor_background,
-        Some(gpui::Hsla::from(rgb(0x1b1e23)))
+        Some(gpui::Hsla::from(rgb(0x23272e)))
     );
     assert_eq!(
         highlight.editor_foreground,
-        Some(gpui::Hsla::from(rgb(0xe6e8eb)))
+        Some(gpui::Hsla::from(rgb(0xabb2bf)))
     );
-    assert!(highlight.syntax.style("keyword").is_some());
-    assert!(highlight.syntax.style("string").is_some());
+    assert_eq!(
+        highlight.editor_active_line,
+        Some(gpui::Hsla::from(rgb(0x2c313c)))
+    );
+    assert_eq!(
+        highlight.editor_line_number,
+        Some(gpui::Hsla::from(rgb(0x495162)))
+    );
+    assert_eq!(
+        highlight.editor_active_line_number,
+        Some(gpui::Hsla::from(rgb(0xabb2bf)))
+    );
+
+    let expected_syntax: [(&str, u32); 16] = [
+        ("boolean", 0xd19a66),
+        ("comment", 0x7f838c),
+        ("comment.doc", 0x7f848e),
+        ("constant", 0xd19a66),
+        ("constructor", 0xe06c75),
+        ("function", 0x61afef),
+        ("keyword", 0xc678dd),
+        ("number", 0xd19a66),
+        ("operator", 0xabb2bf),
+        ("property", 0xe06c75),
+        ("punctuation", 0xabb2bf),
+        ("string", 0x98c379),
+        ("string.escape", 0x56b6c2),
+        ("type", 0xe5c07b),
+        ("variable", 0xe06c75),
+        ("variable.special", 0xe5c07b),
+    ];
+    for (name, color) in expected_syntax {
+        assert_eq!(
+            highlight.syntax.style(name).and_then(|style| style.color),
+            Some(gpui::Hsla::from(rgb(color))),
+            "syntax color for {name}"
+        );
+    }
+
+    assert_eq!(runtime.terminal.background, rgb(0x23272e));
+    assert_eq!(runtime.terminal.foreground, rgb(0xabb2bf));
+    assert_eq!(runtime.terminal.cursor, Some(rgb(0xabb2bf)));
+    assert_eq!(runtime.terminal.selection_background, Some(rgb(0x343b48)));
+    assert_eq!(
+        runtime.terminal.normal,
+        AnsiColors {
+            black: rgb(0x3f4451),
+            red: rgb(0xe05561),
+            green: rgb(0x8cc265),
+            yellow: rgb(0xd18f52),
+            blue: rgb(0x4aa5f0),
+            magenta: rgb(0xc162de),
+            cyan: rgb(0x42b3c2),
+            white: rgb(0xd7dae0),
+        }
+    );
+    assert_eq!(
+        runtime.terminal.bright,
+        AnsiColors {
+            black: rgb(0x4f5666),
+            red: rgb(0xff616e),
+            green: rgb(0xa5e075),
+            yellow: rgb(0xf0a45d),
+            blue: rgb(0x4dc4ff),
+            magenta: rgb(0xde73ff),
+            cyan: rgb(0x4cd1e0),
+            white: rgb(0xe6e6e6),
+        }
+    );
 }
 
 #[test]

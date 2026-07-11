@@ -90,7 +90,7 @@ impl WorkbenchView {
     }
 
     pub fn visible_split_handle_style(_direction: SplitDirection) -> SplitHandleStyle {
-        let theme = WorkbenchTheme::dark();
+        let theme = WorkbenchTheme::one_dark();
         SplitHandleStyle {
             visible_line_width: theme.split_line_width,
             hit_area_width: theme.split_hit_area_width,

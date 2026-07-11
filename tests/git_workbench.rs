@@ -2,8 +2,9 @@ use std::{fs, path::Path, process::Command};
 
 use tempfile::tempdir;
 use yttt::runtime::git_status::{
-    GitBranch, GitBranchKind, read_project_git_branches, read_project_git_diff,
-    read_project_git_status, switch_project_git_branch,
+    GitBranch, GitBranchKind, GitDiffLineKind, GitDiffMode, read_project_git_branches,
+    read_project_git_diff, read_project_git_diff_result, read_project_git_status,
+    switch_project_git_branch,
 };
 
 fn git(project_path: &Path, args: &[&str]) {
@@ -139,4 +140,91 @@ fn remote_only_branch_is_listed_and_checked_out_as_tracking_branch() {
             .as_deref(),
         Some("remote-only")
     );
+}
+
+#[test]
+fn structured_diff_groups_files_hunks_and_line_numbers() {
+    let (_temp, project_path) = initialized_repository();
+    fs::write(project_path.join("tracked.txt"), "changed\n").unwrap();
+    fs::create_dir(project_path.join("newdir")).unwrap();
+    fs::write(project_path.join("newdir/new.txt"), "new\nsecond\n").unwrap();
+
+    let diff = read_project_git_diff_result(&project_path, GitDiffMode::Unstaged, false).unwrap();
+
+    assert_eq!(diff.files.len(), 2);
+    let tracked = diff
+        .files
+        .iter()
+        .find(|file| file.path() == "tracked.txt")
+        .unwrap();
+    assert_eq!((tracked.added, tracked.removed), (1, 1));
+    assert!(
+        tracked
+            .hunks
+            .iter()
+            .flat_map(|hunk| &hunk.lines)
+            .any(|line| line.kind == GitDiffLineKind::Removed
+                && line.old_line == Some(1)
+                && line.new_line.is_none()
+                && line.content == "base")
+    );
+    assert!(
+        tracked
+            .hunks
+            .iter()
+            .flat_map(|hunk| &hunk.lines)
+            .any(|line| line.kind == GitDiffLineKind::Added
+                && line.old_line.is_none()
+                && line.new_line == Some(1)
+                && line.content == "changed")
+    );
+    let untracked = diff
+        .files
+        .iter()
+        .find(|file| file.path() == "newdir/new.txt")
+        .unwrap();
+    assert_eq!((untracked.added, untracked.removed), (2, 0));
+    assert_eq!((diff.total_added(), diff.total_removed()), (3, 1));
+}
+
+#[test]
+fn staged_and_unstaged_modes_read_different_snapshots() {
+    let (_temp, project_path) = initialized_repository();
+    fs::write(project_path.join("tracked.txt"), "staged\n").unwrap();
+    git(&project_path, &["add", "tracked.txt"]);
+    fs::write(project_path.join("tracked.txt"), "unstaged\n").unwrap();
+
+    let staged = read_project_git_diff_result(&project_path, GitDiffMode::Staged, false).unwrap();
+    let unstaged =
+        read_project_git_diff_result(&project_path, GitDiffMode::Unstaged, false).unwrap();
+
+    let staged_lines = staged.files[0]
+        .hunks
+        .iter()
+        .flat_map(|hunk| &hunk.lines)
+        .map(|line| line.content.as_str())
+        .collect::<Vec<_>>();
+    let unstaged_lines = unstaged.files[0]
+        .hunks
+        .iter()
+        .flat_map(|hunk| &hunk.lines)
+        .map(|line| line.content.as_str())
+        .collect::<Vec<_>>();
+    assert!(staged_lines.contains(&"staged"));
+    assert!(!staged_lines.contains(&"unstaged"));
+    assert!(unstaged_lines.contains(&"unstaged"));
+    assert!(!unstaged_lines.contains(&"base"));
+}
+
+#[test]
+fn ignore_whitespace_suppresses_whitespace_only_changes() {
+    let (_temp, project_path) = initialized_repository();
+    fs::write(project_path.join("tracked.txt"), "base   \n").unwrap();
+
+    let normal = read_project_git_diff_result(&project_path, GitDiffMode::Unstaged, false).unwrap();
+    let ignoring_whitespace =
+        read_project_git_diff_result(&project_path, GitDiffMode::Unstaged, true).unwrap();
+
+    assert_eq!(normal.files.len(), 1);
+    assert!(ignoring_whitespace.files.is_empty());
 }

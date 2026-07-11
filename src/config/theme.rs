@@ -16,7 +16,7 @@ pub struct ThemeStore {
 impl ThemeStore {
     pub fn builtin() -> Self {
         let mut themes = HashMap::new();
-        let theme = AppTheme::builtin_dark();
+        let theme = AppTheme::one_dark();
         themes.insert(theme.name.clone(), theme);
         Self { themes }
     }
@@ -238,7 +238,7 @@ fn theme_from_file(file: ThemeFile, warnings: &mut Vec<ThemeLoadWarning>) -> Opt
         return None;
     }
 
-    let fallback = AppTheme::builtin_dark();
+    let fallback = AppTheme::one_dark();
     let mut ui = fallback.ui;
     let mut editor = fallback.editor;
     let theme_name = file.name;

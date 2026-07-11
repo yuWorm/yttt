@@ -18,7 +18,7 @@ pub fn yttt_tabbar_style(theme: WorkbenchTheme) -> YtttTabBarStyle {
         item_height: px(32.0),
         border_width: px(1.0),
         active_background: theme.surface,
-        inactive_background: theme.app_background,
+        inactive_background: theme.tabbar_background,
         hover_background: theme.hover_surface,
     }
 }
