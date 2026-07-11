@@ -11,16 +11,16 @@ use gpui_component::{
 };
 
 use crate::ui::{
-    keybinding_display::parse_keybinding_for_display,
-    palette_surface::palette_row_style,
+    notifications::{ToastItem, ToastTone},
+    palette::surface::palette_row_style,
     primitives::{
         icon_button::{YtttIconButtonKind, yttt_icon_button_style},
         notification::{YtttNotificationTone, yttt_notification_style},
         row::{YtttRowKind, yttt_row_style},
         switch::yttt_switch_style,
     },
+    settings::keybinding_display::parse_keybinding_for_display,
     theme::WorkbenchTheme,
-    toast::{ToastItem, ToastTone},
 };
 pub use yttt_ui::SelectableState;
 

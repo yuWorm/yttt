@@ -6,9 +6,9 @@ use yttt::config::paths::AppConfigPaths;
 fn app_assets_include_gpui_component_icons_used_by_ui() {
     let temp = tempdir().unwrap();
     let config_paths = AppConfigPaths::from_config_dir(temp.path());
-    let assets = yttt::ui::assets::app_assets(&config_paths);
+    let assets = yttt::ui::app::assets::app_assets(&config_paths);
 
-    for path in yttt::ui::assets::REQUIRED_COMPONENT_ICON_ASSET_PATHS {
+    for path in yttt::ui::app::assets::REQUIRED_COMPONENT_ICON_ASSET_PATHS {
         let asset = assets
             .load(path)
             .unwrap_or_else(|err| panic!("load {path}: {err}"));

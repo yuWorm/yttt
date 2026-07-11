@@ -5,8 +5,8 @@ use tempfile::tempdir;
 use yttt::{
     config::paths::AppConfigPaths,
     ui::{
-        assets::app_assets,
-        icon_theme::{IconVisual, available_icon_theme_names, load_icon_theme},
+        app::assets::app_assets,
+        theme::icons::{IconVisual, available_icon_theme_names, load_icon_theme},
     },
 };
 

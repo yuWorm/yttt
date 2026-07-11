@@ -17,7 +17,7 @@ use gpui_component::{
 
 use crate::{
     runtime::git_status::{GitFileStatus, ProjectGitStatus},
-    ui::icon_theme::{IconTheme, icon_for_visual},
+    ui::theme::icons::{IconTheme, icon_for_visual},
 };
 
 use super::{ProjectFileTree, ProjectTreeEntryKind, ProjectTreeLoadState, ProjectTreeVisibleRow};

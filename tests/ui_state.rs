@@ -33,31 +33,31 @@ use yttt::{
         ProjectEditorModel, WorkItemId, read_project_file,
     },
     ui::i18n::{Locale, UiText},
+    ui::notifications::{ToastTone, toast_item_for_event, visible_toast_items},
     ui::palette::visible_palette_rows,
     ui::primitives::sidebar::SidebarSide,
     ui::project_tree::{DirectorySnapshot, ProjectTreeEntry, ProjectTreeEntryKind},
-    ui::sidebar::visible_project_items,
-    ui::terminal_pane::{
+    ui::terminal::pane::{
         PaneLifecycle, TerminalPaneExitInput, TerminalPaneExitedEvent, TerminalSpawnFailure,
         notification_for_terminal_pane_exit, pane_lifecycle_label, spawn_failure_lines,
     },
-    ui::toast::{ToastTone, toast_item_for_event, visible_toast_items},
+    ui::workbench::shell::sidebar::visible_project_items,
     ui::{
         app::register_workbench_close_guard,
-        root::RootView,
-        split_view::{
+        workbench::WorkbenchView,
+        workbench::shell::split_view::{
             pointer_resize_for_drag_delta, resize_command_for_drag_delta, root_split_child_basis,
             visible_pane_titles,
         },
-        tabs::{
+        workbench::shell::tabs::{
             FileTabSnapshot, WorkbenchTabKind, visible_tab_items, visible_tab_titles,
             visible_work_item_tabs,
         },
     },
     ui::{
-        input_owner::{InputOwnerKind, InputOwnerStack, TerminalInputGate},
         interaction::input_owner::{
-            InputOwnerRegistration, InputOwnerToken, InputScopeId, TerminalInputPolicy,
+            InputOwnerKind, InputOwnerRegistration, InputOwnerStack, InputOwnerToken, InputScopeId,
+            TerminalInputGate, TerminalInputPolicy,
         },
         interaction::key_dispatch::workspace_command_for_keystroke,
     },
@@ -126,7 +126,7 @@ fn git_status_parser_records_file_tones() {
 
 #[test]
 fn visible_work_item_tabs_merge_terminal_and_file_items() {
-    let workspace = RootView::dev_fixture().workspace().clone();
+    let workspace = WorkbenchView::dev_fixture().workspace().clone();
     let terminal_items = visible_tab_items(&workspace);
     let project_id = workspace.selected_project_id().unwrap().clone();
     let first_file = DocumentId {
@@ -179,7 +179,7 @@ fn visible_work_item_tabs_merge_terminal_and_file_items() {
 
 #[test]
 fn root_view_titlebar_info_describes_empty_workspace() {
-    let root = RootView::new();
+    let root = WorkbenchView::new();
 
     let info = root.visible_titlebar_info();
 
@@ -190,7 +190,7 @@ fn root_view_titlebar_info_describes_empty_workspace() {
 
 #[test]
 fn root_view_titlebar_info_describes_selected_project() {
-    let root = RootView::dev_fixture();
+    let root = WorkbenchView::dev_fixture();
 
     let info = root.visible_titlebar_info();
 
@@ -200,7 +200,7 @@ fn root_view_titlebar_info_describes_selected_project() {
 
 #[test]
 fn root_view_starts_with_empty_workspace() {
-    let root = RootView::new();
+    let root = WorkbenchView::new();
 
     assert!(root.workspace().opened_projects().is_empty());
 }
@@ -217,14 +217,14 @@ fn root_view_empty_workspace_exposes_visible_actions() {
 
 #[test]
 fn root_view_dev_fixture_contains_sample_project() {
-    let root = RootView::dev_fixture();
+    let root = WorkbenchView::dev_fixture();
 
     assert_eq!(root.workspace().opened_projects().len(), 1);
 }
 
 #[test]
 fn root_view_toggles_sidebar_collapse_state() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     assert!(!root.sidebar_is_collapsed());
 
@@ -297,7 +297,8 @@ fn root_view_sidebar_release_persists_defaults_without_rewriting_other_sessions(
         )
         .unwrap();
     workspace.select_project(&first).unwrap();
-    let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths.clone());
+    let mut root =
+        WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths.clone());
 
     root.resize_sidebar_from_pointer_delta(SidebarSide::Right, -50.0);
     let before_right_release = yttt::config::settings::load_or_create_settings(&paths).unwrap();
@@ -341,7 +342,7 @@ fn root_view_renders_sidebar_resize_handles_only_for_visible_expanded_panels(
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| RootView::dev_fixture());
+        let root = cx.new(|_| WorkbenchView::dev_fixture());
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -515,7 +516,7 @@ fn root_view_double_clicking_tab_opens_rename_dialog() {
 
 #[test]
 fn root_view_confirming_tab_rename_uses_entered_title() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     root.handle_project_tab_click("dev", 2).unwrap();
     root.confirm_tab_rename_dialog("Runtime").unwrap();
@@ -526,7 +527,7 @@ fn root_view_confirming_tab_rename_uses_entered_title() {
 
 #[test]
 fn root_view_canceling_tab_rename_keeps_title() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     root.handle_project_tab_click("dev", 2).unwrap();
     root.cancel_tab_rename_dialog();
@@ -537,7 +538,7 @@ fn root_view_canceling_tab_rename_keeps_title() {
 
 #[test]
 fn root_view_agent_exit_fixture_contains_sample_project() {
-    let root = RootView::agent_exit_fixture();
+    let root = WorkbenchView::agent_exit_fixture();
 
     assert_eq!(root.workspace().opened_projects().len(), 1);
 }
@@ -550,7 +551,7 @@ fn root_view_open_project_path_records_visible_load_error() {
     fs::create_dir_all(&project_config_dir).unwrap();
     fs::write(project_config_dir.join("layout.toml"), "[project\n").unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
 
     let err = root.open_project_path(&project_dir).unwrap_err();
 
@@ -576,7 +577,7 @@ fn root_view_creates_project_work_item_session_on_open() {
     settings.project_panel.default_open = false;
     settings.project_panel.width = 336.0;
     save_settings(&paths, &settings).unwrap();
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
 
     root.open_project_path(&project_dir).unwrap();
 
@@ -694,7 +695,8 @@ fn root_view_file_tree_loads_and_opens_a_project_file(cx: &mut gpui::TestAppCont
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| RootView::with_workspace_for_test_and_config_paths(workspace, paths));
+        let root =
+            cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -818,7 +820,7 @@ fn root_view_project_switch_preserves_each_editor_session() {
 
 #[test]
 fn root_view_tab_navigation_crosses_terminal_and_file_work_items() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
     let project_id = root.workspace().selected_project_id().unwrap().clone();
     let document_id = root
         .project_editor_runtime_mut()
@@ -862,7 +864,7 @@ fn root_view_tab_navigation_crosses_terminal_and_file_work_items() {
 
 #[test]
 fn root_view_tab_close_dispatches_to_the_active_file_work_item() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
     let project_id = root.workspace().selected_project_id().unwrap().clone();
     let document_id = root
         .project_editor_runtime_mut()
@@ -985,7 +987,8 @@ fn root_view_renders_active_file_document_and_consumes_focus(cx: &mut gpui::Test
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|root_cx| {
-            let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths);
+            let mut root =
+                WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths);
             root.project_editor_runtime_mut()
                 .workspace_mut()
                 .session_mut(&project_id)
@@ -1056,7 +1059,8 @@ fn root_view_file_save_preserves_newer_in_flight_edit(cx: &mut gpui::TestAppCont
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|root_cx| {
-            let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths);
+            let mut root =
+                WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths);
             root.project_editor_runtime_mut()
                 .workspace_mut()
                 .session_mut(&project_id)
@@ -1201,7 +1205,8 @@ fn root_view_file_save_requires_resolution_after_external_change(cx: &mut gpui::
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|root_cx| {
-            let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths);
+            let mut root =
+                WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths);
             root.project_editor_runtime_mut()
                 .workspace_mut()
                 .session_mut(&project_id)
@@ -1822,7 +1827,8 @@ fn project_panel_settings_update_selected_and_future_sessions_only() {
         .open_project(PathBuf::from("/tmp/settings-panel-second"), sample_layout())
         .unwrap();
     workspace.select_project(&first).unwrap();
-    let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths.clone());
+    let mut root =
+        WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths.clone());
 
     root.set_project_panel_default_open(false).unwrap();
     root.set_project_panel_width(360.0).unwrap();
@@ -1849,7 +1855,7 @@ fn project_panel_settings_update_selected_and_future_sessions_only() {
         .open_project(PathBuf::from("/tmp/settings-panel-future"), sample_layout())
         .unwrap();
     let future_root =
-        RootView::with_workspace_for_test_and_config_paths(future_workspace, paths.clone());
+        WorkbenchView::with_workspace_for_test_and_config_paths(future_workspace, paths.clone());
     let future_session = future_root
         .project_editor_runtime()
         .workspace()
@@ -2238,7 +2244,7 @@ fn root_view_layout_commands_write_current_project_files() {
     )
     .unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths(paths.clone());
     root.open_project_path(&project_dir).unwrap();
 
     root.run_command(CommandId::LayoutSaveCurrent).unwrap();
@@ -2255,7 +2261,7 @@ fn root_view_exposes_global_default_layout_source() {
     let project_dir = temp.path().join("source-message-project");
     fs::create_dir(&project_dir).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
 
     root.open_project_path(&project_dir).unwrap();
 
@@ -2283,7 +2289,7 @@ fn root_view_project_open_surfaces_personal_layout_warning() {
         "version = 1\nmode = \"patch\"\nunknown = true\nlayout = {}",
     )
     .unwrap();
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
 
     root.open_project_path(&project_dir).unwrap();
 
@@ -2300,7 +2306,7 @@ fn root_view_layout_open_file_falls_back_to_app_local_layout() {
     fs::create_dir(&project_dir).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let expected_layout_file = paths.local_layout_file(&project_dir.canonicalize().unwrap());
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
     root.open_project_path(&project_dir).unwrap();
     root.run_command(CommandId::LayoutSaveCurrent).unwrap();
 
@@ -2323,7 +2329,7 @@ fn root_view_layout_default_editor_opens_without_project() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let expected_layout_file = paths.default_layout_file();
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
 
     root.run_command(CommandId::LayoutDefaultEdit).unwrap();
 
@@ -2353,7 +2359,7 @@ fn root_view_layout_default_editor_opens_without_project() {
 fn root_view_persists_editor_language_settings() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths(paths.clone());
 
     assert!(root.editor_auto_detect_language());
     assert_eq!(root.editor_default_language(), "plain_text");
@@ -2376,7 +2382,7 @@ fn root_view_layout_default_editor_saves_valid_toml() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let layout_file = paths.default_layout_file();
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
     root.run_command(CommandId::LayoutDefaultEdit).unwrap();
 
     let updated = root
@@ -2398,7 +2404,7 @@ fn root_view_layout_default_editor_saves_valid_toml() {
 fn root_view_layout_default_editor_keeps_invalid_toml_open() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
     root.run_command(CommandId::LayoutDefaultEdit).unwrap();
 
     root.set_layout_toml_editor_value("[project\n");
@@ -2416,7 +2422,7 @@ fn root_view_layout_default_editor_keeps_invalid_toml_open() {
 fn root_view_layout_default_editor_records_parse_diagnostic() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
     root.run_command(CommandId::LayoutDefaultEdit).unwrap();
 
     root.set_layout_toml_editor_value("[project\n");
@@ -2437,7 +2443,7 @@ fn root_view_layout_default_editor_records_parse_diagnostic() {
 fn root_view_layout_default_editor_clears_diagnostics_after_valid_save() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
     root.run_command(CommandId::LayoutDefaultEdit).unwrap();
 
     let valid = root.layout_toml_editor_value().unwrap().to_string();
@@ -2465,7 +2471,7 @@ fn root_view_layout_project_editor_selects_project_and_personal_formats() {
         toml::to_string_pretty(&sample_layout()).unwrap(),
     )
     .unwrap();
-    let mut root = RootView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths(paths.clone());
     root.open_project_path(&shared_project).unwrap();
     root.run_command(CommandId::LayoutProjectEdit).unwrap();
     assert_eq!(root.layout_editor_target_kind(), Some("project_config"));
@@ -2510,7 +2516,7 @@ fn root_view_layout_project_editor_creates_personal_replace_for_inherited_projec
     fs::create_dir(&project_dir).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let expected = paths.local_layout_file(&project_dir.canonicalize().unwrap());
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
     root.open_project_path(&project_dir).unwrap();
 
     root.run_command(CommandId::LayoutProjectEdit).unwrap();
@@ -2532,7 +2538,7 @@ fn root_view_layout_project_editor_creates_personal_replace_for_inherited_projec
 fn root_view_layout_project_commands_without_project_show_localized_reason() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
     root.set_language(LanguageSetting::Chinese).unwrap();
 
     root.run_command(CommandId::LayoutProjectEdit).unwrap();
@@ -2571,7 +2577,7 @@ fn root_view_project_close_command_requires_confirmation_for_running_project() {
 fn root_view_settings_keybindings_reveals_keybindings_file_path() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths(paths.clone());
 
     root.run_command(CommandId::SettingsKeybindings).unwrap();
 
@@ -2592,7 +2598,7 @@ fn root_view_settings_keybindings_reveals_keybindings_file_path() {
 fn root_view_status_reveals_settings_paths_without_error_banner() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths(paths.clone());
 
     root.show_settings_file_path_status();
     root.show_themes_directory_status();
@@ -2607,7 +2613,7 @@ fn root_view_status_reveals_settings_paths_without_error_banner() {
 fn root_view_settings_open_command_opens_settings_page() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
 
     root.run_command(CommandId::SettingsOpen).unwrap();
 
@@ -2631,7 +2637,7 @@ fn root_view_settings_open_command_opens_settings_page() {
 fn root_view_settings_search_filters_groups() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
     root.open_settings();
 
     root.set_settings_search_query("shell");
@@ -2644,7 +2650,7 @@ fn root_view_settings_search_filters_groups() {
 fn root_view_settings_can_select_and_close_group() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
     root.open_settings();
 
     root.select_settings_group("terminal").unwrap();
@@ -2660,7 +2666,7 @@ fn editor_settings_group_renders_all_effective_controls(cx: &mut gpui::TestAppCo
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| RootView::dev_fixture());
+        let root = cx.new(|_| WorkbenchView::dev_fixture());
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -2694,7 +2700,7 @@ fn editor_settings_group_renders_all_effective_controls(cx: &mut gpui::TestAppCo
 fn root_view_toggles_system_notifications() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths(paths.clone());
 
     assert!(!root.system_notifications_enabled());
     assert_eq!(
@@ -2715,7 +2721,7 @@ fn root_view_toggles_system_notifications() {
         vec!["System notifications: enabled".to_string()]
     );
 
-    let reloaded = RootView::with_config_paths(paths);
+    let reloaded = WorkbenchView::with_config_paths(paths);
     assert!(reloaded.system_notifications_enabled());
     assert_eq!(
         reloaded.visible_notification_settings_message(),
@@ -2727,7 +2733,7 @@ fn root_view_toggles_system_notifications() {
 fn root_view_language_setting_persists_and_updates_visible_text() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths(paths.clone());
 
     root.set_language(LanguageSetting::Chinese).unwrap();
 
@@ -2736,7 +2742,7 @@ fn root_view_language_setting_persists_and_updates_visible_text() {
         vec!["打开目录", "打开最近项目", "命令面板"]
     );
 
-    let reloaded = RootView::with_config_paths(paths);
+    let reloaded = WorkbenchView::with_config_paths(paths);
     assert_eq!(
         reloaded.visible_empty_workspace_actions(),
         vec!["打开目录", "打开最近项目", "命令面板"]
@@ -2747,7 +2753,7 @@ fn root_view_language_setting_persists_and_updates_visible_text() {
 fn root_view_status_notifications_use_selected_language() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
 
     root.set_language(LanguageSetting::Chinese).unwrap();
     root.run_command(CommandId::SettingsNotifications).unwrap();
@@ -2763,7 +2769,7 @@ fn root_view_status_notifications_use_selected_language() {
 fn root_view_language_setting_updates_settings_labels() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
     root.open_settings();
 
     root.set_language(LanguageSetting::Chinese).unwrap();
@@ -2792,7 +2798,7 @@ fn root_view_language_setting_updates_settings_labels() {
 fn root_view_language_setting_updates_command_palette_labels() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
 
     root.set_language(LanguageSetting::Chinese).unwrap();
     root.open_palette(PaletteKind::Command);
@@ -2855,7 +2861,7 @@ fn root_view_command_palette_can_request_open_project() {
 
 #[test]
 fn root_view_closes_requested_tab_by_id() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     root.close_project_tab("agent").unwrap();
 
@@ -2866,21 +2872,21 @@ fn root_view_closes_requested_tab_by_id() {
 fn root_view_terminal_close_on_exit_setting_persists() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths(paths.clone());
 
     assert!(root.terminal_close_on_exit());
 
     root.set_terminal_close_on_exit(false).unwrap();
 
     assert!(!root.terminal_close_on_exit());
-    assert!(!RootView::with_config_paths(paths).terminal_close_on_exit());
+    assert!(!WorkbenchView::with_config_paths(paths).terminal_close_on_exit());
 }
 
 #[test]
 fn root_view_icon_theme_setting_persists_and_can_reset() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths(paths.clone());
 
     root.set_icon_theme_name(Some("Fixture dark")).unwrap();
     assert_eq!(
@@ -2910,7 +2916,7 @@ fn root_view_terminal_shell_setting_changes_new_shell_tabs() {
     let project_dir = temp.path().join("shell-settings-project");
     fs::create_dir(&project_dir).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
     root.open_project_path(&project_dir).unwrap();
 
     root.set_terminal_shell("/bin/bash").unwrap();
@@ -2927,7 +2933,7 @@ fn root_view_terminal_shell_setting_changes_new_shell_tabs() {
 fn root_view_terminal_display_settings_persist() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths(paths.clone());
 
     root.set_terminal_font_family("JetBrains Mono").unwrap();
     root.set_terminal_font_size(14.5).unwrap();
@@ -2944,7 +2950,7 @@ fn root_view_terminal_display_settings_persist() {
     assert_eq!(runtime.scrollback, 20000);
     assert!(!runtime.show_scrollbar);
 
-    let reloaded = RootView::with_config_paths(paths);
+    let reloaded = WorkbenchView::with_config_paths(paths);
     let terminal = &reloaded.theme_runtime().terminal_settings;
     assert_eq!(terminal.font_family, "JetBrains Mono");
     assert_eq!(terminal.font_size, 14.5);
@@ -2956,7 +2962,7 @@ fn root_view_terminal_display_settings_persist() {
 
 #[test]
 fn root_view_does_not_auto_focus_workspace_while_settings_is_open() {
-    let mut root = RootView::new();
+    let mut root = WorkbenchView::new();
 
     assert!(root.should_auto_focus_workspace());
     root.open_settings();
@@ -2973,7 +2979,7 @@ fn root_view_terminal_input_owner_tracks_foreground_overlays() {
     workspace
         .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
         .unwrap();
-    let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths);
+    let mut root = WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths);
 
     assert_eq!(
         root.foreground_input_owner_kind(),
@@ -3020,7 +3026,7 @@ fn root_view_exposes_foreground_input_scope_id() {
     workspace
         .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
         .unwrap();
-    let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths);
+    let mut root = WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths);
 
     assert_eq!(
         root.foreground_input_scope_id().as_deref(),
@@ -3049,7 +3055,7 @@ fn root_view_exposes_foreground_input_scope_id() {
 
 #[test]
 fn root_view_workspace_keybindings_are_blocked_by_foreground_owner() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
     let project_id = root.workspace().selected_project_id().unwrap().clone();
     let initial_tab_count = root
         .workspace()
@@ -3075,7 +3081,7 @@ fn root_view_workspace_keybindings_are_blocked_by_foreground_owner() {
 
 #[test]
 fn root_view_layout_editor_blocks_project_file_save_binding() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
     root.open_layout_toml_editor().unwrap();
 
     assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Dialog);
@@ -3120,7 +3126,7 @@ fn key_dispatch_allows_workspace_command_when_terminal_does_not_need_key() {
 
 #[test]
 fn root_view_dialog_owner_blocks_terminal_input() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     root.handle_project_tab_click("dev", 2).unwrap();
 
@@ -3130,7 +3136,7 @@ fn root_view_dialog_owner_blocks_terminal_input() {
 
 #[test]
 fn root_view_does_not_consume_terminal_focus_while_overlay_is_open() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     root.focus_visible_terminal_pane("shell").unwrap();
     assert_eq!(root.pending_terminal_focus_pane_id(), Some("shell"));
@@ -3146,7 +3152,7 @@ fn root_view_does_not_consume_terminal_focus_while_overlay_is_open() {
 
 #[test]
 fn root_view_does_not_use_palette_text_fallback_when_input_is_focused() {
-    let mut root = RootView::new();
+    let mut root = WorkbenchView::new();
 
     root.open_palette(PaletteKind::Command);
 
@@ -3158,7 +3164,7 @@ fn root_view_does_not_use_palette_text_fallback_when_input_is_focused() {
 fn root_view_notification_settings_can_be_disabled_again() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths(paths.clone());
 
     root.run_command(CommandId::SettingsNotifications).unwrap();
     root.run_command(CommandId::SettingsNotifications).unwrap();
@@ -3177,7 +3183,7 @@ fn root_view_notification_settings_can_be_disabled_again() {
         ]
     );
 
-    let reloaded = RootView::with_config_paths(paths);
+    let reloaded = WorkbenchView::with_config_paths(paths);
     assert!(!reloaded.system_notifications_enabled());
 }
 
@@ -3204,7 +3210,7 @@ fn root_view_exposes_keybinding_warning_lines() {
     )
     .unwrap();
 
-    let root = RootView::with_config_paths(paths);
+    let root = WorkbenchView::with_config_paths(paths);
 
     assert_eq!(
         root.visible_keybinding_warning_lines(),
@@ -3219,7 +3225,7 @@ fn root_view_exposes_keybinding_warning_lines() {
 fn root_view_keybindings_editor_updates_and_persists_command_keys() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths(paths.clone());
 
     root.set_keybinding_command_keys(CommandId::TabPalette, vec!["cmd-l".to_string()])
         .unwrap();
@@ -3231,7 +3237,7 @@ fn root_view_keybindings_editor_updates_and_persists_command_keys() {
         .unwrap();
     assert_eq!(row.keys, vec!["cmd-l".to_string()]);
 
-    let reloaded = RootView::with_config_paths(paths);
+    let reloaded = WorkbenchView::with_config_paths(paths);
     let row = reloaded
         .visible_keybinding_rows()
         .into_iter()
@@ -3244,7 +3250,7 @@ fn root_view_keybindings_editor_updates_and_persists_command_keys() {
 fn root_view_runtime_keybindings_follow_edited_settings() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
 
     root.set_keybinding_command_keys(CommandId::TabPalette, vec!["cmd-l".to_string()])
         .unwrap();
@@ -3263,7 +3269,7 @@ fn root_view_runtime_keybindings_follow_edited_settings() {
 fn root_view_keybindings_editor_rejects_conflicts() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
 
     let error = root
         .set_keybinding_command_keys(CommandId::TabPalette, vec!["cmd-p".to_string()])
@@ -3276,7 +3282,7 @@ fn root_view_keybindings_editor_rejects_conflicts() {
 fn root_view_keybinding_edit_dialog_updates_command_keys() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = RootView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths);
 
     root.open_keybinding_edit_dialog(CommandId::TabPalette)
         .unwrap();
@@ -3450,7 +3456,7 @@ fn split_pointer_drag_delta_maps_to_continuous_resize() {
 
 #[test]
 fn root_view_pointer_drag_resize_changes_split_ratio_visibly() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
     let before = root_split_child_basis(root.workspace()).unwrap();
 
     let resized_ratio = root
@@ -3467,7 +3473,7 @@ fn root_view_pointer_drag_resize_changes_split_ratio_visibly() {
 
 #[test]
 fn root_view_terminal_pane_contexts_include_project_path() {
-    let root = RootView::dev_fixture();
+    let root = WorkbenchView::dev_fixture();
 
     let contexts = root.visible_terminal_pane_contexts();
 
@@ -3481,7 +3487,7 @@ fn root_view_terminal_pane_contexts_include_project_path() {
 
 #[test]
 fn root_view_tab_palette_scopes_to_current_project_tabs() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     root.open_palette(PaletteKind::Tab);
 
@@ -3490,7 +3496,7 @@ fn root_view_tab_palette_scopes_to_current_project_tabs() {
 
 #[test]
 fn root_view_pane_palette_scopes_to_current_tab_panes() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     root.open_palette(PaletteKind::Pane);
 
@@ -3499,7 +3505,7 @@ fn root_view_pane_palette_scopes_to_current_tab_panes() {
 
 #[test]
 fn root_view_syncs_palette_query_from_input_value() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
     root.open_palette(PaletteKind::Tab);
     root.set_palette_query("agent");
 
@@ -3510,7 +3516,7 @@ fn root_view_syncs_palette_query_from_input_value() {
 
 #[test]
 fn root_view_ignores_palette_input_value_without_active_palette() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     assert!(!root.sync_palette_query_from_input_value("dev"));
 }
@@ -3566,7 +3572,7 @@ fn palette_empty_label_uses_localized_text() {
 
 #[test]
 fn root_view_confirming_tab_palette_selection_switches_tabs() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     root.open_palette(PaletteKind::Tab);
     root.set_palette_query("agent");
@@ -3579,7 +3585,7 @@ fn root_view_confirming_tab_palette_selection_switches_tabs() {
 
 #[test]
 fn root_view_confirming_tab_palette_selection_queues_terminal_focus() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     root.open_palette(PaletteKind::Tab);
     root.set_palette_query("agent");
@@ -3590,7 +3596,7 @@ fn root_view_confirming_tab_palette_selection_queues_terminal_focus() {
 
 #[test]
 fn root_view_confirming_pane_palette_selection_focuses_pane() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     root.open_palette(PaletteKind::Pane);
     root.set_palette_query("shell");
@@ -3604,7 +3610,7 @@ fn root_view_confirming_pane_palette_selection_focuses_pane() {
 
 #[test]
 fn root_view_confirming_pane_palette_selection_queues_terminal_focus() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     root.open_palette(PaletteKind::Pane);
     root.set_palette_query("shell");
@@ -3644,7 +3650,7 @@ fn root_view_command_palette_can_open_project_palette() {
 
 #[test]
 fn root_view_focus_visible_terminal_pane_updates_focused_pane() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     root.focus_visible_terminal_pane("shell").unwrap();
 
@@ -3656,7 +3662,7 @@ fn root_view_focus_visible_terminal_pane_updates_focused_pane() {
 
 #[test]
 fn root_view_marks_focused_terminal_pane_context() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     root.focus_visible_terminal_pane("shell").unwrap();
     let contexts = root.visible_terminal_pane_contexts();
@@ -3670,7 +3676,7 @@ fn root_view_marks_focused_terminal_pane_context() {
 
 #[test]
 fn root_view_focus_visible_terminal_pane_queues_terminal_focus() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     root.focus_visible_terminal_pane("shell").unwrap();
 
@@ -3679,7 +3685,7 @@ fn root_view_focus_visible_terminal_pane_queues_terminal_focus() {
 
 #[test]
 fn root_view_leaves_terminal_control_keybindings_for_focused_terminal() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
     let project_id = root.workspace().selected_project_id().unwrap().clone();
     let initial_tab_count = root
         .workspace()
@@ -3705,7 +3711,7 @@ fn root_view_leaves_terminal_control_keybindings_for_focused_terminal() {
 
 #[test]
 fn root_view_routes_terminal_special_keys_to_focused_terminal() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     root.focus_visible_terminal_pane("shell").unwrap();
 
@@ -3719,7 +3725,7 @@ fn root_view_routes_terminal_special_keys_to_focused_terminal() {
 
 #[test]
 fn root_view_keeps_platform_shortcuts_available_when_terminal_is_focused() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
     let project_id = root.workspace().selected_project_id().unwrap().clone();
     let initial_tab_count = root
         .workspace()
@@ -3745,7 +3751,7 @@ fn root_view_keeps_platform_shortcuts_available_when_terminal_is_focused() {
 
 #[test]
 fn root_view_pane_focus_command_queues_target_terminal_focus() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     root.run_command(CommandId::PaneFocusRight).unwrap();
 
@@ -3754,7 +3760,7 @@ fn root_view_pane_focus_command_queues_target_terminal_focus() {
 
 #[test]
 fn root_view_split_command_queues_new_terminal_focus() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     root.run_command(CommandId::PaneSplitVertical).unwrap();
 
@@ -3763,7 +3769,7 @@ fn root_view_split_command_queues_new_terminal_focus() {
 
 #[test]
 fn root_view_terminal_exit_closes_exact_split_pane() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     root.handle_terminal_pane_exit(terminal_pane_exited_event("dev", "server"))
         .unwrap();
@@ -3778,7 +3784,7 @@ fn root_view_terminal_exit_closes_exact_split_pane() {
 
 #[test]
 fn root_view_terminal_exit_closes_single_pane_tab() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
     root.workspace_mut().select_tab("agent").unwrap();
 
     root.handle_terminal_pane_exit(terminal_pane_exited_event("agent", "codex"))
@@ -3811,7 +3817,7 @@ fn root_view_terminal_exit_keeps_project_open_when_last_tab_closes() {
     workspace
         .open_project(PathBuf::from("/tmp/single"), single_tab_layout())
         .unwrap();
-    let mut root = RootView::with_workspace_for_test(workspace);
+    let mut root = WorkbenchView::with_workspace_for_test(workspace);
 
     root.handle_terminal_pane_exit(TerminalPaneExitedEvent {
         project_id: "/tmp/single".to_string(),
@@ -3845,7 +3851,7 @@ close_on_exit = false
     workspace
         .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
         .unwrap();
-    let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths);
+    let mut root = WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths);
 
     let outcome = root
         .handle_terminal_pane_exit(terminal_pane_exited_event("dev", "server"))
@@ -3888,7 +3894,7 @@ close_on_exit = false
     workspace
         .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
         .unwrap();
-    let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths);
+    let mut root = WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths);
     root.workspace_mut().select_tab("agent").unwrap();
 
     root.handle_terminal_pane_exit(terminal_pane_exited_event("agent", "codex"))
@@ -3925,7 +3931,7 @@ close_on_exit = false
     workspace
         .open_project(PathBuf::from("/tmp/single"), single_tab_layout())
         .unwrap();
-    let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths);
+    let mut root = WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths);
 
     root.handle_terminal_pane_exit(TerminalPaneExitedEvent {
         project_id: "/tmp/single".to_string(),
@@ -3949,7 +3955,7 @@ close_on_exit = false
 
 #[test]
 fn root_view_focus_notification_target_queues_terminal_focus() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
     let event = notification_event();
 
     root.focus_notification_target(&event).unwrap();
@@ -3959,7 +3965,7 @@ fn root_view_focus_notification_target_queues_terminal_focus() {
 
 #[test]
 fn root_view_focus_notification_target_leaves_active_file_for_terminal() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
     let project_id = root.workspace().selected_project_id().unwrap().clone();
     let document_id = root
         .project_editor_runtime_mut()
@@ -3987,23 +3993,23 @@ fn root_view_focus_notification_target_leaves_active_file_for_terminal() {
 #[test]
 fn workspace_arrow_keydown_fallback_maps_to_pane_commands() {
     assert_eq!(
-        RootView::workspace_arrow_keydown_command("right", true, false, true, false),
+        WorkbenchView::workspace_arrow_keydown_command("right", true, false, true, false),
         Some(CommandId::PaneFocusRight)
     );
     assert_eq!(
-        RootView::workspace_arrow_keydown_command("left", false, true, true, false),
+        WorkbenchView::workspace_arrow_keydown_command("left", false, true, true, false),
         Some(CommandId::PaneFocusLeft)
     );
     assert_eq!(
-        RootView::workspace_arrow_keydown_command("down", true, false, true, true),
+        WorkbenchView::workspace_arrow_keydown_command("down", true, false, true, true),
         Some(CommandId::PaneResizeDown)
     );
     assert_eq!(
-        RootView::workspace_arrow_keydown_command("right", true, false, false, false),
+        WorkbenchView::workspace_arrow_keydown_command("right", true, false, false, false),
         None
     );
     assert_eq!(
-        RootView::workspace_arrow_keydown_command_for_owner(
+        WorkbenchView::workspace_arrow_keydown_command_for_owner(
             InputOwnerKind::Editor,
             "right",
             true,
@@ -4017,7 +4023,7 @@ fn workspace_arrow_keydown_fallback_maps_to_pane_commands() {
 
 #[test]
 fn root_view_enqueues_agent_toast_notifications() {
-    let mut root = RootView::new();
+    let mut root = WorkbenchView::new();
 
     root.handle_terminal_notification(notification_event());
 
@@ -4026,7 +4032,7 @@ fn root_view_enqueues_agent_toast_notifications() {
 
 #[test]
 fn root_view_records_agent_status_from_notification() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
 
     root.handle_terminal_notification(notification_event());
 
@@ -4046,7 +4052,7 @@ fn root_view_records_agent_status_from_notification() {
 
 #[test]
 fn root_view_formats_failed_agent_toast_notifications() {
-    let mut root = RootView::new();
+    let mut root = WorkbenchView::new();
     let mut event = notification_event();
     event.kind = NotificationKind::AgentFailed;
 
@@ -4057,7 +4063,7 @@ fn root_view_formats_failed_agent_toast_notifications() {
 
 #[test]
 fn root_view_focuses_notification_target() {
-    let mut root = RootView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture();
     let event = notification_event();
 
     root.focus_notification_target(&event).unwrap();
@@ -4097,7 +4103,7 @@ fn root_view_reports_missing_notification_target() {
 
 #[test]
 fn visible_toast_items_show_three_recent_events_with_tone() {
-    let mut root = RootView::new();
+    let mut root = WorkbenchView::new();
     root.handle_terminal_notification(notification_event_for(
         "first",
         NotificationKind::AgentCompleted,
@@ -4298,18 +4304,18 @@ fn workspace_with_sample_project() -> Workspace {
     workspace
 }
 
-fn english_test_root() -> (tempfile::TempDir, RootView) {
+fn english_test_root() -> (tempfile::TempDir, WorkbenchView) {
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    (temp, RootView::with_config_paths(paths))
+    (temp, WorkbenchView::with_config_paths(paths))
 }
 
-fn english_test_root_with_workspace(workspace: Workspace) -> (tempfile::TempDir, RootView) {
+fn english_test_root_with_workspace(workspace: Workspace) -> (tempfile::TempDir, WorkbenchView) {
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
     (
         temp,
-        RootView::with_workspace_for_test_and_config_paths(workspace, paths),
+        WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths),
     )
 }
 
@@ -4344,7 +4350,7 @@ fn project_file_autosave_fixture<'a>(
 ) -> (
     tempfile::TempDir,
     PathBuf,
-    gpui::Entity<RootView>,
+    gpui::Entity<WorkbenchView>,
     gpui::Entity<ProjectEditorDocument>,
     &'a mut gpui::VisualTestContext,
 ) {
@@ -4358,7 +4364,7 @@ fn project_file_terminal_fixture<'a>(
 ) -> (
     tempfile::TempDir,
     PathBuf,
-    gpui::Entity<RootView>,
+    gpui::Entity<WorkbenchView>,
     gpui::Entity<ProjectEditorDocument>,
     &'a mut gpui::VisualTestContext,
 ) {
@@ -4373,7 +4379,7 @@ fn project_file_fixture<'a>(
 ) -> (
     tempfile::TempDir,
     PathBuf,
-    gpui::Entity<RootView>,
+    gpui::Entity<WorkbenchView>,
     gpui::Entity<ProjectEditorDocument>,
     &'a mut gpui::VisualTestContext,
 ) {
@@ -4405,7 +4411,8 @@ autosave_delay_ms = {delay_ms}
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| {
-            let mut root = RootView::with_workspace_for_test_and_config_paths(workspace, paths);
+            let mut root =
+                WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths);
             root.project_editor_runtime_mut()
                 .workspace_mut()
                 .session_mut(&preselected_project_id)

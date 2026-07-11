@@ -14,15 +14,17 @@ use yttt::config::{
 };
 use yttt::model::layout::LayoutNode;
 use yttt::model::workspace::{TabStartState, Workspace};
-use yttt::ui::actions::{
+use yttt::ui::interaction::actions::{
     app_startup_keybindings, default_ui_keybinding_specs, runtime_command_for_keystroke,
 };
 use yttt::ui::interaction::{
     input_owner::InputOwnerKind, key_dispatch::workspace_command_for_keystroke,
 };
-use yttt::ui::keybinding_display::{KeybindingDisplayPlatform, display_keybindings_for_platform};
-use yttt::ui::keybindings_editor::{KeybindingEditError, KeybindingsEditorState};
-use yttt::ui::split_view::visible_pane_titles;
+use yttt::ui::settings::keybinding_display::{
+    KeybindingDisplayPlatform, display_keybindings_for_platform,
+};
+use yttt::ui::settings::keybindings::{KeybindingEditError, KeybindingsEditorState};
+use yttt::ui::workbench::shell::split_view::visible_pane_titles;
 
 #[test]
 fn default_registry_contains_core_commands() {
@@ -389,7 +391,10 @@ fn user_keybindings_specs_override_default_ui_bindings() {
     )
     .unwrap();
 
-    let specs = yttt::ui::actions::ui_keybinding_specs_from_config(&config, &default_registry());
+    let specs = yttt::ui::interaction::actions::ui_keybinding_specs_from_config(
+        &config,
+        &default_registry(),
+    );
 
     assert!(
         specs
@@ -422,7 +427,10 @@ fn user_keybindings_specs_skip_conflicting_keys_and_invalid_commands() {
     )
     .unwrap();
 
-    let specs = yttt::ui::actions::ui_keybinding_specs_from_config(&config, &default_registry());
+    let specs = yttt::ui::interaction::actions::ui_keybinding_specs_from_config(
+        &config,
+        &default_registry(),
+    );
 
     assert!(specs.is_empty());
 }
@@ -438,7 +446,10 @@ fn user_keybindings_specs_map_non_default_command_actions() {
     )
     .unwrap();
 
-    let specs = yttt::ui::actions::ui_keybinding_specs_from_config(&config, &default_registry());
+    let specs = yttt::ui::interaction::actions::ui_keybinding_specs_from_config(
+        &config,
+        &default_registry(),
+    );
 
     assert_eq!(specs.len(), 1);
     assert_eq!(specs[0].keys, "cmd-alt-k");
@@ -455,7 +466,10 @@ fn runtime_keybinding_matcher_uses_current_config_specs_only() {
     "#,
     )
     .unwrap();
-    let specs = yttt::ui::actions::ui_keybinding_specs_from_config(&config, &default_registry());
+    let specs = yttt::ui::interaction::actions::ui_keybinding_specs_from_config(
+        &config,
+        &default_registry(),
+    );
 
     assert_eq!(
         runtime_command_for_keystroke(&specs, &Keystroke::parse("cmd-l").unwrap()),
@@ -477,7 +491,8 @@ fn load_app_keybindings_missing_file_writes_defaults_without_registering_editabl
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
 
-    let bindings = yttt::ui::actions::load_app_keybindings(&paths, &default_registry());
+    let bindings =
+        yttt::ui::interaction::actions::load_app_keybindings(&paths, &default_registry());
 
     assert!(paths.keybindings_file().exists());
     assert_eq!(bindings.len(), app_startup_keybindings().len());

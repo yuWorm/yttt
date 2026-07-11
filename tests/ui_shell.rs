@@ -4,17 +4,12 @@ use yttt::ui::app::workbench_window_options;
 use yttt::ui::components::{
     SelectableState, notification_tone_for_toast, selectable_state_classes,
 };
-use yttt::ui::font_options::{
-    SYSTEM_FONT_FAMILY_LABEL, font_family_option_for_setting, font_family_options_from_system,
-    font_family_setting_from_option, terminal_font_family_option_for_setting,
-    terminal_font_family_options_from_system, terminal_font_family_setting_from_option,
-};
 use yttt::ui::i18n::{Locale, UiText};
-use yttt::ui::icon_theme::IconTheme;
-use yttt::ui::overlay::{
+use yttt::ui::interaction::overlay::{
     KeyboardCapture, overlay_input_capture_policy, popover_overlay_event_policy,
 };
-use yttt::ui::palette_surface::{
+use yttt::ui::notifications::ToastTone;
+use yttt::ui::palette::surface::{
     PaletteFooterAction, PaletteRowTone, palette_footer_actions, palette_input_placeholder,
     palette_panel_style, palette_row_style, palette_scroll_anchor_index,
 };
@@ -32,18 +27,23 @@ use yttt::ui::primitives::{
     switch::yttt_switch_style,
     tabs::yttt_tabbar_style,
 };
+use yttt::ui::settings::font_options::{
+    SYSTEM_FONT_FAMILY_LABEL, font_family_option_for_setting, font_family_options_from_system,
+    font_family_setting_from_option, terminal_font_family_option_for_setting,
+    terminal_font_family_options_from_system, terminal_font_family_setting_from_option,
+};
 use yttt::ui::settings::{SettingsGroupId, settings_panel_style, settings_rows_for_group};
-use yttt::ui::sidebar::{project_layout_context_commands, project_sidebar_style};
-use yttt::ui::tabs::{
+use yttt::ui::terminal::pane::TerminalPaneView;
+use yttt::ui::theme::WorkbenchTheme;
+use yttt::ui::theme::icons::IconTheme;
+use yttt::ui::workbench::shell::sidebar::{project_layout_context_commands, project_sidebar_style};
+use yttt::ui::workbench::shell::tabs::{
     ProjectTabCloseButtonVisibility, ProjectTabLeadingIcon, ProjectTabStatusIndicator,
     ProjectTabToolbarPlacement, ProjectTabsToolbar, project_tabs, project_tabs_style,
     project_tree_toggle_icon, project_tree_toggle_tooltip, tab_toolbar_icon,
 };
-use yttt::ui::terminal_pane::TerminalPaneView;
-use yttt::ui::theme::WorkbenchTheme;
-use yttt::ui::titlebar::TitlebarInfo;
-use yttt::ui::toast::ToastTone;
-use yttt::{commands::CommandId, model::layout::SplitDirection, ui::root::RootView};
+use yttt::ui::workbench::shell::titlebar::TitlebarInfo;
+use yttt::{commands::CommandId, model::layout::SplitDirection, ui::workbench::WorkbenchView};
 
 #[test]
 fn workbench_theme_exposes_terminal_first_tokens() {
@@ -72,7 +72,7 @@ font_size = 15
     )
     .unwrap();
 
-    let root = RootView::with_config_paths(paths);
+    let root = WorkbenchView::with_config_paths(paths);
 
     assert_eq!(root.theme_runtime().terminal_settings.font_size, 15.0);
 }
@@ -138,7 +138,7 @@ fn titlebar_info_parts_use_compact_project_metadata() {
 
 #[test]
 fn split_resize_handle_style_uses_thin_visible_line() {
-    let style = RootView::visible_split_handle_style(SplitDirection::Horizontal);
+    let style = WorkbenchView::visible_split_handle_style(SplitDirection::Horizontal);
 
     assert_eq!(style.visible_line_width, gpui::px(1.0));
     assert!(style.hit_area_width >= gpui::px(5.0));

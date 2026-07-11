@@ -8,9 +8,11 @@ use crate::{
         workspace::{AgentStatus, OpenedProject, PaneProcessState, TabStartState, Workspace},
     },
     ui::{
-        agent_status::{is_agent_pane, pane_agent_status, project_agent_status, tab_agent_status},
         editor::{DocumentId, WorkItemId},
         i18n::{UiText, UiTextKey},
+        terminal::status::{
+            is_agent_pane, pane_agent_status, project_agent_status, tab_agent_status,
+        },
     },
 };
 

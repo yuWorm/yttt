@@ -14,8 +14,8 @@ use yttt::{
     ui::{
         components::SelectableState,
         editor::DocumentId,
+        palette::picker::{PalettePickerDelegate, PickerDelegate, PickerItem, PickerState},
         palette::visible_palette_rows,
-        picker::{PalettePickerDelegate, PickerDelegate, PickerItem, PickerState},
     },
 };
 
