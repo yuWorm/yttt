@@ -56,6 +56,10 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.project_file_watching_enabled {
+            self.active_project_file_watcher = None;
+            return;
+        }
         let Some((project_id, project_path)) =
             self.workspace.selected_project_id().and_then(|project_id| {
                 self.workspace

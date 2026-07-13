@@ -11,8 +11,8 @@ use tempfile::tempdir;
 use yttt::{
     commands::CommandId,
     config::{
-        keybindings::default_keybindings,
         default_layout::{BuiltinAgent, DefaultLayoutKind, DefaultLayoutTemplate},
+        keybindings::default_keybindings,
         paths::AppConfigPaths,
         settings::{
             AppSettings, EditorAutosave, LanguageSetting, load_or_create_settings, save_settings,
@@ -420,9 +420,10 @@ fn root_view_error_notification_close_button_dismisses_error(cx: &mut gpui::Test
     cx.refresh().unwrap();
 
     cx.read(|app| {
+        let message = root.read(app).visible_error_message();
         assert!(
-            root.read(app).visible_error_message().is_none(),
-            "clicking the close button should dismiss the error notification"
+            message.is_none(),
+            "clicking the close button should dismiss the error notification, got {message:?}"
         );
     });
 }

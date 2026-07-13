@@ -138,7 +138,10 @@ fn active_project_file_watcher_refreshes_tree_and_git_status(cx: &mut TestAppCon
     workspace.select_project(&project_id).unwrap();
 
     let (root, mut cx) = cx.add_window_view(|_, _| {
-        WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
+        let mut root =
+            WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths);
+        root.project_file_watching_enabled = true;
+        root
     });
     cx.run_until_parked();
     assert!(cx.read(|app| {

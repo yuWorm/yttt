@@ -416,7 +416,12 @@ fn spawn_reader<R: Read + Send + 'static>(
                 let Ok(mut buffer) = buffer_rx.recv() else {
                     break;
                 };
-                match reader.read(buffer.as_mut_slice()) {
+                let result = reader.read(buffer.as_mut_slice());
+                if cancelled.load(Ordering::Acquire) {
+                    let _ = buffer_tx.send(buffer);
+                    break;
+                }
+                match result {
                     Ok(0) => {
                         let _ = read_tx.send(PtyReadMessage::Eof);
                         break;
@@ -471,6 +476,12 @@ fn spawn_parser(
                         .recv()
                         .map_err(|_| flume::RecvTimeoutError::Disconnected)
                 };
+                if cancelled.load(Ordering::Acquire) {
+                    if let Ok(PtyReadMessage::Data(batch)) = message {
+                        let _ = buffer_tx.send(batch.buffer);
+                    }
+                    break;
+                }
                 match message {
                     Ok(PtyReadMessage::Data(batch)) => {
                         diagnostics.parser_batches.fetch_add(1, Ordering::Relaxed);

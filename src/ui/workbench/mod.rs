@@ -246,6 +246,7 @@ pub struct WorkbenchView {
     theme_runtime: ThemeRuntime,
     icon_theme: IconTheme,
     active_project_file_watcher: Option<ActiveProjectFileWatcher>,
+    project_file_watching_enabled: bool,
 }
 
 struct ActiveProjectFileWatcher {
@@ -448,6 +449,7 @@ impl WorkbenchView {
                 ..Default::default()
             },
             active_project_file_watcher: None,
+            project_file_watching_enabled: true,
             settings: SettingsControllerState::new(keybinding_warning_lines, keybindings_editor),
             last_opened_layout_file: None,
             last_opened_keybindings_file: None,
@@ -1604,7 +1606,9 @@ impl WorkbenchView {
         workspace
             .open_project(PathBuf::from("/tmp/yttt"), dev_fixture_layout())
             .expect("dev fixture layout should be valid");
-        Self::with_workspace(workspace)
+        let mut root = Self::with_workspace(workspace);
+        root.project_file_watching_enabled = false;
+        root
     }
 
     pub fn agent_exit_fixture() -> Self {
@@ -1615,18 +1619,26 @@ impl WorkbenchView {
                 agent_exit_fixture_layout(),
             )
             .expect("agent exit fixture layout should be valid");
-        Self::with_workspace(workspace)
+        let mut root = Self::with_workspace(workspace);
+        root.project_file_watching_enabled = false;
+        root
     }
 
     pub fn with_workspace_for_test(workspace: Workspace) -> Self {
-        Self::with_workspace(workspace)
+        let mut root = Self::with_workspace(workspace);
+        root.terminal.start_processes = false;
+        root.project_file_watching_enabled = false;
+        root
     }
 
     pub fn with_workspace_for_test_and_config_paths(
         workspace: Workspace,
         config_paths: AppConfigPaths,
     ) -> Self {
-        Self::with_workspace_and_config_paths(workspace, config_paths, false)
+        let mut root = Self::with_workspace_and_config_paths(workspace, config_paths, false);
+        root.terminal.start_processes = false;
+        root.project_file_watching_enabled = false;
+        root
     }
 
     fn with_workspace(workspace: Workspace) -> Self {

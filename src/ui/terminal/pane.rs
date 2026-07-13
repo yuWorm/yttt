@@ -1,4 +1,9 @@
-use std::{path::PathBuf, sync::atomic::Ordering, time::Duration};
+use std::{
+    io::{self, Read},
+    path::PathBuf,
+    sync::{atomic::Ordering, mpsc},
+    time::Duration,
+};
 
 use gpui::{
     Context, Entity, EventEmitter, IntoElement, Render, SharedString, Window, div, prelude::*,
@@ -127,6 +132,7 @@ pub struct TerminalPaneView {
     exit_emitted: bool,
     terminal_input_gate: TerminalInputGate,
     generation: u64,
+    idle_reader_release: Option<mpsc::Sender<()>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -153,11 +159,41 @@ fn accepts_process_exit(
     active_generation == callback_generation && !exit_emitted
 }
 
+struct IdleTerminalReader {
+    release: mpsc::Receiver<()>,
+}
+
+impl Read for IdleTerminalReader {
+    fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+        let _ = self.release.recv();
+        Ok(0)
+    }
+}
+
 impl TerminalPaneView {
     pub fn new(
         context: TerminalPaneContext,
         terminal_config: TerminalConfig,
         theme: WorkbenchTheme,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_with_processes(context, terminal_config, theme, true, cx)
+    }
+
+    pub(crate) fn new_without_processes(
+        context: TerminalPaneContext,
+        terminal_config: TerminalConfig,
+        theme: WorkbenchTheme,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_with_processes(context, terminal_config, theme, false, cx)
+    }
+
+    fn new_with_processes(
+        context: TerminalPaneContext,
+        terminal_config: TerminalConfig,
+        theme: WorkbenchTheme,
+        start_processes: bool,
         cx: &mut Context<Self>,
     ) -> Self {
         let TerminalPaneContext {
@@ -196,9 +232,32 @@ impl TerminalPaneView {
             exit_emitted: false,
             terminal_input_gate,
             generation: 0,
+            idle_reader_release: None,
         };
-        view.start_terminal(cx);
+        if start_processes {
+            view.start_terminal(cx);
+        } else {
+            view.start_idle_terminal(cx);
+        }
         view
+    }
+
+    fn start_idle_terminal(&mut self, cx: &mut Context<Self>) {
+        let (release, reader) = mpsc::channel();
+        let terminal_input_allowed = self.terminal_input_gate.shared_flag();
+        let config = self.terminal_config.clone();
+        self.terminal = Some(cx.new(|cx| {
+            TerminalView::new(
+                io::sink(),
+                IdleTerminalReader { release: reader },
+                config,
+                cx,
+            )
+            .with_key_handler(move |_event| !terminal_input_allowed.load(Ordering::SeqCst))
+        }));
+        self.idle_reader_release = Some(release);
+        self.lifecycle = PaneLifecycle::Running;
+        cx.notify();
     }
 
     fn set_runtime_title(&mut self, title: String, cx: &mut Context<Self>) {

@@ -425,7 +425,14 @@ impl WorkbenchView {
             };
             let terminal_config = self.theme_runtime.to_terminal_config();
             let theme = self.theme_runtime.ui;
-            let pane_view = cx.new(|cx| TerminalPaneView::new(context, terminal_config, theme, cx));
+            let start_processes = self.terminal.start_processes;
+            let pane_view = cx.new(|cx| {
+                if start_processes {
+                    TerminalPaneView::new(context, terminal_config, theme, cx)
+                } else {
+                    TerminalPaneView::new_without_processes(context, terminal_config, theme, cx)
+                }
+            });
             if pane_view.read(cx).is_running()
                 && let Err(error) = self.workspace.mark_pane_running(
                     &ProjectId::new(input.project_id),
