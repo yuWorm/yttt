@@ -39,8 +39,15 @@ pub enum ExitReason {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TerminalExecution {
-    Shell { shell: String, command: String },
-    Command { program: String, args: Vec<String> },
+    Shell {
+        shell: String,
+        command: String,
+    },
+    Command {
+        shell: String,
+        program: String,
+        args: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,12 +79,14 @@ impl TerminalSpawnRequest {
 
     pub fn for_command(
         pane_id: impl Into<String>,
+        shell: impl Into<String>,
         program: impl Into<String>,
         args: Vec<String>,
     ) -> Self {
         Self {
             pane_id: pane_id.into(),
             execution: TerminalExecution::Command {
+                shell: shell.into(),
                 program: program.into(),
                 args,
             },
@@ -464,15 +473,21 @@ fn command_builder(execution: &TerminalExecution, cwd: &Path) -> anyhow::Result<
             }
             builder
         }
-        TerminalExecution::Command { program, args } => {
+        TerminalExecution::Command {
+            shell,
+            program,
+            args,
+        } => {
+            let shell = shell.trim();
+            if shell.is_empty() {
+                anyhow::bail!("command shell cannot be empty");
+            }
             let program = program.trim();
             if program.is_empty() {
                 anyhow::bail!("command executable cannot be empty");
             }
 
-            let mut builder = CommandBuilder::new(program);
-            builder.args(args);
-            builder
+            command_execution_builder(shell, program, args)
         }
     };
     configure_terminal_environment(&mut builder);
@@ -495,13 +510,54 @@ pub fn configure_terminal_environment(builder: &mut CommandBuilder) {
     }
 }
 
-fn shell_execution_args(shell: &str, command: &str) -> Vec<String> {
-    let shell_name = shell
-        .replace('\\', "/")
-        .rsplit('/')
+fn command_execution_builder(shell: &str, program: &str, args: &[String]) -> CommandBuilder {
+    #[cfg(unix)]
+    {
+        let shell_name = shell_executable_name(shell);
+        if matches!(shell_name.as_str(), "fish" | "fish.exe") {
+            let mut builder = CommandBuilder::new(shell);
+            builder.args(["-lic", "exec $argv", "--", program]);
+            builder.args(args);
+            return builder;
+        }
+        if matches!(
+            shell_name.as_str(),
+            "sh" | "sh.exe"
+                | "ash"
+                | "ash.exe"
+                | "bash"
+                | "bash.exe"
+                | "dash"
+                | "dash.exe"
+                | "ksh"
+                | "ksh.exe"
+                | "mksh"
+                | "mksh.exe"
+                | "zsh"
+                | "zsh.exe"
+        ) {
+            let mut builder = CommandBuilder::new(shell);
+            builder.args(["-lic", "exec \"$@\"", "yttt-command", program]);
+            builder.args(args);
+            return builder;
+        }
+    }
+
+    let mut builder = CommandBuilder::new(program);
+    builder.args(args);
+    builder
+}
+
+fn shell_executable_name(shell: &str) -> String {
+    shell
+        .rsplit(['/', '\\'])
         .next()
         .unwrap_or(shell)
-        .to_ascii_lowercase();
+        .to_ascii_lowercase()
+}
+
+fn shell_execution_args(shell: &str, command: &str) -> Vec<String> {
+    let shell_name = shell_executable_name(shell);
 
     if matches!(shell_name.as_str(), "cmd" | "cmd.exe") {
         vec![
@@ -521,9 +577,23 @@ fn shell_execution_args(shell: &str, command: &str) -> Vec<String> {
         ]
     } else if matches!(
         shell_name.as_str(),
-        "bash" | "bash.exe" | "zsh" | "zsh.exe" | "fish" | "fish.exe"
+        "sh" | "sh.exe"
+            | "ash"
+            | "ash.exe"
+            | "bash"
+            | "bash.exe"
+            | "dash"
+            | "dash.exe"
+            | "fish"
+            | "fish.exe"
+            | "ksh"
+            | "ksh.exe"
+            | "mksh"
+            | "mksh.exe"
+            | "zsh"
+            | "zsh.exe"
     ) {
-        vec!["-lc".to_string(), command.to_string()]
+        vec!["-lic".to_string(), command.to_string()]
     } else {
         vec!["-c".to_string(), command.to_string()]
     }
@@ -538,15 +608,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn direct_execution_preserves_program_and_argument_boundaries() {
+    fn command_execution_preserves_arguments_and_uses_the_user_shell_environment() {
         let execution = TerminalExecution::Command {
+            shell: "/bin/zsh".to_string(),
             program: "npm".to_string(),
             args: vec!["run".to_string(), "dev server".to_string()],
         };
 
+        let expected = if cfg!(unix) {
+            vec![
+                "/bin/zsh",
+                "-lic",
+                "exec \"$@\"",
+                "yttt-command",
+                "npm",
+                "run",
+                "dev server",
+            ]
+        } else {
+            vec!["npm", "run", "dev server"]
+        };
         assert_eq!(
             argv(command_builder(&execution, Path::new("/tmp")).unwrap()),
-            vec!["npm", "run", "dev server"]
+            expected
         );
     }
     use crate::test_support::FakeReaperState;
@@ -614,7 +698,7 @@ mod tests {
 
         assert_eq!(
             argv(command_builder(&sh, Path::new("/tmp")).unwrap()),
-            vec!["/bin/sh", "-c", "echo ok"]
+            vec!["/bin/sh", "-lic", "echo ok"]
         );
         assert_eq!(
             argv(command_builder(&powershell, Path::new("/tmp")).unwrap()),

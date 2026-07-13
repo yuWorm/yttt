@@ -277,9 +277,11 @@ title = "Agent"
 layout = { type = "pane", id = "codex", title = "Codex", command = "codex", execution_mode = "command", exit_behavior = "manual_restart", kind = "agent", notify_on_exit = true, detector = "codex" }
 ```
 
-`execution_mode = "shell"` starts the default shell and passes the pane `command` to it; an empty
-command opens an interactive shell. `execution_mode = "command"` executes `command` directly as
-the program and passes `args` without shell expansion.
+`execution_mode = "shell"` starts the configured shell and passes the pane `command` to it; an
+empty command opens an interactive shell. On Unix, non-empty shell commands run in an interactive
+login shell. `execution_mode = "command"` uses that login shell to load the user's environment,
+then replaces it with `command`; `args` keep their argument boundaries and receive no shell
+expansion. Command stdout and stderr remain connected to the pane PTY.
 
 `exit_behavior` accepts `close`, `auto_restart`, or `manual_restart`. Automatic restarts wait
 500 ms before starting a fresh PTY, avoiding a tight respawn loop. Manual restart keeps the pane
