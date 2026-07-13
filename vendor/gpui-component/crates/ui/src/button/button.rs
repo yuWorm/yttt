@@ -930,12 +930,7 @@ impl ButtonVariant {
                     cx.theme().tokens.button_info_hover.into()
                 }
             }
-            Self::Custom(colors) => if outline {
-                colors.color.mix_oklab(cx.theme().transparent, 0.2)
-            } else {
-                colors.color.mix_oklab(cx.theme().transparent, 0.3)
-            }
-            .into(),
+            Self::Custom(colors) => colors.hover.into(),
             Self::Ghost => if cx.theme().mode.is_dark() {
                 cx.theme().secondary.lighten(0.1).opacity(0.8)
             } else {
@@ -1021,7 +1016,7 @@ impl ButtonVariant {
                     cx.theme().tokens.button_info_active.into()
                 }
             }
-            Self::Custom(colors) => colors.color.mix_oklab(cx.theme().transparent, 0.4).into(),
+            Self::Custom(colors) => colors.active.into(),
             Self::Link => cx.theme().transparent.into(),
             Self::Text => cx.theme().transparent.into(),
         };
@@ -1214,6 +1209,23 @@ mod tests {
             assert_eq!(selected_style.border, active_style.border);
             assert_eq!(selected_style.fg, cx.theme().danger);
             assert_ne!(selected_style.bg, cx.theme().tokens.danger_active.into());
+        });
+    }
+
+    #[gpui::test]
+    fn test_custom_variant_uses_configured_interaction_backgrounds(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::init);
+        let window = cx.add_empty_window();
+        window.update(|_, cx| {
+            let hover = cx.theme().success;
+            let active = cx.theme().danger;
+            let variant =
+                ButtonVariant::Custom(ButtonCustomVariant::new(cx).hover(hover).active(active));
+
+            for outline in [false, true] {
+                assert_eq!(variant.hovered(outline, cx).bg, hover.into());
+                assert_eq!(variant.active(outline, cx).bg, active.into());
+            }
         });
     }
 
