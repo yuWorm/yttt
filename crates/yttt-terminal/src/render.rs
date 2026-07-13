@@ -64,6 +64,7 @@ use crate::event::GpuiEventProxy;
 use crate::terminal::TerminalScrollbarMetrics;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
+use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::Colors;
@@ -304,11 +305,6 @@ impl TerminalRenderer {
         let mut current_bg: Option<BackgroundRect> = None;
 
         for (col, cell) in cells {
-            // Skip wide character spacers
-            if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
-                continue;
-            }
-
             // Extract cell styling
             let fg_color = self.palette.resolve(cell.fg, colors);
             let bg_color = self.palette.resolve(cell.bg, colors);
@@ -346,6 +342,12 @@ impl TerminalRenderer {
                     row,
                     color: bg_color,
                 });
+            }
+
+            // Wide-character spacers do not contain text, but they still carry
+            // the leading cell's background style and must fill the second cell.
+            if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                continue;
             }
 
             // Handle text runs
@@ -458,6 +460,31 @@ impl TerminalRenderer {
                 height: self.cell_height,
             },
         })
+    }
+
+    fn selection_columns(
+        selection: SelectionRange,
+        line: Line,
+        num_cols: usize,
+    ) -> Option<(usize, usize)> {
+        if num_cols == 0 || line < selection.start.line || line > selection.end.line {
+            return None;
+        }
+
+        let start_col = if selection.is_block || line == selection.start.line {
+            selection.start.column.0
+        } else {
+            0
+        };
+        let end_col = if selection.is_block || line == selection.end.line {
+            selection.end.column.0.saturating_add(1)
+        } else {
+            num_cols
+        };
+        let start_col = start_col.min(num_cols);
+        let end_col = end_col.min(num_cols);
+
+        (start_col < end_col).then_some((start_col, end_col))
     }
 
     pub(crate) fn paint_ime_text(
@@ -633,32 +660,28 @@ impl TerminalRenderer {
                 ));
             }
 
-            if let Some(selection_range) = selection_range {
-                for col_idx in 0..num_cols {
-                    let point = AlacPoint::new(grid_line, Column(col_idx));
-                    if !selection_range.contains(point) {
-                        continue;
-                    }
+            if let Some(selection_range) = selection_range
+                && let Some((start_col, end_col)) =
+                    Self::selection_columns(selection_range, grid_line, num_cols)
+            {
+                let x = origin.x + self.cell_width * (start_col as f32);
+                let y = origin.y + self.cell_height * (line_idx as f32);
+                let rect_bounds = Bounds {
+                    origin: Point { x, y },
+                    size: Size {
+                        width: self.cell_width * ((end_col - start_col) as f32),
+                        height: self.cell_height,
+                    },
+                };
 
-                    let x = origin.x + self.cell_width * (col_idx as f32);
-                    let y = origin.y + self.cell_height * (line_idx as f32);
-                    let rect_bounds = Bounds {
-                        origin: Point { x, y },
-                        size: Size {
-                            width: self.cell_width,
-                            height: self.cell_height,
-                        },
-                    };
-
-                    window.paint_quad(quad(
-                        rect_bounds,
-                        px(0.0),
-                        selection_background,
-                        Edges::<Pixels>::default(),
-                        transparent_black(),
-                        Default::default(),
-                    ));
-                }
+                window.paint_quad(quad(
+                    rect_bounds,
+                    px(0.0),
+                    selection_background,
+                    Edges::<Pixels>::default(),
+                    transparent_black(),
+                    Default::default(),
+                ));
             }
 
             // Calculate vertical offset to center text in cell
@@ -914,5 +937,77 @@ mod tests {
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].start_col, 0);
         assert_eq!(merged[0].end_col, 10);
+    }
+
+    #[test]
+    fn wide_character_backgrounds_cover_spacers_and_merge_contiguously() {
+        let renderer = TerminalRenderer::new(
+            "monospace".to_string(),
+            px(14.0),
+            1.2,
+            ColorPalette::default(),
+        );
+        let mut first = Cell::default();
+        first.c = '提';
+        first.bg = Color::Indexed(1);
+        first.flags.insert(Flags::WIDE_CHAR);
+        let mut first_spacer = first.clone();
+        first_spacer.c = ' ';
+        first_spacer.flags.remove(Flags::WIDE_CHAR);
+        first_spacer.flags.insert(Flags::WIDE_CHAR_SPACER);
+        let mut second = first.clone();
+        second.c = '交';
+        let second_spacer = first_spacer.clone();
+
+        let (backgrounds, text_runs) = renderer.layout_row(
+            0,
+            vec![
+                (0, first),
+                (1, first_spacer),
+                (2, second),
+                (3, second_spacer),
+            ]
+            .into_iter(),
+            &Colors::default(),
+        );
+
+        assert_eq!(backgrounds.len(), 1);
+        assert_eq!(backgrounds[0].start_col, 0);
+        assert_eq!(backgrounds[0].end_col, 4);
+        assert_eq!(text_runs.len(), 1);
+        assert_eq!(text_runs[0].text, "提交");
+    }
+
+    #[test]
+    fn selection_backgrounds_use_one_contiguous_span_per_line() {
+        let single_line = SelectionRange::new(
+            AlacPoint::new(Line(0), Column(2)),
+            AlacPoint::new(Line(0), Column(11)),
+            false,
+        );
+        assert_eq!(
+            TerminalRenderer::selection_columns(single_line, Line(0), 20),
+            Some((2, 12))
+        );
+
+        let multi_line = SelectionRange::new(
+            AlacPoint::new(Line(0), Column(5)),
+            AlacPoint::new(Line(2), Column(3)),
+            false,
+        );
+        assert_eq!(
+            TerminalRenderer::selection_columns(multi_line, Line(1), 20),
+            Some((0, 20))
+        );
+
+        let block = SelectionRange::new(
+            AlacPoint::new(Line(0), Column(2)),
+            AlacPoint::new(Line(2), Column(4)),
+            true,
+        );
+        assert_eq!(
+            TerminalRenderer::selection_columns(block, Line(1), 20),
+            Some((2, 5))
+        );
     }
 }
