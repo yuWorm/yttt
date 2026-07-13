@@ -16,6 +16,32 @@ Project
 The sidebar shows only currently opened projects. Recent projects are reachable from the
 project palette, not shown by default.
 
+## First Launch
+
+The first launch opens onboarding before the empty workspace. First choose one of two default
+layout types:
+
+- **Split view:** one tab with the coding agent on the left and an interactive shell on the right.
+- **Separate tabs:** one agent tab and one shell tab.
+
+Next choose the built-in coding agent: Codex (`codex`), Claude Code (`claude`), OpenCode
+(`opencode`), Pi (`pi`), or Oh My Pi (`omp`). The command palette remains available from both
+onboarding steps through its configured shortcut and the visible Command Palette action.
+
+Completing onboarding sets `general.onboarding_completed = true`; subsequent launches go directly
+to the workspace. Projects opened afterward inherit the generated global default unless they
+provide a project or personal layout override.
+
+For onboarding development or demos, force the flow even after it has been completed:
+
+```sh
+YTTT_FORCE_ONBOARDING=1 cargo run
+```
+
+`YTTT_FORCE_ONBOARDING` accepts `1`, `true`, `yes`, or `on` case-insensitively. The override does
+not clear the persisted completion marker; every normal launch remains forced only while the
+environment variable is enabled.
+
 ## Project Files and Editor
 
 Terminal tabs and project files share one tab strip. Opening a file creates a file tab;
@@ -84,6 +110,7 @@ The settings file is `<app config>/settings.toml`. These are the complete defaul
 ```toml
 [general]
 language = "system"
+onboarding_completed = false
 
 [theme]
 name = "yttt-dark"

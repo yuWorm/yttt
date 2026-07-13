@@ -12,13 +12,16 @@ use yttt::{
     commands::CommandId,
     config::{
         keybindings::default_keybindings,
+        default_layout::{BuiltinAgent, DefaultLayoutKind, DefaultLayoutTemplate},
         paths::AppConfigPaths,
         settings::{
             AppSettings, EditorAutosave, LanguageSetting, load_or_create_settings, save_settings,
         },
     },
     model::{
-        layout::{PaneKind, ProcessExitBehavior, SplitDirection, TerminalExecutionMode},
+        layout::{
+            LayoutNode, PaneKind, ProcessExitBehavior, SplitDirection, TerminalExecutionMode,
+        },
         split_tree::ResizeDirection,
         workspace::{AgentStatus, PaneProcessState, Workspace},
     },
@@ -591,6 +594,204 @@ fn root_view_agent_exit_fixture_contains_sample_project() {
     let root = WorkbenchView::agent_exit_fixture();
 
     assert_eq!(root.workspace().opened_projects().len(), 1);
+}
+
+#[test]
+fn first_run_onboarding_persists_separate_tabs_and_does_not_repeat() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = WorkbenchView::with_config_paths(paths.clone());
+
+    assert_eq!(
+        root.onboarding_layout_kind(),
+        Some(DefaultLayoutKind::SplitPane)
+    );
+    assert_eq!(root.onboarding_agent(), Some(BuiltinAgent::Codex));
+    assert!(root.complete_onboarding().is_err());
+
+    root.select_onboarding_agent(BuiltinAgent::OpenCode);
+    assert_eq!(root.onboarding_agent(), Some(BuiltinAgent::Codex));
+    root.select_onboarding_layout(DefaultLayoutKind::SeparateTabs);
+    root.advance_onboarding();
+    root.select_onboarding_agent(BuiltinAgent::OpenCode);
+    root.complete_onboarding().unwrap();
+
+    assert_eq!(root.onboarding_agent(), None);
+    assert_eq!(root.onboarding_layout_kind(), None);
+    assert!(
+        load_or_create_settings(&paths)
+            .unwrap()
+            .settings
+            .general
+            .onboarding_completed
+    );
+
+    let template: DefaultLayoutTemplate =
+        toml::from_str(&fs::read_to_string(paths.default_layout_file()).unwrap()).unwrap();
+    assert_eq!(template.project.default_tab.as_deref(), Some("agent"));
+    assert_eq!(template.tabs.len(), 2);
+    let LayoutNode::Pane(agent) = &template.tabs[0].layout else {
+        panic!("first saved tab should contain the selected agent");
+    };
+    assert_eq!(agent.command, "opencode");
+    assert_eq!(agent.kind, PaneKind::Agent);
+    assert!(matches!(&template.tabs[1].layout, LayoutNode::Pane(shell) if shell.id == "shell"));
+
+    let restarted = WorkbenchView::with_config_paths(paths);
+    assert_eq!(restarted.onboarding_agent(), None);
+}
+
+#[test]
+fn first_run_onboarding_persists_split_view() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = WorkbenchView::with_config_paths(paths.clone());
+
+    root.advance_onboarding();
+    root.select_onboarding_agent(BuiltinAgent::Claude);
+    root.complete_onboarding().unwrap();
+
+    let template: DefaultLayoutTemplate =
+        toml::from_str(&fs::read_to_string(paths.default_layout_file()).unwrap()).unwrap();
+    assert_eq!(template.project.default_tab.as_deref(), Some("workspace"));
+    assert_eq!(template.tabs.len(), 1);
+    let LayoutNode::Split(split) = &template.tabs[0].layout else {
+        panic!("saved split view should contain one split tab");
+    };
+    assert!(matches!(split.left.as_ref(), LayoutNode::Pane(agent) if agent.command == "claude"));
+    assert!(matches!(split.right.as_ref(), LayoutNode::Pane(shell) if shell.id == "shell"));
+}
+
+#[test]
+fn force_onboarding_overrides_the_persisted_completion_marker() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut settings = AppSettings::default();
+    settings.general.onboarding_completed = true;
+    save_settings(&paths, &settings).unwrap();
+
+    let normal = WorkbenchView::with_config_paths(paths.clone());
+    assert_eq!(normal.onboarding_layout_kind(), None);
+
+    let forced = WorkbenchView::with_config_paths_and_force_onboarding(paths.clone(), true);
+    assert_eq!(
+        forced.onboarding_layout_kind(),
+        Some(DefaultLayoutKind::SplitPane)
+    );
+    assert!(
+        load_or_create_settings(&paths)
+            .unwrap()
+            .settings
+            .general
+            .onboarding_completed
+    );
+}
+
+#[gpui::test]
+fn first_run_onboarding_selects_layout_before_agent(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let view_paths = paths.clone();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths(view_paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("onboarding-layout-split").is_some());
+    assert!(cx.debug_bounds("onboarding-layout-tabs").is_some());
+    assert!(cx.debug_bounds("onboarding-agent-codex").is_none());
+    assert!(cx.debug_bounds("onboarding-next").is_some());
+    assert!(cx.debug_bounds("onboarding-complete").is_none());
+
+    let command_palette = cx
+        .debug_bounds("onboarding-open-command-palette")
+        .expect("command palette hint should be actionable");
+    cx.simulate_click(command_palette.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).active_palette().map(|palette| palette.kind),
+            Some(PaletteKind::Command)
+        );
+    });
+    root.update(cx, |root, cx| {
+        root.close_palette();
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    let tabs = cx
+        .debug_bounds("onboarding-layout-tabs")
+        .expect("separate tabs layout should render");
+    cx.simulate_click(tabs.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).onboarding_layout_kind(),
+            Some(DefaultLayoutKind::SeparateTabs)
+        );
+    });
+
+    let next = cx
+        .debug_bounds("onboarding-next")
+        .expect("layout step should expose next");
+    cx.simulate_click(next.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("onboarding-layout-split").is_none());
+    for (agent, selector) in [
+        ("codex", "onboarding-agent-codex"),
+        ("claude", "onboarding-agent-claude"),
+        ("opencode", "onboarding-agent-opencode"),
+        ("pi", "onboarding-agent-pi"),
+        ("omp", "onboarding-agent-omp"),
+    ] {
+        assert!(
+            cx.debug_bounds(selector).is_some(),
+            "{agent} choice should render on the second step"
+        );
+    }
+
+    let back = cx
+        .debug_bounds("onboarding-back")
+        .expect("agent step should allow returning to layouts");
+    cx.simulate_click(back.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("onboarding-layout-tabs").is_some());
+    let next = cx.debug_bounds("onboarding-next").unwrap();
+    cx.simulate_click(next.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+
+    let opencode = cx
+        .debug_bounds("onboarding-agent-opencode")
+        .expect("OpenCode choice should render");
+    cx.simulate_click(opencode.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).onboarding_agent(),
+            Some(BuiltinAgent::OpenCode)
+        );
+    });
+
+    let complete = cx
+        .debug_bounds("onboarding-complete")
+        .expect("agent step should expose completion");
+    cx.simulate_click(complete.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.read(|app| assert_eq!(root.read(app).onboarding_agent(), None));
+    assert!(
+        load_or_create_settings(&paths)
+            .unwrap()
+            .settings
+            .general
+            .onboarding_completed
+    );
 }
 
 #[test]

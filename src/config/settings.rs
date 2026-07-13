@@ -49,12 +49,14 @@ pub enum LanguageSetting {
 #[serde(default)]
 pub struct GeneralSettings {
     pub language: LanguageSetting,
+    pub onboarding_completed: bool,
 }
 
 impl Default for GeneralSettings {
     fn default() -> Self {
         Self {
             language: LanguageSetting::System,
+            onboarding_completed: false,
         }
     }
 }

@@ -27,6 +27,7 @@ pub mod layout_editor;
 mod layout_editor_controller;
 #[cfg(test)]
 mod non_destructive_tests;
+mod onboarding;
 mod palette;
 mod project_files;
 mod render;
@@ -38,6 +39,7 @@ mod surface;
 use dialogs::*;
 use git::*;
 use helpers::*;
+use onboarding::*;
 use render::{push_component_notification, split_child};
 use settings::{settings_button, settings_overlay};
 use state::{
@@ -84,7 +86,10 @@ use crate::{
         default_registry, dispatch_workspace_command,
     },
     config::{
-        default_layout::{DefaultLayoutState, DefaultLayoutTemplate, LayoutLoadWarning},
+        default_layout::{
+            BuiltinAgent, DefaultLayoutKind, DefaultLayoutState, DefaultLayoutTemplate,
+            LayoutLoadWarning,
+        },
         keybindings::{
             KeybindingLoadWarning, KeybindingsLoadError, ensure_keybindings_file, load_keybindings,
         },
@@ -216,6 +221,7 @@ pub struct WorkbenchView {
     workspace: Workspace,
     config_paths: AppConfigPaths,
     default_layout_state: DefaultLayoutState,
+    onboarding: Option<OnboardingState>,
     palette: PaletteControllerState,
     command_registry: CommandRegistry,
     load_error: Option<String>,
@@ -348,18 +354,32 @@ impl WorkbenchView {
     }
 
     pub fn with_config_paths(config_paths: AppConfigPaths) -> Self {
-        Self::with_workspace_and_config_paths(Workspace::new(), config_paths)
+        Self::with_config_paths_and_force_onboarding(config_paths, false)
     }
 
-    pub fn from_startup_env() -> Self {
-        let mut root = Self::new();
+    pub fn with_config_paths_and_force_onboarding(
+        config_paths: AppConfigPaths,
+        force_onboarding: bool,
+    ) -> Self {
+        Self::with_workspace_and_config_paths(Workspace::new(), config_paths, force_onboarding)
+    }
+
+    pub fn from_startup_env(force_onboarding: bool) -> Self {
+        let mut root = Self::with_config_paths_and_force_onboarding(
+            AppConfigPaths::for_app(),
+            force_onboarding,
+        );
         if let Some(project_path) = std::env::var_os("YTTT_OPEN_PROJECT") {
             let _ = root.open_project_path(PathBuf::from(project_path));
         }
         root
     }
 
-    fn with_workspace_and_config_paths(workspace: Workspace, config_paths: AppConfigPaths) -> Self {
+    fn with_workspace_and_config_paths(
+        workspace: Workspace,
+        config_paths: AppConfigPaths,
+        force_onboarding: bool,
+    ) -> Self {
         let default_layout_state = DefaultLayoutState::load_or_create(&config_paths);
         let command_registry = default_registry();
         let recent_projects = load_recent_projects(&config_paths)
@@ -397,6 +417,9 @@ impl WorkbenchView {
             layout_load_warning_message(default_layout_state.warnings()),
         );
         let system_notifications_enabled = app_settings.notifications.system;
+        let onboarding = ((force_onboarding || !app_settings.general.onboarding_completed)
+            && workspace.opened_projects().is_empty())
+        .then(OnboardingState::default);
         let mut project_editor_runtime = ProjectEditorRuntime::default();
         for project in workspace.opened_projects() {
             let selected_terminal_id = project
@@ -416,6 +439,7 @@ impl WorkbenchView {
             workspace,
             config_paths,
             default_layout_state,
+            onboarding,
             palette: PaletteControllerState::new(recent_projects),
             command_registry,
             load_error,
@@ -452,6 +476,68 @@ impl WorkbenchView {
 
     pub fn workspace_mut(&mut self) -> &mut Workspace {
         &mut self.workspace
+    }
+
+    pub fn onboarding_agent(&self) -> Option<BuiltinAgent> {
+        self.onboarding.map(|state| state.selected_agent)
+    }
+
+    pub fn onboarding_layout_kind(&self) -> Option<DefaultLayoutKind> {
+        self.onboarding.map(|state| state.selected_layout)
+    }
+
+    pub fn select_onboarding_layout(&mut self, layout_kind: DefaultLayoutKind) {
+        if let Some(state) = &mut self.onboarding
+            && state.step == OnboardingStep::Layout
+        {
+            state.selected_layout = layout_kind;
+        }
+    }
+
+    pub fn advance_onboarding(&mut self) {
+        if let Some(state) = &mut self.onboarding
+            && state.step == OnboardingStep::Layout
+        {
+            state.step = OnboardingStep::Agent;
+        }
+    }
+
+    pub fn return_to_onboarding_layout(&mut self) {
+        if let Some(state) = &mut self.onboarding {
+            state.step = OnboardingStep::Layout;
+        }
+    }
+
+    pub fn select_onboarding_agent(&mut self, agent: BuiltinAgent) {
+        if let Some(state) = &mut self.onboarding
+            && state.step == OnboardingStep::Agent
+        {
+            state.selected_agent = agent;
+        }
+    }
+
+    pub fn complete_onboarding(&mut self) -> Result<(), String> {
+        let Some(state) = self.onboarding else {
+            return Ok(());
+        };
+        if state.step != OnboardingStep::Agent {
+            return Err("select an agent before completing onboarding".to_string());
+        }
+
+        self.default_layout_state
+            .save(DefaultLayoutTemplate::for_onboarding(
+                state.selected_layout,
+                state.selected_agent,
+            ))
+            .map_err(|error| error.to_string())?;
+
+        let mut settings = self.app_settings.clone();
+        settings.general.onboarding_completed = true;
+        save_settings(&self.config_paths, &settings).map_err(|error| error.to_string())?;
+
+        self.app_settings = settings;
+        self.onboarding = None;
+        Ok(())
     }
 
     pub fn select_project(&mut self, project_id: &ProjectId) -> Result<(), WorkbenchError> {
@@ -1540,11 +1626,11 @@ impl WorkbenchView {
         workspace: Workspace,
         config_paths: AppConfigPaths,
     ) -> Self {
-        Self::with_workspace_and_config_paths(workspace, config_paths)
+        Self::with_workspace_and_config_paths(workspace, config_paths, false)
     }
 
     fn with_workspace(workspace: Workspace) -> Self {
-        Self::with_workspace_and_config_paths(workspace, AppConfigPaths::for_app())
+        Self::with_workspace_and_config_paths(workspace, AppConfigPaths::for_app(), false)
     }
 
     fn request_close_selected_project(&mut self) -> Result<CloseProjectDecision, WorkbenchError> {

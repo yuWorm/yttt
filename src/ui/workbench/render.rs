@@ -11,10 +11,21 @@ impl Render for WorkbenchView {
         self.flush_pending_project_close_requests(cx);
         self.sync_input_owner_state();
         let focus_handle = self.workbench_focus_handle(cx);
-        let default_active_content_focus_requested = !focus_handle.contains_focused(window, cx)
+        let default_active_content_focus_requested = self.onboarding.is_none()
+            && !focus_handle.contains_focused(window, cx)
             && self.queue_default_active_work_item_focus();
 
-        let body = if self.workspace.opened_projects().is_empty() {
+        let body = if let Some(onboarding) = self.onboarding {
+            let command_palette_keybinding =
+                self.display_keybinding_for_command(CommandId::CommandPaletteOpen);
+            onboarding_view(
+                cx,
+                onboarding,
+                &self.ui_text,
+                self.theme_runtime.ui,
+                command_palette_keybinding,
+            )
+        } else if self.workspace.opened_projects().is_empty() {
             empty_workspace(cx, &self.ui_text, &self.theme_runtime.ui)
         } else {
             let tab_items = self.workbench_tab_items(cx);

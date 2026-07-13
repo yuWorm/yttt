@@ -16,7 +16,9 @@ use crate::{
         theme::{ThemeStore, load_theme_store},
     },
     ui::{
-        app::startup::{StartupMode, startup_mode_from_fixture},
+        app::startup::{
+            FORCE_ONBOARDING_ENV, StartupMode, force_onboarding_from_env, startup_mode_from_fixture,
+        },
         interaction::actions::app_startup_keybindings,
         theme::ThemeRuntime,
         workbench::WorkbenchView,
@@ -43,12 +45,15 @@ pub fn run() {
             let bounds = Bounds::centered(None, size(px(960.0), px(640.0)), cx);
             cx.open_window(workbench_window_options(bounds), |window, cx| {
                 let view = cx.new(|_| {
+                    let force_onboarding = force_onboarding_from_env(
+                        std::env::var(FORCE_ONBOARDING_ENV).ok().as_deref(),
+                    );
                     match startup_mode_from_fixture(
                         std::env::var("YTTT_DEV_FIXTURE").ok().as_deref(),
                     ) {
                         StartupMode::DevFixture => WorkbenchView::dev_fixture(),
                         StartupMode::AgentExitFixture => WorkbenchView::agent_exit_fixture(),
-                        StartupMode::Normal => WorkbenchView::from_startup_env(),
+                        StartupMode::Normal => WorkbenchView::from_startup_env(force_onboarding),
                     }
                 });
                 let runtime_keybinding_view = view.clone();
