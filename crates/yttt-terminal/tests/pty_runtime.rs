@@ -47,6 +47,7 @@ fn spawn_request_records_size_and_working_directory() {
 fn direct_command_request_preserves_program_and_argument_boundaries() {
     let request = TerminalSpawnRequest::for_command(
         "pane",
+        "zsh",
         "npm",
         vec!["run".to_string(), "dev server".to_string()],
     );
@@ -54,9 +55,35 @@ fn direct_command_request_preserves_program_and_argument_boundaries() {
     assert_eq!(
         request.execution,
         TerminalExecution::Command {
+            shell: "zsh".to_string(),
             program: "npm".to_string(),
             args: vec!["run".to_string(), "dev server".to_string()],
         }
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn command_mode_exposes_program_output_through_the_pty() {
+    use std::io::Read as _;
+
+    let mut session = spawn_portable_pty_session(TerminalSpawnRequest::for_command(
+        "probe",
+        "/bin/sh",
+        "printf",
+        vec!["rendered-through-pty".to_string()],
+    ))
+    .unwrap();
+    let mut io = session.take_io().unwrap();
+    let mut output = String::new();
+
+    io.reader.read_to_string(&mut output).unwrap();
+    let status = session.finish(ExitReason::Completed).unwrap();
+
+    assert_eq!(status, ProcessStatus::Exited { code: Some(0) });
+    assert!(
+        output.contains("rendered-through-pty"),
+        "PTY output did not contain the command output: {output:?}"
     );
 }
 

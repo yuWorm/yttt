@@ -281,9 +281,12 @@ impl TerminalPaneView {
             TerminalExecutionMode::Shell => {
                 TerminalSpawnRequest::for_shell(&self.pane_id, &self.shell, &self.command)
             }
-            TerminalExecutionMode::Command => {
-                TerminalSpawnRequest::for_command(&self.pane_id, &self.command, self.args.clone())
-            }
+            TerminalExecutionMode::Command => TerminalSpawnRequest::for_command(
+                &self.pane_id,
+                &self.shell,
+                &self.command,
+                self.args.clone(),
+            ),
         };
         request.cwd(self.project_path.clone())
     }
