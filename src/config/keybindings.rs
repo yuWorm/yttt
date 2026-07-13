@@ -1,6 +1,12 @@
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use crate::{commands::CommandRegistry, config::paths::AppConfigPaths};
+
+pub const KEYBINDINGS_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub struct Keybinding {
@@ -8,10 +14,21 @@ pub struct Keybinding {
     pub command: String,
 }
 
-#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub struct KeybindingsConfig {
     #[serde(default)]
+    pub schema_version: u32,
+    #[serde(default)]
     pub bindings: Vec<Keybinding>,
+}
+
+impl Default for KeybindingsConfig {
+    fn default() -> Self {
+        Self {
+            schema_version: KEYBINDINGS_SCHEMA_VERSION,
+            bindings: Vec::new(),
+        }
+    }
 }
 
 impl KeybindingsConfig {
@@ -86,13 +103,13 @@ pub enum KeybindingsLoadError {
         path: PathBuf,
         source: toml::de::Error,
     },
-    #[error("failed to serialize default keybindings at {path}: {source}")]
-    SerializeDefaults {
+    #[error("failed to serialize keybindings config at {path}: {source}")]
+    SerializeConfig {
         path: PathBuf,
         source: toml::ser::Error,
     },
-    #[error("failed to write default keybindings at {path}: {source}")]
-    WriteDefaults {
+    #[error("failed to write keybindings config at {path}: {source}")]
+    WriteConfig {
         path: PathBuf,
         source: std::io::Error,
     },
@@ -131,6 +148,7 @@ pub fn load_keybindings(
             path: path.clone(),
             source,
         })?;
+    let config = migrate_keybindings_config(&path, config)?;
 
     Ok(LoadedKeybindings {
         warnings: keybinding_warnings(&config, registry),
@@ -180,22 +198,57 @@ pub fn ensure_keybindings_file(paths: &AppConfigPaths) -> Result<PathBuf, Keybin
         })?;
     }
 
-    let source = toml::to_string_pretty(&default_keybindings()).map_err(|source| {
-        KeybindingsLoadError::SerializeDefaults {
-            path: path.clone(),
-            source,
-        }
-    })?;
-    fs::write(&path, source).map_err(|source| KeybindingsLoadError::WriteDefaults {
-        path: path.clone(),
-        source,
-    })?;
+    write_keybindings_config(&path, &default_keybindings())?;
 
     Ok(path)
 }
 
+fn migrate_keybindings_config(
+    path: &Path,
+    mut config: KeybindingsConfig,
+) -> Result<KeybindingsConfig, KeybindingsLoadError> {
+    if config.schema_version >= KEYBINDINGS_SCHEMA_VERSION {
+        return Ok(config);
+    }
+
+    if config.schema_version == 0 && config.bindings == legacy_default_bindings() {
+        config = default_keybindings();
+    } else {
+        config.schema_version = KEYBINDINGS_SCHEMA_VERSION;
+    }
+    write_keybindings_config(path, &config)?;
+    Ok(config)
+}
+
+fn legacy_default_bindings() -> Vec<Keybinding> {
+    let mut bindings = default_keybindings().bindings;
+    bindings.retain(|binding| {
+        !matches!(
+            binding.command.as_str(),
+            "file.save" | "project_panel.toggle"
+        )
+    });
+    bindings
+}
+
+fn write_keybindings_config(
+    path: &Path,
+    config: &KeybindingsConfig,
+) -> Result<(), KeybindingsLoadError> {
+    let source =
+        toml::to_string_pretty(config).map_err(|source| KeybindingsLoadError::SerializeConfig {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    fs::write(path, source).map_err(|source| KeybindingsLoadError::WriteConfig {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
 pub fn default_keybindings() -> KeybindingsConfig {
     KeybindingsConfig {
+        schema_version: KEYBINDINGS_SCHEMA_VERSION,
         bindings: vec![
             binding("cmd-o", "project.open"),
             binding("ctrl-o", "project.open"),

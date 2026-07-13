@@ -11,6 +11,7 @@ use tempfile::tempdir;
 use yttt::{
     commands::CommandId,
     config::{
+        keybindings::default_keybindings,
         paths::AppConfigPaths,
         settings::{
             AppSettings, EditorAutosave, LanguageSetting, load_or_create_settings, save_settings,
@@ -1126,6 +1127,19 @@ fn root_view_file_save_preserves_newer_in_flight_edit(cx: &mut gpui::TestAppCont
     };
     let expected_document_id = document_id.clone();
     let paths = english_test_config_paths(&temp);
+    let mut legacy_keybindings = default_keybindings();
+    legacy_keybindings.schema_version = 0;
+    legacy_keybindings.bindings.retain(|binding| {
+        !matches!(
+            binding.command.as_str(),
+            "file.save" | "project_panel.toggle"
+        )
+    });
+    fs::write(
+        paths.keybindings_file(),
+        toml::to_string_pretty(&legacy_keybindings).unwrap(),
+    )
+    .unwrap();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
@@ -1184,7 +1198,7 @@ fn root_view_file_save_preserves_newer_in_flight_edit(cx: &mut gpui::TestAppCont
     });
 
     root.update(cx, |root, cx| {
-        root.run_command(CommandId::FileSave).unwrap();
+        assert!(root.dispatch_runtime_keybinding(&Keystroke::parse("ctrl-s").unwrap()));
         assert_eq!(root.pending_document_save_count(), 1);
         cx.notify();
     });
