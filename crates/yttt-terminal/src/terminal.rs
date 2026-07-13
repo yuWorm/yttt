@@ -1,6 +1,6 @@
 //! Shared Alacritty terminal state.
 //!
-//! [`TerminalState`] owns the `Arc<Mutex<Term<_>>>`, terminal dimensions, and framework-neutral
+//! [`TerminalState`] owns the `Arc<FairMutex<Term<_>>>`, terminal dimensions, and framework-neutral
 //! state adapters. Production VTE parsing is intentionally not owned here: the PTY parser
 //! coordinator owns its processor and locks the shared `Term` only while applying a read batch.
 //! Rendering locks the same `Term` only long enough to build a semantic snapshot and reset
@@ -12,11 +12,11 @@ use crate::event::GpuiEventProxy;
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Point as AlacPoint, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
+use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::{Config, Term, TermMode};
 #[cfg(test)]
 use alacritty_terminal::vte::ansi::Processor;
-use parking_lot::Mutex;
 use std::sync::Arc;
 
 /// Simple dimensions implementation for terminal initialization.
@@ -56,9 +56,8 @@ impl Dimensions for TermDimensions {
 
 /// Thread-safe terminal state wrapper.
 ///
-/// This struct wraps alacritty's [`Term`] in an
-/// `Arc<parking_lot::Mutex<>>` to allow safe concurrent access from multiple threads.
-/// It also manages the VTE parser for processing incoming bytes from the PTY.
+/// This struct wraps alacritty's [`Term`] in its starvation-resistant
+/// [`FairMutex`] so the parser cannot repeatedly reacquire the grid ahead of the GPUI thread.
 ///
 /// # Thread Safety
 ///
@@ -68,7 +67,7 @@ impl Dimensions for TermDimensions {
 /// - Use [`with_term`](Self::with_term) for read access to the grid
 /// - Use [`with_term_mut`](Self::with_term_mut) for write access
 ///
-/// The mutex is held only for the duration of the closure, minimizing contention.
+/// The mutex is held only for the duration of the closure.
 ///
 /// # Grid Access
 ///
@@ -85,12 +84,12 @@ impl Dimensions for TermDimensions {
 ///
 /// # Performance Notes
 ///
-/// - `parking_lot::Mutex` is used for faster locking than `std::sync::Mutex`
-/// - Lock contention is minimized by keeping critical sections short
+/// - Alacritty's [`FairMutex`] prevents continuous PTY output from starving rendering and input
+/// - Critical sections stay bounded to one parser batch or one semantic render snapshot
 /// - The VTE parser state is kept outside the mutex (only accessed from one thread)
 pub struct TerminalState {
     /// The underlying alacritty terminal emulator.
-    term: Arc<Mutex<Term<GpuiEventProxy>>>,
+    term: Arc<FairMutex<Term<GpuiEventProxy>>>,
 
     #[cfg(test)]
     parser: Processor,
@@ -193,7 +192,7 @@ impl TerminalState {
         let term = Term::new(config, &dimensions, event_proxy);
 
         Self {
-            term: Arc::new(Mutex::new(term)),
+            term: Arc::new(FairMutex::new(term)),
             #[cfg(test)]
             parser: Processor::new(),
             cols,
@@ -432,8 +431,8 @@ impl TerminalState {
     ///
     /// # Returns
     ///
-    /// A cloned `Arc<Mutex<Term<GpuiEventProxy>>>`.
-    pub fn term_arc(&self) -> Arc<Mutex<Term<GpuiEventProxy>>> {
+    /// A cloned `Arc<FairMutex<Term<GpuiEventProxy>>>`.
+    pub fn term_arc(&self) -> Arc<FairMutex<Term<GpuiEventProxy>>> {
         Arc::clone(&self.term)
     }
 }

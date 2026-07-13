@@ -227,55 +227,63 @@ impl TerminalRenderSnapshot {
             }
         }
 
-        let content = term.renderable_content();
-        let display_offset = content.display_offset;
-        let default_background =
-            palette.resolve(Color::Named(NamedColor::Background), content.colors);
-        let default_foreground =
-            palette.resolve(Color::Named(NamedColor::Foreground), content.colors);
+        let (display_offset, selection, cursor, colors, mode) = {
+            let content = term.renderable_content();
+            (
+                content.display_offset,
+                content.selection,
+                content.cursor,
+                *content.colors,
+                content.mode,
+            )
+        };
+        let default_background = palette.resolve(Color::Named(NamedColor::Background), &colors);
+        let default_foreground = palette.resolve(Color::Named(NamedColor::Foreground), &colors);
         let history_size = term.grid().total_lines().saturating_sub(screen_lines);
-        let cursor_grid_point = content.cursor.point;
+        let cursor_grid_point = cursor.point;
         let cursor_viewport = term::point_to_viewport(display_offset, cursor_grid_point);
-        let mut cursor_shape = content.cursor.shape;
+        let mut cursor_shape = cursor.shape;
         if !cursor_visible || cursor_viewport.is_none() {
             cursor_shape = CursorShape::Hidden;
         } else if !focused && cursor_unfocused_hollow && cursor_shape == CursorShape::Block {
             cursor_shape = CursorShape::HollowBlock;
         }
 
-        let mut rows = (0..screen_lines)
-            .map(|row| RenderableRow {
-                line: Line(row as i32 - display_offset as i32),
-                cells: Vec::with_capacity(cols),
-                generation,
-            })
-            .collect::<Vec<_>>();
+        let mut rows = Vec::with_capacity(damaged_rows.iter().filter(|damaged| **damaged).count());
+        {
+            let grid = term.grid();
+            for (viewport_row, damaged) in damaged_rows.iter().copied().enumerate() {
+                if !damaged {
+                    continue;
+                }
 
-        for indexed in content.display_iter {
-            let viewport_line = indexed.point.line.0 + display_offset as i32;
-            if !(0..screen_lines as i32).contains(&viewport_line)
-                || !damaged_rows[viewport_line as usize]
-            {
-                continue;
+                let line = Line(viewport_row as i32 - display_offset as i32);
+                let mut row = RenderableRow {
+                    line,
+                    cells: Vec::with_capacity(cols),
+                    generation,
+                };
+                for column in 0..cols {
+                    let point = AlacPoint::new(line, Column(column));
+                    row.cells.push(resolve_cell(
+                        Indexed {
+                            point,
+                            cell: &grid[point],
+                        },
+                        selection,
+                        cursor_grid_point,
+                        cursor_shape,
+                        mode,
+                        &colors,
+                        palette,
+                        overlays,
+                        default_foreground,
+                        default_background,
+                    ));
+                }
+                rows.push(row);
             }
-            let cell = resolve_cell(
-                indexed,
-                content.selection,
-                cursor_grid_point,
-                cursor_shape,
-                content.mode,
-                content.colors,
-                palette,
-                overlays,
-                default_foreground,
-                default_background,
-            );
-            rows[viewport_line as usize].cells.push(cell);
         }
-        rows.retain(|row| {
-            let viewport_line = row.line.0 + display_offset as i32;
-            viewport_line >= 0 && damaged_rows[viewport_line as usize]
-        });
 
         let cursor_point = cursor_viewport.unwrap_or_else(|| AlacPoint::new(0, Column(0)));
         let cursor_cell = rows
@@ -283,8 +291,7 @@ impl TerminalRenderSnapshot {
             .find(|row| row.line == cursor_grid_point.line)
             .and_then(|row| row.cells.get_mut(cursor_point.column.0));
         let (cursor_color, text_color, cursor_width) = if let Some(cell) = cursor_cell {
-            let mut cursor_color =
-                palette.resolve(Color::Named(NamedColor::Cursor), content.colors);
+            let mut cursor_color = palette.resolve(Color::Named(NamedColor::Cursor), &colors);
             let mut text_color = palette.cursor_text().unwrap_or(cell.background);
             if contrast(cursor_color, cell.background) < 1.5 {
                 cursor_color = default_foreground;
@@ -298,7 +305,7 @@ impl TerminalRenderSnapshot {
             (cursor_color, text_color, width)
         } else {
             (
-                palette.resolve(Color::Named(NamedColor::Cursor), content.colors),
+                palette.resolve(Color::Named(NamedColor::Cursor), &colors),
                 default_background,
                 NonZeroU32::new(1).unwrap(),
             )

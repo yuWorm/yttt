@@ -999,6 +999,13 @@ impl TerminalView {
     }
 
     fn restart_cursor_blink(&mut self, cx: &mut Context<Self>) {
+        let blinking = self.last_focused
+            && !self.ime_state.is_active()
+            && self.state.with_term(|term| term.cursor_style().blinking);
+        self.restart_cursor_blink_with(blinking, cx);
+    }
+
+    fn restart_cursor_blink_with(&mut self, blinking: bool, cx: &mut Context<Self>) {
         self.cursor_blink_generation = self.cursor_blink_generation.wrapping_add(1);
         self.cursor_blink_task.take();
         let was_hidden = !self.cursor_visible;
@@ -1007,7 +1014,6 @@ impl TerminalView {
             cx.notify();
         }
 
-        let blinking = self.state.with_term(|term| term.cursor_style().blinking);
         if !self.last_focused || self.ime_state.is_active() || !blinking {
             return;
         }
@@ -1085,13 +1091,16 @@ impl TerminalView {
             self.report_io_error(PtyIoOperation::InputQueue, &message, false, cx);
             return false;
         }
-        self.state.clear_selection();
-        self.state.scroll_display(Scroll::Bottom);
+        let blinking = self.state.with_term_mut(|term| {
+            term.selection = None;
+            term.scroll_display(Scroll::Bottom);
+            term.cursor_style().blinking
+        });
         self.selection_anchor = None;
         self.selecting = false;
         self.stop_selection_scroll();
         self.pointer_hidden = self.config.hide_mouse_when_typing;
-        self.restart_cursor_blink(cx);
+        self.restart_cursor_blink_with(blinking, cx);
         cx.notify();
         true
     }
@@ -1993,8 +2002,13 @@ impl TerminalView {
         cx.stop_propagation();
     }
 
-    fn handle_vi_key(&mut self, key_event: &TerminalKeyEvent, cx: &mut Context<Self>) -> bool {
-        if !self.state.mode().contains(TermMode::VI) {
+    fn handle_vi_key(
+        &mut self,
+        key_event: &TerminalKeyEvent,
+        mode: TermMode,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !mode.contains(TermMode::VI) {
             return false;
         }
         let character = key_event
@@ -2097,7 +2111,8 @@ impl TerminalView {
             cx.stop_propagation();
             return;
         }
-        if self.handle_vi_key(&key_event, cx) {
+        let mode = self.state.mode();
+        if self.handle_vi_key(&key_event, mode, cx) {
             cx.stop_propagation();
             return;
         }
@@ -2112,7 +2127,7 @@ impl TerminalView {
             return;
         }
 
-        if let Some(bytes) = encode_key(&key_event, self.state.mode()) {
+        if let Some(bytes) = encode_key(&key_event, mode) {
             let accepted = self.enqueue_input(Bytes::copy_from_slice(&bytes), cx);
             if accepted && key_event.state == KeyState::Pressed {
                 self.pressed_keys.insert(key_event.identity());
@@ -3529,9 +3544,9 @@ mod tests {
         terminal.update(cx, {
             let shaped_without_lock = shaped_without_lock.clone();
             move |terminal, cx| {
-                terminal.renderer.invalidate_palette();
+                terminal.renderer.invalidate_font();
                 terminal.renderer.set_shaping_hook(Some(Arc::new(move || {
-                    assert!(term.try_lock().is_some());
+                    assert!(term.try_lock_unfair().is_some());
                     shaped_without_lock.store(true, Ordering::Relaxed);
                 })));
                 cx.notify();
@@ -3549,6 +3564,40 @@ mod tests {
         let diagnostics = cx.read(|cx| terminal.read(cx).diagnostics_snapshot());
         assert_eq!(diagnostics.rebuilt_rows, 0);
         assert_eq!(diagnostics.shape_cache_misses, 0);
+    }
+
+    #[gpui::test]
+    fn repaint_reuses_cached_cjk_clusters_without_reshaping(cx: &mut TestAppContext) {
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new(io::sink(), io::empty(), TerminalConfig::default(), cx)
+        });
+        terminal.update(cx, |terminal, cx| {
+            terminal.state.process_bytes("中A中".as_bytes());
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        let shape_calls = Arc::new(AtomicUsize::new(0));
+        terminal.update(cx, {
+            let shape_calls = shape_calls.clone();
+            move |terminal, cx| {
+                terminal.renderer.invalidate_palette();
+                terminal.reset_diagnostics();
+                terminal.renderer.set_shaping_hook(Some(Arc::new(move || {
+                    shape_calls.fetch_add(1, Ordering::Relaxed);
+                })));
+                cx.notify();
+            }
+        });
+        cx.run_until_parked();
+
+        let diagnostics = cx.read(|cx| terminal.read(cx).diagnostics_snapshot());
+        assert_eq!(shape_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(diagnostics.shape_cache_misses, 0);
+        assert!(diagnostics.shape_cache_hits >= 3);
+        terminal.update(cx, |terminal, _| {
+            terminal.renderer.set_shaping_hook(None);
+        });
     }
 
     #[gpui::test]

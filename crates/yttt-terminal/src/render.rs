@@ -63,6 +63,7 @@ pub(crate) struct TerminalFontMetrics {
 pub(crate) struct TerminalGlyphKey {
     pub text: SmallVec<[char; 3]>,
     pub font_style: TerminalFontStyle,
+    pub foreground: Hsla,
     pub font_size_bits: u32,
     pub scale_factor_bits: u32,
 }
@@ -90,7 +91,7 @@ struct CachedRowDisplay {
 struct RendererShared {
     metrics_key: Option<FontMetricsKey>,
     metrics: Option<TerminalFontMetrics>,
-    glyph_metrics: LruCache<TerminalGlyphKey, Pixels>,
+    glyph_cache: LruCache<TerminalGlyphKey, ShapedLine>,
     rows: HashMap<usize, CachedRowDisplay>,
     #[cfg(test)]
     shaping_hook: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -101,7 +102,7 @@ impl RendererShared {
         Self {
             metrics_key: None,
             metrics: None,
-            glyph_metrics: LruCache::new(NonZeroUsize::new(MAX_SHAPED_CLUSTERS).unwrap()),
+            glyph_cache: LruCache::new(NonZeroUsize::new(MAX_SHAPED_CLUSTERS).unwrap()),
             rows: HashMap::new(),
             #[cfg(test)]
             shaping_hook: None,
@@ -227,7 +228,7 @@ impl TerminalRenderer {
         let mut shared = self.shared.lock();
         shared.metrics_key = Some(key);
         shared.metrics = Some(metrics);
-        shared.glyph_metrics.clear();
+        shared.glyph_cache.clear();
         shared.rows.clear();
         metrics
     }
@@ -254,7 +255,7 @@ impl TerminalRenderer {
         let mut shared = self.shared.lock();
         shared.metrics_key = None;
         shared.metrics = None;
-        shared.glyph_metrics.clear();
+        shared.glyph_cache.clear();
         shared.rows.clear();
     }
 
@@ -286,7 +287,7 @@ impl TerminalRenderer {
 
         let font_size: f32 = self.font_size.into();
         let scale_factor = window.scale_factor();
-        let mut glyphs = Vec::new();
+        let mut glyphs = Vec::with_capacity(row.cells.len());
         for cell in &row.cells {
             if cell.text.is_empty() {
                 continue;
@@ -294,41 +295,44 @@ impl TerminalRenderer {
             let key = TerminalGlyphKey {
                 text: cell.text.clone(),
                 font_style: cell.font_style,
+                foreground: cell.foreground,
                 font_size_bits: font_size.to_bits(),
                 scale_factor_bits: scale_factor.to_bits(),
             };
-            let cache_hit = self.shared.lock().glyph_metrics.get(&key).is_some();
-            if cache_hit {
+            let cached = self.shared.lock().glyph_cache.get(&key).cloned();
+            let shaped = if let Some(shaped) = cached {
                 self.diagnostics
                     .shape_cache_hits
                     .fetch_add(1, Ordering::Relaxed);
+                shaped
             } else {
                 self.diagnostics
                     .shape_cache_misses
                     .fetch_add(1, Ordering::Relaxed);
-            }
 
-            #[cfg(test)]
-            if let Some(hook) = self.shared.lock().shaping_hook.clone() {
-                hook();
-            }
+                #[cfg(test)]
+                if let Some(hook) = self.shared.lock().shaping_hook.clone() {
+                    hook();
+                }
 
-            let text = cell.text.iter().collect::<String>();
-            let run = TextRun {
-                len: text.len(),
-                font: self.font(cell.font_style),
-                color: cell.foreground,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
+                let text = cell.text.iter().collect::<String>();
+                let run = TextRun {
+                    len: text.len(),
+                    font: self.font(cell.font_style),
+                    color: cell.foreground,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                let shaped = window.text_system().shape_line(
+                    SharedString::from(text),
+                    self.font_size,
+                    &[run],
+                    None,
+                );
+                self.shared.lock().glyph_cache.put(key, shaped.clone());
+                shaped
             };
-            let shaped = window.text_system().shape_line(
-                SharedString::from(text),
-                self.font_size,
-                &[run],
-                None,
-            );
-            self.shared.lock().glyph_metrics.put(key, shaped.width);
             glyphs.push(CachedGlyph {
                 column: cell.point.column.0,
                 shaped,
@@ -358,7 +362,7 @@ impl TerminalRenderer {
         let shared = self.shared.lock();
         TerminalDiagnosticsSnapshot {
             rebuilt_rows: self.diagnostics.rebuilt_rows.load(Ordering::Relaxed),
-            shape_cache_entries: shared.glyph_metrics.len(),
+            shape_cache_entries: shared.glyph_cache.len(),
             shape_cache_hits: self.diagnostics.shape_cache_hits.load(Ordering::Relaxed),
             shape_cache_misses: self.diagnostics.shape_cache_misses.load(Ordering::Relaxed),
             term_lock_nanos: self.diagnostics.term_lock_nanos.load(Ordering::Relaxed),
@@ -897,6 +901,7 @@ impl TerminalRenderer {
 
 #[cfg(test)]
 mod tests {
+    use super::content::RenderDamage;
     use super::*;
     use crate::test_support::TerminalFixture;
     use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
@@ -984,6 +989,21 @@ mod tests {
     }
 
     #[test]
+    fn full_damage_diffs_final_rows_before_invalidating_shape_cache() {
+        let mut fixture = TerminalFixture::new(16, 3);
+        fixture.feed(b"stable frame");
+        let mut cache = TerminalRenderCache::default();
+        assert_eq!(cache.merge(snapshot(&fixture)), 3);
+        let first_generations = cache.row_generations();
+
+        fixture.terminal.set_options(Default::default());
+        let update = snapshot(&fixture);
+        assert!(matches!(&update.damage, RenderDamage::Full));
+        assert_eq!(cache.merge(update), 0);
+        assert_eq!(cache.row_generations(), first_generations);
+    }
+
+    #[test]
     fn shape_cache_is_bounded() {
         let renderer = TerminalRenderer::new(
             "monospace".to_string(),
@@ -994,17 +1014,18 @@ mod tests {
         let mut shared = renderer.shared.lock();
         for index in 0..(MAX_SHAPED_CLUSTERS + 512) {
             let character = char::from_u32(0x1000 + index as u32).unwrap();
-            shared.glyph_metrics.put(
+            shared.glyph_cache.put(
                 TerminalGlyphKey {
                     text: SmallVec::from_slice(&[character]),
                     font_style: TerminalFontStyle::default(),
+                    foreground: gpui::black(),
                     font_size_bits: 14.0_f32.to_bits(),
                     scale_factor_bits: 1.0_f32.to_bits(),
                 },
-                px(1.0),
+                ShapedLine::default(),
             );
         }
-        assert_eq!(shared.glyph_metrics.len(), MAX_SHAPED_CLUSTERS);
+        assert_eq!(shared.glyph_cache.len(), MAX_SHAPED_CLUSTERS);
     }
 
     #[test]

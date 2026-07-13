@@ -1,4 +1,4 @@
-use super::content::{RenderDamage, RenderOverlayState, TerminalRenderSnapshot};
+use super::content::{RenderOverlayState, TerminalRenderSnapshot};
 use alacritty_terminal::index::Line;
 use alacritty_terminal::selection::SelectionRange;
 use std::collections::BTreeSet;
@@ -83,18 +83,17 @@ impl TerminalRenderCache {
                 || frame.cols != update.cols
                 || frame.screen_lines != update.screen_lines
         });
-        let full = incompatible || matches!(update.damage, RenderDamage::Full);
-        let mut rebuilt_rows = 0;
-
-        if full {
+        if incompatible {
             self.next_generation = self.next_generation.wrapping_add(1);
             for row in &mut update.rows {
                 row.generation = self.next_generation;
             }
-            rebuilt_rows = update.rows.len();
+            let rebuilt_rows = update.rows.len();
             self.frame = Some(update);
             return rebuilt_rows;
         }
+
+        let mut rebuilt_rows = 0;
 
         let Some(frame) = &mut self.frame else {
             return 0;

@@ -1,4 +1,5 @@
 use crate::event::{GpuiEventProxy, TerminalEventMailbox};
+use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use bytes::Bytes;
@@ -325,7 +326,7 @@ impl PtyIoDriver {
     pub(crate) fn start<W, R>(
         writer: W,
         reader: R,
-        term: Arc<Mutex<Term<GpuiEventProxy>>>,
+        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
         mailbox: Arc<TerminalEventMailbox>,
     ) -> Self
     where
@@ -454,7 +455,7 @@ fn spawn_reader<R: Read + Send + 'static>(
 }
 
 fn spawn_parser(
-    term: Arc<Mutex<Term<GpuiEventProxy>>>,
+    term: Arc<FairMutex<Term<GpuiEventProxy>>>,
     read_rx: flume::Receiver<PtyReadMessage>,
     buffer_tx: flume::Sender<Box<[u8; READ_BUFFER_BYTES]>>,
     cancelled: Arc<AtomicBool>,
