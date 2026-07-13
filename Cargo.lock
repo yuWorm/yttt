@@ -9182,6 +9182,7 @@ dependencies = [
  "gpui-component",
  "gpui-component-assets",
  "gpui_platform",
+ "notify",
  "objc",
  "serde",
  "serde_json",

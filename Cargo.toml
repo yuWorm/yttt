@@ -13,6 +13,7 @@ anyhow = "1"
 gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
 gpui-component = { path = "vendor/gpui-component/crates/ui", features = ["tree-sitter-languages"] }
 gpui-component-assets = { path = "vendor/gpui-component/crates/assets" }
+notify = "7.0.0"
 tree-sitter = "0.26"
 tree-sitter-bash = "0.23.3"
 tree-sitter-c = "0.24.1"

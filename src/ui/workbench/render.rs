@@ -2,6 +2,7 @@ use super::*;
 
 impl Render for WorkbenchView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ensure_active_project_file_watcher(window, cx);
         self.flush_pending_git_operations(window, cx);
         self.flush_pending_project_tree_loads(window, cx);
         self.flush_pending_document_saves(window, cx);
