@@ -1,54 +1,20 @@
-//! Terminal state management.
+//! Shared Alacritty terminal state.
 //!
-//! This module provides [`TerminalState`], a thread-safe wrapper around alacritty's
-//! [`Term`] structure. It manages the terminal
-//! emulator state, including the character grid, cursor position, and VTE parser.
+//! [`TerminalState`] owns the `Arc<Mutex<Term<_>>>`, terminal dimensions, and framework-neutral
+//! state adapters. Production VTE parsing is intentionally not owned here: the PTY parser
+//! coordinator owns its processor and locks the shared `Term` only while applying a read batch.
+//! Rendering locks the same `Term` only long enough to build a semantic snapshot and reset
+//! Alacritty damage.
 //!
-//! # Architecture
-//!
-//! `TerminalState` wraps the alacritty terminal in `Arc<Mutex<>>` to allow safe
-//! concurrent access from:
-//!
-//! - The async reader task (writing bytes to the terminal)
-//! - The render thread (reading the grid for display)
-//! - The main thread (handling resize events)
-//!
-//! # VTE Parsing
-//!
-//! The terminal uses alacritty's VTE parser to process byte streams. When bytes
-//! arrive from the PTY, they are fed through the parser via [`process_bytes`],
-//! which calls handler methods on the `Term` to update the grid:
-//!
-//! ```text
-//! PTY bytes → VTE Parser → Term handlers → Grid updates
-//!                          ├─ print()     (regular characters)
-//!                          ├─ execute()   (control chars: BEL, BS, etc.)
-//!                          ├─ esc_dispatch()  (escape sequences)
-//!                          └─ csi_dispatch()  (CSI sequences: colors, cursor, etc.)
-//! ```
-//!
-//! # Example
-//!
-//! ```
-//! use std::sync::mpsc::channel;
-//! use yttt_terminal::event::GpuiEventProxy;
-//! use yttt_terminal::terminal::TerminalState;
-//!
-//! let (tx, rx) = channel();
-//! let event_proxy = GpuiEventProxy::new(tx);
-//! let mut terminal = TerminalState::new(80, 24, event_proxy);
-//!
-//! // Process some output (e.g., colored text)
-//! terminal.process_bytes(b"\x1b[31mRed text\x1b[0m");
-//! ```
-//!
-//! [`process_bytes`]: TerminalState::process_bytes
-
+//! `process_bytes` exists only in tests so fixtures can apply deterministic VT sequences without
+//! creating worker threads.
 use crate::event::GpuiEventProxy;
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Point as AlacPoint, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
+use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::{Config, Term, TermMode};
+#[cfg(test)]
 use alacritty_terminal::vte::ansi::Processor;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -126,7 +92,7 @@ pub struct TerminalState {
     /// The underlying alacritty terminal emulator.
     term: Arc<Mutex<Term<GpuiEventProxy>>>,
 
-    /// VTE parser for converting byte streams into terminal actions.
+    #[cfg(test)]
     parser: Processor,
 
     /// Number of columns in the terminal.
@@ -193,16 +159,15 @@ impl TerminalState {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::mpsc::channel;
-    /// use yttt_terminal::event::GpuiEventProxy;
+    /// use yttt_terminal::event::{GpuiEventProxy, TerminalEventMailbox};
     /// use yttt_terminal::terminal::TerminalState;
     ///
-    /// let (tx, rx) = channel();
-    /// let event_proxy = GpuiEventProxy::new(tx);
+    /// let (mailbox, _signals) = TerminalEventMailbox::new();
+    /// let event_proxy = GpuiEventProxy::new(mailbox);
     /// let terminal = TerminalState::new(80, 24, event_proxy);
     /// ```
     pub fn new(cols: usize, rows: usize, event_proxy: GpuiEventProxy) -> Self {
-        Self::new_with_scrollback(cols, rows, Config::default().scrolling_history, event_proxy)
+        Self::new_with_options(cols, rows, Config::default(), event_proxy)
     }
 
     /// Create a new terminal state with a custom scrollback history limit.
@@ -214,45 +179,30 @@ impl TerminalState {
     ) -> Self {
         let mut config = Config::default();
         config.scrolling_history = scrollback;
+        Self::new_with_options(cols, rows, config, event_proxy)
+    }
 
-        // Create dimensions for terminal initialization
+    /// Create a terminal with a complete Alacritty core configuration.
+    pub fn new_with_options(
+        cols: usize,
+        rows: usize,
+        config: Config,
+        event_proxy: GpuiEventProxy,
+    ) -> Self {
         let dimensions = TermDimensions::new(cols, rows);
-
-        // Create the terminal with the given configuration and dimensions
         let term = Term::new(config, &dimensions, event_proxy);
-
-        // Create the VTE parser for processing incoming bytes
-        let parser = Processor::new();
 
         Self {
             term: Arc::new(Mutex::new(term)),
-            parser,
+            #[cfg(test)]
+            parser: Processor::new(),
             cols,
             rows,
         }
     }
 
-    /// Process incoming bytes from the PTY.
-    ///
-    /// This method feeds the bytes through the VTE parser, which will call
-    /// the appropriate handler methods on the terminal to update its state.
-    ///
-    /// # Arguments
-    ///
-    /// * `bytes` - The bytes received from the PTY
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use std::sync::mpsc::channel;
-    /// # use yttt_terminal::event::GpuiEventProxy;
-    /// # use yttt_terminal::terminal::TerminalState;
-    /// # let (tx, rx) = channel();
-    /// # let event_proxy = GpuiEventProxy::new(tx);
-    /// # let mut terminal = TerminalState::new(80, 24, event_proxy);
-    /// // Process some output from the PTY
-    /// terminal.process_bytes(b"Hello, world!\r\n");
-    /// ```
+    #[cfg(test)]
+    /// Process incoming bytes through a test-only parser.
     pub fn process_bytes(&mut self, bytes: &[u8]) {
         let mut term = self.term.lock();
         // The parser.advance method calls handler methods on the Term
@@ -273,11 +223,10 @@ impl TerminalState {
     /// # Examples
     ///
     /// ```
-    /// # use std::sync::mpsc::channel;
-    /// # use yttt_terminal::event::GpuiEventProxy;
+    /// # use yttt_terminal::event::{GpuiEventProxy, TerminalEventMailbox};
     /// # use yttt_terminal::terminal::TerminalState;
-    /// # let (tx, rx) = channel();
-    /// # let event_proxy = GpuiEventProxy::new(tx);
+    /// # let (mailbox, _signals) = TerminalEventMailbox::new();
+    /// # let event_proxy = GpuiEventProxy::new(mailbox);
     /// # let mut terminal = TerminalState::new(80, 24, event_proxy);
     /// // Resize to 120x30
     /// terminal.resize(120, 30);
@@ -307,11 +256,10 @@ impl TerminalState {
     /// # Examples
     ///
     /// ```
-    /// # use std::sync::mpsc::channel;
-    /// # use yttt_terminal::event::GpuiEventProxy;
+    /// # use yttt_terminal::event::{GpuiEventProxy, TerminalEventMailbox};
     /// # use yttt_terminal::terminal::TerminalState;
-    /// # let (tx, rx) = channel();
-    /// # let event_proxy = GpuiEventProxy::new(tx);
+    /// # let (mailbox, _signals) = TerminalEventMailbox::new();
+    /// # let event_proxy = GpuiEventProxy::new(mailbox);
     /// # let terminal = TerminalState::new(80, 24, event_proxy);
     /// use alacritty_terminal::term::TermMode;
     ///
@@ -324,14 +272,14 @@ impl TerminalState {
         let term = self.term.lock();
         *term.mode()
     }
+    /// Snapshot dynamic terminal colors without holding the terminal lock.
+    pub fn dynamic_colors(&self) -> Colors {
+        self.with_term(|term| *term.colors())
+    }
 
-    /// Update the maximum number of scrollback lines kept by the terminal.
-    pub fn set_scrollback(&self, scrollback: usize) {
-        self.with_term_mut(|term| {
-            let mut config = Config::default();
-            config.scrolling_history = scrollback;
-            term.set_options(config);
-        });
+    /// Replace the complete Alacritty core configuration.
+    pub fn set_options(&self, options: Config) {
+        self.with_term_mut(|term| term.set_options(options));
     }
 
     /// Scroll the visible terminal display through scrollback history.
@@ -359,26 +307,26 @@ impl TerminalState {
         })
     }
 
-    /// Begin a terminal text selection.
-    pub fn begin_selection(&self, point: AlacPoint, selection_type: SelectionType) {
+    /// Begin a terminal text selection at a specific cell side.
+    pub fn begin_selection(&self, point: AlacPoint, side: Side, selection_type: SelectionType) {
         self.with_term_mut(|term| {
-            term.selection = Some(Selection::new(selection_type, point, Side::Left));
+            term.selection = Some(Selection::new(selection_type, point, side));
         });
     }
 
-    /// Update the current terminal text selection.
-    pub fn update_selection(&self, point: AlacPoint) {
+    /// Update the current terminal text selection endpoint.
+    pub fn update_selection(&self, point: AlacPoint, side: Side) {
         self.with_term_mut(|term| {
             if let Some(selection) = term.selection.as_mut() {
-                selection.update(point, Side::Right);
+                selection.update(point, side);
             }
         });
     }
 
     /// Set a simple range selection.
     pub fn set_simple_selection(&self, start: AlacPoint, end: AlacPoint) {
-        self.begin_selection(start, SelectionType::Simple);
-        self.update_selection(end);
+        self.begin_selection(start, Side::Left, SelectionType::Simple);
+        self.update_selection(end, Side::Right);
     }
 
     /// Clear any active terminal text selection.
@@ -409,11 +357,10 @@ impl TerminalState {
     /// # Examples
     ///
     /// ```
-    /// # use std::sync::mpsc::channel;
-    /// # use yttt_terminal::event::GpuiEventProxy;
+    /// # use yttt_terminal::event::{GpuiEventProxy, TerminalEventMailbox};
     /// # use yttt_terminal::terminal::TerminalState;
-    /// # let (tx, rx) = channel();
-    /// # let event_proxy = GpuiEventProxy::new(tx);
+    /// # let (mailbox, _signals) = TerminalEventMailbox::new();
+    /// # let event_proxy = GpuiEventProxy::new(mailbox);
     /// # let terminal = TerminalState::new(80, 24, event_proxy);
     /// let cursor_pos = terminal.with_term(|term| {
     ///     term.grid().cursor.point
@@ -443,11 +390,10 @@ impl TerminalState {
     /// # Examples
     ///
     /// ```
-    /// # use std::sync::mpsc::channel;
-    /// # use yttt_terminal::event::GpuiEventProxy;
+    /// # use yttt_terminal::event::{GpuiEventProxy, TerminalEventMailbox};
     /// # use yttt_terminal::terminal::TerminalState;
-    /// # let (tx, rx) = channel();
-    /// # let event_proxy = GpuiEventProxy::new(tx);
+    /// # let (mailbox, _signals) = TerminalEventMailbox::new();
+    /// # let event_proxy = GpuiEventProxy::new(mailbox);
     /// # let terminal = TerminalState::new(80, 24, event_proxy);
     /// terminal.with_term_mut(|term| {
     ///     // Perform some mutation on the term
@@ -495,14 +441,13 @@ impl TerminalState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::TerminalEvent;
+    use crate::event::{TerminalEvent, TerminalEventMailbox};
     use alacritty_terminal::grid::Scroll;
     use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
-    use std::sync::mpsc::channel;
 
     fn event_proxy() -> GpuiEventProxy {
-        let (tx, _rx) = channel();
-        GpuiEventProxy::new(tx)
+        let (mailbox, _) = TerminalEventMailbox::new();
+        GpuiEventProxy::new(mailbox)
     }
 
     #[test]
@@ -537,12 +482,12 @@ mod tests {
 
     #[test]
     fn test_primary_device_attributes_query_emits_pty_write() {
-        let (tx, rx) = channel();
-        let mut terminal = TerminalState::new(80, 24, GpuiEventProxy::new(tx));
+        let (mailbox, _) = TerminalEventMailbox::new();
+        let mut terminal = TerminalState::new(80, 24, GpuiEventProxy::new(mailbox.clone()));
 
         terminal.process_bytes(b"\x1b[c");
 
-        let events: Vec<_> = rx.try_iter().collect();
+        let events = mailbox.drain().events;
         assert!(
             events
                 .iter()

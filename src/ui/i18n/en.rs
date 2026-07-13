@@ -365,6 +365,28 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsScrollbarDescription => {
             "Show a thin scrollback indicator in terminal panes."
         }
+        UiTextKey::SettingsTerminalCursorShape => "Cursor shape",
+        UiTextKey::SettingsTerminalCursorShapeDescription => "Shape of the terminal cursor.",
+        UiTextKey::SettingsTerminalCursorBlinking => "Blinking cursor",
+        UiTextKey::SettingsTerminalCursorBlinkingDescription => {
+            "Blink the terminal cursor while the terminal is focused."
+        }
+        UiTextKey::SettingsTerminalHideMouseWhenTyping => "Hide mouse while typing",
+        UiTextKey::SettingsTerminalHideMouseWhenTypingDescription => {
+            "Hide the pointer while keyboard input is sent to the terminal."
+        }
+        UiTextKey::SettingsTerminalCopyOnSelect => "Copy on select",
+        UiTextKey::SettingsTerminalCopyOnSelectDescription => {
+            "Copy completed terminal selections without an explicit Copy action."
+        }
+        UiTextKey::SettingsTerminalOsc52Policy => "OSC 52 clipboard access",
+        UiTextKey::SettingsTerminalOsc52PolicyDescription => {
+            "Control terminal application access to the system clipboard."
+        }
+        UiTextKey::SettingsTerminalKittyKeyboard => "Kitty keyboard protocol",
+        UiTextKey::SettingsTerminalKittyKeyboardDescription => {
+            "Allow terminal applications to negotiate the Kitty keyboard protocol."
+        }
         UiTextKey::SettingsLayoutSource => "Layout source",
         UiTextKey::SettingsLayoutSourceDescription => "Current project layout source.",
         UiTextKey::SettingsOpenProjectFirst => "Open a project first",

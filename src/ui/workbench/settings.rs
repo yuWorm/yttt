@@ -11,6 +11,29 @@ impl WorkbenchView {
     pub fn terminal_show_scrollbar(&self) -> bool {
         self.app_settings.terminal.show_scrollbar
     }
+    pub fn terminal_cursor_shape(&self) -> TerminalCursorShape {
+        self.app_settings.terminal.cursor_shape
+    }
+
+    pub fn terminal_cursor_blinking(&self) -> bool {
+        self.app_settings.terminal.cursor_blinking
+    }
+
+    pub fn terminal_hide_mouse_when_typing(&self) -> bool {
+        self.app_settings.terminal.hide_mouse_when_typing
+    }
+
+    pub fn terminal_copy_on_select(&self) -> bool {
+        self.app_settings.terminal.copy_on_select
+    }
+
+    pub fn terminal_osc52_policy(&self) -> TerminalOsc52Policy {
+        self.app_settings.terminal.osc52_policy
+    }
+
+    pub fn terminal_kitty_keyboard(&self) -> bool {
+        self.app_settings.terminal.kitty_keyboard
+    }
 
     pub fn editor_auto_detect_language(&self) -> bool {
         self.app_settings.editor.auto_detect_language
@@ -147,6 +170,53 @@ impl WorkbenchView {
         show_scrollbar: bool,
     ) -> Result<(), WorkbenchError> {
         self.app_settings.terminal.show_scrollbar = show_scrollbar;
+        self.save_app_settings_and_refresh_runtime()
+    }
+    pub fn set_terminal_cursor_shape(
+        &mut self,
+        cursor_shape: TerminalCursorShape,
+    ) -> Result<(), WorkbenchError> {
+        self.app_settings.terminal.cursor_shape = cursor_shape;
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_terminal_cursor_blinking(
+        &mut self,
+        cursor_blinking: bool,
+    ) -> Result<(), WorkbenchError> {
+        self.app_settings.terminal.cursor_blinking = cursor_blinking;
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_terminal_hide_mouse_when_typing(
+        &mut self,
+        hide_mouse_when_typing: bool,
+    ) -> Result<(), WorkbenchError> {
+        self.app_settings.terminal.hide_mouse_when_typing = hide_mouse_when_typing;
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_terminal_copy_on_select(
+        &mut self,
+        copy_on_select: bool,
+    ) -> Result<(), WorkbenchError> {
+        self.app_settings.terminal.copy_on_select = copy_on_select;
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_terminal_osc52_policy(
+        &mut self,
+        osc52_policy: TerminalOsc52Policy,
+    ) -> Result<(), WorkbenchError> {
+        self.app_settings.terminal.osc52_policy = osc52_policy;
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_terminal_kitty_keyboard(
+        &mut self,
+        kitty_keyboard: bool,
+    ) -> Result<(), WorkbenchError> {
+        self.app_settings.terminal.kitty_keyboard = kitty_keyboard;
         self.save_app_settings_and_refresh_runtime()
     }
 
@@ -826,6 +896,56 @@ impl WorkbenchView {
         }
     }
 
+    pub(super) fn settings_terminal_cursor_shape_select(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SettingsStringSelectState> {
+        let items = terminal_cursor_shape_labels();
+        let selected = terminal_cursor_shape_label(self.terminal_cursor_shape()).to_string();
+        if let Some(select) = &self.settings.settings_terminal_cursor_shape_select {
+            return select.clone();
+        }
+
+        let selected_index = selected_index_for_settings_option(&items, &selected);
+        let select =
+            cx.new(|cx| SelectState::new(SearchableVec::new(items), selected_index, window, cx));
+        let subscription = cx.subscribe_in(
+            &select,
+            window,
+            Self::on_settings_terminal_cursor_shape_select_event,
+        );
+        self.settings.settings_terminal_cursor_shape_select = Some(select.clone());
+        self.settings
+            .settings_terminal_cursor_shape_select_subscription = Some(subscription);
+        select
+    }
+
+    pub(super) fn settings_terminal_osc52_policy_select(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SettingsStringSelectState> {
+        let items = terminal_osc52_policy_labels();
+        let selected = terminal_osc52_policy_label(self.terminal_osc52_policy()).to_string();
+        if let Some(select) = &self.settings.settings_terminal_osc52_policy_select {
+            return select.clone();
+        }
+
+        let selected_index = selected_index_for_settings_option(&items, &selected);
+        let select =
+            cx.new(|cx| SelectState::new(SearchableVec::new(items), selected_index, window, cx));
+        let subscription = cx.subscribe_in(
+            &select,
+            window,
+            Self::on_settings_terminal_osc52_policy_select_event,
+        );
+        self.settings.settings_terminal_osc52_policy_select = Some(select.clone());
+        self.settings
+            .settings_terminal_osc52_policy_select_subscription = Some(subscription);
+        select
+    }
+
     pub(super) fn settings_editor_language_select(
         &mut self,
         window: &mut Window,
@@ -1084,6 +1204,46 @@ impl WorkbenchView {
             self.load_error = Some(error.to_string());
         }
         self.sync_gpui_component_theme(cx);
+        self.sync_terminal_pane_configs(cx);
+        cx.notify();
+    }
+
+    pub(super) fn on_settings_terminal_cursor_shape_select_event(
+        &mut self,
+        _select: &Entity<SettingsStringSelectState>,
+        event: &SelectEvent<SearchableVec<String>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(Some(value)) = event else {
+            return;
+        };
+        let Some(cursor_shape) = terminal_cursor_shape_from_label(value) else {
+            return;
+        };
+        if let Err(error) = self.set_terminal_cursor_shape(cursor_shape) {
+            self.load_error = Some(error.to_string());
+        }
+        self.sync_terminal_pane_configs(cx);
+        cx.notify();
+    }
+
+    pub(super) fn on_settings_terminal_osc52_policy_select_event(
+        &mut self,
+        _select: &Entity<SettingsStringSelectState>,
+        event: &SelectEvent<SearchableVec<String>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(Some(value)) = event else {
+            return;
+        };
+        let Some(policy) = terminal_osc52_policy_from_label(value) else {
+            return;
+        };
+        if let Err(error) = self.set_terminal_osc52_policy(policy) {
+            self.load_error = Some(error.to_string());
+        }
         self.sync_terminal_pane_configs(cx);
         cx.notify();
     }

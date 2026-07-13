@@ -573,11 +573,7 @@ fn settings_rows_are_grouped_by_user_facing_sections() {
     );
     assert!(terminal_rows.iter().any(|row| row.title == "Default shell"));
     assert!(terminal_rows.iter().any(|row| row.title == "Font size"));
-    assert!(
-        terminal_rows
-            .iter()
-            .any(|row| row.title == "Close pane on exit")
-    );
+    assert!(terminal_rows.iter().any(|row| row.title == "Cursor shape"));
     assert!(terminal_rows.iter().any(|row| row.title == "Scrollbar"));
     assert!(
         layout_rows
@@ -654,11 +650,7 @@ fn settings_rows_are_localized() {
     assert!(editor_rows.iter().any(|row| row.title == "自动保存"));
     assert!(editor_rows.iter().any(|row| row.title == "显示隐藏文件"));
     assert!(terminal_rows.iter().any(|row| row.title == "默认 Shell"));
-    assert!(
-        terminal_rows
-            .iter()
-            .any(|row| row.title == "退出后关闭面板")
-    );
+    assert!(terminal_rows.iter().any(|row| row.title == "光标形状"));
 }
 
 #[test]

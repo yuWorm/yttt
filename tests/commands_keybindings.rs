@@ -495,7 +495,7 @@ fn runtime_keybinding_matcher_uses_current_config_specs_only() {
 
 #[test]
 fn app_startup_keybindings_keep_user_editable_bindings_out_of_gpui_keymap() {
-    assert_eq!(app_startup_keybindings().len(), 4);
+    assert_eq!(app_startup_keybindings().len(), 17);
 }
 
 #[test]

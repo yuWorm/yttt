@@ -1,347 +1,137 @@
-//! # yttt-terminal
+//! # `yttt-terminal`
 //!
-//! A terminal emulator component for embedding in [GPUI](https://gpui.rs) applications.
+//! An embeddable GPUI terminal adapter built on
+//! [`alacritty_terminal`](https://docs.rs/alacritty_terminal).
 //!
-//! This library provides [`TerminalView`], a complete terminal emulator that can be
-//! embedded in any GPUI application. It uses [alacritty_terminal](https://docs.rs/alacritty_terminal)
-//! for VTE parsing and terminal state management, providing a production-ready terminal
-//! with full ANSI escape sequence support.
+//! [`TerminalView`] owns GPUI focus, input, callbacks, interaction state, and painting. Alacritty
+//! remains authoritative for VT parsing, grid state, terminal modes, selection, search, dynamic
+//! colors, cursor style, and protocol negotiation.
 //!
-//! ## Features
+//! ## Execution model
 //!
-//! - **Full Terminal Emulation**: VTE-compliant terminal powered by alacritty_terminal
-//! - **Color Support**: 16 ANSI colors, 256-color mode, and 24-bit true color (RGB)
-//! - **GPUI Integration**: Implements GPUI's `Render` trait for seamless embedding
-//! - **Flexible I/O**: Accepts arbitrary [`std::io::Read`]/[`std::io::Write`] streams
-//!   (works with any PTY implementation)
-//! - **Customizable Colors**: Builder pattern for configuring the full color palette
-//! - **Event Callbacks**: Hooks for resize, exit, bell, title changes, and clipboard operations
-//! - **Keyboard Input**: Full keyboard support including control sequences, function keys,
-//!   and application cursor mode
-//! - **Push-based I/O**: Efficient async architecture that only wakes when data arrives
+//! A bounded three-worker driver keeps blocking PTY operations away from GPUI:
 //!
-//! ## Quick Start
+//! 1. A reader fills a preallocated pool of fixed-size buffers and submits at most eight batches.
+//! 2. A parser coordinator owns the VTE processor, applies bytes under the `Term` lock, and
+//!    returns buffers to the pool.
+//! 3. An ordered writer processes input, query replies, resize callbacks, and shutdown.
 //!
-//! The terminal view accepts I/O streams rather than spawning processes directly.
-//! This gives you full control over the PTY lifecycle. Here's a complete example
-//! using [portable-pty](https://docs.rs/portable-pty):
+//! Alacritty events pass through a bounded, coalescing mailbox. GPUI receives one capacity-one
+//! signal and drains titles, bells, clipboard requests, dynamic queries, cursor changes, I/O
+//! failures, and lifecycle events in order. Keyboard and mouse handlers only enqueue protocol
+//! bytes; they never block on the PTY writer.
+//!
+//! ## Rendering model
+//!
+//! The terminal snapshots Alacritty's renderable content and damage while holding the `Term` lock,
+//! then releases it before font shaping or canvas painting. An authoritative visible-row cache
+//! merges damaged rows. A bounded glyph-cluster LRU reuses shaping while preserving explicit
+//! terminal cell origins. Selection, cursor, IME, search, hints, and hyperlink hover contribute
+//! overlay damage without mutating the grid.
+//!
+//! ## Protocol and interaction coverage
+//!
+//! - Legacy and Kitty keyboard encoding, including application cursor/keypad modes and
+//!   press/repeat/release events.
+//! - X10, UTF-8, SGR, and SGR-pixel mouse reports; local selection, scrollback, and alternate
+//!   scrolling.
+//! - Bracketed paste normalization, GPUI clipboard and primary-selection integration, and
+//!   focus-aware OSC 52 policy enforcement.
+//! - Dynamic color and size queries, cursor style/blinking, IME preedit, search, URL/hyperlink
+//!   hints, Vi navigation/selection, and an interactive scrollbar.
+//!
+//! ## Portable PTY quick start
+//!
+//! Register terminal actions once at application startup. Use [`spawn_portable_pty_session`] to
+//! configure the child environment, retain process/master ownership, and obtain separate blocking
+//! I/O handles:
 //!
 //! ```ignore
-//! use gpui::{Application, Edges, px};
-//! use yttt_terminal::{ColorPalette, TerminalConfig, TerminalView};
-//! use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-//! use yttt_terminal::pty::configure_terminal_environment;
-//! use std::sync::Arc;
+//! use yttt_terminal::{
+//!     TerminalConfig, TerminalSpawnRequest, TerminalView, spawn_portable_pty_session,
+//! };
 //!
-//! fn main() {
-//!     let app = Application::new();
-//!     app.run(|cx| {
-//!         yttt_terminal::init(cx);
+//! yttt_terminal::init(cx);
 //!
-//!         // 1. Create PTY with initial dimensions
-//!         let pty_system = native_pty_system();
-//!         let pair = pty_system.openpty(PtySize {
-//!             rows: 24,
-//!             cols: 80,
-//!             pixel_width: 0,
-//!             pixel_height: 0,
-//!         }).expect("Failed to open PTY");
+//! let mut session = spawn_portable_pty_session(
+//!     TerminalSpawnRequest::for_shell("shell", "/bin/zsh", "")
+//!         .cwd(project_directory),
+//! )?;
+//! let io = session.take_io().expect("PTY I/O can only be taken once");
+//! let resize = session.resize_handle();
 //!
-//!         // 2. Spawn shell in the PTY
-//!         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-//!         let mut cmd = CommandBuilder::new(&shell);
-//!         configure_terminal_environment(&mut cmd);
-//!         let _child = pair.slave.spawn_command(cmd).expect("Failed to spawn shell");
+//! let terminal = cx.new(|cx| {
+//!     TerminalView::new(io.writer, io.reader, TerminalConfig::default(), cx)
+//!         .with_resize_callback(move |cols, rows| {
+//!             resize
+//!                 .resize(cols as usize, rows as usize)
+//!                 .map_err(|error| error.to_string())
+//!         })
+//!         .with_title_callback(|_cx, title| {
+//!             eprintln!("title: {title}");
+//!         })
+//!         .with_io_error_callback(|_cx, operation, message, fatal| {
+//!             eprintln!("{operation:?} (fatal={fatal}): {message}");
+//!         })
+//!         .with_exit_callback(|_cx, reason| {
+//!             eprintln!("terminal exited: {reason:?}");
+//!         })
+//! });
+//! terminal.read(cx).focus_handle().focus(window, cx);
 //!
-//!         // 3. Get I/O handles from the PTY master
-//!         let writer = pair.master.take_writer().expect("Failed to get writer");
-//!         let reader = pair.master.try_clone_reader().expect("Failed to get reader");
-//!         let pty_master = Arc::new(parking_lot::Mutex::new(pair.master));
-//!
-//!         // 4. Create terminal configuration
-//!         let config = TerminalConfig {
-//!             font_family: "monospace".into(),
-//!             font_size: px(14.0),
-//!             cols: 80,
-//!             rows: 24,
-//!             scrollback: 10000,
-//!             line_height_multiplier: 1.2,
-//!             padding: Edges::all(px(8.0)),
-//!             show_scrollbar: true,
-//!             colors: ColorPalette::default(),
-//!         };
-//!
-//!         // 5. Create resize callback to sync PTY dimensions
-//!         let pty_for_resize = pty_master.clone();
-//!         let resize_callback = move |cols: usize, rows: usize| {
-//!             let _ = pty_for_resize.lock().resize(PtySize {
-//!                 cols: cols as u16,
-//!                 rows: rows as u16,
-//!                 pixel_width: 0,
-//!                 pixel_height: 0,
-//!             });
-//!         };
-//!
-//!         // 6. Open window with terminal
-//!         cx.spawn(async move |cx| {
-//!             cx.open_window(Default::default(), |window, cx| {
-//!                 let terminal = cx.new(|cx| {
-//!                     TerminalView::new(writer, reader, config, cx)
-//!                         .with_resize_callback(resize_callback)
-//!                         .with_exit_callback(|_, cx| cx.quit())
-//!                 });
-//!                 terminal.read(cx).focus_handle().focus(window);
-//!                 terminal
-//!             })
-//!         }).detach();
-//!     });
-//! }
+//! // Retain `session`, then reap it from a background executor when the view exits.
 //! ```
 //!
-//! ## Architecture
+//! [`spawn_portable_pty_session`] applies [`pty::configure_terminal_environment`] automatically.
+//! It advertises `TERM=xterm-256color`, true color, and the yttt terminal identity while
+//! preserving explicit environment overrides.
 //!
-//! The library is organized around a few key components:
+//! ## Generic stream cancellation
 //!
-//! ```text
-//! ┌─────────────────────────────────────────────────────────────────┐
-//! │                      Your GPUI Application                      │
-//! └─────────────────────────────────────────────────────────────────┘
-//!                                  │
-//!                                  ▼
-//! ┌─────────────────────────────────────────────────────────────────┐
-//! │  TerminalView (GPUI Entity, implements Render)                  │
-//! │  ├─ Keyboard/mouse event handling                               │
-//! │  ├─ Callback dispatch (resize, exit, bell, title, clipboard)    │
-//! │  └─ Canvas-based rendering                                      │
-//! └─────────────────────────────────────────────────────────────────┘
-//!         │                    │                      │
-//!         ▼                    ▼                      ▼
-//! ┌───────────────┐   ┌──────────────────┐   ┌────────────────────────┐
-//! │ TerminalState │   │ TerminalRenderer │   │ I/O Pipeline           │
-//! │ ├─ Term<>     │   │ ├─ Font metrics  │   │ ├─ Background thread   │
-//! │ │  (alacritty)│   │ ├─ ColorPalette  │   │ │   reads from PTY     │
-//! │ └─ VTE Parser │   │ └─ Text layout   │   │ ├─ Flume channel       │
-//! └───────────────┘   └──────────────────┘   │ └─ Async task notifies │
-//!                                            └────────────────────────┘
-//! ```
-//!
-//! ### Data Flow
-//!
-//! 1. **Output from PTY**: A background thread reads bytes from the PTY stdout,
-//!    sends them through a [flume](https://docs.rs/flume) channel to an async task,
-//!    which processes them through the VTE parser and notifies GPUI to repaint.
-//!
-//! 2. **Input to PTY**: Keyboard events are converted to terminal escape sequences
-//!    by the [`input`] module and written directly to the PTY stdin.
-//!
-//! 3. **Rendering**: On each paint, [`TerminalRenderer`] reads the terminal grid,
-//!    batches cells with identical styling, and draws backgrounds, text, and cursor.
+//! [`TerminalView::new`] also accepts arbitrary [`std::io::Read`] and [`std::io::Write`] values.
+//! Dropping the view stops parser and writer work, but Rust cannot forcibly interrupt an arbitrary
+//! blocking `Read`. Custom embedders must close or otherwise unblock their reader during shutdown.
+//! A reader that returns after shutdown is discarded without touching terminal or GPUI state.
+//! [`PortablePtySession`] provides this cancellation and reaping contract for portable PTYs.
 //!
 //! ## Configuration
 //!
-//! ### Terminal Dimensions and Font
+//! [`TerminalConfig::default`] uses:
 //!
-//! Configure the terminal through [`TerminalConfig`]:
+//! - an 80 × 24 grid and 10,000 lines of scrollback;
+//! - a visible scrollbar and Alacritty semantic-selection escapes;
+//! - a block, non-blinking cursor with 750 ms interval, 5 s timeout, hollow unfocused rendering,
+//!   and 0.15 beam/underline thickness;
+//! - copy-only OSC 52 access, disabled Kitty keyboard negotiation, and URL hints;
+//! - GPUI-managed normal clipboard access, plus primary selection on Linux/FreeBSD.
 //!
-//! ```ignore
-//! use gpui::{Edges, px};
-//! use yttt_terminal::{ColorPalette, TerminalConfig};
+//! Font, palette, core terminal options, and interaction groups can be updated with
+//! [`TerminalView::update_config`]. Font changes invalidate metrics and shaping; palette changes
+//! retain metrics; core changes call Alacritty's option update once.
 //!
-//! let config = TerminalConfig {
-//!     // Grid dimensions (characters)
-//!     cols: 120,
-//!     rows: 40,
+//! ## Callbacks
 //!
-//!     // Font settings
-//!     font_family: "JetBrains Mono".into(),
-//!     font_size: px(13.0),
-//!
-//!     // Line height multiplier for tall glyphs (nerd fonts)
-//!     line_height_multiplier: 1.2,
-//!
-//!     // Scrollback history (lines)
-//!     scrollback: 10000,
-//!
-//!     // Padding around terminal content
-//!     padding: Edges {
-//!         top: px(4.0),
-//!         right: px(8.0),
-//!         bottom: px(4.0),
-//!         left: px(8.0),
-//!     },
-//!
-//!     // Thin scrollback indicator
-//!     show_scrollbar: true,
-//!
-//!     // Color scheme
-//!     colors: ColorPalette::default(),
-//! };
-//! ```
-//!
-//! ### Custom Color Palette
-//!
-//! Use [`ColorPalette::builder()`] to customize the terminal colors:
-//!
-//! ```
-//! use yttt_terminal::ColorPalette;
-//!
-//! // Create a custom color scheme (Gruvbox-like)
-//! let colors = ColorPalette::builder()
-//!     // Background and foreground
-//!     .background(0x28, 0x28, 0x28)
-//!     .foreground(0xeb, 0xdb, 0xb2)
-//!     .cursor(0xeb, 0xdb, 0xb2)
-//!
-//!     // Normal colors (0-7)
-//!     .black(0x28, 0x28, 0x28)
-//!     .red(0xcc, 0x24, 0x1d)
-//!     .green(0x98, 0x97, 0x1a)
-//!     .yellow(0xd7, 0x99, 0x21)
-//!     .blue(0x45, 0x85, 0x88)
-//!     .magenta(0xb1, 0x62, 0x86)
-//!     .cyan(0x68, 0x9d, 0x6a)
-//!     .white(0xa8, 0x99, 0x84)
-//!
-//!     // Bright colors (8-15)
-//!     .bright_black(0x92, 0x83, 0x74)
-//!     .bright_red(0xfb, 0x49, 0x34)
-//!     .bright_green(0xb8, 0xbb, 0x26)
-//!     .bright_yellow(0xfa, 0xbd, 0x2f)
-//!     .bright_blue(0x83, 0xa5, 0x98)
-//!     .bright_magenta(0xd3, 0x86, 0x9b)
-//!     .bright_cyan(0x8e, 0xc0, 0x7c)
-//!     .bright_white(0xeb, 0xdb, 0xb2)
-//!     .build();
-//! ```
-//!
-//! ## Event Handling
-//!
-//! The terminal provides several callback hooks for integration:
-//!
-//! ### Resize Callback
-//!
-//! **Essential** for proper terminal operation. Called when the terminal grid
-//! dimensions change (e.g., when the window is resized):
-//!
-//! ```ignore
-//! terminal.with_resize_callback(move |cols, rows| {
-//!     // Notify your PTY about the new size
-//!     pty.lock().resize(PtySize {
-//!         cols: cols as u16,
-//!         rows: rows as u16,
-//!         pixel_width: 0,
-//!         pixel_height: 0,
-//!     }).ok();
-//! })
-//! ```
-//!
-//! ### Exit Callback
-//!
-//! Called when the terminal process exits:
-//!
-//! ```ignore
-//! terminal.with_exit_callback(|window, cx| {
-//!     // Close the window or show an exit message
-//!     cx.quit();
-//! })
-//! ```
-//!
-//! ### Key Handler
-//!
-//! Intercept key events before the terminal processes them. Return `true` to
-//! consume the event:
-//!
-//! ```ignore
-//! terminal.with_key_handler(|event| {
-//!     // Handle Ctrl++ to increase font size
-//!     if event.keystroke.modifiers.control && event.keystroke.key == "+" {
-//!         // Your font size logic here
-//!         return true; // Consume the event
-//!     }
-//!     false // Let terminal handle it
-//! })
-//! ```
-//!
-//! ### Other Callbacks
-//!
-//! - **Bell**: `with_bell_callback` - Terminal bell (BEL character)
-//! - **Title**: `with_title_callback` - Window title changes (OSC 0/2)
-//! - **Clipboard**: `with_clipboard_store_callback` - Clipboard write requests (OSC 52)
-//!
-//! ## Dynamic Configuration
-//!
-//! Update terminal settings at runtime with [`TerminalView::update_config`]:
-//!
-//! ```ignore
-//! terminal.update(cx, |terminal, cx| {
-//!     let mut config = terminal.config().clone();
-//!     config.font_size += px(2.0);  // Increase font size
-//!     terminal.update_config(config, cx);
-//! });
-//! ```
-//!
-//! ## Feature Matrix
-//!
-//! | Feature | Status |
-//! |---------|--------|
-//! | Text rendering | ✅ Full support |
-//! | Bold/italic/underline | ✅ Full support |
-//! | 16 ANSI colors | ✅ Full support |
-//! | 256-color mode | ✅ Full support |
-//! | True color (24-bit) | ✅ Full support |
-//! | Keyboard input | ✅ Full support |
-//! | Application cursor mode | ✅ Full support |
-//! | Function keys (F1-F12) | ✅ Full support |
-//! | Mouse click reporting | 🔄 Partial (framework ready) |
-//! | Mouse selection | 🔄 Planned |
-//! | Scrollback | 🔄 Planned |
-//! | Clipboard (OSC 52) | ✅ Callback support |
-//! | Title changes (OSC 0/2) | ✅ Callback support |
-//! | Bell (BEL) | ✅ Callback support |
-//!
-//! ## Platform Support
-//!
-//! - **Linux**: X11 and Wayland via GPUI's platform support
-//! - **Clipboard**: Uses [arboard](https://docs.rs/arboard) with Wayland data-control
+//! - [`TerminalView::with_resize_callback`] receives `(cols, rows)` and returns
+//!   `Result<(), String>`. A failure reports a nonfatal [`PtyIoOperation::Resize`] error while the
+//!   local grid still updates.
+//! - [`TerminalView::with_title_callback`] receives bounded OSC 0/2 title updates.
+//! - [`TerminalView::with_bell_callback`] receives coalesced terminal bells.
+//! - [`TerminalView::with_io_error_callback`] receives `(operation, message, fatal)`. Fatal
+//!   read/write/mailbox errors are followed by exactly one exit callback.
+//! - [`TerminalView::with_exit_callback`] receives [`ExitReason`] without requiring a visible
+//!   window.
+//! - [`TerminalView::with_key_handler`] may consume host shortcuts before terminal encoding.
 //!
 //! ## Modules
 //!
-//! | Module | Description |
-//! |--------|-------------|
-//! | [`view`] | Main terminal view component ([`TerminalView`], [`TerminalConfig`]) |
-//! | [`terminal`] | Terminal state wrapper ([`TerminalState`]) |
-//! | [`colors`] | Color palette ([`ColorPalette`], [`ColorPaletteBuilder`]) |
-//! | [`render`] | Text and background rendering ([`TerminalRenderer`]) |
-//! | [`event`] | Event bridge ([`TerminalEvent`], [`GpuiEventProxy`]) |
-//! | [`input`] | Keyboard to escape sequence conversion |
-//! | [`mouse`] | Mouse event handling and reporting |
-//! | [`clipboard`] | System clipboard integration ([`Clipboard`]) |
-//!
-//! ## Troubleshooting
-//!
-//! ### Terminal shows garbled text
-//!
-//! Configure the child command with the terminal capabilities:
-//! ```ignore
-//! configure_terminal_environment(&mut cmd);
-//! ```
-//! [`pty::spawn_portable_pty_session`] applies this automatically. It advertises
-//! `TERM=xterm-256color`, true color, and the yttt terminal identity. It also
-//! defaults `CLICOLOR=1` for tools such as macOS/BSD `ls`, unless `CLICOLOR`
-//! or `NO_COLOR` is already present in the inherited environment.
-//!
-//! ### Arrow keys don't work in vim/less
-//!
-//! The terminal automatically handles application cursor mode. Ensure your
-//! resize callback is correctly notifying the PTY, as some applications
-//! query terminal dimensions on startup.
-//!
-//! ### Font doesn't render correctly
-//!
-//! Use a monospace font. Nerd fonts work well with `line_height_multiplier: 1.2`
-//! to accommodate tall glyphs.
+//! - [`view`]: GPUI view, configuration, bounded driver, callbacks, and interactions.
+//! - [`terminal`]: shared Alacritty terminal state and geometry adapters.
+//! - [`render`]: immutable terminal snapshots, damage cache, font metrics, and painter.
+//! - [`input`] and [`mouse`]: framework-neutral protocol encoders.
+//! - [`event`]: bounded Alacritty-to-GPUI event bridge.
+//! - [`pty`]: portable-PTY spawning, resize, environment, cancellation, and child reaping.
+//! - [`colors`]: configurable ANSI, indexed, selection, search, hint, and cursor colors.
 
-pub mod clipboard;
 pub mod colors;
 pub mod event;
 pub mod input;
@@ -349,20 +139,28 @@ pub mod mouse;
 pub mod pty;
 pub mod render;
 pub mod terminal;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod view;
 
 // Re-export main types for convenience
-pub use clipboard::Clipboard;
 pub use colors::{ColorPalette, ColorPaletteBuilder};
-pub use event::{GpuiEventProxy, TerminalEvent};
+pub use event::{
+    ClipboardFormatter, ColorFormatter, GpuiEventProxy, MAX_OSC52_BYTES, MAX_TITLE_BYTES,
+    SizeFormatter, TerminalEvent,
+};
+pub use input::{
+    KeyState, TerminalKey, TerminalKeyEvent, TerminalModifiers, TerminalNamedKey, encode_key, paste,
+};
 pub use pty::{
     ExitReason, FakeTerminalRuntime, PortablePtyIo, PortablePtyResizeHandle, PortablePtyRuntime,
-    PortablePtySession, ProcessHandle, ProcessStatus, TerminalExecution, TerminalRuntime,
-    TerminalSpawnRequest, spawn_portable_pty_session,
+    PortablePtySession, ProcessHandle, ProcessStatus, PtyEvent, PtyIoOperation, TerminalExecution,
+    TerminalRuntime, TerminalSpawnRequest, spawn_portable_pty_session,
 };
 pub use render::TerminalRenderer;
 pub use terminal::TerminalState;
 pub use view::{
-    BellCallback, ClipboardStoreCallback, ExitCallback, KeyHandler, ResizeCallback, TerminalConfig,
-    TerminalView, TitleCallback, init,
+    BellCallback, DEFAULT_TERMINAL_URL_REGEX, ExitCallback, IoErrorCallback, KeyHandler,
+    ResizeCallback, TerminalConfig, TerminalCursorShape, TerminalHintAction, TerminalHintConfig,
+    TerminalOsc52Policy, TerminalView, TitleCallback, init, is_valid_hint_alphabet,
 };

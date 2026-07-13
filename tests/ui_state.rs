@@ -62,6 +62,7 @@ use yttt::{
         interaction::key_dispatch::workspace_command_for_keystroke,
     },
 };
+use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
 
 #[test]
 fn git_status_summary_parses_branch_and_dirty_counts() {
@@ -2765,6 +2766,38 @@ fn editor_settings_group_renders_all_effective_controls(cx: &mut gpui::TestAppCo
         assert!(cx.debug_bounds(selector).is_some(), "missing {selector}");
     }
 }
+#[gpui::test]
+fn terminal_settings_group_renders_protocol_and_interaction_controls(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::dev_fixture());
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.open_settings();
+        root.select_settings_group("terminal").unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+
+    for selector in [
+        "settings-terminal-scrollbar-row",
+        "settings-terminal-cursor-shape-row",
+        "settings-terminal-cursor-blinking-row",
+        "settings-terminal-hide-mouse-when-typing-row",
+        "settings-terminal-copy-on-select-row",
+        "settings-terminal-osc52-policy-row",
+        "settings-terminal-kitty-keyboard-row",
+    ] {
+        assert!(cx.debug_bounds(selector).is_some(), "missing {selector}");
+    }
+}
 
 #[test]
 fn root_view_toggles_system_notifications() {
@@ -3022,6 +3055,14 @@ fn root_view_terminal_display_settings_persist() {
     root.set_terminal_padding(8.0).unwrap();
     root.set_terminal_scrollback(20000).unwrap();
     root.set_terminal_show_scrollbar(false).unwrap();
+    root.set_terminal_cursor_shape(TerminalCursorShape::Underline)
+        .unwrap();
+    root.set_terminal_cursor_blinking(true).unwrap();
+    root.set_terminal_hide_mouse_when_typing(true).unwrap();
+    root.set_terminal_copy_on_select(true).unwrap();
+    root.set_terminal_osc52_policy(TerminalOsc52Policy::ReadWrite)
+        .unwrap();
+    root.set_terminal_kitty_keyboard(true).unwrap();
 
     let runtime = &root.theme_runtime().terminal_settings;
     assert_eq!(runtime.font_family, "JetBrains Mono");
@@ -3030,6 +3071,12 @@ fn root_view_terminal_display_settings_persist() {
     assert_eq!(runtime.padding, 8.0);
     assert_eq!(runtime.scrollback, 20000);
     assert!(!runtime.show_scrollbar);
+    assert_eq!(runtime.cursor_shape, TerminalCursorShape::Underline);
+    assert!(runtime.cursor_blinking);
+    assert!(runtime.hide_mouse_when_typing);
+    assert!(runtime.copy_on_select);
+    assert_eq!(runtime.osc52_policy, TerminalOsc52Policy::ReadWrite);
+    assert!(runtime.kitty_keyboard);
 
     let reloaded = WorkbenchView::with_config_paths(paths);
     let terminal = &reloaded.theme_runtime().terminal_settings;
@@ -3039,6 +3086,12 @@ fn root_view_terminal_display_settings_persist() {
     assert_eq!(terminal.padding, 8.0);
     assert_eq!(terminal.scrollback, 20000);
     assert!(!terminal.show_scrollbar);
+    assert_eq!(terminal.cursor_shape, TerminalCursorShape::Underline);
+    assert!(terminal.cursor_blinking);
+    assert!(terminal.hide_mouse_when_typing);
+    assert!(terminal.copy_on_select);
+    assert_eq!(terminal.osc52_policy, TerminalOsc52Policy::ReadWrite);
+    assert!(terminal.kitty_keyboard);
 }
 
 #[test]
@@ -4258,6 +4311,12 @@ fn terminal_pane_exit_event_preserves_process_identity() {
 #[test]
 fn terminal_pane_lifecycle_labels_are_visible() {
     assert_eq!(pane_lifecycle_label(&PaneLifecycle::Running), "running");
+    assert_eq!(
+        pane_lifecycle_label(&PaneLifecycle::Stopping {
+            reason: ExitReason::Completed,
+        }),
+        "stopping"
+    );
     assert_eq!(
         pane_lifecycle_label(&PaneLifecycle::Exited {
             code: Some(0),

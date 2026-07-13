@@ -305,6 +305,22 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsScrollbackDescription => "保留在内存中的终端行数。",
         UiTextKey::SettingsScrollbar => "滚动条",
         UiTextKey::SettingsScrollbarDescription => "在终端面板中显示细滚动指示器。",
+        UiTextKey::SettingsTerminalCursorShape => "光标形状",
+        UiTextKey::SettingsTerminalCursorShapeDescription => "设置终端光标的形状。",
+        UiTextKey::SettingsTerminalCursorBlinking => "光标闪烁",
+        UiTextKey::SettingsTerminalCursorBlinkingDescription => "终端获得焦点时闪烁光标。",
+        UiTextKey::SettingsTerminalHideMouseWhenTyping => "输入时隐藏鼠标",
+        UiTextKey::SettingsTerminalHideMouseWhenTypingDescription => {
+            "向终端发送键盘输入时隐藏指针。"
+        }
+        UiTextKey::SettingsTerminalCopyOnSelect => "选中即复制",
+        UiTextKey::SettingsTerminalCopyOnSelectDescription => {
+            "完成终端文本选择后自动复制，无需执行复制操作。"
+        }
+        UiTextKey::SettingsTerminalOsc52Policy => "OSC 52 剪贴板访问",
+        UiTextKey::SettingsTerminalOsc52PolicyDescription => "控制终端应用对系统剪贴板的访问权限。",
+        UiTextKey::SettingsTerminalKittyKeyboard => "Kitty 键盘协议",
+        UiTextKey::SettingsTerminalKittyKeyboardDescription => "允许终端应用协商 Kitty 键盘协议。",
         UiTextKey::SettingsLayoutSource => "布局来源",
         UiTextKey::SettingsLayoutSourceDescription => "当前项目布局来源。",
         UiTextKey::SettingsOpenProjectFirst => "请先打开项目",

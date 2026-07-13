@@ -1,5 +1,14 @@
+mod driver;
+
+pub use driver::{
+    MAX_COMMANDS, MAX_QUEUED_INPUT_BYTES, MAX_QUEUED_REPLY_BYTES, MAX_USER_COMMANDS,
+    MAX_WRITE_CHUNK_BYTES, PtyEvent, PtyIoOperation, READ_BUFFER_BYTES, READ_QUEUE_CAPACITY,
+    ResizeCallback,
+};
+pub(crate) use driver::{PtyIoDriver, PtyIoHandle};
+
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -109,6 +118,7 @@ pub struct PortablePtySession {
     child: Box<dyn Child + Send + Sync>,
     io: Option<PortablePtyIo>,
     status: ProcessStatus,
+    reaped: bool,
 }
 
 #[derive(Clone)]
@@ -290,7 +300,58 @@ pub fn spawn_portable_pty_session(
         child,
         io: Some(PortablePtyIo { writer, reader }),
         status: ProcessStatus::Running,
+        reaped: false,
     })
+}
+
+const COMPLETED_EXIT_GRACE: Duration = Duration::from_millis(500);
+
+trait ReapableChild {
+    fn poll_exit(&mut self) -> io::Result<Option<portable_pty::ExitStatus>>;
+    fn terminate(&mut self) -> io::Result<()>;
+    fn wait_for_exit(&mut self) -> io::Result<portable_pty::ExitStatus>;
+}
+
+impl<T: Child + ?Sized> ReapableChild for T {
+    fn poll_exit(&mut self) -> io::Result<Option<portable_pty::ExitStatus>> {
+        self.try_wait()
+    }
+
+    fn terminate(&mut self) -> io::Result<()> {
+        self.kill()
+    }
+
+    fn wait_for_exit(&mut self) -> io::Result<portable_pty::ExitStatus> {
+        self.wait()
+    }
+}
+
+fn reap_child<C: ReapableChild + ?Sized>(
+    child: &mut C,
+    reason: ExitReason,
+    completed_grace: Duration,
+) -> io::Result<portable_pty::ExitStatus> {
+    let mut exited = false;
+    if reason == ExitReason::Completed {
+        let deadline = Instant::now() + completed_grace;
+        loop {
+            match child.poll_exit() {
+                Ok(Some(_)) => {
+                    exited = true;
+                    break;
+                }
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Ok(None) | Err(_) => break,
+            }
+        }
+    }
+
+    if reason != ExitReason::Completed || !exited {
+        let _ = child.terminate();
+    }
+    child.wait_for_exit()
 }
 
 impl PortablePtySession {
@@ -311,7 +372,6 @@ impl PortablePtySession {
     pub fn kill(&mut self) -> anyhow::Result<()> {
         if matches!(self.status, ProcessStatus::Running) {
             self.child.kill()?;
-            self.status = ProcessStatus::Exited { code: None };
         }
         Ok(())
     }
@@ -326,6 +386,33 @@ impl PortablePtySession {
         }
 
         self.status
+    }
+
+    /// Consume the session and reap its child exactly once.
+    pub fn finish(mut self, reason: ExitReason) -> anyhow::Result<ProcessStatus> {
+        if self.reaped {
+            return Ok(self.status);
+        }
+        let result = reap_child(&mut *self.child, reason, COMPLETED_EXIT_GRACE);
+        self.reaped = true;
+        let status = result?;
+        self.status = ProcessStatus::Exited {
+            code: Some(exit_status_code(status)),
+        };
+        Ok(self.status)
+    }
+}
+impl Drop for PortablePtySession {
+    fn drop(&mut self) {
+        if self.reaped {
+            return;
+        }
+        let _ = reap_child(&mut *self.child, ExitReason::KilledByUser, Duration::ZERO);
+        self.reaped = true;
+        debug_assert!(
+            false,
+            "PortablePtySession dropped without consuming finish/reap"
+        );
     }
 }
 
@@ -461,6 +548,57 @@ mod tests {
             argv(command_builder(&execution, Path::new("/tmp")).unwrap()),
             vec!["npm", "run", "dev server"]
         );
+    }
+    use crate::test_support::FakeReaperState;
+
+    struct FakeReapChild {
+        state: FakeReaperState,
+        exited_on_poll: bool,
+    }
+
+    impl ReapableChild for FakeReapChild {
+        fn poll_exit(&mut self) -> io::Result<Option<portable_pty::ExitStatus>> {
+            Ok(self
+                .exited_on_poll
+                .then(|| portable_pty::ExitStatus::with_exit_code(0)))
+        }
+
+        fn terminate(&mut self) -> io::Result<()> {
+            self.state.record_kill();
+            Ok(())
+        }
+
+        fn wait_for_exit(&mut self) -> io::Result<portable_pty::ExitStatus> {
+            self.state.record_wait();
+            Ok(portable_pty::ExitStatus::with_exit_code(0))
+        }
+    }
+
+    #[test]
+    fn portable_pty_reaper_kills_and_waits_exactly_once() {
+        let state = FakeReaperState::default();
+        let mut child = FakeReapChild {
+            state: state.clone(),
+            exited_on_poll: false,
+        };
+        reap_child(&mut child, ExitReason::Failed, Duration::ZERO).unwrap();
+        assert_eq!(state.counts(), (1, 1));
+
+        let exited_state = FakeReaperState::default();
+        let mut exited_child = FakeReapChild {
+            state: exited_state.clone(),
+            exited_on_poll: true,
+        };
+        reap_child(&mut exited_child, ExitReason::Completed, Duration::ZERO).unwrap();
+        assert_eq!(exited_state.counts(), (0, 1));
+
+        let stalled_state = FakeReaperState::default();
+        let mut stalled_child = FakeReapChild {
+            state: stalled_state.clone(),
+            exited_on_poll: false,
+        };
+        reap_child(&mut stalled_child, ExitReason::Completed, Duration::ZERO).unwrap();
+        assert_eq!(stalled_state.counts(), (1, 1));
     }
 
     #[test]

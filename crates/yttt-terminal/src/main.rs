@@ -8,20 +8,23 @@ use gpui::{
     AppContext, Context, Edges, Entity, InteractiveElement, IntoElement, KeyDownEvent,
     ParentElement, Render, Styled, Window, div, px,
 };
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-use std::sync::Arc;
 use yttt_terminal::{
-    ColorPalette, TerminalConfig, TerminalView, pty::configure_terminal_environment,
+    ColorPalette, ExitReason, PortablePtySession, TerminalConfig, TerminalSpawnRequest,
+    TerminalView, spawn_portable_pty_session,
 };
 
 /// Wrapper view that holds the terminal and handles font size shortcuts.
 struct TerminalApp {
     terminal: Entity<TerminalView>,
+    session: Option<PortablePtySession>,
 }
 
 impl TerminalApp {
-    fn new(terminal: Entity<TerminalView>) -> Self {
-        Self { terminal }
+    fn new(terminal: Entity<TerminalView>, session: PortablePtySession) -> Self {
+        Self {
+            terminal,
+            session: Some(session),
+        }
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
@@ -50,6 +53,18 @@ impl TerminalApp {
     }
 }
 
+impl Drop for TerminalApp {
+    fn drop(&mut self) {
+        if let Some(session) = self.session.take() {
+            let _ = std::thread::Builder::new()
+                .name("yttt-terminal-example-reaper".to_string())
+                .spawn(move || {
+                    let _ = session.finish(ExitReason::KilledByUser);
+                });
+        }
+    }
+}
+
 impl Render for TerminalApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -63,46 +78,14 @@ fn main() -> Result<()> {
     let app = gpui_platform::application();
     app.run(move |cx| {
         yttt_terminal::init(cx);
-        // Get shell from environment
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let mut session =
+            spawn_portable_pty_session(TerminalSpawnRequest::for_shell("shell", &shell, ""))
+                .expect("Failed to spawn portable PTY session");
+        let io = session.take_io().expect("PTY I/O can only be taken once");
+        let resize_handle = session.resize_handle();
 
-        // Create PTY system
-        let pty_system = native_pty_system();
-
-        // Open a PTY with initial size
-        let pair = pty_system
-            .openpty(PtySize {
-                rows: 24,
-                cols: 80,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .expect("Failed to open PTY");
-
-        // Spawn shell in the PTY
-        let mut cmd = CommandBuilder::new(&shell);
-        configure_terminal_environment(&mut cmd);
-
-        let _child = pair
-            .slave
-            .spawn_command(cmd)
-            .expect("Failed to spawn shell");
-
-        // Get the master PTY handles for I/O
-        let writer = pair.master.take_writer().expect("Failed to get PTY writer");
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .expect("Failed to get PTY reader");
-
-        // Keep the master for resizing
-        let pty_master = Arc::new(parking_lot::Mutex::new(pair.master));
-
-        // Drop the slave - we don't need it anymore after spawning
-        drop(pair.slave);
-
-        // Spawn window creation on the main thread
-        let pty_master_clone = pty_master.clone();
+        // Spawn window creation on the main thread.
         cx.spawn(async move |cx| {
             let colors = ColorPalette::builder()
                 .background(0x16, 0x16, 0x17)
@@ -138,19 +121,13 @@ fn main() -> Result<()> {
                 padding: Edges::all(px(8.0)),
                 show_scrollbar: true,
                 colors,
+                ..TerminalConfig::default()
             };
 
-            // Create resize callback that notifies the PTY
-            let pty_for_resize = pty_master_clone.clone();
-            let resize_callback = move |cols: usize, rows: usize| {
-                if let Err(e) = pty_for_resize.lock().resize(PtySize {
-                    cols: cols as u16,
-                    rows: rows as u16,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                }) {
-                    eprintln!("Failed to resize PTY: {}", e);
-                }
+            let resize_callback = move |cols: u16, rows: u16| {
+                resize_handle
+                    .resize(cols as usize, rows as usize)
+                    .map_err(|error| error.to_string())
             };
 
             cx.open_window(
@@ -164,9 +141,9 @@ fn main() -> Result<()> {
                 |window, cx| {
                     // Create the terminal view
                     let terminal = cx.new(|cx| {
-                        TerminalView::new(writer, reader, config, cx)
+                        TerminalView::new(io.writer, io.reader, config, cx)
                             .with_resize_callback(resize_callback)
-                            .with_exit_callback(|_window, cx| {
+                            .with_exit_callback(|cx, _reason| {
                                 cx.quit();
                             })
                     });
@@ -176,7 +153,7 @@ fn main() -> Result<()> {
                     focus_handle.focus(window, cx);
 
                     // Wrap in TerminalApp to handle font size shortcuts
-                    cx.new(|_cx| TerminalApp::new(terminal))
+                    cx.new(|_cx| TerminalApp::new(terminal, session))
                 },
             )?;
 

@@ -139,6 +139,64 @@ pub(super) fn language_setting_from_label(label: &str) -> Option<LanguageSetting
     }
 }
 
+pub(super) fn terminal_cursor_shape_labels() -> Vec<String> {
+    [
+        TerminalCursorShape::Block,
+        TerminalCursorShape::Underline,
+        TerminalCursorShape::Beam,
+    ]
+    .into_iter()
+    .map(terminal_cursor_shape_label)
+    .map(ToString::to_string)
+    .collect()
+}
+
+pub(super) fn terminal_cursor_shape_label(shape: TerminalCursorShape) -> &'static str {
+    match shape {
+        TerminalCursorShape::Block => "Block",
+        TerminalCursorShape::Underline => "Underline",
+        TerminalCursorShape::Beam => "Beam",
+    }
+}
+
+pub(super) fn terminal_cursor_shape_from_label(label: &str) -> Option<TerminalCursorShape> {
+    match label {
+        "Block" => Some(TerminalCursorShape::Block),
+        "Underline" => Some(TerminalCursorShape::Underline),
+        "Beam" => Some(TerminalCursorShape::Beam),
+        _ => None,
+    }
+}
+
+pub(super) fn terminal_osc52_policy_labels() -> Vec<String> {
+    [
+        TerminalOsc52Policy::Disabled,
+        TerminalOsc52Policy::CopyOnly,
+        TerminalOsc52Policy::ReadWrite,
+    ]
+    .into_iter()
+    .map(terminal_osc52_policy_label)
+    .map(ToString::to_string)
+    .collect()
+}
+
+pub(super) fn terminal_osc52_policy_label(policy: TerminalOsc52Policy) -> &'static str {
+    match policy {
+        TerminalOsc52Policy::Disabled => "Disabled",
+        TerminalOsc52Policy::CopyOnly => "Copy only",
+        TerminalOsc52Policy::ReadWrite => "Read and write",
+    }
+}
+
+pub(super) fn terminal_osc52_policy_from_label(label: &str) -> Option<TerminalOsc52Policy> {
+    match label {
+        "Disabled" => Some(TerminalOsc52Policy::Disabled),
+        "Copy only" => Some(TerminalOsc52Policy::CopyOnly),
+        "Read and write" => Some(TerminalOsc52Policy::ReadWrite),
+        _ => None,
+    }
+}
+
 pub(super) fn parse_keybinding_edit_value(value: &str) -> Vec<String> {
     value
         .split(',')

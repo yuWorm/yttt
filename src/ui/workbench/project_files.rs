@@ -589,7 +589,7 @@ impl WorkbenchView {
         });
     }
 
-    fn spawn_project_entry_delete(
+    pub(super) fn spawn_project_entry_delete(
         &mut self,
         project_id: ProjectId,
         relative_path: PathBuf,

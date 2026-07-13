@@ -357,6 +357,12 @@ fn terminal_config_uses_runtime_settings_and_colors() {
     runtime.terminal_settings.font_size = 15.0;
     runtime.terminal_settings.padding = 8.0;
     runtime.terminal_settings.show_scrollbar = false;
+    runtime.terminal_settings.cursor_shape = yttt_terminal::TerminalCursorShape::Beam;
+    runtime.terminal_settings.cursor_blinking = true;
+    runtime.terminal_settings.hide_mouse_when_typing = true;
+    runtime.terminal_settings.copy_on_select = true;
+    runtime.terminal_settings.osc52_policy = yttt_terminal::TerminalOsc52Policy::ReadWrite;
+    runtime.terminal_settings.kitty_keyboard = true;
 
     let config = runtime.to_terminal_config();
 
@@ -365,6 +371,18 @@ fn terminal_config_uses_runtime_settings_and_colors() {
     assert_eq!(config.padding.left, gpui::px(8.0));
     assert_eq!(config.scrollback, 10000);
     assert!(!config.show_scrollbar);
+    assert_eq!(
+        config.cursor_shape,
+        yttt_terminal::TerminalCursorShape::Beam
+    );
+    assert!(config.cursor_blinking);
+    assert!(config.hide_mouse_when_typing);
+    assert!(config.copy_on_select);
+    assert_eq!(
+        config.osc52_policy,
+        yttt_terminal::TerminalOsc52Policy::ReadWrite
+    );
+    assert!(config.kitty_keyboard);
 }
 
 #[test]

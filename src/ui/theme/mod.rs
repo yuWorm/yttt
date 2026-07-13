@@ -137,6 +137,19 @@ impl ThemeRuntime {
             line_height_multiplier: self.terminal_settings.line_height,
             padding: Edges::all(px(self.terminal_settings.padding)),
             show_scrollbar: self.terminal_settings.show_scrollbar,
+            cursor_shape: self.terminal_settings.cursor_shape,
+            cursor_blinking: self.terminal_settings.cursor_blinking,
+            cursor_blink_interval_ms: self.terminal_settings.cursor_blink_interval_ms,
+            cursor_blink_timeout_secs: self.terminal_settings.cursor_blink_timeout_secs as u8,
+            cursor_unfocused_hollow: self.terminal_settings.cursor_unfocused_hollow,
+            cursor_thickness: self.terminal_settings.cursor_thickness,
+            hide_mouse_when_typing: self.terminal_settings.hide_mouse_when_typing,
+            copy_on_select: self.terminal_settings.copy_on_select,
+            semantic_escape_chars: self.terminal_settings.semantic_escape_chars.clone(),
+            osc52_policy: self.terminal_settings.osc52_policy,
+            kitty_keyboard: self.terminal_settings.kitty_keyboard,
+            hint_alphabet: self.terminal_settings.hint_alphabet.clone(),
+            hints: self.terminal_settings.hints.clone(),
             colors: self.terminal.to_color_palette(),
         }
     }
@@ -220,6 +233,16 @@ pub struct TerminalTheme {
     pub foreground: Rgba,
     pub cursor: Option<Rgba>,
     pub selection_background: Option<Rgba>,
+    pub selection_foreground: Option<Rgba>,
+    pub cursor_text: Option<Rgba>,
+    pub search_foreground: Rgba,
+    pub search_background: Rgba,
+    pub focused_search_foreground: Rgba,
+    pub focused_search_background: Rgba,
+    pub hint_start_foreground: Rgba,
+    pub hint_start_background: Rgba,
+    pub hint_end_foreground: Rgba,
+    pub hint_end_background: Rgba,
     pub normal: AnsiColors,
     pub bright: AnsiColors,
     pub indexed_colors: Vec<IndexedColor>,
@@ -239,6 +262,33 @@ impl TerminalTheme {
             .foreground(foreground_r, foreground_g, foreground_b)
             .cursor(cursor_r, cursor_g, cursor_b)
             .selection_background(selection_r, selection_g, selection_b);
+
+        if let Some(color) = self.selection_foreground {
+            let (r, g, b) = color_bytes(color);
+            builder = builder.selection_foreground(r, g, b);
+        }
+        if let Some(color) = self.cursor_text {
+            let (r, g, b) = color_bytes(color);
+            builder = builder.cursor_text(r, g, b);
+        }
+
+        builder = builder
+            .search(
+                color_bytes(self.search_foreground),
+                color_bytes(self.search_background),
+            )
+            .focused_search(
+                color_bytes(self.focused_search_foreground),
+                color_bytes(self.focused_search_background),
+            )
+            .hint_start(
+                color_bytes(self.hint_start_foreground),
+                color_bytes(self.hint_start_background),
+            )
+            .hint_end(
+                color_bytes(self.hint_end_foreground),
+                color_bytes(self.hint_end_background),
+            );
 
         let (r, g, b) = color_bytes(self.normal.black);
         builder = builder.black(r, g, b);

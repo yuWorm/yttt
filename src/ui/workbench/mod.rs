@@ -15,7 +15,8 @@ use gpui_component::{
     scroll::ScrollableElement as _,
     select::{SearchableVec, Select, SelectEvent, SelectState},
 };
-use yttt_terminal::input::keystroke_to_bytes;
+use yttt_terminal::input::{KeyState, TerminalKeyEvent};
+use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
 
 mod action_handlers;
 mod dialogs;
@@ -946,7 +947,7 @@ impl WorkbenchView {
         self.terminal_input_allowed()
             && self.selected_focused_pane_id().is_some()
             && !keystroke.modifiers.platform
-            && keystroke_to_bytes(keystroke, Default::default()).is_some()
+            && TerminalKeyEvent::from_gpui_keystroke(keystroke, KeyState::Pressed, false).is_some()
     }
 
     pub fn set_keybinding_command_keys(
@@ -1846,6 +1847,12 @@ impl WorkbenchView {
         self.settings.settings_icon_theme_select_subscription = None;
         self.settings.settings_terminal_theme_select = None;
         self.settings.settings_terminal_theme_select_subscription = None;
+        self.settings.settings_terminal_cursor_shape_select = None;
+        self.settings
+            .settings_terminal_cursor_shape_select_subscription = None;
+        self.settings.settings_terminal_osc52_policy_select = None;
+        self.settings
+            .settings_terminal_osc52_policy_select_subscription = None;
         self.settings.settings_editor_language_select = None;
         self.settings.settings_editor_language_select_subscription = None;
         self.settings.settings_font_family_select = None;

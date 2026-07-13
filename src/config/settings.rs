@@ -6,6 +6,10 @@ use std::{
 use crate::config::paths::AppConfigPaths;
 use crate::ui::theme::DEFAULT_THEME_NAME;
 
+use yttt_terminal::{
+    TerminalCursorShape, TerminalHintConfig, TerminalOsc52Policy, is_valid_hint_alphabet,
+};
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -98,6 +102,19 @@ pub struct TerminalSettings {
     pub padding: f32,
     pub scrollback: usize,
     pub show_scrollbar: bool,
+    pub cursor_shape: TerminalCursorShape,
+    pub cursor_blinking: bool,
+    pub cursor_blink_interval_ms: u64,
+    pub cursor_blink_timeout_secs: u16,
+    pub cursor_unfocused_hollow: bool,
+    pub cursor_thickness: f32,
+    pub hide_mouse_when_typing: bool,
+    pub copy_on_select: bool,
+    pub semantic_escape_chars: String,
+    pub osc52_policy: TerminalOsc52Policy,
+    pub kitty_keyboard: bool,
+    pub hint_alphabet: String,
+    pub hints: Vec<TerminalHintConfig>,
 }
 
 impl Default for TerminalSettings {
@@ -111,8 +128,25 @@ impl Default for TerminalSettings {
             padding: 6.0,
             scrollback: 10000,
             show_scrollbar: true,
+            cursor_shape: TerminalCursorShape::Block,
+            cursor_blinking: false,
+            cursor_blink_interval_ms: 750,
+            cursor_blink_timeout_secs: 5,
+            cursor_unfocused_hollow: true,
+            cursor_thickness: 0.15,
+            hide_mouse_when_typing: false,
+            copy_on_select: false,
+            semantic_escape_chars: alacritty_terminal_semantic_escapes(),
+            osc52_policy: TerminalOsc52Policy::CopyOnly,
+            kitty_keyboard: false,
+            hint_alphabet: "jfkdls;ahgurieowpq".to_string(),
+            hints: vec![TerminalHintConfig::default()],
         }
     }
+}
+
+fn alacritty_terminal_semantic_escapes() -> String {
+    ",│`|:\"' ()[]{}<>\t".to_string()
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -564,6 +598,46 @@ fn validate_settings(
         warnings.push(SettingsLoadWarning::InvalidTerminalValue {
             field: "scrollback",
         });
+    }
+    if settings.terminal.cursor_blink_interval_ms < 10 {
+        settings.terminal.cursor_blink_interval_ms = defaults.cursor_blink_interval_ms;
+        warnings.push(SettingsLoadWarning::InvalidTerminalValue {
+            field: "cursor_blink_interval_ms",
+        });
+    }
+    if settings.terminal.cursor_blink_timeout_secs > u8::MAX as u16 {
+        settings.terminal.cursor_blink_timeout_secs = defaults.cursor_blink_timeout_secs;
+        warnings.push(SettingsLoadWarning::InvalidTerminalValue {
+            field: "cursor_blink_timeout_secs",
+        });
+    }
+    if !settings.terminal.cursor_thickness.is_finite()
+        || !(0.05..=1.0).contains(&settings.terminal.cursor_thickness)
+    {
+        settings.terminal.cursor_thickness = defaults.cursor_thickness;
+        warnings.push(SettingsLoadWarning::InvalidTerminalValue {
+            field: "cursor_thickness",
+        });
+    }
+    if settings.terminal.semantic_escape_chars.is_empty() {
+        settings.terminal.semantic_escape_chars = defaults.semantic_escape_chars.clone();
+        warnings.push(SettingsLoadWarning::InvalidTerminalValue {
+            field: "semantic_escape_chars",
+        });
+    }
+    if !is_valid_hint_alphabet(&settings.terminal.hint_alphabet) {
+        settings.terminal.hint_alphabet = defaults.hint_alphabet.clone();
+        warnings.push(SettingsLoadWarning::InvalidTerminalValue {
+            field: "hint_alphabet",
+        });
+    }
+    let original_hint_count = settings.terminal.hints.len();
+    settings.terminal.hints.retain(TerminalHintConfig::is_valid);
+    if settings.terminal.hints.is_empty() {
+        settings.terminal.hints = defaults.hints.clone();
+    }
+    if settings.terminal.hints.len() != original_hint_count {
+        warnings.push(SettingsLoadWarning::InvalidTerminalValue { field: "hints" });
     }
     if settings.terminal.shell.trim().is_empty() {
         settings.terminal.shell = defaults.shell;

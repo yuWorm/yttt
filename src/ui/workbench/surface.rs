@@ -536,6 +536,13 @@ impl WorkbenchView {
                 }
                 cx.notify();
             }
+            TerminalPaneEvent::IoError { message, .. } => {
+                self.load_error = Some(message.clone());
+                cx.notify();
+            }
+            TerminalPaneEvent::TitleChanged { .. } => {
+                cx.notify();
+            }
             TerminalPaneEvent::Exited(event) => {
                 if let Err(error) = self.handle_terminal_pane_exit(event.clone()) {
                     self.load_error = Some(error.to_string());

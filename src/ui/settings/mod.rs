@@ -260,6 +260,30 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 UiTextKey::SettingsScrollbar,
                 UiTextKey::SettingsScrollbarDescription,
             ),
+            row(
+                UiTextKey::SettingsTerminalCursorShape,
+                UiTextKey::SettingsTerminalCursorShapeDescription,
+            ),
+            row(
+                UiTextKey::SettingsTerminalCursorBlinking,
+                UiTextKey::SettingsTerminalCursorBlinkingDescription,
+            ),
+            row(
+                UiTextKey::SettingsTerminalHideMouseWhenTyping,
+                UiTextKey::SettingsTerminalHideMouseWhenTypingDescription,
+            ),
+            row(
+                UiTextKey::SettingsTerminalCopyOnSelect,
+                UiTextKey::SettingsTerminalCopyOnSelectDescription,
+            ),
+            row(
+                UiTextKey::SettingsTerminalOsc52Policy,
+                UiTextKey::SettingsTerminalOsc52PolicyDescription,
+            ),
+            row(
+                UiTextKey::SettingsTerminalKittyKeyboard,
+                UiTextKey::SettingsTerminalKittyKeyboardDescription,
+            ),
         ],
         SettingsGroupId::DefaultLayout => vec![
             row(

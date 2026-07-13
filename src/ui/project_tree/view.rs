@@ -1218,7 +1218,7 @@ mod tests {
         let snapshot = ProjectTreeRenderSnapshot::from_tree(&model, None);
         let view_slot = Rc::new(RefCell::new(None));
         let view_slot_for_window = view_slot.clone();
-        let (_root, mut cx) = cx.add_window_view(move |window, cx| {
+        let (_root, cx) = cx.add_window_view(move |window, cx| {
             let view = cx.new(|cx| ProjectTreeView::new(snapshot, cx));
             *view_slot_for_window.borrow_mut() = Some(view.clone());
             gpui_component::Root::new(view, window, cx)
@@ -1304,7 +1304,7 @@ mod tests {
             ProjectTreeRenderSnapshot::from_tree(&ProjectFileTree::new("/project"), None);
         let view_slot = Rc::new(RefCell::new(None));
         let view_slot_for_window = view_slot.clone();
-        let (_root, mut cx) = cx.add_window_view(move |window, cx| {
+        let (_root, cx) = cx.add_window_view(move |window, cx| {
             let view = cx.new(|cx| ProjectTreeView::new(snapshot, cx));
             *view_slot_for_window.borrow_mut() = Some(view.clone());
             gpui_component::Root::new(view, window, cx)

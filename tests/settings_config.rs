@@ -9,6 +9,7 @@ use yttt::config::{
         resolve_default_shell, save_settings,
     },
 };
+use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
 
 #[test]
 fn app_config_paths_expose_settings_and_theme_dir() {
@@ -40,6 +41,28 @@ fn missing_settings_file_writes_defaults() {
     assert_eq!(loaded.settings.terminal.padding, 6.0);
     assert_eq!(loaded.settings.terminal.scrollback, 10000);
     assert!(loaded.settings.terminal.show_scrollbar);
+    assert_eq!(
+        loaded.settings.terminal.cursor_shape,
+        TerminalCursorShape::Block
+    );
+    assert!(!loaded.settings.terminal.cursor_blinking);
+    assert_eq!(loaded.settings.terminal.cursor_blink_interval_ms, 750);
+    assert_eq!(loaded.settings.terminal.cursor_blink_timeout_secs, 5);
+    assert_eq!(loaded.settings.terminal.cursor_thickness, 0.15);
+    assert!(loaded.settings.terminal.cursor_unfocused_hollow);
+    assert!(!loaded.settings.terminal.hide_mouse_when_typing);
+    assert!(!loaded.settings.terminal.copy_on_select);
+    assert_eq!(
+        loaded.settings.terminal.osc52_policy,
+        TerminalOsc52Policy::CopyOnly
+    );
+    assert!(!loaded.settings.terminal.kitty_keyboard);
+    assert_eq!(
+        loaded.settings.terminal.semantic_escape_chars,
+        ",│`|:\"' ()[]{}<>\t"
+    );
+    assert_eq!(loaded.settings.terminal.hint_alphabet, "jfkdls;ahgurieowpq");
+    assert_eq!(loaded.settings.terminal.hints.len(), 1);
     assert!(loaded.settings.editor.auto_detect_language);
     assert_eq!(loaded.settings.editor.default_language, "plain_text");
     assert!(!loaded.settings.editor.lsp.enabled);
@@ -96,6 +119,32 @@ scrollback = 0
     assert_eq!(loaded.settings.terminal.line_height, 1.15);
     assert_eq!(loaded.settings.terminal.padding, 6.0);
     assert_eq!(loaded.settings.terminal.scrollback, 10000);
+    assert_eq!(loaded.warnings.len(), 4);
+}
+
+#[test]
+fn terminal_settings_reject_invalid_protocol_values() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(
+        paths.settings_file(),
+        r#"
+[terminal]
+cursor_blink_interval_ms = 1
+cursor_blink_timeout_secs = 256
+cursor_thickness = 2.0
+hint_alphabet = "界"
+"#,
+    )
+    .unwrap();
+
+    let loaded = load_or_create_settings(&paths).unwrap();
+    let terminal = loaded.settings.terminal;
+    assert_eq!(terminal.cursor_blink_interval_ms, 750);
+    assert_eq!(terminal.cursor_blink_timeout_secs, 5);
+    assert_eq!(terminal.cursor_thickness, 0.15);
+    assert_eq!(terminal.hint_alphabet, "jfkdls;ahgurieowpq");
     assert_eq!(loaded.warnings.len(), 4);
 }
 

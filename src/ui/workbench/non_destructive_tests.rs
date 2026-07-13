@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     rc::Rc,
+    time::{Duration, Instant},
 };
 
 use gpui::{EntityId, TestAppContext};
@@ -63,7 +64,7 @@ fn active_terminal_content_receives_default_focus(cx: &mut TestAppContext) {
         .open_project(project_path, dev_fixture_layout())
         .unwrap();
 
-    let (root, mut cx) = cx.add_window_view(|_, _| {
+    let (root, cx) = cx.add_window_view(|_, _| {
         WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
     });
     cx.run_until_parked();
@@ -101,7 +102,7 @@ fn titlebar_renders_branch_and_changes_actions(cx: &mut TestAppContext) {
         .open_project(project_path, dev_fixture_layout())
         .unwrap();
 
-    let (_root, mut cx) = cx.add_window_view(|_, _| {
+    let (_root, cx) = cx.add_window_view(|_, _| {
         let mut root =
             WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths);
         root.project.project_git_statuses.insert(
@@ -139,7 +140,7 @@ fn git_diff_panel_renders_controls_and_handles_shortcuts(cx: &mut TestAppContext
     workspace
         .open_project(project_path, dev_fixture_layout())
         .unwrap();
-    let (root, mut cx) = cx.add_window_view(|_, _| {
+    let (root, cx) = cx.add_window_view(|_, _| {
         let mut root =
             WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths);
         root.app_settings.editor.font_family = "YTTT Test Editor Font".to_string();
@@ -314,7 +315,7 @@ fn git_diff_split_panes_share_vertical_scroll_but_keep_horizontal_scroll_indepen
     workspace
         .open_project(project_path, dev_fixture_layout())
         .unwrap();
-    let (root, mut cx) = cx.add_window_view(|_, _| {
+    let (root, cx) = cx.add_window_view(|_, _| {
         WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
     });
     root.update_in(cx, |root, _window, cx| {
@@ -446,7 +447,7 @@ fn project_entry_delete_alert_renders_and_executes_confirmation(cx: &mut TestApp
         .unwrap();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
-    let (_component_root, mut cx) = cx.add_window_view(move |window, cx| {
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| {
             WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
         });
@@ -464,15 +465,26 @@ fn project_entry_delete_alert_renders_and_executes_confirmation(cx: &mut TestApp
     });
 
     root.update_in(cx, |root, window, root_cx| {
-        root.confirm_project_entry_delete(project_id, PathBuf::from("victim.txt"), window, root_cx);
+        root.confirm_project_entry_delete(
+            project_id.clone(),
+            PathBuf::from("victim.txt"),
+            window,
+            root_cx,
+        );
     });
     cx.run_until_parked();
 
-    let confirm = cx
-        .debug_bounds("project-entry-delete-confirm")
+    cx.debug_bounds("project-entry-delete-confirm")
         .expect("delete confirmation must render an actionable button");
-    cx.simulate_click(confirm.center(), gpui::Modifiers::none());
+    root.update_in(cx, |root, window, root_cx| {
+        root.spawn_project_entry_delete(project_id, PathBuf::from("victim.txt"), window, root_cx);
+    });
     cx.run_until_parked();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while victim_path.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+        cx.run_until_parked();
+    }
 
     assert!(!victim_path.exists());
 }

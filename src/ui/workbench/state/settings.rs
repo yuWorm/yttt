@@ -25,6 +25,12 @@ pub(in super::super) struct SettingsControllerState {
     pub(in super::super) settings_icon_theme_select_subscription: Option<Subscription>,
     pub(in super::super) settings_terminal_theme_select: Option<Entity<SettingsStringSelectState>>,
     pub(in super::super) settings_terminal_theme_select_subscription: Option<Subscription>,
+    pub(in super::super) settings_terminal_cursor_shape_select:
+        Option<Entity<SettingsStringSelectState>>,
+    pub(in super::super) settings_terminal_cursor_shape_select_subscription: Option<Subscription>,
+    pub(in super::super) settings_terminal_osc52_policy_select:
+        Option<Entity<SettingsStringSelectState>>,
+    pub(in super::super) settings_terminal_osc52_policy_select_subscription: Option<Subscription>,
     pub(in super::super) settings_editor_language_select: Option<Entity<SettingsStringSelectState>>,
     pub(in super::super) settings_editor_language_select_subscription: Option<Subscription>,
     pub(in super::super) settings_font_family_select: Option<Entity<SettingsStringSelectState>>,
@@ -63,6 +69,10 @@ impl SettingsControllerState {
             settings_icon_theme_select_subscription: None,
             settings_terminal_theme_select: None,
             settings_terminal_theme_select_subscription: None,
+            settings_terminal_cursor_shape_select: None,
+            settings_terminal_cursor_shape_select_subscription: None,
+            settings_terminal_osc52_policy_select: None,
+            settings_terminal_osc52_policy_select_subscription: None,
             settings_editor_language_select: None,
             settings_editor_language_select_subscription: None,
             settings_font_family_select: None,

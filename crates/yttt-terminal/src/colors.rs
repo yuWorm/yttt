@@ -88,180 +88,206 @@ use gpui::Hsla;
 ///     .foreground(0xeb, 0xdb, 0xb2)
 ///     .build();
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ColorPalette {
-    /// The 16 standard ANSI colors (black, red, green, yellow, blue, magenta, cyan, white,
-    /// and their bright variants)
     ansi_colors: [Hsla; 16],
-
-    /// The 256-color palette (colors 16-255)
-    /// Colors 0-15 are the standard ANSI colors
-    /// Colors 16-231 are a 6x6x6 RGB cube
-    /// Colors 232-255 are grayscale
+    ansi_rgb: [Rgb; 16],
     extended_colors: [Hsla; 256],
-
-    /// Default foreground color
+    extended_rgb: [Rgb; 256],
     foreground: Hsla,
-
-    /// Default background color
+    foreground_rgb: Rgb,
     background: Hsla,
-
-    /// Default cursor color
+    background_rgb: Rgb,
     cursor: Hsla,
-
-    /// Selection background color
+    cursor_rgb: Rgb,
     selection_background: Hsla,
+    selection_background_rgb: Rgb,
+    selection_foreground: Option<Hsla>,
+    selection_foreground_rgb: Option<Rgb>,
+    cursor_text: Option<Hsla>,
+    cursor_text_rgb: Option<Rgb>,
+    search_foreground: Hsla,
+    search_background: Hsla,
+    focused_search_foreground: Hsla,
+    focused_search_background: Hsla,
+    hint_start_foreground: Hsla,
+    hint_start_background: Hsla,
+    hint_end_foreground: Hsla,
+    hint_end_background: Hsla,
 }
 
 impl Default for ColorPalette {
     fn default() -> Self {
-        // Standard ANSI colors (based on common terminal emulator defaults)
-        let ansi_colors = [
-            // Normal colors
-            rgb_to_hsla(Rgb {
+        let ansi_rgb = [
+            Rgb {
                 r: 0x00,
                 g: 0x00,
                 b: 0x00,
-            }), // Black
-            rgb_to_hsla(Rgb {
+            },
+            Rgb {
                 r: 0xcc,
                 g: 0x00,
                 b: 0x00,
-            }), // Red
-            rgb_to_hsla(Rgb {
+            },
+            Rgb {
                 r: 0x4e,
                 g: 0x9a,
                 b: 0x06,
-            }), // Green
-            rgb_to_hsla(Rgb {
+            },
+            Rgb {
                 r: 0xc4,
                 g: 0xa0,
                 b: 0x00,
-            }), // Yellow
-            rgb_to_hsla(Rgb {
+            },
+            Rgb {
                 r: 0x34,
                 g: 0x65,
                 b: 0xa4,
-            }), // Blue
-            rgb_to_hsla(Rgb {
+            },
+            Rgb {
                 r: 0x75,
                 g: 0x50,
                 b: 0x7b,
-            }), // Magenta
-            rgb_to_hsla(Rgb {
+            },
+            Rgb {
                 r: 0x06,
                 g: 0x98,
                 b: 0x9a,
-            }), // Cyan
-            rgb_to_hsla(Rgb {
+            },
+            Rgb {
                 r: 0xd3,
                 g: 0xd7,
                 b: 0xcf,
-            }), // White
-            // Bright colors
-            rgb_to_hsla(Rgb {
+            },
+            Rgb {
                 r: 0x55,
                 g: 0x57,
                 b: 0x53,
-            }), // Bright Black (Gray)
-            rgb_to_hsla(Rgb {
+            },
+            Rgb {
                 r: 0xef,
                 g: 0x29,
                 b: 0x29,
-            }), // Bright Red
-            rgb_to_hsla(Rgb {
+            },
+            Rgb {
                 r: 0x8a,
                 g: 0xe2,
                 b: 0x34,
-            }), // Bright Green
-            rgb_to_hsla(Rgb {
+            },
+            Rgb {
                 r: 0xfc,
                 g: 0xe9,
                 b: 0x4f,
-            }), // Bright Yellow
-            rgb_to_hsla(Rgb {
+            },
+            Rgb {
                 r: 0x72,
                 g: 0x9f,
                 b: 0xcf,
-            }), // Bright Blue
-            rgb_to_hsla(Rgb {
+            },
+            Rgb {
                 r: 0xad,
                 g: 0x7f,
                 b: 0xa8,
-            }), // Bright Magenta
-            rgb_to_hsla(Rgb {
+            },
+            Rgb {
                 r: 0x34,
                 g: 0xe2,
                 b: 0xe2,
-            }), // Bright Cyan
-            rgb_to_hsla(Rgb {
+            },
+            Rgb {
                 r: 0xee,
                 g: 0xee,
                 b: 0xec,
-            }), // Bright White
+            },
         ];
+        let ansi_colors = ansi_rgb.map(rgb_to_hsla);
+        let mut extended_rgb = [Rgb { r: 0, g: 0, b: 0 }; 256];
+        extended_rgb[..16].copy_from_slice(&ansi_rgb);
 
-        // Build the full 256-color palette
-        let mut extended_colors = [Hsla::default(); 256];
-
-        // First 16 colors are the standard ANSI colors
-        extended_colors[0..16].copy_from_slice(&ansi_colors);
-
-        // Colors 16-231: 6x6x6 RGB cube
-        let mut idx = 16;
-        for r in 0..6 {
-            for g in 0..6 {
-                for b in 0..6 {
-                    let rgb = Rgb {
-                        r: if r == 0 { 0 } else { 55 + r * 40 },
-                        g: if g == 0 { 0 } else { 55 + g * 40 },
-                        b: if b == 0 { 0 } else { 55 + b * 40 },
+        let mut index = 16;
+        for red in 0..6 {
+            for green in 0..6 {
+                for blue in 0..6 {
+                    extended_rgb[index] = Rgb {
+                        r: if red == 0 { 0 } else { 55 + red * 40 },
+                        g: if green == 0 { 0 } else { 55 + green * 40 },
+                        b: if blue == 0 { 0 } else { 55 + blue * 40 },
                     };
-                    extended_colors[idx] = rgb_to_hsla(rgb);
-                    idx += 1;
+                    index += 1;
                 }
             }
         }
-
-        // Colors 232-255: Grayscale ramp
-        for i in 0..24 {
-            let gray = (8 + i * 10) as u8;
-            extended_colors[232 + i] = rgb_to_hsla(Rgb {
+        for index in 0..24 {
+            let gray = (8 + index * 10) as u8;
+            extended_rgb[232 + index] = Rgb {
                 r: gray,
                 g: gray,
                 b: gray,
-            });
+            };
         }
+        let extended_colors = extended_rgb.map(rgb_to_hsla);
 
-        // Default terminal colors
-        let foreground = rgb_to_hsla(Rgb {
+        let foreground_rgb = Rgb {
             r: 0xd4,
             g: 0xd4,
             b: 0xd4,
-        }); // Light gray
-        let background = rgb_to_hsla(Rgb {
+        };
+        let background_rgb = Rgb {
             r: 0x1e,
             g: 0x1e,
             b: 0x1e,
-        }); // Dark gray
-        let cursor = rgb_to_hsla(Rgb {
+        };
+        let cursor_rgb = Rgb {
             r: 0xff,
             g: 0xff,
             b: 0xff,
-        }); // White
-        let selection_background = rgb_to_hsla(Rgb {
+        };
+        let selection_background_rgb = Rgb {
             r: 0x32,
             g: 0x3a,
             b: 0x4d,
-        });
+        };
+        let search_rgb = Rgb {
+            r: 0x18,
+            g: 0x18,
+            b: 0x18,
+        };
+        let search_background_rgb = Rgb {
+            r: 0xac,
+            g: 0x42,
+            b: 0x42,
+        };
+        let focused_background_rgb = Rgb {
+            r: 0xf4,
+            g: 0xbf,
+            b: 0x75,
+        };
 
         Self {
             ansi_colors,
+            ansi_rgb,
             extended_colors,
-            foreground,
-            background,
-            cursor,
-            selection_background,
+            extended_rgb,
+            foreground: rgb_to_hsla(foreground_rgb),
+            foreground_rgb,
+            background: rgb_to_hsla(background_rgb),
+            background_rgb,
+            cursor: rgb_to_hsla(cursor_rgb),
+            cursor_rgb,
+            selection_background: rgb_to_hsla(selection_background_rgb),
+            selection_background_rgb,
+            selection_foreground: None,
+            selection_foreground_rgb: None,
+            cursor_text: None,
+            cursor_text_rgb: None,
+            search_foreground: rgb_to_hsla(search_rgb),
+            search_background: rgb_to_hsla(search_background_rgb),
+            focused_search_foreground: rgb_to_hsla(search_rgb),
+            focused_search_background: rgb_to_hsla(focused_background_rgb),
+            hint_start_foreground: rgb_to_hsla(search_rgb),
+            hint_start_background: rgb_to_hsla(focused_background_rgb),
+            hint_end_foreground: rgb_to_hsla(search_rgb),
+            hint_end_background: rgb_to_hsla(search_background_rgb),
         }
     }
 }
@@ -375,6 +401,35 @@ impl ColorPalette {
         }
     }
 
+    /// Resolve an OSC color query without converting configured RGB through HSL.
+    pub fn query_rgb(&self, index: usize, colors: &Colors) -> Option<Rgb> {
+        if index <= NamedColor::DimForeground as usize {
+            if let Some(rgb) = colors[index] {
+                return Some(rgb);
+            }
+        }
+
+        match index {
+            0..=255 => Some(self.extended_rgb[index]),
+            index if index == NamedColor::Foreground as usize => Some(self.foreground_rgb),
+            index if index == NamedColor::Background as usize => Some(self.background_rgb),
+            index if index == NamedColor::Cursor as usize => Some(self.cursor_rgb),
+            index if index == NamedColor::BrightForeground as usize => Some(self.foreground_rgb),
+            index if index == NamedColor::DimForeground as usize => {
+                Some(dim_rgb(self.foreground_rgb))
+            }
+            index
+                if (NamedColor::DimBlack as usize..=NamedColor::DimWhite as usize)
+                    .contains(&index) =>
+            {
+                Some(dim_rgb(
+                    self.ansi_rgb[index - NamedColor::DimBlack as usize],
+                ))
+            }
+            _ => None,
+        }
+    }
+
     /// Gets a reference to the ANSI color palette.
     pub fn ansi_colors(&self) -> &[Hsla; 16] {
         &self.ansi_colors
@@ -404,8 +459,42 @@ impl ColorPalette {
     pub fn selection_background(&self) -> Hsla {
         self.selection_background
     }
+
+    pub fn selection_foreground(&self) -> Option<Hsla> {
+        self.selection_foreground
+    }
+
+    pub fn cursor_text(&self) -> Option<Hsla> {
+        self.cursor_text
+    }
+
+    pub fn search_colors(&self) -> (Hsla, Hsla) {
+        (self.search_foreground, self.search_background)
+    }
+
+    pub fn focused_search_colors(&self) -> (Hsla, Hsla) {
+        (
+            self.focused_search_foreground,
+            self.focused_search_background,
+        )
+    }
+
+    pub fn hint_start_colors(&self) -> (Hsla, Hsla) {
+        (self.hint_start_foreground, self.hint_start_background)
+    }
+
+    pub fn hint_end_colors(&self) -> (Hsla, Hsla) {
+        (self.hint_end_foreground, self.hint_end_background)
+    }
 }
 
+fn dim_rgb(rgb: Rgb) -> Rgb {
+    Rgb {
+        r: ((rgb.r as f32) * 0.7).round() as u8,
+        g: ((rgb.g as f32) * 0.7).round() as u8,
+        b: ((rgb.b as f32) * 0.7).round() as u8,
+    }
+}
 /// Converts an RGB color to GPUI's Hsla color format.
 ///
 /// # Arguments
@@ -481,25 +570,103 @@ impl ColorPaletteBuilder {
 
     /// Sets the background color.
     pub fn background(mut self, r: u8, g: u8, b: u8) -> Self {
-        self.palette.background = rgb_to_hsla(Rgb { r, g, b });
+        let rgb = Rgb { r, g, b };
+        self.palette.background = rgb_to_hsla(rgb);
+        self.palette.background_rgb = rgb;
         self
     }
 
     /// Sets the foreground color.
     pub fn foreground(mut self, r: u8, g: u8, b: u8) -> Self {
-        self.palette.foreground = rgb_to_hsla(Rgb { r, g, b });
+        let rgb = Rgb { r, g, b };
+        self.palette.foreground = rgb_to_hsla(rgb);
+        self.palette.foreground_rgb = rgb;
         self
     }
 
     /// Sets the cursor color.
     pub fn cursor(mut self, r: u8, g: u8, b: u8) -> Self {
-        self.palette.cursor = rgb_to_hsla(Rgb { r, g, b });
+        let rgb = Rgb { r, g, b };
+        self.palette.cursor = rgb_to_hsla(rgb);
+        self.palette.cursor_rgb = rgb;
         self
     }
 
     /// Sets the selection background color.
     pub fn selection_background(mut self, r: u8, g: u8, b: u8) -> Self {
-        self.palette.selection_background = rgb_to_hsla(Rgb { r, g, b });
+        let rgb = Rgb { r, g, b };
+        self.palette.selection_background = rgb_to_hsla(rgb);
+        self.palette.selection_background_rgb = rgb;
+        self
+    }
+
+    pub fn selection_foreground(mut self, r: u8, g: u8, b: u8) -> Self {
+        let rgb = Rgb { r, g, b };
+        self.palette.selection_foreground = Some(rgb_to_hsla(rgb));
+        self.palette.selection_foreground_rgb = Some(rgb);
+        self
+    }
+
+    pub fn cursor_text(mut self, r: u8, g: u8, b: u8) -> Self {
+        let rgb = Rgb { r, g, b };
+        self.palette.cursor_text = Some(rgb_to_hsla(rgb));
+        self.palette.cursor_text_rgb = Some(rgb);
+        self
+    }
+
+    pub fn search(mut self, foreground: (u8, u8, u8), background: (u8, u8, u8)) -> Self {
+        self.palette.search_foreground = rgb_to_hsla(Rgb {
+            r: foreground.0,
+            g: foreground.1,
+            b: foreground.2,
+        });
+        self.palette.search_background = rgb_to_hsla(Rgb {
+            r: background.0,
+            g: background.1,
+            b: background.2,
+        });
+        self
+    }
+
+    pub fn focused_search(mut self, foreground: (u8, u8, u8), background: (u8, u8, u8)) -> Self {
+        self.palette.focused_search_foreground = rgb_to_hsla(Rgb {
+            r: foreground.0,
+            g: foreground.1,
+            b: foreground.2,
+        });
+        self.palette.focused_search_background = rgb_to_hsla(Rgb {
+            r: background.0,
+            g: background.1,
+            b: background.2,
+        });
+        self
+    }
+
+    pub fn hint_start(mut self, foreground: (u8, u8, u8), background: (u8, u8, u8)) -> Self {
+        self.palette.hint_start_foreground = rgb_to_hsla(Rgb {
+            r: foreground.0,
+            g: foreground.1,
+            b: foreground.2,
+        });
+        self.palette.hint_start_background = rgb_to_hsla(Rgb {
+            r: background.0,
+            g: background.1,
+            b: background.2,
+        });
+        self
+    }
+
+    pub fn hint_end(mut self, foreground: (u8, u8, u8), background: (u8, u8, u8)) -> Self {
+        self.palette.hint_end_foreground = rgb_to_hsla(Rgb {
+            r: foreground.0,
+            g: foreground.1,
+            b: foreground.2,
+        });
+        self.palette.hint_end_background = rgb_to_hsla(Rgb {
+            r: background.0,
+            g: background.1,
+            b: background.2,
+        });
         self
     }
 
@@ -601,7 +768,10 @@ impl ColorPaletteBuilder {
 
     /// Sets an ANSI color by index (0-15).
     fn set_ansi_color(&mut self, idx: usize, r: u8, g: u8, b: u8) {
-        let color = rgb_to_hsla(Rgb { r, g, b });
+        let rgb = Rgb { r, g, b };
+        let color = rgb_to_hsla(rgb);
+        self.palette.ansi_rgb[idx] = rgb;
+        self.palette.extended_rgb[idx] = rgb;
         self.palette.ansi_colors[idx] = color;
         self.palette.extended_colors[idx] = color;
     }
@@ -683,5 +853,37 @@ mod tests {
         };
         let hsla = palette.resolve(Color::Spec(rgb), &colors);
         assert_eq!(hsla.a, 1.0);
+    }
+    #[test]
+    fn color_queries_preserve_configured_rgb_and_prefer_dynamic_overrides() {
+        let palette = ColorPalette::builder()
+            .foreground(1, 2, 3)
+            .background(4, 5, 6)
+            .red(7, 8, 9)
+            .build();
+        let mut colors = Colors::default();
+
+        assert_eq!(
+            palette.query_rgb(1, &colors),
+            Some(Rgb { r: 7, g: 8, b: 9 })
+        );
+        assert_eq!(
+            palette.query_rgb(NamedColor::Foreground as usize, &colors),
+            Some(Rgb { r: 1, g: 2, b: 3 })
+        );
+
+        colors[NamedColor::Foreground] = Some(Rgb {
+            r: 10,
+            g: 11,
+            b: 12,
+        });
+        assert_eq!(
+            palette.query_rgb(NamedColor::Foreground as usize, &colors),
+            Some(Rgb {
+                r: 10,
+                g: 11,
+                b: 12
+            })
+        );
     }
 }

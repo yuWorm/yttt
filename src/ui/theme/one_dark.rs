@@ -42,6 +42,16 @@ pub(super) fn theme() -> AppTheme {
             cursor: Some(rgb(0xabb2bf)),
             // Zed's #67769640 selection composited over the RGB-only terminal background.
             selection_background: Some(rgb(0x343b48)),
+            selection_foreground: None,
+            cursor_text: None,
+            search_foreground: rgb(0x181818),
+            search_background: rgb(0xac4242),
+            focused_search_foreground: rgb(0x181818),
+            focused_search_background: rgb(0xf4bf75),
+            hint_start_foreground: rgb(0x181818),
+            hint_start_background: rgb(0xf4bf75),
+            hint_end_foreground: rgb(0x181818),
+            hint_end_background: rgb(0xac4242),
             normal: AnsiColors {
                 black: rgb(0x3f4451),
                 red: rgb(0xe05561),

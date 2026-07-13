@@ -647,6 +647,8 @@ fn settings_terminal_rows(
     let line_height_input = root.settings_number_input(SettingsNumberField::LineHeight, window, cx);
     let padding_input = root.settings_number_input(SettingsNumberField::Padding, window, cx);
     let scrollback_input = root.settings_number_input(SettingsNumberField::Scrollback, window, cx);
+    let cursor_shape_select = root.settings_terminal_cursor_shape_select(window, cx);
+    let osc52_policy_select = root.settings_terminal_osc52_policy_select(window, cx);
     let custom_shell_input_for_add = custom_shell_input.clone();
     let custom_shell_control = div()
         .flex()
@@ -739,23 +741,148 @@ fn settings_terminal_rows(
             text.get(UiTextKey::SettingsScrollbackDescription),
             settings_number_control(scrollback_input, style).into_any_element(),
         ))
-        .child(setting_row(
-            style,
-            theme,
-            text.get(UiTextKey::SettingsScrollbar),
-            text.get(UiTextKey::SettingsScrollbarDescription),
-            settings_switch(
-                "settings-show-scrollbar",
-                root.terminal_show_scrollbar(),
+        .child(
+            setting_row(
+                style,
                 theme,
-                cx.listener(|this, checked: &bool, _window, cx| {
-                    let _ = this.set_terminal_show_scrollbar(*checked);
-                    this.sync_terminal_pane_configs(cx);
-                    cx.notify();
-                }),
+                text.get(UiTextKey::SettingsScrollbar),
+                text.get(UiTextKey::SettingsScrollbarDescription),
+                settings_switch(
+                    "settings-show-scrollbar",
+                    root.terminal_show_scrollbar(),
+                    theme,
+                    cx.listener(|this, checked: &bool, _window, cx| {
+                        if let Err(error) = this.set_terminal_show_scrollbar(*checked) {
+                            this.load_error = Some(error.to_string());
+                        }
+                        this.sync_terminal_pane_configs(cx);
+                        cx.notify();
+                    }),
+                )
+                .into_any_element(),
             )
-            .into_any_element(),
-        ))
+            .debug_selector(|| "settings-terminal-scrollbar-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsTerminalCursorShape),
+                text.get(UiTextKey::SettingsTerminalCursorShapeDescription),
+                settings_select_control(
+                    cursor_shape_select,
+                    theme,
+                    false,
+                    text.get(UiTextKey::SettingsTerminalCursorShape),
+                )
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-terminal-cursor-shape-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsTerminalCursorBlinking),
+                text.get(UiTextKey::SettingsTerminalCursorBlinkingDescription),
+                settings_switch(
+                    "settings-terminal-cursor-blinking",
+                    root.terminal_cursor_blinking(),
+                    theme,
+                    cx.listener(|this, checked: &bool, _window, cx| {
+                        if let Err(error) = this.set_terminal_cursor_blinking(*checked) {
+                            this.load_error = Some(error.to_string());
+                        }
+                        this.sync_terminal_pane_configs(cx);
+                        cx.notify();
+                    }),
+                )
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-terminal-cursor-blinking-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsTerminalHideMouseWhenTyping),
+                text.get(UiTextKey::SettingsTerminalHideMouseWhenTypingDescription),
+                settings_switch(
+                    "settings-terminal-hide-mouse-when-typing",
+                    root.terminal_hide_mouse_when_typing(),
+                    theme,
+                    cx.listener(|this, checked: &bool, _window, cx| {
+                        if let Err(error) = this.set_terminal_hide_mouse_when_typing(*checked) {
+                            this.load_error = Some(error.to_string());
+                        }
+                        this.sync_terminal_pane_configs(cx);
+                        cx.notify();
+                    }),
+                )
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-terminal-hide-mouse-when-typing-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsTerminalCopyOnSelect),
+                text.get(UiTextKey::SettingsTerminalCopyOnSelectDescription),
+                settings_switch(
+                    "settings-terminal-copy-on-select",
+                    root.terminal_copy_on_select(),
+                    theme,
+                    cx.listener(|this, checked: &bool, _window, cx| {
+                        if let Err(error) = this.set_terminal_copy_on_select(*checked) {
+                            this.load_error = Some(error.to_string());
+                        }
+                        this.sync_terminal_pane_configs(cx);
+                        cx.notify();
+                    }),
+                )
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-terminal-copy-on-select-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsTerminalOsc52Policy),
+                text.get(UiTextKey::SettingsTerminalOsc52PolicyDescription),
+                settings_select_control(
+                    osc52_policy_select,
+                    theme,
+                    false,
+                    text.get(UiTextKey::SettingsTerminalOsc52Policy),
+                )
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-terminal-osc52-policy-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsTerminalKittyKeyboard),
+                text.get(UiTextKey::SettingsTerminalKittyKeyboardDescription),
+                settings_switch(
+                    "settings-terminal-kitty-keyboard",
+                    root.terminal_kitty_keyboard(),
+                    theme,
+                    cx.listener(|this, checked: &bool, _window, cx| {
+                        if let Err(error) = this.set_terminal_kitty_keyboard(*checked) {
+                            this.load_error = Some(error.to_string());
+                        }
+                        this.sync_terminal_pane_configs(cx);
+                        cx.notify();
+                    }),
+                )
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-terminal-kitty-keyboard-row".to_string()),
+        )
 }
 
 fn settings_default_layout_rows(

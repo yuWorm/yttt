@@ -88,5 +88,5 @@ fn real_session_exposes_io_and_resize_handle() {
     let io = session.take_io().unwrap();
     session.resize(100, 30).unwrap();
     drop(io);
-    session.kill().unwrap();
+    session.finish(ExitReason::KilledByUser).unwrap();
 }
