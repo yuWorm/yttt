@@ -136,6 +136,30 @@ impl ProjectFileTree {
         if path != snapshot.relative_directory || !self.loading.remove(&path) {
             return false;
         }
+        let removed_directories = self
+            .directories
+            .get(&path)
+            .map(|previous| {
+                let current_directories = snapshot
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.kind.is_traversable())
+                    .map(|entry| entry.relative_path.as_path())
+                    .collect::<HashSet<_>>();
+                previous
+                    .entries
+                    .iter()
+                    .filter(|entry| {
+                        entry.kind.is_traversable()
+                            && !current_directories.contains(entry.relative_path.as_path())
+                    })
+                    .map(|entry| entry.relative_path.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for removed_directory in removed_directories {
+            self.remove_cached_subtree(&removed_directory);
+        }
         self.errors.remove(&path);
         self.directories.insert(path, snapshot);
         true
@@ -151,6 +175,7 @@ impl ProjectFileTree {
         if !self.loading.remove(&path) {
             return false;
         }
+        self.directories.remove(&path);
         self.errors.insert(path, error.into());
         true
     }
@@ -170,10 +195,12 @@ impl ProjectFileTree {
 
     pub fn refresh_expanded(&mut self) -> Vec<DirectoryLoadRequest> {
         self.generation = self.generation.wrapping_add(1);
-        self.directories.clear();
+        self.expanded.insert(PathBuf::new());
+        let expanded = &self.expanded;
+        self.directories
+            .retain(|path, _snapshot| expanded.contains(path));
         self.loading.clear();
         self.errors.clear();
-        self.expanded.insert(PathBuf::new());
         self.expanded
             .iter()
             .cloned()
@@ -183,6 +210,44 @@ impl ProjectFileTree {
                     relative_directory,
                     generation: self.generation,
                 }
+            })
+            .collect()
+    }
+
+    pub fn refresh_directories(
+        &mut self,
+        directories: impl IntoIterator<Item = PathBuf>,
+    ) -> Vec<DirectoryLoadRequest> {
+        let directories = directories
+            .into_iter()
+            .filter_map(|directory| normalize_tree_path(&directory))
+            .collect::<BTreeSet<_>>();
+        if directories.is_empty() {
+            return Vec::new();
+        }
+
+        self.generation = self.generation.wrapping_add(1);
+        let previously_loading = std::mem::take(&mut self.loading);
+        let mut directories_to_load = previously_loading
+            .into_iter()
+            .filter(|path| self.expanded.contains(path))
+            .collect::<BTreeSet<_>>();
+        for directory in directories {
+            self.errors.remove(&directory);
+            if self.expanded.contains(&directory) {
+                directories_to_load.insert(directory);
+            } else {
+                self.remove_cached_subtree(&directory);
+                directories_to_load.retain(|path| !path.starts_with(&directory));
+            }
+        }
+
+        self.loading.extend(directories_to_load.iter().cloned());
+        directories_to_load
+            .into_iter()
+            .map(|relative_directory| DirectoryLoadRequest {
+                relative_directory,
+                generation: self.generation,
             })
             .collect()
     }
@@ -209,6 +274,20 @@ impl ProjectFileTree {
             self.append_visible_entries(&root.entries, 0, &mut rows);
         }
         rows
+    }
+
+    fn remove_cached_subtree(&mut self, path: &Path) {
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        self.directories
+            .retain(|cached_path, _snapshot| !cached_path.starts_with(path));
+        self.loading
+            .retain(|loading_path| !loading_path.starts_with(path));
+        self.errors
+            .retain(|error_path, _error| !error_path.starts_with(path));
+        self.expanded
+            .retain(|expanded_path| !expanded_path.starts_with(path));
     }
 
     fn append_visible_entries(
