@@ -1,4 +1,10 @@
-use std::{cell::RefCell, ffi::OsString, fs, path::Path, rc::Rc};
+use std::{
+    cell::RefCell,
+    ffi::OsString,
+    fs,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 use gpui::AppContext as _;
 use tempfile::tempdir;
@@ -183,6 +189,17 @@ fn refresh_expanded_requests_every_open_directory() {
     );
 
     let requests = tree.refresh_expanded();
+    assert_eq!(
+        tree.visible_rows()
+            .iter()
+            .map(|row| row.relative_path.as_path())
+            .collect::<Vec<_>>(),
+        vec![Path::new("src"), Path::new("src/main.rs")]
+    );
+    assert_eq!(
+        tree.directory_load_state(Path::new("src")),
+        ProjectTreeLoadState::Loading
+    );
 
     assert_eq!(
         requests
@@ -195,6 +212,188 @@ fn refresh_expanded_requests_every_open_directory() {
         requests
             .iter()
             .all(|request| request.generation == tree.generation())
+    );
+}
+
+#[test]
+fn refresh_expanded_invalidates_collapsed_directory_cache() {
+    let mut tree = ProjectFileTree::new("/project");
+    let root_request = tree.request_expand(Path::new("")).unwrap();
+    tree.apply_snapshot(
+        root_request.generation,
+        snapshot("", [entry("src", ProjectTreeEntryKind::Directory)]),
+    );
+    let src_request = tree.request_expand(Path::new("src")).unwrap();
+    tree.apply_snapshot(
+        src_request.generation,
+        snapshot("src", [entry("src/main.rs", ProjectTreeEntryKind::File)]),
+    );
+    tree.collapse(Path::new("src"));
+
+    let requests = tree.refresh_expanded();
+
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].relative_directory, Path::new(""));
+    assert!(!tree.has_snapshot(Path::new("src")));
+    assert!(tree.request_expand(Path::new("src")).is_some());
+}
+
+#[test]
+fn refresh_error_drops_stale_snapshot_and_allows_retry() {
+    let mut tree = ProjectFileTree::new("/project");
+    let root_request = tree.request_expand(Path::new("")).unwrap();
+    tree.apply_snapshot(
+        root_request.generation,
+        snapshot("", [entry("src", ProjectTreeEntryKind::Directory)]),
+    );
+    let src_request = tree.request_expand(Path::new("src")).unwrap();
+    tree.apply_snapshot(
+        src_request.generation,
+        snapshot("src", [entry("src/main.rs", ProjectTreeEntryKind::File)]),
+    );
+
+    let src_refresh = tree
+        .refresh_expanded()
+        .into_iter()
+        .find(|request| request.relative_directory == Path::new("src"))
+        .unwrap();
+    assert!(tree.has_snapshot(Path::new("src")));
+
+    assert!(tree.apply_error(
+        src_refresh.generation,
+        Path::new("src"),
+        "directory disappeared"
+    ));
+    assert!(!tree.has_snapshot(Path::new("src")));
+    assert!(tree.request_expand(Path::new("src")).is_some());
+}
+
+#[test]
+fn refresh_directories_only_reloads_affected_expanded_directory() {
+    let mut tree = ProjectFileTree::new("/project");
+    let root_request = tree.request_expand(Path::new("")).unwrap();
+    tree.apply_snapshot(
+        root_request.generation,
+        snapshot(
+            "",
+            [
+                entry("src", ProjectTreeEntryKind::Directory),
+                entry("tests", ProjectTreeEntryKind::Directory),
+            ],
+        ),
+    );
+    let src_request = tree.request_expand(Path::new("src")).unwrap();
+    tree.apply_snapshot(
+        src_request.generation,
+        snapshot("src", [entry("src/main.rs", ProjectTreeEntryKind::File)]),
+    );
+    let tests_request = tree.request_expand(Path::new("tests")).unwrap();
+    tree.apply_snapshot(
+        tests_request.generation,
+        snapshot(
+            "tests",
+            [entry("tests/project.rs", ProjectTreeEntryKind::File)],
+        ),
+    );
+    let visible_before_refresh = tree
+        .visible_rows()
+        .into_iter()
+        .map(|row| row.relative_path)
+        .collect::<Vec<_>>();
+
+    let requests = tree.refresh_directories([PathBuf::from("src")]);
+
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].relative_directory, Path::new("src"));
+    assert_eq!(
+        tree.visible_rows()
+            .into_iter()
+            .map(|row| row.relative_path)
+            .collect::<Vec<_>>(),
+        visible_before_refresh
+    );
+    assert_eq!(
+        tree.directory_load_state(Path::new("src")),
+        ProjectTreeLoadState::Loading
+    );
+    assert_eq!(
+        tree.directory_load_state(Path::new("tests")),
+        ProjectTreeLoadState::Loaded
+    );
+}
+
+#[test]
+fn refresh_directories_requeues_other_inflight_loads() {
+    let mut tree = ProjectFileTree::new("/project");
+    let root_request = tree.request_expand(Path::new("")).unwrap();
+    tree.apply_snapshot(
+        root_request.generation,
+        snapshot("", [entry("src", ProjectTreeEntryKind::Directory)]),
+    );
+    let stale_src_request = tree.request_expand(Path::new("src")).unwrap();
+
+    let requests = tree.refresh_directories([PathBuf::new()]);
+
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.relative_directory.as_path())
+            .collect::<Vec<_>>(),
+        vec![Path::new(""), Path::new("src")]
+    );
+    assert!(!tree.apply_snapshot(
+        stale_src_request.generation,
+        snapshot("src", [entry("src/stale.rs", ProjectTreeEntryKind::File)])
+    ));
+    let src_request = requests
+        .into_iter()
+        .find(|request| request.relative_directory == Path::new("src"))
+        .unwrap();
+    assert!(tree.apply_snapshot(
+        src_request.generation,
+        snapshot("src", [entry("src/current.rs", ProjectTreeEntryKind::File)])
+    ));
+}
+
+#[test]
+fn applying_parent_snapshot_prunes_removed_directory_subtree() {
+    let mut tree = ProjectFileTree::new("/project");
+    let root_request = tree.request_expand(Path::new("")).unwrap();
+    tree.apply_snapshot(
+        root_request.generation,
+        snapshot("", [entry("src", ProjectTreeEntryKind::Directory)]),
+    );
+    let src_request = tree.request_expand(Path::new("src")).unwrap();
+    tree.apply_snapshot(
+        src_request.generation,
+        snapshot(
+            "src",
+            [entry("src/generated", ProjectTreeEntryKind::Directory)],
+        ),
+    );
+    let generated_request = tree.request_expand(Path::new("src/generated")).unwrap();
+    tree.apply_snapshot(
+        generated_request.generation,
+        snapshot(
+            "src/generated",
+            [entry("src/generated/output.rs", ProjectTreeEntryKind::File)],
+        ),
+    );
+
+    let src_refresh = tree
+        .refresh_directories([PathBuf::from("src")])
+        .pop()
+        .unwrap();
+    assert!(tree.apply_snapshot(src_refresh.generation, snapshot("src", [])));
+
+    assert!(!tree.has_snapshot(Path::new("src/generated")));
+    assert!(!tree.is_expanded(Path::new("src/generated")));
+    assert_eq!(
+        tree.visible_rows()
+            .into_iter()
+            .map(|row| row.relative_path)
+            .collect::<Vec<_>>(),
+        vec![PathBuf::from("src")]
     );
 }
 

@@ -1,8 +1,72 @@
 use super::*;
 
 const ACTIVE_PROJECT_FILE_WATCH_DEBOUNCE: Duration = Duration::from_millis(150);
+const MAX_INCREMENTAL_PROJECT_TREE_DIRECTORIES: usize = 256;
 
-fn project_file_event_requires_refresh(kind: &notify::EventKind) -> bool {
+#[derive(Default)]
+struct ProjectFileRefreshBatch {
+    tree_directories: BTreeSet<PathBuf>,
+    refresh_all_expanded: bool,
+    refresh_status: bool,
+}
+
+impl ProjectFileRefreshBatch {
+    fn initial() -> Self {
+        Self {
+            refresh_all_expanded: true,
+            refresh_status: true,
+            ..Self::default()
+        }
+    }
+
+    fn record_event(&mut self, project_path: &Path, event: notify::Event) -> bool {
+        if event.need_rescan() {
+            self.refresh_all_expanded = true;
+            self.refresh_status = true;
+            self.tree_directories.clear();
+            return true;
+        }
+        if !project_file_event_requires_status_refresh(&event.kind) {
+            return false;
+        }
+        self.refresh_status = true;
+        if !project_file_event_requires_tree_refresh(&event.kind) || self.refresh_all_expanded {
+            return true;
+        }
+        if project_file_event_requires_full_tree_refresh(&event.kind) {
+            self.refresh_all_expanded = true;
+            self.tree_directories.clear();
+            return true;
+        }
+
+        let mut found_project_path = false;
+        for event_path in event.paths {
+            let Ok(relative_path) = event_path.strip_prefix(project_path) else {
+                continue;
+            };
+            let relative_directory = relative_path.parent().unwrap_or_else(|| Path::new(""));
+            self.tree_directories
+                .insert(relative_directory.to_path_buf());
+            found_project_path = true;
+            if self.tree_directories.len() > MAX_INCREMENTAL_PROJECT_TREE_DIRECTORIES {
+                self.refresh_all_expanded = true;
+                self.tree_directories.clear();
+                break;
+            }
+        }
+        if !found_project_path {
+            self.refresh_all_expanded = true;
+            self.tree_directories.clear();
+        }
+        true
+    }
+
+    fn has_tree_refresh(&self) -> bool {
+        self.refresh_all_expanded || !self.tree_directories.is_empty()
+    }
+}
+
+fn project_file_event_requires_status_refresh(kind: &notify::EventKind) -> bool {
     matches!(
         kind,
         notify::EventKind::Any
@@ -10,6 +74,38 @@ fn project_file_event_requires_refresh(kind: &notify::EventKind) -> bool {
             | notify::EventKind::Modify(_)
             | notify::EventKind::Remove(_)
     )
+}
+
+fn project_file_event_requires_tree_refresh(kind: &notify::EventKind) -> bool {
+    matches!(
+        kind,
+        notify::EventKind::Any
+            | notify::EventKind::Create(_)
+            | notify::EventKind::Modify(
+                notify::event::ModifyKind::Any
+                    | notify::event::ModifyKind::Name(_)
+                    | notify::event::ModifyKind::Other
+            )
+            | notify::EventKind::Remove(_)
+    )
+}
+
+fn project_file_event_requires_full_tree_refresh(kind: &notify::EventKind) -> bool {
+    matches!(
+        kind,
+        notify::EventKind::Any
+            | notify::EventKind::Modify(
+                notify::event::ModifyKind::Any | notify::event::ModifyKind::Other
+            )
+    )
+}
+
+fn drain_project_file_refresh_signal(receiver: &std::sync::mpsc::Receiver<()>) -> bool {
+    if receiver.try_recv().is_err() {
+        return false;
+    }
+    while receiver.try_recv().is_ok() {}
+    true
 }
 
 impl WorkbenchView {
@@ -51,6 +147,30 @@ impl WorkbenchView {
         requests
     }
 
+    pub(super) fn refresh_project_tree_directory_states(
+        &mut self,
+        project_id: &ProjectId,
+        directories: &BTreeSet<PathBuf>,
+    ) -> Vec<DirectoryLoadRequest> {
+        let Some(session) = self
+            .project
+            .project_editor_runtime
+            .workspace_mut()
+            .session_mut(project_id)
+        else {
+            return Vec::new();
+        };
+        let requests = session
+            .file_tree_mut()
+            .refresh_directories(directories.iter().cloned());
+        if let Some(request) = requests.first() {
+            self.project
+                .project_editor_runtime
+                .track_tree_load(project_id.clone(), request.generation);
+        }
+        requests
+    }
+
     pub(super) fn ensure_active_project_file_watcher(
         &mut self,
         window: &mut Window,
@@ -75,15 +195,22 @@ impl WorkbenchView {
         }
 
         self.active_project_file_watcher = None;
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let _ = tx.try_send(());
+        let pending_refresh = Arc::new(std::sync::Mutex::new(ProjectFileRefreshBatch::initial()));
+        let callback_refresh = pending_refresh.clone();
+        let watched_project_root = project_path.clone();
+        let (refresh_tx, refresh_rx) = std::sync::mpsc::sync_channel(1);
+        let _ = refresh_tx.try_send(());
         let mut watcher =
             match notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
-                if result
-                    .as_ref()
-                    .is_ok_and(|event| project_file_event_requires_refresh(&event.kind))
-                {
-                    let _ = tx.try_send(());
+                let Ok(event) = result else {
+                    return;
+                };
+                let recorded = callback_refresh
+                    .lock()
+                    .expect("project file refresh batch mutex poisoned")
+                    .record_event(&watched_project_root, event);
+                if recorded {
+                    let _ = refresh_tx.try_send(());
                 }
             }) {
                 Ok(watcher) => watcher,
@@ -112,26 +239,50 @@ impl WorkbenchView {
                 cx.background_executor()
                     .timer(ACTIVE_PROJECT_FILE_WATCH_DEBOUNCE)
                     .await;
-                match rx.try_recv() {
-                    Ok(()) => while rx.try_recv().is_ok() {},
-                    Err(std::sync::mpsc::TryRecvError::Empty) => continue,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                if !drain_project_file_refresh_signal(&refresh_rx) {
+                    continue;
+                }
+                let refresh = {
+                    let mut pending = pending_refresh
+                        .lock()
+                        .expect("project file refresh batch mutex poisoned");
+                    std::mem::take(&mut *pending)
+                };
+                if !refresh.refresh_status && !refresh.has_tree_refresh() {
+                    continue;
                 }
 
                 let is_active = this
-                    .update_in(cx, |root, _window, cx| {
+                    .update_in(cx, |root, window, cx| {
                         if !root.active_project_file_watcher_matches(
                             &watched_project_id,
                             &watched_project_path,
                         ) {
                             return false;
                         }
-                        root.queue_project_tree_refresh(watched_project_id.clone());
-                        cx.notify();
+                        let tree_load_queued = if refresh.refresh_all_expanded {
+                            root.queue_project_tree_refresh(watched_project_id.clone())
+                        } else if !refresh.tree_directories.is_empty() {
+                            root.queue_project_tree_directories_refresh(
+                                watched_project_id.clone(),
+                                &refresh.tree_directories,
+                            )
+                        } else {
+                            false
+                        };
+                        if tree_load_queued {
+                            cx.notify();
+                        } else {
+                            root.check_project_documents_for_external_changes(
+                                &watched_project_id,
+                                window,
+                                cx,
+                            );
+                        }
                         true
                     })
                     .unwrap_or(false);
-                if !is_active {
+                if !is_active || !refresh.refresh_status {
                     continue;
                 }
 
@@ -871,12 +1022,30 @@ impl WorkbenchView {
         }
     }
 
-    pub(super) fn queue_project_tree_refresh(&mut self, project_id: ProjectId) {
-        for request in self.refresh_expanded_project_tree_states(&project_id) {
+    pub(super) fn queue_project_tree_refresh(&mut self, project_id: ProjectId) -> bool {
+        let requests = self.refresh_expanded_project_tree_states(&project_id);
+        let queued = !requests.is_empty();
+        for request in requests {
             self.project
                 .pending_project_tree_loads
                 .push((project_id.clone(), request));
         }
+        queued
+    }
+
+    fn queue_project_tree_directories_refresh(
+        &mut self,
+        project_id: ProjectId,
+        directories: &BTreeSet<PathBuf>,
+    ) -> bool {
+        let requests = self.refresh_project_tree_directory_states(&project_id, directories);
+        let queued = !requests.is_empty();
+        for request in requests {
+            self.project
+                .pending_project_tree_loads
+                .push((project_id.clone(), request));
+        }
+        queued
     }
 
     pub(super) fn flush_pending_project_tree_loads(
@@ -1160,5 +1329,100 @@ impl WorkbenchView {
         let _ = self.select_work_item(WorkItemId::File(opened_id));
         self.load_error = None;
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn content_changes_refresh_status_without_rescanning_tree() {
+        let kind = notify::EventKind::Modify(notify::event::ModifyKind::Data(
+            notify::event::DataChange::Any,
+        ));
+
+        assert!(project_file_event_requires_status_refresh(&kind));
+        assert!(!project_file_event_requires_tree_refresh(&kind));
+    }
+
+    #[test]
+    fn structural_changes_refresh_tree_and_status() {
+        let kinds = [
+            notify::EventKind::Any,
+            notify::EventKind::Create(notify::event::CreateKind::Any),
+            notify::EventKind::Modify(notify::event::ModifyKind::Name(
+                notify::event::RenameMode::Any,
+            )),
+            notify::EventKind::Remove(notify::event::RemoveKind::Any),
+        ];
+
+        for kind in kinds {
+            assert!(project_file_event_requires_status_refresh(&kind));
+            assert!(project_file_event_requires_tree_refresh(&kind));
+        }
+    }
+
+    #[test]
+    fn structural_events_coalesce_affected_parent_directories() {
+        let project_path = Path::new("/project");
+        let mut batch = ProjectFileRefreshBatch::default();
+
+        assert!(
+            batch.record_event(
+                project_path,
+                notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::Any))
+                    .add_path(project_path.join("src/new.rs"))
+            )
+        );
+        assert!(
+            batch.record_event(
+                project_path,
+                notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Name(
+                    notify::event::RenameMode::Any
+                )))
+                .add_path(project_path.join("src/old.rs"))
+                .add_path(project_path.join("tests/new.rs"))
+            )
+        );
+
+        assert_eq!(
+            batch.tree_directories,
+            BTreeSet::from([PathBuf::from("src"), PathBuf::from("tests")])
+        );
+        assert!(!batch.refresh_all_expanded);
+        assert!(batch.refresh_status);
+    }
+
+    #[test]
+    fn watcher_rescan_signal_falls_back_to_all_expanded_directories() {
+        let mut batch = ProjectFileRefreshBatch::default();
+        let event =
+            notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan);
+
+        assert!(batch.record_event(Path::new("/project"), event));
+        assert!(batch.refresh_all_expanded);
+        assert!(batch.tree_directories.is_empty());
+        assert!(batch.refresh_status);
+    }
+
+    #[test]
+    fn excessive_affected_directories_fall_back_to_bounded_full_refresh() {
+        let project_path = Path::new("/project");
+        let mut batch = ProjectFileRefreshBatch::default();
+
+        for index in 0..=MAX_INCREMENTAL_PROJECT_TREE_DIRECTORIES {
+            let event =
+                notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::Any))
+                    .add_path(
+                        project_path
+                            .join(format!("directory-{index}"))
+                            .join("file.rs"),
+                    );
+            assert!(batch.record_event(project_path, event));
+        }
+
+        assert!(batch.refresh_all_expanded);
+        assert!(batch.tree_directories.is_empty());
     }
 }
