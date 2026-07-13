@@ -260,6 +260,17 @@ impl CodeEditorState {
         &self.diagnostics
     }
 
+    pub fn relocate(&mut self, path: impl Into<PathBuf>, title: impl Into<String>) {
+        self.path = path.into();
+        self.config.title = title.into();
+        self.resolved_language = resolve_editor_language(
+            &self.path,
+            &self.value,
+            self.config.language_mode,
+            &EditorLanguageCatalog::builtin(),
+        );
+    }
+
     pub fn set_value(&mut self, value: impl Into<String>) {
         self.value = value.into();
         self.error = None;

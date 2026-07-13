@@ -185,6 +185,27 @@ fn project_editor_document_tracks_breadcrumbs_at_the_cursor(cx: &mut gpui::TestA
     );
 }
 
+#[test]
+fn relocating_model_rekeys_future_saves_without_losing_dirty_text() {
+    let mut model = project_model("old", fingerprint(3, 1));
+    model.on_input_changed("dirty");
+    let _stale_request = model.begin_save();
+    let new_document_id = DocumentId {
+        project_id: ProjectId::new("project-a"),
+        canonical_path: PathBuf::from("/project-a/src/renamed.py"),
+    };
+
+    model.relocate(new_document_id.clone(), "renamed.py");
+
+    assert_eq!(model.document_id(), &new_document_id);
+    assert_eq!(model.editor().path(), new_document_id.canonical_path);
+    assert_eq!(model.editor().config().title(), "renamed.py");
+    assert_eq!(model.value(), "dirty");
+    assert!(model.is_dirty());
+    assert_eq!(model.save_state(), &ProjectEditorSaveState::Idle);
+    assert_eq!(model.begin_save().document_id, new_document_id);
+}
+
 fn project_model(value: &str, disk_fingerprint: DiskFingerprint) -> ProjectEditorModel {
     let document_id = DocumentId {
         project_id: ProjectId::new("project-a"),

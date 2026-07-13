@@ -100,6 +100,29 @@ impl ProjectEditorRuntime {
         self.documents.remove(document_id)
     }
 
+    pub fn relocate_document(
+        &mut self,
+        old: &DocumentId,
+        new: DocumentId,
+    ) -> Option<Entity<ProjectEditorDocument>> {
+        if old == &new {
+            return self.documents.get(old).cloned();
+        }
+        if self.documents.contains_key(&new) || !self.workspace.relocate_file(old, new.clone()) {
+            return None;
+        }
+        let document = self.documents.remove(old)?;
+        if let Some(subscription) = self.document_subscriptions.remove(old) {
+            self.document_subscriptions
+                .insert(new.clone(), subscription);
+        }
+        self.pending_file_generations.remove(old);
+        self.autosave_tasks.remove(old);
+        self.follow_up_autosaves.remove(old);
+        self.documents.insert(new, document.clone());
+        Some(document)
+    }
+
     pub fn documents_for_project(
         &self,
         project_id: &ProjectId,

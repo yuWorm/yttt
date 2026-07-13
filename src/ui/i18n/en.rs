@@ -19,6 +19,18 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::ProjectFilesEmptyDirectory => "Empty directory",
         UiTextKey::ProjectFilesDirectoryError => "Unable to load directory",
         UiTextKey::ProjectFilesRetry => "Retry",
+        UiTextKey::ProjectFilesNewFile => "New File",
+        UiTextKey::ProjectFilesNewDirectory => "New Folder",
+        UiTextKey::ProjectFilesRename => "Rename",
+        UiTextKey::ProjectFilesDelete => "Delete",
+        UiTextKey::ProjectFilesCopy => "Copy",
+        UiTextKey::ProjectFilesCut => "Cut",
+        UiTextKey::ProjectFilesPaste => "Paste",
+        UiTextKey::ProjectFilesEntryPlaceholder => "name or path; end with / for a folder",
+        UiTextKey::ProjectFilesDeleteConfirmTitle => "Delete project entry?",
+        UiTextKey::ProjectFilesDeleteConfirmMessage => {
+            "The selected file or folder will be permanently deleted. This cannot be undone."
+        }
         UiTextKey::ProjectFileUnsupportedBinary => "Binary files are not supported",
         UiTextKey::ProjectFileInvalidEncoding => "Only UTF-8 files are supported",
         UiTextKey::ProjectFileTooLarge => "File exceeds the 10 MiB editor limit",

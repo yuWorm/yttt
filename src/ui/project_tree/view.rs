@@ -6,26 +6,41 @@ use std::{
 };
 
 use gpui::{
-    App, AppContext as _, Context, Entity, EventEmitter, IntoElement, ParentElement as _, Render,
-    Styled as _, Window, div, px,
+    App, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, Styled as _, Subscription, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme as _,
+    ActiveTheme as _, Sizable as _,
+    input::{Escape, Input, InputEvent, InputState},
     list::ListItem,
+    menu::PopupMenuItem,
     tree::{TreeItem, TreeState, tree},
 };
 
 use crate::{
     runtime::git_status::{GitFileStatus, ProjectGitStatus},
-    ui::theme::icons::{IconTheme, icon_for_visual},
+    ui::{
+        interaction::actions::{
+            ProjectTreeCopy, ProjectTreeCut, ProjectTreeDelete, ProjectTreeNewDirectory,
+            ProjectTreeNewFile, ProjectTreePaste, ProjectTreeRename,
+        },
+        theme::icons::{IconTheme, icon_for_visual},
+    },
 };
 
 use super::{ProjectFileTree, ProjectTreeEntryKind, ProjectTreeLoadState, ProjectTreeVisibleRow};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProjectTreeViewEvent {
+    SelectPath(PathBuf),
     ToggleDirectory { path: PathBuf, expanded: bool },
     OpenFile(PathBuf),
+    CreateEntry { parent: PathBuf, input: String },
+    RenameEntry { path: PathBuf, new_name: String },
+    RequestDelete(PathBuf),
+    CopyEntry(PathBuf),
+    CutEntry(PathBuf),
+    PasteEntry { destination_directory: PathBuf },
     Refresh,
 }
 
@@ -42,6 +57,33 @@ impl Default for ProjectTreeRenderText {
             loading: "Loading…".to_string(),
             empty_directory: "Empty directory".to_string(),
             retry: "Retry".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectTreeInteractionText {
+    pub new_file: String,
+    pub new_directory: String,
+    pub rename: String,
+    pub delete: String,
+    pub copy: String,
+    pub cut: String,
+    pub paste: String,
+    pub entry_placeholder: String,
+}
+
+impl Default for ProjectTreeInteractionText {
+    fn default() -> Self {
+        Self {
+            new_file: "New File".to_string(),
+            new_directory: "New Folder".to_string(),
+            rename: "Rename".to_string(),
+            delete: "Delete".to_string(),
+            copy: "Copy".to_string(),
+            cut: "Cut".to_string(),
+            paste: "Paste".to_string(),
+            entry_placeholder: "name or path; end with / for a folder".to_string(),
         }
     }
 }
@@ -259,10 +301,27 @@ fn stable_path_id(path: &Path) -> String {
     id
 }
 
+const EDIT_ROW_ID: &str = "project-tree-edit-row";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ProjectTreeEditTarget {
+    Create {
+        parent: PathBuf,
+        force_directory: bool,
+    },
+    Rename {
+        path: PathBuf,
+    },
+}
+
 pub struct ProjectTreeView {
     tree: Entity<TreeState>,
     snapshot: ProjectTreeRenderSnapshot,
     icon_theme: IconTheme,
+    interaction_text: ProjectTreeInteractionText,
+    edit_target: Option<ProjectTreeEditTarget>,
+    edit_input: Option<Entity<InputState>>,
+    edit_subscription: Option<Subscription>,
 }
 
 impl ProjectTreeView {
@@ -287,6 +346,10 @@ impl ProjectTreeView {
             tree,
             snapshot,
             icon_theme,
+            interaction_text: ProjectTreeInteractionText::default(),
+            edit_target: None,
+            edit_input: None,
+            edit_subscription: None,
         }
     }
 
@@ -300,14 +363,18 @@ impl ProjectTreeView {
         icon_theme: IconTheme,
         cx: &mut Context<Self>,
     ) {
-        let items = snapshot.tree_items();
-        let selected_index = snapshot.selected_index();
-        self.tree.update(cx, |state, cx| {
-            state.set_items(items, cx);
-            state.set_selected_index(selected_index, cx);
-        });
         self.snapshot = snapshot;
         self.icon_theme = icon_theme;
+        self.rebuild_tree_state(cx);
+        cx.notify();
+    }
+
+    pub fn set_interaction_text(
+        &mut self,
+        interaction_text: ProjectTreeInteractionText,
+        cx: &mut Context<Self>,
+    ) {
+        self.interaction_text = interaction_text;
         cx.notify();
     }
 
@@ -319,6 +386,10 @@ impl ProjectTreeView {
         &self.snapshot
     }
 
+    pub fn is_editing(&self) -> bool {
+        self.edit_target.is_some()
+    }
+
     pub fn activate_path(&mut self, path: &Path, cx: &mut Context<Self>) -> bool {
         let Some(row) = self.snapshot.row_for_path(path).cloned() else {
             return false;
@@ -328,6 +399,20 @@ impl ProjectTreeView {
 
     pub fn request_refresh(&mut self, cx: &mut Context<Self>) {
         cx.emit(ProjectTreeViewEvent::Refresh);
+    }
+
+    pub fn begin_create_selected(
+        &mut self,
+        force_directory: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let parent = self
+            .selected_row()
+            .as_ref()
+            .map(operation_destination_directory)
+            .unwrap_or_default();
+        self.begin_create(parent, force_directory, window, cx);
     }
 
     fn activate_id(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
@@ -356,6 +441,222 @@ impl ProjectTreeView {
             Some(ProjectTreeEntryKind::SymlinkDirectory) | None => false,
         }
     }
+
+    fn selected_row(&self) -> Option<ProjectTreeRenderRow> {
+        self.snapshot
+            .rows()
+            .iter()
+            .find(|row| row.selected && !row.synthetic)
+            .cloned()
+    }
+
+    fn select_context_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        cx.emit(ProjectTreeViewEvent::SelectPath(path));
+    }
+
+    fn begin_create(
+        &mut self,
+        parent: PathBuf,
+        force_directory: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(row) = self.snapshot.row_for_path(&parent)
+            && row.kind == Some(ProjectTreeEntryKind::Directory)
+            && !row.expanded
+        {
+            cx.emit(ProjectTreeViewEvent::ToggleDirectory {
+                path: parent.clone(),
+                expanded: true,
+            });
+        }
+        self.begin_edit(
+            ProjectTreeEditTarget::Create {
+                parent,
+                force_directory,
+            },
+            String::new(),
+            window,
+            cx,
+        );
+    }
+
+    fn begin_rename(
+        &mut self,
+        row: ProjectTreeRenderRow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = row.relative_path else {
+            return;
+        };
+        self.begin_edit(
+            ProjectTreeEditTarget::Rename { path },
+            row.label,
+            window,
+            cx,
+        );
+    }
+
+    fn begin_edit(
+        &mut self,
+        target: ProjectTreeEditTarget,
+        value: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cancel_edit(cx);
+        let placeholder = self.interaction_text.entry_placeholder.clone();
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(value)
+                .placeholder(placeholder)
+        });
+        let subscription =
+            cx.subscribe_in(
+                &input,
+                window,
+                |this, input, event, _window, cx| match event {
+                    InputEvent::PressEnter { .. } => this.submit_edit(input, cx),
+                    InputEvent::Blur => this.cancel_edit(cx),
+                    InputEvent::Change | InputEvent::Focus => {}
+                },
+            );
+        self.edit_target = Some(target);
+        self.edit_input = Some(input.clone());
+        self.edit_subscription = Some(subscription);
+        self.rebuild_tree_state(cx);
+        cx.defer_in(window, move |_, window, cx| {
+            input.update(cx, |input, input_cx| input.focus(window, input_cx));
+        });
+        cx.notify();
+    }
+
+    fn submit_edit(&mut self, input: &Entity<InputState>, cx: &mut Context<Self>) {
+        let Some(target) = self.edit_target.clone() else {
+            return;
+        };
+        let value = input.read(cx).value().to_string();
+        if value.is_empty() {
+            self.cancel_edit(cx);
+            return;
+        }
+        match target {
+            ProjectTreeEditTarget::Create {
+                parent,
+                force_directory,
+            } => {
+                let input = if force_directory && !value.ends_with('/') {
+                    format!("{value}/")
+                } else {
+                    value
+                };
+                cx.emit(ProjectTreeViewEvent::CreateEntry { parent, input });
+            }
+            ProjectTreeEditTarget::Rename { path } => {
+                if path.file_name().is_none_or(|name| name != value.as_str()) {
+                    cx.emit(ProjectTreeViewEvent::RenameEntry {
+                        path,
+                        new_name: value,
+                    });
+                }
+            }
+        }
+        self.cancel_edit(cx);
+    }
+
+    fn cancel_edit(&mut self, cx: &mut Context<Self>) {
+        if self.edit_target.take().is_none() {
+            return;
+        }
+        self.edit_input = None;
+        self.edit_subscription = None;
+        self.rebuild_tree_state(cx);
+        cx.notify();
+    }
+
+    fn rebuild_tree_state(&mut self, cx: &mut Context<Self>) {
+        let mut items = self.snapshot.tree_items();
+        if let Some(ProjectTreeEditTarget::Create { parent, .. }) = &self.edit_target {
+            insert_edit_item(&mut items, parent);
+        }
+        let selected_id = self
+            .selected_row()
+            .and_then(|row| row.relative_path)
+            .map(|path| stable_path_id(&path));
+        let selected_item = selected_id
+            .as_deref()
+            .and_then(|id| find_tree_item(&items, id))
+            .cloned();
+        self.tree.update(cx, |state, tree_cx| {
+            state.set_items(items, tree_cx);
+            state.set_selected_item(selected_item.as_ref(), tree_cx);
+        });
+    }
+
+    fn emit_selected_path_event(
+        &mut self,
+        event: impl FnOnce(PathBuf) -> ProjectTreeViewEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = self.selected_row().and_then(|row| row.relative_path) else {
+            cx.propagate();
+            return;
+        };
+        cx.emit(event(path));
+    }
+
+    fn on_new_file(&mut self, _: &ProjectTreeNewFile, window: &mut Window, cx: &mut Context<Self>) {
+        self.begin_create_selected(false, window, cx);
+    }
+
+    fn on_new_directory(
+        &mut self,
+        _: &ProjectTreeNewDirectory,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.begin_create_selected(true, window, cx);
+    }
+
+    fn on_rename(&mut self, _: &ProjectTreeRename, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = self.selected_row() else {
+            cx.propagate();
+            return;
+        };
+        self.begin_rename(row, window, cx);
+    }
+
+    fn on_delete(&mut self, _: &ProjectTreeDelete, _: &mut Window, cx: &mut Context<Self>) {
+        self.emit_selected_path_event(ProjectTreeViewEvent::RequestDelete, cx);
+    }
+
+    fn on_copy(&mut self, _: &ProjectTreeCopy, _: &mut Window, cx: &mut Context<Self>) {
+        self.emit_selected_path_event(ProjectTreeViewEvent::CopyEntry, cx);
+    }
+
+    fn on_cut(&mut self, _: &ProjectTreeCut, _: &mut Window, cx: &mut Context<Self>) {
+        self.emit_selected_path_event(ProjectTreeViewEvent::CutEntry, cx);
+    }
+
+    fn on_paste(&mut self, _: &ProjectTreePaste, _: &mut Window, cx: &mut Context<Self>) {
+        let destination_directory = self
+            .selected_row()
+            .as_ref()
+            .map(operation_destination_directory)
+            .unwrap_or_default();
+        cx.emit(ProjectTreeViewEvent::PasteEntry {
+            destination_directory,
+        });
+    }
+
+    fn on_cancel_edit(&mut self, _: &Escape, _: &mut Window, cx: &mut Context<Self>) {
+        if self.edit_target.is_some() {
+            self.cancel_edit(cx);
+        } else {
+            cx.propagate();
+        }
+    }
 }
 
 impl EventEmitter<ProjectTreeViewEvent> for ProjectTreeView {}
@@ -363,24 +664,260 @@ impl EventEmitter<ProjectTreeViewEvent> for ProjectTreeView {}
 impl Render for ProjectTreeView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = self.snapshot.rows_by_id.clone();
+        let menu_rows = rows.clone();
         let view = cx.weak_entity();
+        let menu_view = view.clone();
         let icon_theme = self.icon_theme.clone();
-        div()
-            .size_full()
-            .child(tree(&self.tree, move |ix, entry, selected, _window, cx| {
-                let id = entry.item().id.as_str().to_string();
-                let row = rows.get(&id).cloned();
-                render_component_row(
+        let edit_target = self.edit_target.clone();
+        let edit_input = self.edit_input.clone();
+        let text = self.interaction_text.clone();
+        let tree = tree(&self.tree, move |ix, entry, selected, _window, cx| {
+            let id = entry.item().id.as_str().to_string();
+            if id == EDIT_ROW_ID {
+                return render_edit_row(
+                    ix,
+                    entry.depth(),
+                    selected,
+                    None,
+                    edit_target.as_ref(),
+                    edit_input.as_ref(),
+                    &icon_theme,
+                    cx,
+                );
+            }
+            let row = rows.get(&id).cloned();
+            if row.as_ref().is_some_and(|row| {
+                matches!(
+                    &edit_target,
+                    Some(ProjectTreeEditTarget::Rename { path })
+                        if row.relative_path.as_deref() == Some(path)
+                )
+            }) {
+                return render_edit_row(
                     ix,
                     entry.depth(),
                     selected,
                     row,
+                    edit_target.as_ref(),
+                    edit_input.as_ref(),
                     &icon_theme,
-                    view.clone(),
                     cx,
-                )
-            }))
+                );
+            }
+            render_component_row(
+                ix,
+                entry.depth(),
+                selected,
+                row,
+                &icon_theme,
+                view.clone(),
+                cx,
+            )
+        })
+        .context_menu(move |_ix, entry, menu, _window, cx| {
+            let id = entry.item().id.as_str();
+            let Some(row) = menu_rows.get(id).cloned() else {
+                return menu;
+            };
+            let Some(path) = row.relative_path.clone() else {
+                return menu;
+            };
+            let destination_directory = operation_destination_directory(&row);
+            let _ = menu_view.update(cx, |view, view_cx| {
+                view.select_context_path(path.clone(), view_cx);
+            });
+
+            let new_file_view = menu_view.clone();
+            let new_file_parent = destination_directory.clone();
+            let new_directory_view = menu_view.clone();
+            let new_directory_parent = destination_directory.clone();
+            let rename_view = menu_view.clone();
+            let rename_row = row.clone();
+            let delete_view = menu_view.clone();
+            let delete_path = path.clone();
+            let copy_view = menu_view.clone();
+            let copy_path = path.clone();
+            let cut_view = menu_view.clone();
+            let cut_path = path.clone();
+            let paste_view = menu_view.clone();
+
+            menu.item(
+                PopupMenuItem::new(text.new_file.clone()).on_click(move |_, window, cx| {
+                    let _ = new_file_view.update(cx, |view, view_cx| {
+                        view.begin_create(new_file_parent.clone(), false, window, view_cx);
+                    });
+                }),
+            )
+            .item(
+                PopupMenuItem::new(text.new_directory.clone()).on_click(move |_, window, cx| {
+                    let _ = new_directory_view.update(cx, |view, view_cx| {
+                        view.begin_create(new_directory_parent.clone(), true, window, view_cx);
+                    });
+                }),
+            )
+            .item(PopupMenuItem::separator())
+            .item(
+                PopupMenuItem::new(text.cut.clone()).on_click(move |_, _, cx| {
+                    let _ = cut_view.update(cx, |_, view_cx| {
+                        view_cx.emit(ProjectTreeViewEvent::CutEntry(cut_path.clone()));
+                    });
+                }),
+            )
+            .item(
+                PopupMenuItem::new(text.copy.clone()).on_click(move |_, _, cx| {
+                    let _ = copy_view.update(cx, |_, view_cx| {
+                        view_cx.emit(ProjectTreeViewEvent::CopyEntry(copy_path.clone()));
+                    });
+                }),
+            )
+            .item(
+                PopupMenuItem::new(text.paste.clone()).on_click(move |_, _, cx| {
+                    let destination_directory = destination_directory.clone();
+                    let _ = paste_view.update(cx, |_, view_cx| {
+                        view_cx.emit(ProjectTreeViewEvent::PasteEntry {
+                            destination_directory,
+                        });
+                    });
+                }),
+            )
+            .item(PopupMenuItem::separator())
+            .item(
+                PopupMenuItem::new(text.rename.clone()).on_click(move |_, window, cx| {
+                    let row = rename_row.clone();
+                    let _ = rename_view.update(cx, |view, view_cx| {
+                        view.begin_rename(row, window, view_cx);
+                    });
+                }),
+            )
+            .item(
+                PopupMenuItem::new(text.delete.clone()).on_click(move |_, _, cx| {
+                    let _ = delete_view.update(cx, |_, view_cx| {
+                        view_cx.emit(ProjectTreeViewEvent::RequestDelete(delete_path.clone()));
+                    });
+                }),
+            )
+        });
+
+        div()
+            .size_full()
+            .on_action(cx.listener(Self::on_new_file))
+            .on_action(cx.listener(Self::on_new_directory))
+            .on_action(cx.listener(Self::on_rename))
+            .on_action(cx.listener(Self::on_delete))
+            .on_action(cx.listener(Self::on_copy))
+            .on_action(cx.listener(Self::on_cut))
+            .on_action(cx.listener(Self::on_paste))
+            .on_action(cx.listener(Self::on_cancel_edit))
+            .child(tree)
     }
+}
+
+fn operation_destination_directory(row: &ProjectTreeRenderRow) -> PathBuf {
+    if row.kind == Some(ProjectTreeEntryKind::Directory) {
+        row.relative_path.clone().unwrap_or_default()
+    } else {
+        row.relative_path
+            .as_deref()
+            .and_then(Path::parent)
+            .unwrap_or(Path::new(""))
+            .to_path_buf()
+    }
+}
+
+fn insert_edit_item(items: &mut Vec<TreeItem>, parent: &Path) {
+    let edit_item = TreeItem::new(EDIT_ROW_ID, "").disabled(true);
+    if parent.as_os_str().is_empty() {
+        items.insert(0, edit_item);
+        return;
+    }
+    let parent_id = stable_path_id(parent);
+    if insert_edit_item_under(items, &parent_id, edit_item.clone()) {
+        return;
+    }
+    items.insert(0, edit_item);
+}
+
+fn insert_edit_item_under(items: &mut [TreeItem], parent_id: &str, edit_item: TreeItem) -> bool {
+    for item in items {
+        if item.id.as_str() == parent_id {
+            item.children.insert(0, edit_item);
+            *item = item.clone().expanded(true);
+            return true;
+        }
+        if insert_edit_item_under(&mut item.children, parent_id, edit_item.clone()) {
+            return true;
+        }
+    }
+    false
+}
+
+fn find_tree_item<'a>(items: &'a [TreeItem], id: &str) -> Option<&'a TreeItem> {
+    for item in items {
+        if item.id.as_str() == id {
+            return Some(item);
+        }
+        if let Some(found) = find_tree_item(&item.children, id) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn render_edit_row(
+    ix: usize,
+    depth: usize,
+    selected: bool,
+    row: Option<ProjectTreeRenderRow>,
+    target: Option<&ProjectTreeEditTarget>,
+    input: Option<&Entity<InputState>>,
+    icon_theme: &IconTheme,
+    cx: &mut App,
+) -> ListItem {
+    let Some(input) = input else {
+        return ListItem::new(("project-tree-missing-edit-input", ix)).disabled(true);
+    };
+    let force_directory = matches!(
+        target,
+        Some(ProjectTreeEditTarget::Create {
+            force_directory: true,
+            ..
+        })
+    );
+    let path = row
+        .as_ref()
+        .and_then(|row| row.relative_path.as_deref())
+        .unwrap_or(Path::new(""));
+    let kind = row.as_ref().and_then(|row| row.kind);
+    let icon = if force_directory
+        || matches!(
+            kind,
+            Some(ProjectTreeEntryKind::Directory | ProjectTreeEntryKind::SymlinkDirectory)
+        ) {
+        icon_theme.resolve_directory(path, false)
+    } else {
+        icon_theme.resolve_file(path)
+    };
+
+    ListItem::new(("project-tree-edit-row", ix))
+        .selected(selected)
+        .pl(px(8.0 + depth as f32 * 14.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .w_full()
+                .child(div().w(px(12.0)))
+                .child(icon_for_visual(icon, cx.theme().muted_foreground))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .border_1()
+                        .border_color(cx.theme().primary)
+                        .child(Input::new(input).appearance(false).small()),
+                ),
+        )
 }
 
 fn render_component_row(

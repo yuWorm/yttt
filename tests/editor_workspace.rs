@@ -165,3 +165,58 @@ fn relative_navigation_wraps_across_terminal_and_file_items() {
         Some(WorkItemId::File(file))
     );
 }
+
+#[test]
+fn relocating_file_in_place_rekeys_active_work_item() {
+    let project_id = ProjectId::new("project-a");
+    let mut workspace = ProjectEditorWorkspaceState::default();
+    assert!(workspace.open_project(project_id.clone(), "/project-a", None, true, 280.0,));
+    let old = workspace
+        .session_mut(&project_id)
+        .unwrap()
+        .open_file("/project-a/src/old.rs");
+    let mut new = old.clone();
+    new.canonical_path = PathBuf::from("/project-a/src/new.rs");
+
+    assert!(workspace.relocate_file(&old, new.clone()));
+
+    let session = workspace.session(&project_id).unwrap();
+    assert_eq!(session.file_ids(), &[new.clone()]);
+    assert_eq!(session.active_work_item(), Some(&WorkItemId::File(new)));
+}
+
+#[test]
+fn relocating_file_between_projects_moves_session_ownership() {
+    let source_project_id = ProjectId::new("project-a");
+    let destination_project_id = ProjectId::new("project-b");
+    let mut workspace = ProjectEditorWorkspaceState::default();
+    assert!(workspace.open_project(source_project_id.clone(), "/project-a", None, true, 280.0,));
+    assert!(workspace.open_project(
+        destination_project_id.clone(),
+        "/project-b",
+        None,
+        true,
+        280.0,
+    ));
+    let old = workspace
+        .session_mut(&source_project_id)
+        .unwrap()
+        .open_file("/project-a/src/file.rs");
+    let new = yttt::ui::editor::DocumentId {
+        project_id: destination_project_id.clone(),
+        canonical_path: PathBuf::from("/project-b/file.rs"),
+    };
+
+    assert!(workspace.relocate_file(&old, new.clone()));
+
+    assert!(
+        workspace
+            .session(&source_project_id)
+            .unwrap()
+            .file_ids()
+            .is_empty()
+    );
+    let destination = workspace.session(&destination_project_id).unwrap();
+    assert_eq!(destination.file_ids(), &[new.clone()]);
+    assert_eq!(destination.active_work_item(), Some(&WorkItemId::File(new)));
+}

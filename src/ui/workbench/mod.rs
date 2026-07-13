@@ -8,7 +8,8 @@ use gpui::{
 use gpui_component::{
     ActiveTheme as _, Disableable as _, IconName, IndexPath, Root as ComponentRoot, Sizable as _,
     Theme as ComponentTheme, WindowExt as _,
-    button::Button,
+    button::{Button, ButtonVariant, ButtonVariants as _},
+    dialog::DialogButtonProps,
     highlighter::SyntaxHighlighter,
     input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent, Rope, StepAction},
     scroll::ScrollableElement as _,
@@ -39,9 +40,12 @@ use helpers::*;
 use render::{push_component_notification, split_child};
 use settings::{settings_button, settings_overlay};
 use state::{
-    documents::DocumentLifecycleState, overlays::OverlayControllerState,
-    palette::PaletteControllerState, project::ProjectControllerState,
-    settings::SettingsControllerState, terminal::TerminalControllerState,
+    documents::DocumentLifecycleState,
+    overlays::OverlayControllerState,
+    palette::PaletteControllerState,
+    project::{ProjectControllerState, ProjectTreeClipboard},
+    settings::SettingsControllerState,
+    terminal::TerminalControllerState,
 };
 
 use std::{
@@ -169,9 +173,11 @@ use crate::{
             },
         },
         project_tree::{
-            DirectoryLoadRequest, DirectorySnapshot, ProjectTreeFsError, ProjectTreeLoadState,
+            DirectoryLoadRequest, DirectorySnapshot, ProjectEntryFsError, ProjectEntryPasteMode,
+            ProjectTreeFsError, ProjectTreeInteractionText, ProjectTreeLoadState,
             ProjectTreeRenderSnapshot, ProjectTreeRenderText, ProjectTreeView,
-            ProjectTreeViewEvent, scan_project_directory,
+            ProjectTreeViewEvent, create_project_entry, delete_project_entry, paste_project_entry,
+            rename_project_entry, scan_project_directory,
         },
         settings::font_options::{
             font_family_option_for_setting, font_family_options_from_system,

@@ -107,6 +107,25 @@ impl WorkbenchView {
         ))
     }
 
+    fn project_tree_interaction_text(&self) -> ProjectTreeInteractionText {
+        ProjectTreeInteractionText {
+            new_file: self.ui_text.get(UiTextKey::ProjectFilesNewFile).to_string(),
+            new_directory: self
+                .ui_text
+                .get(UiTextKey::ProjectFilesNewDirectory)
+                .to_string(),
+            rename: self.ui_text.get(UiTextKey::ProjectFilesRename).to_string(),
+            delete: self.ui_text.get(UiTextKey::ProjectFilesDelete).to_string(),
+            copy: self.ui_text.get(UiTextKey::ProjectFilesCopy).to_string(),
+            cut: self.ui_text.get(UiTextKey::ProjectFilesCut).to_string(),
+            paste: self.ui_text.get(UiTextKey::ProjectFilesPaste).to_string(),
+            entry_placeholder: self
+                .ui_text
+                .get(UiTextKey::ProjectFilesEntryPlaceholder)
+                .to_string(),
+        }
+    }
+
     pub(super) fn ensure_project_tree_view(
         &mut self,
         project_id: &ProjectId,
@@ -119,9 +138,11 @@ impl WorkbenchView {
             .tree(project_id)
             .cloned()
         {
+            let interaction_text = self.project_tree_interaction_text();
             if let Some(snapshot) = self.project_tree_render_snapshot(project_id) {
                 tree.update(cx, |tree, tree_cx| {
-                    tree.sync_with_icon_theme(snapshot, self.icon_theme.clone(), tree_cx)
+                    tree.sync_with_icon_theme(snapshot, self.icon_theme.clone(), tree_cx);
+                    tree.set_interaction_text(interaction_text, tree_cx);
                 });
             }
             return Some(tree);
@@ -141,8 +162,12 @@ impl WorkbenchView {
         }
         let snapshot = self.project_tree_render_snapshot(project_id)?;
         let icon_theme = self.icon_theme.clone();
-        let tree =
-            cx.new(|tree_cx| ProjectTreeView::new_with_icon_theme(snapshot, icon_theme, tree_cx));
+        let interaction_text = self.project_tree_interaction_text();
+        let tree = cx.new(|tree_cx| {
+            let mut tree = ProjectTreeView::new_with_icon_theme(snapshot, icon_theme, tree_cx);
+            tree.set_interaction_text(interaction_text, tree_cx);
+            tree
+        });
         let event_project_id = project_id.clone();
         let subscription = cx.subscribe_in(&tree, window, move |this, tree, event, window, cx| {
             this.on_project_tree_view_event(&event_project_id, tree, event, window, cx);
@@ -167,6 +192,16 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) {
         match event {
+            ProjectTreeViewEvent::SelectPath(path) => {
+                if let Some(session) = self
+                    .project
+                    .project_editor_runtime
+                    .workspace_mut()
+                    .session_mut(project_id)
+                {
+                    session.file_tree_mut().select(Some(path.clone()));
+                }
+            }
             ProjectTreeViewEvent::ToggleDirectory { path, expanded } => {
                 let request = self
                     .project
@@ -201,11 +236,459 @@ impl WorkbenchView {
                 }
                 self.spawn_project_file_open(project_id.clone(), path.clone(), window, cx);
             }
+            ProjectTreeViewEvent::CreateEntry { parent, input } => {
+                self.spawn_project_entry_create(
+                    project_id.clone(),
+                    parent.clone(),
+                    input.clone(),
+                    window,
+                    cx,
+                );
+            }
+            ProjectTreeViewEvent::RenameEntry { path, new_name } => {
+                self.spawn_project_entry_rename(
+                    project_id.clone(),
+                    path.clone(),
+                    new_name.clone(),
+                    window,
+                    cx,
+                );
+            }
+            ProjectTreeViewEvent::RequestDelete(path) => {
+                self.confirm_project_entry_delete(project_id.clone(), path.clone(), window, cx);
+            }
+            ProjectTreeViewEvent::CopyEntry(path) => {
+                self.project.project_tree_clipboard = Some(ProjectTreeClipboard {
+                    source_project_id: project_id.clone(),
+                    relative_path: path.clone(),
+                    mode: ProjectEntryPasteMode::Copy,
+                });
+            }
+            ProjectTreeViewEvent::CutEntry(path) => {
+                self.project.project_tree_clipboard = Some(ProjectTreeClipboard {
+                    source_project_id: project_id.clone(),
+                    relative_path: path.clone(),
+                    mode: ProjectEntryPasteMode::Cut,
+                });
+            }
+            ProjectTreeViewEvent::PasteEntry {
+                destination_directory,
+            } => {
+                self.spawn_project_entry_paste(
+                    project_id.clone(),
+                    destination_directory.clone(),
+                    window,
+                    cx,
+                );
+            }
             ProjectTreeViewEvent::Refresh => {
                 self.refresh_project_tree(project_id.clone(), window, cx);
             }
         }
         cx.notify();
+    }
+
+    fn relocate_open_project_documents(
+        &mut self,
+        source_project_id: &ProjectId,
+        source_relative_path: &Path,
+        destination_project_id: &ProjectId,
+        destination_relative_path: &Path,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(source_root) = self
+            .workspace
+            .project(source_project_id)
+            .map(|project| project.path.clone())
+        else {
+            return;
+        };
+        let Some(destination_root) = self
+            .workspace
+            .project(destination_project_id)
+            .map(|project| project.path.clone())
+        else {
+            return;
+        };
+        let Ok(canonical_source_root) = fs::canonicalize(source_root) else {
+            return;
+        };
+        let Ok(canonical_destination_base) =
+            fs::canonicalize(destination_root.join(destination_relative_path))
+        else {
+            return;
+        };
+        let source_base = canonical_source_root.join(source_relative_path);
+        let migrations = self
+            .project
+            .project_editor_runtime
+            .documents_for_project(source_project_id)
+            .filter_map(|(document_id, _)| {
+                let suffix = document_id.canonical_path.strip_prefix(&source_base).ok()?;
+                let destination_relative = destination_relative_path.join(suffix);
+                let new_document_id = crate::ui::editor::DocumentId {
+                    project_id: destination_project_id.clone(),
+                    canonical_path: canonical_destination_base.join(suffix),
+                };
+                Some((
+                    document_id.clone(),
+                    new_document_id,
+                    destination_relative.to_string_lossy().into_owned(),
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        for (old_document_id, new_document_id, breadcrumb_header) in migrations {
+            let Some(document) = self
+                .project
+                .project_editor_runtime
+                .relocate_document(&old_document_id, new_document_id.clone())
+            else {
+                continue;
+            };
+            document.update(cx, |document, document_cx| {
+                document.relocate(
+                    new_document_id.clone(),
+                    breadcrumb_header.clone(),
+                    document_cx,
+                );
+            });
+            self.relocate_pending_document_id(&old_document_id, &new_document_id);
+        }
+    }
+
+    fn relocate_pending_document_id(
+        &mut self,
+        old: &crate::ui::editor::DocumentId,
+        new: &crate::ui::editor::DocumentId,
+    ) {
+        for pending in self
+            .documents
+            .pending_document_saves
+            .iter_mut()
+            .chain(self.documents.pending_focus_change_autosaves.iter_mut())
+            .chain(self.documents.pending_file_close_requests.iter_mut())
+        {
+            if pending == old {
+                *pending = new.clone();
+            }
+        }
+        if self.project.pending_editor_focus_document_id.as_ref() == Some(old) {
+            self.project.pending_editor_focus_document_id = Some(new.clone());
+        }
+        if let Some(conflict) = self.documents.pending_file_conflict.as_mut()
+            && &conflict.document_id == old
+        {
+            conflict.document_id = new.clone();
+            conflict.request.document_id = new.clone();
+        }
+        if let Some(pending) = self.documents.pending_dirty_close.as_mut() {
+            if let DirtyCloseIntent::File(document_id) = &mut pending.intent
+                && document_id == old
+            {
+                *document_id = new.clone();
+            }
+            for document_id in &mut pending.dirty_documents {
+                if document_id == old {
+                    *document_id = new.clone();
+                }
+            }
+            if pending.saving_documents.remove(old) {
+                pending.saving_documents.insert(new.clone());
+            }
+        }
+    }
+
+    fn spawn_project_entry_create(
+        &mut self,
+        project_id: ProjectId,
+        parent: PathBuf,
+        input: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project_root) = self
+            .workspace
+            .project(&project_id)
+            .map(|project| project.path.clone())
+        else {
+            return;
+        };
+        let io_task = cx
+            .background_spawn(async move { create_project_entry(&project_root, &parent, &input) });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = io_task.await;
+            let _ = this.update_in(cx, |root, window, cx| {
+                match result {
+                    Ok(created) => {
+                        if let Some(session) = root
+                            .project
+                            .project_editor_runtime
+                            .workspace_mut()
+                            .session_mut(&project_id)
+                        {
+                            session
+                                .file_tree_mut()
+                                .select(Some(created.relative_path.clone()));
+                        }
+                        root.load_error = None;
+                        root.refresh_project_tree(project_id.clone(), window, cx);
+                        if !created.kind.is_directory() {
+                            root.spawn_project_file_open(
+                                project_id.clone(),
+                                created.relative_path,
+                                window,
+                                cx,
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        root.load_error = Some(root.localized_project_entry_error(&error));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn spawn_project_entry_rename(
+        &mut self,
+        project_id: ProjectId,
+        relative_path: PathBuf,
+        new_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project_root) = self
+            .workspace
+            .project(&project_id)
+            .map(|project| project.path.clone())
+        else {
+            return;
+        };
+        let moved_relative_path = relative_path.clone();
+        let io_task = cx.background_spawn(async move {
+            rename_project_entry(&project_root, &relative_path, &new_name)
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = io_task.await;
+            let _ = this.update_in(cx, |root, window, cx| {
+                match result {
+                    Ok(renamed) => {
+                        root.relocate_open_project_documents(
+                            &project_id,
+                            &moved_relative_path,
+                            &project_id,
+                            &renamed.relative_path,
+                            cx,
+                        );
+                        if let Some(session) = root
+                            .project
+                            .project_editor_runtime
+                            .workspace_mut()
+                            .session_mut(&project_id)
+                        {
+                            session
+                                .file_tree_mut()
+                                .select(Some(renamed.relative_path.clone()));
+                        }
+                        root.load_error = None;
+                        root.refresh_project_tree(project_id.clone(), window, cx);
+                    }
+                    Err(error) => {
+                        root.load_error = Some(root.localized_project_entry_error(&error));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn confirm_project_entry_delete(
+        &mut self,
+        project_id: ProjectId,
+        relative_path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let title = self
+            .ui_text
+            .get(UiTextKey::ProjectFilesDeleteConfirmTitle)
+            .to_string();
+        let message = self
+            .ui_text
+            .get(UiTextKey::ProjectFilesDeleteConfirmMessage)
+            .to_string();
+        let delete_label = self.ui_text.get(UiTextKey::ProjectFilesDelete).to_string();
+        let cancel_label = self.ui_text.get(UiTextKey::Cancel).to_string();
+        let display_path = relative_path.display().to_string();
+        let workbench = cx.weak_entity();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let workbench = workbench.clone();
+            let project_id = project_id.clone();
+            let relative_path = relative_path.clone();
+            let delete_label = delete_label.clone();
+            let cancel_label = cancel_label.clone();
+            dialog
+                .title(title.clone())
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(display_path.clone())
+                        .child(message.clone()),
+                )
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(delete_label.clone())
+                        .ok_variant(ButtonVariant::Danger)
+                        .cancel_text(cancel_label.clone())
+                        .show_cancel(true)
+                        .on_ok(move |_, window, cx| {
+                            let _ = workbench.update(cx, |root, root_cx| {
+                                root.spawn_project_entry_delete(
+                                    project_id.clone(),
+                                    relative_path.clone(),
+                                    window,
+                                    root_cx,
+                                );
+                            });
+                            true
+                        }),
+                )
+        });
+    }
+
+    fn spawn_project_entry_delete(
+        &mut self,
+        project_id: ProjectId,
+        relative_path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project_root) = self
+            .workspace
+            .project(&project_id)
+            .map(|project| project.path.clone())
+        else {
+            return;
+        };
+        let io_task =
+            cx.background_spawn(async move { delete_project_entry(&project_root, &relative_path) });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = io_task.await;
+            let _ = this.update_in(cx, |root, window, cx| {
+                match result {
+                    Ok(()) => {
+                        if let Some(session) = root
+                            .project
+                            .project_editor_runtime
+                            .workspace_mut()
+                            .session_mut(&project_id)
+                        {
+                            session.file_tree_mut().select(None);
+                        }
+                        root.load_error = None;
+                        root.refresh_project_tree(project_id.clone(), window, cx);
+                    }
+                    Err(error) => {
+                        root.load_error = Some(root.localized_project_entry_error(&error));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn spawn_project_entry_paste(
+        &mut self,
+        destination_project_id: ProjectId,
+        destination_directory: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(clipboard) = self.project.project_tree_clipboard.clone() else {
+            return;
+        };
+        let Some(source_root) = self
+            .workspace
+            .project(&clipboard.source_project_id)
+            .map(|project| project.path.clone())
+        else {
+            self.project.project_tree_clipboard = None;
+            return;
+        };
+        let Some(destination_root) = self
+            .workspace
+            .project(&destination_project_id)
+            .map(|project| project.path.clone())
+        else {
+            return;
+        };
+        let source_relative_path = clipboard.relative_path.clone();
+        let mode = clipboard.mode;
+        let io_task = cx.background_spawn(async move {
+            paste_project_entry(
+                &source_root,
+                &source_relative_path,
+                &destination_root,
+                &destination_directory,
+                mode,
+            )
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = io_task.await;
+            let _ = this.update_in(cx, |root, window, cx| {
+                match result {
+                    Ok(pasted) => {
+                        if mode == ProjectEntryPasteMode::Cut {
+                            root.relocate_open_project_documents(
+                                &clipboard.source_project_id,
+                                &clipboard.relative_path,
+                                &destination_project_id,
+                                &pasted.relative_path,
+                                cx,
+                            );
+                        }
+                        if mode == ProjectEntryPasteMode::Cut
+                            && root.project.project_tree_clipboard.as_ref() == Some(&clipboard)
+                        {
+                            root.project.project_tree_clipboard = None;
+                        }
+                        if let Some(session) = root
+                            .project
+                            .project_editor_runtime
+                            .workspace_mut()
+                            .session_mut(&destination_project_id)
+                        {
+                            session
+                                .file_tree_mut()
+                                .select(Some(pasted.relative_path.clone()));
+                        }
+                        root.load_error = None;
+                        if clipboard.source_project_id != destination_project_id
+                            && mode == ProjectEntryPasteMode::Cut
+                        {
+                            root.refresh_project_tree(
+                                clipboard.source_project_id.clone(),
+                                window,
+                                cx,
+                            );
+                        }
+                        root.refresh_project_tree(destination_project_id.clone(), window, cx);
+                    }
+                    Err(error) => {
+                        root.load_error = Some(root.localized_project_entry_error(&error));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(super) fn refresh_project_tree(
@@ -305,6 +788,13 @@ impl WorkbenchView {
         format!(
             "{}: {error}",
             self.ui_text.get(UiTextKey::ProjectFilesDirectoryError)
+        )
+    }
+
+    fn localized_project_entry_error(&self, error: &ProjectEntryFsError) -> String {
+        format!(
+            "{}: {error}",
+            self.ui_text.get(UiTextKey::StatusErrorContext)
         )
     }
 

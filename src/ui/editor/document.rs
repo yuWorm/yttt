@@ -95,6 +95,13 @@ impl ProjectEditorModel {
         &self.document_id
     }
 
+    pub fn relocate(&mut self, document_id: DocumentId, title: impl Into<String>) {
+        self.editor
+            .relocate(document_id.canonical_path.clone(), title);
+        self.document_id = document_id;
+        self.save_state = ProjectEditorSaveState::Idle;
+    }
+
     pub fn editor(&self) -> &CodeEditorState {
         &self.editor
     }
@@ -266,6 +273,27 @@ impl ProjectEditorDocument {
 
     pub fn model_mut(&mut self) -> &mut ProjectEditorModel {
         &mut self.model
+    }
+
+    pub fn relocate(
+        &mut self,
+        document_id: DocumentId,
+        breadcrumb_header: impl Into<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let title = document_id
+            .canonical_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| document_id.canonical_path.display().to_string());
+        self.model.relocate(document_id, title);
+        self.breadcrumb_header = breadcrumb_header.into();
+        let language = self.model.editor().language().to_string();
+        self.input.update(cx, |input, input_cx| {
+            input.set_highlighter(language, input_cx);
+        });
+        self.refresh_breadcrumbs(self.breadcrumb_cursor_line);
+        cx.notify();
     }
 
     pub fn input(&self) -> &Entity<InputState> {

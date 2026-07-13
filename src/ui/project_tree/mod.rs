@@ -3,13 +3,14 @@ mod state;
 mod view;
 
 pub use fs::{
-    DirectorySnapshot, ProjectTreeEntry, ProjectTreeEntryKind, ProjectTreeFsError,
-    scan_project_directory,
+    DirectorySnapshot, ProjectEntryFsError, ProjectEntryMutation, ProjectEntryPasteMode,
+    ProjectTreeEntry, ProjectTreeEntryKind, ProjectTreeFsError, create_project_entry,
+    delete_project_entry, paste_project_entry, rename_project_entry, scan_project_directory,
 };
 pub use state::{
     DirectoryLoadRequest, ProjectFileTree, ProjectTreeLoadState, ProjectTreeVisibleRow,
 };
 pub use view::{
-    ProjectTreeRenderRow, ProjectTreeRenderSnapshot, ProjectTreeRenderText, ProjectTreeView,
-    ProjectTreeViewEvent,
+    ProjectTreeInteractionText, ProjectTreeRenderRow, ProjectTreeRenderSnapshot,
+    ProjectTreeRenderText, ProjectTreeView, ProjectTreeViewEvent,
 };

@@ -11,6 +11,7 @@ use crate::{
 };
 
 pub const WORKSPACE_CONTEXT: &str = "Workspace";
+pub const PROJECT_TREE_CONTEXT: &str = "Tree";
 
 actions!(
     yttt,
@@ -58,6 +59,13 @@ actions!(
         SettingsOpen,
         SettingsKeybindings,
         SettingsNotifications,
+        ProjectTreeNewFile,
+        ProjectTreeNewDirectory,
+        ProjectTreeRename,
+        ProjectTreeDelete,
+        ProjectTreeCopy,
+        ProjectTreeCut,
+        ProjectTreePaste,
     ]
 );
 
@@ -308,6 +316,32 @@ fn built_in_ui_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("up", PaletteSelectPrev, Some(WORKSPACE_CONTEXT)),
         KeyBinding::new("enter", PaletteConfirm, Some(WORKSPACE_CONTEXT)),
         KeyBinding::new("escape", PaletteCancel, Some(WORKSPACE_CONTEXT)),
+        KeyBinding::new("cmd-n", ProjectTreeNewFile, Some(PROJECT_TREE_CONTEXT)),
+        KeyBinding::new(
+            "cmd-shift-n",
+            ProjectTreeNewDirectory,
+            Some(PROJECT_TREE_CONTEXT),
+        ),
+        KeyBinding::new("enter", ProjectTreeRename, Some(PROJECT_TREE_CONTEXT)),
+        KeyBinding::new(
+            "cmd-backspace",
+            ProjectTreeDelete,
+            Some(PROJECT_TREE_CONTEXT),
+        ),
+        KeyBinding::new("delete", ProjectTreeDelete, Some(PROJECT_TREE_CONTEXT)),
+        KeyBinding::new("cmd-c", ProjectTreeCopy, Some(PROJECT_TREE_CONTEXT)),
+        KeyBinding::new("cmd-x", ProjectTreeCut, Some(PROJECT_TREE_CONTEXT)),
+        KeyBinding::new("cmd-v", ProjectTreePaste, Some(PROJECT_TREE_CONTEXT)),
+        KeyBinding::new("ctrl-n", ProjectTreeNewFile, Some(PROJECT_TREE_CONTEXT)),
+        KeyBinding::new(
+            "ctrl-shift-n",
+            ProjectTreeNewDirectory,
+            Some(PROJECT_TREE_CONTEXT),
+        ),
+        KeyBinding::new("f2", ProjectTreeRename, Some(PROJECT_TREE_CONTEXT)),
+        KeyBinding::new("ctrl-c", ProjectTreeCopy, Some(PROJECT_TREE_CONTEXT)),
+        KeyBinding::new("ctrl-x", ProjectTreeCut, Some(PROJECT_TREE_CONTEXT)),
+        KeyBinding::new("ctrl-v", ProjectTreePaste, Some(PROJECT_TREE_CONTEXT)),
     ]
 }
 

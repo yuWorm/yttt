@@ -130,6 +130,30 @@ impl ProjectWorkItemSession {
         self.active_work_item.clone()
     }
 
+    fn relocate_file_within_session(&mut self, old: &DocumentId, new: DocumentId) -> bool {
+        if old.project_id != self.project_id
+            || new.project_id != self.project_id
+            || (old != &new && self.file_ids.contains(&new))
+        {
+            return false;
+        }
+        let Some(index) = self.file_ids.iter().position(|id| id == old) else {
+            return false;
+        };
+        self.file_ids[index] = new.clone();
+        let old_item = WorkItemId::File(old.clone());
+        let new_item = WorkItemId::File(new);
+        if self.active_work_item.as_ref() == Some(&old_item) {
+            self.active_work_item = Some(new_item.clone());
+        }
+        for item in &mut self.activation_history {
+            if item == &old_item {
+                *item = new_item.clone();
+            }
+        }
+        true
+    }
+
     pub fn file_tree(&self) -> &ProjectFileTree {
         &self.file_tree
     }
@@ -226,6 +250,46 @@ impl ProjectEditorWorkspaceState {
 
     pub fn session_mut(&mut self, project_id: &ProjectId) -> Option<&mut ProjectWorkItemSession> {
         self.sessions.get_mut(project_id)
+    }
+
+    pub fn relocate_file(&mut self, old: &DocumentId, new: DocumentId) -> bool {
+        if old == &new {
+            return self
+                .sessions
+                .get(&old.project_id)
+                .is_some_and(|session| session.file_ids.contains(old));
+        }
+        if old.project_id == new.project_id {
+            return self
+                .sessions
+                .get_mut(&old.project_id)
+                .is_some_and(|session| session.relocate_file_within_session(old, new));
+        }
+        let source_exists = self
+            .sessions
+            .get(&old.project_id)
+            .is_some_and(|session| session.file_ids.contains(old));
+        let destination_available = self
+            .sessions
+            .get(&new.project_id)
+            .is_some_and(|session| !session.file_ids.contains(&new));
+        if !source_exists || !destination_available {
+            return false;
+        }
+
+        if let Some(source) = self.sessions.get_mut(&old.project_id) {
+            let old_item = WorkItemId::File(old.clone());
+            source.file_ids.retain(|id| id != old);
+            source.activation_history.retain(|item| item != &old_item);
+            if source.active_work_item.as_ref() == Some(&old_item) {
+                source.active_work_item = source.activation_history.last().cloned();
+            }
+        }
+        if let Some(destination) = self.sessions.get_mut(&new.project_id) {
+            destination.file_ids.push(new.clone());
+            destination.activate(WorkItemId::File(new));
+        }
+        true
     }
 
     pub fn len(&self) -> usize {

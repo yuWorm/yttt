@@ -1,3 +1,5 @@
+use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
+
 use super::*;
 
 impl WorkbenchView {
@@ -140,6 +142,14 @@ impl WorkbenchView {
         let root_is_empty = session.file_tree().visible_rows().is_empty();
         let has_root_snapshot = session.file_tree().has_snapshot(Path::new(""));
         let theme = self.theme_runtime.ui;
+        let tree_is_editing = tree.read(cx).is_editing();
+        let new_entry_tree = tree.clone();
+        let workbench_for_new_entry = cx.weak_entity();
+        let new_file_label = self.ui_text.get(UiTextKey::ProjectFilesNewFile).to_string();
+        let new_directory_label = self
+            .ui_text
+            .get(UiTextKey::ProjectFilesNewDirectory)
+            .to_string();
 
         let content = match root_load_state {
             ProjectTreeLoadState::Loading | ProjectTreeLoadState::Unloaded
@@ -187,7 +197,7 @@ impl WorkbenchView {
                         )),
                     )
             }
-            ProjectTreeLoadState::Loaded if root_is_empty => div()
+            ProjectTreeLoadState::Loaded if root_is_empty && !tree_is_editing => div()
                 .debug_selector(|| "project-file-panel-empty".to_string())
                 .flex()
                 .flex_1()
@@ -249,23 +259,81 @@ impl WorkbenchView {
                                 ),
                         )
                         .child(
-                            yttt_button(
-                                "project-file-panel-refresh",
-                                self.ui_text.get(UiTextKey::ProjectFilesRefresh),
-                                YtttButtonVariant::Ghost,
-                                theme,
-                                cx,
-                            )
-                            .on_click(cx.listener(
-                                move |this, _, window, cx| {
-                                    this.refresh_project_tree(
-                                        refresh_project_id.clone(),
-                                        window,
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    Button::new("project-file-panel-new")
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::Plus)
+                                        .dropdown_menu(move |menu, _, _| {
+                                            let new_file_tree = new_entry_tree.clone();
+                                            let new_directory_tree = new_entry_tree.clone();
+                                            let new_file_workbench =
+                                                workbench_for_new_entry.clone();
+                                            let new_directory_workbench =
+                                                workbench_for_new_entry.clone();
+                                            menu.item(
+                                                PopupMenuItem::new(new_file_label.clone())
+                                                    .on_click(move |_, window, cx| {
+                                                        new_file_tree.update(
+                                                            cx,
+                                                            |tree, tree_cx| {
+                                                                tree.begin_create_selected(
+                                                                    false, window, tree_cx,
+                                                                );
+                                                            },
+                                                        );
+                                                        let _ = new_file_workbench.update(
+                                                            cx,
+                                                            |_, workbench_cx| {
+                                                                workbench_cx.notify();
+                                                            },
+                                                        );
+                                                    }),
+                                            )
+                                            .item(
+                                                PopupMenuItem::new(new_directory_label.clone())
+                                                    .on_click(move |_, window, cx| {
+                                                        new_directory_tree.update(
+                                                            cx,
+                                                            |tree, tree_cx| {
+                                                                tree.begin_create_selected(
+                                                                    true, window, tree_cx,
+                                                                );
+                                                            },
+                                                        );
+                                                        let _ = new_directory_workbench.update(
+                                                            cx,
+                                                            |_, workbench_cx| {
+                                                                workbench_cx.notify();
+                                                            },
+                                                        );
+                                                    }),
+                                            )
+                                        }),
+                                )
+                                .child(
+                                    yttt_button(
+                                        "project-file-panel-refresh",
+                                        self.ui_text.get(UiTextKey::ProjectFilesRefresh),
+                                        YtttButtonVariant::Ghost,
+                                        theme,
                                         cx,
-                                    );
-                                    cx.notify();
-                                },
-                            )),
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _, window, cx| {
+                                            this.refresh_project_tree(
+                                                refresh_project_id.clone(),
+                                                window,
+                                                cx,
+                                            );
+                                            cx.notify();
+                                        },
+                                    )),
+                                ),
                         ),
                 )
                 .child(content)
