@@ -91,6 +91,59 @@ fn active_terminal_content_receives_default_focus(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn agent_exit_notification_does_not_reenter_workbench_entity(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(project_path, agent_exit_fixture_layout())
+        .unwrap();
+    let notification = NotificationEvent {
+        kind: NotificationKind::AgentCompleted,
+        project_id: project_id.as_str().to_string(),
+        tab_id: "agent".to_string(),
+        pane_id: "codex".to_string(),
+        project_title: "yttt-agent-exit".to_string(),
+        tab_title: "Agent".to_string(),
+        pane_title: "Codex".to_string(),
+    };
+
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| {
+            WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
+        });
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        ComponentRoot::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    let pane = cx.update(|_window, cx| {
+        root.read(cx)
+            .terminal
+            .terminal_panes
+            .values()
+            .next()
+            .cloned()
+            .expect("render must create the agent terminal pane")
+    });
+    let event = TerminalPaneEvent::Notification(notification.clone());
+
+    cx.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.on_terminal_pane_event(&pane, &event, window, cx);
+        });
+    });
+
+    cx.update(|_window, cx| {
+        assert_eq!(root.read(cx).toast_queue.events(), &[notification]);
+    });
+}
+
+#[gpui::test]
 fn titlebar_renders_branch_and_changes_actions(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();

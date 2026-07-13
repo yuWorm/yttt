@@ -504,16 +504,12 @@ where
 pub(super) fn push_component_notification(
     root: Entity<WorkbenchView>,
     event: NotificationEvent,
+    action_label: &'static str,
+    theme: WorkbenchTheme,
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) {
     let item = toast_item_for_event(&event);
-    let root_state = root.read(cx);
-    let theme = root_state.theme_runtime.ui;
-    let action_label = root_state
-        .ui_text
-        .get(UiTextKey::OpenNotificationTarget)
-        .to_string();
     let focus_event = event.clone();
     window.push_notification(
         workbench_agent_notification(item, action_label, theme).on_click(move |_, _window, cx| {

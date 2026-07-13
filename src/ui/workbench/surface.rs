@@ -533,8 +533,10 @@ impl WorkbenchView {
             TerminalPaneEvent::Notification(event) => {
                 let root = cx.entity();
                 let event = event.clone();
+                let action_label = self.ui_text.get(UiTextKey::OpenNotificationTarget);
+                let theme = self.theme_runtime.ui;
                 self.handle_terminal_notification(event.clone());
-                push_component_notification(root, event, _window, cx);
+                push_component_notification(root, event, action_label, theme, _window, cx);
                 cx.notify();
             }
             TerminalPaneEvent::Started(event) => {
