@@ -1,5 +1,17 @@
 use super::*;
 
+const ACTIVE_PROJECT_FILE_WATCH_DEBOUNCE: Duration = Duration::from_millis(150);
+
+fn project_file_event_requires_refresh(kind: &notify::EventKind) -> bool {
+    matches!(
+        kind,
+        notify::EventKind::Any
+            | notify::EventKind::Create(_)
+            | notify::EventKind::Modify(_)
+            | notify::EventKind::Remove(_)
+    )
+}
+
 impl WorkbenchView {
     pub fn refresh_project_tree_state(
         &mut self,
@@ -37,6 +49,124 @@ impl WorkbenchView {
                 .track_tree_load(project_id.clone(), request.generation);
         }
         requests
+    }
+
+    pub(super) fn ensure_active_project_file_watcher(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((project_id, project_path)) =
+            self.workspace.selected_project_id().and_then(|project_id| {
+                self.workspace
+                    .project(project_id)
+                    .map(|project| (project_id.clone(), project.path.clone()))
+            })
+        else {
+            self.active_project_file_watcher = None;
+            return;
+        };
+        if self.active_project_file_watcher_matches(&project_id, &project_path) {
+            return;
+        }
+
+        self.active_project_file_watcher = None;
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let _ = tx.try_send(());
+        let mut watcher =
+            match notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+                if result
+                    .as_ref()
+                    .is_ok_and(|event| project_file_event_requires_refresh(&event.kind))
+                {
+                    let _ = tx.try_send(());
+                }
+            }) {
+                Ok(watcher) => watcher,
+                Err(error) => {
+                    self.load_error = Some(format!(
+                        "Failed to watch project files at {}: {error}",
+                        project_path.display()
+                    ));
+                    return;
+                }
+            };
+        use notify::Watcher as _;
+        if let Err(error) = watcher.watch(&project_path, notify::RecursiveMode::Recursive) {
+            self.load_error = Some(format!(
+                "Failed to watch project files at {}: {error}",
+                project_path.display()
+            ));
+            return;
+        }
+
+        let watched_project_id = project_id.clone();
+        let watched_project_path = project_path.clone();
+        let task = cx.spawn_in(window, async move |this, cx| {
+            let _watcher = watcher;
+            loop {
+                cx.background_executor()
+                    .timer(ACTIVE_PROJECT_FILE_WATCH_DEBOUNCE)
+                    .await;
+                match rx.try_recv() {
+                    Ok(()) => while rx.try_recv().is_ok() {},
+                    Err(std::sync::mpsc::TryRecvError::Empty) => continue,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                }
+
+                let is_active = this
+                    .update_in(cx, |root, _window, cx| {
+                        if !root.active_project_file_watcher_matches(
+                            &watched_project_id,
+                            &watched_project_path,
+                        ) {
+                            return false;
+                        }
+                        root.queue_project_tree_refresh(watched_project_id.clone());
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+                if !is_active {
+                    continue;
+                }
+
+                let status_project_path = watched_project_path.clone();
+                let status_task = cx
+                    .background_executor()
+                    .spawn(async move { read_project_git_status(&status_project_path) });
+                let status = status_task.await;
+                let _ = this.update_in(cx, |root, _window, cx| {
+                    if !root.active_project_file_watcher_matches(
+                        &watched_project_id,
+                        &watched_project_path,
+                    ) {
+                        return;
+                    }
+                    root.apply_project_git_status(&watched_project_id, status);
+                    cx.notify();
+                });
+            }
+        });
+        self.active_project_file_watcher = Some(ActiveProjectFileWatcher {
+            project_id,
+            project_path,
+            _task: task,
+        });
+    }
+
+    fn active_project_file_watcher_matches(
+        &self,
+        project_id: &ProjectId,
+        project_path: &Path,
+    ) -> bool {
+        self.workspace.selected_project_id() == Some(project_id)
+            && self
+                .active_project_file_watcher
+                .as_ref()
+                .is_some_and(|watcher| {
+                    &watcher.project_id == project_id && watcher.project_path == project_path
+                })
     }
 
     pub fn apply_project_tree_snapshot(

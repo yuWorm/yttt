@@ -127,7 +127,7 @@ legacy files are rejected with a visible warning.
 - Sessions and running processes are not restored after app restart.
 - Project editing accepts UTF-8 text files up to 10 MiB; binary and invalid UTF-8 files are
   rejected.
-- There is no continuous filesystem watcher. External changes are checked on focus, refresh,
-  and save boundaries.
+- Continuous filesystem watching is limited to the active project; inactive projects refresh
+  when selected.
 - The project tree does not create, rename, move, or delete files and directories.
 - Packaging and release automation are not implemented.

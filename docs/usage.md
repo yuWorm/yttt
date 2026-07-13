@@ -73,8 +73,8 @@ Discard and Continue, or Cancel. A save failure leaves the file, project, or win
 - The maximum file size is 10 MiB.
 - Canonical paths must remain inside the project root.
 - Symlinked directories are shown but not traversed.
-- There is no continuous filesystem watcher; focus, project-tree refresh, and save boundaries
-  perform external-change checks.
+- The active project is watched recursively. Create, modify, and remove events refresh expanded
+  tree directories, open-document disk state, and Git status after a short debounce.
 - The tree does not create, rename, move, duplicate, or delete filesystem entries.
 
 ## Settings TOML
@@ -419,6 +419,8 @@ Run these before marking a product phase complete:
   the in-file search control opens and navigates between matches.
 - Manual save and both autosave modes write files.
 - External modification and deletion show the appropriate conflict choices.
+- Creating, modifying, or deleting a file outside yttt updates the active project's file tree
+  and Git status without reselecting the project.
 - Dirty file, dirty project with running terminals, and window close all protect unsaved data.
 - Pane focus can be changed from keyboard and pointer.
 - Invalid layout TOML produces a visible error.
@@ -427,8 +429,8 @@ Run these before marking a product phase complete:
 ## Known Limits
 
 - The project tree and text editor are not a general-purpose file manager or full IDE.
-- File editing is limited to regular UTF-8 files up to 10 MiB, without a continuous watcher or
-  create/rename/move/delete operations.
+- File editing is limited to regular UTF-8 files up to 10 MiB. Continuous filesystem watching is
+  limited to the active project; inactive projects refresh when selected.
 - No client/server terminal runtime.
 - No live process restore after restart.
 - No output parser for agent internal state.

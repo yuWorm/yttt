@@ -3,7 +3,7 @@ use gpui::{
     FontWeight, HighlightStyle, InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
     PathPromptOptions, Pixels, Point, Render, Rgba, ScrollHandle, SharedString, Stateful,
-    Subscription, UniformListScrollHandle, Window, div, prelude::*, px, relative, rgba,
+    Subscription, Task, UniformListScrollHandle, Window, div, prelude::*, px, relative, rgba,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, IconName, IndexPath, Root as ComponentRoot, Sizable as _,
@@ -238,6 +238,13 @@ pub struct WorkbenchView {
     app_settings: AppSettings,
     theme_runtime: ThemeRuntime,
     icon_theme: IconTheme,
+    active_project_file_watcher: Option<ActiveProjectFileWatcher>,
+}
+
+struct ActiveProjectFileWatcher {
+    project_id: ProjectId,
+    project_path: PathBuf,
+    _task: Task<()>,
 }
 
 const EMPTY_WORKSPACE_ACTIONS: [UiTextKey; 3] = [
@@ -415,6 +422,7 @@ impl WorkbenchView {
                 project_editor_runtime,
                 ..Default::default()
             },
+            active_project_file_watcher: None,
             settings: SettingsControllerState::new(keybinding_warning_lines, keybindings_editor),
             last_opened_layout_file: None,
             last_opened_keybindings_file: None,
@@ -2021,7 +2029,16 @@ impl WorkbenchView {
     }
 
     fn refresh_project_git_status(&mut self, project_id: &ProjectId, project_path: &Path) {
-        if let Some(status) = read_project_git_status(project_path) {
+        let status = read_project_git_status(project_path);
+        self.apply_project_git_status(project_id, status);
+    }
+
+    fn apply_project_git_status(
+        &mut self,
+        project_id: &ProjectId,
+        status: Option<crate::runtime::git_status::ProjectGitStatus>,
+    ) {
+        if let Some(status) = status {
             self.project
                 .project_git_statuses
                 .insert(project_id.clone(), status);

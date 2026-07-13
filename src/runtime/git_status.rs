@@ -307,6 +307,7 @@ fn read_project_git_diff_output(
 pub fn read_project_git_status(project_path: &Path) -> Option<ProjectGitStatus> {
     let output = Command::new("git")
         .args(["status", "--porcelain=v1", "-b", "--ignored=matching"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .current_dir(project_path)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
