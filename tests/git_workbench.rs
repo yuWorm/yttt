@@ -2,9 +2,9 @@ use std::{fs, path::Path, process::Command};
 
 use tempfile::tempdir;
 use yttt::runtime::git_status::{
-    GitBranch, GitBranchKind, GitDiffLineKind, GitDiffMode, read_project_git_branches,
-    read_project_git_diff, read_project_git_diff_result, read_project_git_status,
-    switch_project_git_branch,
+    GitBranch, GitBranchKind, GitDiffLineKind, GitDiffMode, GitFileStatus,
+    read_project_git_branches, read_project_git_diff, read_project_git_diff_result,
+    read_project_git_status, switch_project_git_branch,
 };
 
 fn git(project_path: &Path, args: &[&str]) {
@@ -80,6 +80,29 @@ fn branch_switch_rejects_option_like_ref_names() {
             .as_deref(),
         Some("main")
     );
+}
+
+#[test]
+fn project_status_reports_ignored_files_and_directory_descendants() {
+    let (_temp, project_path) = initialized_repository();
+    fs::write(project_path.join(".gitignore"), "target/\n.env\n").unwrap();
+    git(&project_path, &["add", ".gitignore"]);
+    git(&project_path, &["commit", "-m", "ignore generated files"]);
+    fs::create_dir(project_path.join("target")).unwrap();
+    fs::write(project_path.join("target/cache.bin"), "ignored\n").unwrap();
+    fs::write(project_path.join(".env"), "ignored\n").unwrap();
+
+    let status = read_project_git_status(&project_path).unwrap();
+
+    assert_eq!(
+        status.file_status(Path::new("target/cache.bin")),
+        Some(GitFileStatus::Ignored)
+    );
+    assert_eq!(
+        status.file_status(Path::new(".env")),
+        Some(GitFileStatus::Ignored)
+    );
+    assert!(status.summary.is_clean());
 }
 
 #[test]

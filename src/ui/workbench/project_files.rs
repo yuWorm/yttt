@@ -119,6 +119,14 @@ impl WorkbenchView {
             copy: self.ui_text.get(UiTextKey::ProjectFilesCopy).to_string(),
             cut: self.ui_text.get(UiTextKey::ProjectFilesCut).to_string(),
             paste: self.ui_text.get(UiTextKey::ProjectFilesPaste).to_string(),
+            show_hidden: self
+                .ui_text
+                .get(UiTextKey::ProjectFilesShowHidden)
+                .to_string(),
+            hide_hidden: self
+                .ui_text
+                .get(UiTextKey::ProjectFilesHideHidden)
+                .to_string(),
             entry_placeholder: self
                 .ui_text
                 .get(UiTextKey::ProjectFilesEntryPlaceholder)
@@ -139,10 +147,12 @@ impl WorkbenchView {
             .cloned()
         {
             let interaction_text = self.project_tree_interaction_text();
+            let show_hidden = self.app_settings.project_panel.show_hidden;
             if let Some(snapshot) = self.project_tree_render_snapshot(project_id) {
                 tree.update(cx, |tree, tree_cx| {
                     tree.sync_with_icon_theme(snapshot, self.icon_theme.clone(), tree_cx);
                     tree.set_interaction_text(interaction_text, tree_cx);
+                    tree.set_show_hidden(show_hidden, tree_cx);
                 });
             }
             return Some(tree);
@@ -163,9 +173,11 @@ impl WorkbenchView {
         let snapshot = self.project_tree_render_snapshot(project_id)?;
         let icon_theme = self.icon_theme.clone();
         let interaction_text = self.project_tree_interaction_text();
+        let show_hidden = self.app_settings.project_panel.show_hidden;
         let tree = cx.new(|tree_cx| {
             let mut tree = ProjectTreeView::new_with_icon_theme(snapshot, icon_theme, tree_cx);
             tree.set_interaction_text(interaction_text, tree_cx);
+            tree.set_show_hidden(show_hidden, tree_cx);
             tree
         });
         let event_project_id = project_id.clone();
@@ -280,6 +292,11 @@ impl WorkbenchView {
                     window,
                     cx,
                 );
+            }
+            ProjectTreeViewEvent::SetShowHidden(show_hidden) => {
+                if let Err(error) = self.set_project_panel_show_hidden(*show_hidden) {
+                    self.load_error = Some(error.to_string());
+                }
             }
             ProjectTreeViewEvent::Refresh => {
                 self.refresh_project_tree(project_id.clone(), window, cx);
@@ -506,7 +523,7 @@ impl WorkbenchView {
         .detach();
     }
 
-    fn confirm_project_entry_delete(
+    pub(super) fn confirm_project_entry_delete(
         &mut self,
         project_id: ProjectId,
         relative_path: PathBuf,
@@ -525,15 +542,15 @@ impl WorkbenchView {
         let cancel_label = self.ui_text.get(UiTextKey::Cancel).to_string();
         let display_path = relative_path.display().to_string();
         let workbench = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_alert_dialog(cx, move |alert, _, _| {
             let workbench = workbench.clone();
             let project_id = project_id.clone();
             let relative_path = relative_path.clone();
             let delete_label = delete_label.clone();
             let cancel_label = cancel_label.clone();
-            dialog
+            alert
                 .title(title.clone())
-                .child(
+                .description(
                     div()
                         .flex()
                         .flex_col()
@@ -541,23 +558,33 @@ impl WorkbenchView {
                         .child(display_path.clone())
                         .child(message.clone()),
                 )
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text(delete_label.clone())
-                        .ok_variant(ButtonVariant::Danger)
-                        .cancel_text(cancel_label.clone())
-                        .show_cancel(true)
-                        .on_ok(move |_, window, cx| {
-                            let _ = workbench.update(cx, |root, root_cx| {
-                                root.spawn_project_entry_delete(
-                                    project_id.clone(),
-                                    relative_path.clone(),
-                                    window,
-                                    root_cx,
-                                );
-                            });
-                            true
-                        }),
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            Button::new("project-entry-delete-cancel")
+                                .debug_selector(|| "project-entry-delete-cancel".to_string())
+                                .label(cancel_label.clone())
+                                .on_click(|_, window, cx| {
+                                    window.close_dialog(cx);
+                                }),
+                        )
+                        .child(
+                            Button::new("project-entry-delete-confirm")
+                                .debug_selector(|| "project-entry-delete-confirm".to_string())
+                                .danger()
+                                .label(delete_label.clone())
+                                .on_click(move |_, window, cx| {
+                                    let _ = workbench.update(cx, |root, root_cx| {
+                                        root.spawn_project_entry_delete(
+                                            project_id.clone(),
+                                            relative_path.clone(),
+                                            window,
+                                            root_cx,
+                                        );
+                                    });
+                                    window.close_dialog(cx);
+                                }),
+                        ),
                 )
         });
     }

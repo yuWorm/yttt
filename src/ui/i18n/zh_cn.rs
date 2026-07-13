@@ -26,6 +26,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::ProjectFilesCopy => "复制",
         UiTextKey::ProjectFilesCut => "剪切",
         UiTextKey::ProjectFilesPaste => "粘贴",
+        UiTextKey::ProjectFilesShowHidden => "显示隐藏文件",
+        UiTextKey::ProjectFilesHideHidden => "隐藏隐藏文件",
         UiTextKey::ProjectFilesEntryPlaceholder => "输入名称或路径；以 / 结尾创建文件夹",
         UiTextKey::ProjectFilesDeleteConfirmTitle => "删除项目条目？",
         UiTextKey::ProjectFilesDeleteConfirmMessage => "所选文件或文件夹将被永久删除，且无法撤销。",

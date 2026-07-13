@@ -24,6 +24,8 @@ pub enum UiTextKey {
     ProjectFilesCopy,
     ProjectFilesCut,
     ProjectFilesPaste,
+    ProjectFilesShowHidden,
+    ProjectFilesHideHidden,
     ProjectFilesEntryPlaceholder,
     ProjectFilesDeleteConfirmTitle,
     ProjectFilesDeleteConfirmMessage,

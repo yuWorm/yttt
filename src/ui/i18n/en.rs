@@ -26,6 +26,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::ProjectFilesCopy => "Copy",
         UiTextKey::ProjectFilesCut => "Cut",
         UiTextKey::ProjectFilesPaste => "Paste",
+        UiTextKey::ProjectFilesShowHidden => "Show Hidden Files",
+        UiTextKey::ProjectFilesHideHidden => "Hide Hidden Files",
         UiTextKey::ProjectFilesEntryPlaceholder => "name or path; end with / for a folder",
         UiTextKey::ProjectFilesDeleteConfirmTitle => "Delete project entry?",
         UiTextKey::ProjectFilesDeleteConfirmMessage => {

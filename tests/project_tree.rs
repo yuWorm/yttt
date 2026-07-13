@@ -360,14 +360,20 @@ fn component_path_ids_and_selection_survive_refresh() {
 }
 
 #[test]
-fn component_rows_include_git_status_tones() {
+fn component_rows_include_changed_and_ignored_git_statuses() {
     let mut tree = ProjectFileTree::new("/project");
     let request = tree.request_expand(Path::new("")).unwrap();
     tree.apply_snapshot(
         request.generation,
-        snapshot("", [entry("src/main.rs", ProjectTreeEntryKind::File)]),
+        snapshot(
+            "",
+            [
+                entry("src/main.rs", ProjectTreeEntryKind::File),
+                entry("target/cache.bin", ProjectTreeEntryKind::File),
+            ],
+        ),
     );
-    let git = parse_git_status_porcelain("## main\n M src/main.rs\n");
+    let git = parse_git_status_porcelain("## main\n M src/main.rs\n!! target/\n");
 
     let render = ProjectTreeRenderSnapshot::from_tree(&tree, Some(&git));
 
@@ -377,6 +383,13 @@ fn component_rows_include_git_status_tones() {
             .unwrap()
             .git_status,
         Some(GitFileStatus::Modified)
+    );
+    assert_eq!(
+        render
+            .row_for_path(Path::new("target/cache.bin"))
+            .unwrap()
+            .git_status,
+        Some(GitFileStatus::Ignored)
     );
 }
 

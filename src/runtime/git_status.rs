@@ -10,6 +10,7 @@ pub enum GitFileStatus {
     Modified,
     Deleted,
     Untracked,
+    Ignored,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -157,7 +158,12 @@ pub struct ProjectGitStatus {
 
 impl ProjectGitStatus {
     pub fn file_status(&self, relative_path: &Path) -> Option<GitFileStatus> {
-        self.file_statuses.get(relative_path).copied()
+        self.file_statuses.get(relative_path).copied().or_else(|| {
+            relative_path.ancestors().skip(1).find_map(|ancestor| {
+                (self.file_statuses.get(ancestor) == Some(&GitFileStatus::Ignored))
+                    .then_some(GitFileStatus::Ignored)
+            })
+        })
     }
 
     pub fn file_statuses(&self) -> &BTreeMap<PathBuf, GitFileStatus> {
@@ -300,7 +306,7 @@ fn read_project_git_diff_output(
 
 pub fn read_project_git_status(project_path: &Path) -> Option<ProjectGitStatus> {
     let output = Command::new("git")
-        .args(["status", "--porcelain=v1", "-b"])
+        .args(["status", "--porcelain=v1", "-b", "--ignored=matching"])
         .current_dir(project_path)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -329,6 +335,13 @@ pub fn parse_git_status_porcelain(output: &str) -> ProjectGitStatus {
         }
 
         let state = &line[..2];
+        if state == "!!" {
+            if let Some(path) = status_path(line) {
+                status.file_statuses.insert(path, GitFileStatus::Ignored);
+            }
+            continue;
+        }
+
         if state == "??" {
             status.summary.added += 1;
             status.summary.untracked += 1;

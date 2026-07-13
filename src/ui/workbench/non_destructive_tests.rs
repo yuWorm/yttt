@@ -1,4 +1,11 @@
-use std::{collections::HashMap, fs, path::Path, process::Command};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    rc::Rc,
+};
 
 use gpui::{EntityId, TestAppContext};
 use tempfile::tempdir;
@@ -422,4 +429,50 @@ fn layout_default_does_not_drop_terminal_entities(cx: &mut TestAppContext) {
             .unwrap();
         assert_runtime_unchanged(root, &before);
     });
+}
+
+#[gpui::test]
+fn project_entry_delete_alert_renders_and_executes_confirmation(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir(&project_path).unwrap();
+    let victim_path = project_path.join("victim.txt");
+    fs::write(&victim_path, "delete me").unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(project_path, dev_fixture_layout())
+        .unwrap();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, mut cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| {
+            WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
+        });
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        ComponentRoot::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    cx.run_until_parked();
+    let project_id = cx.read(|cx| {
+        root.read(cx)
+            .workspace
+            .selected_project_id()
+            .unwrap()
+            .clone()
+    });
+
+    root.update_in(cx, |root, window, root_cx| {
+        root.confirm_project_entry_delete(project_id, PathBuf::from("victim.txt"), window, root_cx);
+    });
+    cx.run_until_parked();
+
+    let confirm = cx
+        .debug_bounds("project-entry-delete-confirm")
+        .expect("delete confirmation must render an actionable button");
+    cx.simulate_click(confirm.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+
+    assert!(!victim_path.exists());
 }

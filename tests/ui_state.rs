@@ -125,6 +125,21 @@ fn git_status_parser_records_file_tones() {
 }
 
 #[test]
+fn git_status_parser_propagates_ignored_directory_status_without_marking_tree_dirty() {
+    let parsed = parse_git_status_porcelain("## main\n!! target/\n!! .env\n");
+
+    assert_eq!(
+        parsed.file_status(Path::new("target/debug/app")),
+        Some(GitFileStatus::Ignored)
+    );
+    assert_eq!(
+        parsed.file_status(Path::new(".env")),
+        Some(GitFileStatus::Ignored)
+    );
+    assert!(parsed.summary.is_clean());
+}
+
+#[test]
 fn visible_work_item_tabs_merge_terminal_and_file_items() {
     let workspace = WorkbenchView::dev_fixture().workspace().clone();
     let terminal_items = visible_tab_items(&workspace);

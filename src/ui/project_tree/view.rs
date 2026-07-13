@@ -41,6 +41,7 @@ pub enum ProjectTreeViewEvent {
     CopyEntry(PathBuf),
     CutEntry(PathBuf),
     PasteEntry { destination_directory: PathBuf },
+    SetShowHidden(bool),
     Refresh,
 }
 
@@ -70,6 +71,8 @@ pub struct ProjectTreeInteractionText {
     pub copy: String,
     pub cut: String,
     pub paste: String,
+    pub show_hidden: String,
+    pub hide_hidden: String,
     pub entry_placeholder: String,
 }
 
@@ -83,6 +86,8 @@ impl Default for ProjectTreeInteractionText {
             copy: "Copy".to_string(),
             cut: "Cut".to_string(),
             paste: "Paste".to_string(),
+            show_hidden: "Show Hidden Files".to_string(),
+            hide_hidden: "Hide Hidden Files".to_string(),
             entry_placeholder: "name or path; end with / for a folder".to_string(),
         }
     }
@@ -304,9 +309,17 @@ fn stable_path_id(path: &Path) -> String {
 const EDIT_ROW_ID: &str = "project-tree-edit-row";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+enum ProjectTreeCreatePlacement {
+    Start,
+    FirstChild(PathBuf),
+    After(PathBuf),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum ProjectTreeEditTarget {
     Create {
         parent: PathBuf,
+        placement: ProjectTreeCreatePlacement,
         force_directory: bool,
     },
     Rename {
@@ -319,9 +332,11 @@ pub struct ProjectTreeView {
     snapshot: ProjectTreeRenderSnapshot,
     icon_theme: IconTheme,
     interaction_text: ProjectTreeInteractionText,
+    show_hidden: bool,
     edit_target: Option<ProjectTreeEditTarget>,
     edit_input: Option<Entity<InputState>>,
     edit_subscription: Option<Subscription>,
+    edit_input_needs_focus: bool,
 }
 
 impl ProjectTreeView {
@@ -347,9 +362,11 @@ impl ProjectTreeView {
             snapshot,
             icon_theme,
             interaction_text: ProjectTreeInteractionText::default(),
+            show_hidden: false,
             edit_target: None,
             edit_input: None,
             edit_subscription: None,
+            edit_input_needs_focus: false,
         }
     }
 
@@ -376,6 +393,18 @@ impl ProjectTreeView {
     ) {
         self.interaction_text = interaction_text;
         cx.notify();
+    }
+
+    pub fn set_show_hidden(&mut self, show_hidden: bool, cx: &mut Context<Self>) {
+        if self.show_hidden == show_hidden {
+            return;
+        }
+        self.show_hidden = show_hidden;
+        cx.notify();
+    }
+
+    fn toggle_show_hidden(&mut self, cx: &mut Context<Self>) {
+        cx.emit(ProjectTreeViewEvent::SetShowHidden(!self.show_hidden));
     }
 
     pub fn tree_state(&self) -> &Entity<TreeState> {
@@ -407,12 +436,8 @@ impl ProjectTreeView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let parent = self
-            .selected_row()
-            .as_ref()
-            .map(operation_destination_directory)
-            .unwrap_or_default();
-        self.begin_create(parent, force_directory, window, cx);
+        let row = self.selected_row();
+        self.begin_create(row, force_directory, window, cx);
     }
 
     fn activate_id(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
@@ -456,23 +481,39 @@ impl ProjectTreeView {
 
     fn begin_create(
         &mut self,
-        parent: PathBuf,
+        row: Option<ProjectTreeRenderRow>,
         force_directory: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(row) = self.snapshot.row_for_path(&parent)
-            && row.kind == Some(ProjectTreeEntryKind::Directory)
-            && !row.expanded
-        {
-            cx.emit(ProjectTreeViewEvent::ToggleDirectory {
-                path: parent.clone(),
-                expanded: true,
-            });
-        }
+        let (parent, placement) = match row {
+            Some(ProjectTreeRenderRow {
+                relative_path: Some(path),
+                kind: Some(ProjectTreeEntryKind::Directory),
+                expanded,
+                ..
+            }) => {
+                if !expanded {
+                    cx.emit(ProjectTreeViewEvent::ToggleDirectory {
+                        path: path.clone(),
+                        expanded: true,
+                    });
+                }
+                (path.clone(), ProjectTreeCreatePlacement::FirstChild(path))
+            }
+            Some(ProjectTreeRenderRow {
+                relative_path: Some(path),
+                ..
+            }) => {
+                let parent = path.parent().unwrap_or(Path::new("")).to_path_buf();
+                (parent, ProjectTreeCreatePlacement::After(path))
+            }
+            _ => (PathBuf::new(), ProjectTreeCreatePlacement::Start),
+        };
         self.begin_edit(
             ProjectTreeEditTarget::Create {
                 parent,
+                placement,
                 force_directory,
             },
             String::new(),
@@ -509,6 +550,7 @@ impl ProjectTreeView {
         let placeholder = self.interaction_text.entry_placeholder.clone();
         let input = cx.new(|cx| {
             InputState::new(window, cx)
+                .submit_on_enter(true)
                 .default_value(value)
                 .placeholder(placeholder)
         });
@@ -517,18 +559,15 @@ impl ProjectTreeView {
                 &input,
                 window,
                 |this, input, event, _window, cx| match event {
-                    InputEvent::PressEnter { .. } => this.submit_edit(input, cx),
-                    InputEvent::Blur => this.cancel_edit(cx),
+                    InputEvent::PressEnter { .. } | InputEvent::Blur => this.submit_edit(input, cx),
                     InputEvent::Change | InputEvent::Focus => {}
                 },
             );
         self.edit_target = Some(target);
-        self.edit_input = Some(input.clone());
+        self.edit_input = Some(input);
         self.edit_subscription = Some(subscription);
+        self.edit_input_needs_focus = true;
         self.rebuild_tree_state(cx);
-        cx.defer_in(window, move |_, window, cx| {
-            input.update(cx, |input, input_cx| input.focus(window, input_cx));
-        });
         cx.notify();
     }
 
@@ -536,7 +575,11 @@ impl ProjectTreeView {
         let Some(target) = self.edit_target.clone() else {
             return;
         };
-        let value = input.read(cx).value().to_string();
+        let value = input
+            .read(cx)
+            .value()
+            .trim_end_matches(['\r', '\n'])
+            .to_string();
         if value.is_empty() {
             self.cancel_edit(cx);
             return;
@@ -545,6 +588,7 @@ impl ProjectTreeView {
             ProjectTreeEditTarget::Create {
                 parent,
                 force_directory,
+                ..
             } => {
                 let input = if force_directory && !value.ends_with('/') {
                     format!("{value}/")
@@ -571,14 +615,18 @@ impl ProjectTreeView {
         }
         self.edit_input = None;
         self.edit_subscription = None;
+        self.edit_input_needs_focus = false;
         self.rebuild_tree_state(cx);
         cx.notify();
     }
 
     fn rebuild_tree_state(&mut self, cx: &mut Context<Self>) {
         let mut items = self.snapshot.tree_items();
-        if let Some(ProjectTreeEditTarget::Create { parent, .. }) = &self.edit_target {
-            insert_edit_item(&mut items, parent);
+        if let Some(ProjectTreeEditTarget::Create {
+            parent, placement, ..
+        }) = &self.edit_target
+        {
+            insert_edit_item(&mut items, parent, placement);
         }
         let selected_id = self
             .selected_row()
@@ -662,7 +710,15 @@ impl ProjectTreeView {
 impl EventEmitter<ProjectTreeViewEvent> for ProjectTreeView {}
 
 impl Render for ProjectTreeView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.edit_input_needs_focus {
+            self.edit_input_needs_focus = false;
+            if let Some(input) = self.edit_input.clone() {
+                cx.defer_in(window, move |_, window, cx| {
+                    input.update(cx, |input, input_cx| input.focus(window, input_cx));
+                });
+            }
+        }
         let rows = self.snapshot.rows_by_id.clone();
         let menu_rows = rows.clone();
         let view = cx.weak_entity();
@@ -671,6 +727,7 @@ impl Render for ProjectTreeView {
         let edit_target = self.edit_target.clone();
         let edit_input = self.edit_input.clone();
         let text = self.interaction_text.clone();
+        let show_hidden = self.show_hidden;
         let tree = tree(&self.tree, move |ix, entry, selected, _window, cx| {
             let id = entry.item().id.as_str().to_string();
             if id == EDIT_ROW_ID {
@@ -728,9 +785,10 @@ impl Render for ProjectTreeView {
             });
 
             let new_file_view = menu_view.clone();
-            let new_file_parent = destination_directory.clone();
+            let new_file_row = row.clone();
             let new_directory_view = menu_view.clone();
-            let new_directory_parent = destination_directory.clone();
+            let new_directory_row = row.clone();
+            let hidden_view = menu_view.clone();
             let rename_view = menu_view.clone();
             let rename_row = row.clone();
             let delete_view = menu_view.clone();
@@ -743,15 +801,31 @@ impl Render for ProjectTreeView {
 
             menu.item(
                 PopupMenuItem::new(text.new_file.clone()).on_click(move |_, window, cx| {
+                    let row = new_file_row.clone();
                     let _ = new_file_view.update(cx, |view, view_cx| {
-                        view.begin_create(new_file_parent.clone(), false, window, view_cx);
+                        view.begin_create(Some(row), false, window, view_cx);
                     });
                 }),
             )
             .item(
                 PopupMenuItem::new(text.new_directory.clone()).on_click(move |_, window, cx| {
+                    let row = new_directory_row.clone();
                     let _ = new_directory_view.update(cx, |view, view_cx| {
-                        view.begin_create(new_directory_parent.clone(), true, window, view_cx);
+                        view.begin_create(Some(row), true, window, view_cx);
+                    });
+                }),
+            )
+            .item(PopupMenuItem::separator())
+            .item(
+                PopupMenuItem::new(if show_hidden {
+                    text.hide_hidden.clone()
+                } else {
+                    text.show_hidden.clone()
+                })
+                .checked(show_hidden)
+                .on_click(move |_, _, cx| {
+                    let _ = hidden_view.update(cx, |view, view_cx| {
+                        view.toggle_show_hidden(view_cx);
                     });
                 }),
             )
@@ -824,14 +898,30 @@ fn operation_destination_directory(row: &ProjectTreeRenderRow) -> PathBuf {
     }
 }
 
-fn insert_edit_item(items: &mut Vec<TreeItem>, parent: &Path) {
+fn insert_edit_item(
+    items: &mut Vec<TreeItem>,
+    parent: &Path,
+    placement: &ProjectTreeCreatePlacement,
+) {
     let edit_item = TreeItem::new(EDIT_ROW_ID, "").disabled(true);
-    if parent.as_os_str().is_empty() {
-        items.insert(0, edit_item);
+    let inserted = match placement {
+        ProjectTreeCreatePlacement::Start => {
+            items.insert(0, edit_item.clone());
+            true
+        }
+        ProjectTreeCreatePlacement::FirstChild(path) => {
+            insert_edit_item_under(items, &stable_path_id(path), edit_item.clone())
+        }
+        ProjectTreeCreatePlacement::After(path) => {
+            insert_edit_item_after(items, &stable_path_id(path), edit_item.clone())
+        }
+    };
+    if inserted {
         return;
     }
-    let parent_id = stable_path_id(parent);
-    if insert_edit_item_under(items, &parent_id, edit_item.clone()) {
+    if !parent.as_os_str().is_empty()
+        && insert_edit_item_under(items, &stable_path_id(parent), edit_item.clone())
+    {
         return;
     }
     items.insert(0, edit_item);
@@ -845,6 +935,19 @@ fn insert_edit_item_under(items: &mut [TreeItem], parent_id: &str, edit_item: Tr
             return true;
         }
         if insert_edit_item_under(&mut item.children, parent_id, edit_item.clone()) {
+            return true;
+        }
+    }
+    false
+}
+
+fn insert_edit_item_after(items: &mut Vec<TreeItem>, anchor_id: &str, edit_item: TreeItem) -> bool {
+    if let Some(index) = items.iter().position(|item| item.id.as_str() == anchor_id) {
+        items.insert(index + 1, edit_item);
+        return true;
+    }
+    for item in items {
+        if insert_edit_item_after(&mut item.children, anchor_id, edit_item.clone()) {
             return true;
         }
     }
@@ -956,7 +1059,12 @@ fn render_component_row(
         Some(GitFileStatus::Added | GitFileStatus::Untracked) => Some(cx.theme().success),
         Some(GitFileStatus::Modified) => Some(cx.theme().warning),
         Some(GitFileStatus::Deleted) => Some(cx.theme().danger),
-        None => None,
+        Some(GitFileStatus::Ignored) | None => None,
+    };
+    let label_color = if row.git_status == Some(GitFileStatus::Ignored) {
+        cx.theme().muted_foreground
+    } else {
+        cx.theme().foreground
     };
     let hint = match &row.load_state {
         ProjectTreeLoadState::Loading => Some("…".to_string()),
@@ -988,7 +1096,7 @@ fn render_component_row(
                         .flex_1()
                         .truncate()
                         .text_sm()
-                        .text_color(cx.theme().foreground)
+                        .text_color(label_color)
                         .child(row.label),
                 )
                 .children(
@@ -1009,4 +1117,222 @@ fn render_component_row(
                 view.activate_id(&id, cx);
             });
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::Focusable as _;
+    use std::{cell::RefCell, rc::Rc};
+
+    fn item(path: &str, children: Vec<TreeItem>) -> TreeItem {
+        TreeItem::new(stable_path_id(Path::new(path)), path)
+            .expanded(true)
+            .children(children)
+    }
+
+    #[test]
+    fn create_row_is_first_child_of_clicked_directory() {
+        let mut items = vec![item(
+            "src",
+            vec![
+                item("src/main.rs", Vec::new()),
+                item("src/lib.rs", Vec::new()),
+            ],
+        )];
+
+        insert_edit_item(
+            &mut items,
+            Path::new("src"),
+            &ProjectTreeCreatePlacement::FirstChild(PathBuf::from("src")),
+        );
+
+        assert_eq!(items[0].children[0].id.as_str(), EDIT_ROW_ID);
+        assert_eq!(
+            items[0].children[1].id.as_str(),
+            stable_path_id(Path::new("src/main.rs"))
+        );
+    }
+
+    #[test]
+    fn create_row_is_after_clicked_file() {
+        let mut items = vec![item(
+            "src",
+            vec![
+                item("src/main.rs", Vec::new()),
+                item("src/lib.rs", Vec::new()),
+            ],
+        )];
+
+        insert_edit_item(
+            &mut items,
+            Path::new("src"),
+            &ProjectTreeCreatePlacement::After(PathBuf::from("src/main.rs")),
+        );
+
+        assert_eq!(
+            items[0].children[0].id.as_str(),
+            stable_path_id(Path::new("src/main.rs"))
+        );
+        assert_eq!(items[0].children[1].id.as_str(), EDIT_ROW_ID);
+        assert_eq!(
+            items[0].children[2].id.as_str(),
+            stable_path_id(Path::new("src/lib.rs"))
+        );
+    }
+
+    #[test]
+    fn missing_anchor_falls_back_to_parent_instead_of_tree_top() {
+        let mut items = vec![
+            item("src", vec![item("src/main.rs", Vec::new())]),
+            item("README.md", Vec::new()),
+        ];
+
+        insert_edit_item(
+            &mut items,
+            Path::new("src"),
+            &ProjectTreeCreatePlacement::After(PathBuf::from("src/missing.rs")),
+        );
+
+        assert_ne!(items[0].id.as_str(), EDIT_ROW_ID);
+        assert_eq!(items[0].children[0].id.as_str(), EDIT_ROW_ID);
+    }
+    #[gpui::test]
+    fn create_and_rename_inputs_submit_with_enter(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(|cx| cx.bind_keys(crate::ui::interaction::actions::app_startup_keybindings()));
+        let mut model = ProjectFileTree::new("/project");
+        let request = model.request_expand(Path::new("")).unwrap();
+        model.apply_snapshot(
+            request.generation,
+            crate::ui::project_tree::DirectorySnapshot {
+                relative_directory: PathBuf::new(),
+                entries: vec![crate::ui::project_tree::ProjectTreeEntry {
+                    name: "README.md".into(),
+                    relative_path: PathBuf::from("README.md"),
+                    kind: ProjectTreeEntryKind::File,
+                }],
+            },
+        );
+        model.select(Some(PathBuf::from("README.md")));
+        let snapshot = ProjectTreeRenderSnapshot::from_tree(&model, None);
+        let view_slot = Rc::new(RefCell::new(None));
+        let view_slot_for_window = view_slot.clone();
+        let (_root, mut cx) = cx.add_window_view(move |window, cx| {
+            let view = cx.new(|cx| ProjectTreeView::new(snapshot, cx));
+            *view_slot_for_window.borrow_mut() = Some(view.clone());
+            gpui_component::Root::new(view, window, cx)
+        });
+        let view = view_slot.borrow_mut().take().unwrap();
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let subscription = cx.update(|_, cx| {
+            view.update(cx, |_, view_cx| {
+                let events = events.clone();
+                view_cx.subscribe(&view, move |_, _, event, _| {
+                    events.borrow_mut().push(event.clone());
+                })
+            })
+        });
+        cx.run_until_parked();
+
+        cx.update(|window, cx| {
+            view.update(cx, |view, view_cx| {
+                view.begin_create_selected(false, window, view_cx);
+            });
+        });
+        cx.run_until_parked();
+
+        let input = cx.update(|window, cx| {
+            let view = view.read(cx);
+            assert!(view.is_editing());
+            let input = view
+                .edit_input
+                .as_ref()
+                .expect("edit input must remain mounted")
+                .clone();
+            assert!(input.read(cx).focus_handle(cx).is_focused(window));
+            input
+        });
+        input.update_in(cx, |input, window, input_cx| {
+            input.set_value("created.txt", window, input_cx);
+        });
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+
+        cx.update(|_, cx| assert!(!view.read(cx).is_editing()));
+        assert_eq!(
+            events.borrow().as_slice(),
+            [ProjectTreeViewEvent::CreateEntry {
+                parent: PathBuf::new(),
+                input: "created.txt".to_string(),
+            }]
+        );
+
+        view.update_in(cx, |view, window, view_cx| {
+            let row = view.selected_row().unwrap();
+            view.begin_rename(row, window, view_cx);
+        });
+        cx.run_until_parked();
+        let input = cx.read(|cx| view.read(cx).edit_input.as_ref().unwrap().clone());
+        input.update_in(cx, |input, window, input_cx| {
+            input.set_value("RENAMED.md", window, input_cx);
+        });
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+
+        cx.update(|_, cx| assert!(!view.read(cx).is_editing()));
+        assert_eq!(
+            events.borrow().as_slice(),
+            [
+                ProjectTreeViewEvent::CreateEntry {
+                    parent: PathBuf::new(),
+                    input: "created.txt".to_string(),
+                },
+                ProjectTreeViewEvent::RenameEntry {
+                    path: PathBuf::from("README.md"),
+                    new_name: "RENAMED.md".to_string(),
+                },
+            ]
+        );
+        drop(subscription);
+    }
+
+    #[gpui::test]
+    fn hidden_files_toggle_emits_global_setting_value(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let snapshot =
+            ProjectTreeRenderSnapshot::from_tree(&ProjectFileTree::new("/project"), None);
+        let view_slot = Rc::new(RefCell::new(None));
+        let view_slot_for_window = view_slot.clone();
+        let (_root, mut cx) = cx.add_window_view(move |window, cx| {
+            let view = cx.new(|cx| ProjectTreeView::new(snapshot, cx));
+            *view_slot_for_window.borrow_mut() = Some(view.clone());
+            gpui_component::Root::new(view, window, cx)
+        });
+        let view = view_slot.borrow_mut().take().unwrap();
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let subscription = cx.update(|_, cx| {
+            view.update(cx, |_, view_cx| {
+                let events = events.clone();
+                view_cx.subscribe(&view, move |_, _, event, _| {
+                    events.borrow_mut().push(event.clone());
+                })
+            })
+        });
+
+        view.update_in(cx, |view, _, view_cx| {
+            view.toggle_show_hidden(view_cx);
+            view.set_show_hidden(true, view_cx);
+            view.toggle_show_hidden(view_cx);
+        });
+
+        assert_eq!(
+            events.borrow().as_slice(),
+            [
+                ProjectTreeViewEvent::SetShowHidden(true),
+                ProjectTreeViewEvent::SetShowHidden(false),
+            ]
+        );
+        drop(subscription);
+    }
 }

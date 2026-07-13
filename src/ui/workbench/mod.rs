@@ -8,8 +8,8 @@ use gpui::{
 use gpui_component::{
     ActiveTheme as _, Disableable as _, IconName, IndexPath, Root as ComponentRoot, Sizable as _,
     Theme as ComponentTheme, WindowExt as _,
-    button::{Button, ButtonVariant, ButtonVariants as _},
-    dialog::DialogButtonProps,
+    button::{Button, ButtonVariants as _},
+    dialog::DialogFooter,
     highlighter::SyntaxHighlighter,
     input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent, Rope, StepAction},
     scroll::ScrollableElement as _,

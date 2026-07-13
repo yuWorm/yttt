@@ -322,7 +322,6 @@ fn built_in_ui_keybindings() -> Vec<KeyBinding> {
             ProjectTreeNewDirectory,
             Some(PROJECT_TREE_CONTEXT),
         ),
-        KeyBinding::new("enter", ProjectTreeRename, Some(PROJECT_TREE_CONTEXT)),
         KeyBinding::new(
             "cmd-backspace",
             ProjectTreeDelete,
