@@ -2764,6 +2764,23 @@ fn editor_settings_group_renders_all_effective_controls(cx: &mut gpui::TestAppCo
     ] {
         assert!(cx.debug_bounds(selector).is_some(), "missing {selector}");
     }
+    let first_before = cx
+        .debug_bounds("settings-editor-font-family-row")
+        .expect("first editor settings row");
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: first_before.origin + gpui::point(gpui::px(24.0), gpui::px(24.0)),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-240.0))),
+        ..Default::default()
+    });
+    cx.refresh().unwrap();
+    let first_after = cx
+        .debug_bounds("settings-editor-font-family-row")
+        .expect("first editor settings row after scrolling");
+    assert_eq!(
+        first_after.origin.y,
+        first_before.origin.y - gpui::px(240.0),
+        "settings content should move by the wheel delta"
+    );
 }
 
 #[test]
