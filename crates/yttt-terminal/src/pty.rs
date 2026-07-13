@@ -388,8 +388,24 @@ fn command_builder(execution: &TerminalExecution, cwd: &Path) -> anyhow::Result<
             builder
         }
     };
+    configure_terminal_environment(&mut builder);
     builder.cwd(cwd);
     Ok(builder)
+}
+
+/// Configure a PTY child process with yttt's terminal capabilities.
+///
+/// Existing `CLICOLOR` preferences are preserved, and the default is omitted
+/// when the parent environment explicitly requests `NO_COLOR`.
+pub fn configure_terminal_environment(builder: &mut CommandBuilder) {
+    builder.env("TERM", "xterm-256color");
+    builder.env("COLORTERM", "truecolor");
+    builder.env("TERM_PROGRAM", "yttt");
+    builder.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
+
+    if builder.get_env("CLICOLOR").is_none() && builder.get_env("NO_COLOR").is_none() {
+        builder.env("CLICOLOR", "1");
+    }
 }
 
 fn shell_execution_args(shell: &str, command: &str) -> Vec<String> {
@@ -484,6 +500,58 @@ mod tests {
             argv(command_builder(&execution, Path::new("/tmp")).unwrap()),
             vec!["/bin/zsh"]
         );
+    }
+
+    #[test]
+    fn spawned_commands_advertise_terminal_color_capabilities() {
+        let execution = TerminalExecution::Shell {
+            shell: "/bin/zsh".to_string(),
+            command: String::new(),
+        };
+        let builder = command_builder(&execution, Path::new("/tmp")).unwrap();
+
+        assert_eq!(
+            builder.get_env("TERM"),
+            Some(std::ffi::OsStr::new("xterm-256color"))
+        );
+        assert_eq!(
+            builder.get_env("COLORTERM"),
+            Some(std::ffi::OsStr::new("truecolor"))
+        );
+        assert_eq!(
+            builder.get_env("TERM_PROGRAM"),
+            Some(std::ffi::OsStr::new("yttt"))
+        );
+        assert_eq!(
+            builder.get_env("TERM_PROGRAM_VERSION"),
+            Some(std::ffi::OsStr::new(env!("CARGO_PKG_VERSION")))
+        );
+    }
+
+    #[test]
+    fn spawned_commands_default_to_cli_colors_without_overriding_user_preferences() {
+        let mut defaults = CommandBuilder::new("/bin/sh");
+        defaults.env_remove("CLICOLOR");
+        defaults.env_remove("NO_COLOR");
+        configure_terminal_environment(&mut defaults);
+        assert_eq!(
+            defaults.get_env("CLICOLOR"),
+            Some(std::ffi::OsStr::new("1"))
+        );
+
+        let mut explicit = CommandBuilder::new("/bin/sh");
+        explicit.env("CLICOLOR", "custom");
+        configure_terminal_environment(&mut explicit);
+        assert_eq!(
+            explicit.get_env("CLICOLOR"),
+            Some(std::ffi::OsStr::new("custom"))
+        );
+
+        let mut disabled = CommandBuilder::new("/bin/sh");
+        disabled.env_remove("CLICOLOR");
+        disabled.env("NO_COLOR", "1");
+        configure_terminal_environment(&mut disabled);
+        assert_eq!(disabled.get_env("CLICOLOR"), None);
     }
 
     fn argv(builder: CommandBuilder) -> Vec<String> {

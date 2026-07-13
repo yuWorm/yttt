@@ -30,11 +30,14 @@
 //! use gpui::{Application, Edges, px};
 //! use yttt_terminal::{ColorPalette, TerminalConfig, TerminalView};
 //! use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+//! use yttt_terminal::pty::configure_terminal_environment;
 //! use std::sync::Arc;
 //!
 //! fn main() {
 //!     let app = Application::new();
 //!     app.run(|cx| {
+//!         yttt_terminal::init(cx);
+//!
 //!         // 1. Create PTY with initial dimensions
 //!         let pty_system = native_pty_system();
 //!         let pair = pty_system.openpty(PtySize {
@@ -47,8 +50,7 @@
 //!         // 2. Spawn shell in the PTY
 //!         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
 //!         let mut cmd = CommandBuilder::new(&shell);
-//!         cmd.env("TERM", "xterm-256color");
-//!         cmd.env("COLORTERM", "truecolor");
+//!         configure_terminal_environment(&mut cmd);
 //!         let _child = pair.slave.spawn_command(cmd).expect("Failed to spawn shell");
 //!
 //!         // 3. Get I/O handles from the PTY master
@@ -319,16 +321,14 @@
 //!
 //! ### Terminal shows garbled text
 //!
-//! Ensure you set the `TERM` environment variable when spawning the shell:
+//! Configure the child command with the terminal capabilities:
 //! ```ignore
-//! cmd.env("TERM", "xterm-256color");
-//! cmd.env("COLORTERM", "truecolor");
+//! configure_terminal_environment(&mut cmd);
 //! ```
-//!
-//! ### Colors don't display correctly
-//!
-//! Some applications check `COLORTERM=truecolor` for 24-bit color support.
-//! Set both `TERM` and `COLORTERM` for best compatibility.
+//! [`pty::spawn_portable_pty_session`] applies this automatically. It advertises
+//! `TERM=xterm-256color`, true color, and the yttt terminal identity. It also
+//! defaults `CLICOLOR=1` for tools such as macOS/BSD `ls`, unless `CLICOLOR`
+//! or `NO_COLOR` is already present in the inherited environment.
 //!
 //! ### Arrow keys don't work in vim/less
 //!
@@ -364,5 +364,5 @@ pub use render::TerminalRenderer;
 pub use terminal::TerminalState;
 pub use view::{
     BellCallback, ClipboardStoreCallback, ExitCallback, KeyHandler, ResizeCallback, TerminalConfig,
-    TerminalView, TitleCallback,
+    TerminalView, TitleCallback, init,
 };

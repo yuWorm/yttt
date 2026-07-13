@@ -20,6 +20,9 @@ A terminal emulator component for [GPUI](https://gpui.rs) applications. Uses [al
 ```rust
 use yttt_terminal::{TerminalConfig, TerminalView, ColorPalette};
 
+// Register terminal key bindings once during GPUI application initialization.
+yttt_terminal::init(cx);
+
 // Create terminal with PTY reader/writer
 let terminal = cx.new(|cx| {
     TerminalView::new(pty_writer, pty_reader, config, cx)

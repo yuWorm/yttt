@@ -62,9 +62,44 @@ use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
 use alacritty_terminal::selection::SelectionType as AlacSelectionType;
 use gpui::{Edges, *};
 use std::io::{Read, Write};
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::{Arc, LazyLock};
 use std::thread;
+
+const TERMINAL_KEY_CONTEXT: &str = "YtttTerminal";
+
+actions!(yttt_terminal, [SendTab, SendBacktab]);
+
+/// Register terminal-specific key bindings.
+///
+/// Call this once during GPUI application initialization so terminal-local
+/// Tab handling takes precedence over ancestor focus-navigation bindings.
+pub fn init(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("tab", SendTab, Some(TERMINAL_KEY_CONTEXT)),
+        KeyBinding::new("shift-tab", SendBacktab, Some(TERMINAL_KEY_CONTEXT)),
+    ]);
+}
+
+fn tab_key_down_event(shift: bool) -> &'static KeyDownEvent {
+    static TAB_EVENTS: LazyLock<[KeyDownEvent; 2]> = LazyLock::new(|| {
+        [
+            KeyDownEvent {
+                keystroke: Keystroke::parse("tab").expect("static Tab keystroke must parse"),
+                is_held: false,
+                prefer_character_input: false,
+            },
+            KeyDownEvent {
+                keystroke: Keystroke::parse("shift-tab")
+                    .expect("static Shift-Tab keystroke must parse"),
+                is_held: false,
+                prefer_character_input: false,
+            },
+        ]
+    });
+    &TAB_EVENTS[usize::from(shift)]
+}
+
 /// Configuration for terminal creation and runtime updates.
 ///
 /// This struct defines the terminal's appearance and behavior, including
@@ -428,7 +463,10 @@ pub struct TerminalView {
     /// Last painted terminal viewport, used for mouse hit testing.
     viewport: Arc<parking_lot::Mutex<Option<TerminalViewport>>>,
 
-    /// Whether the left mouse button is currently selecting terminal text.
+    /// Grid cell where the current left-button selection gesture started.
+    selection_anchor: Option<AlacPoint>,
+
+    /// Whether the current gesture has produced an active terminal selection.
     selecting: bool,
 
     /// Text currently being composed by the platform input method.
@@ -591,6 +629,7 @@ impl TerminalView {
             exit_callback: None,
             viewport: Arc::new(parking_lot::Mutex::new(None)),
             selecting: false,
+            selection_anchor: None,
             ime_state: TerminalImeState::default(),
         }
     }
@@ -858,6 +897,14 @@ impl TerminalView {
     /// Converts GPUI keystrokes to terminal escape sequences and writes them
     /// to the stdin writer. If a key handler is set and returns true, the event
     /// is consumed and not sent to the terminal.
+    fn on_send_tab(&mut self, _: &SendTab, window: &mut Window, cx: &mut Context<Self>) {
+        self.on_key_down(tab_key_down_event(false), window, cx);
+    }
+
+    fn on_send_backtab(&mut self, _: &SendBacktab, window: &mut Window, cx: &mut Context<Self>) {
+        self.on_key_down(tab_key_down_event(true), window, cx);
+    }
+
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         // Check if key handler wants to consume this event
         if let Some(ref handler) = self.key_handler
@@ -892,8 +939,12 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Request focus when clicking the terminal
         window.focus(&self.focus_handle, cx);
+
+        if event.button == MouseButton::Left {
+            self.selection_anchor = None;
+            self.selecting = false;
+        }
 
         let Some(point) = self.point_for_position(event.position) else {
             return;
@@ -908,9 +959,14 @@ impl TerminalView {
         }
 
         if event.button == MouseButton::Left {
-            self.selecting = true;
-            self.state
-                .begin_selection(point, Self::selection_type(event.click_count));
+            self.selection_anchor = Some(point);
+            if event.click_count > 1 {
+                self.selecting = true;
+                self.state
+                    .begin_selection(point, Self::selection_type(event.click_count));
+            } else {
+                self.state.clear_selection();
+            }
         }
 
         cx.notify();
@@ -921,7 +977,10 @@ impl TerminalView {
     /// Currently a placeholder for future mouse selection support.
     fn on_mouse_up(&mut self, event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let Some(point) = self.point_for_position(event.position) else {
-            self.selecting = false;
+            if event.button == MouseButton::Left {
+                self.selection_anchor = None;
+                self.selecting = false;
+            }
             return;
         };
         let mode = self.state.mode();
@@ -929,15 +988,21 @@ impl TerminalView {
 
         if let Some(bytes) = mouse_button_report(event.button, false, point, modifiers, mode) {
             self.write_stdin(&bytes);
-            self.selecting = false;
+            if event.button == MouseButton::Left {
+                self.selection_anchor = None;
+                self.selecting = false;
+            }
             cx.notify();
             return;
         }
 
-        if self.selecting && event.button == MouseButton::Left {
-            self.state.update_selection(point);
+        if event.button == MouseButton::Left {
+            if self.selecting {
+                self.state.update_selection(point);
+            }
+            self.selection_anchor = None;
+            self.selecting = false;
         }
-        self.selecting = false;
         cx.notify();
     }
 
@@ -950,14 +1015,26 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.selecting || !event.dragging() {
+        if !event.dragging() {
             return;
         }
+        let Some(anchor) = self.selection_anchor else {
+            return;
+        };
+        let Some(point) = self.point_for_position(event.position) else {
+            return;
+        };
 
-        if let Some(point) = self.point_for_position(event.position) {
-            self.state.update_selection(point);
-            cx.notify();
+        if !self.selecting {
+            if point == anchor {
+                return;
+            }
+            self.state
+                .begin_selection(anchor, AlacSelectionType::Simple);
+            self.selecting = true;
         }
+        self.state.update_selection(point);
+        cx.notify();
     }
 
     /// Handle scroll events.
@@ -1221,6 +1298,9 @@ impl Render for TerminalView {
             .size_full()
             .bg(rgb(0x1e1e1e))
             .track_focus(&self.focus_handle)
+            .key_context(TERMINAL_KEY_CONTEXT)
+            .on_action(cx.listener(Self::on_send_tab))
+            .on_action(cx.listener(Self::on_send_backtab))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
@@ -1343,8 +1423,13 @@ impl Render for TerminalView {
 
 #[cfg(test)]
 mod tests {
-    use super::{TerminalImeState, TerminalView};
-    use gpui::EntityInputHandler;
+    use super::{TerminalConfig, TerminalImeState, TerminalView};
+    use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
+    use gpui::{
+        EntityInputHandler, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, TestAppContext,
+        point,
+    };
+    use std::io;
 
     #[test]
     fn ime_composition_waits_for_commit() {
@@ -1356,6 +1441,93 @@ mod tests {
         assert_eq!(ime_state.commit_text("中文"), Some("中文"));
         assert_eq!(ime_state.marked_text_range(), None);
         assert_eq!(ime_state.commit_text(""), None);
+    }
+
+    #[gpui::test]
+    fn plain_click_does_not_select_text_and_drag_still_selects(cx: &mut TestAppContext) {
+        let (terminal, mut cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new(io::sink(), io::empty(), TerminalConfig::default(), cx)
+        });
+        terminal.update(cx, |terminal, cx| {
+            terminal.state.process_bytes(b"PTY text");
+            terminal.state.set_simple_selection(
+                AlacPoint::new(Line(0), Column(0)),
+                AlacPoint::new(Line(0), Column(2)),
+            );
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        let viewport = cx.read(|cx| {
+            (*terminal.read(cx).viewport.lock()).expect("terminal viewport must be painted")
+        });
+        let start = point(
+            viewport.bounds.origin.x + viewport.padding.left + viewport.cell_width * 0.5,
+            viewport.bounds.origin.y + viewport.padding.top + viewport.cell_height * 0.5,
+        );
+        let end = point(
+            viewport.bounds.origin.x + viewport.padding.left + viewport.cell_width * 2.5,
+            viewport.bounds.origin.y + viewport.padding.top + viewport.cell_height * 0.5,
+        );
+
+        cx.simulate_click(start, Modifiers::none());
+        assert_eq!(
+            cx.read(|cx| terminal.read(cx).state.selection_to_string()),
+            None,
+            "a plain click must clear selection without selecting the clicked cell"
+        );
+
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+        assert_eq!(
+            cx.read(|cx| terminal.read(cx).state.selection_to_string()),
+            None,
+            "selection must remain pending until the pointer reaches another cell"
+        );
+        cx.simulate_mouse_move(end, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+        assert_eq!(
+            cx.read(|cx| terminal.read(cx).state.selection_to_string()),
+            Some("PTY".to_string())
+        );
+    }
+
+    #[gpui::test]
+    fn double_click_still_selects_a_word(cx: &mut TestAppContext) {
+        let (terminal, mut cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new(io::sink(), io::empty(), TerminalConfig::default(), cx)
+        });
+        terminal.update(cx, |terminal, cx| {
+            terminal.state.process_bytes(b"PTY text");
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        let viewport = cx.read(|cx| {
+            (*terminal.read(cx).viewport.lock()).expect("terminal viewport must be painted")
+        });
+        let position = point(
+            viewport.bounds.origin.x + viewport.padding.left + viewport.cell_width * 0.5,
+            viewport.bounds.origin.y + viewport.padding.top + viewport.cell_height * 0.5,
+        );
+        let modifiers = Modifiers::none();
+        cx.simulate_event(MouseDownEvent {
+            position,
+            modifiers,
+            button: MouseButton::Left,
+            click_count: 2,
+            first_mouse: false,
+        });
+        cx.simulate_event(MouseUpEvent {
+            position,
+            modifiers,
+            button: MouseButton::Left,
+            click_count: 2,
+        });
+
+        assert_eq!(
+            cx.read(|cx| terminal.read(cx).state.selection_to_string()),
+            Some("PTY".to_string())
+        );
     }
 
     #[test]

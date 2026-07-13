@@ -32,6 +32,7 @@ pub fn run() {
             platform::macos::prepare_macos_app_runtime();
 
             gpui_component::init(cx);
+            yttt_terminal::init(cx);
             crate::ui::editor::register_builtin_editor_languages();
             let config_paths = AppConfigPaths::for_app();
             let theme_runtime = load_app_theme_runtime(&config_paths);

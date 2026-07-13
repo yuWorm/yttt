@@ -10,7 +10,9 @@ use gpui::{
 };
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::sync::Arc;
-use yttt_terminal::{ColorPalette, TerminalConfig, TerminalView};
+use yttt_terminal::{
+    ColorPalette, TerminalConfig, TerminalView, pty::configure_terminal_environment,
+};
 
 /// Wrapper view that holds the terminal and handles font size shortcuts.
 struct TerminalApp {
@@ -60,6 +62,7 @@ impl Render for TerminalApp {
 fn main() -> Result<()> {
     let app = gpui_platform::application();
     app.run(move |cx| {
+        yttt_terminal::init(cx);
         // Get shell from environment
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
 
@@ -78,8 +81,7 @@ fn main() -> Result<()> {
 
         // Spawn shell in the PTY
         let mut cmd = CommandBuilder::new(&shell);
-        cmd.env("TERM", "xterm-256color");
-        cmd.env("COLORTERM", "truecolor");
+        configure_terminal_environment(&mut cmd);
 
         let _child = pair
             .slave
