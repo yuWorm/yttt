@@ -49,44 +49,41 @@ fn settings_sidebar(
         .settings_page
         .visible_groups(&root.ui_text)
         .into_iter()
-        .fold(
-            div().flex().flex_col().gap_1().min_h_0(),
-            |groups, group| {
-                let group_id = group.id.as_str().to_string();
-                let background = if group.selected {
-                    theme.active_surface
-                } else {
-                    rgba(0x00000000)
-                };
-                let text = if group.selected {
-                    theme.text
-                } else {
-                    theme.text_muted
-                };
+        .fold(div().flex().flex_col().gap_1(), |groups, group| {
+            let group_id = group.id.as_str().to_string();
+            let background = if group.selected {
+                theme.active_surface
+            } else {
+                rgba(0x00000000)
+            };
+            let text = if group.selected {
+                theme.text
+            } else {
+                theme.text_muted
+            };
 
-                groups.child(
-                    div()
-                        .id(SharedString::from(format!(
-                            "settings-group-{}",
-                            group.id.as_str()
-                        )))
-                        .flex()
-                        .items_center()
-                        .h_8()
-                        .rounded_sm()
-                        .px_3()
-                        .bg(background)
-                        .text_sm()
-                        .text_color(text)
-                        .hover(move |this| this.bg(theme.hover_surface))
-                        .on_click(cx.listener(move |this, _, _window, cx| {
-                            let _ = this.select_settings_group(&group_id);
-                            cx.notify();
-                        }))
-                        .child(group.title),
-                )
-            },
-        );
+            groups.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "settings-group-{}",
+                        group.id.as_str()
+                    )))
+                    .flex()
+                    .items_center()
+                    .h_8()
+                    .rounded_sm()
+                    .px_3()
+                    .bg(background)
+                    .text_sm()
+                    .text_color(text)
+                    .hover(move |this| this.bg(theme.hover_surface))
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        let _ = this.select_settings_group(&group_id);
+                        cx.notify();
+                    }))
+                    .child(group.title),
+            )
+        });
 
     div()
         .flex()
@@ -183,14 +180,11 @@ fn settings_content(
                 )),
         )
         .child(
-            div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scrollbar()
-                .px_6()
-                .child(settings_rows(root, group, style, window, cx)),
+            div().flex_1().min_h_0().child(
+                settings_rows(root, group, style, window, cx)
+                    .px_6()
+                    .overflow_y_scrollbar(),
+            ),
         )
 }
 
