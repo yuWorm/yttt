@@ -27,6 +27,7 @@ pub enum CommandId {
     ProjectOpenRecent,
     ProjectClose,
     ProjectPalette,
+    ProjectOpenedPalette,
     ProjectPanelToggle,
     ProjectPanelRefresh,
     GitBranchSwitch,
@@ -71,6 +72,7 @@ impl CommandId {
         Self::ProjectOpenRecent,
         Self::ProjectClose,
         Self::ProjectPalette,
+        Self::ProjectOpenedPalette,
         Self::ProjectPanelToggle,
         Self::ProjectPanelRefresh,
         Self::FileSave,
@@ -115,6 +117,7 @@ impl CommandId {
             Self::ProjectOpenRecent => "project.open_recent",
             Self::ProjectClose => "project.close",
             Self::ProjectPalette => "project.palette",
+            Self::ProjectOpenedPalette => "project.opened_palette",
             Self::ProjectPanelToggle => "project_panel.toggle",
             Self::ProjectPanelRefresh => "project_panel.refresh",
             Self::GitBranchSwitch => "git.branch.switch",
@@ -171,6 +174,10 @@ impl CommandId {
             Self::ProjectPalette => {
                 presentation("Open Project Palette", "Switch opened or recent projects")
             }
+            Self::ProjectOpenedPalette => presentation(
+                "Switch Opened Project",
+                "Choose from currently opened projects",
+            ),
             Self::ProjectPanelToggle => {
                 presentation("Toggle Project Files", "Show or hide the project file tree")
             }
@@ -301,6 +308,7 @@ impl CommandId {
             | Self::GitBranchSwitch
             | Self::GitDiffOpen
             | Self::TabPalette
+            | Self::ProjectOpenedPalette
             | Self::LayoutProjectEdit
             | Self::LayoutSaveCurrent
             | Self::LayoutExportProjectConfig

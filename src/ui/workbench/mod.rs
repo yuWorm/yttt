@@ -116,8 +116,9 @@ use crate::{
     palette::{
         ActivePalette, CommandPaletteContext, PaletteItem, PaletteKind, RecentProject,
         TabPaletteSnapshot, command_palette_items_with_text, decode_tab_palette_item_id,
-        pane_palette_items_with_text, project_palette_items_with_text, tab_palette_items_with_text,
-        unified_tab_palette_items,
+        opened_project_palette_items_with_text, pane_palette_items_with_text,
+        project_palette_items_with_text, recent_project_palette_items_with_text,
+        tab_palette_items_with_text, unified_tab_palette_items,
     },
     runtime::{
         git_status::{
@@ -149,11 +150,12 @@ use crate::{
         interaction::actions::{
             FileSave, GitBranchSwitch, GitDiffOpen, LayoutDefaultEdit, LayoutDefaultReload,
             LayoutDefaultReset, LayoutExportProjectConfig, LayoutOpenFile, LayoutProjectEdit,
-            LayoutResetLocalOverride, LayoutSaveCurrent, OpenCommandPalette, OpenPanePalette,
-            OpenProject, OpenProjectPalette, OpenTabPalette, PaletteCancel, PaletteConfirm,
-            PaletteSelectNext, PaletteSelectPrev, PaneClose, PaneFocusDown, PaneFocusLeft,
-            PaneFocusRight, PaneFocusUp, PaneRename, PaneResizeDown, PaneResizeLeft,
-            PaneResizeRight, PaneResizeUp, PaneSplitHorizontal, PaneSplitVertical, ProjectClose,
+            LayoutResetLocalOverride, LayoutSaveCurrent, OpenCommandPalette,
+            OpenOpenedProjectPalette, OpenPanePalette, OpenProject, OpenProjectPalette,
+            OpenTabPalette, PaletteCancel, PaletteConfirm, PaletteSelectNext, PaletteSelectPrev,
+            PaneClose, PaneFocusDown, PaneFocusLeft, PaneFocusRight, PaneFocusUp, PaneRename,
+            PaneResizeDown, PaneResizeLeft, PaneResizeRight, PaneResizeUp, PaneSplitHorizontal,
+            PaneSplitVertical, ProjectClose, ProjectPanelRefresh, ProjectPanelToggle,
             SettingsKeybindings, SettingsNotifications, SettingsOpen, TabClose, TabNew, TabNext,
             TabPrev, TabRename, UiKeybindingSpec, WORKSPACE_CONTEXT, runtime_command_for_keystroke,
             ui_keybinding_specs_from_config,
@@ -265,6 +267,8 @@ fn palette_input_scope_id(kind: PaletteKind) -> &'static str {
     match kind {
         PaletteKind::Command => "palette.command",
         PaletteKind::Project => "palette.project",
+        PaletteKind::OpenedProject => "palette.opened_project",
+        PaletteKind::RecentProject => "palette.recent_project",
         PaletteKind::Tab => "palette.tab",
         PaletteKind::Pane => "palette.pane",
         PaletteKind::GitBranch => "palette.git_branch",
@@ -1025,18 +1029,13 @@ impl WorkbenchView {
         self.settings.keybinding_interceptor_subscription = Some(subscription);
     }
 
-    pub fn dispatch_runtime_keybinding(&mut self, keystroke: &Keystroke) -> bool {
-        let Some(command_id) = workspace_command_for_keystroke(
+    pub fn runtime_command_for_dispatch(&self, keystroke: &Keystroke) -> Option<CommandId> {
+        workspace_command_for_keystroke(
             self.foreground_input_owner_kind(),
             keystroke,
             |keystroke| self.runtime_command_for_keystroke(keystroke),
             |keystroke| self.terminal_should_receive_keystroke(keystroke),
-        ) else {
-            return false;
-        };
-
-        let _ = self.run_command(command_id);
-        true
+        )
     }
 
     pub fn terminal_should_receive_keystroke(&self, keystroke: &Keystroke) -> bool {
@@ -1277,7 +1276,7 @@ impl WorkbenchView {
                 Ok(())
             }
             CommandId::ProjectOpenRecent => {
-                self.open_palette(PaletteKind::Project);
+                self.open_palette(PaletteKind::RecentProject);
                 Ok(())
             }
             CommandId::CommandPaletteOpen => {
@@ -1286,6 +1285,10 @@ impl WorkbenchView {
             }
             CommandId::ProjectPalette => {
                 self.open_palette(PaletteKind::Project);
+                Ok(())
+            }
+            CommandId::ProjectOpenedPalette => {
+                self.open_palette(PaletteKind::OpenedProject);
                 Ok(())
             }
             CommandId::ProjectPanelToggle => {

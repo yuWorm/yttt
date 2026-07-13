@@ -47,6 +47,7 @@ fn editor_runtime_command_allowed(command: CommandId) -> bool {
             | CommandId::CommandPaletteOpen
             | CommandId::ProjectOpenRecent
             | CommandId::ProjectPalette
+            | CommandId::ProjectOpenedPalette
             | CommandId::TabPalette
     )
 }

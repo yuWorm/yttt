@@ -513,6 +513,14 @@ fn palette_surface_text_is_localized() {
         "切换项目..."
     );
     assert_eq!(
+        palette_input_placeholder(yttt::palette::PaletteKind::OpenedProject, &text),
+        "切换已打开项目..."
+    );
+    assert_eq!(
+        palette_input_placeholder(yttt::palette::PaletteKind::RecentProject, &text),
+        "打开最近项目..."
+    );
+    assert_eq!(
         palette_footer_actions(&text),
         vec![
             PaletteFooterAction {

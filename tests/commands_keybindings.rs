@@ -35,6 +35,7 @@ fn default_registry_contains_core_commands() {
     assert!(registry.contains(CommandId::TabRename));
     assert!(registry.contains(CommandId::CommandPaletteOpen));
     assert!(registry.contains(CommandId::SettingsOpen));
+    assert!(registry.contains(CommandId::ProjectOpenedPalette));
 }
 
 #[test]
@@ -304,6 +305,10 @@ fn default_keybindings_include_palette_shortcuts() {
 
     assert_has_config_binding(&config, "cmd-p", "command_palette.open");
     assert_has_config_binding(&config, "ctrl-k", "pane.palette");
+    assert_has_config_binding(&config, "cmd-shift-p", "project.opened_palette");
+    assert_has_config_binding(&config, "ctrl-shift-p", "project.opened_palette");
+    assert_has_ui_binding("cmd-shift-p", "project.opened_palette");
+    assert_has_ui_binding("ctrl-shift-p", "project.opened_palette");
 }
 
 #[test]
@@ -532,7 +537,7 @@ fn legacy_default_keybindings_are_upgraded_with_editor_shortcuts() {
     legacy.bindings.retain(|binding| {
         !matches!(
             binding.command.as_str(),
-            "file.save" | "project_panel.toggle"
+            "file.save" | "project_panel.toggle" | "project.opened_palette"
         )
     });
     std::fs::write(
@@ -546,6 +551,27 @@ fn legacy_default_keybindings_are_upgraded_with_editor_shortcuts() {
     assert_eq!(loaded.config.schema_version, KEYBINDINGS_SCHEMA_VERSION);
     assert_has_config_binding(&loaded.config, "cmd-s", "file.save");
     assert_has_config_binding(&loaded.config, "ctrl-s", "file.save");
+    let persisted: KeybindingsConfig =
+        toml::from_str(&std::fs::read_to_string(paths.keybindings_file()).unwrap()).unwrap();
+    assert_eq!(persisted, loaded.config);
+}
+
+#[test]
+fn schema_one_default_keybindings_add_opened_project_shortcuts() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut legacy = default_keybindings();
+    legacy.schema_version = 1;
+    legacy
+        .bindings
+        .retain(|binding| binding.command != "project.opened_palette");
+    save_keybindings(&paths, &legacy).unwrap();
+
+    let loaded = load_keybindings(&paths, &default_registry()).unwrap();
+
+    assert_eq!(loaded.config.schema_version, KEYBINDINGS_SCHEMA_VERSION);
+    assert_has_config_binding(&loaded.config, "cmd-shift-p", "project.opened_palette");
+    assert_has_config_binding(&loaded.config, "ctrl-shift-p", "project.opened_palette");
     let persisted: KeybindingsConfig =
         toml::from_str(&std::fs::read_to_string(paths.keybindings_file()).unwrap()).unwrap();
     assert_eq!(persisted, loaded.config);
@@ -580,6 +606,32 @@ fn custom_legacy_keybindings_are_versioned_without_restoring_defaults() {
             .unwrap()
             .config,
         loaded.config
+    );
+}
+
+#[test]
+fn custom_schema_one_keybindings_do_not_gain_default_shortcuts() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let custom = KeybindingsConfig {
+        schema_version: 1,
+        bindings: vec![Keybinding {
+            keys: "cmd-l".to_string(),
+            command: "tab.palette".to_string(),
+        }],
+    };
+    save_keybindings(&paths, &custom).unwrap();
+
+    let loaded = load_keybindings(&paths, &default_registry()).unwrap();
+
+    assert_eq!(loaded.config.schema_version, KEYBINDINGS_SCHEMA_VERSION);
+    assert_eq!(loaded.config.bindings, custom.bindings);
+    assert!(
+        loaded
+            .config
+            .bindings
+            .iter()
+            .all(|binding| binding.command != "project.opened_palette")
     );
 }
 

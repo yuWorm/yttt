@@ -8,8 +8,9 @@ use yttt::{
     },
     palette::{
         ActivePalette, CommandPaletteContext, PaletteItem, PaletteKind, RecentProject,
-        TabPaletteSnapshot, command_palette_items, pane_palette_items, project_palette_items,
-        tab_palette_items, unified_tab_palette_items,
+        TabPaletteSnapshot, command_palette_items, opened_project_palette_items,
+        pane_palette_items, project_palette_items, recent_project_palette_items, tab_palette_items,
+        unified_tab_palette_items,
     },
     ui::{
         components::SelectableState,
@@ -180,6 +181,46 @@ fn project_palette_contains_opened_and_recent_projects() {
             .iter()
             .any(|item| item.title == "zed" && item.status.as_deref() == Some("recent"))
     );
+}
+
+#[test]
+fn opened_project_palette_contains_only_opened_projects() {
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+
+    let items = opened_project_palette_items(&workspace);
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].title, "yttt");
+    assert_eq!(items[0].command, CommandId::ProjectOpenedPalette);
+    assert_eq!(items[0].status.as_deref(), Some("open"));
+}
+
+#[test]
+fn recent_project_palette_excludes_opened_projects() {
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+    let recent = vec![
+        RecentProject {
+            title: "yttt".to_string(),
+            path: PathBuf::from("/tmp/yttt"),
+        },
+        RecentProject {
+            title: "zed".to_string(),
+            path: PathBuf::from("/tmp/zed"),
+        },
+    ];
+
+    let items = recent_project_palette_items(&workspace, &recent);
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].title, "zed");
+    assert_eq!(items[0].command, CommandId::ProjectOpenRecent);
+    assert_eq!(items[0].status.as_deref(), Some("recent"));
 }
 
 #[test]
@@ -466,8 +507,11 @@ fn palette_picker_delegate_exposes_picker_items_for_all_palette_kinds() {
     for kind in [
         PaletteKind::Command,
         PaletteKind::Project,
+        PaletteKind::OpenedProject,
+        PaletteKind::RecentProject,
         PaletteKind::Tab,
         PaletteKind::Pane,
+        PaletteKind::GitBranch,
     ] {
         let delegate = PalettePickerDelegate::new(
             kind,

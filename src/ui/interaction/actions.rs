@@ -1,6 +1,6 @@
 use std::{borrow::Cow, collections::HashSet};
 
-use gpui::{KeyBinding, KeybindingKeystroke, Keystroke, actions};
+use gpui::{Action, KeyBinding, KeybindingKeystroke, Keystroke, actions};
 
 use crate::{
     commands::{CommandId, CommandRegistry},
@@ -20,6 +20,7 @@ actions!(
         OpenProject,
         ProjectClose,
         OpenProjectPalette,
+        OpenOpenedProjectPalette,
         ProjectPanelToggle,
         ProjectPanelRefresh,
         GitBranchSwitch,
@@ -123,6 +124,14 @@ const DEFAULT_UI_KEYBINDING_SPECS: &[UiKeybindingSpec] = &[
     UiKeybindingSpec {
         keys: Cow::Borrowed("ctrl-shift-o"),
         command: CommandId::ProjectPalette,
+    },
+    UiKeybindingSpec {
+        keys: Cow::Borrowed("cmd-shift-p"),
+        command: CommandId::ProjectOpenedPalette,
+    },
+    UiKeybindingSpec {
+        keys: Cow::Borrowed("ctrl-shift-p"),
+        command: CommandId::ProjectOpenedPalette,
     },
     UiKeybindingSpec {
         keys: Cow::Borrowed("cmd-j"),
@@ -308,6 +317,53 @@ pub fn runtime_command_for_keystroke(
                 .unwrap_or(false)
         })
         .map(|spec| spec.command)
+}
+
+pub fn ui_action_for_command(command: CommandId) -> Option<Box<dyn Action>> {
+    let action: Box<dyn Action> = match command {
+        CommandId::ProjectOpen => Box::new(OpenProject),
+        CommandId::ProjectOpenRecent => return None,
+        CommandId::ProjectClose => Box::new(ProjectClose),
+        CommandId::ProjectPalette => Box::new(OpenProjectPalette),
+        CommandId::ProjectOpenedPalette => Box::new(OpenOpenedProjectPalette),
+        CommandId::ProjectPanelToggle => Box::new(ProjectPanelToggle),
+        CommandId::ProjectPanelRefresh => Box::new(ProjectPanelRefresh),
+        CommandId::GitBranchSwitch => Box::new(GitBranchSwitch),
+        CommandId::GitDiffOpen => Box::new(GitDiffOpen),
+        CommandId::FileSave => Box::new(FileSave),
+        CommandId::TabNew => Box::new(TabNew),
+        CommandId::TabClose => Box::new(TabClose),
+        CommandId::TabRename => Box::new(TabRename),
+        CommandId::TabNext => Box::new(TabNext),
+        CommandId::TabPrev => Box::new(TabPrev),
+        CommandId::TabPalette => Box::new(OpenTabPalette),
+        CommandId::PaneSplitHorizontal => Box::new(PaneSplitHorizontal),
+        CommandId::PaneSplitVertical => Box::new(PaneSplitVertical),
+        CommandId::PaneClose => Box::new(PaneClose),
+        CommandId::PaneFocusLeft => Box::new(PaneFocusLeft),
+        CommandId::PaneFocusRight => Box::new(PaneFocusRight),
+        CommandId::PaneFocusUp => Box::new(PaneFocusUp),
+        CommandId::PaneFocusDown => Box::new(PaneFocusDown),
+        CommandId::PaneResizeLeft => Box::new(PaneResizeLeft),
+        CommandId::PaneResizeRight => Box::new(PaneResizeRight),
+        CommandId::PaneResizeUp => Box::new(PaneResizeUp),
+        CommandId::PaneResizeDown => Box::new(PaneResizeDown),
+        CommandId::PaneRename => Box::new(PaneRename),
+        CommandId::PanePalette => Box::new(OpenPanePalette),
+        CommandId::LayoutDefaultEdit => Box::new(LayoutDefaultEdit),
+        CommandId::LayoutDefaultReset => Box::new(LayoutDefaultReset),
+        CommandId::LayoutDefaultReload => Box::new(LayoutDefaultReload),
+        CommandId::LayoutProjectEdit => Box::new(LayoutProjectEdit),
+        CommandId::LayoutSaveCurrent => Box::new(LayoutSaveCurrent),
+        CommandId::LayoutExportProjectConfig => Box::new(LayoutExportProjectConfig),
+        CommandId::LayoutResetLocalOverride => Box::new(LayoutResetLocalOverride),
+        CommandId::LayoutOpenFile => Box::new(LayoutOpenFile),
+        CommandId::CommandPaletteOpen => Box::new(OpenCommandPalette),
+        CommandId::SettingsOpen => Box::new(SettingsOpen),
+        CommandId::SettingsKeybindings => Box::new(SettingsKeybindings),
+        CommandId::SettingsNotifications => Box::new(SettingsNotifications),
+    };
+    Some(action)
 }
 
 fn built_in_ui_keybindings() -> Vec<KeyBinding> {

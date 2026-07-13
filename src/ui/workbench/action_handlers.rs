@@ -21,6 +21,33 @@ impl WorkbenchView {
         cx.notify();
     }
 
+    pub(super) fn on_opened_project_palette(
+        &mut self,
+        _: &OpenOpenedProjectPalette,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::ProjectOpenedPalette, cx);
+    }
+
+    pub(super) fn on_project_panel_toggle(
+        &mut self,
+        _: &ProjectPanelToggle,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::ProjectPanelToggle, cx);
+    }
+
+    pub(super) fn on_project_panel_refresh(
+        &mut self,
+        _: &ProjectPanelRefresh,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::ProjectPanelRefresh, cx);
+    }
+
     pub(super) fn on_open_project(
         &mut self,
         _: &OpenProject,

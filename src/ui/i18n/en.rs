@@ -69,6 +69,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::TypeToFilter => "Type to filter",
         UiTextKey::PalettePlaceholderCommand => "Execute a command...",
         UiTextKey::PalettePlaceholderProject => "Switch project...",
+        UiTextKey::PalettePlaceholderOpenedProject => "Switch opened project...",
+        UiTextKey::PalettePlaceholderRecentProject => "Open recent project...",
         UiTextKey::PalettePlaceholderTab => "Switch tab...",
         UiTextKey::PalettePlaceholderPane => "Switch pane...",
         UiTextKey::PalettePlaceholderGitBranch => "Switch Git branch...",
@@ -102,6 +104,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandProjectCloseDescription => "Close the selected project",
         UiTextKey::CommandProjectPaletteTitle => "Open Project Palette",
         UiTextKey::CommandProjectPaletteDescription => "Switch opened or recent projects",
+        UiTextKey::CommandProjectOpenedPaletteTitle => "Switch Opened Project",
+        UiTextKey::CommandProjectOpenedPaletteDescription => {
+            "Choose from currently opened projects"
+        }
         UiTextKey::CommandProjectPanelToggleTitle => "Toggle Project Files",
         UiTextKey::CommandProjectPanelToggleDescription => "Show or hide the project file tree",
         UiTextKey::CommandProjectPanelRefreshTitle => "Refresh Project Files",

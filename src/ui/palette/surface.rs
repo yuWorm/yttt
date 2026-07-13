@@ -114,6 +114,8 @@ pub fn palette_input_placeholder(kind: PaletteKind, ui_text: &UiText) -> &'stati
     match kind {
         PaletteKind::Command => ui_text.get(UiTextKey::PalettePlaceholderCommand),
         PaletteKind::Project => ui_text.get(UiTextKey::PalettePlaceholderProject),
+        PaletteKind::OpenedProject => ui_text.get(UiTextKey::PalettePlaceholderOpenedProject),
+        PaletteKind::RecentProject => ui_text.get(UiTextKey::PalettePlaceholderRecentProject),
         PaletteKind::Tab => ui_text.get(UiTextKey::PalettePlaceholderTab),
         PaletteKind::Pane => ui_text.get(UiTextKey::PalettePlaceholderPane),
         PaletteKind::GitBranch => ui_text.get(UiTextKey::PalettePlaceholderGitBranch),

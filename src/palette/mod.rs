@@ -20,6 +20,8 @@ use crate::{
 pub enum PaletteKind {
     Command,
     Project,
+    OpenedProject,
+    RecentProject,
     Tab,
     Pane,
     GitBranch,
@@ -227,7 +229,24 @@ pub fn project_palette_items_with_text(
     recent_projects: &[RecentProject],
     ui_text: &UiText,
 ) -> Vec<PaletteItem> {
-    let mut items: Vec<_> = workspace
+    let mut items = opened_project_palette_items_with_text(workspace, ui_text);
+    items.extend(recent_project_palette_items_with_text(
+        workspace,
+        recent_projects,
+        ui_text,
+    ));
+    items
+}
+
+pub fn opened_project_palette_items(workspace: &Workspace) -> Vec<PaletteItem> {
+    opened_project_palette_items_with_text(workspace, &UiText::english())
+}
+
+pub fn opened_project_palette_items_with_text(
+    workspace: &Workspace,
+    ui_text: &UiText,
+) -> Vec<PaletteItem> {
+    workspace
         .opened_projects()
         .iter()
         .map(|project| PaletteItem {
@@ -236,24 +255,44 @@ pub fn project_palette_items_with_text(
             subtitle: Some(project.path.display().to_string()),
             status: Some(open_project_status(project, ui_text)),
             keybinding: None,
-            command: CommandId::ProjectPalette,
+            command: CommandId::ProjectOpenedPalette,
             enabled: true,
             disabled_reason: None,
         })
-        .collect();
+        .collect()
+}
 
-    items.extend(recent_projects.iter().map(|project| PaletteItem {
-        id: project.path.display().to_string(),
-        title: project.title.clone(),
-        subtitle: Some(project.path.display().to_string()),
-        status: Some(ui_text.get(UiTextKey::PaletteStatusRecent).to_string()),
-        keybinding: None,
-        command: CommandId::ProjectOpenRecent,
-        enabled: true,
-        disabled_reason: None,
-    }));
+pub fn recent_project_palette_items(
+    workspace: &Workspace,
+    recent_projects: &[RecentProject],
+) -> Vec<PaletteItem> {
+    recent_project_palette_items_with_text(workspace, recent_projects, &UiText::english())
+}
 
-    items
+pub fn recent_project_palette_items_with_text(
+    workspace: &Workspace,
+    recent_projects: &[RecentProject],
+    ui_text: &UiText,
+) -> Vec<PaletteItem> {
+    recent_projects
+        .iter()
+        .filter(|recent| {
+            workspace
+                .opened_projects()
+                .iter()
+                .all(|opened| opened.path.as_path() != recent.path.as_path())
+        })
+        .map(|project| PaletteItem {
+            id: project.path.display().to_string(),
+            title: project.title.clone(),
+            subtitle: Some(project.path.display().to_string()),
+            status: Some(ui_text.get(UiTextKey::PaletteStatusRecent).to_string()),
+            keybinding: None,
+            command: CommandId::ProjectOpenRecent,
+            enabled: true,
+            disabled_reason: None,
+        })
+        .collect()
 }
 
 pub fn tab_palette_items(workspace: &Workspace) -> Option<Vec<PaletteItem>> {
@@ -402,6 +441,7 @@ fn command_title_key(command_id: CommandId) -> UiTextKey {
         CommandId::ProjectOpenRecent => UiTextKey::CommandProjectOpenRecentTitle,
         CommandId::ProjectClose => UiTextKey::CommandProjectCloseTitle,
         CommandId::ProjectPalette => UiTextKey::CommandProjectPaletteTitle,
+        CommandId::ProjectOpenedPalette => UiTextKey::CommandProjectOpenedPaletteTitle,
         CommandId::ProjectPanelToggle => UiTextKey::CommandProjectPanelToggleTitle,
         CommandId::ProjectPanelRefresh => UiTextKey::CommandProjectPanelRefreshTitle,
         CommandId::GitBranchSwitch => UiTextKey::CommandGitBranchSwitchTitle,
@@ -447,6 +487,7 @@ fn command_description_key(command_id: CommandId) -> UiTextKey {
         CommandId::ProjectOpenRecent => UiTextKey::CommandProjectOpenRecentDescription,
         CommandId::ProjectClose => UiTextKey::CommandProjectCloseDescription,
         CommandId::ProjectPalette => UiTextKey::CommandProjectPaletteDescription,
+        CommandId::ProjectOpenedPalette => UiTextKey::CommandProjectOpenedPaletteDescription,
         CommandId::ProjectPanelToggle => UiTextKey::CommandProjectPanelToggleDescription,
         CommandId::ProjectPanelRefresh => UiTextKey::CommandProjectPanelRefreshDescription,
         CommandId::GitBranchSwitch => UiTextKey::CommandGitBranchSwitchDescription,

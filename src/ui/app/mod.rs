@@ -19,7 +19,7 @@ use crate::{
         app::startup::{
             FORCE_ONBOARDING_ENV, StartupMode, force_onboarding_from_env, startup_mode_from_fixture,
         },
-        interaction::actions::app_startup_keybindings,
+        interaction::actions::{app_startup_keybindings, ui_action_for_command},
         theme::ThemeRuntime,
         workbench::WorkbenchView,
     },
@@ -56,27 +56,28 @@ pub fn run() {
                         StartupMode::Normal => WorkbenchView::from_startup_env(force_onboarding),
                     }
                 });
-                let runtime_keybinding_view = view.clone();
-                let keybinding_subscription = cx.intercept_keystrokes(move |event, _window, cx| {
-                    let mut handled = false;
-                    runtime_keybinding_view.update(cx, |root, cx| {
-                        handled = root.dispatch_runtime_keybinding(&event.keystroke);
-                        if handled {
-                            cx.notify();
-                        }
-                    });
-                    if handled {
-                        cx.stop_propagation();
-                    }
-                });
-                view.update(cx, |root, _| {
-                    root.set_keybinding_interceptor_subscription(keybinding_subscription);
-                });
+                register_workbench_keybinding_interceptor(cx, &view);
                 register_workbench_close_guard(window, cx, &view);
                 cx.new(|cx| ComponentRoot::new(view, window, cx))
             })
             .expect("failed to open yttt window");
         });
+}
+
+pub fn register_workbench_keybinding_interceptor(cx: &mut App, view: &Entity<WorkbenchView>) {
+    let runtime_keybinding_view = view.clone();
+    let keybinding_subscription = cx.intercept_keystrokes(move |event, window, cx| {
+        let command = runtime_keybinding_view
+            .read(cx)
+            .runtime_command_for_dispatch(&event.keystroke);
+        if let Some(action) = command.and_then(ui_action_for_command) {
+            window.dispatch_action(action, cx);
+            cx.stop_propagation();
+        }
+    });
+    view.update(cx, |root, _| {
+        root.set_keybinding_interceptor_subscription(keybinding_subscription);
+    });
 }
 
 pub fn register_workbench_close_guard(window: &Window, cx: &App, view: &Entity<WorkbenchView>) {

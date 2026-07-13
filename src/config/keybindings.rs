@@ -6,7 +6,7 @@ use std::{
 
 use crate::{commands::CommandRegistry, config::paths::AppConfigPaths};
 
-pub const KEYBINDINGS_SCHEMA_VERSION: u32 = 1;
+pub const KEYBINDINGS_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub struct Keybinding {
@@ -211,7 +211,12 @@ fn migrate_keybindings_config(
         return Ok(config);
     }
 
-    if config.schema_version == 0 && config.bindings == legacy_default_bindings() {
+    let uses_legacy_defaults = match config.schema_version {
+        0 => config.bindings == legacy_v0_default_bindings(),
+        1 => config.bindings == legacy_v1_default_bindings(),
+        _ => false,
+    };
+    if uses_legacy_defaults {
         config = default_keybindings();
     } else {
         config.schema_version = KEYBINDINGS_SCHEMA_VERSION;
@@ -220,14 +225,20 @@ fn migrate_keybindings_config(
     Ok(config)
 }
 
-fn legacy_default_bindings() -> Vec<Keybinding> {
-    let mut bindings = default_keybindings().bindings;
+fn legacy_v0_default_bindings() -> Vec<Keybinding> {
+    let mut bindings = legacy_v1_default_bindings();
     bindings.retain(|binding| {
         !matches!(
             binding.command.as_str(),
             "file.save" | "project_panel.toggle"
         )
     });
+    bindings
+}
+
+fn legacy_v1_default_bindings() -> Vec<Keybinding> {
+    let mut bindings = default_keybindings().bindings;
+    bindings.retain(|binding| binding.command != "project.opened_palette");
     bindings
 }
 
@@ -262,6 +273,8 @@ pub fn default_keybindings() -> KeybindingsConfig {
             binding("ctrl-shift-e", "project_panel.toggle"),
             binding("cmd-shift-o", "project.palette"),
             binding("ctrl-shift-o", "project.palette"),
+            binding("cmd-shift-p", "project.opened_palette"),
+            binding("ctrl-shift-p", "project.opened_palette"),
             binding("cmd-j", "tab.palette"),
             binding("ctrl-j", "tab.palette"),
             binding("cmd-k", "pane.palette"),

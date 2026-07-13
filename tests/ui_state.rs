@@ -47,7 +47,7 @@ use yttt::{
     },
     ui::workbench::shell::sidebar::visible_project_items,
     ui::{
-        app::register_workbench_close_guard,
+        app::{register_workbench_close_guard, register_workbench_keybinding_interceptor},
         workbench::WorkbenchView,
         workbench::shell::split_view::{
             pointer_resize_for_drag_delta, resize_command_for_drag_delta, root_split_child_basis,
@@ -1400,7 +1400,10 @@ fn root_view_file_save_preserves_newer_in_flight_edit(cx: &mut gpui::TestAppCont
     });
 
     root.update(cx, |root, cx| {
-        assert!(root.dispatch_runtime_keybinding(&Keystroke::parse("ctrl-s").unwrap()));
+        let command = root
+            .runtime_command_for_dispatch(&Keystroke::parse("ctrl-s").unwrap())
+            .unwrap();
+        root.run_command(command).unwrap();
         assert_eq!(root.pending_document_save_count(), 1);
         cx.notify();
     });
@@ -3434,7 +3437,10 @@ fn root_view_workspace_keybindings_are_blocked_by_foreground_owner() {
 
     root.open_settings();
 
-    assert!(!root.dispatch_runtime_keybinding(&Keystroke::parse("cmd-t").unwrap()));
+    assert!(
+        root.runtime_command_for_dispatch(&Keystroke::parse("cmd-t").unwrap())
+            .is_none()
+    );
     assert_eq!(
         root.workspace()
             .project(&project_id)
@@ -3452,7 +3458,10 @@ fn root_view_layout_editor_blocks_project_file_save_binding() {
     root.open_layout_toml_editor().unwrap();
 
     assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Dialog);
-    assert!(!root.dispatch_runtime_keybinding(&Keystroke::parse("cmd-s").unwrap()));
+    assert!(
+        root.runtime_command_for_dispatch(&Keystroke::parse("cmd-s").unwrap())
+            .is_none()
+    );
 }
 
 #[test]
@@ -4016,6 +4025,36 @@ fn root_view_command_palette_can_open_project_palette() {
 }
 
 #[test]
+fn root_view_project_commands_open_separate_project_palettes() {
+    let mut root = WorkbenchView::dev_fixture();
+    root.focus_visible_terminal_pane("shell").unwrap();
+
+    let command = root
+        .runtime_command_for_dispatch(&Keystroke::parse("cmd-shift-p").unwrap())
+        .unwrap();
+    assert_eq!(command, CommandId::ProjectOpenedPalette);
+    root.run_command(command).unwrap();
+    assert_eq!(
+        root.active_palette().map(|palette| palette.kind),
+        Some(PaletteKind::OpenedProject)
+    );
+    let items = root.active_palette_items();
+    assert!(!items.is_empty());
+    assert!(
+        items
+            .iter()
+            .all(|item| item.command == CommandId::ProjectOpenedPalette)
+    );
+
+    root.close_palette();
+    root.run_command(CommandId::ProjectOpenRecent).unwrap();
+    assert_eq!(
+        root.active_palette().map(|palette| palette.kind),
+        Some(PaletteKind::RecentProject)
+    );
+}
+
+#[test]
 fn root_view_focus_visible_terminal_pane_updates_focused_pane() {
     let mut root = WorkbenchView::dev_fixture();
 
@@ -4064,7 +4103,10 @@ fn root_view_leaves_terminal_control_keybindings_for_focused_terminal() {
 
     root.focus_visible_terminal_pane("shell").unwrap();
 
-    assert!(!root.dispatch_runtime_keybinding(&Keystroke::parse("ctrl-t").unwrap()));
+    assert!(
+        root.runtime_command_for_dispatch(&Keystroke::parse("ctrl-t").unwrap())
+            .is_none()
+    );
     assert_eq!(
         root.workspace()
             .project(&project_id)
@@ -4104,7 +4146,10 @@ fn root_view_keeps_platform_shortcuts_available_when_terminal_is_focused() {
 
     root.focus_visible_terminal_pane("shell").unwrap();
 
-    assert!(root.dispatch_runtime_keybinding(&Keystroke::parse("cmd-t").unwrap()));
+    let command = root
+        .runtime_command_for_dispatch(&Keystroke::parse("cmd-t").unwrap())
+        .unwrap();
+    root.run_command(command).unwrap();
     assert_eq!(
         root.workspace()
             .project(&project_id)
@@ -4114,6 +4159,44 @@ fn root_view_keeps_platform_shortcuts_available_when_terminal_is_focused() {
             .len(),
         initial_tab_count + 1
     );
+}
+
+#[gpui::test]
+fn focused_terminal_platform_open_shortcut_prompts_immediately(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::dev_fixture());
+        register_workbench_keybinding_interceptor(cx, &root);
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+
+    root.update(cx, |root, cx| {
+        root.focus_visible_terminal_pane("shell").unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+
+    cx.simulate_keystrokes("cmd-o");
+    cx.run_until_parked();
+
+    assert!(
+        cx.did_prompt_for_paths(),
+        "the open-project action must run during the shortcut dispatch"
+    );
+    root.update(cx, |root, _| {
+        assert!(!root.take_pending_open_project_request());
+    });
+    cx.simulate_path_prompt_response(|options| {
+        assert!(!options.files);
+        assert!(options.directories);
+        assert!(!options.multiple);
+        None
+    });
+    cx.run_until_parked();
 }
 
 #[test]
@@ -4968,6 +5051,9 @@ fn configured_git_keybinding_dispatches_from_the_workbench() {
         root.runtime_command_for_keystroke(&Keystroke::parse("cmd-shift-g").unwrap()),
         Some(CommandId::GitDiffOpen)
     );
-    assert!(root.dispatch_runtime_keybinding(&Keystroke::parse("cmd-shift-g").unwrap()));
+    let command = root
+        .runtime_command_for_dispatch(&Keystroke::parse("cmd-shift-g").unwrap())
+        .unwrap();
+    root.run_command(command).unwrap();
     assert!(root.git_diff_panel_is_open());
 }

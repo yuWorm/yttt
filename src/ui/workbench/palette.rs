@@ -66,7 +66,7 @@ impl WorkbenchView {
                     return Ok(());
                 }
             }
-            PaletteKind::Project => {
+            PaletteKind::Project | PaletteKind::OpenedProject | PaletteKind::RecentProject => {
                 let project_id = self
                     .workspace
                     .opened_projects()
@@ -127,6 +127,14 @@ impl WorkbenchView {
         match kind {
             PaletteKind::Command => self.command_palette_items(),
             PaletteKind::Project => project_palette_items_with_text(
+                &self.workspace,
+                &self.palette.recent_projects,
+                &self.ui_text,
+            ),
+            PaletteKind::OpenedProject => {
+                opened_project_palette_items_with_text(&self.workspace, &self.ui_text)
+            }
+            PaletteKind::RecentProject => recent_project_palette_items_with_text(
                 &self.workspace,
                 &self.palette.recent_projects,
                 &self.ui_text,
