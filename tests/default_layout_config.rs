@@ -5,11 +5,15 @@ use tempfile::tempdir;
 use yttt::{
     config::{
         default_layout::{
-            DefaultLayoutSource, DefaultLayoutState, DefaultLayoutTemplate, LayoutLoadWarning,
+            BuiltinAgent, DefaultLayoutKind, DefaultLayoutSource, DefaultLayoutState,
+            DefaultLayoutTemplate, LayoutLoadWarning,
         },
         paths::AppConfigPaths,
     },
-    model::layout::{LayoutError, PaneKind},
+    model::layout::{
+        LayoutError, LayoutNode, PaneKind, ProcessExitBehavior, SplitDirection,
+        TerminalExecutionMode,
+    },
 };
 
 #[test]
@@ -35,6 +39,76 @@ fn builtin_template_is_valid_shell_layout() {
         PaneKind::Shell
     );
     assert_eq!(template.validate(), Ok(()));
+}
+
+#[test]
+fn onboarding_agents_build_a_valid_split_view_default() {
+    for agent in BuiltinAgent::ALL {
+        let template = DefaultLayoutTemplate::for_onboarding(DefaultLayoutKind::SplitPane, agent);
+
+        assert_eq!(template.project.default_tab.as_deref(), Some("workspace"));
+        assert_eq!(template.tabs.len(), 1);
+        assert_eq!(template.tabs[0].id, "workspace");
+        assert_eq!(template.validate(), Ok(()));
+
+        let LayoutNode::Split(split) = &template.tabs[0].layout else {
+            panic!("split view onboarding layout should be split");
+        };
+        assert_eq!(split.direction, SplitDirection::Horizontal);
+        assert_eq!(split.ratio, 0.65);
+
+        let LayoutNode::Pane(agent_pane) = split.left.as_ref() else {
+            panic!("left side should be the selected agent");
+        };
+        assert_eq!(agent_pane.id, agent.id());
+        assert_eq!(agent_pane.title, agent.display_name());
+        assert_eq!(agent_pane.command, agent.command());
+        assert_eq!(agent_pane.kind, PaneKind::Agent);
+        assert_eq!(agent_pane.execution_mode, TerminalExecutionMode::Command);
+        assert_eq!(agent_pane.exit_behavior, ProcessExitBehavior::ManualRestart);
+        assert!(agent_pane.notify_on_exit);
+
+        let LayoutNode::Pane(shell_pane) = split.right.as_ref() else {
+            panic!("right side should be the shell");
+        };
+        assert_eq!(shell_pane.id, "shell");
+        assert_eq!(shell_pane.kind, PaneKind::Shell);
+        assert_eq!(shell_pane.execution_mode, TerminalExecutionMode::Shell);
+        assert!(shell_pane.command.is_empty());
+    }
+}
+
+#[test]
+fn onboarding_agents_build_a_valid_separate_tabs_default() {
+    for agent in BuiltinAgent::ALL {
+        let template =
+            DefaultLayoutTemplate::for_onboarding(DefaultLayoutKind::SeparateTabs, agent);
+
+        assert_eq!(template.project.default_tab.as_deref(), Some("agent"));
+        assert_eq!(template.tabs.len(), 2);
+        assert_eq!(template.tabs[0].id, "agent");
+        assert_eq!(template.tabs[1].id, "shell");
+        assert_eq!(template.validate(), Ok(()));
+
+        let LayoutNode::Pane(agent_pane) = &template.tabs[0].layout else {
+            panic!("first tab should contain the selected agent");
+        };
+        assert_eq!(agent_pane.id, agent.id());
+        assert_eq!(agent_pane.title, agent.display_name());
+        assert_eq!(agent_pane.command, agent.command());
+        assert_eq!(agent_pane.kind, PaneKind::Agent);
+        assert_eq!(agent_pane.execution_mode, TerminalExecutionMode::Command);
+        assert_eq!(agent_pane.exit_behavior, ProcessExitBehavior::ManualRestart);
+        assert!(agent_pane.notify_on_exit);
+
+        let LayoutNode::Pane(shell_pane) = &template.tabs[1].layout else {
+            panic!("second tab should contain the shell");
+        };
+        assert_eq!(shell_pane.id, "shell");
+        assert_eq!(shell_pane.kind, PaneKind::Shell);
+        assert_eq!(shell_pane.execution_mode, TerminalExecutionMode::Shell);
+        assert!(shell_pane.command.is_empty());
+    }
 }
 
 #[test]

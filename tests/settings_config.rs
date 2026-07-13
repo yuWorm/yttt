@@ -29,6 +29,7 @@ fn missing_settings_file_writes_defaults() {
     let loaded = load_or_create_settings(&paths).unwrap();
 
     assert_eq!(loaded.settings.general.language, LanguageSetting::System);
+    assert!(!loaded.settings.general.onboarding_completed);
     assert_eq!(loaded.settings.theme.name, "one-dark-theme");
     assert_eq!(loaded.settings.theme.terminal, None);
     assert!(!loaded.settings.notifications.system);
@@ -151,12 +152,14 @@ fn settings_persist_language_and_terminal_scrollbar() {
     let paths = AppConfigPaths::from_config_dir(dir.path());
     let mut settings = AppSettings::default();
     settings.general.language = LanguageSetting::Chinese;
+    settings.general.onboarding_completed = true;
     settings.terminal.show_scrollbar = false;
 
     save_settings(&paths, &settings).unwrap();
     let loaded = load_or_create_settings(&paths).unwrap();
 
     assert_eq!(loaded.settings.general.language, LanguageSetting::Chinese);
+    assert!(loaded.settings.general.onboarding_completed);
     assert!(!loaded.settings.terminal.show_scrollbar);
 }
 

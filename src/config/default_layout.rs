@@ -6,8 +6,70 @@ use std::{
 use crate::config::paths::AppConfigPaths;
 use crate::model::layout::{
     LayoutError, LayoutNode, PaneConfig, PaneKind, ProcessExitBehavior, ProjectConfig,
-    ProjectLayout, TabConfig, TerminalExecutionMode,
+    ProjectLayout, SplitConfig, SplitDirection, TabConfig, TerminalExecutionMode,
 };
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BuiltinAgent {
+    #[default]
+    Codex,
+    Claude,
+    OpenCode,
+    Pi,
+    OhMyPi,
+}
+
+impl BuiltinAgent {
+    pub const ALL: [Self; 5] = [
+        Self::Codex,
+        Self::Claude,
+        Self::OpenCode,
+        Self::Pi,
+        Self::OhMyPi,
+    ];
+
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::Claude => "claude",
+            Self::OpenCode => "opencode",
+            Self::Pi => "pi",
+            Self::OhMyPi => "omp",
+        }
+    }
+
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Codex => "Codex",
+            Self::Claude => "Claude Code",
+            Self::OpenCode => "OpenCode",
+            Self::Pi => "Pi",
+            Self::OhMyPi => "Oh My Pi",
+        }
+    }
+
+    pub const fn command(self) -> &'static str {
+        self.id()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DefaultLayoutKind {
+    #[default]
+    SplitPane,
+    SeparateTabs,
+}
+
+impl DefaultLayoutKind {
+    pub const ALL: [Self; 2] = [Self::SplitPane, Self::SeparateTabs];
+
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::SplitPane => "split",
+            Self::SeparateTabs => "tabs",
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DefaultLayoutSource {
@@ -72,18 +134,45 @@ impl DefaultLayoutTemplate {
             tabs: vec![TabConfig {
                 id: "shell".to_string(),
                 title: "Shell".to_string(),
-                layout: LayoutNode::Pane(PaneConfig {
-                    id: "shell".to_string(),
-                    title: "Shell".to_string(),
-                    command: String::new(),
-                    args: Vec::new(),
-                    execution_mode: TerminalExecutionMode::Shell,
-                    exit_behavior: ProcessExitBehavior::Close,
-                    kind: PaneKind::Shell,
-                    notify_on_exit: false,
-                    detector: None,
-                }),
+                layout: LayoutNode::Pane(shell_pane()),
             }],
+        }
+    }
+
+    pub fn for_onboarding(layout_kind: DefaultLayoutKind, agent: BuiltinAgent) -> Self {
+        match layout_kind {
+            DefaultLayoutKind::SplitPane => Self {
+                project: DefaultProjectTemplate {
+                    default_tab: Some("workspace".to_string()),
+                },
+                tabs: vec![TabConfig {
+                    id: "workspace".to_string(),
+                    title: "Workspace".to_string(),
+                    layout: LayoutNode::Split(SplitConfig {
+                        direction: SplitDirection::Horizontal,
+                        ratio: 0.65,
+                        left: Box::new(LayoutNode::Pane(agent_pane(agent))),
+                        right: Box::new(LayoutNode::Pane(shell_pane())),
+                    }),
+                }],
+            },
+            DefaultLayoutKind::SeparateTabs => Self {
+                project: DefaultProjectTemplate {
+                    default_tab: Some("agent".to_string()),
+                },
+                tabs: vec![
+                    TabConfig {
+                        id: "agent".to_string(),
+                        title: agent.display_name().to_string(),
+                        layout: LayoutNode::Pane(agent_pane(agent)),
+                    },
+                    TabConfig {
+                        id: "shell".to_string(),
+                        title: "Shell".to_string(),
+                        layout: LayoutNode::Pane(shell_pane()),
+                    },
+                ],
+            },
         }
     }
 
@@ -99,6 +188,34 @@ impl DefaultLayoutTemplate {
 
     pub fn validate(&self) -> Result<(), LayoutError> {
         self.materialize("Project").validate()
+    }
+}
+
+fn agent_pane(agent: BuiltinAgent) -> PaneConfig {
+    PaneConfig {
+        id: agent.id().to_string(),
+        title: agent.display_name().to_string(),
+        command: agent.command().to_string(),
+        args: Vec::new(),
+        execution_mode: TerminalExecutionMode::Command,
+        exit_behavior: ProcessExitBehavior::ManualRestart,
+        kind: PaneKind::Agent,
+        notify_on_exit: true,
+        detector: None,
+    }
+}
+
+fn shell_pane() -> PaneConfig {
+    PaneConfig {
+        id: "shell".to_string(),
+        title: "Shell".to_string(),
+        command: String::new(),
+        args: Vec::new(),
+        execution_mode: TerminalExecutionMode::Shell,
+        exit_behavior: ProcessExitBehavior::Close,
+        kind: PaneKind::Shell,
+        notify_on_exit: false,
+        detector: None,
     }
 }
 
