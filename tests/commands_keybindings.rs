@@ -7,8 +7,8 @@ use yttt::commands::{
 };
 use yttt::config::{
     keybindings::{
-        KeybindingLoadWarning, KeybindingsConfig, default_keybindings, load_keybindings,
-        save_keybindings,
+        KEYBINDINGS_SCHEMA_VERSION, Keybinding, KeybindingLoadWarning, KeybindingsConfig,
+        default_keybindings, load_keybindings, save_keybindings,
     },
     paths::AppConfigPaths,
 };
@@ -523,11 +523,73 @@ fn missing_keybindings_file_writes_defaults() {
 }
 
 #[test]
+fn legacy_default_keybindings_are_upgraded_with_editor_shortcuts() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    let mut legacy = default_keybindings();
+    legacy.schema_version = 0;
+    legacy.bindings.retain(|binding| {
+        !matches!(
+            binding.command.as_str(),
+            "file.save" | "project_panel.toggle"
+        )
+    });
+    std::fs::write(
+        paths.keybindings_file(),
+        toml::to_string_pretty(&legacy).unwrap(),
+    )
+    .unwrap();
+
+    let loaded = load_keybindings(&paths, &default_registry()).unwrap();
+
+    assert_eq!(loaded.config.schema_version, KEYBINDINGS_SCHEMA_VERSION);
+    assert_has_config_binding(&loaded.config, "cmd-s", "file.save");
+    assert_has_config_binding(&loaded.config, "ctrl-s", "file.save");
+    let persisted: KeybindingsConfig =
+        toml::from_str(&std::fs::read_to_string(paths.keybindings_file()).unwrap()).unwrap();
+    assert_eq!(persisted, loaded.config);
+}
+
+#[test]
+fn custom_legacy_keybindings_are_versioned_without_restoring_defaults() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let legacy = KeybindingsConfig {
+        schema_version: 0,
+        bindings: vec![Keybinding {
+            keys: "cmd-l".to_string(),
+            command: "tab.palette".to_string(),
+        }],
+    };
+    save_keybindings(&paths, &legacy).unwrap();
+
+    let loaded = load_keybindings(&paths, &default_registry()).unwrap();
+
+    assert_eq!(loaded.config.schema_version, KEYBINDINGS_SCHEMA_VERSION);
+    assert_eq!(loaded.config.bindings, legacy.bindings);
+    assert!(
+        loaded
+            .config
+            .bindings
+            .iter()
+            .all(|binding| binding.command != "file.save")
+    );
+    assert_eq!(
+        load_keybindings(&paths, &default_registry())
+            .unwrap()
+            .config,
+        loaded.config
+    );
+}
+
+#[test]
 fn save_keybindings_writes_user_toml() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let config = KeybindingsConfig {
-        bindings: vec![yttt::config::keybindings::Keybinding {
+        schema_version: KEYBINDINGS_SCHEMA_VERSION,
+        bindings: vec![Keybinding {
             keys: "cmd-l".to_string(),
             command: "tab.palette".to_string(),
         }],
