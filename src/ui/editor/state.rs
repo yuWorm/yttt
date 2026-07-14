@@ -3,6 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::config::settings::EditorSettings;
+
 use super::{
     EditorLanguageCatalog, EditorLanguageId, EditorLanguageResolution,
     EditorLanguageResolutionSource,
@@ -119,6 +121,13 @@ impl CodeEditorConfig {
             soft_wrap: false,
             line_number: true,
         }
+    }
+
+    pub fn with_editor_settings(mut self, settings: &EditorSettings) -> Self {
+        self.tab_size = settings.tab_size;
+        self.soft_wrap = settings.soft_wrap;
+        self.line_number = settings.line_numbers;
+        self
     }
 
     pub fn title(&self) -> &str {

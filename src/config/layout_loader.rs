@@ -17,6 +17,8 @@ use crate::{
 
 pub use crate::config::personal_layout::PersonalLayout;
 
+const PROJECT_DIR_VARIABLE: &str = "<ProjectDir>";
+
 #[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize, PartialEq)]
 pub struct LayoutOverride {
     pub project: Option<ProjectOverride>,
@@ -34,6 +36,7 @@ pub struct ProjectOverride {
 pub struct TabOverride {
     pub id: String,
     pub title: Option<String>,
+    pub cwd: Option<PathBuf>,
     pub layout: Option<LayoutNodeOverride>,
 }
 
@@ -234,7 +237,8 @@ pub fn open_project_config(
         return Err(ProjectOpenError::NotDirectory(project_path));
     }
 
-    let loaded = load_project_layout(paths, &project_path, default_state)?;
+    let mut loaded = load_project_layout(paths, &project_path, default_state)?;
+    resolve_layout_variables(&mut loaded.layout, &project_path);
     let recent_projects = record_recent_project(paths, &project_path, &loaded.layout.project.name)?;
 
     Ok(ProjectOpenConfig {
@@ -359,6 +363,9 @@ pub fn merge_layouts(
 
         if let Some(title) = &tab_override.title {
             tab.title = title.clone();
+        }
+        if let Some(cwd) = &tab_override.cwd {
+            tab.cwd = Some(cwd.clone());
         }
 
         if let Some(layout_override) = &tab_override.layout {
@@ -525,6 +532,24 @@ fn load_project_layout(
                 })
             }
         },
+    }
+}
+
+fn resolve_layout_variables(layout: &mut ProjectLayout, project_path: &Path) {
+    for tab in &mut layout.tabs {
+        if let Some(cwd) = tab.cwd.take() {
+            tab.cwd = Some(resolve_cwd(cwd, project_path));
+        }
+    }
+}
+
+fn resolve_cwd(cwd: PathBuf, project_path: &Path) -> PathBuf {
+    if let Ok(suffix) = cwd.strip_prefix(PROJECT_DIR_VARIABLE) {
+        project_path.join(suffix)
+    } else if cwd.is_relative() {
+        project_path.join(cwd)
+    } else {
+        cwd
     }
 }
 

@@ -206,6 +206,18 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandLayoutOpenFileDescription => {
             "Reveal the selected project's layout file path"
         }
+        UiTextKey::LayoutEditorPlaceholder => "Edit layout TOML...",
+        UiTextKey::LayoutEditorReadFailed => "Failed to read layout TOML",
+        UiTextKey::LayoutEditorParseFailed => "Failed to parse layout TOML",
+        UiTextKey::LayoutEditorValidationFailed => "Invalid layout TOML",
+        UiTextKey::LayoutEditorPersonalInvalid => "Invalid personal layout",
+        UiTextKey::LayoutEditorRequiresPatchMode => {
+            "Personal layout editor requires mode = \"patch\""
+        }
+        UiTextKey::LayoutEditorRequiresReplaceMode => {
+            "Personal layout editor requires mode = \"replace\""
+        }
+        UiTextKey::LayoutEditorSaveFailed => "Failed to save layout TOML",
         UiTextKey::CommandPaletteOpenTitle => "Open Command Palette",
         UiTextKey::CommandPaletteOpenDescription => "Search and run commands",
         UiTextKey::CommandSettingsOpenTitle => "Open Settings",

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::{
     config::layout_loader::{
         LayoutNodeOverride, LayoutOverride, PaneOverride, ProjectOverride, TabOverride,
@@ -203,6 +205,8 @@ struct StrictTabOverride {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    cwd: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     layout: Option<StrictLayoutNodeOverride>,
 }
 
@@ -211,6 +215,7 @@ impl From<StrictTabOverride> for TabOverride {
         Self {
             id: value.id,
             title: value.title,
+            cwd: value.cwd,
             layout: value.layout.map(Into::into),
         }
     }
@@ -221,6 +226,7 @@ impl From<&TabOverride> for StrictTabOverride {
         Self {
             id: value.id.clone(),
             title: value.title.clone(),
+            cwd: value.cwd.clone(),
             layout: value.layout.as_ref().map(Into::into),
         }
     }
@@ -358,6 +364,8 @@ impl From<&ProjectConfig> for StrictProjectConfig {
 struct StrictTabConfig {
     id: String,
     title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cwd: Option<PathBuf>,
     layout: StrictLayoutNode,
 }
 
@@ -366,6 +374,7 @@ impl From<StrictTabConfig> for TabConfig {
         Self {
             id: value.id,
             title: value.title,
+            cwd: value.cwd,
             layout: value.layout.into(),
         }
     }
@@ -376,6 +385,7 @@ impl From<&TabConfig> for StrictTabConfig {
         Self {
             id: value.id.clone(),
             title: value.title.clone(),
+            cwd: value.cwd.clone(),
             layout: (&value.layout).into(),
         }
     }

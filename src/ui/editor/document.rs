@@ -1,16 +1,16 @@
 use gpui::{
     AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Subscription, Window,
-    div, px, relative,
+    div, px,
 };
-use gpui_component::input::{Input, InputEvent, InputState, Position, Search};
+use gpui_component::input::{InputEvent, InputState, Position, Search};
 use gpui_component::{ActiveTheme as _, Icon, IconName};
 
 use crate::config::settings::EditorSettings;
 
 use super::{
     CodeEditorState, DiskFingerprint, DocumentId, EditorSymbol, breadcrumbs_at,
-    code_editor_input_state, document_symbols,
+    code_editor_input_state, document_symbols, styled_code_editor_input,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -484,19 +484,11 @@ impl Render for ProjectEditorDocument {
                     }),
             );
 
-        let input = Input::new(&self.input)
+        let input = styled_code_editor_input(&self.input, &self.appearance)
             .flex_1()
             .min_h_0()
             .w_full()
-            .appearance(false)
-            .flush_search_panel(true)
-            .text_size(px(self.appearance.font_size))
-            .line_height(relative(self.appearance.line_height));
-        let input = if self.appearance.font_family.is_empty() {
-            input
-        } else {
-            input.font_family(self.appearance.font_family.clone())
-        };
+            .flush_search_panel(true);
 
         div()
             .id("project-editor-document")

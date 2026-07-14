@@ -253,6 +253,7 @@ impl Workspace {
         project.layout.tabs.push(TabConfig {
             id: tab_id.clone(),
             title,
+            cwd: None,
             layout: LayoutNode::Pane(PaneConfig {
                 id: pane_id.clone(),
                 title: "shell".to_string(),

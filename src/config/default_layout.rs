@@ -134,6 +134,7 @@ impl DefaultLayoutTemplate {
             tabs: vec![TabConfig {
                 id: "shell".to_string(),
                 title: "Shell".to_string(),
+                cwd: None,
                 layout: LayoutNode::Pane(shell_pane()),
             }],
         }
@@ -148,6 +149,7 @@ impl DefaultLayoutTemplate {
                 tabs: vec![TabConfig {
                     id: "workspace".to_string(),
                     title: "Workspace".to_string(),
+                    cwd: None,
                     layout: LayoutNode::Split(SplitConfig {
                         direction: SplitDirection::Horizontal,
                         ratio: 0.65,
@@ -164,11 +166,13 @@ impl DefaultLayoutTemplate {
                     TabConfig {
                         id: "agent".to_string(),
                         title: agent.display_name().to_string(),
+                        cwd: None,
                         layout: LayoutNode::Pane(agent_pane(agent)),
                     },
                     TabConfig {
                         id: "shell".to_string(),
                         title: "Shell".to_string(),
+                        cwd: None,
                         layout: LayoutNode::Pane(shell_pane()),
                     },
                 ],

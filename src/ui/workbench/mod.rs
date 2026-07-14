@@ -145,7 +145,7 @@ use crate::{
             ProjectEditorModel, ProjectEditorRuntime, ProjectEditorSaveState, ProjectFileIoError,
             ProjectFileLoadRequest, ReadonlyCodeRow, ReadonlyCodeView, SaveMode,
             SaveProjectFileOutcome, SaveRequest, WorkItemId, code_editor_input_state,
-            project_relative_path, read_project_file, save_project_file,
+            project_relative_path, read_project_file, save_project_file, styled_code_editor_input,
         },
         i18n::{Locale, UiText, UiTextKey},
         interaction::actions::{

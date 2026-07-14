@@ -2718,6 +2718,120 @@ fn root_view_layout_default_editor_opens_without_project() {
 }
 
 #[test]
+fn layout_editor_popup_uses_chinese_text_and_error_prefixes() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut settings = AppSettings::default();
+    settings.general.language = LanguageSetting::Chinese;
+    settings.general.onboarding_completed = true;
+    save_settings(&paths, &settings).unwrap();
+    let mut root = WorkbenchView::with_config_paths(paths);
+
+    root.run_command(CommandId::LayoutDefaultEdit).unwrap();
+
+    let config = root.visible_layout_toml_editor_config().unwrap();
+    assert_eq!(config.title(), "编辑默认布局");
+    assert_eq!(config.placeholder(), "编辑布局 TOML…");
+    let ui_text = UiText::new(Locale::Chinese);
+    assert_eq!(ui_text.get(yttt::ui::i18n::UiTextKey::Cancel), "取消");
+    assert_eq!(ui_text.get(yttt::ui::i18n::UiTextKey::SettingsSave), "保存");
+
+    root.set_layout_toml_editor_value("[project\n");
+    root.save_layout_toml_editor().unwrap();
+
+    assert!(
+        root.visible_layout_toml_editor_error()
+            .unwrap()
+            .starts_with("解析布局 TOML 失败:")
+    );
+}
+
+#[gpui::test]
+fn layout_default_editor_uses_editor_settings_and_updates_appearance(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    fs::write(
+        paths.settings_file(),
+        r#"
+[general]
+language = "en"
+onboarding_completed = true
+
+[editor]
+font_family = "Menlo"
+font_size = 18.0
+line_height = 1.6
+tab_size = 2
+soft_wrap = true
+line_numbers = false
+"#,
+    )
+    .unwrap();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths(paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+
+    root.update(cx, |root, cx| {
+        root.run_command(CommandId::LayoutDefaultEdit).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    let original_value = cx.read(|app| {
+        let root = root.read(app);
+        let config = root.visible_layout_toml_editor_config().unwrap();
+        assert_eq!(config.tab_size(), 2);
+        assert!(config.soft_wrap());
+        assert!(!config.line_number());
+        assert_eq!(
+            root.visible_layout_toml_editor_appearance().unwrap(),
+            &EditorAppearance {
+                font_family: "Menlo".to_string(),
+                font_size: 18.0,
+                line_height: 1.6,
+                soft_wrap: true,
+                line_numbers: false,
+            }
+        );
+        root.layout_toml_editor_value().unwrap().to_string()
+    });
+
+    root.update_in(cx, |root, window, cx| {
+        root.set_editor_font_family("JetBrains Mono", window, cx)
+            .unwrap();
+        root.set_editor_font_size(17.0, window, cx).unwrap();
+        root.set_editor_line_height(1.7, window, cx).unwrap();
+        root.set_editor_soft_wrap(false, window, cx).unwrap();
+        root.set_editor_line_numbers(true, window, cx).unwrap();
+    });
+
+    cx.read(|app| {
+        let root = root.read(app);
+        assert_eq!(
+            root.visible_layout_toml_editor_appearance().unwrap(),
+            &EditorAppearance {
+                font_family: "JetBrains Mono".to_string(),
+                font_size: 17.0,
+                line_height: 1.7,
+                soft_wrap: false,
+                line_numbers: true,
+            }
+        );
+        assert_eq!(
+            root.layout_toml_editor_value(),
+            Some(original_value.as_str())
+        );
+    });
+}
+
+#[test]
 fn root_view_persists_editor_language_settings() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
@@ -2765,7 +2879,7 @@ fn root_view_layout_default_editor_saves_valid_toml() {
 #[test]
 fn root_view_layout_default_editor_keeps_invalid_toml_open() {
     let temp = tempdir().unwrap();
-    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let paths = english_test_config_paths(&temp);
     let mut root = WorkbenchView::with_config_paths(paths);
     root.run_command(CommandId::LayoutDefaultEdit).unwrap();
 
@@ -2776,14 +2890,14 @@ fn root_view_layout_default_editor_keeps_invalid_toml_open() {
     assert!(
         root.visible_layout_toml_editor_error()
             .unwrap()
-            .contains("failed to parse layout TOML")
+            .contains("Failed to parse layout TOML")
     );
 }
 
 #[test]
 fn root_view_layout_default_editor_records_parse_diagnostic() {
     let temp = tempdir().unwrap();
-    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let paths = english_test_config_paths(&temp);
     let mut root = WorkbenchView::with_config_paths(paths);
     root.run_command(CommandId::LayoutDefaultEdit).unwrap();
 
@@ -2797,7 +2911,7 @@ fn root_view_layout_default_editor_records_parse_diagnostic() {
     assert!(
         diagnostics[0]
             .message
-            .contains("failed to parse layout TOML")
+            .contains("Failed to parse layout TOML")
     );
 }
 
@@ -3958,6 +4072,36 @@ fn root_view_terminal_pane_contexts_include_project_path() {
         contexts
             .iter()
             .all(|context| context.project_path == PathBuf::from("/tmp/yttt"))
+    );
+}
+
+#[test]
+fn root_view_terminal_pane_contexts_use_tab_cwd() {
+    let mut root = WorkbenchView::dev_fixture();
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let mut layout = root
+        .workspace()
+        .project(&project_id)
+        .unwrap()
+        .layout
+        .clone();
+    layout
+        .tabs
+        .iter_mut()
+        .find(|tab| tab.id == "dev")
+        .unwrap()
+        .cwd = Some(PathBuf::from("/tmp/yttt/services/api"));
+    root.workspace_mut()
+        .replace_selected_project_layout(layout)
+        .unwrap();
+
+    let contexts = root.visible_terminal_pane_contexts();
+
+    assert_eq!(contexts.len(), 2);
+    assert!(
+        contexts
+            .iter()
+            .all(|context| context.project_path == PathBuf::from("/tmp/yttt/services/api"))
     );
 }
 

@@ -1,7 +1,7 @@
-use gpui::{Context, Window};
-use gpui_component::input::{InputState, TabSize};
+use gpui::{Context, Entity, Styled as _, Window, px, relative};
+use gpui_component::input::{Input, InputState, TabSize};
 
-use super::CodeEditorState;
+use super::{CodeEditorState, EditorAppearance};
 
 pub fn code_editor_input_state(
     window: &mut Window,
@@ -20,4 +20,19 @@ pub fn code_editor_input_state(
         .rows(editor.config().rows())
         .soft_wrap(editor.config().soft_wrap())
         .folding(true)
+}
+
+pub fn styled_code_editor_input(
+    input: &Entity<InputState>,
+    appearance: &EditorAppearance,
+) -> Input {
+    let input = Input::new(input)
+        .appearance(false)
+        .text_size(px(appearance.font_size))
+        .line_height(relative(appearance.line_height));
+    if appearance.font_family.is_empty() {
+        input
+    } else {
+        input.font_family(appearance.font_family.clone())
+    }
 }
