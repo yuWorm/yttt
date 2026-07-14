@@ -3778,6 +3778,10 @@ fn root_view_exposes_keybinding_warning_lines() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     fs::create_dir_all(paths.config_dir()).unwrap();
+    let mut settings = AppSettings::default();
+    settings.general.language = LanguageSetting::Chinese;
+    settings.general.onboarding_completed = true;
+    save_settings(&paths, &settings).unwrap();
     fs::write(
         paths.keybindings_file(),
         r#"
@@ -3800,10 +3804,7 @@ fn root_view_exposes_keybinding_warning_lines() {
 
     assert_eq!(
         root.visible_keybinding_warning_lines(),
-        vec![
-            "Conflicting keybinding: cmd-p",
-            "Invalid command id: missing.command"
-        ]
+        vec!["快捷键冲突: cmd-p", "无效的命令 ID: missing.command"]
     );
 }
 
@@ -3868,26 +3869,38 @@ fn root_view_keybindings_editor_rejects_conflicts() {
 fn root_view_keybinding_edit_dialog_updates_command_keys() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths(paths.clone());
 
     root.open_keybinding_edit_dialog(CommandId::TabPalette)
         .unwrap();
 
     assert_eq!(
-        root.pending_keybinding_edit_value().as_deref(),
-        Some("cmd-j, ctrl-j")
+        root.pending_keybinding_edit_keys(),
+        Some(vec!["cmd-j".to_string(), "ctrl-j".to_string()])
     );
     assert_eq!(
         root.foreground_input_owner_kind(),
         InputOwnerKind::KeybindingRecorder
     );
 
-    root.confirm_keybinding_edit_dialog("cmd-l, ctrl-l")
-        .unwrap();
+    assert!(root.record_keybinding_edit_keystroke(&Keystroke::parse("cmd-l").unwrap()));
+    assert!(root.record_keybinding_edit_keystroke(&Keystroke::parse("ctrl-l").unwrap()));
+    root.confirm_keybinding_edit_dialog().unwrap();
 
-    assert!(root.pending_keybinding_edit_value().is_none());
+    assert!(root.pending_keybinding_edit_keys().is_none());
     assert_eq!(
         root.visible_keybinding_rows()
+            .into_iter()
+            .find(|row| row.command == CommandId::TabPalette)
+            .unwrap()
+            .keys,
+        vec!["cmd-l".to_string(), "ctrl-l".to_string()]
+    );
+
+    let reloaded = WorkbenchView::with_config_paths(paths);
+    assert_eq!(
+        reloaded
+            .visible_keybinding_rows()
             .into_iter()
             .find(|row| row.command == CommandId::TabPalette)
             .unwrap()

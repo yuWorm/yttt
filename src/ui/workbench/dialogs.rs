@@ -78,10 +78,32 @@ pub(super) fn tab_rename_dialog(
 
 pub(super) fn keybinding_edit_dialog(
     cx: &mut Context<WorkbenchView>,
-    input: &Entity<InputState>,
+    ui_text: &UiText,
+    command: CommandId,
+    keybindings: &[String],
+    error: Option<&str>,
     theme: WorkbenchTheme,
 ) -> Div {
     let dialog = yttt_dialog_style(theme);
+    let recorded = if keybindings.is_empty() {
+        div()
+            .text_sm()
+            .text_color(dialog.hint)
+            .child(ui_text.get(UiTextKey::SettingsKeybindingRecorderPrompt))
+    } else {
+        keybindings.iter().fold(
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .justify_center()
+                .gap_2(),
+            |bindings, keybinding| {
+                bindings.child(workbench_keybinding_badge(keybinding.clone(), theme))
+            },
+        )
+    };
+
     capture_overlay_input(
         div()
             .absolute()
@@ -110,15 +132,39 @@ pub(super) fn keybinding_edit_dialog(
                         div()
                             .text_sm()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("Edit keybinding"),
+                            .child(ui_text.get(UiTextKey::SettingsKeybindingDialogTitle)),
                     )
-                    .child(yttt_dialog_input(input, theme))
                     .child(
                         div()
                             .text_xs()
                             .text_color(dialog.hint)
-                            .child("Separate multiple bindings with commas."),
+                            .child(command_title_with_text(command, ui_text)),
                     )
+                    .child(
+                        div()
+                            .id(SharedString::from("keybinding-recorder"))
+                            .debug_selector(|| "keybinding-recorder".to_string())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .min_h_16()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(theme.focus_ring)
+                            .bg(theme.surface_elevated)
+                            .px_4()
+                            .py_3()
+                            .child(recorded),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(dialog.hint)
+                            .child(ui_text.get(UiTextKey::SettingsKeybindingRecorderHint)),
+                    )
+                    .when_some(error.map(str::to_string), |dialog, error| {
+                        dialog.child(div().text_xs().text_color(theme.danger).child(error))
+                    })
                     .child(
                         div()
                             .flex()
@@ -126,8 +172,19 @@ pub(super) fn keybinding_edit_dialog(
                             .gap_2()
                             .child(yttt_dialog_button(
                                 cx,
+                                "clear-keybinding-edit",
+                                ui_text.get(UiTextKey::SettingsClearKeybindings),
+                                YtttButtonVariant::Secondary,
+                                theme,
+                                cx.listener(|this, _, _window, cx| {
+                                    this.clear_keybinding_edit_keys();
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(yttt_dialog_button(
+                                cx,
                                 "cancel-keybinding-edit",
-                                "Cancel",
+                                ui_text.get(UiTextKey::Cancel),
                                 YtttButtonVariant::Secondary,
                                 theme,
                                 cx.listener(|this, _, _window, cx| {
@@ -138,11 +195,11 @@ pub(super) fn keybinding_edit_dialog(
                             .child(yttt_dialog_button(
                                 cx,
                                 "confirm-keybinding-edit",
-                                "Save",
+                                ui_text.get(UiTextKey::SettingsSave),
                                 YtttButtonVariant::Primary,
                                 theme,
                                 cx.listener(|this, _, _window, cx| {
-                                    let _ = this.confirm_keybinding_edit_dialog_from_input(cx);
+                                    let _ = this.confirm_keybinding_edit_dialog();
                                     cx.notify();
                                 }),
                             )),

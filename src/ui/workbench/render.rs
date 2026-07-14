@@ -226,8 +226,19 @@ impl Render for WorkbenchView {
             }
         }
         if self.overlays.pending_keybinding_edit.is_some() {
-            if let Some(input) = self.keybinding_edit_input(window, cx) {
-                root = root.child(keybinding_edit_dialog(cx, &input, self.theme_runtime.ui));
+            if self.overlays.keybinding_recorder_needs_focus {
+                focus_handle.focus(window, cx);
+                self.overlays.keybinding_recorder_needs_focus = false;
+            }
+            if let Some(edit) = self.overlays.pending_keybinding_edit.as_ref() {
+                root = root.child(keybinding_edit_dialog(
+                    cx,
+                    &self.ui_text,
+                    edit.command,
+                    &edit.keys,
+                    edit.error.as_deref(),
+                    self.theme_runtime.ui,
+                ));
             }
         }
         if let Some(text) = self.visible_dirty_close_dialog_text() {

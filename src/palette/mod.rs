@@ -204,8 +204,8 @@ pub fn command_palette_items_with_text(
                 .availability_for_context(context.command_context());
             PaletteItem {
                 id: command.id.as_str().to_string(),
-                title: ui_text.get(command_title_key(command.id)).to_string(),
-                subtitle: Some(ui_text.get(command_description_key(command.id)).to_string()),
+                title: command_title_with_text(command.id, ui_text).to_string(),
+                subtitle: Some(command_description_with_text(command.id, ui_text).to_string()),
                 status: None,
                 keybinding: None,
                 command: command.id,
@@ -433,6 +433,14 @@ pub fn pane_palette_items_with_text(
             })
             .collect(),
     )
+}
+
+pub fn command_title_with_text(command_id: CommandId, ui_text: &UiText) -> &'static str {
+    ui_text.get(command_title_key(command_id))
+}
+
+pub fn command_description_with_text(command_id: CommandId, ui_text: &UiText) -> &'static str {
+    ui_text.get(command_description_key(command_id))
 }
 
 fn command_title_key(command_id: CommandId) -> UiTextKey {

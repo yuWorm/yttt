@@ -198,15 +198,6 @@ pub(super) fn terminal_osc52_policy_from_label(label: &str) -> Option<TerminalOs
     }
 }
 
-pub(super) fn parse_keybinding_edit_value(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|key| !key.is_empty())
-        .map(ToString::to_string)
-        .collect()
-}
-
 pub(super) fn should_focus_terminal_after_command(command_id: CommandId) -> bool {
     matches!(
         command_id,
@@ -249,14 +240,28 @@ pub(super) fn layout_load_warning_message(warnings: &[LayoutLoadWarning]) -> Opt
 pub(super) fn load_keybindings_messages(
     paths: &AppConfigPaths,
     registry: &CommandRegistry,
+    text: &UiText,
 ) -> (Option<String>, Vec<String>) {
     match load_keybindings(paths, registry) {
         Ok(loaded) if loaded.warnings.is_empty() => (None, Vec::new()),
         Ok(loaded) => {
-            let lines = format_keybinding_warning_lines(&loaded.warnings);
-            (Some(format!("Keybindings: {}", lines.join("; "))), lines)
+            let lines = format_keybinding_warning_lines(&loaded.warnings, text);
+            (
+                Some(format!(
+                    "{}: {}",
+                    text.get(UiTextKey::StatusKeybindingsFile),
+                    lines.join("; ")
+                )),
+                lines,
+            )
         }
-        Err(error) => (Some(error.to_string()), Vec::new()),
+        Err(error) => (
+            Some(format!(
+                "{}: {error}",
+                text.get(UiTextKey::StatusKeybindingsFile)
+            )),
+            Vec::new(),
+        ),
     }
 }
 
@@ -358,16 +363,22 @@ pub(super) fn ui_text_for_language(language: LanguageSetting) -> UiText {
     }
 }
 
-pub(super) fn format_keybinding_warning_lines(warnings: &[KeybindingLoadWarning]) -> Vec<String> {
+pub(super) fn format_keybinding_warning_lines(
+    warnings: &[KeybindingLoadWarning],
+    text: &UiText,
+) -> Vec<String> {
     warnings
         .iter()
         .map(|warning| match warning {
-            KeybindingLoadWarning::Conflict(conflict) => {
-                format!("Conflicting keybinding: {}", conflict.keys)
-            }
-            KeybindingLoadWarning::InvalidCommand(command) => {
-                format!("Invalid command id: {command}")
-            }
+            KeybindingLoadWarning::Conflict(conflict) => format!(
+                "{}: {}",
+                text.get(UiTextKey::SettingsConflictingKeybinding),
+                conflict.keys
+            ),
+            KeybindingLoadWarning::InvalidCommand(command) => format!(
+                "{}: {command}",
+                text.get(UiTextKey::SettingsInvalidCommandId)
+            ),
         })
         .collect()
 }

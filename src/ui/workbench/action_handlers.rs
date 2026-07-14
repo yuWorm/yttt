@@ -547,6 +547,15 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.overlays.pending_keybinding_edit.is_some() {
+            let recorded = self.record_keybinding_edit_keystroke(&event.keystroke);
+            cx.stop_propagation();
+            if recorded {
+                cx.notify();
+            }
+            return;
+        }
+
         if self.overlays.git_diff_panel.is_some() {
             if self.handle_git_diff_key_down(event, cx) {
                 cx.stop_propagation();

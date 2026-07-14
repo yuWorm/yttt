@@ -1024,7 +1024,7 @@ fn settings_keybinding_rows(
         let command = row.command;
         let keys = row.display_keys();
         let title = row.title;
-        let description = row.command_id;
+        let description = row.description;
         let title_text = if row.has_conflict {
             format!("{title} ({})", text.get(UiTextKey::SettingsConflict))
         } else {

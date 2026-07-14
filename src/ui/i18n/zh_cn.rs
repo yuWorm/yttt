@@ -395,6 +395,14 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsNoKeybindingConflicts => "没有快捷键冲突",
         UiTextKey::SettingsUnbound => "未绑定",
         UiTextKey::SettingsConflict => "冲突",
+        UiTextKey::SettingsKeybindingDialogTitle => "编辑快捷键",
+        UiTextKey::SettingsKeybindingRecorderPrompt => "请按下快捷键",
+        UiTextKey::SettingsKeybindingRecorderHint => {
+            "首次录制会替换当前绑定；继续按键可添加备用快捷键。单独按修饰键不会被录制。"
+        }
+        UiTextKey::SettingsClearKeybindings => "清除",
+        UiTextKey::SettingsConflictingKeybinding => "快捷键冲突",
+        UiTextKey::SettingsInvalidCommandId => "无效的命令 ID",
         UiTextKey::SettingsSave => "保存",
         UiTextKey::SettingsExport => "导出",
         UiTextKey::SettingsOpen => "打开",

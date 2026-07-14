@@ -116,10 +116,11 @@ use crate::{
     },
     palette::{
         ActivePalette, CommandPaletteContext, PaletteItem, PaletteKind, RecentProject,
-        TabPaletteSnapshot, command_palette_items_with_text, decode_tab_palette_item_id,
-        opened_project_palette_items_with_text, pane_palette_items_with_text,
-        project_palette_items_with_text, recent_project_palette_items_with_text,
-        tab_palette_items_with_text, unified_tab_palette_items,
+        TabPaletteSnapshot, command_palette_items_with_text, command_title_with_text,
+        decode_tab_palette_item_id, opened_project_palette_items_with_text,
+        pane_palette_items_with_text, project_palette_items_with_text,
+        recent_project_palette_items_with_text, tab_palette_items_with_text,
+        unified_tab_palette_items,
     },
     runtime::{
         git_status::{
@@ -193,7 +194,9 @@ use crate::{
             font_family_setting_from_option, terminal_font_family_option_for_setting,
             terminal_font_family_options_from_system, terminal_font_family_setting_from_option,
         },
-        settings::keybinding_display::primary_display_keybinding_for_current_platform,
+        settings::keybinding_display::{
+            primary_display_keybinding_for_current_platform, recorded_keybinding,
+        },
         settings::keybindings::{KeybindingEditError, KeybindingRow, KeybindingsEditorState},
         settings::{SettingsGroupId, SettingsPanelStyle, settings_panel_style},
         terminal::pane::{
@@ -352,7 +355,9 @@ struct PendingTabRename {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PendingKeybindingEdit {
     command: CommandId,
-    value: String,
+    keys: Vec<String>,
+    has_recorded: bool,
+    error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -398,8 +403,6 @@ impl WorkbenchView {
         let recent_projects = load_recent_projects(&config_paths)
             .map(recent_projects_for_palette)
             .unwrap_or_default();
-        let (load_error, keybinding_warning_lines) =
-            load_keybindings_messages(&config_paths, &command_registry);
         let keybindings_editor = load_keybindings_editor_state(&config_paths, &command_registry);
         let (mut app_settings, settings_warning_lines) = load_app_settings_messages(&config_paths);
         let language_detection_error = (!app_settings.general.onboarding_completed
@@ -412,6 +415,9 @@ impl WorkbenchView {
                     .map(|error| error.to_string())
             })
             .flatten();
+        let ui_text = ui_text_for_language(app_settings.general.language);
+        let (load_error, keybinding_warning_lines) =
+            load_keybindings_messages(&config_paths, &command_registry, &ui_text);
         let (theme_runtime, theme_warning_lines) =
             load_theme_runtime_messages(&config_paths, &app_settings);
         let (icon_theme, icon_theme_error) =
@@ -491,7 +497,7 @@ impl WorkbenchView {
             toast_queue: ToastQueue::default(),
             system_notifier: NoopSystemNotifier,
             system_notifications_enabled,
-            ui_text: ui_text_for_language(app_settings.general.language),
+            ui_text,
             app_settings,
             theme_runtime,
             icon_theme,
@@ -792,11 +798,11 @@ impl WorkbenchView {
             .map(|rename| rename.value.clone())
     }
 
-    pub fn pending_keybinding_edit_value(&self) -> Option<String> {
+    pub fn pending_keybinding_edit_keys(&self) -> Option<Vec<String>> {
         self.overlays
             .pending_keybinding_edit
             .as_ref()
-            .map(|edit| edit.value.clone())
+            .map(|edit| edit.keys.clone())
     }
 
     pub fn confirm_tab_rename_dialog(&mut self, title: &str) -> Result<(), WorkbenchError> {
@@ -827,28 +833,82 @@ impl WorkbenchView {
         &mut self,
         command: CommandId,
     ) -> Result<(), WorkbenchError> {
-        let value = self
-            .settings
-            .keybindings_editor
-            .command_keys(command)
-            .join(", ");
-        self.overlays.pending_keybinding_edit = Some(PendingKeybindingEdit { command, value });
-        self.reset_keybinding_edit_input();
-        self.overlays.keybinding_edit_input_needs_focus = true;
+        let keys = self.settings.keybindings_editor.command_keys(command);
+        self.overlays.pending_keybinding_edit = Some(PendingKeybindingEdit {
+            command,
+            keys,
+            has_recorded: false,
+            error: None,
+        });
+        self.overlays.keybinding_recorder_needs_focus = true;
         self.load_error = None;
         self.sync_input_owner_state();
         Ok(())
     }
 
-    pub fn confirm_keybinding_edit_dialog(&mut self, value: &str) -> Result<(), WorkbenchError> {
+    pub fn confirm_keybinding_edit_dialog(&mut self) -> Result<(), WorkbenchError> {
         let Some(edit) = self.overlays.pending_keybinding_edit.clone() else {
             return Ok(());
         };
-        self.set_keybinding_command_keys(edit.command, parse_keybinding_edit_value(value))?;
+        if let Err(error) = self.set_keybinding_command_keys(edit.command, edit.keys) {
+            let message = match &error {
+                WorkbenchError::KeybindingEdit(error) => {
+                    self.localized_keybinding_edit_error(error)
+                }
+                _ => error.to_string(),
+            };
+            if let Some(edit) = &mut self.overlays.pending_keybinding_edit {
+                edit.error = Some(message);
+            }
+            return Err(error);
+        }
         self.clear_keybinding_edit_dialog();
         self.load_error = None;
         self.sync_input_owner_state();
         Ok(())
+    }
+
+    pub fn record_keybinding_edit_keystroke(&mut self, keystroke: &Keystroke) -> bool {
+        let Some(keybinding) = recorded_keybinding(keystroke) else {
+            return false;
+        };
+        let Some(edit) = &mut self.overlays.pending_keybinding_edit else {
+            return false;
+        };
+
+        if !edit.has_recorded {
+            edit.keys.clear();
+            edit.has_recorded = true;
+        }
+        if !edit.keys.contains(&keybinding) {
+            edit.keys.push(keybinding);
+        }
+        edit.error = None;
+        true
+    }
+
+    pub fn clear_keybinding_edit_keys(&mut self) {
+        if let Some(edit) = &mut self.overlays.pending_keybinding_edit {
+            edit.keys.clear();
+            edit.has_recorded = true;
+            edit.error = None;
+        }
+    }
+
+    fn localized_keybinding_edit_error(&self, error: &KeybindingEditError) -> String {
+        match error {
+            KeybindingEditError::ConflictingBindings(keys) => format!(
+                "{}: {}",
+                self.ui_text.get(UiTextKey::SettingsConflictingKeybinding),
+                keys.join(", ")
+            ),
+            KeybindingEditError::InvalidCommands(commands) => format!(
+                "{}: {}",
+                self.ui_text.get(UiTextKey::SettingsInvalidCommandId),
+                commands.join(", ")
+            ),
+            KeybindingEditError::Save(message) => message.clone(),
+        }
     }
 
     pub fn cancel_keybinding_edit_dialog(&mut self) {
@@ -1086,7 +1146,9 @@ impl WorkbenchView {
     }
 
     pub fn visible_keybinding_rows(&self) -> Vec<KeybindingRow> {
-        self.settings.keybindings_editor.rows()
+        self.settings
+            .keybindings_editor
+            .rows_with_text(&self.ui_text)
     }
 
     pub fn runtime_keybinding_specs(&self) -> Vec<UiKeybindingSpec> {
@@ -1952,7 +2014,7 @@ impl WorkbenchView {
 
     fn clear_keybinding_edit_dialog(&mut self) {
         self.overlays.pending_keybinding_edit = None;
-        self.reset_keybinding_edit_input();
+        self.overlays.keybinding_recorder_needs_focus = false;
     }
 
     fn remove_terminal_panes_for_project(&mut self, project_id: &str) {
@@ -2025,12 +2087,6 @@ impl WorkbenchView {
         self.overlays.tab_rename_input = None;
         self.overlays.tab_rename_input_subscription = None;
         self.overlays.tab_rename_input_needs_focus = false;
-    }
-
-    fn reset_keybinding_edit_input(&mut self) {
-        self.overlays.keybinding_edit_input = None;
-        self.overlays.keybinding_edit_input_subscription = None;
-        self.overlays.keybinding_edit_input_needs_focus = false;
     }
 
     fn reset_settings_search_input(&mut self) {
@@ -2373,36 +2429,6 @@ impl WorkbenchView {
         Some(input)
     }
 
-    fn keybinding_edit_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<Entity<InputState>> {
-        let edit = self.overlays.pending_keybinding_edit.as_ref()?;
-        let input = if let Some(input) = &self.overlays.keybinding_edit_input {
-            input.clone()
-        } else {
-            let value = edit.value.clone();
-            let input = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("cmd-l, ctrl-l")
-                    .default_value(value)
-            });
-            let subscription =
-                cx.subscribe_in(&input, window, Self::on_keybinding_edit_input_event);
-            self.overlays.keybinding_edit_input = Some(input.clone());
-            self.overlays.keybinding_edit_input_subscription = Some(subscription);
-            input
-        };
-
-        if self.overlays.keybinding_edit_input_needs_focus {
-            input.update(cx, |input, cx| input.focus(window, cx));
-            self.overlays.keybinding_edit_input_needs_focus = false;
-        }
-
-        Some(input)
-    }
-
     fn on_tab_rename_input_event(
         &mut self,
         input: &Entity<InputState>,
@@ -2425,29 +2451,6 @@ impl WorkbenchView {
         }
     }
 
-    fn on_keybinding_edit_input_event(
-        &mut self,
-        input: &Entity<InputState>,
-        event: &InputEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match event {
-            InputEvent::Change => {
-                if let Some(edit) = &mut self.overlays.pending_keybinding_edit {
-                    edit.value = input.read(cx).value().to_string();
-                    cx.notify();
-                }
-            }
-            InputEvent::PressEnter { .. } => {
-                let value = input.read(cx).value().to_string();
-                let _ = self.confirm_keybinding_edit_dialog(&value);
-                cx.notify();
-            }
-            InputEvent::Focus | InputEvent::Blur => {}
-        }
-    }
-
     fn confirm_tab_rename_dialog_from_input(
         &mut self,
         cx: &mut Context<Self>,
@@ -2461,21 +2464,6 @@ impl WorkbenchView {
             .unwrap_or_default();
 
         self.confirm_tab_rename_dialog(&value)
-    }
-
-    fn confirm_keybinding_edit_dialog_from_input(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) -> Result<(), WorkbenchError> {
-        let value = self
-            .overlays
-            .keybinding_edit_input
-            .as_ref()
-            .map(|input| input.read(cx).value().to_string())
-            .or_else(|| self.pending_keybinding_edit_value())
-            .unwrap_or_default();
-
-        self.confirm_keybinding_edit_dialog(&value)
     }
 }
 
