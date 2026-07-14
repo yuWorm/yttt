@@ -5,6 +5,7 @@ use yttt::ui::components::{
     SelectableState, notification_tone_for_toast, selectable_state_classes,
     workbench_agent_notification,
 };
+use yttt::ui::editor::{DocumentId, WorkItemId};
 use yttt::ui::i18n::{Locale, UiText};
 use yttt::ui::interaction::overlay::{
     KeyboardCapture, overlay_input_capture_policy, popover_overlay_event_policy,
@@ -40,11 +41,16 @@ use yttt::ui::theme::icons::IconTheme;
 use yttt::ui::workbench::shell::sidebar::{project_context_commands, project_sidebar_style};
 use yttt::ui::workbench::shell::tabs::{
     ProjectTabCloseButtonVisibility, ProjectTabLeadingIcon, ProjectTabStatusIndicator,
-    ProjectTabToolbarPlacement, ProjectTabsToolbar, project_tabs, project_tabs_style,
-    project_tree_toggle_icon, project_tree_toggle_tooltip, tab_toolbar_icon,
+    ProjectTabStatusTone, ProjectTabToolbarPlacement, ProjectTabsToolbar, WorkbenchTabItem,
+    WorkbenchTabKind, project_tabs, project_tabs_style, project_tree_toggle_icon,
+    project_tree_toggle_tooltip, tab_toolbar_icon,
 };
 use yttt::ui::workbench::shell::titlebar::TitlebarInfo;
-use yttt::{commands::CommandId, model::layout::SplitDirection, ui::workbench::WorkbenchView};
+use yttt::{
+    commands::CommandId,
+    model::{ids::ProjectId, layout::SplitDirection},
+    ui::workbench::WorkbenchView,
+};
 
 #[test]
 fn workbench_theme_exposes_one_dark_base_tokens() {
@@ -243,6 +249,80 @@ fn empty_tabs_keep_project_tree_toggle_visible(cx: &mut gpui::TestAppContext) {
     let (_view, cx) = cx.add_window_view(|_, _| EmptyProjectTabs);
 
     assert!(cx.debug_bounds("project-tree-toggle").is_some());
+}
+
+struct TerminalAndFileTabs;
+
+impl gpui::Render for TerminalAndFileTabs {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        let file_id = DocumentId {
+            project_id: ProjectId::new("/tmp/yttt"),
+            canonical_path: "commands.rs".into(),
+        };
+        let items = vec![
+            WorkbenchTabItem {
+                id: WorkItemId::Terminal("shell".to_string()),
+                kind: WorkbenchTabKind::Terminal,
+                title: "Shell".to_string(),
+                tooltip: "Shell".to_string(),
+                status: Some("started".to_string()),
+                status_tone: Some(ProjectTabStatusTone::Started),
+                dirty: false,
+                icon_path: None,
+                state: SelectableState::Active,
+            },
+            WorkbenchTabItem {
+                id: WorkItemId::File(file_id),
+                kind: WorkbenchTabKind::File,
+                title: "commands.rs".to_string(),
+                tooltip: "commands.rs".to_string(),
+                status: None,
+                status_tone: None,
+                dirty: false,
+                icon_path: Some("commands.rs".into()),
+                state: SelectableState::Inactive,
+            },
+        ];
+
+        project_tabs(
+            items,
+            WorkbenchTheme::one_dark(),
+            IconTheme::default(),
+            |_| |_, _, _| {},
+            |_| |_, _, _| {},
+            ProjectTabsToolbar::new(
+                false,
+                project_tree_toggle_tooltip(false),
+                noop_tab_toolbar_click,
+                noop_tab_toolbar_click,
+                noop_tab_toolbar_click,
+                noop_tab_toolbar_click,
+            ),
+        )
+    }
+}
+
+#[gpui::test]
+fn file_close_button_uses_terminal_trailing_position(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (_view, cx) = cx.add_window_view(|_, _| TerminalAndFileTabs);
+
+    let terminal_tab = cx.debug_bounds("project-tab-0").unwrap();
+    let file_tab = cx.debug_bounds("project-tab-1").unwrap();
+    let terminal_close = cx.debug_bounds("project-tab-close-0").unwrap();
+    let file_close = cx.debug_bounds("project-tab-close-1").unwrap();
+    let terminal_trailing_inset = terminal_tab.origin.x + terminal_tab.size.width
+        - terminal_close.origin.x
+        - terminal_close.size.width;
+    let file_trailing_inset =
+        file_tab.origin.x + file_tab.size.width - file_close.origin.x - file_close.size.width;
+
+    assert_eq!(terminal_close.size, file_close.size);
+    assert_eq!(file_trailing_inset, terminal_trailing_inset);
 }
 
 #[gpui::test]
@@ -959,6 +1039,11 @@ fn yttt_tabbar_style_matches_project_tab_density() {
 
     assert_eq!(primitive.height, project.height);
     assert_eq!(primitive.item_height, project.item_height);
+    assert_eq!(primitive.close_slot_size, project.close_slot_size);
+    assert_eq!(
+        primitive.close_slot_size,
+        yttt_icon_button_style(YtttIconButtonKind::TabClose, theme).size
+    );
     assert_eq!(primitive.border_width, gpui::px(1.0));
     assert_eq!(primitive.active_background, theme.surface);
     assert_eq!(primitive.inactive_background, theme.tabbar_background);
