@@ -394,7 +394,7 @@ impl WorkbenchView {
 
         Some((
             selected_project_id.as_str().to_string(),
-            project.path.clone(),
+            tab.cwd.clone().unwrap_or_else(|| project.path.clone()),
             project.layout.project.name.clone(),
             project.selected_tab_id.clone(),
             tab.title.clone(),

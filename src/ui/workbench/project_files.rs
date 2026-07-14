@@ -1293,9 +1293,7 @@ impl WorkbenchView {
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| loaded.relative_path.to_string_lossy().into_owned());
             let config = CodeEditorConfig::new(title, language_mode)
-                .with_tab_size(self.app_settings.editor.tab_size)
-                .with_soft_wrap(self.app_settings.editor.soft_wrap)
-                .with_line_number(self.app_settings.editor.line_numbers);
+                .with_editor_settings(&self.app_settings.editor);
             let model = ProjectEditorModel::new(
                 document_id.clone(),
                 CodeEditorState::new(&loaded.canonical_path, config, loaded.text),

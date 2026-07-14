@@ -354,6 +354,7 @@ fn layout_toml_editor_overlay(
     let Some(session) = root.overlays.layout_toml_editor.as_ref() else {
         return div();
     };
+    let editor_appearance = session.appearance();
     let editor = session.editor();
     let title = editor.config().title().to_string();
     let path = editor.path().display().to_string();
@@ -412,7 +413,7 @@ fn layout_toml_editor_overlay(
                             )
                             .child(settings_button(
                                 "layout-toml-editor-close",
-                                "Cancel",
+                                root.ui_text.get(UiTextKey::Cancel),
                                 false,
                                 theme,
                                 cx,
@@ -437,7 +438,9 @@ fn layout_toml_editor_overlay(
                                     .rounded_sm()
                                     .bg(editor_theme.background)
                                     .overflow_hidden()
-                                    .child(Input::new(input).h_full().appearance(false)),
+                                    .child(
+                                        styled_code_editor_input(input, editor_appearance).h_full(),
+                                    ),
                             )
                             .when_some(error, |this, error| {
                                 this.child(
@@ -466,7 +469,7 @@ fn layout_toml_editor_overlay(
                             .py_3()
                             .child(settings_button(
                                 "layout-toml-editor-cancel",
-                                "Cancel",
+                                root.ui_text.get(UiTextKey::Cancel),
                                 false,
                                 theme,
                                 cx,
@@ -477,7 +480,7 @@ fn layout_toml_editor_overlay(
                             ))
                             .child(settings_button(
                                 "layout-toml-editor-save",
-                                "Save",
+                                root.ui_text.get(UiTextKey::SettingsSave),
                                 true,
                                 theme,
                                 cx,

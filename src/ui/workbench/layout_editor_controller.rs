@@ -48,32 +48,42 @@ impl WorkbenchView {
             .map(|session| session.editor().language_id())
     }
 
+    pub fn visible_layout_toml_editor_config(&self) -> Option<&CodeEditorConfig> {
+        self.overlays
+            .layout_toml_editor
+            .as_ref()
+            .map(|session| session.editor().config())
+    }
+
+    pub fn visible_layout_toml_editor_appearance(&self) -> Option<&EditorAppearance> {
+        self.overlays
+            .layout_toml_editor
+            .as_ref()
+            .map(LayoutEditorSession::appearance)
+    }
+
     pub fn open_layout_toml_editor(&mut self) -> Result<(), WorkbenchError> {
         self.open_default_layout_editor()
     }
 
     pub fn open_default_layout_editor(&mut self) -> Result<(), WorkbenchError> {
         let path = self.default_layout_state.path().to_path_buf();
-        let value = fs::read_to_string(&path).map_err(|source| {
-            WorkbenchError::LayoutTomlEditor(format!(
-                "failed to read layout TOML at {}: {source}",
-                path.display()
-            ))
-        })?;
+        let value = read_layout_editor_source(&path, &self.ui_text)?;
 
         self.overlays.layout_toml_editor = Some(LayoutEditorSession::new(
             LayoutEditorTarget::Default,
             CodeEditorState::new(
                 path,
                 CodeEditorConfig::new(
-                    "Edit default layout TOML",
+                    self.ui_text.get(UiTextKey::CommandLayoutDefaultEditTitle),
                     CodeEditorLanguageMode::Explicit(EditorLanguageId::Toml),
                 )
-                .placeholder_text("Edit layout TOML...")
+                .placeholder_text(self.ui_text.get(UiTextKey::LayoutEditorPlaceholder))
                 .with_rows(24)
-                .with_soft_wrap(false),
+                .with_editor_settings(&self.app_settings.editor),
                 value,
             ),
+            EditorAppearance::from(&self.app_settings.editor),
         ));
         self.finish_opening_layout_editor();
         Ok(())
@@ -95,7 +105,7 @@ impl WorkbenchView {
         let personal_file = self.config_paths.local_layout_file(&project_path);
 
         let (path, format, value, diagnostic) = if personal_file.exists() {
-            let value = read_layout_editor_source(&personal_file)?;
+            let value = read_layout_editor_source(&personal_file, &self.ui_text)?;
             match parse_personal_layout(&personal_file, &value) {
                 Ok(PersonalLayout::Patch(_)) => (
                     personal_file,
@@ -110,7 +120,11 @@ impl WorkbenchView {
                     None,
                 ),
                 Err(error) => {
-                    let message = error.to_string();
+                    let message = localized_layout_editor_error(
+                        &self.ui_text,
+                        UiTextKey::LayoutEditorPersonalInvalid,
+                        error,
+                    );
                     (
                         personal_file,
                         ProjectLayoutEditorFormat::InvalidPersonal,
@@ -120,7 +134,7 @@ impl WorkbenchView {
                 }
             }
         } else if project_file.exists() {
-            let value = read_layout_editor_source(&project_file)?;
+            let value = read_layout_editor_source(&project_file, &self.ui_text)?;
             (
                 project_file,
                 ProjectLayoutEditorFormat::ProjectConfig,
@@ -129,7 +143,7 @@ impl WorkbenchView {
             )
         } else {
             let path = save_local_layout(&self.config_paths, &project_path, &effective_layout)?;
-            let value = read_layout_editor_source(&path)?;
+            let value = read_layout_editor_source(&path, &self.ui_text)?;
             (
                 path,
                 ProjectLayoutEditorFormat::PersonalReplace,
@@ -141,12 +155,12 @@ impl WorkbenchView {
         let mut editor = CodeEditorState::new(
             path.clone(),
             CodeEditorConfig::new(
-                "Edit project layout TOML",
+                self.ui_text.get(UiTextKey::CommandLayoutProjectEditTitle),
                 CodeEditorLanguageMode::Explicit(EditorLanguageId::Toml),
             )
-            .placeholder_text("Edit layout TOML...")
+            .placeholder_text(self.ui_text.get(UiTextKey::LayoutEditorPlaceholder))
             .with_rows(24)
-            .with_soft_wrap(false),
+            .with_editor_settings(&self.app_settings.editor),
             value,
         );
         if let Some(message) = diagnostic {
@@ -164,6 +178,7 @@ impl WorkbenchView {
                 format,
             },
             editor,
+            EditorAppearance::from(&self.app_settings.editor),
         ));
         self.finish_opening_layout_editor();
         Ok(())
@@ -194,22 +209,30 @@ impl WorkbenchView {
                 let template = match toml::from_str::<DefaultLayoutTemplate>(editor.value()) {
                     Ok(template) => template,
                     Err(error) => {
-                        self.set_layout_toml_editor_error(
-                            "toml",
-                            format!("failed to parse layout TOML: {error}"),
+                        let message = localized_layout_editor_error(
+                            &self.ui_text,
+                            UiTextKey::LayoutEditorParseFailed,
+                            error,
                         );
+                        self.set_layout_toml_editor_error("toml", message);
                         return Ok(());
                     }
                 };
                 if let Err(error) = template.validate() {
-                    self.set_layout_toml_editor_error(
-                        "layout",
-                        format!("invalid layout TOML: {error}"),
+                    let message = localized_layout_editor_error(
+                        &self.ui_text,
+                        UiTextKey::LayoutEditorValidationFailed,
+                        error,
                     );
+                    self.set_layout_toml_editor_error("layout", message);
                     return Ok(());
                 }
                 if let Err(error) = self.default_layout_state.save(template) {
-                    let message = error.to_string();
+                    let message = localized_layout_editor_error(
+                        &self.ui_text,
+                        UiTextKey::LayoutEditorSaveFailed,
+                        error,
+                    );
                     self.set_layout_toml_editor_error("layout", message.clone());
                     self.load_error = Some(message);
                     return Ok(());
@@ -217,13 +240,17 @@ impl WorkbenchView {
             }
             LayoutEditorTarget::Project { path, format, .. } => {
                 if let Err((source, message)) =
-                    validate_project_editor_source(path, *format, editor.value())
+                    validate_project_editor_source(path, *format, editor.value(), &self.ui_text)
                 {
                     self.set_layout_toml_editor_error(source, message);
                     return Ok(());
                 }
                 if let Err(error) = write_layout_file_atomic(path, editor.value()) {
-                    let message = error.to_string();
+                    let message = localized_layout_editor_error(
+                        &self.ui_text,
+                        UiTextKey::LayoutEditorSaveFailed,
+                        error,
+                    );
                     self.set_layout_toml_editor_error("filesystem", message.clone());
                     self.load_error = Some(message);
                     return Ok(());
@@ -291,44 +318,81 @@ impl WorkbenchView {
     }
 }
 
-fn read_layout_editor_source(path: &Path) -> Result<String, WorkbenchError> {
+fn read_layout_editor_source(path: &Path, ui_text: &UiText) -> Result<String, WorkbenchError> {
     fs::read_to_string(path).map_err(|source| {
         WorkbenchError::LayoutTomlEditor(format!(
-            "failed to read layout TOML at {}: {source}",
+            "{} ({}): {source}",
+            ui_text.get(UiTextKey::LayoutEditorReadFailed),
             path.display()
         ))
     })
+}
+
+fn localized_layout_editor_error(
+    ui_text: &UiText,
+    key: UiTextKey,
+    detail: impl std::fmt::Display,
+) -> String {
+    format!("{}: {detail}", ui_text.get(key))
 }
 
 fn validate_project_editor_source(
     path: &Path,
     format: ProjectLayoutEditorFormat,
     source: &str,
+    ui_text: &UiText,
 ) -> Result<(), (&'static str, String)> {
     match format {
         ProjectLayoutEditorFormat::ProjectConfig => {
-            let layout = toml::from_str::<ProjectLayout>(source)
-                .map_err(|error| ("toml", format!("failed to parse layout TOML: {error}")))?;
-            layout
-                .validate()
-                .map_err(|error| ("layout", format!("invalid layout TOML: {error}")))
+            let layout = toml::from_str::<ProjectLayout>(source).map_err(|error| {
+                (
+                    "toml",
+                    localized_layout_editor_error(
+                        ui_text,
+                        UiTextKey::LayoutEditorParseFailed,
+                        error,
+                    ),
+                )
+            })?;
+            layout.validate().map_err(|error| {
+                (
+                    "layout",
+                    localized_layout_editor_error(
+                        ui_text,
+                        UiTextKey::LayoutEditorValidationFailed,
+                        error,
+                    ),
+                )
+            })
         }
         ProjectLayoutEditorFormat::PersonalPatch
         | ProjectLayoutEditorFormat::PersonalReplace
         | ProjectLayoutEditorFormat::InvalidPersonal => {
-            let personal = parse_personal_layout(path, source)
-                .map_err(|error| ("personal-layout", error.to_string()))?;
+            let personal = parse_personal_layout(path, source).map_err(|error| {
+                (
+                    "personal-layout",
+                    localized_layout_editor_error(
+                        ui_text,
+                        UiTextKey::LayoutEditorPersonalInvalid,
+                        error,
+                    ),
+                )
+            })?;
             match (format, personal) {
                 (ProjectLayoutEditorFormat::PersonalPatch, PersonalLayout::Patch(_))
                 | (ProjectLayoutEditorFormat::PersonalReplace, PersonalLayout::Replace(_))
                 | (ProjectLayoutEditorFormat::InvalidPersonal, _) => Ok(()),
                 (ProjectLayoutEditorFormat::PersonalPatch, PersonalLayout::Replace(_)) => Err((
                     "personal-layout",
-                    "personal layout editor requires mode = \"patch\"".to_string(),
+                    ui_text
+                        .get(UiTextKey::LayoutEditorRequiresPatchMode)
+                        .to_string(),
                 )),
                 (ProjectLayoutEditorFormat::PersonalReplace, PersonalLayout::Patch(_)) => Err((
                     "personal-layout",
-                    "personal layout editor requires mode = \"replace\"".to_string(),
+                    ui_text
+                        .get(UiTextKey::LayoutEditorRequiresReplaceMode)
+                        .to_string(),
                 )),
                 (ProjectLayoutEditorFormat::ProjectConfig, _) => unreachable!(),
             }

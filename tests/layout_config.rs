@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, path::PathBuf};
 
 use tempfile::tempdir;
 use yttt::config::{
@@ -517,11 +517,18 @@ fn personal_layout_v1_serializes_patch_and_replace_through_strict_wire_dtos() {
             name: None,
             default_tab: Some("agent".to_string()),
         }),
+        tabs: vec![TabOverride {
+            id: "dev".to_string(),
+            cwd: Some(PathBuf::from("<ProjectDir>/dev")),
+            ..Default::default()
+        }],
         ..Default::default()
     };
+    let mut replacement = sample_layout();
+    replacement.tabs[0].cwd = Some(PathBuf::from("<ProjectDir>/dev"));
 
     let patch_source = serialize_personal_patch(&patch).unwrap();
-    let replace_source = serialize_personal_replace(&sample_layout()).unwrap();
+    let replace_source = serialize_personal_replace(&replacement).unwrap();
 
     assert!(patch_source.contains("version = 1"));
     assert!(patch_source.contains("mode = \"patch\""));
@@ -533,7 +540,7 @@ fn personal_layout_v1_serializes_patch_and_replace_through_strict_wire_dtos() {
     assert!(replace_source.contains("mode = \"replace\""));
     assert_eq!(
         parse_personal_layout(path, &replace_source).unwrap(),
-        PersonalLayout::Replace(sample_layout())
+        PersonalLayout::Replace(replacement)
     );
 }
 
@@ -544,6 +551,7 @@ fn local_override_renames_tab_and_command_by_id() {
         tabs: vec![TabOverride {
             id: "dev".to_string(),
             title: Some("Development".to_string()),
+            cwd: Some(PathBuf::from("<ProjectDir>/frontend")),
             layout: Some(LayoutNodeOverride::Pane(PaneOverride {
                 id: "server".to_string(),
                 title: None,
@@ -563,6 +571,10 @@ fn local_override_renames_tab_and_command_by_id() {
     let dev = result.layout.tab("dev").unwrap();
 
     assert_eq!(dev.title, "Development");
+    assert_eq!(
+        dev.cwd.as_deref(),
+        Some(std::path::Path::new("<ProjectDir>/frontend"))
+    );
     assert_eq!(dev.layout.find_pane("server").unwrap().command, "pnpm");
     let server = dev.layout.find_pane("server").unwrap();
     assert_eq!(server.args, vec!["dev"]);
@@ -582,6 +594,7 @@ fn stale_override_ids_are_reported_and_ignored() {
         tabs: vec![TabOverride {
             id: "missing".to_string(),
             title: Some("Missing".to_string()),
+            cwd: None,
             layout: None,
         }],
         ..Default::default()
@@ -641,6 +654,31 @@ fn config_global_default_project_config_does_not_read_broken_global_file() {
         LayoutSource::ProjectConfig(paths.project_layout_file(&opened.path))
     );
     assert!(opened.warnings.is_empty());
+}
+
+#[test]
+fn config_project_layout_resolves_project_dir_in_tab_cwd() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("project-cwd");
+    fs::create_dir_all(project_dir.join(".yttt")).unwrap();
+    fs::create_dir_all(project_dir.join("services/api")).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut default_state = DefaultLayoutState::load_or_create(&paths);
+    let mut layout = sample_layout();
+    layout.tabs[0].cwd = Some(PathBuf::from("<ProjectDir>/services/api"));
+    fs::write(
+        project_dir.join(".yttt/layout.toml"),
+        toml::to_string_pretty(&layout).unwrap(),
+    )
+    .unwrap();
+    let expected_cwd = project_dir.canonicalize().unwrap().join("services/api");
+
+    let opened = open_project_config(&paths, &project_dir, &mut default_state).unwrap();
+
+    assert_eq!(
+        opened.layout.tab("dev").unwrap().cwd.as_deref(),
+        Some(expected_cwd.as_path())
+    );
 }
 
 #[test]
@@ -793,11 +831,13 @@ fn personal_layout_warning_reports_stale_tab_and_pane_with_path() {
             TabOverride {
                 id: "missing-tab".to_string(),
                 title: Some("Missing".to_string()),
+                cwd: None,
                 layout: None,
             },
             TabOverride {
                 id: "dev".to_string(),
                 title: None,
+                cwd: None,
                 layout: Some(LayoutNodeOverride::Pane(PaneOverride {
                     id: "missing-pane".to_string(),
                     command: Some("echo missing".to_string()),
@@ -888,6 +928,7 @@ fn config_project_layout_merges_app_local_override() {
         tabs: vec![TabOverride {
             id: "dev".to_string(),
             title: Some("Development".to_string()),
+            cwd: None,
             layout: Some(LayoutNodeOverride::Pane(PaneOverride {
                 id: "server".to_string(),
                 command: Some("pnpm dev".to_string()),

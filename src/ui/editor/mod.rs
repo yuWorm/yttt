@@ -30,5 +30,5 @@ pub use state::{
     CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, EditorDiagnostic,
     EditorDiagnosticSeverity, EditorLanguageService, EditorRange,
 };
-pub use view::code_editor_input_state;
+pub use view::{code_editor_input_state, styled_code_editor_input};
 pub use workspace::{DocumentId, ProjectEditorWorkspaceState, ProjectWorkItemSession, WorkItemId};

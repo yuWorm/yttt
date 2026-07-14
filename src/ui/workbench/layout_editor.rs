@@ -3,7 +3,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{model::ids::ProjectId, ui::editor::CodeEditorState};
+use crate::{
+    model::ids::ProjectId,
+    ui::editor::{CodeEditorState, EditorAppearance},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectLayoutEditorFormat {
@@ -44,15 +47,24 @@ impl LayoutEditorTarget {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LayoutEditorSession {
     target: LayoutEditorTarget,
     editor: CodeEditorState,
+    appearance: EditorAppearance,
 }
 
 impl LayoutEditorSession {
-    pub fn new(target: LayoutEditorTarget, editor: CodeEditorState) -> Self {
-        Self { target, editor }
+    pub fn new(
+        target: LayoutEditorTarget,
+        editor: CodeEditorState,
+        appearance: EditorAppearance,
+    ) -> Self {
+        Self {
+            target,
+            editor,
+            appearance,
+        }
     }
 
     pub fn target(&self) -> &LayoutEditorTarget {
@@ -65,6 +77,14 @@ impl LayoutEditorSession {
 
     pub fn editor_mut(&mut self) -> &mut CodeEditorState {
         &mut self.editor
+    }
+
+    pub fn appearance(&self) -> &EditorAppearance {
+        &self.appearance
+    }
+
+    pub fn set_appearance(&mut self, appearance: EditorAppearance) {
+        self.appearance = appearance;
     }
 }
 

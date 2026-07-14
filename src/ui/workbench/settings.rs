@@ -443,6 +443,15 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) {
         let appearance = EditorAppearance::from(&self.app_settings.editor);
+        if let Some(session) = &mut self.overlays.layout_toml_editor {
+            session.set_appearance(appearance.clone());
+        }
+        if let Some(input) = &self.overlays.layout_toml_input {
+            input.update(cx, |input, input_cx| {
+                input.set_soft_wrap(appearance.soft_wrap, window, input_cx);
+                input.set_line_number(appearance.line_numbers, window, input_cx);
+            });
+        }
         let project_ids = self
             .workspace
             .opened_projects()
