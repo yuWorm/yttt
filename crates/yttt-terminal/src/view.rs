@@ -69,7 +69,7 @@ use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point as AlacPoint, Side};
 use alacritty_terminal::selection::{Selection, SelectionType as AlacSelectionType};
 use alacritty_terminal::term::cell::Hyperlink;
-use alacritty_terminal::term::search::RegexSearch;
+use alacritty_terminal::term::search::{RegexIter, RegexSearch};
 use alacritty_terminal::term::{
     ClipboardType, Config as TermConfig, Osc52, SEMANTIC_ESCAPE_CHARS, TermMode,
 };
@@ -1659,10 +1659,57 @@ impl TerminalView {
     }
 
     fn hyperlink_at_point(&self, point: AlacPoint) -> Option<TerminalLinkHit> {
-        self.visible_hyperlink_spans()
-            .into_iter()
-            .find(|(range, _)| range.contains(&point))
-            .map(|(range, uri)| TerminalLinkHit { range, uri })
+        self.state.with_term(|term| {
+            if point.line < term.topmost_line()
+                || point.line > term.bottommost_line()
+                || point.column > term.last_column()
+            {
+                return None;
+            }
+
+            if let Some(hyperlink) = term.grid()[point].hyperlink() {
+                let mut start = point;
+                loop {
+                    let previous = start.sub(term, Boundary::Cursor, 1);
+                    if previous == start
+                        || term.grid()[previous].hyperlink().as_ref() != Some(&hyperlink)
+                    {
+                        break;
+                    }
+                    start = previous;
+                }
+
+                let mut end = point;
+                loop {
+                    let next = end.add(term, Boundary::Cursor, 1);
+                    if next == end || term.grid()[next].hyperlink().as_ref() != Some(&hyperlink) {
+                        break;
+                    }
+                    end = next;
+                }
+
+                return Some(TerminalLinkHit {
+                    range: start..=end,
+                    uri: hyperlink.uri().to_string(),
+                });
+            }
+
+            let line_start = term.line_search_left(point);
+            let line_end = term.line_search_right(point);
+            self.config
+                .hints
+                .iter()
+                .filter(|config| config.action == TerminalHintAction::Open)
+                .filter_map(|config| config.regex.as_deref())
+                .find_map(|pattern| {
+                    let mut regex = RegexSearch::new(pattern).ok()?;
+                    let range =
+                        RegexIter::new(line_start, line_end, Direction::Right, term, &mut regex)
+                            .find(|range| range.contains(&point))?;
+                    let uri = term.bounds_to_string(*range.start(), *range.end());
+                    Some(TerminalLinkHit { range, uri })
+                })
+        })
     }
 
     fn point_and_side_for_position(&self, position: Point<Pixels>) -> Option<(AlacPoint, Side)> {
@@ -2213,7 +2260,7 @@ impl TerminalView {
         let mode = self.state.mode();
         let modifiers = Self::terminal_modifiers(event.modifiers);
         if button == TerminalMouseButton::Left
-            && modifiers.super_key
+            && event.modifiers.secondary()
             && let Some(link) = self.hovered_link.clone()
         {
             self.held_mouse_button = None;
@@ -4309,6 +4356,46 @@ mod tests {
             assert_eq!(hint.candidates[0].target, "https://example.com");
             assert_eq!(hint.candidates[0].label, "j");
         });
+    }
+
+    #[gpui::test]
+    fn plain_url_is_hovered_and_secondary_click_opens_it(cx: &mut TestAppContext) {
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new(io::sink(), io::empty(), TerminalConfig::default(), cx)
+        });
+        terminal.update(cx, |terminal, cx| {
+            terminal
+                .state
+                .process_bytes(b"visit https://example.com/path\r\n");
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let link_position = cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            let viewport = terminal
+                .viewport
+                .lock()
+                .expect("terminal viewport must be painted");
+            point(
+                viewport.bounds.origin.x + viewport.padding.left + viewport.cell_width * 10.5,
+                viewport.bounds.origin.y + viewport.padding.top + viewport.cell_height * 0.5,
+            )
+        });
+
+        cx.simulate_mouse_move(link_position, None, Modifiers::none());
+        cx.read(|cx| {
+            let link = terminal
+                .read(cx)
+                .hovered_link
+                .as_ref()
+                .expect("plain URL must be recognized on hover");
+            assert_eq!(link.uri, "https://example.com/path");
+        });
+
+        cx.simulate_click(link_position, Modifiers::none());
+        assert_eq!(cx.opened_url(), None);
+        cx.simulate_click(link_position, Modifiers::secondary_key());
+        assert_eq!(cx.opened_url().as_deref(), Some("https://example.com/path"));
     }
 
     #[gpui::test]
