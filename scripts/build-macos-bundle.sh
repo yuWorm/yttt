@@ -151,9 +151,7 @@ cat > "$contents_dir/Info.plist" <<EOF
   <key>CFBundleExecutable</key>
   <string>yttt</string>
   <key>CFBundleIconFile</key>
-  <string>AppIcon</string>
-  <key>CFBundleIconName</key>
-  <string>AppIcon</string>
+  <string>AppIcon.icns</string>
   <key>CFBundleIdentifier</key>
   <string>com.yttt.app</string>
   <key>CFBundleInfoDictionaryVersion</key>

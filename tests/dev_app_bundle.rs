@@ -43,8 +43,9 @@ fn dev_app_bundle_script_generates_bundle_without_opening() {
         .expect("read app icon script");
 
     assert!(plist.contains("com.yttt.dev"));
-    assert!(plist.contains("CFBundleIconFile"));
-    assert!(plist.contains("CFBundleIconName"));
+    assert!(plist.contains("<key>CFBundleIconFile</key>"));
+    assert!(plist.contains("<string>AppIcon.icns</string>"));
+    assert!(!plist.contains("CFBundleIconName"));
     assert!(plist.contains("NSPrincipalClass"));
     assert!(source_png.exists());
     assert!(source_icon.exists());

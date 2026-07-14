@@ -62,6 +62,12 @@ fn macos_bundle_script_packages_a_signed_launchable_app() {
         env!("CARGO_PKG_VERSION")
     );
     assert_eq!(plist_value(&plist, "CFBundlePackageType"), "APPL");
+    assert_eq!(plist_value(&plist, "CFBundleIconFile"), "AppIcon.icns");
+    assert!(
+        !std::fs::read_to_string(&plist)
+            .unwrap()
+            .contains("CFBundleIconName")
+    );
     assert_eq!(plist_value(&plist, "LSMinimumSystemVersion"), "13.0");
     assert!(bundled_binary.metadata().unwrap().len() > 0);
     assert!(

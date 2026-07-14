@@ -5,7 +5,8 @@ pub mod startup;
 use std::rc::Rc;
 
 use gpui::{
-    App, AppContext, Bounds, Entity, Pixels, Window, WindowBounds, WindowOptions, px, size,
+    App, AppContext, Bounds, Entity, Pixels, QuitMode, Window, WindowBounds, WindowOptions, px,
+    size,
 };
 use gpui_component::{Root as ComponentRoot, Theme, TitleBar};
 
@@ -29,6 +30,7 @@ pub fn run() {
     let config_paths = AppConfigPaths::for_app();
     gpui_platform::application()
         .with_assets(assets::app_assets(&config_paths))
+        .with_quit_mode(QuitMode::LastWindowClosed)
         .run(|cx: &mut App| {
             #[cfg(target_os = "macos")]
             platform::macos::prepare_macos_app_runtime();
