@@ -15,7 +15,7 @@ impl Render for WorkbenchView {
             && !focus_handle.contains_focused(window, cx)
             && self.queue_default_active_work_item_focus();
 
-        let body = if let Some(onboarding) = self.onboarding {
+        let body = if let Some(onboarding) = self.onboarding.as_ref() {
             let command_palette_keybinding =
                 self.display_keybinding_for_command(CommandId::CommandPaletteOpen);
             onboarding_view(

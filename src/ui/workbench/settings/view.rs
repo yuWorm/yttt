@@ -341,6 +341,41 @@ fn settings_appearance_rows(
             )
             .into_any_element(),
         ))
+        .child(setting_row(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsImportZedThemes),
+            text.get(UiTextKey::SettingsImportZedThemesDescription),
+            settings_button(
+                "settings-import-zed-themes",
+                text.get(UiTextKey::SettingsImportZedThemesAction),
+                true,
+                theme,
+                cx,
+                cx.listener(move |this, _, window, cx| {
+                    match this.import_zed_themes_from_settings() {
+                        Ok((ui_theme_count, icon_theme_count)) => {
+                            let context = format!(
+                                "{}: {}; {}: {}",
+                                this.ui_text.get(UiTextKey::SettingsUiTheme),
+                                ui_theme_count,
+                                this.ui_text.get(UiTextKey::SettingsIconTheme),
+                                icon_theme_count
+                            );
+                            this.queue_status_notification(
+                                this.ui_text.get(UiTextKey::SettingsImportZedThemesComplete),
+                                context,
+                            );
+                        }
+                        Err(error) => this.load_error = Some(error),
+                    }
+                    this.flush_pending_status_notifications(window, cx);
+                    cx.notify();
+                }),
+            )
+            .debug_selector(|| "settings-import-zed-themes".to_string())
+            .into_any_element(),
+        ))
 }
 
 fn settings_language_rows(

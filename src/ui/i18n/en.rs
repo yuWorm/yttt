@@ -4,7 +4,13 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
     match key {
         UiTextKey::AppName => "yttt",
         UiTextKey::OnboardingTitle => "Welcome to yttt",
-        UiTextKey::OnboardingSubtitle => "Choose a default layout, then select its coding agent.",
+        UiTextKey::OnboardingSubtitle => {
+            "Choose a language, default layout, and coding agent, then optionally import themes from Zed."
+        }
+        UiTextKey::OnboardingLanguageHeading => "Choose your language",
+        UiTextKey::OnboardingLanguageSubtitle => {
+            "The detected default is saved now. You can change it here or later in Settings."
+        }
         UiTextKey::OnboardingAgentHeading => "Choose a coding agent",
         UiTextKey::OnboardingAgentSubtitle => "This agent will be used in the layout you selected.",
         UiTextKey::OnboardingLayoutHeading => "Choose a default layout",
@@ -18,6 +24,16 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::OnboardingNext => "Next",
         UiTextKey::OnboardingBack => "Back",
         UiTextKey::OnboardingContinue => "Use this layout",
+        UiTextKey::OnboardingZedHeading => "Import themes from Zed",
+        UiTextKey::OnboardingZedSubtitle => {
+            "Compatible themes were detected in your installed Zed extensions. Review them before importing."
+        }
+        UiTextKey::OnboardingZedUiThemes => "UI themes",
+        UiTextKey::OnboardingZedIconThemes => "Icon themes",
+        UiTextKey::OnboardingZedNoThemes => "No compatible Zed themes were detected.",
+        UiTextKey::OnboardingZedDetectionWarnings => "Some Zed extensions could not be inspected.",
+        UiTextKey::OnboardingZedSkip => "Skip import",
+        UiTextKey::OnboardingZedImport => "Import and finish",
         UiTextKey::EmptySubtitle => "Open a directory or choose a recent project.",
         UiTextKey::EmptySidebarNote => "Sidebar shows opened projects only.",
         UiTextKey::OpenDirectory => "Open Directory",
@@ -298,6 +314,13 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsThemesDirectoryDescription => {
             "Open the folder containing user theme TOML files."
         }
+        UiTextKey::SettingsImportZedThemes => "Import Zed themes",
+        UiTextKey::SettingsImportZedThemesDescription => {
+            "Detect and import compatible UI and icon themes from installed Zed extensions."
+        }
+        UiTextKey::SettingsImportZedThemesAction => "Import",
+        UiTextKey::SettingsImportZedThemesComplete => "Zed themes imported",
+        UiTextKey::SettingsImportZedThemesNone => "No compatible Zed themes were detected.",
         UiTextKey::SettingsLanguageDetection => "Language detection",
         UiTextKey::SettingsLanguageDetectionDescription => {
             "Detect code editor language from filename, extension, and first line."

@@ -565,6 +565,11 @@ fn settings_rows_are_grouped_by_user_facing_sections() {
     let appearance_rows = settings_rows_for_group(SettingsGroupId::Appearance, &text);
     assert!(appearance_rows.iter().any(|row| row.title == "Icon theme"));
     assert!(
+        appearance_rows
+            .iter()
+            .any(|row| row.title == "Import Zed themes")
+    );
+    assert!(
         language_rows
             .iter()
             .any(|row| row.title == "Language detection")

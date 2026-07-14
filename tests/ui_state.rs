@@ -608,14 +608,16 @@ fn first_run_onboarding_persists_separate_tabs_and_does_not_repeat() {
         Some(DefaultLayoutKind::SplitPane)
     );
     assert_eq!(root.onboarding_agent(), Some(BuiltinAgent::Codex));
-    assert!(root.complete_onboarding().is_err());
+    assert!(root.complete_onboarding(false).is_err());
 
     root.select_onboarding_agent(BuiltinAgent::OpenCode);
     assert_eq!(root.onboarding_agent(), Some(BuiltinAgent::Codex));
+    root.advance_onboarding();
     root.select_onboarding_layout(DefaultLayoutKind::SeparateTabs);
     root.advance_onboarding();
     root.select_onboarding_agent(BuiltinAgent::OpenCode);
-    root.complete_onboarding().unwrap();
+    root.advance_onboarding();
+    root.complete_onboarding(false).unwrap();
 
     assert_eq!(root.onboarding_agent(), None);
     assert_eq!(root.onboarding_layout_kind(), None);
@@ -649,8 +651,10 @@ fn first_run_onboarding_persists_split_view() {
     let mut root = WorkbenchView::with_config_paths(paths.clone());
 
     root.advance_onboarding();
+    root.advance_onboarding();
     root.select_onboarding_agent(BuiltinAgent::Claude);
-    root.complete_onboarding().unwrap();
+    root.advance_onboarding();
+    root.complete_onboarding(false).unwrap();
 
     let template: DefaultLayoutTemplate =
         toml::from_str(&fs::read_to_string(paths.default_layout_file()).unwrap()).unwrap();
@@ -679,6 +683,15 @@ fn force_onboarding_overrides_the_persisted_completion_marker() {
         forced.onboarding_layout_kind(),
         Some(DefaultLayoutKind::SplitPane)
     );
+    assert_eq!(
+        load_or_create_settings(&paths)
+            .unwrap()
+            .settings
+            .general
+            .language,
+        LanguageSetting::System,
+        "forced onboarding must not rerun first-launch language detection"
+    );
     assert!(
         load_or_create_settings(&paths)
             .unwrap()
@@ -704,11 +717,23 @@ fn first_run_onboarding_selects_layout_before_agent(cx: &mut gpui::TestAppContex
     let root = root_slot.borrow_mut().take().unwrap();
 
     cx.run_until_parked();
-    assert!(cx.debug_bounds("onboarding-layout-split").is_some());
-    assert!(cx.debug_bounds("onboarding-layout-tabs").is_some());
+    assert!(cx.debug_bounds("onboarding-language-step").is_some());
+    assert!(cx.debug_bounds("onboarding-language-en").is_some());
+    assert!(cx.debug_bounds("onboarding-language-zh-cn").is_some());
+    assert!(cx.debug_bounds("onboarding-layout-split").is_none());
     assert!(cx.debug_bounds("onboarding-agent-codex").is_none());
-    assert!(cx.debug_bounds("onboarding-next").is_some());
-    assert!(cx.debug_bounds("onboarding-complete").is_none());
+    let detected_language = load_or_create_settings(&paths)
+        .unwrap()
+        .settings
+        .general
+        .language;
+    assert_ne!(detected_language, LanguageSetting::System);
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).onboarding_language(),
+            Some(detected_language)
+        );
+    });
 
     let command_palette = cx
         .debug_bounds("onboarding-open-command-palette")
@@ -726,6 +751,35 @@ fn first_run_onboarding_selects_layout_before_agent(cx: &mut gpui::TestAppContex
         cx.notify();
     });
     cx.run_until_parked();
+
+    let chinese = cx
+        .debug_bounds("onboarding-language-zh-cn")
+        .expect("Chinese language choice should render");
+    cx.simulate_click(chinese.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).onboarding_language(),
+            Some(LanguageSetting::Chinese)
+        );
+    });
+    assert_eq!(
+        load_or_create_settings(&paths)
+            .unwrap()
+            .settings
+            .general
+            .language,
+        LanguageSetting::Chinese
+    );
+    let language_next = cx
+        .debug_bounds("onboarding-language-next")
+        .expect("language step should expose next");
+    cx.simulate_click(language_next.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("onboarding-language-step").is_none());
+    assert!(cx.debug_bounds("onboarding-layout-split").is_some());
+    assert!(cx.debug_bounds("onboarding-layout-tabs").is_some());
+    assert!(cx.debug_bounds("onboarding-next").is_some());
 
     let tabs = cx
         .debug_bounds("onboarding-layout-tabs")
@@ -780,10 +834,26 @@ fn first_run_onboarding_selects_layout_before_agent(cx: &mut gpui::TestAppContex
         );
     });
 
-    let complete = cx
-        .debug_bounds("onboarding-complete")
-        .expect("agent step should expose completion");
-    cx.simulate_click(complete.center(), gpui::Modifiers::none());
+    let agent_next = cx
+        .debug_bounds("onboarding-agent-next")
+        .expect("agent step should continue to Zed import");
+    cx.simulate_click(agent_next.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("onboarding-zed-import-step").is_some());
+    assert!(cx.debug_bounds("onboarding-zed-back").is_some());
+
+    let finish = if let Some(skip) = cx.debug_bounds("onboarding-zed-skip") {
+        assert!(
+            cx.debug_bounds("onboarding-zed-ui-theme-0").is_some()
+                || cx.debug_bounds("onboarding-zed-icon-theme-0").is_some(),
+            "detected Zed themes should be listed before confirmation"
+        );
+        skip
+    } else {
+        cx.debug_bounds("onboarding-zed-continue")
+            .expect("empty Zed import step should allow finishing")
+    };
+    cx.simulate_click(finish.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     cx.read(|app| assert_eq!(root.read(app).onboarding_agent(), None));
     assert!(
@@ -2948,6 +3018,30 @@ fn root_view_settings_can_select_and_close_group() {
 
     assert!(!root.settings_is_open());
     assert_eq!(root.selected_settings_group_title(), Some("Terminal"));
+}
+
+#[gpui::test]
+fn appearance_settings_group_renders_zed_import_button(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::dev_fixture());
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.open_settings();
+        root.select_settings_group("appearance").unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+
+    assert!(
+        cx.debug_bounds("settings-import-zed-themes").is_some(),
+        "Appearance settings should expose the Zed theme import action"
+    );
 }
 
 #[gpui::test]

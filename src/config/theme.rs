@@ -1,11 +1,11 @@
 use std::{collections::HashMap, fs, path::PathBuf};
 
-use gpui::{Rgba, rgb};
+use gpui::{Rgba, rgb, rgba};
 use gpui_component::ThemeMode;
 
 use crate::{
     config::paths::AppConfigPaths,
-    ui::theme::{AnsiColors, AppTheme, EditorSyntaxTheme},
+    ui::theme::{AnsiColors, AppTheme, EditorSyntaxTheme, ThemeMetadata, color_hex},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -114,17 +114,18 @@ pub fn load_theme_store(paths: &AppConfigPaths) -> Result<LoadedThemeStore, Them
     Ok(LoadedThemeStore { store, warnings })
 }
 
-#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 struct ThemeFile {
     name: String,
     mode: String,
+    metadata: ThemeMetadata,
     ui: UiThemeFile,
     editor: EditorThemeFile,
     terminal: TerminalThemeFile,
 }
 
-#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 struct UiThemeFile {
     background: Option<String>,
@@ -152,7 +153,7 @@ struct UiThemeFile {
     focused_pane_border: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 struct EditorThemeFile {
     background: Option<String>,
@@ -163,7 +164,7 @@ struct EditorThemeFile {
     syntax: EditorSyntaxThemeFile,
 }
 
-#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 struct EditorSyntaxThemeFile {
     boolean: Option<String>,
@@ -185,13 +186,13 @@ struct EditorSyntaxThemeFile {
     variable_special: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 struct TerminalThemeFile {
     colors: TerminalColorsFile,
 }
 
-#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 struct TerminalColorsFile {
     primary: TerminalPrimaryColors,
@@ -201,26 +202,26 @@ struct TerminalColorsFile {
     bright: AnsiColorsFile,
 }
 
-#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 struct TerminalPrimaryColors {
     background: Option<String>,
     foreground: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 struct TerminalCursorColors {
     cursor: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 struct TerminalSelectionColors {
     background: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 struct AnsiColorsFile {
     black: Option<String>,
@@ -231,6 +232,106 @@ struct AnsiColorsFile {
     magenta: Option<String>,
     cyan: Option<String>,
     white: Option<String>,
+}
+
+pub(crate) fn serialize_theme_file(theme: &AppTheme) -> Result<String, toml::ser::Error> {
+    let ui = theme.ui;
+    let editor = theme.editor;
+    let terminal = &theme.terminal;
+    let file = ThemeFile {
+        name: theme.name.clone(),
+        mode: match theme.mode {
+            ThemeMode::Light => "light",
+            ThemeMode::Dark => "dark",
+        }
+        .to_string(),
+        metadata: theme.metadata.clone(),
+        ui: UiThemeFile {
+            background: color_string(ui.app_background),
+            surface: color_string(ui.surface),
+            surface_elevated: color_string(ui.surface_elevated),
+            titlebar: color_string(ui.titlebar_background),
+            sidebar: color_string(ui.sidebar_background),
+            tabbar: color_string(ui.tabbar_background),
+            terminal_background: color_string(ui.terminal_background),
+            border: color_string(ui.border),
+            border_strong: color_string(ui.border_strong),
+            split_line: color_string(ui.split_line),
+            split_line_active: color_string(ui.split_line_active),
+            text: color_string(ui.text),
+            text_muted: color_string(ui.text_muted),
+            text_subtle: color_string(ui.text_subtle),
+            accent: color_string(ui.accent),
+            active_surface: color_string(ui.active_surface),
+            hover_surface: color_string(ui.hover_surface),
+            danger: color_string(ui.danger),
+            success: color_string(ui.success),
+            warning: color_string(ui.warning),
+            focus_ring: color_string(ui.focus_ring),
+            selection: color_string(ui.selection),
+            focused_pane_border: color_string(ui.focused_pane_border),
+        },
+        editor: EditorThemeFile {
+            background: color_string(editor.background),
+            foreground: color_string(editor.foreground),
+            active_line: color_string(editor.active_line),
+            line_number: color_string(editor.line_number),
+            active_line_number: color_string(editor.active_line_number),
+            syntax: EditorSyntaxThemeFile {
+                boolean: color_string(editor.syntax.boolean),
+                comment: color_string(editor.syntax.comment),
+                comment_doc: color_string(editor.syntax.comment_doc),
+                constant: color_string(editor.syntax.constant),
+                constructor: color_string(editor.syntax.constructor),
+                function: color_string(editor.syntax.function),
+                keyword: color_string(editor.syntax.keyword),
+                number: color_string(editor.syntax.number),
+                operator: color_string(editor.syntax.operator),
+                property: color_string(editor.syntax.property),
+                punctuation: color_string(editor.syntax.punctuation),
+                string: color_string(editor.syntax.string),
+                string_escape: color_string(editor.syntax.string_escape),
+                type_: color_string(editor.syntax.type_),
+                variable: color_string(editor.syntax.variable),
+                variable_special: color_string(editor.syntax.variable_special),
+            },
+        },
+        terminal: TerminalThemeFile {
+            colors: TerminalColorsFile {
+                primary: TerminalPrimaryColors {
+                    background: color_string(terminal.background),
+                    foreground: color_string(terminal.foreground),
+                },
+                cursor: TerminalCursorColors {
+                    cursor: terminal.cursor.map(color_hex),
+                },
+                selection: TerminalSelectionColors {
+                    background: terminal.selection_background.map(color_hex),
+                },
+                normal: ansi_colors_file(terminal.normal),
+                bright: ansi_colors_file(terminal.bright),
+            },
+        },
+    };
+
+    toml::to_string_pretty(&file)
+}
+
+fn color_string(color: Rgba) -> Option<String> {
+    Some(color_hex(color))
+}
+
+fn ansi_colors_file(colors: AnsiColors) -> AnsiColorsFile {
+    AnsiColorsFile {
+        black: color_string(colors.black),
+        red: color_string(colors.red),
+        green: color_string(colors.green),
+        yellow: color_string(colors.yellow),
+        blue: color_string(colors.blue),
+        magenta: color_string(colors.magenta),
+        cyan: color_string(colors.cyan),
+        white: color_string(colors.white),
+    }
 }
 
 fn theme_from_file(file: ThemeFile, warnings: &mut Vec<ThemeLoadWarning>) -> Option<AppTheme> {
@@ -489,6 +590,7 @@ fn theme_from_file(file: ThemeFile, warnings: &mut Vec<ThemeLoadWarning>) -> Opt
     Some(AppTheme {
         name: theme_name,
         mode: parse_theme_mode(&file.mode),
+        metadata: file.metadata,
         ui,
         editor,
         terminal,
@@ -727,8 +829,9 @@ fn apply_editor_syntax_colors(
 
 fn parse_hex_color(value: &str) -> Option<Rgba> {
     let value = value.trim().strip_prefix('#').unwrap_or(value.trim());
-    if value.len() != 6 {
-        return None;
+    match value.len() {
+        6 => u32::from_str_radix(value, 16).ok().map(rgb),
+        8 => u32::from_str_radix(value, 16).ok().map(rgba),
+        _ => None,
     }
-    u32::from_str_radix(value, 16).ok().map(rgb)
 }

@@ -1,5 +1,6 @@
 pub mod icons;
 mod one_dark;
+pub mod zed;
 
 use gpui::{Edges, Rgba, px};
 use gpui_component::{
@@ -16,10 +17,33 @@ use crate::config::{
 
 pub const DEFAULT_THEME_NAME: &str = "one-dark-theme";
 
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct ThemeMetadata {
+    pub authors: Vec<String>,
+    pub description: Option<String>,
+    pub repository: Option<String>,
+    pub converted_from: Option<String>,
+    pub source: Option<ThemeSourceMetadata>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct ThemeSourceMetadata {
+    pub format: String,
+    pub extension_id: Option<String>,
+    pub extension_name: Option<String>,
+    pub extension_version: Option<String>,
+    pub theme_file: Option<String>,
+    pub family_name: Option<String>,
+    pub family_author: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppTheme {
     pub name: String,
     pub mode: ThemeMode,
+    pub metadata: ThemeMetadata,
     pub ui: WorkbenchTheme,
     pub editor: EditorTheme,
     pub terminal: TerminalTheme,
@@ -346,7 +370,7 @@ pub struct IndexedColor {
     pub color: Rgba,
 }
 
-fn color_hex(color: Rgba) -> String {
+pub(crate) fn color_hex(color: Rgba) -> String {
     let r = (color.r.clamp(0.0, 1.0) * 255.0).round() as u8;
     let g = (color.g.clamp(0.0, 1.0) * 255.0).round() as u8;
     let b = (color.b.clamp(0.0, 1.0) * 255.0).round() as u8;

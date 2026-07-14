@@ -4,7 +4,13 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
     match key {
         UiTextKey::AppName => "yttt",
         UiTextKey::OnboardingTitle => "欢迎使用 yttt",
-        UiTextKey::OnboardingSubtitle => "先选择默认布局，再选择编程 Agent。",
+        UiTextKey::OnboardingSubtitle => {
+            "选择语言、默认布局和编程 Agent，然后可选择从 Zed 导入主题。"
+        }
+        UiTextKey::OnboardingLanguageHeading => "选择语言",
+        UiTextKey::OnboardingLanguageSubtitle => {
+            "已保存自动识别的默认语言，你可以在此修改，也可以稍后在设置中修改。"
+        }
         UiTextKey::OnboardingAgentHeading => "选择编程 Agent",
         UiTextKey::OnboardingAgentSubtitle => "所选 Agent 将用于刚才选择的默认布局。",
         UiTextKey::OnboardingLayoutHeading => "选择默认布局",
@@ -18,6 +24,14 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::OnboardingNext => "下一步",
         UiTextKey::OnboardingBack => "上一步",
         UiTextKey::OnboardingContinue => "使用此布局",
+        UiTextKey::OnboardingZedHeading => "从 Zed 导入主题",
+        UiTextKey::OnboardingZedSubtitle => "已在安装的 Zed 扩展中探测到兼容主题，请确认是否导入。",
+        UiTextKey::OnboardingZedUiThemes => "UI 主题",
+        UiTextKey::OnboardingZedIconThemes => "图标主题",
+        UiTextKey::OnboardingZedNoThemes => "未探测到兼容的 Zed 主题。",
+        UiTextKey::OnboardingZedDetectionWarnings => "部分 Zed 扩展无法完成探测。",
+        UiTextKey::OnboardingZedSkip => "跳过导入",
+        UiTextKey::OnboardingZedImport => "导入并完成",
         UiTextKey::EmptySubtitle => "打开目录，或从最近项目中选择。",
         UiTextKey::EmptySidebarNote => "侧边栏只显示已打开的项目。",
         UiTextKey::OpenDirectory => "打开目录",
@@ -256,6 +270,13 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsShowPath => "显示路径",
         UiTextKey::SettingsThemesDirectory => "主题目录",
         UiTextKey::SettingsThemesDirectoryDescription => "打开用户主题 TOML 文件所在目录。",
+        UiTextKey::SettingsImportZedThemes => "导入 Zed 主题",
+        UiTextKey::SettingsImportZedThemesDescription => {
+            "从已安装的 Zed 扩展中探测并导入兼容的界面主题和图标主题。"
+        }
+        UiTextKey::SettingsImportZedThemesAction => "导入",
+        UiTextKey::SettingsImportZedThemesComplete => "Zed 主题导入完成",
+        UiTextKey::SettingsImportZedThemesNone => "未探测到兼容的 Zed 主题。",
         UiTextKey::SettingsLanguageDetection => "语言检测",
         UiTextKey::SettingsLanguageDetectionDescription => {
             "根据文件名、扩展名和首行检测代码编辑器语言。"
