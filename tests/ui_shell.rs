@@ -37,7 +37,7 @@ use yttt::ui::settings::{SettingsGroupId, settings_panel_style, settings_rows_fo
 use yttt::ui::terminal::pane::TerminalPaneView;
 use yttt::ui::theme::WorkbenchTheme;
 use yttt::ui::theme::icons::IconTheme;
-use yttt::ui::workbench::shell::sidebar::{project_layout_context_commands, project_sidebar_style};
+use yttt::ui::workbench::shell::sidebar::{project_context_commands, project_sidebar_style};
 use yttt::ui::workbench::shell::tabs::{
     ProjectTabCloseButtonVisibility, ProjectTabLeadingIcon, ProjectTabStatusIndicator,
     ProjectTabToolbarPlacement, ProjectTabsToolbar, project_tabs, project_tabs_style,
@@ -330,15 +330,16 @@ fn sidebar_inactive_width_does_not_overwrite_expanded_width() {
 }
 
 #[test]
-fn project_sidebar_context_exposes_project_layout_commands() {
+fn project_sidebar_context_exposes_project_commands() {
     assert_eq!(
-        project_layout_context_commands(),
+        project_context_commands(),
         &[
             CommandId::LayoutProjectEdit,
             CommandId::LayoutSaveCurrent,
             CommandId::LayoutExportProjectConfig,
             CommandId::LayoutResetLocalOverride,
             CommandId::LayoutOpenFile,
+            CommandId::ProjectClose,
         ]
     );
 }

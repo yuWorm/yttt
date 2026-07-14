@@ -373,6 +373,7 @@ fn root_view_renders_sidebar_resize_handles_only_for_visible_expanded_panels(
         cx.debug_bounds("project-file-panel-resize-handle")
             .is_some()
     );
+    assert!(cx.debug_bounds("project-sidebar-initial-0").is_none());
 
     root.update(cx, |root, cx| {
         root.toggle_sidebar();
@@ -383,6 +384,7 @@ fn root_view_renders_sidebar_resize_handles_only_for_visible_expanded_panels(
         assert!(root.read(app).sidebar_is_collapsed());
         assert!(root.read(app).selected_project_panel_visible());
     });
+    assert!(cx.debug_bounds("project-sidebar-initial-0").is_some());
 
     root.update(cx, |root, cx| {
         root.run_command(CommandId::ProjectPanelToggle).unwrap();
@@ -3788,13 +3790,15 @@ fn visible_tab_titles_come_from_selected_project() {
 }
 
 #[test]
-fn visible_project_items_mark_selected_project() {
+fn visible_project_items_mark_selection_and_distinct_initials() {
     let mut workspace = Workspace::new();
     let first = workspace
         .open_project(PathBuf::from("/tmp/one"), sample_layout())
         .unwrap();
+    let mut second_layout = sample_layout();
+    second_layout.project.name = "backend".to_string();
     let second = workspace
-        .open_project(PathBuf::from("/tmp/two"), sample_layout())
+        .open_project(PathBuf::from("/tmp/two"), second_layout)
         .unwrap();
 
     workspace.select_project(&first).unwrap();
@@ -3802,8 +3806,10 @@ fn visible_project_items_mark_selected_project() {
     let items = visible_project_items(&workspace);
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].id, first.as_str());
+    assert_eq!(items[0].initial, "Y");
     assert_eq!(items[0].state, SelectableState::Active);
     assert_eq!(items[1].id, second.as_str());
+    assert_eq!(items[1].initial, "B");
     assert_eq!(items[1].state, SelectableState::Inactive);
 }
 

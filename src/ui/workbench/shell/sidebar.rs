@@ -13,7 +13,7 @@ use crate::ui::components::{SelectableState, workbench_icon_button};
 use crate::ui::i18n::{UiText, UiTextKey};
 use crate::ui::interaction::actions::{
     LayoutExportProjectConfig, LayoutOpenFile, LayoutProjectEdit, LayoutResetLocalOverride,
-    LayoutSaveCurrent,
+    LayoutSaveCurrent, ProjectClose,
 };
 use crate::ui::terminal::status::{agent_status_label, project_agent_status};
 use crate::ui::{
@@ -28,22 +28,24 @@ use crate::ui::{
     theme::WorkbenchTheme,
 };
 
-const PROJECT_LAYOUT_CONTEXT_COMMANDS: &[CommandId] = &[
+const PROJECT_CONTEXT_COMMANDS: &[CommandId] = &[
     CommandId::LayoutProjectEdit,
     CommandId::LayoutSaveCurrent,
     CommandId::LayoutExportProjectConfig,
     CommandId::LayoutResetLocalOverride,
     CommandId::LayoutOpenFile,
+    CommandId::ProjectClose,
 ];
 
-pub fn project_layout_context_commands() -> &'static [CommandId] {
-    PROJECT_LAYOUT_CONTEXT_COMMANDS
+pub fn project_context_commands() -> &'static [CommandId] {
+    PROJECT_CONTEXT_COMMANDS
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectSidebarItem {
     pub id: String,
     pub title: String,
+    pub initial: String,
     pub path: String,
     pub agent_status: Option<String>,
     pub state: SelectableState,
@@ -83,6 +85,14 @@ pub fn project_sidebar_style(theme: WorkbenchTheme) -> ProjectSidebarStyle {
     }
 }
 
+fn project_initial(name: &str) -> String {
+    name.trim()
+        .chars()
+        .next()
+        .map(|character| character.to_uppercase().collect())
+        .unwrap_or_else(|| "?".to_string())
+}
+
 pub fn visible_project_items(workspace: &Workspace) -> Vec<ProjectSidebarItem> {
     let selected_project_id = workspace.selected_project_id();
 
@@ -92,6 +102,7 @@ pub fn visible_project_items(workspace: &Workspace) -> Vec<ProjectSidebarItem> {
         .map(|project| ProjectSidebarItem {
             id: project.id.as_str().to_string(),
             title: project.layout.project.name.clone(),
+            initial: project_initial(&project.layout.project.name),
             path: project.path.display().to_string(),
             agent_status: project_agent_status(project)
                 .map(agent_status_label)
@@ -243,11 +254,20 @@ where
                 .items_center()
                 .gap_2()
                 .overflow_hidden()
-                .child(
+                .when(collapsed, |this| this.w_full().justify_center())
+                .children(collapsed.then(|| {
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(row_style.title)
+                        .debug_selector(move || format!("project-sidebar-initial-{index}"))
+                        .child(item.initial)
+                }))
+                .children((!collapsed).then(|| {
                     Icon::new(IconName::Folder)
                         .size_3()
-                        .text_color(row_style.subtitle),
-                )
+                        .text_color(row_style.subtitle)
+                }))
                 .children((!collapsed).then(|| {
                     div()
                         .text_sm()
@@ -286,6 +306,11 @@ where
                 .item(
                     PopupMenuItem::new(text.get(UiTextKey::CommandLayoutOpenFileTitle))
                         .action(Box::new(LayoutOpenFile)),
+                )
+                .item(PopupMenuItem::separator())
+                .item(
+                    PopupMenuItem::new(text.get(UiTextKey::CommandProjectCloseTitle))
+                        .action(Box::new(ProjectClose)),
                 )
         })
 }
