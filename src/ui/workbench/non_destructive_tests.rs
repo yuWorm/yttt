@@ -91,6 +91,42 @@ fn active_terminal_content_receives_default_focus(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn keybinding_recorder_renders_focuses_and_records(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+
+    let (root, mut cx) = cx.add_window_view(|_, _| WorkbenchView::with_config_paths(config_paths));
+    cx.update(|_, app| {
+        root.update(app, |root, cx| {
+            root.open_keybinding_edit_dialog(CommandId::TabPalette)
+                .unwrap();
+            cx.notify();
+        });
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("keybinding-recorder").is_some());
+    cx.simulate_keystrokes("cmd-l");
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        let root = root.read(app);
+        assert_eq!(
+            root.pending_keybinding_edit_keys(),
+            Some(vec!["cmd-l".to_string()])
+        );
+        assert!(
+            root.focus_handle
+                .as_ref()
+                .expect("render must initialize the workbench focus handle")
+                .is_focused(window)
+        );
+    });
+}
+
+#[gpui::test]
 fn window_reactivation_restores_previously_focused_terminal_pane(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();

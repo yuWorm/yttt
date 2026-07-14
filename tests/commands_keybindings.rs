@@ -14,6 +14,7 @@ use yttt::config::{
 };
 use yttt::model::layout::LayoutNode;
 use yttt::model::workspace::{TabStartState, Workspace};
+use yttt::ui::i18n::{Locale, UiText};
 use yttt::ui::interaction::actions::{
     app_startup_keybindings, default_ui_keybinding_specs, runtime_command_for_keystroke,
 };
@@ -21,7 +22,7 @@ use yttt::ui::interaction::{
     input_owner::InputOwnerKind, key_dispatch::workspace_command_for_keystroke,
 };
 use yttt::ui::settings::keybinding_display::{
-    KeybindingDisplayPlatform, display_keybindings_for_platform,
+    KeybindingDisplayPlatform, display_keybindings_for_platform, recorded_keybinding,
 };
 use yttt::ui::settings::keybindings::{KeybindingEditError, KeybindingsEditorState};
 use yttt::ui::workbench::shell::split_view::visible_pane_titles;
@@ -672,6 +673,44 @@ fn keybindings_editor_lists_commands_with_current_keys() {
     } else {
         assert_eq!(row.display_keys(), vec!["ctrl-p".to_string()]);
     }
+}
+
+#[test]
+fn keybindings_editor_localizes_command_presentations() {
+    let editor = KeybindingsEditorState::new(default_keybindings(), default_registry());
+    let text = UiText::new(Locale::Chinese);
+
+    let row = editor
+        .rows_with_text(&text)
+        .into_iter()
+        .find(|row| row.command == CommandId::CommandPaletteOpen)
+        .unwrap();
+
+    assert_eq!(row.title, "打开命令面板");
+    assert_eq!(row.description, "搜索并运行命令");
+}
+
+#[test]
+fn recorded_keybindings_accept_shortcuts_and_ignore_incomplete_input() {
+    assert_eq!(
+        recorded_keybinding(&Keystroke::parse("cmd-shift-k").unwrap()).as_deref(),
+        Some("cmd-shift-k")
+    );
+    assert_eq!(
+        recorded_keybinding(&Keystroke::parse("enter").unwrap()).as_deref(),
+        Some("enter")
+    );
+    assert_eq!(
+        recorded_keybinding(&Keystroke {
+            key: "k".to_string(),
+            key_char: Some("k".to_string()),
+            ..Default::default()
+        })
+        .as_deref(),
+        Some("k")
+    );
+    assert!(recorded_keybinding(&Keystroke::parse("shift").unwrap()).is_none());
+    assert!(recorded_keybinding(&Keystroke::parse("k").unwrap()).is_none());
 }
 
 #[test]

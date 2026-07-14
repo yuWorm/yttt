@@ -87,6 +87,10 @@ impl WorkbenchView {
         self.app_settings.general.language = language;
         save_settings(&self.config_paths, &self.app_settings)?;
         self.ui_text = ui_text_for_language(language);
+        if let Ok(loaded) = load_keybindings(&self.config_paths, &self.command_registry) {
+            self.settings.keybinding_warning_lines =
+                format_keybinding_warning_lines(&loaded.warnings, &self.ui_text);
+        }
         self.reset_palette_input();
         self.reset_settings_search_input();
         Ok(())

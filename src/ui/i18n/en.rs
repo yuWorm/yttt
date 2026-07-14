@@ -478,6 +478,14 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsNoKeybindingConflicts => "No keybinding conflicts",
         UiTextKey::SettingsUnbound => "Unbound",
         UiTextKey::SettingsConflict => "conflict",
+        UiTextKey::SettingsKeybindingDialogTitle => "Edit keybinding",
+        UiTextKey::SettingsKeybindingRecorderPrompt => "Press a shortcut",
+        UiTextKey::SettingsKeybindingRecorderHint => {
+            "The first recorded shortcut replaces the current bindings. Keep pressing to add alternatives; modifier keys alone are ignored."
+        }
+        UiTextKey::SettingsClearKeybindings => "Clear",
+        UiTextKey::SettingsConflictingKeybinding => "Conflicting keybinding",
+        UiTextKey::SettingsInvalidCommandId => "Invalid command id",
         UiTextKey::SettingsSave => "Save",
         UiTextKey::SettingsExport => "Export",
         UiTextKey::SettingsOpen => "Open",

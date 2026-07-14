@@ -7,6 +7,8 @@ use crate::{
         },
         paths::AppConfigPaths,
     },
+    palette::{command_description_with_text, command_title_with_text},
+    ui::i18n::UiText,
 };
 
 use super::keybinding_display::display_keybindings_for_current_platform;
@@ -59,6 +61,10 @@ impl KeybindingsEditorState {
     }
 
     pub fn rows(&self) -> Vec<KeybindingRow> {
+        self.rows_with_text(&UiText::english())
+    }
+
+    pub fn rows_with_text(&self, text: &UiText) -> Vec<KeybindingRow> {
         let conflicting_keys: Vec<_> = self
             .config
             .conflicts()
@@ -71,7 +77,6 @@ impl KeybindingsEditorState {
             .copied()
             .filter(|command| self.registry.contains(*command))
             .map(|command| {
-                let presentation = command.presentation();
                 let keys = self.command_keys(command);
                 let has_conflict = keys.iter().any(|key| {
                     conflicting_keys
@@ -82,8 +87,8 @@ impl KeybindingsEditorState {
                 KeybindingRow {
                     command,
                     command_id: command.as_str(),
-                    title: presentation.title,
-                    description: presentation.description,
+                    title: command_title_with_text(command, text),
+                    description: command_description_with_text(command, text),
                     keys,
                     has_conflict,
                 }

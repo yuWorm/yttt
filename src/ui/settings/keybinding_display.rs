@@ -58,6 +58,37 @@ pub fn parse_keybinding_for_display(keys: &str) -> Option<Keystroke> {
     Keystroke::parse(keys).ok()
 }
 
+pub fn recorded_keybinding(keystroke: &Keystroke) -> Option<String> {
+    let key = keystroke.key.trim();
+    if key.is_empty()
+        || is_modifier_key(key)
+        || (keystroke.is_ime_in_progress() && key.chars().count() == 1)
+    {
+        return None;
+    }
+
+    Some(keystroke.unparse())
+}
+
+fn is_modifier_key(key: &str) -> bool {
+    matches!(
+        key,
+        "shift"
+            | "control"
+            | "ctrl"
+            | "alt"
+            | "option"
+            | "platform"
+            | "command"
+            | "cmd"
+            | "super"
+            | "win"
+            | "windows"
+            | "function"
+            | "fn"
+    )
+}
+
 fn normalized_keybindings(keys: &[String]) -> Vec<String> {
     let mut normalized = Vec::new();
     for key in keys {
