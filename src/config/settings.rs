@@ -45,6 +45,24 @@ pub enum LanguageSetting {
     Chinese,
 }
 
+pub fn detect_system_language_setting() -> LanguageSetting {
+    language_setting_for_locale(sys_locale::get_locale().as_deref())
+}
+
+pub fn language_setting_for_locale(locale: Option<&str>) -> LanguageSetting {
+    let language = locale
+        .unwrap_or_default()
+        .trim()
+        .split(['-', '_', '.', '@'])
+        .next()
+        .unwrap_or_default();
+    if language.eq_ignore_ascii_case("zh") {
+        LanguageSetting::Chinese
+    } else {
+        LanguageSetting::English
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct GeneralSettings {

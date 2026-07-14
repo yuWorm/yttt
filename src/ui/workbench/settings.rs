@@ -140,6 +140,33 @@ impl WorkbenchView {
         self.save_app_settings_and_refresh_runtime()
     }
 
+    pub fn import_zed_themes_from_settings(&mut self) -> Result<(usize, usize), String> {
+        let detection = detect_installed_zed_themes();
+        if detection.is_empty() {
+            return Err(self
+                .ui_text
+                .get(UiTextKey::SettingsImportZedThemesNone)
+                .to_string());
+        }
+        let imported = import_detected_zed_themes(&detection, &self.config_paths)
+            .map_err(|error| error.to_string())?;
+        let ui_theme_count = imported.ui_themes.len();
+        let icon_theme_count = imported
+            .icon_themes
+            .iter()
+            .map(|package| package.theme_names.len())
+            .sum();
+
+        self.settings.settings_ui_theme_select = None;
+        self.settings.settings_ui_theme_select_subscription = None;
+        self.settings.settings_terminal_theme_select = None;
+        self.settings.settings_terminal_theme_select_subscription = None;
+        self.settings.settings_icon_theme_select = None;
+        self.settings.settings_icon_theme_select_subscription = None;
+        self.refresh_theme_runtime_from_settings();
+        Ok((ui_theme_count, icon_theme_count))
+    }
+
     pub fn set_terminal_font_family(&mut self, font_family: &str) -> Result<(), WorkbenchError> {
         self.app_settings.terminal.font_family = font_family.to_string();
         self.save_app_settings_and_refresh_runtime()

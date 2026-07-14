@@ -154,6 +154,10 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 UiTextKey::SettingsThemesDirectory,
                 UiTextKey::SettingsThemesDirectoryDescription,
             ),
+            row(
+                UiTextKey::SettingsImportZedThemes,
+                UiTextKey::SettingsImportZedThemesDescription,
+            ),
         ],
         SettingsGroupId::Languages => vec![
             row(

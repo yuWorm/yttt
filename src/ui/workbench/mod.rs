@@ -101,7 +101,8 @@ use crate::{
         paths::AppConfigPaths,
         settings::{
             AppSettings, EditorAutosave, LanguageSetting, SettingsLoadWarning, SettingsSaveError,
-            detect_shell_candidates, load_or_create_settings, resolve_default_shell, save_settings,
+            detect_shell_candidates, detect_system_language_setting, load_or_create_settings,
+            resolve_default_shell, save_settings,
         },
         theme::{ThemeLoadWarning, ThemeStore, load_theme_store},
     },
@@ -199,10 +200,16 @@ use crate::{
             TerminalPaneContext, TerminalPaneEvent, TerminalPaneExitedEvent,
             TerminalPaneStartedEvent, TerminalPaneView,
         },
-        theme::icons::{
-            IconTheme, available_icon_theme_names as load_icon_theme_names, load_icon_theme,
+        theme::{
+            EditorTheme, ThemeRuntime, WorkbenchTheme,
+            icons::{
+                IconTheme, available_icon_theme_names as load_icon_theme_names, load_icon_theme,
+            },
+            zed::{
+                DetectedZedExtension, ZedThemeDetection, detect_installed_zed_themes,
+                import_detected_zed_themes,
+            },
         },
-        theme::{EditorTheme, ThemeRuntime, WorkbenchTheme},
         workbench::layout_editor::{
             LayoutEditorSession, LayoutEditorTarget, ProjectLayoutEditorFormat,
             write_layout_file_atomic,
@@ -393,7 +400,17 @@ impl WorkbenchView {
         let (load_error, keybinding_warning_lines) =
             load_keybindings_messages(&config_paths, &command_registry);
         let keybindings_editor = load_keybindings_editor_state(&config_paths, &command_registry);
-        let (app_settings, settings_warning_lines) = load_app_settings_messages(&config_paths);
+        let (mut app_settings, settings_warning_lines) = load_app_settings_messages(&config_paths);
+        let language_detection_error = (!app_settings.general.onboarding_completed
+            && workspace.opened_projects().is_empty()
+            && app_settings.general.language == LanguageSetting::System)
+            .then(|| {
+                app_settings.general.language = detect_system_language_setting();
+                save_settings(&config_paths, &app_settings)
+                    .err()
+                    .map(|error| error.to_string())
+            })
+            .flatten();
         let (theme_runtime, theme_warning_lines) =
             load_theme_runtime_messages(&config_paths, &app_settings);
         let (icon_theme, icon_theme_error) =
@@ -417,6 +434,7 @@ impl WorkbenchView {
                 }),
         );
         let load_error = combine_load_messages(load_error, icon_theme_error);
+        let load_error = combine_load_messages(load_error, language_detection_error);
         let load_error = combine_load_messages(
             load_error,
             layout_load_warning_message(default_layout_state.warnings()),
@@ -424,7 +442,9 @@ impl WorkbenchView {
         let system_notifications_enabled = app_settings.notifications.system;
         let onboarding = ((force_onboarding || !app_settings.general.onboarding_completed)
             && workspace.opened_projects().is_empty())
-        .then(OnboardingState::default);
+        .then(|| {
+            OnboardingState::new(detect_installed_zed_themes(), app_settings.general.language)
+        });
         let mut project_editor_runtime = ProjectEditorRuntime::default();
         for project in workspace.opened_projects() {
             let selected_terminal_id = project
@@ -484,12 +504,40 @@ impl WorkbenchView {
         &mut self.workspace
     }
 
+    pub fn onboarding_language(&self) -> Option<LanguageSetting> {
+        self.onboarding
+            .as_ref()
+            .map(|state| state.selected_language)
+    }
+
     pub fn onboarding_agent(&self) -> Option<BuiltinAgent> {
-        self.onboarding.map(|state| state.selected_agent)
+        self.onboarding.as_ref().map(|state| state.selected_agent)
     }
 
     pub fn onboarding_layout_kind(&self) -> Option<DefaultLayoutKind> {
-        self.onboarding.map(|state| state.selected_layout)
+        self.onboarding.as_ref().map(|state| state.selected_layout)
+    }
+
+    pub fn select_onboarding_language(
+        &mut self,
+        language: LanguageSetting,
+    ) -> Result<(), WorkbenchError> {
+        if !self
+            .onboarding
+            .as_ref()
+            .is_some_and(|state| state.step == OnboardingStep::Language)
+        {
+            return Ok(());
+        }
+        let language = match language {
+            LanguageSetting::System => LanguageSetting::English,
+            language => language,
+        };
+        self.set_language(language)?;
+        if let Some(state) = &mut self.onboarding {
+            state.selected_language = language;
+        }
+        Ok(())
     }
 
     pub fn select_onboarding_layout(&mut self, layout_kind: DefaultLayoutKind) {
@@ -501,16 +549,31 @@ impl WorkbenchView {
     }
 
     pub fn advance_onboarding(&mut self) {
-        if let Some(state) = &mut self.onboarding
-            && state.step == OnboardingStep::Layout
-        {
-            state.step = OnboardingStep::Agent;
+        if let Some(state) = &mut self.onboarding {
+            state.step = match state.step {
+                OnboardingStep::Language => OnboardingStep::Layout,
+                OnboardingStep::Layout => OnboardingStep::Agent,
+                OnboardingStep::Agent => OnboardingStep::ZedImport,
+                OnboardingStep::ZedImport => OnboardingStep::ZedImport,
+            };
+        }
+    }
+
+    pub fn return_to_onboarding_language(&mut self) {
+        if let Some(state) = &mut self.onboarding {
+            state.step = OnboardingStep::Language;
         }
     }
 
     pub fn return_to_onboarding_layout(&mut self) {
         if let Some(state) = &mut self.onboarding {
             state.step = OnboardingStep::Layout;
+        }
+    }
+
+    pub fn return_to_onboarding_agent(&mut self) {
+        if let Some(state) = &mut self.onboarding {
+            state.step = OnboardingStep::Agent;
         }
     }
 
@@ -522,12 +585,22 @@ impl WorkbenchView {
         }
     }
 
-    pub fn complete_onboarding(&mut self) -> Result<(), String> {
-        let Some(state) = self.onboarding else {
+    pub fn complete_onboarding(&mut self, import_zed_themes: bool) -> Result<(), String> {
+        let Some(state) = self.onboarding.clone() else {
             return Ok(());
         };
-        if state.step != OnboardingStep::Agent {
-            return Err("select an agent before completing onboarding".to_string());
+        if state.step != OnboardingStep::ZedImport {
+            return Err(
+                "confirm whether to import Zed themes before completing onboarding".to_string(),
+            );
+        }
+
+        if import_zed_themes && !state.zed_import_completed {
+            import_detected_zed_themes(&state.zed_detection, &self.config_paths)
+                .map_err(|error| error.to_string())?;
+            if let Some(current_state) = &mut self.onboarding {
+                current_state.zed_import_completed = true;
+            }
         }
 
         self.default_layout_state

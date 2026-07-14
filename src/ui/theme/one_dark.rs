@@ -3,13 +3,14 @@ use gpui_component::ThemeMode;
 
 use super::{
     AnsiColors, AppTheme, DEFAULT_THEME_NAME, EditorSyntaxTheme, EditorTheme, TerminalTheme,
-    WorkbenchTheme,
+    ThemeMetadata, WorkbenchTheme,
 };
 
 pub(super) fn theme() -> AppTheme {
     AppTheme {
         name: DEFAULT_THEME_NAME.to_string(),
         mode: ThemeMode::Dark,
+        metadata: ThemeMetadata::default(),
         ui: WorkbenchTheme::one_dark(),
         editor: EditorTheme {
             background: rgb(0x23272e),

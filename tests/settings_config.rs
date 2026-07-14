@@ -5,11 +5,33 @@ use yttt::config::{
     paths::AppConfigPaths,
     settings::{
         AUTO_SHELL, AppSettings, EditorAutosave, LanguageSetting, SettingsLoadWarning,
-        ShellPlatform, detect_shell_candidates_with, load_or_create_settings,
-        resolve_default_shell, save_settings,
+        ShellPlatform, detect_shell_candidates_with, language_setting_for_locale,
+        load_or_create_settings, resolve_default_shell, save_settings,
     },
 };
 use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
+
+#[test]
+fn system_locale_maps_supported_chinese_variants() {
+    for locale in ["zh-CN", "zh_Hans_CN.UTF-8", "zh-Hant-TW", "ZH_cn"] {
+        assert_eq!(
+            language_setting_for_locale(Some(locale)),
+            LanguageSetting::Chinese,
+            "{locale}"
+        );
+    }
+}
+
+#[test]
+fn system_locale_defaults_other_or_missing_locales_to_english() {
+    for locale in [Some("en-US"), Some("de_DE.UTF-8"), Some("ja-JP"), None] {
+        assert_eq!(
+            language_setting_for_locale(locale),
+            LanguageSetting::English,
+            "{locale:?}"
+        );
+    }
+}
 
 #[test]
 fn app_config_paths_expose_settings_and_theme_dir() {
