@@ -61,6 +61,7 @@ pub struct ProjectTabsStyle {
     pub height: Pixels,
     pub item_height: Pixels,
     pub border_width: Pixels,
+    pub close_slot_size: Pixels,
     pub active_background: Rgba,
     pub inactive_background: Rgba,
     pub hover_background: Rgba,
@@ -108,6 +109,7 @@ pub fn project_tabs_style(theme: WorkbenchTheme) -> ProjectTabsStyle {
         height: primitive.height,
         item_height: primitive.item_height,
         border_width: primitive.border_width,
+        close_slot_size: primitive.close_slot_size,
         active_background: primitive.active_background,
         inactive_background: primitive.inactive_background,
         hover_background: primitive.hover_background,
@@ -303,6 +305,7 @@ where
             item,
             &icon_theme,
             theme,
+            style.close_slot_size,
             on_select_tab(select_tab_id),
             on_close_tab(close_tab_id),
         ));
@@ -334,6 +337,7 @@ fn project_tab<SelectH, CloseH>(
     item: WorkbenchTabItem,
     icon_theme: &IconTheme,
     theme: WorkbenchTheme,
+    close_slot_size: Pixels,
     on_select_tab: SelectH,
     on_close_tab: CloseH,
 ) -> impl IntoElement
@@ -397,6 +401,7 @@ where
             group_name,
             dirty,
             theme,
+            close_slot_size,
             on_close_tab,
         )),
     };
@@ -439,6 +444,7 @@ where
         theme,
         on_close_tab,
     )
+    .debug_selector(move || format!("project-tab-close-{index}"))
     .invisible()
     .group_hover(group_name, |this| this.visible())
 }
@@ -448,6 +454,7 @@ fn file_tab_close_slot<CloseH>(
     group_name: String,
     dirty: bool,
     theme: WorkbenchTheme,
+    close_slot_size: Pixels,
     on_close_tab: CloseH,
 ) -> impl IntoElement
 where
@@ -460,7 +467,7 @@ where
         .items_center()
         .justify_center()
         .flex_none()
-        .size(px(24.0))
+        .size(close_slot_size)
         .children(dirty.then(|| {
             div()
                 .size(dirty_style.size)
