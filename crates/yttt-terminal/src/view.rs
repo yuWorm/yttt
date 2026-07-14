@@ -1740,12 +1740,14 @@ impl TerminalView {
             return false;
         };
         let y: f32 = position.y.into();
-        self.scrollbar_captured = true;
         if (thumb_top..=thumb_top + thumb_height).contains(&y) {
+            self.scrollbar_captured = true;
             self.scrollbar_drag = Some(ScrollbarDragState {
                 pointer_offset: y - thumb_top,
             });
         } else {
+            self.scrollbar_captured = false;
+            self.scrollbar_drag = None;
             self.state.scroll_display(if y < thumb_top {
                 Scroll::PageUp
             } else {
@@ -2332,8 +2334,12 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         if self.scrollbar_captured {
-            let _ = self.update_scrollbar_drag(event.position, cx);
-            return;
+            if event.dragging() && self.update_scrollbar_drag(event.position, cx) {
+                return;
+            }
+            self.scrollbar_captured = false;
+            self.scrollbar_drag = None;
+            cx.notify();
         }
         let was_hidden = self.pointer_hidden;
         self.pointer_hidden = false;
@@ -3059,6 +3065,7 @@ impl Render for TerminalView {
         let padding = self.config.padding;
         let show_scrollbar = self.config.show_scrollbar;
         let cursor_unfocused_hollow = self.config.cursor_unfocused_hollow;
+        let pointer_gesture_active = self.scrollbar_captured || self.selection_anchor.is_some();
         let (background, foreground) = render_cache.lock().frame().map_or_else(
             || {
                 (
@@ -3126,6 +3133,7 @@ impl Render for TerminalView {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up(MouseButton::Middle, cx.listener(Self::on_mouse_up))
             .on_mouse_up(MouseButton::Right, cx.listener(Self::on_mouse_up))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_scroll_wheel(cx.listener(Self::on_scroll))
             .child(
@@ -3282,6 +3290,27 @@ impl Render for TerminalView {
                         );
                         if let Some(prepared_ime) = prepared_ime.as_ref() {
                             measured_renderer.paint_ime_text(prepared_ime, window, cx);
+                        }
+                        if pointer_gesture_active {
+                            let terminal = terminal.clone();
+                            window.on_mouse_event(
+                                move |event: &MouseMoveEvent, phase, window, cx| {
+                                    if phase != DispatchPhase::Capture {
+                                        return;
+                                    }
+                                    terminal.update(cx, |terminal, terminal_cx| {
+                                        let outside_viewport =
+                                            terminal.viewport.lock().as_ref().is_some_and(
+                                                |viewport| {
+                                                    !viewport.bounds.contains(&event.position)
+                                                },
+                                            );
+                                        if outside_viewport {
+                                            terminal.on_mouse_move(event, window, terminal_cx);
+                                        }
+                                    });
+                                },
+                            );
                         }
                         let paint_completed = Instant::now();
                         performance_for_paint.record_paint(
@@ -4392,7 +4421,16 @@ mod tests {
                 viewport.bounds.origin.y + viewport.padding.top + px(1.0),
             )
         });
-        cx.simulate_click(point(x, y), Modifiers::none());
+        cx.simulate_mouse_down(point(x, y), MouseButton::Left, Modifiers::none());
+        cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            assert!(
+                !terminal.scrollbar_captured,
+                "a paging click must not capture the pointer"
+            );
+            assert!(terminal.scrollbar_drag.is_none());
+        });
+        cx.simulate_mouse_up(point(x, y), MouseButton::Left, Modifiers::none());
         assert!(
             cx.read(|cx| terminal.read(cx).state.display_offset()) > 0,
             "a track click above the bottom-positioned thumb must page up"
@@ -4401,6 +4439,117 @@ mod tests {
             let terminal = terminal.read(cx);
             assert!(!terminal.scrollbar_captured);
             assert!(terminal.scrollbar_drag.is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn scrollbar_thumb_releases_outside_the_terminal(cx: &mut TestAppContext) {
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new(io::sink(), io::empty(), TerminalConfig::default(), cx)
+        });
+        terminal.update(cx, |terminal, cx| {
+            for line in 0..3000 {
+                terminal
+                    .state
+                    .process_bytes(format!("line-{line}\r\n").as_bytes());
+            }
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let (thumb, outside) = cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            let viewport = terminal
+                .viewport
+                .lock()
+                .expect("terminal viewport must be painted");
+            let (_, _, thumb_top, thumb_height, _, _) = terminal
+                .scrollbar_geometry()
+                .expect("the fixture must have a scrollbar");
+            let thumb = point(
+                viewport.bounds.origin.x + viewport.bounds.size.width - px(2.0),
+                px(thumb_top + thumb_height / 2.0),
+            );
+            let outside = point(viewport.bounds.origin.x - px(20.0), thumb.y);
+            (thumb, outside)
+        });
+
+        cx.simulate_mouse_down(thumb, MouseButton::Left, Modifiers::none());
+        cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            assert!(terminal.scrollbar_captured);
+            assert!(terminal.scrollbar_drag.is_some());
+        });
+        cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::none());
+        cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            assert!(!terminal.scrollbar_captured);
+            assert!(terminal.scrollbar_drag.is_none());
+        });
+
+        cx.simulate_mouse_down(thumb, MouseButton::Left, Modifiers::none());
+        assert!(cx.read(|cx| terminal.read(cx).scrollbar_captured));
+        cx.simulate_mouse_move(outside, None, Modifiers::none());
+        cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            assert!(!terminal.scrollbar_captured);
+            assert!(terminal.scrollbar_drag.is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn selection_drag_outside_viewport_scrolls_and_extends_selection(cx: &mut TestAppContext) {
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new(io::sink(), io::empty(), TerminalConfig::default(), cx)
+        });
+        terminal.update(cx, |terminal, cx| {
+            for line in 0..3000 {
+                terminal
+                    .state
+                    .process_bytes(format!("line-{line}\r\n").as_bytes());
+            }
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let (start, drag_inside, drag_outside) = cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            let viewport = terminal
+                .viewport
+                .lock()
+                .expect("terminal viewport must be painted");
+            let content_top = viewport.bounds.origin.y + viewport.padding.top;
+            let x = viewport.bounds.origin.x + viewport.padding.left + viewport.cell_width * 2.0;
+            (
+                point(x, content_top + viewport.cell_height * 4.0),
+                point(x, content_top + viewport.cell_height * 2.0),
+                point(x, viewport.bounds.origin.y - px(20.0)),
+            )
+        });
+
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(drag_inside, Some(MouseButton::Left), Modifiers::none());
+        assert!(cx.read(|cx| terminal.read(cx).selecting));
+
+        cx.simulate_mouse_move(drag_outside, Some(MouseButton::Left), Modifiers::none());
+        cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            assert!(terminal.selection_scroll_delta > 0);
+            assert!(terminal.selection_scroll_task.is_some());
+        });
+        cx.background_executor
+            .advance_clock(Duration::from_millis(17));
+        cx.run_until_parked();
+        cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            assert!(terminal.state.display_offset() > 0);
+            assert!(terminal.state.selection_to_string().is_some());
+        });
+
+        cx.simulate_mouse_up(drag_outside, MouseButton::Left, Modifiers::none());
+        cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            assert!(!terminal.selecting);
+            assert!(terminal.selection_anchor.is_none());
+            assert!(terminal.selection_scroll_task.is_none());
         });
     }
 
