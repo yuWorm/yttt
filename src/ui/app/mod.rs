@@ -59,6 +59,7 @@ pub fn run() {
                     }
                 });
                 register_workbench_keybinding_interceptor(cx, &view);
+                register_workbench_focus_restore(window, cx, &view);
                 register_workbench_close_guard(window, cx, &view);
                 cx.new(|cx| ComponentRoot::new(view, window, cx))
             })
@@ -79,6 +80,16 @@ pub fn register_workbench_keybinding_interceptor(cx: &mut App, view: &Entity<Wor
     });
     view.update(cx, |root, _| {
         root.set_keybinding_interceptor_subscription(keybinding_subscription);
+    });
+}
+
+pub fn register_workbench_focus_restore(
+    window: &mut Window,
+    cx: &mut App,
+    view: &Entity<WorkbenchView>,
+) {
+    view.update(cx, |view, cx| {
+        view.register_window_activation_observer(window, cx);
     });
 }
 

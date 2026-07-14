@@ -243,6 +243,7 @@ pub struct WorkbenchView {
     pending_open_project_request: bool,
     pending_status_notifications: Vec<ToastItem>,
     focus_handle: Option<FocusHandle>,
+    window_activation_subscription: Option<Subscription>,
     terminal: TerminalControllerState,
     sidebar_collapsed: bool,
     active_sidebar_resize_drag: Option<ActiveSidebarResizeDrag>,
@@ -482,6 +483,7 @@ impl WorkbenchView {
             pending_open_project_request: false,
             pending_status_notifications: Vec::new(),
             focus_handle: None,
+            window_activation_subscription: None,
             terminal: TerminalControllerState::default(),
             sidebar_collapsed: false,
             active_sidebar_resize_drag: None,
@@ -2001,6 +2003,22 @@ impl WorkbenchView {
         let focus_handle = cx.focus_handle();
         self.focus_handle = Some(focus_handle.clone());
         focus_handle
+    }
+
+    pub(crate) fn register_window_activation_observer(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.window_activation_subscription =
+            Some(cx.observe_window_activation(window, Self::on_window_activation_changed));
+    }
+
+    fn on_window_activation_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if window.is_window_active() && self.queue_default_active_work_item_focus() {
+            window.blur();
+            cx.notify();
+        }
     }
 
     fn reset_tab_rename_input(&mut self) {

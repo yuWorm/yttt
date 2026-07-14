@@ -91,6 +91,66 @@ fn active_terminal_content_receives_default_focus(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn window_reactivation_restores_previously_focused_terminal_pane(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(project_path, dev_fixture_layout())
+        .unwrap();
+    workspace.focus_pane("shell").unwrap();
+
+    let (root, cx) = cx.add_window_view(|_, _| {
+        WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
+    });
+    cx.update(|window, cx| {
+        crate::ui::app::register_workbench_focus_restore(window, cx, &root);
+    });
+    cx.run_until_parked();
+
+    let terminal_focus = cx.update(|window, cx| {
+        let root = root.read(cx);
+        assert_eq!(root.selected_focused_pane_id(), Some("shell"));
+        assert!(
+            !root
+                .focus_handle
+                .as_ref()
+                .expect("render must initialize the workbench focus handle")
+                .is_focused(window),
+            "initial focus must land on the selected terminal pane"
+        );
+        window
+            .focused(cx)
+            .expect("the selected terminal pane must own focus")
+    });
+    cx.update(|window, cx| {
+        let workbench_focus = root
+            .read(cx)
+            .focus_handle
+            .as_ref()
+            .expect("render must initialize the workbench focus handle")
+            .clone();
+        workbench_focus.focus(window, cx);
+    });
+
+    cx.deactivate_window();
+    cx.update(|window, _cx| window.activate_window());
+    cx.run_until_parked();
+
+    cx.update(|window, cx| {
+        assert!(window.is_window_active());
+        assert!(
+            terminal_focus.is_focused(window),
+            "reactivation must restore the exact terminal pane that was selected before deactivation"
+        );
+        assert_eq!(root.read(cx).selected_focused_pane_id(), Some("shell"));
+    });
+}
+
+#[gpui::test]
 fn agent_exit_notification_does_not_reenter_workbench_entity(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
