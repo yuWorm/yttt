@@ -8,7 +8,6 @@ mod cache;
 mod content;
 
 pub(crate) use cache::TerminalRenderCache;
-#[cfg(test)]
 pub(crate) use content::TerminalCellWidth;
 pub(crate) use content::{
     HintCellOverlay, RenderDecorationFlags, RenderOverlayState, RenderableCell, RenderableCursor,
@@ -22,11 +21,8 @@ use gpui::{
     App, Bounds, Edges, Font, FontFeatures, FontStyle, FontWeight, Hsla, Pixels, Point, ShapedLine,
     SharedString, Size, TextAlign, TextRun, UnderlineStyle, Window, px, quad, transparent_black,
 };
-use lru::LruCache;
 use parking_lot::Mutex;
-use smallvec::SmallVec;
 use std::collections::HashMap;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -48,7 +44,89 @@ struct DecorationSpan {
     kind: RenderDecorationFlags,
 }
 
-pub(crate) const MAX_SHAPED_CLUSTERS: usize = 8192;
+#[derive(Clone, Debug, PartialEq)]
+struct TerminalTextBatch {
+    column: usize,
+    cell_count: usize,
+    column_count: usize,
+    cell_columns: usize,
+    cell_starts: Option<Vec<(usize, usize)>>,
+    text: String,
+    font_style: TerminalFontStyle,
+    foreground: Hsla,
+}
+
+impl TerminalTextBatch {
+    fn new(cell: &RenderableCell) -> Self {
+        Self {
+            column: cell.point.column.0,
+            cell_count: 1,
+            column_count: cell.width.columns(),
+            cell_columns: cell.width.columns(),
+            cell_starts: (cell.width.columns() > 1).then(|| vec![(0, 0)]),
+            text: cell.text.iter().collect(),
+            font_style: cell.font_style,
+            foreground: cell.foreground,
+        }
+    }
+
+    fn can_append(&self, cell: &RenderableCell) -> bool {
+        self.column + self.column_count == cell.point.column.0
+            && self.cell_columns == cell.width.columns()
+            && self.font_style == cell.font_style
+            && self.foreground == cell.foreground
+    }
+
+    fn contains_spacer(&self, cell: &RenderableCell) -> bool {
+        cell.width == TerminalCellWidth::Spacer
+            && self.column + self.column_count == cell.point.column.0 + 1
+    }
+
+    fn append(&mut self, cell: &RenderableCell) {
+        if let Some(cell_starts) = self.cell_starts.as_mut() {
+            cell_starts.push((self.text.len(), self.column_count));
+        }
+        self.text.extend(cell.text.iter());
+        self.cell_count += 1;
+        self.column_count += self.cell_columns;
+    }
+}
+
+fn text_batches(cells: &[RenderableCell]) -> Vec<TerminalTextBatch> {
+    let mut batches = Vec::with_capacity(cells.len() / 8 + 1);
+    let mut current = None::<TerminalTextBatch>;
+
+    for cell in cells {
+        if cell.text.is_empty() {
+            if current
+                .as_ref()
+                .is_some_and(|batch| batch.contains_spacer(cell))
+            {
+                continue;
+            }
+            if let Some(batch) = current.take() {
+                batches.push(batch);
+            }
+            continue;
+        }
+
+        if let Some(batch) = current.as_mut()
+            && batch.can_append(cell)
+        {
+            batch.append(cell);
+            continue;
+        }
+
+        if let Some(batch) = current.replace(TerminalTextBatch::new(cell)) {
+            batches.push(batch);
+        }
+    }
+
+    if let Some(batch) = current {
+        batches.push(batch);
+    }
+    batches
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TerminalFontMetrics {
@@ -60,15 +138,6 @@ pub(crate) struct TerminalFontMetrics {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub(crate) struct TerminalGlyphKey {
-    pub text: SmallVec<[char; 3]>,
-    pub font_style: TerminalFontStyle,
-    pub foreground: Hsla,
-    pub font_size_bits: u32,
-    pub scale_factor_bits: u32,
-}
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct FontMetricsKey {
     family: String,
     font_size_bits: u32,
@@ -77,21 +146,58 @@ struct FontMetricsKey {
 }
 
 #[derive(Clone)]
-struct CachedGlyph {
+struct CachedTextRun {
     column: usize,
+    cell_count: usize,
+    column_count: usize,
+    fixed_cell_starts: Option<Arc<[(usize, usize)]>>,
+    foreground: Hsla,
     shaped: ShapedLine,
+}
+
+impl CachedTextRun {
+    fn glyph_x(&self, cell_width: Pixels, byte_index: usize, shaped_x: Pixels) -> Pixels {
+        let Some(cell_starts) = self.fixed_cell_starts.as_ref() else {
+            return shaped_x;
+        };
+        let cell_index = cell_starts
+            .partition_point(|(start, _)| *start <= byte_index)
+            .saturating_sub(1);
+        let extra_columns = cell_starts
+            .get(cell_index)
+            .map_or(0, |(_, column)| column.saturating_sub(cell_index));
+        shaped_x + cell_width * extra_columns as f32
+    }
 }
 
 #[derive(Clone)]
 struct CachedRowDisplay {
     generation: u64,
-    glyphs: Vec<CachedGlyph>,
+    background_spans: Arc<[BackgroundSpan]>,
+    text_runs: Arc<[CachedTextRun]>,
+    decoration_spans: Arc<[DecorationSpan]>,
+}
+
+pub(crate) struct PreparedTerminalFrame {
+    snapshot: Arc<TerminalRenderSnapshot>,
+    rows: Vec<CachedRowDisplay>,
+}
+
+impl PreparedTerminalFrame {
+    pub(crate) fn snapshot(&self) -> &TerminalRenderSnapshot {
+        self.snapshot.as_ref()
+    }
+}
+
+pub(crate) struct PreparedImeText {
+    cursor_bounds: Bounds<Pixels>,
+    background: Hsla,
+    shaped: ShapedLine,
 }
 
 struct RendererShared {
     metrics_key: Option<FontMetricsKey>,
     metrics: Option<TerminalFontMetrics>,
-    glyph_cache: LruCache<TerminalGlyphKey, ShapedLine>,
     rows: HashMap<usize, CachedRowDisplay>,
     #[cfg(test)]
     shaping_hook: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -102,7 +208,6 @@ impl RendererShared {
         Self {
             metrics_key: None,
             metrics: None,
-            glyph_cache: LruCache::new(NonZeroUsize::new(MAX_SHAPED_CLUSTERS).unwrap()),
             rows: HashMap::new(),
             #[cfg(test)]
             shaping_hook: None,
@@ -113,8 +218,9 @@ impl RendererShared {
 #[derive(Default)]
 struct TerminalDiagnostics {
     rebuilt_rows: AtomicU64,
-    shape_cache_hits: AtomicU64,
-    shape_cache_misses: AtomicU64,
+    shaped_text_runs: AtomicU64,
+    painted_text_runs: AtomicU64,
+    painted_text_cells: AtomicU64,
     term_lock_nanos: AtomicU64,
     paint_nanos: AtomicU64,
 }
@@ -123,9 +229,9 @@ struct TerminalDiagnostics {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TerminalDiagnosticsSnapshot {
     pub rebuilt_rows: u64,
-    pub shape_cache_entries: usize,
-    pub shape_cache_hits: u64,
-    pub shape_cache_misses: u64,
+    pub shaped_text_runs: u64,
+    pub painted_text_runs: u64,
+    pub painted_text_cells: u64,
     pub term_lock_nanos: u64,
     pub paint_nanos: u64,
     pub bytes_read: u64,
@@ -228,7 +334,6 @@ impl TerminalRenderer {
         let mut shared = self.shared.lock();
         shared.metrics_key = Some(key);
         shared.metrics = Some(metrics);
-        shared.glyph_cache.clear();
         shared.rows.clear();
         metrics
     }
@@ -236,7 +341,7 @@ impl TerminalRenderer {
     fn font(&self, style: TerminalFontStyle) -> Font {
         Font {
             family: self.font_family.clone().into(),
-            features: FontFeatures::default(),
+            features: FontFeatures::disable_ligatures(),
             fallbacks: None,
             weight: if style.bold {
                 FontWeight::BOLD
@@ -255,7 +360,6 @@ impl TerminalRenderer {
         let mut shared = self.shared.lock();
         shared.metrics_key = None;
         shared.metrics = None;
-        shared.glyph_cache.clear();
         shared.rows.clear();
     }
 
@@ -268,87 +372,114 @@ impl TerminalRenderer {
         self.shared.lock().shaping_hook = hook;
     }
 
-    fn shaped_row(
+    #[cfg(test)]
+    pub(crate) fn cached_first_run_glyph_x_for_index(
+        &self,
+        row_index: usize,
+        byte_index: usize,
+    ) -> Option<Pixels> {
+        let shared = self.shared.lock();
+        let run = shared.rows.get(&row_index)?.text_runs.first()?;
+        let glyph = run
+            .shaped
+            .runs
+            .iter()
+            .flat_map(|font_run| font_run.glyphs.iter())
+            .filter(|glyph| glyph.index >= byte_index)
+            .min_by_key(|glyph| glyph.index)?;
+        Some(run.glyph_x(self.cell_width, glyph.index, glyph.position.x))
+    }
+
+    fn prepared_row(
         &self,
         row_index: usize,
         row: &RenderableRow,
         window: &mut Window,
-    ) -> Vec<CachedGlyph> {
-        if let Some(glyphs) = self
+    ) -> CachedRowDisplay {
+        if let Some(cached) = self
             .shared
             .lock()
             .rows
             .get(&row_index)
             .filter(|cached| cached.generation == row.generation)
-            .map(|cached| cached.glyphs.clone())
+            .cloned()
         {
-            return glyphs;
+            return cached;
         }
 
-        let font_size: f32 = self.font_size.into();
-        let scale_factor = window.scale_factor();
-        let mut glyphs = Vec::with_capacity(row.cells.len());
-        for cell in &row.cells {
-            if cell.text.is_empty() {
-                continue;
+        let batches = text_batches(&row.cells);
+        let mut text_runs = Vec::with_capacity(batches.len());
+        #[cfg(test)]
+        let shaping_hook = self.shared.lock().shaping_hook.clone();
+
+        for batch in batches {
+            #[cfg(test)]
+            if let Some(hook) = shaping_hook.as_ref() {
+                hook();
             }
-            let key = TerminalGlyphKey {
-                text: cell.text.clone(),
-                font_style: cell.font_style,
-                foreground: cell.foreground,
-                font_size_bits: font_size.to_bits(),
-                scale_factor_bits: scale_factor.to_bits(),
-            };
-            let cached = self.shared.lock().glyph_cache.get(&key).cloned();
-            let shaped = if let Some(shaped) = cached {
-                self.diagnostics
-                    .shape_cache_hits
-                    .fetch_add(1, Ordering::Relaxed);
-                shaped
-            } else {
-                self.diagnostics
-                    .shape_cache_misses
-                    .fetch_add(1, Ordering::Relaxed);
 
-                #[cfg(test)]
-                if let Some(hook) = self.shared.lock().shaping_hook.clone() {
-                    hook();
-                }
-
-                let text = cell.text.iter().collect::<String>();
-                let run = TextRun {
-                    len: text.len(),
-                    font: self.font(cell.font_style),
-                    color: cell.foreground,
-                    background_color: None,
-                    underline: None,
-                    strikethrough: None,
-                };
-                let shaped = window.text_system().shape_line(
-                    SharedString::from(text),
-                    self.font_size,
-                    &[run],
-                    None,
-                );
-                self.shared.lock().glyph_cache.put(key, shaped.clone());
-                shaped
+            let TerminalTextBatch {
+                column,
+                cell_count,
+                column_count,
+                cell_starts,
+                text,
+                font_style,
+                foreground,
+                ..
+            } = batch;
+            let run = TextRun {
+                len: text.len(),
+                font: self.font(font_style),
+                color: foreground,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
             };
-            glyphs.push(CachedGlyph {
-                column: cell.point.column.0,
+            let shaped = window.text_system().shape_line(
+                SharedString::from(text),
+                self.font_size,
+                &[run],
+                Some(self.cell_width),
+            );
+            text_runs.push(CachedTextRun {
+                column,
+                cell_count,
+                column_count,
+                fixed_cell_starts: cell_starts.map(Into::into),
+                foreground,
                 shaped,
             });
         }
+
         self.diagnostics
             .rebuilt_rows
             .fetch_add(1, Ordering::Relaxed);
-        self.shared.lock().rows.insert(
-            row_index,
-            CachedRowDisplay {
-                generation: row.generation,
-                glyphs: glyphs.clone(),
-            },
-        );
-        glyphs
+        self.diagnostics
+            .shaped_text_runs
+            .fetch_add(text_runs.len() as u64, Ordering::Relaxed);
+        let cached = CachedRowDisplay {
+            generation: row.generation,
+            background_spans: Self::background_spans(row_index, &row.cells).into(),
+            text_runs: text_runs.into(),
+            decoration_spans: Self::decoration_spans_for_row(row_index, &row.cells).into(),
+        };
+        self.shared.lock().rows.insert(row_index, cached.clone());
+        cached
+    }
+
+    pub(crate) fn prepare_frame(
+        &self,
+        snapshot: Arc<TerminalRenderSnapshot>,
+        window: &mut Window,
+    ) -> PreparedTerminalFrame {
+        let rows = snapshot
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(row_index, row)| self.prepared_row(row_index, row, window))
+            .collect();
+        PreparedTerminalFrame { snapshot, rows }
     }
 
     pub(crate) fn record_term_lock(&self, nanos: u64) {
@@ -359,12 +490,11 @@ impl TerminalRenderer {
 
     #[cfg(any(test, debug_assertions))]
     pub fn diagnostics_snapshot(&self) -> TerminalDiagnosticsSnapshot {
-        let shared = self.shared.lock();
         TerminalDiagnosticsSnapshot {
             rebuilt_rows: self.diagnostics.rebuilt_rows.load(Ordering::Relaxed),
-            shape_cache_entries: shared.glyph_cache.len(),
-            shape_cache_hits: self.diagnostics.shape_cache_hits.load(Ordering::Relaxed),
-            shape_cache_misses: self.diagnostics.shape_cache_misses.load(Ordering::Relaxed),
+            shaped_text_runs: self.diagnostics.shaped_text_runs.load(Ordering::Relaxed),
+            painted_text_runs: self.diagnostics.painted_text_runs.load(Ordering::Relaxed),
+            painted_text_cells: self.diagnostics.painted_text_cells.load(Ordering::Relaxed),
             term_lock_nanos: self.diagnostics.term_lock_nanos.load(Ordering::Relaxed),
             paint_nanos: self.diagnostics.paint_nanos.load(Ordering::Relaxed),
             ..TerminalDiagnosticsSnapshot::default()
@@ -375,10 +505,13 @@ impl TerminalRenderer {
     pub fn reset_diagnostics(&self) {
         self.diagnostics.rebuilt_rows.store(0, Ordering::Relaxed);
         self.diagnostics
-            .shape_cache_hits
+            .shaped_text_runs
             .store(0, Ordering::Relaxed);
         self.diagnostics
-            .shape_cache_misses
+            .painted_text_runs
+            .store(0, Ordering::Relaxed);
+        self.diagnostics
+            .painted_text_cells
             .store(0, Ordering::Relaxed);
         self.diagnostics.term_lock_nanos.store(0, Ordering::Relaxed);
         self.diagnostics.paint_nanos.store(0, Ordering::Relaxed);
@@ -418,60 +551,66 @@ impl TerminalRenderer {
         spans
     }
 
-    fn decoration_spans(rows: &[RenderableRow]) -> Vec<DecorationSpan> {
+    fn decoration_spans_for_row(row_index: usize, cells: &[RenderableCell]) -> Vec<DecorationSpan> {
         let mut spans = Vec::new();
-        for (row_index, row) in rows.iter().enumerate() {
-            for kind in [
-                RenderDecorationFlags::UNDERLINE,
-                RenderDecorationFlags::DOUBLE_UNDERLINE,
-                RenderDecorationFlags::UNDERCURL,
-                RenderDecorationFlags::DOTTED_UNDERLINE,
-                RenderDecorationFlags::DASHED_UNDERLINE,
-                RenderDecorationFlags::STRIKEOUT,
-            ] {
-                let mut current: Option<DecorationSpan> = None;
-                for cell in &row.cells {
-                    if !cell.decorations.contains(kind) {
-                        if let Some(span) = current.take() {
-                            spans.push(span);
-                        }
-                        continue;
+        for kind in [
+            RenderDecorationFlags::UNDERLINE,
+            RenderDecorationFlags::DOUBLE_UNDERLINE,
+            RenderDecorationFlags::UNDERCURL,
+            RenderDecorationFlags::DOTTED_UNDERLINE,
+            RenderDecorationFlags::DASHED_UNDERLINE,
+            RenderDecorationFlags::STRIKEOUT,
+        ] {
+            let mut current: Option<DecorationSpan> = None;
+            for cell in cells {
+                if !cell.decorations.contains(kind) {
+                    if let Some(span) = current.take() {
+                        spans.push(span);
                     }
-                    let start_col = cell.point.column.0;
-                    let end_col = start_col + cell.width.columns();
-                    match &mut current {
-                        Some(span)
-                            if span.color == cell.underline_color && start_col <= span.end_col =>
-                        {
-                            span.end_col = span.end_col.max(end_col);
-                        }
-                        Some(span) => {
-                            spans.push(*span);
-                            *span = DecorationSpan {
-                                row: row_index,
-                                start_col,
-                                end_col,
-                                color: cell.underline_color,
-                                kind,
-                            };
-                        }
-                        None => {
-                            current = Some(DecorationSpan {
-                                row: row_index,
-                                start_col,
-                                end_col,
-                                color: cell.underline_color,
-                                kind,
-                            });
-                        }
+                    continue;
+                }
+                let start_col = cell.point.column.0;
+                let end_col = start_col + cell.width.columns();
+                match &mut current {
+                    Some(span)
+                        if span.color == cell.underline_color && start_col <= span.end_col =>
+                    {
+                        span.end_col = span.end_col.max(end_col);
+                    }
+                    Some(span) => {
+                        spans.push(*span);
+                        *span = DecorationSpan {
+                            row: row_index,
+                            start_col,
+                            end_col,
+                            color: cell.underline_color,
+                            kind,
+                        };
+                    }
+                    None => {
+                        current = Some(DecorationSpan {
+                            row: row_index,
+                            start_col,
+                            end_col,
+                            color: cell.underline_color,
+                            kind,
+                        });
                     }
                 }
-                if let Some(span) = current {
-                    spans.push(span);
-                }
+            }
+            if let Some(span) = current {
+                spans.push(span);
             }
         }
         spans
+    }
+
+    #[cfg(test)]
+    fn decoration_spans(rows: &[RenderableRow]) -> Vec<DecorationSpan> {
+        rows.iter()
+            .enumerate()
+            .flat_map(|(row_index, row)| Self::decoration_spans_for_row(row_index, &row.cells))
+            .collect()
     }
 
     pub(crate) fn ime_caret_offset(
@@ -528,16 +667,15 @@ impl TerminalRenderer {
         })
     }
 
-    pub(crate) fn paint_ime_text(
+    pub(crate) fn prepare_ime_text(
         &self,
         cursor_bounds: Bounds<Pixels>,
         snapshot: &TerminalRenderSnapshot,
         text: &str,
         window: &mut Window,
-        cx: &mut App,
-    ) {
+    ) -> Option<PreparedImeText> {
         if text.is_empty() {
-            return;
+            return None;
         }
         let run = TextRun {
             len: text.len(),
@@ -554,27 +692,40 @@ impl TerminalRenderer {
         let shaped = window
             .text_system()
             .shape_line(text.into(), self.font_size, &[run], None);
+        Some(PreparedImeText {
+            cursor_bounds,
+            background: snapshot.default_background,
+            shaped,
+        })
+    }
+
+    pub(crate) fn paint_ime_text(
+        &self,
+        prepared: &PreparedImeText,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         let ime_bounds = Bounds {
-            origin: cursor_bounds.origin,
+            origin: prepared.cursor_bounds.origin,
             size: Size {
-                width: shaped.width.max(self.cell_width),
+                width: prepared.shaped.width.max(self.cell_width),
                 height: self.cell_height,
             },
         };
         window.paint_quad(quad(
             ime_bounds,
             px(0.0),
-            snapshot.default_background,
+            prepared.background,
             Edges::<Pixels>::default(),
             transparent_black(),
             Default::default(),
         ));
         let base_height = self.cell_height / self.line_height_multiplier;
         let vertical_offset = (self.cell_height - base_height) / 2.0;
-        let _ = shaped.paint(
+        let _ = prepared.shaped.paint(
             Point {
-                x: cursor_bounds.origin.x,
-                y: cursor_bounds.origin.y + vertical_offset,
+                x: prepared.cursor_bounds.origin.x,
+                y: prepared.cursor_bounds.origin.y + vertical_offset,
             },
             self.cell_height,
             TextAlign::Left,
@@ -584,16 +735,61 @@ impl TerminalRenderer {
         );
     }
 
+    fn paint_fixed_cell_text_run(
+        &self,
+        origin: Point<Pixels>,
+        text_run: &CachedTextRun,
+        window: &mut Window,
+    ) {
+        let line_bounds = Bounds {
+            origin,
+            size: Size {
+                width: self.cell_width * text_run.column_count as f32,
+                height: self.cell_height,
+            },
+        };
+        let baseline = (self.cell_height - text_run.shaped.ascent - text_run.shaped.descent) / 2.0
+            + text_run.shaped.ascent;
+        window.paint_layer(line_bounds, |window| {
+            for font_run in &text_run.shaped.runs {
+                for glyph in &font_run.glyphs {
+                    let glyph_origin = Point {
+                        x: origin.x
+                            + text_run.glyph_x(self.cell_width, glyph.index, glyph.position.x),
+                        y: origin.y + baseline + glyph.position.y,
+                    };
+                    if glyph.is_emoji {
+                        let _ = window.paint_emoji(
+                            glyph_origin,
+                            font_run.font_id,
+                            glyph.id,
+                            text_run.shaped.font_size,
+                        );
+                    } else {
+                        let _ = window.paint_glyph(
+                            glyph_origin,
+                            font_run.font_id,
+                            glyph.id,
+                            text_run.shaped.font_size,
+                            text_run.foreground,
+                        );
+                    }
+                }
+            }
+        });
+    }
+
     pub(crate) fn paint(
         &self,
         bounds: Bounds<Pixels>,
         padding: Edges<Pixels>,
         show_scrollbar: bool,
-        snapshot: &TerminalRenderSnapshot,
+        prepared: &PreparedTerminalFrame,
         window: &mut Window,
         cx: &mut App,
     ) {
         let paint_started = Instant::now();
+        let snapshot = prepared.snapshot();
         window.paint_quad(quad(
             bounds,
             px(0.0),
@@ -610,8 +806,10 @@ impl TerminalRenderer {
         let base_height = self.cell_height / self.line_height_multiplier;
         let vertical_offset = (self.cell_height - base_height) / 2.0;
 
-        for (row_index, row) in snapshot.rows.iter().enumerate() {
-            for span in Self::background_spans(row_index, &row.cells) {
+        let mut painted_text_runs = 0_u64;
+        let mut painted_text_cells = 0_u64;
+        for (row_index, row) in prepared.rows.iter().enumerate() {
+            for span in row.background_spans.iter() {
                 if span.color == snapshot.default_background {
                     continue;
                 }
@@ -634,42 +832,62 @@ impl TerminalRenderer {
                 ));
             }
 
-            for glyph in self.shaped_row(row_index, row, window) {
-                let _ = glyph.shaped.paint(
-                    Point {
-                        x: origin.x + self.cell_width * glyph.column as f32,
-                        y: origin.y + self.cell_height * row_index as f32 + vertical_offset,
-                    },
-                    self.cell_height,
-                    TextAlign::Left,
-                    None,
-                    window,
-                    cx,
-                );
+            for text_run in row.text_runs.iter() {
+                let text_origin = Point {
+                    x: origin.x + self.cell_width * text_run.column as f32,
+                    y: origin.y + self.cell_height * row_index as f32 + vertical_offset,
+                };
+                if text_run.fixed_cell_starts.is_some() {
+                    self.paint_fixed_cell_text_run(text_origin, text_run, window);
+                } else {
+                    let _ = text_run.shaped.paint(
+                        text_origin,
+                        self.cell_height,
+                        TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    );
+                }
+                painted_text_runs += 1;
+                painted_text_cells += text_run.cell_count as u64;
             }
         }
 
-        self.paint_decorations(origin, &snapshot.rows, window);
+        self.paint_decorations(
+            origin,
+            prepared
+                .rows
+                .iter()
+                .flat_map(|row| row.decoration_spans.iter()),
+            window,
+        );
 
         self.paint_cursor(bounds, padding, snapshot.cursor, window);
         if show_scrollbar {
             self.paint_scrollbar(bounds, padding, snapshot, window);
         }
+        self.diagnostics
+            .painted_text_runs
+            .fetch_add(painted_text_runs, Ordering::Relaxed);
+        self.diagnostics
+            .painted_text_cells
+            .fetch_add(painted_text_cells, Ordering::Relaxed);
         self.diagnostics.paint_nanos.fetch_add(
             paint_started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
             Ordering::Relaxed,
         );
     }
 
-    fn paint_decorations(
+    fn paint_decorations<'a>(
         &self,
         origin: Point<Pixels>,
-        rows: &[RenderableRow],
+        spans: impl Iterator<Item = &'a DecorationSpan>,
         window: &mut Window,
     ) {
         let font_size: f32 = self.font_size.into();
         let thickness = px((font_size * 0.06).max(1.0));
-        for span in Self::decoration_spans(rows) {
+        for span in spans {
             let x = origin.x + self.cell_width * span.start_col as f32;
             let width = self.cell_width * (span.end_col - span.start_col) as f32;
             let row_top = origin.y + self.cell_height * span.row as f32;
@@ -956,6 +1174,27 @@ mod tests {
     }
 
     #[test]
+    fn block_cursor_covers_both_columns_of_a_wide_character() {
+        let mut fixture = TerminalFixture::new(4, 1);
+        fixture.feed("你".as_bytes());
+        fixture.feed(b"\x1b[2D");
+
+        let snapshot = snapshot(&fixture);
+        assert_eq!(snapshot.cursor.point.column.0, 0);
+        assert_eq!(snapshot.cursor.width.get(), 2);
+        assert_eq!(snapshot.rows[0].cells[0].width, TerminalCellWidth::Wide);
+        assert_eq!(snapshot.rows[0].cells[1].width, TerminalCellWidth::Spacer);
+        assert_eq!(
+            snapshot.rows[0].cells[0].background,
+            snapshot.cursor.cursor_color
+        );
+        assert_eq!(
+            snapshot.rows[0].cells[1].background,
+            snapshot.cursor.cursor_color
+        );
+    }
+
+    #[test]
     fn render_snapshot_applies_selection_and_cursor_precedence() {
         let mut fixture = TerminalFixture::new(4, 1);
         fixture.feed(b"ABC\x1b[2D");
@@ -989,7 +1228,7 @@ mod tests {
     }
 
     #[test]
-    fn full_damage_diffs_final_rows_before_invalidating_shape_cache() {
+    fn full_damage_diffs_final_rows_before_invalidating_row_cache() {
         let mut fixture = TerminalFixture::new(16, 3);
         fixture.feed(b"stable frame");
         let mut cache = TerminalRenderCache::default();
@@ -1004,28 +1243,80 @@ mod tests {
     }
 
     #[test]
-    fn shape_cache_is_bounded() {
-        let renderer = TerminalRenderer::new(
-            "monospace".to_string(),
-            px(14.0),
-            1.2,
-            ColorPalette::default(),
-        );
-        let mut shared = renderer.shared.lock();
-        for index in 0..(MAX_SHAPED_CLUSTERS + 512) {
-            let character = char::from_u32(0x1000 + index as u32).unwrap();
-            shared.glyph_cache.put(
-                TerminalGlyphKey {
-                    text: SmallVec::from_slice(&[character]),
-                    font_style: TerminalFontStyle::default(),
-                    foreground: gpui::black(),
-                    font_size_bits: 14.0_f32.to_bits(),
-                    scale_factor_bits: 1.0_f32.to_bits(),
-                },
-                ShapedLine::default(),
-            );
-        }
-        assert_eq!(shared.glyph_cache.len(), MAX_SHAPED_CLUSTERS);
+    fn handed_off_frame_stays_immutable_while_cache_merges_next_update() {
+        let mut fixture = TerminalFixture::new(4, 1);
+        fixture.feed(b"A");
+        let mut cache = TerminalRenderCache::default();
+        cache.merge(snapshot(&fixture));
+        let handed_off = cache.frame().unwrap();
+
+        fixture.feed(b"B");
+        assert_eq!(cache.merge(snapshot(&fixture)), 1);
+        let current = cache.frame().unwrap();
+
+        assert_eq!(handed_off.rows[0].cells[0].text.as_slice(), &['A']);
+        assert!(handed_off.rows[0].cells[1].text.is_empty());
+        assert_eq!(current.rows[0].cells[1].text.as_slice(), &['B']);
+    }
+
+    #[test]
+    fn text_batches_merge_contiguous_same_style_cells() {
+        let mut fixture = TerminalFixture::new(16, 1);
+        fixture.feed(b"terminal-frame");
+        let snapshot = snapshot(&fixture);
+
+        let batches = text_batches(&snapshot.rows[0].cells);
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].column, 0);
+        assert_eq!(batches[0].cell_count, 14);
+        assert_eq!(batches[0].text, "terminal-frame");
+    }
+
+    #[test]
+    fn text_batches_split_at_style_and_cell_width_changes() {
+        let mut fixture = TerminalFixture::new(8, 1);
+        fixture.feed(b"A\x1b[31mB");
+        fixture.feed("界C".as_bytes());
+        let snapshot = snapshot(&fixture);
+
+        let batches = text_batches(&snapshot.rows[0].cells);
+
+        assert_eq!(batches.len(), 4);
+        assert_eq!(batches[0].text, "A");
+        assert_eq!(batches[1].text, "B");
+        assert_eq!(batches[2].text, "界");
+        assert_eq!(batches[2].cell_columns, 2);
+        assert_eq!(batches[3].column, 4);
+        assert_eq!(batches[3].text, "C");
+    }
+
+    #[test]
+    fn text_batches_merge_contiguous_wide_cells_across_spacers() {
+        let mut fixture = TerminalFixture::new(16, 1);
+        fixture.feed("提交中文".as_bytes());
+        let snapshot = snapshot(&fixture);
+
+        let batches = text_batches(&snapshot.rows[0].cells);
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].text, "提交中文");
+        assert_eq!(batches[0].cell_count, 4);
+        assert_eq!(batches[0].column_count, 8);
+        assert_eq!(batches[0].cell_columns, 2);
+    }
+
+    #[test]
+    fn text_batches_keep_combining_marks_with_their_base_cell() {
+        let mut fixture = TerminalFixture::new(8, 1);
+        fixture.feed("e\u{301}x".as_bytes());
+        let snapshot = snapshot(&fixture);
+
+        let batches = text_batches(&snapshot.rows[0].cells);
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].text, "e\u{301}x");
+        assert_eq!(batches[0].cell_count, 2);
     }
 
     #[test]

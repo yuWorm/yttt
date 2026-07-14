@@ -1,4 +1,6 @@
 use crate::event::{GpuiEventProxy, TerminalEventMailbox};
+use crate::perf::{InputPerformanceSample, TerminalPerformanceHandle};
+
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
@@ -7,7 +9,10 @@ use parking_lot::{Condvar, Mutex, RwLock};
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(any(test, debug_assertions))]
+use std::sync::atomic::{AtomicU64, AtomicUsize};
+
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -42,8 +47,15 @@ pub enum PtyEvent {
 pub type ResizeCallback = Arc<dyn Fn(u16, u16) -> Result<(), String> + Send + Sync>;
 
 #[derive(Debug)]
+pub(crate) struct QueuedInput {
+    bytes: Bytes,
+    performance_sample: Option<InputPerformanceSample>,
+}
+
+#[derive(Debug)]
 pub(crate) enum PtyCommand {
-    WriteInput(Bytes),
+    WriteInput(QueuedInput),
+
     WriteReply(Bytes),
     Resize { cols: u16, rows: u16 },
     Shutdown,
@@ -63,14 +75,21 @@ pub(crate) enum PtyReadMessage {
 
 #[derive(Default)]
 pub(crate) struct PtyDiagnostics {
+    #[cfg(any(test, debug_assertions))]
     bytes_read: AtomicU64,
+    #[cfg(any(test, debug_assertions))]
     parser_batches: AtomicU64,
+    #[cfg(any(test, debug_assertions))]
     read_batches_high_water: AtomicUsize,
+    #[cfg(any(test, debug_assertions))]
     queued_input_high_water: AtomicUsize,
+    #[cfg(any(test, debug_assertions))]
     queued_reply_high_water: AtomicUsize,
+    #[cfg(any(test, debug_assertions))]
     queued_command_high_water: AtomicUsize,
 }
 
+#[cfg(any(test, debug_assertions))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PtyDiagnosticsSnapshot {
     pub bytes_read: u64,
@@ -82,6 +101,7 @@ pub(crate) struct PtyDiagnosticsSnapshot {
 }
 
 impl PtyDiagnostics {
+    #[cfg(any(test, debug_assertions))]
     fn snapshot(&self) -> PtyDiagnosticsSnapshot {
         PtyDiagnosticsSnapshot {
             bytes_read: self.bytes_read.load(Ordering::Relaxed),
@@ -92,10 +112,54 @@ impl PtyDiagnostics {
             queued_command_high_water: self.queued_command_high_water.load(Ordering::Relaxed),
         }
     }
-}
 
-fn update_high_water(high_water: &AtomicUsize, value: usize) {
-    high_water.fetch_max(value, Ordering::Relaxed);
+    #[inline]
+    fn record_read(&self, _bytes: usize) {
+        #[cfg(any(test, debug_assertions))]
+        self.bytes_read.fetch_add(_bytes as u64, Ordering::Relaxed);
+    }
+
+    #[inline]
+    fn record_parser_batch(&self) {
+        #[cfg(any(test, debug_assertions))]
+        self.parser_batches.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    fn record_read_queue_depth(&self, _depth: usize) {
+        #[cfg(any(test, debug_assertions))]
+        self.read_batches_high_water
+            .fetch_max(_depth, Ordering::Relaxed);
+    }
+
+    #[inline]
+    fn record_input_queue(&self, _bytes: usize, _commands: usize) {
+        #[cfg(any(test, debug_assertions))]
+        {
+            self.queued_input_high_water
+                .fetch_max(_bytes, Ordering::Relaxed);
+            self.queued_command_high_water
+                .fetch_max(_commands, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    fn record_reply_queue(&self, _bytes: usize, _commands: usize) {
+        #[cfg(any(test, debug_assertions))]
+        {
+            self.queued_reply_high_water
+                .fetch_max(_bytes, Ordering::Relaxed);
+            self.queued_command_high_water
+                .fetch_max(_commands, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    fn record_command_queue(&self, _commands: usize) {
+        #[cfg(any(test, debug_assertions))]
+        self.queued_command_high_water
+            .fetch_max(_commands, Ordering::Relaxed);
+    }
 }
 
 #[derive(Default)]
@@ -122,7 +186,17 @@ impl PtyCommandQueue {
         }
     }
 
+    #[cfg(test)]
+
     pub(crate) fn enqueue_input(&self, bytes: Bytes) -> Result<(), String> {
+        self.enqueue_input_sampled(bytes, None)
+    }
+
+    fn enqueue_input_sampled(
+        &self,
+        bytes: Bytes,
+        performance_sample: Option<InputPerformanceSample>,
+    ) -> Result<(), String> {
         if bytes.is_empty() {
             return Ok(());
         }
@@ -142,15 +216,18 @@ impl PtyCommandQueue {
             let end = (offset + MAX_WRITE_CHUNK_BYTES).min(bytes.len());
             state
                 .commands
-                .push_back(PtyCommand::WriteInput(bytes.slice(offset..end)));
+                .push_back(PtyCommand::WriteInput(QueuedInput {
+                    bytes: bytes.slice(offset..end),
+                    performance_sample: (end == bytes.len())
+                        .then_some(performance_sample)
+                        .flatten(),
+                }));
         }
         state.input_bytes += bytes.len();
         state.user_commands += chunks;
-        update_high_water(&self.diagnostics.queued_input_high_water, state.input_bytes);
-        update_high_water(
-            &self.diagnostics.queued_command_high_water,
-            state.commands.len(),
-        );
+        self.diagnostics
+            .record_input_queue(state.input_bytes, state.commands.len());
+
         self.ready.notify_one();
         Ok(())
     }
@@ -183,11 +260,9 @@ impl PtyCommandQueue {
             insert_at += 1;
         }
         state.reply_bytes += bytes.len();
-        update_high_water(&self.diagnostics.queued_reply_high_water, state.reply_bytes);
-        update_high_water(
-            &self.diagnostics.queued_command_high_water,
-            state.commands.len(),
-        );
+        self.diagnostics
+            .record_reply_queue(state.reply_bytes, state.commands.len());
+
         self.ready.notify_one();
         Ok(())
     }
@@ -210,10 +285,8 @@ impl PtyCommandQueue {
             return Err("PTY command queue capacity exceeded".to_string());
         }
         state.commands.push_back(PtyCommand::Resize { cols, rows });
-        update_high_water(
-            &self.diagnostics.queued_command_high_water,
-            state.commands.len(),
-        );
+        self.diagnostics.record_command_queue(state.commands.len());
+
         self.ready.notify_one();
         Ok(())
     }
@@ -223,10 +296,11 @@ impl PtyCommandQueue {
         loop {
             if let Some(command) = state.commands.pop_front() {
                 match &command {
-                    PtyCommand::WriteInput(bytes) => {
-                        state.input_bytes = state.input_bytes.saturating_sub(bytes.len());
+                    PtyCommand::WriteInput(input) => {
+                        state.input_bytes = state.input_bytes.saturating_sub(input.bytes.len());
                         state.user_commands = state.user_commands.saturating_sub(1);
                     }
+
                     PtyCommand::WriteReply(bytes) => {
                         state.reply_bytes = state.reply_bytes.saturating_sub(bytes.len());
                     }
@@ -270,17 +344,26 @@ pub(crate) struct PtyIoHandle {
     queue: Arc<PtyCommandQueue>,
     mailbox: Arc<TerminalEventMailbox>,
     resize_callback: Arc<RwLock<Option<ResizeCallback>>>,
+    performance: TerminalPerformanceHandle,
 }
 
 impl PtyIoHandle {
     pub(crate) fn write_input(&self, bytes: Bytes) -> Result<(), String> {
-        self.queue.enqueue_input(bytes).inspect_err(|message| {
-            self.mailbox.push_pty_event(PtyEvent::IoError {
-                operation: PtyIoOperation::InputQueue,
-                message: message.clone(),
-                fatal: false,
-            });
-        })
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        let performance_sample = self.performance.begin_input(&bytes);
+
+        self.queue
+            .enqueue_input_sampled(bytes, Some(performance_sample))
+            .inspect_err(|message| {
+                self.performance.cancel_input(performance_sample);
+                self.mailbox.push_pty_event(PtyEvent::IoError {
+                    operation: PtyIoOperation::InputQueue,
+                    message: message.clone(),
+                    fatal: false,
+                });
+            })
     }
 
     pub(crate) fn write_reply(&self, bytes: Bytes) -> Result<(), String> {
@@ -318,16 +401,39 @@ pub(crate) struct PtyIoDriver {
     handle: PtyIoHandle,
     cancelled: Arc<AtomicBool>,
     read_tx: flume::Sender<PtyReadMessage>,
+    #[cfg(any(test, debug_assertions))]
     diagnostics: Arc<PtyDiagnostics>,
     _threads: Vec<JoinHandle<()>>,
 }
 
 impl PtyIoDriver {
+    #[cfg(test)]
+
     pub(crate) fn start<W, R>(
         writer: W,
         reader: R,
         term: Arc<FairMutex<Term<GpuiEventProxy>>>,
         mailbox: Arc<TerminalEventMailbox>,
+    ) -> Self
+    where
+        W: Write + Send + 'static,
+        R: Read + Send + 'static,
+    {
+        Self::start_with_performance(
+            writer,
+            reader,
+            term,
+            mailbox,
+            TerminalPerformanceHandle::new(),
+        )
+    }
+
+    pub(crate) fn start_with_performance<W, R>(
+        writer: W,
+        reader: R,
+        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+        mailbox: Arc<TerminalEventMailbox>,
+        performance: TerminalPerformanceHandle,
     ) -> Self
     where
         W: Write + Send + 'static,
@@ -340,6 +446,7 @@ impl PtyIoDriver {
             queue: queue.clone(),
             mailbox: mailbox.clone(),
             resize_callback: resize_callback.clone(),
+            performance: performance.clone(),
         };
         let cancelled = Arc::new(AtomicBool::new(false));
         let (read_tx, read_rx) = flume::bounded(READ_QUEUE_CAPACITY);
@@ -361,6 +468,7 @@ impl PtyIoDriver {
             buffer_tx.clone(),
             cancelled.clone(),
             diagnostics.clone(),
+            performance.clone(),
         );
         let parser_thread = spawn_parser(
             term,
@@ -369,13 +477,15 @@ impl PtyIoDriver {
             cancelled.clone(),
             mailbox.clone(),
             diagnostics.clone(),
+            performance.clone(),
         );
-        let writer_thread = spawn_writer(writer, queue, resize_callback, mailbox);
+        let writer_thread = spawn_writer(writer, queue, resize_callback, mailbox, performance);
 
         Self {
             handle,
             cancelled,
             read_tx,
+            #[cfg(any(test, debug_assertions))]
             diagnostics,
             _threads: vec![reader_thread, parser_thread, writer_thread],
         }
@@ -384,6 +494,8 @@ impl PtyIoDriver {
     pub(crate) fn handle(&self) -> PtyIoHandle {
         self.handle.clone()
     }
+
+    #[cfg(any(test, debug_assertions))]
 
     pub(crate) fn diagnostics(&self) -> PtyDiagnosticsSnapshot {
         self.diagnostics.snapshot()
@@ -409,6 +521,7 @@ fn spawn_reader<R: Read + Send + 'static>(
     buffer_tx: flume::Sender<Box<[u8; READ_BUFFER_BYTES]>>,
     cancelled: Arc<AtomicBool>,
     diagnostics: Arc<PtyDiagnostics>,
+    performance: TerminalPerformanceHandle,
 ) -> JoinHandle<()> {
     thread::Builder::new()
         .name("yttt-pty-reader".to_string())
@@ -428,16 +541,20 @@ fn spawn_reader<R: Read + Send + 'static>(
                         break;
                     }
                     Ok(len) => {
-                        diagnostics
-                            .bytes_read
-                            .fetch_add(len as u64, Ordering::Relaxed);
+                        diagnostics.record_read(len);
+
+                        performance.record_read(len);
+
                         if read_tx
                             .send(PtyReadMessage::Data(ReadBatch { buffer, len }))
                             .is_err()
                         {
                             break;
                         }
-                        update_high_water(&diagnostics.read_batches_high_water, read_tx.len());
+                        let depth = read_tx.len();
+                        diagnostics.record_read_queue_depth(depth);
+
+                        performance.set_read_queue_depth(depth);
                     }
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => {
                         if buffer_tx.send(buffer).is_err() {
@@ -461,6 +578,7 @@ fn spawn_parser(
     cancelled: Arc<AtomicBool>,
     mailbox: Arc<TerminalEventMailbox>,
     diagnostics: Arc<PtyDiagnostics>,
+    performance: TerminalPerformanceHandle,
 ) -> JoinHandle<()> {
     thread::Builder::new()
         .name("yttt-pty-parser".to_string())
@@ -477,6 +595,8 @@ fn spawn_parser(
                         .recv()
                         .map_err(|_| flume::RecvTimeoutError::Disconnected)
                 };
+                performance.set_read_queue_depth(read_rx.len());
+
                 if cancelled.load(Ordering::Acquire) {
                     if let Ok(PtyReadMessage::Data(batch)) = message {
                         let _ = buffer_tx.send(batch.buffer);
@@ -485,13 +605,34 @@ fn spawn_parser(
                 }
                 match message {
                     Ok(PtyReadMessage::Data(batch)) => {
-                        diagnostics.parser_batches.fetch_add(1, Ordering::Relaxed);
+                        diagnostics.record_parser_batch();
+
+                        let batch_started = Instant::now();
+                        let lock_started = Instant::now();
                         {
                             let mut term = term.lock();
+                            let lock_wait = lock_started.elapsed();
+                            let advance_started = Instant::now();
                             processor.advance(&mut *term, &batch.buffer[..batch.len]);
+                            let advance = advance_started.elapsed();
+                            let completed_at = Instant::now();
+                            performance.record_parser_batch(
+                                batch_started.elapsed(),
+                                lock_wait,
+                                advance,
+                                completed_at,
+                                &batch.buffer[..batch.len],
+                            );
+                        }
+                        // Match Alacritty's event loop: unsynchronized parser output must wake
+                        // the UI. Waiting only for a synchronized-update timeout starves redraws
+                        // indefinitely while a TUI continuously fills the read queue.
+                        if batch.len > 0 && processor.sync_bytes_count() < batch.len {
+                            mailbox.request_redraw();
                         }
                         let _ = buffer_tx.send(batch.buffer);
                     }
+
                     Ok(PtyReadMessage::Eof) => {
                         mailbox.push_pty_event(PtyEvent::Eof);
                         break;
@@ -524,46 +665,27 @@ fn spawn_writer<W: Write + Send + 'static>(
     queue: Arc<PtyCommandQueue>,
     resize_callback: Arc<RwLock<Option<ResizeCallback>>>,
     mailbox: Arc<TerminalEventMailbox>,
+    performance: TerminalPerformanceHandle,
 ) -> JoinHandle<()> {
     thread::Builder::new()
         .name("yttt-pty-writer".to_string())
         .spawn(move || {
             loop {
                 match queue.pop() {
-                    PtyCommand::WriteInput(bytes) | PtyCommand::WriteReply(bytes) => {
-                        let mut offset = 0;
-                        let mut backoff = Duration::from_millis(1);
-                        while offset < bytes.len() {
-                            match writer.write(&bytes[offset..]) {
-                                Ok(0) => {
-                                    if queue.wait_retry(backoff) {
-                                        return;
-                                    }
-                                    backoff = (backoff * 2).min(Duration::from_millis(16));
-                                }
-                                Ok(count) => {
-                                    offset += count;
-                                    backoff = Duration::from_millis(1);
-                                }
-                                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                                    if queue.wait_retry(backoff) {
-                                        return;
-                                    }
-                                    backoff = (backoff * 2).min(Duration::from_millis(16));
-                                }
-                                Err(error) => {
-                                    mailbox.push_pty_event(PtyEvent::IoError {
-                                        operation: PtyIoOperation::Write,
-                                        message: error.to_string(),
-                                        fatal: true,
-                                    });
-                                    queue.shutdown();
-                                    return;
-                                }
-                            }
+                    PtyCommand::WriteInput(input) => {
+                        if !write_pty_bytes(&mut writer, &input.bytes, &queue, &mailbox) {
+                            return;
+                        }
+                        if let Some(sample) = input.performance_sample {
+                            performance.record_input_written(sample, Instant::now());
                         }
                     }
+                    PtyCommand::WriteReply(bytes) => {
+                        if !write_pty_bytes(&mut writer, &bytes, &queue, &mailbox) {
+                            return;
+                        }
+                    }
+
                     PtyCommand::Resize { cols, rows } => {
                         let callback = resize_callback.read().clone();
                         if let Some(callback) = callback
@@ -584,6 +706,46 @@ fn spawn_writer<W: Write + Send + 'static>(
             }
         })
         .expect("failed to spawn PTY writer")
+}
+fn write_pty_bytes<W: Write>(
+    writer: &mut W,
+    bytes: &Bytes,
+    queue: &PtyCommandQueue,
+    mailbox: &TerminalEventMailbox,
+) -> bool {
+    let mut offset = 0;
+    let mut backoff = Duration::from_millis(1);
+    while offset < bytes.len() {
+        match writer.write(&bytes[offset..]) {
+            Ok(0) => {
+                if queue.wait_retry(backoff) {
+                    return false;
+                }
+                backoff = (backoff * 2).min(Duration::from_millis(16));
+            }
+            Ok(count) => {
+                offset += count;
+                backoff = Duration::from_millis(1);
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if queue.wait_retry(backoff) {
+                    return false;
+                }
+                backoff = (backoff * 2).min(Duration::from_millis(16));
+            }
+            Err(error) => {
+                mailbox.push_pty_event(PtyEvent::IoError {
+                    operation: PtyIoOperation::Write,
+                    message: error.to_string(),
+                    fatal: true,
+                });
+                queue.shutdown();
+                return false;
+            }
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -637,7 +799,7 @@ mod tests {
             matches!(&commands[1], PtyCommand::WriteReply(bytes) if bytes.as_ref() == b"reply")
         );
         assert!(
-            matches!(&commands[2], PtyCommand::WriteInput(bytes) if bytes.as_ref() == b"input")
+            matches!(&commands[2], PtyCommand::WriteInput(input) if input.bytes.as_ref() == b"input")
         );
     }
 
@@ -672,7 +834,13 @@ mod tests {
         let recorded = writer.clone();
         let queue = queue();
         let mailbox = TerminalEventMailbox::new().0;
-        let thread = spawn_writer(writer, queue.clone(), Arc::new(RwLock::new(None)), mailbox);
+        let thread = spawn_writer(
+            writer,
+            queue.clone(),
+            Arc::new(RwLock::new(None)),
+            mailbox,
+            TerminalPerformanceHandle::new(),
+        );
         queue.enqueue_input(Bytes::from_static(b"abcdef")).unwrap();
         let deadline = Instant::now() + Duration::from_secs(1);
         while recorded.bytes() != b"abcdef" && Instant::now() < deadline {
@@ -780,6 +948,18 @@ mod tests {
         assert_eq!(diagnostics.bytes_read, 11);
         assert_eq!(diagnostics.parser_batches, 2);
         assert!(diagnostics.read_batches_high_water <= READ_QUEUE_CAPACITY);
+        let redraw_deadline = Instant::now() + Duration::from_secs(2);
+        let mut redraw_requested = false;
+        while !redraw_requested && Instant::now() < redraw_deadline {
+            redraw_requested = mailbox.drain().redraw;
+            if !redraw_requested {
+                thread::sleep(Duration::from_millis(2));
+            }
+        }
+        assert!(
+            redraw_requested,
+            "unsynchronized parser output must request a redraw"
+        );
         driver.shutdown();
     }
 

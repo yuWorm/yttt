@@ -25,14 +25,15 @@
 //!
 //! The terminal snapshots Alacritty's renderable content and damage while holding the `Term` lock,
 //! then releases it before font shaping or canvas painting. An authoritative visible-row cache
-//! merges damaged rows. A bounded glyph-cluster LRU reuses shaping while preserving explicit
-//! terminal cell origins. Selection, cursor, IME, search, hints, and hyperlink hover contribute
-//! overlay damage without mutating the grid.
+//! merges damaged rows. Canvas prepaint shapes contiguous same-style cells of equal terminal width
+//! into row runs, preserving explicit two-column glyph offsets for wide cells. Paint reuses those
+//! runs without touching the terminal or shaping text. Selection, cursor, IME, search, hints, and
+//! hyperlink hover contribute overlay damage without mutating the grid.
 //!
 //! ## Protocol and interaction coverage
 //!
-//! - Legacy and Kitty keyboard encoding, including application cursor/keypad modes and
-//!   press/repeat/release events.
+//! - Legacy and Kitty keyboard encoding, including application cursor/keypad modes,
+//!   press/repeat/release events, associated text, and pure IME text events.
 //! - X10, UTF-8, SGR, and SGR-pixel mouse reports; local selection, scrollback, and alternate
 //!   scrolling.
 //! - Bracketed paste normalization, GPUI clipboard and primary-selection integration, and
@@ -136,6 +137,8 @@ pub mod colors;
 pub mod event;
 pub mod input;
 pub mod mouse;
+mod perf;
+
 pub mod pty;
 pub mod render;
 pub mod terminal;
@@ -151,6 +154,12 @@ pub use event::{
 };
 pub use input::{
     KeyState, TerminalKey, TerminalKeyEvent, TerminalModifiers, TerminalNamedKey, encode_key, paste,
+};
+#[cfg(feature = "perf-metrics")]
+pub use perf::{
+    DurationDistribution, SlowFrameCounts, TerminalLatencyMetrics, TerminalPerformanceCounters,
+    TerminalPerformanceDocument, TerminalPerformanceHandle, TerminalPerformanceReporter,
+    TerminalPerformanceSemantics, TerminalPerformanceSnapshot,
 };
 pub use pty::{
     ExitReason, FakeTerminalRuntime, PortablePtyIo, PortablePtyResizeHandle, PortablePtyRuntime,

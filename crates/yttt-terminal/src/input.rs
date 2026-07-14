@@ -177,7 +177,10 @@ impl TerminalKeyEvent {
 }
 
 pub fn encode_key(event: &TerminalKeyEvent, mode: TermMode) -> Option<SmallVec<[u8; 32]>> {
-    if event.prefer_character_input && event.state != KeyState::Released {
+    if event.prefer_character_input
+        && event.state != KeyState::Released
+        && !mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC)
+    {
         return event
             .text
             .as_deref()
@@ -218,6 +221,25 @@ pub fn encode_key(event: &TerminalKeyEvent, mode: TermMode) -> Option<SmallVec<[
         encode_legacy(event, mode)
     }
 }
+
+pub(crate) fn encode_text_input(text: &str, mode: TermMode) -> Option<Bytes> {
+    if text.is_empty() {
+        return None;
+    }
+
+    if !mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC)
+        || !mode.contains(TermMode::REPORT_ASSOCIATED_TEXT)
+        || contains_control_character(text)
+    {
+        return Some(Bytes::copy_from_slice(text.as_bytes()));
+    }
+
+    let mut payload = String::with_capacity(text.len().saturating_mul(2).saturating_add(7));
+    payload.push_str("\x1b[0;;");
+    append_kitty_codepoints(&mut payload, text);
+    payload.push('u');
+    Some(Bytes::from(payload.into_bytes()))
+}
 fn encode_with_kitty(event: &TerminalKeyEvent, mode: TermMode) -> Option<SmallVec<[u8; 32]>> {
     if event.state == KeyState::Released {
         if !mode.contains(TermMode::REPORT_EVENT_TYPES) {
@@ -242,7 +264,7 @@ fn encode_with_kitty(event: &TerminalKeyEvent, mode: TermMode) -> Option<SmallVe
         mode.contains(TermMode::REPORT_ASSOCIATED_TEXT)
             && event.state != KeyState::Released
             && !text.is_empty()
-            && !is_control_character(text)
+            && !contains_control_character(text)
     });
     let (base, terminator) = kitty_base(event, mode, associated_text.is_some())?;
     let report_event_type = mode.contains(TermMode::REPORT_EVENT_TYPES)
@@ -263,10 +285,8 @@ fn encode_with_kitty(event: &TerminalKeyEvent, mode: TermMode) -> Option<SmallVe
         });
     }
     if let Some(text) = associated_text {
-        for (index, character) in text.chars().enumerate() {
-            payload.push(if index == 0 { ';' } else { ':' });
-            let _ = write!(payload, "{}", u32::from(character));
-        }
+        payload.push(';');
+        append_kitty_codepoints(&mut payload, text);
     }
     payload.push(terminator);
     Some(SmallVec::from_slice(payload.as_bytes()))
@@ -610,12 +630,18 @@ fn control_byte(character: char) -> Option<u8> {
     }
 }
 
-fn is_control_character(text: &str) -> bool {
-    let Some(codepoint) = text.chars().next() else {
-        return false;
-    };
-    text.chars().count() == 1
-        && (codepoint <= '\u{1f}' || ('\u{7f}'..='\u{9f}').contains(&codepoint))
+fn append_kitty_codepoints(payload: &mut String, text: &str) {
+    for (index, character) in text.chars().enumerate() {
+        if index > 0 {
+            payload.push(':');
+        }
+        let _ = write!(payload, "{}", u32::from(character));
+    }
+}
+
+fn contains_control_character(text: &str) -> bool {
+    text.chars()
+        .any(|codepoint| codepoint <= '\u{1f}' || ('\u{7f}'..='\u{9f}').contains(&codepoint))
 }
 
 #[cfg(test)]
@@ -863,6 +889,35 @@ mod tests {
             ),
             b"\x1b[13;1:3u"
         );
+    }
+
+    #[test]
+    fn kitty_text_input_encodes_ime_commits_as_pure_text_events() {
+        let mode = TermMode::REPORT_ALL_KEYS_AS_ESC | TermMode::REPORT_ASSOCIATED_TEXT;
+        assert_eq!(
+            encode_text_input("你好", mode).unwrap().as_ref(),
+            b"\x1b[0;;20320:22909u"
+        );
+        assert_eq!(
+            encode_text_input("你好", TermMode::DISAMBIGUATE_ESC_CODES)
+                .unwrap()
+                .as_ref(),
+            "你好".as_bytes()
+        );
+        assert_eq!(
+            encode_text_input("a\n", mode).unwrap().as_ref(),
+            b"a\n",
+            "control characters cannot be embedded as Kitty associated text"
+        );
+        assert!(encode_text_input("", mode).is_none());
+
+        let mut character = event(
+            TerminalKey::Character("a".to_string()),
+            Some("å"),
+            TerminalModifiers::default(),
+        );
+        character.prefer_character_input = true;
+        assert_eq!(encoded(&character, mode), b"\x1b[97;1;229u");
     }
 
     #[test]

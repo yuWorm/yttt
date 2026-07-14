@@ -47,7 +47,12 @@
 
 use crate::colors::ColorPalette;
 use crate::event::{GpuiEventProxy, MAX_OSC52_BYTES, TerminalEvent, TerminalEventMailbox};
-use crate::input::{KeyState, TerminalKey, TerminalKeyEvent, TerminalModifiers, encode_key, paste};
+use crate::perf::TerminalPerformanceHandle;
+
+use crate::input::{
+    KeyState, TerminalKey, TerminalKeyEvent, TerminalModifiers, encode_key, encode_text_input,
+    paste,
+};
 use crate::mouse::{
     MouseButtonState, TerminalMouseButton, TerminalMouseEvent, TerminalWheelDirection,
     encode_mouse, pixel_to_cell, pixel_to_cell_side, pixels_to_scroll_lines,
@@ -609,6 +614,7 @@ pub struct TerminalView {
     /// The renderer for drawing terminal content
     renderer: TerminalRenderer,
     render_cache: Arc<parking_lot::Mutex<TerminalRenderCache>>,
+    performance: TerminalPerformanceHandle,
 
     /// Focus handle for keyboard event handling
     focus_handle: FocusHandle,
@@ -791,20 +797,25 @@ impl TerminalView {
         R: Read + Send + 'static,
     {
         let config = config.normalized();
-        let (event_mailbox, event_signal) = TerminalEventMailbox::new();
+        let performance = TerminalPerformanceHandle::new();
+        let (event_mailbox, event_signal) =
+            TerminalEventMailbox::new_with_performance(performance.clone());
         let event_proxy = GpuiEventProxy::new(event_mailbox.clone());
+
         let state = TerminalState::new_with_options(
             config.cols,
             config.rows,
             config.term_options(),
             event_proxy,
         );
-        let io_driver = PtyIoDriver::start(
+        let io_driver = PtyIoDriver::start_with_performance(
             stdin_writer,
             stdout_reader,
             state.term_arc(),
             event_mailbox.clone(),
+            performance.clone(),
         );
+
         let io = io_driver.handle();
 
         let mut renderer = TerminalRenderer::new(
@@ -833,6 +844,8 @@ impl TerminalView {
             state,
             renderer,
             render_cache: Arc::new(parking_lot::Mutex::new(TerminalRenderCache::default())),
+            performance,
+
             focus_handle,
             io_driver,
             io,
@@ -2620,6 +2633,8 @@ impl TerminalView {
             return;
         }
         self.exited = true;
+        self.performance.finish_measurement();
+
         self.io_driver.shutdown();
         if let Some(callback) = &self.exit_callback {
             callback(cx, reason);
@@ -2700,6 +2715,71 @@ impl TerminalView {
     /// A reference to the focus handle.
     pub fn focus_handle(&self) -> &FocusHandle {
         &self.focus_handle
+    }
+
+    #[cfg(feature = "perf-metrics")]
+    pub fn performance_handle(&self) -> crate::TerminalPerformanceHandle {
+        self.performance.clone()
+    }
+    /// Starts deterministic text and IME input samples for the performance harness.
+    #[cfg(feature = "perf-metrics")]
+    #[doc(hidden)]
+    pub fn start_performance_input_probe(
+        &mut self,
+        delay: Duration,
+        start_file: Option<std::path::PathBuf>,
+
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        const SAMPLES: [(&str, bool); 6] = [
+            ("perf-input-01", false),
+            ("性能输入一", true),
+            ("perf-input-02", false),
+            ("中文延迟二", true),
+            ("perf-input-03", false),
+            ("终端响应三", true),
+        ];
+
+        cx.spawn_in(window, async move |this, cx| {
+            while start_file.as_ref().is_some_and(|path| !path.is_file()) {
+                cx.background_executor()
+                    .timer(Duration::from_millis(25))
+                    .await;
+            }
+
+            cx.background_executor().timer(delay).await;
+            'samples: for _ in 0..5 {
+                for (text, uses_ime) in SAMPLES {
+                    if uses_ime {
+                        if this
+                            .update_in(cx, |view, window, cx| {
+                                view.replace_and_mark_text_in_range(None, text, None, window, cx);
+                            })
+                            .is_err()
+                        {
+                            break 'samples;
+                        }
+                        cx.background_executor()
+                            .timer(Duration::from_millis(50))
+                            .await;
+                    }
+
+                    if this
+                        .update_in(cx, |view, window, cx| {
+                            view.replace_text_in_range(None, text, window, cx);
+                        })
+                        .is_err()
+                    {
+                        break 'samples;
+                    }
+                    cx.background_executor()
+                        .timer(Duration::from_millis(100))
+                        .await;
+                }
+            }
+        })
+        .detach();
     }
 
     #[cfg(any(test, debug_assertions))]
@@ -2878,6 +2958,8 @@ impl EntityInputHandler for TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let had_marked_text = self.ime_state.is_active();
+
         let committed = self.ime_state.commit_text(text);
         if self.search.active {
             if let Some(text) = committed {
@@ -2900,15 +2982,24 @@ impl EntityInputHandler for TerminalView {
             self.restart_cursor_blink(cx);
             cx.notify();
         } else {
-            let enqueued = committed.is_some_and(|text| {
-                self.enqueue_input(Bytes::copy_from_slice(text.as_bytes()), cx)
-            });
+            let enqueued = if let Some(text) = committed {
+                let mode = self.state.mode();
+                encode_text_input(&text, mode).is_some_and(|bytes| self.enqueue_input(bytes, cx))
+            } else {
+                false
+            };
             if !enqueued {
                 self.restart_cursor_blink(cx);
                 cx.notify();
             }
         }
-        window.invalidate_character_coordinates();
+        // Plain terminal input has no in-process caret to reposition. Scheduling a
+        // character-coordinate callback for every ASCII key starves redraws under
+        // continuous TUI output; only close out an actual IME composition here.
+
+        if had_marked_text {
+            window.invalidate_character_coordinates();
+        }
     }
 
     fn replace_and_mark_text_in_range(
@@ -2916,12 +3007,16 @@ impl EntityInputHandler for TerminalView {
         _range: Option<std::ops::Range<usize>>,
         new_text: &str,
         new_selected_range: Option<std::ops::Range<usize>>,
-        window: &mut Window,
+        _window: &mut Window,
+
         cx: &mut Context<Self>,
     ) {
+        self.performance.record_ime_preedit();
         self.ime_state.set_marked_text(new_text, new_selected_range);
         self.restart_cursor_blink(cx);
-        window.invalidate_character_coordinates();
+        // The platform queries bounds while composition is active. `cx.notify()` is
+        // sufficient to paint the preedit without another next-frame callback.
+
         cx.notify();
     }
 
@@ -2956,6 +3051,11 @@ impl Render for TerminalView {
         let renderer = self.renderer.clone();
         let render_cache = self.render_cache.clone();
         let event_mailbox = self.event_mailbox.clone();
+        let event_mailbox_for_paint = event_mailbox.clone();
+
+        let performance_for_prepaint = self.performance.clone();
+        let performance_for_paint = self.performance.clone();
+
         let padding = self.config.padding;
         let show_scrollbar = self.config.show_scrollbar;
         let cursor_unfocused_hollow = self.config.cursor_unfocused_hollow;
@@ -3031,6 +3131,8 @@ impl Render for TerminalView {
             .child(
                 canvas(
                     move |bounds, window, cx| {
+                        let prepaint_started = Instant::now();
+
                         let mut measured_renderer = renderer;
                         let metrics = measured_renderer.ensure_metrics(window);
                         let effective_padding = if show_scrollbar {
@@ -3076,11 +3178,9 @@ impl Render for TerminalView {
                                 });
                             });
                         }
-                        (measured_renderer, effective_padding)
-                    },
-                    move |bounds, (measured_renderer, effective_padding), window, cx| {
+
                         let lock_started = Instant::now();
-                        let snapshot = {
+                        let (snapshot, parser_generation) = {
                             let mut term = state_arc.lock();
                             let (selection, cursor_row, display_offset, screen_lines) = {
                                 let content = term.renderable_content();
@@ -3102,7 +3202,7 @@ impl Render for TerminalView {
                                 screen_lines,
                                 &render_overlays,
                             );
-                            TerminalRenderSnapshot::build(
+                            let snapshot = TerminalRenderSnapshot::build(
                                 &mut term,
                                 &measured_renderer.palette,
                                 &render_overlays,
@@ -3111,47 +3211,96 @@ impl Render for TerminalView {
                                 cursor_visible,
                                 &forced_rows,
                                 render_generation,
-                            )
+                            );
+                            let parser_generation = performance_for_prepaint.parser_generation();
+                            (snapshot, parser_generation)
                         };
                         event_mailbox.clear_redraw();
                         measured_renderer.record_term_lock(
                             lock_started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
                         );
 
-                        let mut cache = render_cache.lock();
-                        cache.merge(snapshot);
-                        let snapshot = cache
-                            .frame()
-                            .expect("a merged terminal snapshot must produce a frame");
+                        let snapshot = {
+                            let mut cache = render_cache.lock();
+                            cache.merge(snapshot);
+                            cache
+                                .frame()
+                                .expect("a merged terminal snapshot must produce a frame")
+                        };
                         let cursor_bounds = measured_renderer.cursor_bounds(
                             bounds,
                             effective_padding,
                             snapshot.cursor,
                         );
-                        if let Some(viewport) = viewport.lock().as_mut() {
+                        if let Some(viewport) = viewport_for_layout.lock().as_mut() {
                             viewport.cursor_bounds = cursor_bounds;
                         }
+                        let prepared_ime = cursor_bounds.zip(marked_text.as_deref()).and_then(
+                            |(cursor_bounds, marked_text)| {
+                                measured_renderer.prepare_ime_text(
+                                    cursor_bounds,
+                                    snapshot.as_ref(),
+                                    marked_text,
+                                    window,
+                                )
+                            },
+                        );
+                        let prepared_frame = measured_renderer.prepare_frame(snapshot, window);
+                        performance_for_prepaint.record_prepaint(
+                            parser_generation,
+                            prepaint_started,
+                            prepaint_started.elapsed(),
+                        );
+
+                        (
+                            measured_renderer,
+                            effective_padding,
+                            prepared_frame,
+                            prepared_ime,
+                            parser_generation,
+                        )
+                    },
+                    move |bounds,
+                          (
+                        measured_renderer,
+                        effective_padding,
+                        prepared_frame,
+                        prepared_ime,
+                        parser_generation,
+                    ),
+                          window,
+                          cx| {
+                        let paint_started = Instant::now();
 
                         measured_renderer.paint(
                             bounds,
                             effective_padding,
                             show_scrollbar,
-                            snapshot,
+                            &prepared_frame,
                             window,
                             cx,
                         );
-                        if let (Some(cursor_bounds), Some(marked_text)) =
-                            (cursor_bounds, marked_text.as_deref())
-                        {
-                            measured_renderer.paint_ime_text(
-                                cursor_bounds,
-                                snapshot,
-                                marked_text,
-                                window,
-                                cx,
-                            );
+                        if let Some(prepared_ime) = prepared_ime.as_ref() {
+                            measured_renderer.paint_ime_text(prepared_ime, window, cx);
                         }
-                        drop(cache);
+                        let paint_completed = Instant::now();
+                        performance_for_paint.record_paint(
+                            parser_generation,
+                            paint_completed,
+                            paint_completed.saturating_duration_since(paint_started),
+                        );
+                        // A parser update can arrive after prepaint clears the redraw gate.
+                        // Defer the follow-up notification until this paint is complete so
+                        // GPUI cannot absorb it into the frame currently being submitted.
+                        if event_mailbox_for_paint.redraw_pending() {
+                            let terminal = terminal.clone();
+                            window.defer(cx, move |_window, cx| {
+                                terminal.update(cx, |_terminal, terminal_cx| {
+                                    terminal_cx.notify();
+                                });
+                            });
+                        }
+
                         if hint_active {
                             let terminal = terminal.clone();
                             window.defer(cx, move |_window, cx| {
@@ -3204,7 +3353,7 @@ mod tests {
     use crate::test_support::{ReadStep, RecordingWriter, ScriptedReader};
     use alacritty_terminal::grid::Scroll;
     use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
-    use alacritty_terminal::term::ClipboardType;
+    use alacritty_terminal::term::{ClipboardType, TermMode};
     use gpui::{
         ClipboardItem, EntityInputHandler, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
         MouseButton, MouseDownEvent, MouseUpEvent, ScrollDelta, ScrollWheelEvent, TestAppContext,
@@ -3563,16 +3712,18 @@ mod tests {
         cx.run_until_parked();
         let diagnostics = cx.read(|cx| terminal.read(cx).diagnostics_snapshot());
         assert_eq!(diagnostics.rebuilt_rows, 0);
-        assert_eq!(diagnostics.shape_cache_misses, 0);
+        assert_eq!(diagnostics.shaped_text_runs, 0);
     }
 
     #[gpui::test]
-    fn repaint_reuses_cached_cjk_clusters_without_reshaping(cx: &mut TestAppContext) {
+    fn repaint_batches_contiguous_tui_text_into_one_paint_call(cx: &mut TestAppContext) {
         let (terminal, cx) = cx.add_window_view(|_, cx| {
             TerminalView::new(io::sink(), io::empty(), TerminalConfig::default(), cx)
         });
         terminal.update(cx, |terminal, cx| {
-            terminal.state.process_bytes("中A中".as_bytes());
+            terminal
+                .state
+                .process_bytes(b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
             cx.notify();
         });
         cx.run_until_parked();
@@ -3592,12 +3743,83 @@ mod tests {
         cx.run_until_parked();
 
         let diagnostics = cx.read(|cx| terminal.read(cx).diagnostics_snapshot());
-        assert_eq!(shape_calls.load(Ordering::Relaxed), 0);
-        assert_eq!(diagnostics.shape_cache_misses, 0);
-        assert!(diagnostics.shape_cache_hits >= 3);
+        assert_eq!(shape_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(diagnostics.shaped_text_runs, 1);
+        assert_eq!(diagnostics.painted_text_runs, 1);
+        assert_eq!(diagnostics.painted_text_cells, 64);
         terminal.update(cx, |terminal, _| {
             terminal.renderer.set_shaping_hook(None);
         });
+    }
+
+    #[gpui::test]
+    fn repaint_batches_contiguous_cjk_into_one_double_width_paint_call(cx: &mut TestAppContext) {
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new(io::sink(), io::empty(), TerminalConfig::default(), cx)
+        });
+        terminal.update(cx, |terminal, cx| {
+            terminal.state.process_bytes("提交中文输入性能".as_bytes());
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        terminal.update(cx, |terminal, cx| {
+            terminal.renderer.invalidate_palette();
+            terminal.reset_diagnostics();
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        let diagnostics = cx.read(|cx| terminal.read(cx).diagnostics_snapshot());
+        assert_eq!(diagnostics.shaped_text_runs, 1, "{diagnostics:?}");
+        assert_eq!(diagnostics.painted_text_runs, 1, "{diagnostics:?}");
+        assert_eq!(diagnostics.painted_text_cells, 8, "{diagnostics:?}");
+        let (second_glyph_x, cell_width) = cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            (
+                terminal
+                    .renderer
+                    .cached_first_run_glyph_x_for_index(0, "提".len())
+                    .unwrap(),
+                terminal.renderer.cell_width,
+            )
+        });
+        let actual_x: f32 = second_glyph_x.into();
+        let expected_x: f32 = (cell_width * 2.0).into();
+        assert!((actual_x - expected_x).abs() < 0.001);
+    }
+
+    #[gpui::test]
+    fn animated_tui_update_shapes_one_row_and_paints_one_run_per_row(cx: &mut TestAppContext) {
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new(io::sink(), io::empty(), TerminalConfig::default(), cx)
+        });
+        let line = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let mut frame = String::with_capacity((line.len() + 2) * 12);
+        for row in 0..12 {
+            if row > 0 {
+                frame.push_str("\r\n");
+            }
+            frame.push_str(line);
+        }
+        terminal.update(cx, |terminal, cx| {
+            terminal.state.process_bytes(frame.as_bytes());
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        terminal.update(cx, |terminal, cx| {
+            terminal.reset_diagnostics();
+            terminal.state.process_bytes(b"\x1b[6;33H@\x1b[12;65H");
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        let diagnostics = cx.read(|cx| terminal.read(cx).diagnostics_snapshot());
+        assert_eq!(diagnostics.rebuilt_rows, 1, "{diagnostics:?}");
+        assert_eq!(diagnostics.shaped_text_runs, 1, "{diagnostics:?}");
+        assert_eq!(diagnostics.painted_text_runs, 12, "{diagnostics:?}");
+        assert_eq!(diagnostics.painted_text_cells, 12 * 64, "{diagnostics:?}");
     }
 
     #[gpui::test]
@@ -3633,6 +3855,41 @@ mod tests {
             terminal.unmark_text(window, cx);
         });
         assert_eq!(recorded.bytes(), "中文".as_bytes());
+    }
+
+    #[gpui::test]
+    fn kitty_associated_text_encodes_ime_commit_as_pure_text_event(cx: &mut TestAppContext) {
+        let writer = RecordingWriter::default();
+        let recorded = writer.clone();
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new(
+                writer,
+                ScriptedReader::new([ReadStep::Sleep(Duration::from_secs(2)), ReadStep::Eof]),
+                TerminalConfig {
+                    kitty_keyboard: true,
+                    ..TerminalConfig::default()
+                },
+                cx,
+            )
+        });
+
+        terminal.update_in(cx, |terminal, window, cx| {
+            terminal.state.process_bytes(b"\x1b[>24u");
+            assert!(
+                terminal
+                    .state
+                    .mode()
+                    .contains(TermMode::REPORT_ALL_KEYS_AS_ESC | TermMode::REPORT_ASSOCIATED_TEXT)
+            );
+            terminal.replace_text_in_range(None, "中文", window, cx);
+        });
+
+        let expected = b"\x1b[0;;20013:25991u";
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while recorded.bytes() != expected && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(recorded.bytes(), expected);
     }
 
     #[gpui::test]

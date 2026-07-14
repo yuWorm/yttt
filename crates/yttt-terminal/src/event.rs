@@ -1,5 +1,7 @@
 //! Bounded bridge from Alacritty terminal events into GPUI.
 
+use crate::perf::TerminalPerformanceHandle;
+
 use crate::pty::{PtyEvent, PtyIoOperation};
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::term::ClipboardType;
@@ -77,11 +79,13 @@ struct GenerationGate {
 }
 
 impl GenerationGate {
-    fn request(&self, signal: &async_channel::Sender<()>, wakeups: &AtomicU64) {
+    fn request(&self, signal: &async_channel::Sender<()>) -> bool {
         self.generation.fetch_add(1, Ordering::AcqRel);
         if !self.pending.swap(true, Ordering::AcqRel) {
             let _ = signal.try_send(());
-            wakeups.fetch_add(1, Ordering::Relaxed);
+            true
+        } else {
+            false
         }
     }
 
@@ -89,14 +93,16 @@ impl GenerationGate {
         self.pending.load(Ordering::Acquire)
     }
 
-    fn clear(&self, signal: &async_channel::Sender<()>, wakeups: &AtomicU64) {
+    fn clear(&self, signal: &async_channel::Sender<()>) -> bool {
         let observed = self.generation.load(Ordering::Acquire);
         self.pending.store(false, Ordering::Release);
         if self.generation.load(Ordering::Acquire) != observed
             && !self.pending.swap(true, Ordering::AcqRel)
         {
             let _ = signal.try_send(());
-            wakeups.fetch_add(1, Ordering::Relaxed);
+            true
+        } else {
+            false
         }
     }
 }
@@ -115,11 +121,19 @@ pub struct TerminalEventMailbox {
     redraw_gate: GenerationGate,
     failed: AtomicBool,
     signal: async_channel::Sender<()>,
+    #[cfg(any(test, debug_assertions))]
     gpui_wakeups: AtomicU64,
+    performance: TerminalPerformanceHandle,
 }
 
 impl TerminalEventMailbox {
     pub fn new() -> (Arc<Self>, async_channel::Receiver<()>) {
+        Self::new_with_performance(TerminalPerformanceHandle::new())
+    }
+
+    pub(crate) fn new_with_performance(
+        performance: TerminalPerformanceHandle,
+    ) -> (Arc<Self>, async_channel::Receiver<()>) {
         let (signal, receiver) = async_channel::bounded(1);
         (
             Arc::new(Self {
@@ -130,18 +144,31 @@ impl TerminalEventMailbox {
                 redraw_gate: GenerationGate::default(),
                 failed: AtomicBool::new(false),
                 signal,
+                #[cfg(any(test, debug_assertions))]
                 gpui_wakeups: AtomicU64::new(0),
+                performance,
             }),
             receiver,
         )
     }
 
     pub fn request_redraw(&self) {
-        self.redraw_gate.request(&self.signal, &self.gpui_wakeups);
+        let signaled = self.redraw_gate.request(&self.signal);
+        if signaled {
+            self.record_gpui_wakeup();
+        }
+        self.performance.record_redraw_request(signaled);
+    }
+
+    pub(crate) fn redraw_pending(&self) -> bool {
+        self.redraw_gate.pending()
     }
 
     pub(crate) fn clear_redraw(&self) {
-        self.redraw_gate.clear(&self.signal, &self.gpui_wakeups);
+        if self.redraw_gate.clear(&self.signal) {
+            self.record_gpui_wakeup();
+            self.performance.record_redraw_signal();
+        }
     }
 
     pub(crate) fn push_pty_event(&self, event: PtyEvent) {
@@ -163,7 +190,10 @@ impl TerminalEventMailbox {
                     .fetch_update(Ordering::AcqRel, Ordering::Acquire, |bells| {
                         Some(bells.saturating_add(1))
                     });
-                self.event_gate.request(&self.signal, &self.gpui_wakeups);
+                if self.event_gate.request(&self.signal) {
+                    self.record_gpui_wakeup();
+                }
+
                 return;
             }
             TerminalEvent::Title(ref mut title) => {
@@ -225,7 +255,9 @@ impl TerminalEventMailbox {
             queue.push_back(event);
         }
         drop(queue);
-        self.event_gate.request(&self.signal, &self.gpui_wakeups);
+        if self.event_gate.request(&self.signal) {
+            self.record_gpui_wakeup();
+        }
     }
 
     pub(crate) fn drain(&self) -> MailboxDrain {
@@ -238,13 +270,24 @@ impl TerminalEventMailbox {
         }
         let bells = self.bells.swap(0, Ordering::AcqRel);
         let redraw = self.redraw_gate.pending();
-        self.event_gate.clear(&self.signal, &self.gpui_wakeups);
+        if self.event_gate.clear(&self.signal) {
+            self.record_gpui_wakeup();
+        }
+
         MailboxDrain {
             events,
             redraw,
             bells,
         }
     }
+
+    #[inline]
+    fn record_gpui_wakeup(&self) {
+        #[cfg(any(test, debug_assertions))]
+        self.gpui_wakeups.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[cfg(any(test, debug_assertions))]
 
     pub(crate) fn gpui_wakeups(&self) -> u64 {
         self.gpui_wakeups.load(Ordering::Relaxed)

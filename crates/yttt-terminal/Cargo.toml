@@ -5,6 +5,10 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "YTTT terminal component for GPUI"
 
+
+[features]
+perf-metrics = ["dep:hdrhistogram", "dep:serde_json"]
+
 [dependencies]
 gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
@@ -15,10 +19,11 @@ parking_lot = "0.12"
 flume = "0.12"
 async-channel = "2"
 bytes = "1"
-lru = "0.12"
 smallvec = "1"
 unicode-width = "0.2"
 serde = { version = "1", features = ["derive"] }
+hdrhistogram = { version = "7", optional = true }
+serde_json = { version = "1", optional = true }
 
 
 [dev-dependencies]

@@ -2,11 +2,12 @@ use super::content::{RenderOverlayState, TerminalRenderSnapshot};
 use alacritty_terminal::index::Line;
 use alacritty_terminal::selection::SelectionRange;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 /// Authoritative resolved visible-frame cache.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TerminalRenderCache {
-    frame: Option<TerminalRenderSnapshot>,
+    frame: Option<Arc<TerminalRenderSnapshot>>,
     next_generation: u64,
     previous_selection_rows: BTreeSet<usize>,
     previous_cursor_row: Option<usize>,
@@ -89,13 +90,13 @@ impl TerminalRenderCache {
                 row.generation = self.next_generation;
             }
             let rebuilt_rows = update.rows.len();
-            self.frame = Some(update);
+            self.frame = Some(Arc::new(update));
             return rebuilt_rows;
         }
 
         let mut rebuilt_rows = 0;
 
-        let Some(frame) = &mut self.frame else {
+        let Some(frame) = self.frame.as_mut().map(Arc::make_mut) else {
             return 0;
         };
         for mut row in update.rows {
@@ -120,8 +121,8 @@ impl TerminalRenderCache {
         rebuilt_rows
     }
 
-    pub(crate) fn frame(&self) -> Option<&TerminalRenderSnapshot> {
-        self.frame.as_ref()
+    pub(crate) fn frame(&self) -> Option<Arc<TerminalRenderSnapshot>> {
+        self.frame.clone()
     }
 
     pub(crate) fn clear(&mut self) {

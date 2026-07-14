@@ -17,13 +17,29 @@ use yttt_terminal::{
 struct TerminalApp {
     terminal: Entity<TerminalView>,
     session: Option<PortablePtySession>,
+    #[cfg(feature = "perf-metrics")]
+    _performance_reporter: Option<yttt_terminal::TerminalPerformanceReporter>,
 }
 
 impl TerminalApp {
+    #[cfg(not(feature = "perf-metrics"))]
+
     fn new(terminal: Entity<TerminalView>, session: PortablePtySession) -> Self {
         Self {
             terminal,
             session: Some(session),
+        }
+    }
+    #[cfg(feature = "perf-metrics")]
+    fn new(
+        terminal: Entity<TerminalView>,
+        session: PortablePtySession,
+        performance_reporter: Option<yttt_terminal::TerminalPerformanceReporter>,
+    ) -> Self {
+        Self {
+            terminal,
+            session: Some(session),
+            _performance_reporter: performance_reporter,
         }
     }
 
@@ -79,9 +95,13 @@ fn main() -> Result<()> {
     app.run(move |cx| {
         yttt_terminal::init(cx);
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-        let mut session =
-            spawn_portable_pty_session(TerminalSpawnRequest::for_shell("shell", &shell, ""))
-                .expect("Failed to spawn portable PTY session");
+        let start_command = std::env::var("YTTT_TERMINAL_START_COMMAND").unwrap_or_default();
+        let mut session = spawn_portable_pty_session(TerminalSpawnRequest::for_shell(
+            "shell",
+            &shell,
+            start_command,
+        ))
+        .expect("Failed to spawn portable PTY session");
         let io = session.take_io().expect("PTY I/O can only be taken once");
         let resize_handle = session.resize_handle();
 
@@ -130,8 +150,24 @@ fn main() -> Result<()> {
                     .map_err(|error| error.to_string())
             };
 
+            let benchmark_mode = std::env::var_os("YTTT_TERMINAL_PERF_OUTPUT").is_some()
+                || std::env::var_os("YTTT_TERMINAL_BENCHMARK_MODE").is_some();
+
+            let benchmark_window_bounds = benchmark_mode.then(|| {
+                gpui::WindowBounds::Windowed(gpui::Bounds::new(
+                    gpui::point(px(100.0), px(100.0)),
+                    gpui::size(px(1024.0), px(768.0)),
+                ))
+            });
+
             cx.open_window(
                 gpui::WindowOptions {
+                    window_bounds: benchmark_window_bounds,
+                    kind: if benchmark_mode {
+                        gpui::WindowKind::PopUp
+                    } else {
+                        gpui::WindowKind::Normal
+                    },
                     titlebar: Some(gpui::TitlebarOptions {
                         title: Some("yttt-terminal".into()),
                         ..Default::default()
@@ -144,18 +180,56 @@ fn main() -> Result<()> {
                         TerminalView::new(io.writer, io.reader, config, cx)
                             .with_resize_callback(resize_callback)
                             .with_exit_callback(|cx, _reason| {
-                                cx.quit();
+                                if std::env::var_os("YTTT_TERMINAL_KEEP_OPEN_AFTER_EXIT").is_none()
+                                {
+                                    cx.quit();
+                                }
                             })
                     });
 
                     // Focus the terminal so it receives key events
                     let focus_handle = terminal.read(cx).focus_handle().clone();
                     focus_handle.focus(window, cx);
+                    cx.activate(true);
+                    window.activate_window();
+                    #[cfg(feature = "perf-metrics")]
+                    let performance_start_file = std::env::var_os("YTTT_TERMINAL_PERF_START_FILE")
+                        .map(std::path::PathBuf::from);
 
-                    // Wrap in TerminalApp to handle font size shortcuts
-                    cx.new(|_cx| TerminalApp::new(terminal, session))
+                    #[cfg(feature = "perf-metrics")]
+                    if let Some(delay_ms) = std::env::var("YTTT_TERMINAL_PERF_INPUT_DELAY_MS")
+                        .ok()
+                        .and_then(|value| value.parse::<u64>().ok())
+                    {
+                        terminal.update(cx, |terminal, cx| {
+                            terminal.start_performance_input_probe(
+                                std::time::Duration::from_millis(delay_ms),
+                                performance_start_file,
+                                window,
+                                cx,
+                            );
+                        });
+                    }
+
+                    // Wrap in TerminalApp to handle font size shortcuts.
+                    #[cfg(feature = "perf-metrics")]
+                    let terminal_app = {
+                        let performance_reporter = terminal
+                            .read(cx)
+                            .performance_handle()
+                            .spawn_reporter_from_env()
+                            .unwrap_or_else(|error| {
+                                eprintln!("failed to start terminal performance reporter: {error}");
+                                None
+                            });
+                        TerminalApp::new(terminal, session, performance_reporter)
+                    };
+                    #[cfg(not(feature = "perf-metrics"))]
+                    let terminal_app = TerminalApp::new(terminal, session);
+                    cx.new(|_cx| terminal_app)
                 },
-            )?;
+            )
+            .inspect_err(|error| eprintln!("failed to open terminal window: {error}"))?;
 
             Ok::<_, anyhow::Error>(())
         })

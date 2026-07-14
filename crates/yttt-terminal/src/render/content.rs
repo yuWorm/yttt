@@ -286,10 +286,11 @@ impl TerminalRenderSnapshot {
         }
 
         let cursor_point = cursor_viewport.unwrap_or_else(|| AlacPoint::new(0, Column(0)));
-        let cursor_cell = rows
-            .iter_mut()
-            .find(|row| row.line == cursor_grid_point.line)
-            .and_then(|row| row.cells.get_mut(cursor_point.column.0));
+        let cursor_row_index = rows
+            .iter()
+            .position(|row| row.line == cursor_grid_point.line);
+        let cursor_cell = cursor_row_index
+            .and_then(|row_index| rows[row_index].cells.get_mut(cursor_point.column.0));
         let (cursor_color, text_color, cursor_width) = if let Some(cell) = cursor_cell {
             let mut cursor_color = palette.resolve(Color::Named(NamedColor::Cursor), &colors);
             let mut text_color = palette.cursor_text().unwrap_or(cell.background);
@@ -310,6 +311,20 @@ impl TerminalRenderSnapshot {
                 NonZeroU32::new(1).unwrap(),
             )
         };
+
+        if cursor_shape == CursorShape::Block
+            && cursor_width.get() > 1
+            && let Some(row_index) = cursor_row_index
+        {
+            for column_offset in 1..cursor_width.get() as usize {
+                if let Some(cell) = rows[row_index]
+                    .cells
+                    .get_mut(cursor_point.column.0 + column_offset)
+                {
+                    cell.background = cursor_color;
+                }
+            }
+        }
 
         term.reset_damage();
         Self {

@@ -15,6 +15,9 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
+#[cfg(unix)]
+const DEFAULT_UTF8_LOCALE: &str = "C.UTF-8";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ProcessHandle(u64);
 
@@ -497,13 +500,22 @@ fn command_builder(execution: &TerminalExecution, cwd: &Path) -> anyhow::Result<
 
 /// Configure a PTY child process with yttt's terminal capabilities.
 ///
-/// Existing `CLICOLOR` preferences are preserved, and the default is omitted
-/// when the parent environment explicitly requests `NO_COLOR`.
+/// Existing locale and `CLICOLOR` preferences are preserved. Unix children
+/// receive a UTF-8 locale only when the parent supplied no locale at all, and
+/// the color default is omitted when the parent explicitly requests `NO_COLOR`.
 pub fn configure_terminal_environment(builder: &mut CommandBuilder) {
     builder.env("TERM", "xterm-256color");
     builder.env("COLORTERM", "truecolor");
     builder.env("TERM_PROGRAM", "yttt");
     builder.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
+
+    #[cfg(unix)]
+    if ["LC_ALL", "LC_CTYPE", "LANG"]
+        .iter()
+        .all(|name| builder.get_env(name).map_or(true, |value| value.is_empty()))
+    {
+        builder.env("LANG", DEFAULT_UTF8_LOCALE);
+    }
 
     if builder.get_env("CLICOLOR").is_none() && builder.get_env("NO_COLOR").is_none() {
         builder.env("CLICOLOR", "1");
@@ -747,6 +759,38 @@ mod tests {
         assert_eq!(
             builder.get_env("TERM_PROGRAM_VERSION"),
             Some(std::ffi::OsStr::new(env!("CARGO_PKG_VERSION")))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawned_commands_default_to_utf8_without_overriding_locale() {
+        let mut defaults = CommandBuilder::new("/bin/sh");
+        for name in ["LC_ALL", "LC_CTYPE", "LANG"] {
+            defaults.env_remove(name);
+        }
+        configure_terminal_environment(&mut defaults);
+        assert_eq!(
+            defaults.get_env("LANG"),
+            Some(std::ffi::OsStr::new(DEFAULT_UTF8_LOCALE))
+        );
+
+        let mut explicit_lang = CommandBuilder::new("/bin/sh");
+        explicit_lang.env("LANG", "zh_CN.UTF-8");
+        configure_terminal_environment(&mut explicit_lang);
+        assert_eq!(
+            explicit_lang.get_env("LANG"),
+            Some(std::ffi::OsStr::new("zh_CN.UTF-8"))
+        );
+
+        let mut explicit_ctype = CommandBuilder::new("/bin/sh");
+        explicit_ctype.env_remove("LANG");
+        explicit_ctype.env("LC_CTYPE", "en_US.UTF-8");
+        configure_terminal_environment(&mut explicit_ctype);
+        assert_eq!(explicit_ctype.get_env("LANG"), None);
+        assert_eq!(
+            explicit_ctype.get_env("LC_CTYPE"),
+            Some(std::ffi::OsStr::new("en_US.UTF-8"))
         );
     }
 
