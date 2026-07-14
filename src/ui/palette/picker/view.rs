@@ -41,37 +41,38 @@ where
     let panel = yttt_panel_style(YtttPanelKind::Palette, theme);
 
     capture_overlay_input(
-        div()
-            .absolute()
-            .inset_0()
-            .flex()
-            .items_start()
-            .justify_center()
-            .pt_16()
-            .bg(panel.overlay)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .w(panel.width)
-                    .max_w(panel.max_width)
-                    .max_h(panel.max_height)
-                    .rounded(panel.radius)
-                    .border_1()
-                    .border_color(panel.border)
-                    .bg(panel.background)
-                    .text_color(theme.text)
-                    .overflow_hidden()
-                    .child(picker_header(query_input, theme))
-                    .child(picker_items(
-                        rows,
-                        ui_text,
-                        scroll_handle,
-                        theme,
-                        on_confirm_item,
-                    ))
-                    .child(picker_footer(ui_text, theme)),
-            ),
+        div().absolute().inset_0().child(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_start()
+                .justify_center()
+                .pt_16()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .w(panel.width)
+                        .max_w(panel.max_width)
+                        .max_h(panel.max_height)
+                        .rounded(panel.radius)
+                        .border_1()
+                        .border_color(panel.border)
+                        .bg(panel.background)
+                        .text_color(theme.text)
+                        .overflow_hidden()
+                        .child(picker_header(query_input, theme))
+                        .child(picker_items(
+                            rows,
+                            ui_text,
+                            scroll_handle,
+                            theme,
+                            on_confirm_item,
+                        ))
+                        .child(picker_footer(ui_text, theme)),
+                ),
+        ),
     )
 }
 

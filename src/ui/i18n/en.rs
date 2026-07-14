@@ -276,7 +276,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RenameTabHint => "Enter to rename, Escape to cancel",
         UiTextKey::OpenNotificationTarget => "Open",
         UiTextKey::SettingsSearchPlaceholder => "Search settings...",
-        UiTextKey::SettingsClose => "Close",
         UiTextKey::SettingsGroupGeneral => "General",
         UiTextKey::SettingsGroupGeneralDescription => "Application behavior and notifications",
         UiTextKey::SettingsGroupAppearance => "Appearance",

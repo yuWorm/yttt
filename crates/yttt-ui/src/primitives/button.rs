@@ -1,8 +1,5 @@
 use gpui::{App, ElementId, Pixels, Rgba, SharedString, prelude::*, px};
-use gpui_component::{
-    Sizable as _,
-    button::{Button, ButtonCustomVariant, ButtonVariants},
-};
+use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
 
 use crate::theme::WorkbenchTheme;
 
@@ -27,12 +24,9 @@ pub struct YtttButtonStyle {
 
 pub fn yttt_button_style(variant: YtttButtonVariant, theme: WorkbenchTheme) -> YtttButtonStyle {
     let (background, hover_background, border, text) = match variant {
-        YtttButtonVariant::Primary => (
-            theme.active_surface,
-            theme.hover_surface,
-            theme.border,
-            theme.text,
-        ),
+        YtttButtonVariant::Primary => {
+            (theme.active_surface, theme.border, theme.border, theme.text)
+        }
         YtttButtonVariant::Secondary => (
             theme.surface_elevated,
             theme.hover_surface,
@@ -45,12 +39,18 @@ pub fn yttt_button_style(variant: YtttButtonVariant, theme: WorkbenchTheme) -> Y
             gpui::rgba(0x00000000),
             theme.text_muted,
         ),
-        YtttButtonVariant::Danger => (
-            theme.danger.blend(gpui::rgba(0x00000022)),
-            theme.danger,
-            theme.danger,
-            theme.text,
-        ),
+        YtttButtonVariant::Danger => {
+            let hover_background = theme.surface.blend(Rgba {
+                a: 0.3,
+                ..theme.danger
+            });
+            (
+                theme.danger.blend(gpui::rgba(0x00000022)),
+                hover_background,
+                theme.danger,
+                theme.text,
+            )
+        }
     };
 
     YtttButtonStyle {
@@ -88,8 +88,8 @@ pub fn yttt_button(
     let style = yttt_button_style(variant, theme);
     Button::new(id)
         .label(label)
-        .xsmall()
-        .compact()
+        .h(style.height)
+        .px(style.padding_x)
         .rounded(style.radius)
         .outline()
         .border_color(style.border)

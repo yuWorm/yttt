@@ -31,12 +31,15 @@ pub(super) fn tab_rename_dialog(
                     .bg(dialog.background)
                     .p(dialog.padding)
                     .text_color(dialog.text)
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(ui_text.get(UiTextKey::RenameTabTitle)),
-                    )
+                    .child(yttt_dialog_header(
+                        "close-tab-rename-dialog",
+                        ui_text.get(UiTextKey::RenameTabTitle),
+                        theme,
+                        cx.listener(|this, _, _window, cx| {
+                            this.cancel_tab_rename_dialog();
+                            cx.notify();
+                        }),
+                    ))
                     .child(yttt_dialog_input(input, theme))
                     .child(
                         div()
@@ -106,12 +109,15 @@ pub(super) fn keybinding_edit_dialog(
                     .bg(dialog.background)
                     .p(dialog.padding)
                     .text_color(dialog.text)
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("Edit keybinding"),
-                    )
+                    .child(yttt_dialog_header(
+                        "close-keybinding-edit-dialog",
+                        "Edit keybinding",
+                        theme,
+                        cx.listener(|this, _, _window, cx| {
+                            this.cancel_keybinding_edit_dialog();
+                            cx.notify();
+                        }),
+                    ))
                     .child(yttt_dialog_input(input, theme))
                     .child(
                         div()
@@ -227,12 +233,15 @@ pub(super) fn file_conflict_dialog(
                     .bg(dialog.background)
                     .p(dialog.padding)
                     .text_color(dialog.text)
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(title),
-                    )
+                    .child(yttt_dialog_header(
+                        "close-file-conflict-dialog",
+                        title,
+                        theme,
+                        cx.listener(|this, _, _window, cx| {
+                            this.cancel_pending_file_conflict(cx);
+                            cx.notify();
+                        }),
+                    ))
                     .child(workbench_inline_notification(
                         ToastItem {
                             title: path,
@@ -278,12 +287,15 @@ pub(super) fn dirty_close_dialog(
         .bg(dialog.background)
         .p(dialog.padding)
         .text_color(dialog.text)
-        .child(
-            div()
-                .text_sm()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .child(title),
-        );
+        .child(yttt_dialog_header(
+            "close-dirty-file-dialog",
+            title,
+            theme,
+            cx.listener(|this, _, _window, cx| {
+                this.cancel_pending_dirty_close();
+                cx.notify();
+            }),
+        ));
     if !summary.is_empty() {
         content = content.child(workbench_inline_notification(
             ToastItem {
@@ -385,12 +397,15 @@ pub(super) fn close_project_dialog(
                     .bg(dialog.background)
                     .p(dialog.padding)
                     .text_color(dialog.text)
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(ui_text.get(UiTextKey::CloseProjectTitle)),
-                    )
+                    .child(yttt_dialog_header(
+                        "close-project-dialog",
+                        ui_text.get(UiTextKey::CloseProjectTitle),
+                        theme,
+                        cx.listener(|this, _, _window, cx| {
+                            this.cancel_pending_project_close();
+                            cx.notify();
+                        }),
+                    ))
                     .child(workbench_inline_notification(
                         ToastItem {
                             title: ui_text.get(UiTextKey::CloseProjectBody).to_string(),
@@ -435,6 +450,37 @@ pub(super) fn close_project_dialog(
                     ),
             ),
     )
+}
+
+fn yttt_dialog_header<H>(
+    id: &'static str,
+    title: impl Into<SharedString>,
+    theme: WorkbenchTheme,
+    on_close: H,
+) -> Div
+where
+    H: Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
+{
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_3()
+        .w_full()
+        .child(
+            div()
+                .min_w_0()
+                .text_sm()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(title.into()),
+        )
+        .child(workbench_icon_button(
+            id,
+            IconName::Close,
+            YtttIconButtonKind::OverlayClose,
+            theme,
+            on_close,
+        ))
 }
 
 fn yttt_dialog_input(input: &Entity<InputState>, theme: WorkbenchTheme) -> Div {

@@ -134,9 +134,9 @@ use crate::{
     ui::{
         components::{
             ActionEmphasis, workbench_action_button, workbench_agent_notification,
-            workbench_closable_inline_notification, workbench_inline_notification,
-            workbench_keybinding_badge, workbench_settings_row, workbench_status_notification,
-            workbench_switch,
+            workbench_closable_inline_notification, workbench_icon_button,
+            workbench_inline_notification, workbench_keybinding_badge, workbench_settings_row,
+            workbench_status_notification, workbench_switch,
         },
         editor::{
             CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, CurrentDiskState,
@@ -172,6 +172,7 @@ use crate::{
         primitives::{
             button::{YtttButtonVariant, yttt_button},
             dialog::yttt_dialog_style,
+            icon_button::YtttIconButtonKind,
             input::{YtttInputKind, yttt_input_style},
             panel::{YtttPanelKind, yttt_panel_style},
             select::yttt_select_style,

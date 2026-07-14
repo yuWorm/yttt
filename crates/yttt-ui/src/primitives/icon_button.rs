@@ -7,6 +7,7 @@ pub enum YtttIconButtonKind {
     Toolbar,
     SidebarHeader,
     TabClose,
+    OverlayClose,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -31,6 +32,7 @@ pub fn yttt_icon_button_style(
         YtttIconButtonKind::Toolbar => (px(28.0), px(0.0), px(1.0), theme.text_muted),
         YtttIconButtonKind::SidebarHeader => (px(24.0), px(4.0), px(0.0), theme.text_subtle),
         YtttIconButtonKind::TabClose => (px(16.0), px(4.0), px(0.0), theme.text_subtle),
+        YtttIconButtonKind::OverlayClose => (px(28.0), px(6.0), px(0.0), theme.text_muted),
     };
 
     YtttIconButtonStyle {

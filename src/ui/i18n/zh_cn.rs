@@ -242,7 +242,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RenameTabHint => "回车重命名，Esc 取消",
         UiTextKey::OpenNotificationTarget => "打开",
         UiTextKey::SettingsSearchPlaceholder => "搜索设置...",
-        UiTextKey::SettingsClose => "关闭",
         UiTextKey::SettingsGroupGeneral => "通用",
         UiTextKey::SettingsGroupGeneralDescription => "应用行为和通知",
         UiTextKey::SettingsGroupAppearance => "外观",

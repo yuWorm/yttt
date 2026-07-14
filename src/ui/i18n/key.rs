@@ -236,7 +236,6 @@ pub enum UiTextKey {
     RenameTabHint,
     OpenNotificationTarget,
     SettingsSearchPlaceholder,
-    SettingsClose,
     SettingsGroupGeneral,
     SettingsGroupGeneralDescription,
     SettingsGroupAppearance,

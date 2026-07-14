@@ -167,12 +167,11 @@ fn settings_content(
                                 .child(group.description(&root.ui_text)),
                         ),
                 )
-                .child(settings_button(
+                .child(workbench_icon_button(
                     "settings-close",
-                    root.ui_text.get(UiTextKey::SettingsClose),
-                    false,
+                    IconName::Close,
+                    YtttIconButtonKind::OverlayClose,
                     theme,
-                    cx,
                     cx.listener(|this, _, _window, cx| {
                         this.close_settings();
                         cx.notify();
