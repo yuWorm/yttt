@@ -318,6 +318,22 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSystemNotificationsDescription => {
             "Notify when agent terminal tasks complete or fail."
         }
+        UiTextKey::SettingsPerformanceMetrics => "Application performance metrics",
+        UiTextKey::SettingsPerformanceMetricsDescription => {
+            "Show project, terminal, tab, editor, and application resource metrics in the title bar."
+        }
+        UiTextKey::SettingsSystemPerformanceMetrics => "System-wide CPU and memory",
+        UiTextKey::SettingsSystemPerformanceMetricsDescription => {
+            "Show total system CPU and memory usage in the title bar."
+        }
+        UiTextKey::PerformanceProjects => "Projects",
+        UiTextKey::PerformanceTerminals => "Terminals",
+        UiTextKey::PerformanceTabs => "Tabs",
+        UiTextKey::PerformanceEditors => "Editors",
+        UiTextKey::PerformanceCpu => "Application CPU",
+        UiTextKey::PerformanceMemory => "Application memory",
+        UiTextKey::PerformanceSystemCpu => "System CPU",
+        UiTextKey::PerformanceSystemMemory => "System memory",
         UiTextKey::SettingsNewTabCommandPicker => "New tab command picker",
         UiTextKey::SettingsNewTabCommandPickerDescription => {
             "Show a command picker when clicking the new tab button."

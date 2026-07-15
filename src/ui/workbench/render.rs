@@ -172,6 +172,7 @@ impl Render for WorkbenchView {
             .line_height(relative(self.app_settings.general.ui_line_height))
             .child(workbench_titlebar(
                 self.visible_titlebar_info(),
+                self.visible_titlebar_performance(),
                 self.theme_runtime.ui,
                 self.ui_text.get(UiTextKey::CommandPaletteOpenTitle),
                 self.ui_text.get(UiTextKey::CommandSettingsOpenTitle),

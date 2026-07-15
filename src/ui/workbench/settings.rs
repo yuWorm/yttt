@@ -83,6 +83,34 @@ impl WorkbenchView {
         self.system_notifications_enabled = enabled;
         Ok(())
     }
+    pub fn performance_metrics_enabled(&self) -> bool {
+        self.app_settings.general.performance_metrics_enabled
+    }
+
+    pub fn set_performance_metrics_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<(), WorkbenchError> {
+        self.app_settings.general.performance_metrics_enabled = enabled;
+        save_settings(&self.config_paths, &self.app_settings)?;
+        self.sync_performance_monitoring(cx);
+        Ok(())
+    }
+    pub fn system_performance_metrics_enabled(&self) -> bool {
+        self.app_settings.general.system_performance_metrics_enabled
+    }
+
+    pub fn set_system_performance_metrics_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<(), WorkbenchError> {
+        self.app_settings.general.system_performance_metrics_enabled = enabled;
+        save_settings(&self.config_paths, &self.app_settings)?;
+        self.sync_performance_monitoring(cx);
+        Ok(())
+    }
 
     pub fn new_tab_command_picker_enabled(&self) -> bool {
         self.app_settings.general.new_tab_command_picker_enabled

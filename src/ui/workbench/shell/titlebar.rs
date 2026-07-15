@@ -1,5 +1,5 @@
 use gpui::{App, ClickEvent, IntoElement, Window, div, prelude::*, rgb};
-use gpui_component::{IconName, StyledExt, TitleBar, tooltip::Tooltip};
+use gpui_component::{Icon, IconName, StyledExt, TitleBar, tooltip::Tooltip};
 
 use crate::ui::{
     components::workbench_icon_button, primitives::icon_button::YtttIconButtonKind,
@@ -12,6 +12,34 @@ pub struct TitlebarInfo {
     pub compact_path: Option<String>,
     pub git_branch: Option<String>,
     pub git_counters: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TitlebarMetricInfo {
+    pub value: String,
+    pub tooltip: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TitlebarApplicationPerformanceInfo {
+    pub projects: TitlebarMetricInfo,
+    pub terminals: TitlebarMetricInfo,
+    pub tabs: TitlebarMetricInfo,
+    pub editors: TitlebarMetricInfo,
+    pub cpu: TitlebarMetricInfo,
+    pub memory: TitlebarMetricInfo,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TitlebarSystemPerformanceInfo {
+    pub cpu: TitlebarMetricInfo,
+    pub memory: TitlebarMetricInfo,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TitlebarPerformanceInfo {
+    pub application: Option<TitlebarApplicationPerformanceInfo>,
+    pub system: Option<TitlebarSystemPerformanceInfo>,
 }
 
 impl TitlebarInfo {
@@ -48,6 +76,7 @@ pub fn compact_path_for_titlebar(path: &str) -> String {
 
 pub fn workbench_titlebar<BranchH, DiffH, CommandH, SettingsH>(
     info: TitlebarInfo,
+    performance: Option<TitlebarPerformanceInfo>,
     theme: WorkbenchTheme,
     command_tooltip: &'static str,
     settings_tooltip: &'static str,
@@ -130,6 +159,7 @@ where
                         )
                 }))
                 .child(div().flex_1())
+                .children(performance.map(|metrics| titlebar_performance_metrics(metrics, theme)))
                 .child(
                     div()
                         .flex()
@@ -163,6 +193,131 @@ where
                         ),
                 ),
         )
+}
+
+fn titlebar_performance_metrics(
+    metrics: TitlebarPerformanceInfo,
+    theme: WorkbenchTheme,
+) -> impl IntoElement {
+    div()
+        .id("titlebar-performance-metrics")
+        .debug_selector(|| "titlebar-performance-metrics".to_string())
+        .flex()
+        .items_center()
+        .gap_2()
+        .h_full()
+        .px_2()
+        .mr_1()
+        .border_l_1()
+        .border_color(theme.border)
+        .children(
+            metrics
+                .application
+                .map(|metrics| titlebar_application_performance_metrics(metrics, theme)),
+        )
+        .children(
+            metrics
+                .system
+                .map(|metrics| titlebar_system_performance_metrics(metrics, theme)),
+        )
+}
+
+fn titlebar_application_performance_metrics(
+    metrics: TitlebarApplicationPerformanceInfo,
+    theme: WorkbenchTheme,
+) -> impl IntoElement {
+    div()
+        .id("titlebar-application-performance-metrics")
+        .debug_selector(|| "titlebar-application-performance-metrics".to_string())
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(titlebar_performance_metric(
+            "titlebar-performance-projects",
+            IconName::Folder,
+            metrics.projects,
+            theme,
+        ))
+        .child(titlebar_performance_metric(
+            "titlebar-performance-terminals",
+            IconName::SquareTerminal,
+            metrics.terminals,
+            theme,
+        ))
+        .child(titlebar_performance_metric(
+            "titlebar-performance-tabs",
+            IconName::GalleryVerticalEnd,
+            metrics.tabs,
+            theme,
+        ))
+        .child(titlebar_performance_metric(
+            "titlebar-performance-editors",
+            IconName::File,
+            metrics.editors,
+            theme,
+        ))
+        .child(titlebar_performance_metric(
+            "titlebar-performance-cpu",
+            IconName::Cpu,
+            metrics.cpu,
+            theme,
+        ))
+        .child(titlebar_performance_metric(
+            "titlebar-performance-memory",
+            IconName::MemoryStick,
+            metrics.memory,
+            theme,
+        ))
+}
+
+fn titlebar_system_performance_metrics(
+    metrics: TitlebarSystemPerformanceInfo,
+    theme: WorkbenchTheme,
+) -> impl IntoElement {
+    div()
+        .id("titlebar-system-performance-metrics")
+        .debug_selector(|| "titlebar-system-performance-metrics".to_string())
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(
+            Icon::new(IconName::Globe)
+                .size_3()
+                .text_color(theme.text_subtle),
+        )
+        .child(titlebar_performance_metric(
+            "titlebar-system-cpu",
+            IconName::Cpu,
+            metrics.cpu,
+            theme,
+        ))
+        .child(titlebar_performance_metric(
+            "titlebar-system-memory",
+            IconName::MemoryStick,
+            metrics.memory,
+            theme,
+        ))
+}
+
+fn titlebar_performance_metric(
+    id: &'static str,
+    icon: IconName,
+    metric: TitlebarMetricInfo,
+    theme: WorkbenchTheme,
+) -> impl IntoElement {
+    let tooltip = metric.tooltip;
+    div()
+        .id(id)
+        .debug_selector(move || id.to_string())
+        .flex()
+        .items_center()
+        .gap_1()
+        .whitespace_nowrap()
+        .text_xs()
+        .text_color(theme.text_muted)
+        .child(Icon::new(icon).size_3().text_color(theme.text_subtle))
+        .child(metric.value)
+        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
 }
 
 fn titlebar_meta(value: String, theme: WorkbenchTheme) -> impl IntoElement {

@@ -31,6 +31,7 @@ mod layout_editor_controller;
 mod non_destructive_tests;
 mod onboarding;
 mod palette;
+mod performance;
 mod project_files;
 mod render;
 mod resize;
@@ -255,6 +256,7 @@ pub struct WorkbenchView {
     presented_error_notification: Option<String>,
     project: ProjectControllerState,
     settings: SettingsControllerState,
+    performance: performance::PerformanceMonitorState,
     last_opened_layout_file: Option<PathBuf>,
     last_opened_keybindings_file: Option<PathBuf>,
     overlays: OverlayControllerState,
@@ -507,6 +509,7 @@ impl WorkbenchView {
             active_project_file_watcher: None,
             project_file_watching_enabled: true,
             settings: SettingsControllerState::new(keybinding_warning_lines, keybindings_editor),
+            performance: performance::PerformanceMonitorState::default(),
             last_opened_layout_file: None,
             last_opened_keybindings_file: None,
             overlays: OverlayControllerState::default(),

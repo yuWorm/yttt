@@ -80,6 +80,8 @@ pub struct GeneralSettings {
     pub ui_font_size: f32,
     pub ui_line_height: f32,
     pub onboarding_completed: bool,
+    pub performance_metrics_enabled: bool,
+    pub system_performance_metrics_enabled: bool,
     pub new_tab_command_picker_enabled: bool,
     pub new_tab_commands: Vec<String>,
 }
@@ -92,6 +94,8 @@ impl Default for GeneralSettings {
             ui_font_size: DEFAULT_UI_FONT_SIZE,
             ui_line_height: DEFAULT_UI_LINE_HEIGHT,
             onboarding_completed: false,
+            performance_metrics_enabled: true,
+            system_performance_metrics_enabled: false,
             new_tab_command_picker_enabled: false,
             new_tab_commands: vec![
                 "lazygit".to_string(),

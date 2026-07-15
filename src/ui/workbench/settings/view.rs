@@ -327,6 +327,52 @@ fn settings_general_rows(
             setting_row(
                 style,
                 theme,
+                text.get(UiTextKey::SettingsPerformanceMetrics),
+                text.get(UiTextKey::SettingsPerformanceMetricsDescription),
+                settings_switch(
+                    "settings-performance-metrics",
+                    root.performance_metrics_enabled(),
+                    theme,
+                    cx.listener(|this, checked: &bool, _window, cx| {
+                        if let Err(error) = this.set_performance_metrics_enabled(*checked, cx) {
+                            this.load_error = Some(error.to_string());
+                        }
+                        cx.notify();
+                    }),
+                )
+                .debug_selector(|| "settings-performance-metrics".to_string())
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-performance-metrics-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsSystemPerformanceMetrics),
+                text.get(UiTextKey::SettingsSystemPerformanceMetricsDescription),
+                settings_switch(
+                    "settings-system-performance-metrics",
+                    root.system_performance_metrics_enabled(),
+                    theme,
+                    cx.listener(|this, checked: &bool, _window, cx| {
+                        if let Err(error) =
+                            this.set_system_performance_metrics_enabled(*checked, cx)
+                        {
+                            this.load_error = Some(error.to_string());
+                        }
+                        cx.notify();
+                    }),
+                )
+                .debug_selector(|| "settings-system-performance-metrics".to_string())
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-system-performance-metrics-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
                 text.get(UiTextKey::SettingsNewTabCommandPicker),
                 text.get(UiTextKey::SettingsNewTabCommandPickerDescription),
                 settings_switch(

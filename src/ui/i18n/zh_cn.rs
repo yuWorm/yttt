@@ -276,6 +276,22 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSelectLanguage => "选择语言",
         UiTextKey::SettingsSystemNotifications => "系统通知",
         UiTextKey::SettingsSystemNotificationsDescription => "Agent 终端任务完成或失败时通知。",
+        UiTextKey::SettingsPerformanceMetrics => "应用性能指标",
+        UiTextKey::SettingsPerformanceMetricsDescription => {
+            "在标题栏显示项目、终端、标签页、编辑器和当前应用资源指标。"
+        }
+        UiTextKey::SettingsSystemPerformanceMetrics => "系统全局 CPU 和内存",
+        UiTextKey::SettingsSystemPerformanceMetricsDescription => {
+            "在标题栏显示整个系统的 CPU 和内存占用。"
+        }
+        UiTextKey::PerformanceProjects => "项目",
+        UiTextKey::PerformanceTerminals => "终端",
+        UiTextKey::PerformanceTabs => "标签页",
+        UiTextKey::PerformanceEditors => "编辑器",
+        UiTextKey::PerformanceCpu => "应用 CPU",
+        UiTextKey::PerformanceMemory => "应用内存",
+        UiTextKey::PerformanceSystemCpu => "系统 CPU",
+        UiTextKey::PerformanceSystemMemory => "系统内存",
         UiTextKey::SettingsNewTabCommandPicker => "新标签页命令选择框",
         UiTextKey::SettingsNewTabCommandPickerDescription => "点击新建标签页按钮时显示命令选择框。",
         UiTextKey::SettingsNewTabCommands => "新标签页命令",

@@ -63,6 +63,7 @@ pub fn run() {
                             }
                         }
                     });
+                    view.update(cx, |view, cx| view.sync_performance_monitoring(cx));
                     register_workbench_keybinding_interceptor(cx, &view);
                     register_workbench_focus_restore(window, cx, &view);
                     register_workbench_close_guard(window, cx, &view);

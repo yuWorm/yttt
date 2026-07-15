@@ -42,6 +42,7 @@ yttt-terminal = { path = "crates/yttt-terminal" }
 yttt-ui = { path = "crates/yttt-ui" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sysinfo = "0.31.4"
 sys-locale = "0.3.2"
 thiserror = "2"
 toml = "0.8"
