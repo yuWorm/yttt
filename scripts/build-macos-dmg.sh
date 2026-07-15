@@ -63,8 +63,9 @@ bundle_args=()
 staging_dir="$(mktemp -d "${TMPDIR:-/tmp}/yttt-dmg.XXXXXX")"
 cleanup() { rm -rf "$staging_dir"; }
 trap cleanup EXIT
+bundle_args+=(--output "$staging_dir/yttt.app")
 
-"$repo_root/scripts/build-macos-bundle.sh" "${bundle_args[@]}" --output "$staging_dir/yttt.app"
+"$repo_root/scripts/build-macos-bundle.sh" "${bundle_args[@]}"
 ln -s /Applications "$staging_dir/Applications"
 mkdir -p "$(dirname "$dmg_path")"
 rm -f "$dmg_path"
