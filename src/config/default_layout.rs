@@ -450,7 +450,7 @@ impl LayoutFileSystem for StdLayoutFileSystem {
     }
 
     fn sync(&self, path: &Path) -> io::Result<()> {
-        fs::OpenOptions::new().read(true).open(path)?.sync_all()
+        fs::OpenOptions::new().write(true).open(path)?.sync_all()
     }
 
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
@@ -616,5 +616,15 @@ mod tests {
                 message: "write denied".to_string(),
             }
         );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn std_layout_file_system_syncs_with_a_writable_handle() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("default-layout.toml");
+        fs::write(&path, "version = 1").unwrap();
+
+        StdLayoutFileSystem.sync(&path).unwrap();
     }
 }
