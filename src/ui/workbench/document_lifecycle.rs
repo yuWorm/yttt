@@ -161,6 +161,7 @@ impl WorkbenchView {
         let pending = self.documents.pending_dirty_close.as_ref()?;
         let title = match &pending.intent {
             DirtyCloseIntent::File(_) => self.ui_text.get(UiTextKey::UnsavedChangesTitle),
+            DirtyCloseIntent::WorkItems { .. } => self.ui_text.get(UiTextKey::UnsavedChangesTitle),
             DirtyCloseIntent::Project(_) => self.ui_text.get(UiTextKey::CloseProjectTitle),
             DirtyCloseIntent::Window => self.ui_text.get(UiTextKey::CloseWindowTitle),
         };
@@ -266,6 +267,14 @@ impl WorkbenchView {
                     self.load_error = Some(error.to_string());
                 }
             }
+            DirtyCloseIntent::WorkItems {
+                terminal_ids,
+                file_ids,
+            } => {
+                if let Err(error) = self.close_work_items_immediately(&terminal_ids, &file_ids) {
+                    self.load_error = Some(error.to_string());
+                }
+            }
             DirtyCloseIntent::Project(project_id) => {
                 match self.workspace.confirm_close_project(&project_id) {
                     Ok(closed) => self.cleanup_closed_project(&closed.project_id),
@@ -288,6 +297,14 @@ impl WorkbenchView {
         match pending.intent {
             DirtyCloseIntent::File(document_id) => {
                 if let Err(error) = self.close_file_work_item_immediately(&document_id) {
+                    self.load_error = Some(error.to_string());
+                }
+            }
+            DirtyCloseIntent::WorkItems {
+                terminal_ids,
+                file_ids,
+            } => {
+                if let Err(error) = self.close_work_items_immediately(&terminal_ids, &file_ids) {
                     self.load_error = Some(error.to_string());
                 }
             }

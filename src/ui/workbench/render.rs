@@ -85,6 +85,7 @@ impl Render for WorkbenchView {
                             tab_items,
                             self.theme_runtime.ui,
                             self.icon_theme.clone(),
+                            self.ui_text,
                             |work_item| {
                                 cx.listener(move |this, event: &ClickEvent, _window, cx| {
                                     let _ = this.handle_work_item_tab_click(
@@ -95,9 +96,21 @@ impl Render for WorkbenchView {
                                 })
                             },
                             |work_item| {
+                                cx.listener(move |this, _event: &MouseDownEvent, _window, cx| {
+                                    let _ = this.handle_work_item_tab_click(work_item.clone(), 1);
+                                    cx.notify();
+                                })
+                            },
+                            |work_item| {
                                 cx.listener(move |this, _event: &ClickEvent, _window, cx| {
                                     cx.stop_propagation();
                                     let _ = this.close_work_item_tab(work_item.clone());
+                                    cx.notify();
+                                })
+                            },
+                            |target_index| {
+                                cx.listener(move |this, dragged: &WorkItemId, _window, cx| {
+                                    let _ = this.move_work_item_tab(dragged, target_index);
                                     cx.notify();
                                 })
                             },
@@ -313,6 +326,11 @@ impl Render for WorkbenchView {
             .on_action(cx.listener(Self::on_project_close))
             .on_action(cx.listener(Self::on_tab_new))
             .on_action(cx.listener(Self::on_tab_close))
+            .on_action(cx.listener(Self::on_tab_close_all))
+            .on_action(cx.listener(Self::on_tab_close_before))
+            .on_action(cx.listener(Self::on_tab_close_after))
+            .on_action(cx.listener(Self::on_tab_close_all_files))
+            .on_action(cx.listener(Self::on_tab_close_all_terminals))
             .on_action(cx.listener(Self::on_tab_rename))
             .on_action(cx.listener(Self::on_tab_next))
             .on_action(cx.listener(Self::on_tab_prev))

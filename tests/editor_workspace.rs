@@ -59,6 +59,47 @@ fn selecting_files_keeps_terminal_ids_authoritative() {
 }
 
 #[test]
+fn dragging_work_items_persists_one_mixed_tab_order() {
+    let mut session = ProjectWorkItemSession::new(
+        ProjectId::new("project-a"),
+        "/project-a",
+        Some("dev".to_string()),
+        true,
+        280.0,
+    );
+    let terminals = vec!["dev".to_string(), "logs".to_string()];
+    let file = session.open_file("/project-a/src/main.rs");
+    let file_item = WorkItemId::File(file);
+
+    assert!(session.move_work_item(&file_item, 0, &terminals));
+    assert_eq!(
+        session.ordered_items(&terminals),
+        vec![
+            file_item.clone(),
+            WorkItemId::Terminal("dev".to_string()),
+            WorkItemId::Terminal("logs".to_string()),
+        ]
+    );
+
+    let dev = WorkItemId::Terminal("dev".to_string());
+    assert!(session.move_work_item(&dev, 2, &terminals));
+    assert_eq!(
+        session.ordered_items(&terminals),
+        vec![
+            file_item.clone(),
+            WorkItemId::Terminal("logs".to_string()),
+            dev.clone(),
+        ]
+    );
+
+    session.reconcile_work_item_order(&["dev".to_string()]);
+    assert_eq!(
+        session.ordered_items(&["dev".to_string(), "logs".to_string()]),
+        vec![file_item, dev, WorkItemId::Terminal("logs".to_string()),]
+    );
+}
+
+#[test]
 fn projects_keep_independent_file_tree_panel_and_active_file_state() {
     let mut workspace = ProjectEditorWorkspaceState::default();
     let alpha = ProjectId::new("alpha");

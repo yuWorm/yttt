@@ -160,7 +160,8 @@ use crate::{
             PaneClose, PaneFocusDown, PaneFocusLeft, PaneFocusRight, PaneFocusUp, PaneRename,
             PaneResizeDown, PaneResizeLeft, PaneResizeRight, PaneResizeUp, PaneSplitHorizontal,
             PaneSplitVertical, ProjectClose, ProjectPanelRefresh, ProjectPanelToggle,
-            SettingsKeybindings, SettingsNotifications, SettingsOpen, TabClose, TabNew, TabNext,
+            SettingsKeybindings, SettingsNotifications, SettingsOpen, TabClose, TabCloseAfter,
+            TabCloseAll, TabCloseAllFiles, TabCloseAllTerminals, TabCloseBefore, TabNew, TabNext,
             TabPrev, TabRename, UiKeybindingSpec, WORKSPACE_CONTEXT, runtime_command_for_keystroke,
             ui_keybinding_specs_from_config,
         },
@@ -223,7 +224,8 @@ use crate::{
         workbench::shell::sidebar::project_sidebar,
         workbench::shell::split_view::{pointer_resize_for_drag_delta, split_child_basis},
         workbench::shell::tabs::{
-            FileTabSnapshot, ProjectTabsToolbar, WorkbenchTabItem, project_tabs, visible_tab_items,
+            FileTabSnapshot, ProjectTabsToolbar, WorkbenchTabCloseScope, WorkbenchTabItem,
+            project_tabs, tab_close_targets, visible_tab_items,
             visible_work_item_tabs as merge_work_item_tabs,
         },
         workbench::shell::titlebar::{TitlebarInfo, compact_path_for_titlebar, workbench_titlebar},
@@ -337,6 +339,10 @@ struct PendingFileConflict {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum DirtyCloseIntent {
     File(crate::ui::editor::DocumentId),
+    WorkItems {
+        terminal_ids: Vec<String>,
+        file_ids: Vec<crate::ui::editor::DocumentId>,
+    },
     Project(ProjectId),
     Window,
 }
@@ -996,6 +1002,104 @@ impl WorkbenchView {
     pub fn close_work_item_tab(&mut self, work_item: WorkItemId) -> Result<(), WorkbenchError> {
         if self.select_work_item(work_item)? {
             self.run_command(CommandId::TabClose)?;
+        }
+        Ok(())
+    }
+
+    pub fn move_work_item_tab(
+        &mut self,
+        work_item: &WorkItemId,
+        to_index: usize,
+    ) -> Result<bool, WorkbenchError> {
+        let Some((project_id, terminal_ids)) = self.selected_project_work_item_ids() else {
+            return Ok(false);
+        };
+        Ok(self
+            .project
+            .project_editor_runtime
+            .workspace_mut()
+            .session_mut(&project_id)
+            .is_some_and(|session| session.move_work_item(work_item, to_index, &terminal_ids)))
+    }
+
+    pub fn close_work_item_tabs(
+        &mut self,
+        anchor: &WorkItemId,
+        scope: WorkbenchTabCloseScope,
+        cx: &Context<Self>,
+    ) -> Result<(), WorkbenchError> {
+        if self.documents.pending_dirty_close.is_some() {
+            return Ok(());
+        }
+        let ordered = self
+            .workbench_tab_items(cx)
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        let targets = tab_close_targets(&ordered, anchor, scope);
+        let terminal_ids = targets
+            .iter()
+            .filter_map(|item| match item {
+                WorkItemId::Terminal(tab_id) => Some(tab_id.clone()),
+                WorkItemId::File(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let file_ids = targets
+            .into_iter()
+            .filter_map(|item| match item {
+                WorkItemId::Terminal(_) => None,
+                WorkItemId::File(document_id) => Some(document_id),
+            })
+            .collect::<Vec<_>>();
+        let dirty_file_ids = file_ids
+            .iter()
+            .filter(|document_id| {
+                self.project
+                    .project_editor_runtime
+                    .document(document_id)
+                    .is_some_and(|document| document.read(cx).model().is_dirty())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if dirty_file_ids.is_empty() {
+            self.close_work_items_immediately(&terminal_ids, &file_ids)?;
+        } else {
+            self.documents.pending_dirty_close = Some(PendingDirtyClose {
+                intent: DirtyCloseIntent::WorkItems {
+                    terminal_ids,
+                    file_ids,
+                },
+                dirty_documents: dirty_file_ids,
+                running_pane_count: 0,
+                saving_documents: HashSet::new(),
+            });
+        }
+        self.sync_input_owner_state();
+        Ok(())
+    }
+
+    fn close_work_items_immediately(
+        &mut self,
+        terminal_ids: &[String],
+        file_ids: &[crate::ui::editor::DocumentId],
+    ) -> Result<(), WorkbenchError> {
+        if !terminal_ids.is_empty() {
+            self.workspace.close_tabs(terminal_ids)?;
+            if let Some((project_id, remaining_terminal_ids)) =
+                self.selected_project_work_item_ids()
+                && let Some(session) = self
+                    .project
+                    .project_editor_runtime
+                    .workspace_mut()
+                    .session_mut(&project_id)
+            {
+                session.reconcile_work_item_order(&remaining_terminal_ids);
+            }
+            self.reconcile_active_terminal_with_workspace()?;
+        }
+        for document_id in file_ids {
+            self.close_file_work_item_immediately(document_id)?;
         }
         Ok(())
     }
@@ -1938,6 +2042,15 @@ impl WorkbenchView {
             WorkItemId::Terminal(tab_id) => {
                 self.workspace.select_tab(&tab_id)?;
                 dispatch_workspace_command(&mut self.workspace, CommandId::TabClose)?;
+                if let Some((project_id, terminal_ids)) = self.selected_project_work_item_ids()
+                    && let Some(session) = self
+                        .project
+                        .project_editor_runtime
+                        .workspace_mut()
+                        .session_mut(&project_id)
+                {
+                    session.reconcile_work_item_order(&terminal_ids);
+                }
                 let selected_tab_id = self
                     .workspace
                     .selected_project_id()
@@ -2232,6 +2345,14 @@ impl WorkbenchView {
         let Some((project_id, terminal_ids)) = self.selected_project_work_item_ids() else {
             return Ok(());
         };
+        if let Some(session) = self
+            .project
+            .project_editor_runtime
+            .workspace_mut()
+            .session_mut(&project_id)
+        {
+            session.reconcile_work_item_order(&terminal_ids);
+        }
         let selected_terminal = self.workspace.project(&project_id).and_then(|project| {
             terminal_ids
                 .contains(&project.selected_tab_id)
