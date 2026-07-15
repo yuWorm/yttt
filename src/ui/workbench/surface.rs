@@ -104,7 +104,26 @@ impl WorkbenchView {
             })
             .unwrap_or_default();
         let active = self.active_work_item();
-        merge_work_item_tabs(&terminal_items, &file_items, active.as_ref())
+        let mut items = merge_work_item_tabs(&terminal_items, &file_items, active.as_ref());
+        let terminal_ids = terminal_items
+            .iter()
+            .map(|item| item.id.clone())
+            .collect::<Vec<_>>();
+        if let Some(session) = self
+            .project
+            .project_editor_runtime
+            .workspace()
+            .session(project_id)
+        {
+            let order = session.ordered_items(&terminal_ids);
+            items.sort_by_key(|item| {
+                order
+                    .iter()
+                    .position(|ordered_id| ordered_id == &item.id)
+                    .unwrap_or(usize::MAX)
+            });
+        }
+        items
     }
 
     pub fn selected_project_panel_visible(&self) -> bool {

@@ -20,6 +20,7 @@ pub struct ProjectWorkItemSession {
     file_ids: Vec<DocumentId>,
     active_work_item: Option<WorkItemId>,
     activation_history: Vec<WorkItemId>,
+    work_item_order: Option<Vec<WorkItemId>>,
     file_tree: ProjectFileTree,
     project_panel_visible: bool,
     project_panel_width: f32,
@@ -40,6 +41,7 @@ impl ProjectWorkItemSession {
             file_ids: Vec::new(),
             active_work_item,
             activation_history,
+            work_item_order: None,
             file_tree: ProjectFileTree::new(root),
             project_panel_visible,
             project_panel_width,
@@ -67,20 +69,69 @@ impl ProjectWorkItemSession {
             project_id: self.project_id.clone(),
             canonical_path: canonical_path.into(),
         };
+        let item = WorkItemId::File(id.clone());
         if !self.file_ids.contains(&id) {
             self.file_ids.push(id.clone());
+            if let Some(order) = &mut self.work_item_order {
+                order.push(item.clone());
+            }
         }
-        self.activate(WorkItemId::File(id.clone()));
+        self.activate(item);
         id
     }
 
     pub fn ordered_items(&self, terminal_ids: &[String]) -> Vec<WorkItemId> {
-        terminal_ids
+        let available = terminal_ids
             .iter()
             .cloned()
             .map(WorkItemId::Terminal)
             .chain(self.file_ids.iter().cloned().map(WorkItemId::File))
-            .collect()
+            .collect::<Vec<_>>();
+        let Some(custom_order) = &self.work_item_order else {
+            return available;
+        };
+
+        let mut ordered = custom_order
+            .iter()
+            .filter(|item| available.contains(item))
+            .cloned()
+            .collect::<Vec<_>>();
+        for item in available {
+            if !ordered.contains(&item) {
+                ordered.push(item);
+            }
+        }
+        ordered
+    }
+
+    pub fn move_work_item(
+        &mut self,
+        item: &WorkItemId,
+        to_index: usize,
+        terminal_ids: &[String],
+    ) -> bool {
+        let mut ordered = self.ordered_items(terminal_ids);
+        let Some(from_index) = ordered.iter().position(|candidate| candidate == item) else {
+            return false;
+        };
+        if from_index == to_index {
+            return false;
+        }
+
+        let moved = ordered.remove(from_index);
+        ordered.insert(to_index.min(ordered.len()), moved);
+        self.work_item_order = Some(ordered);
+        true
+    }
+
+    pub fn reconcile_work_item_order(&mut self, terminal_ids: &[String]) {
+        let file_ids = &self.file_ids;
+        if let Some(order) = &mut self.work_item_order {
+            order.retain(|item| match item {
+                WorkItemId::Terminal(id) => terminal_ids.contains(id),
+                WorkItemId::File(id) => file_ids.contains(id),
+            });
+        }
     }
 
     pub fn select_work_item(&mut self, item: WorkItemId, terminal_ids: &[String]) -> bool {
@@ -115,6 +166,9 @@ impl ProjectWorkItemSession {
 
         self.file_ids.retain(|id| id != document_id);
         self.activation_history.retain(|item| item != &closing);
+        if let Some(order) = &mut self.work_item_order {
+            order.retain(|item| item != &closing);
+        }
         if was_active {
             let after = self.ordered_items(terminal_ids);
             let next = after
@@ -149,6 +203,13 @@ impl ProjectWorkItemSession {
         for item in &mut self.activation_history {
             if item == &old_item {
                 *item = new_item.clone();
+            }
+        }
+        if let Some(order) = &mut self.work_item_order {
+            for item in order {
+                if item == &old_item {
+                    *item = new_item.clone();
+                }
             }
         }
         true

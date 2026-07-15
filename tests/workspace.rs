@@ -191,6 +191,25 @@ fn close_selected_tab_rejects_last_tab() {
 }
 
 #[test]
+fn bulk_tab_close_can_leave_a_project_without_terminal_tabs() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .unwrap();
+
+    let closed = workspace
+        .close_tabs(&["dev".to_string(), "agent".to_string()])
+        .unwrap();
+
+    assert_eq!(closed, vec!["dev", "agent"]);
+    let project = workspace.project(&project_id).unwrap();
+    assert!(project.layout.tabs.is_empty());
+    assert!(project.tab_states.is_empty());
+    assert!(project.selected_tab_id.is_empty());
+    assert!(workspace.create_shell_tab().is_ok());
+}
+
+#[test]
 fn process_exit_closes_exact_pane_without_changing_project_selection() {
     let mut workspace = Workspace::new();
     let project_id = workspace

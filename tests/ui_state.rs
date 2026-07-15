@@ -54,11 +54,12 @@ use yttt::{
             visible_pane_titles,
         },
         workbench::shell::tabs::{
-            FileTabSnapshot, WorkbenchTabKind, visible_tab_items, visible_tab_titles,
-            visible_work_item_tabs,
+            FileTabSnapshot, WorkbenchTabCloseScope, WorkbenchTabKind, visible_tab_items,
+            visible_tab_titles, visible_work_item_tabs,
         },
     },
     ui::{
+        interaction::actions::TabCloseAllTerminals,
         interaction::input_owner::{
             InputOwnerKind, InputOwnerRegistration, InputOwnerStack, InputOwnerToken, InputScopeId,
             TerminalInputGate, TerminalInputPolicy,
@@ -2302,6 +2303,138 @@ fn closing_dirty_file_requires_a_decision(cx: &mut gpui::TestAppContext) {
             root.read(app).active_work_item(),
             Some(WorkItemId::Terminal("agent".to_string()))
         );
+    });
+}
+
+#[gpui::test]
+fn cancelling_bulk_close_keeps_clean_and_dirty_targets_open(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (_temp, _project_dir, root, document, cx) = project_file_terminal_fixture(cx, "off", 50);
+    let document_id = cx.read(|app| document.read(app).model().document_id().clone());
+    let anchor = WorkItemId::File(document_id.clone());
+    let input = cx.read(|app| document.read(app).input().clone());
+    input.update_in(cx, |input, window, input_cx| {
+        replace_editor_value(input, "keep this dirty tab", window, input_cx);
+    });
+    cx.run_until_parked();
+
+    root.update(cx, |root, cx| {
+        root.close_work_item_tabs(&anchor, WorkbenchTabCloseScope::All, cx)
+            .unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        let root = root.read(app);
+        assert!(root.has_pending_dirty_close());
+        assert_eq!(
+            root.visible_dirty_close_actions(),
+            vec!["Cancel", "Discard and Continue", "Save All and Continue"]
+        );
+        assert_eq!(
+            root.workspace()
+                .project(&document_id.project_id)
+                .unwrap()
+                .layout
+                .tabs
+                .len(),
+            2
+        );
+        assert!(
+            root.project_editor_runtime()
+                .document(&document_id)
+                .is_some()
+        );
+    });
+
+    root.update(cx, |root, cx| {
+        root.cancel_pending_dirty_close();
+        cx.notify();
+    });
+    cx.read(|app| {
+        let root = root.read(app);
+        assert!(!root.has_pending_dirty_close());
+        assert_eq!(
+            root.workspace()
+                .project(&document_id.project_id)
+                .unwrap()
+                .layout
+                .tabs
+                .len(),
+            2
+        );
+        assert!(
+            root.project_editor_runtime()
+                .document(&document_id)
+                .is_some()
+        );
+    });
+
+    root.update(cx, |root, cx| {
+        root.close_work_item_tabs(&anchor, WorkbenchTabCloseScope::All, cx)
+            .unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    root.update_in(cx, |root, window, cx| {
+        root.discard_pending_dirty_close(window, cx);
+    });
+    cx.read(|app| {
+        let root = root.read(app);
+        assert!(
+            root.workspace()
+                .project(&document_id.project_id)
+                .unwrap()
+                .layout
+                .tabs
+                .is_empty()
+        );
+        assert!(
+            root.project_editor_runtime()
+                .document(&document_id)
+                .is_none()
+        );
+        assert_eq!(root.active_work_item(), None);
+    });
+}
+
+#[gpui::test]
+fn scoped_bulk_tab_close_removes_terminal_and_file_groups(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (_temp, _project_dir, root, document, cx) = project_file_terminal_fixture(cx, "off", 50);
+    let document_id = cx.read(|app| document.read(app).model().document_id().clone());
+    let anchor = WorkItemId::File(document_id.clone());
+
+    root.update_in(cx, |_root, window, cx| {
+        window.dispatch_action(Box::new(TabCloseAllTerminals), cx);
+    });
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        let root = root.read(app);
+        let project = root.workspace().project(&document_id.project_id).unwrap();
+        assert!(project.layout.tabs.is_empty());
+        assert!(
+            root.project_editor_runtime()
+                .document(&document_id)
+                .is_some()
+        );
+        assert_eq!(root.active_work_item(), Some(anchor.clone()));
+    });
+
+    root.update(cx, |root, cx| {
+        root.close_work_item_tabs(&anchor, WorkbenchTabCloseScope::Files, cx)
+            .unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        let root = root.read(app);
+        assert!(
+            root.project_editor_runtime()
+                .document(&document_id)
+                .is_none()
+        );
+        assert_eq!(root.active_work_item(), None);
     });
 }
 

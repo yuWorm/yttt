@@ -41,9 +41,9 @@ use yttt::ui::theme::icons::IconTheme;
 use yttt::ui::workbench::shell::sidebar::{project_context_commands, project_sidebar_style};
 use yttt::ui::workbench::shell::tabs::{
     ProjectTabCloseButtonVisibility, ProjectTabLeadingIcon, ProjectTabStatusIndicator,
-    ProjectTabStatusTone, ProjectTabToolbarPlacement, ProjectTabsToolbar, WorkbenchTabItem,
-    WorkbenchTabKind, project_tabs, project_tabs_style, project_tree_toggle_icon,
-    project_tree_toggle_tooltip, tab_toolbar_icon,
+    ProjectTabStatusTone, ProjectTabToolbarPlacement, ProjectTabsToolbar, WorkbenchTabCloseScope,
+    WorkbenchTabItem, WorkbenchTabKind, project_tabs, project_tabs_style, project_tree_toggle_icon,
+    project_tree_toggle_tooltip, tab_close_targets, tab_toolbar_icon,
 };
 use yttt::ui::workbench::shell::titlebar::TitlebarInfo;
 use yttt::{
@@ -199,6 +199,50 @@ fn sidebar_and_tabs_use_compact_zed_like_density() {
         ProjectTabToolbarPlacement::FixedAfterScrollableTabs
     );
     assert_ne!(tabs.active_background, tabs.inactive_background);
+    assert_eq!(tabs.active_indicator, theme.accent);
+    assert_eq!(tabs.active_indicator_height, gpui::px(2.0));
+}
+
+#[test]
+fn tab_context_close_scopes_follow_visible_mixed_order() {
+    let project_id = ProjectId::new("/tmp/yttt");
+    let first_file = WorkItemId::File(DocumentId {
+        project_id: project_id.clone(),
+        canonical_path: "first.rs".into(),
+    });
+    let second_file = WorkItemId::File(DocumentId {
+        project_id,
+        canonical_path: "second.rs".into(),
+    });
+    let first_terminal = WorkItemId::Terminal("dev".to_string());
+    let second_terminal = WorkItemId::Terminal("agent".to_string());
+    let items = vec![
+        first_terminal.clone(),
+        first_file.clone(),
+        second_terminal.clone(),
+        second_file.clone(),
+    ];
+
+    assert_eq!(
+        tab_close_targets(&items, &second_terminal, WorkbenchTabCloseScope::Before),
+        vec![first_terminal.clone(), first_file.clone()]
+    );
+    assert_eq!(
+        tab_close_targets(&items, &second_terminal, WorkbenchTabCloseScope::After),
+        vec![second_file.clone()]
+    );
+    assert_eq!(
+        tab_close_targets(&items, &second_terminal, WorkbenchTabCloseScope::Files),
+        vec![first_file, second_file]
+    );
+    assert_eq!(
+        tab_close_targets(&items, &second_terminal, WorkbenchTabCloseScope::Terminals,),
+        vec![first_terminal, second_terminal.clone()]
+    );
+    assert_eq!(
+        tab_close_targets(&items, &second_terminal, WorkbenchTabCloseScope::All),
+        items
+    );
 }
 
 #[test]
@@ -229,6 +273,9 @@ impl gpui::Render for EmptyProjectTabs {
             Vec::new(),
             WorkbenchTheme::one_dark(),
             IconTheme::default(),
+            UiText::new(Locale::English),
+            |_| |_, _, _| {},
+            |_| |_, _, _| {},
             |_| |_, _, _| {},
             |_| |_, _, _| {},
             ProjectTabsToolbar::new(
@@ -292,6 +339,9 @@ impl gpui::Render for TerminalAndFileTabs {
             items,
             WorkbenchTheme::one_dark(),
             IconTheme::default(),
+            UiText::new(Locale::English),
+            |_| |_, _, _| {},
+            |_| |_, _, _| {},
             |_| |_, _, _| {},
             |_| |_, _, _| {},
             ProjectTabsToolbar::new(
@@ -323,6 +373,145 @@ fn file_close_button_uses_terminal_trailing_position(cx: &mut gpui::TestAppConte
 
     assert_eq!(terminal_close.size, file_close.size);
     assert_eq!(file_trailing_inset, terminal_trailing_inset);
+}
+
+struct ReorderableTabs {
+    items: Vec<WorkbenchTabItem>,
+    context_selected: Option<WorkItemId>,
+}
+
+impl ReorderableTabs {
+    fn new() -> Self {
+        Self {
+            items: ["first", "second", "third"]
+                .into_iter()
+                .enumerate()
+                .map(|(index, id)| WorkbenchTabItem {
+                    id: WorkItemId::Terminal(id.to_string()),
+                    kind: WorkbenchTabKind::Terminal,
+                    title: id.to_string(),
+                    tooltip: id.to_string(),
+                    status: None,
+                    status_tone: None,
+                    dirty: false,
+                    icon_path: None,
+                    state: if index == 0 {
+                        SelectableState::Active
+                    } else {
+                        SelectableState::Inactive
+                    },
+                })
+                .collect(),
+            context_selected: None,
+        }
+    }
+}
+
+impl gpui::Render for ReorderableTabs {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        project_tabs(
+            self.items.clone(),
+            WorkbenchTheme::one_dark(),
+            IconTheme::default(),
+            UiText::new(Locale::English),
+            |_| |_, _, _| {},
+            |selected| {
+                cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                    this.context_selected = Some(selected.clone());
+                    cx.notify();
+                })
+            },
+            |_| |_, _, _| {},
+            |target_index| {
+                cx.listener(move |this, dragged: &WorkItemId, _window, cx| {
+                    let Some(from_index) = this.items.iter().position(|item| &item.id == dragged)
+                    else {
+                        return;
+                    };
+                    if from_index == target_index {
+                        return;
+                    }
+                    let moved = this.items.remove(from_index);
+                    this.items.insert(target_index.min(this.items.len()), moved);
+                    cx.notify();
+                })
+            },
+            ProjectTabsToolbar::new(
+                false,
+                project_tree_toggle_tooltip(false),
+                noop_tab_toolbar_click,
+                noop_tab_toolbar_click,
+                noop_tab_toolbar_click,
+                noop_tab_toolbar_click,
+            ),
+        )
+    }
+}
+
+#[gpui::test]
+fn dragging_a_tab_reorders_the_rendered_tab_model(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (view, cx) = cx.add_window_view(|_, _| ReorderableTabs::new());
+    let first = cx.debug_bounds("project-tab-0").unwrap();
+    let third = cx.debug_bounds("project-tab-2").unwrap();
+
+    cx.simulate_mouse_down(
+        first.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::none(),
+    );
+    cx.simulate_mouse_move(
+        third.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::none(),
+    );
+    cx.simulate_mouse_up(
+        third.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::none(),
+    );
+    cx.run_until_parked();
+
+    cx.read(|app| {
+        assert_eq!(
+            view.read(app)
+                .items
+                .iter()
+                .map(|item| item.id.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                WorkItemId::Terminal("second".to_string()),
+                WorkItemId::Terminal("third".to_string()),
+                WorkItemId::Terminal("first".to_string()),
+            ]
+        );
+    });
+}
+
+#[gpui::test]
+fn right_clicking_a_tab_selects_the_context_menu_target(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (view, cx) = cx.add_window_view(|_, _| ReorderableTabs::new());
+    let first = cx.debug_bounds("project-tab-0").unwrap();
+
+    cx.simulate_mouse_move(first.center(), None, gpui::Modifiers::none());
+    cx.simulate_mouse_down(
+        first.center(),
+        gpui::MouseButton::Right,
+        gpui::Modifiers::none(),
+    );
+    cx.run_until_parked();
+
+    cx.read(|app| {
+        assert_eq!(
+            view.read(app).context_selected,
+            Some(WorkItemId::Terminal("first".to_string()))
+        );
+    });
 }
 
 #[gpui::test]

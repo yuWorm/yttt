@@ -690,6 +690,13 @@ impl WorkbenchView {
             {
                 *document_id = new.clone();
             }
+            if let DirtyCloseIntent::WorkItems { file_ids, .. } = &mut pending.intent {
+                for document_id in file_ids {
+                    if document_id == old {
+                        *document_id = new.clone();
+                    }
+                }
+            }
             for document_id in &mut pending.dirty_documents {
                 if document_id == old {
                     *document_id = new.clone();

@@ -229,6 +229,60 @@ impl WorkbenchView {
         self.dispatch_command_action(CommandId::TabClose, cx);
     }
 
+    pub(super) fn on_tab_close_all(
+        &mut self,
+        _: &TabCloseAll,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_tab_close_scope(WorkbenchTabCloseScope::All, cx);
+    }
+
+    pub(super) fn on_tab_close_before(
+        &mut self,
+        _: &TabCloseBefore,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_tab_close_scope(WorkbenchTabCloseScope::Before, cx);
+    }
+
+    pub(super) fn on_tab_close_after(
+        &mut self,
+        _: &TabCloseAfter,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_tab_close_scope(WorkbenchTabCloseScope::After, cx);
+    }
+
+    pub(super) fn on_tab_close_all_files(
+        &mut self,
+        _: &TabCloseAllFiles,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_tab_close_scope(WorkbenchTabCloseScope::Files, cx);
+    }
+
+    pub(super) fn on_tab_close_all_terminals(
+        &mut self,
+        _: &TabCloseAllTerminals,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_tab_close_scope(WorkbenchTabCloseScope::Terminals, cx);
+    }
+
+    fn dispatch_tab_close_scope(&mut self, scope: WorkbenchTabCloseScope, cx: &mut Context<Self>) {
+        if let Some(anchor) = self.active_work_item()
+            && let Err(error) = self.close_work_item_tabs(&anchor, scope, cx)
+        {
+            self.load_error = Some(error.to_string());
+        }
+        cx.notify();
+    }
+
     pub(super) fn on_tab_rename(
         &mut self,
         _: &TabRename,

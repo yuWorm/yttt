@@ -317,6 +317,68 @@ impl Workspace {
         Ok(removed_tab.id)
     }
 
+    pub fn close_tabs(&mut self, tab_ids: &[String]) -> Result<Vec<String>, WorkspaceError> {
+        if tab_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let project = self.selected_project_mut()?;
+        let selected_index = project
+            .layout
+            .tabs
+            .iter()
+            .position(|tab| tab.id == project.selected_tab_id);
+        let selected_removed = tab_ids.contains(&project.selected_tab_id);
+        let removed_before_selected = selected_index
+            .map(|selected_index| {
+                project.layout.tabs[..selected_index]
+                    .iter()
+                    .filter(|tab| tab_ids.contains(&tab.id))
+                    .count()
+            })
+            .unwrap_or_default();
+        let mut removed = Vec::new();
+        project.layout.tabs.retain(|tab| {
+            if tab_ids.contains(&tab.id) {
+                removed.push(tab.id.clone());
+                false
+            } else {
+                true
+            }
+        });
+        if removed.is_empty() {
+            return Ok(removed);
+        }
+        project
+            .tab_states
+            .retain(|tab| !removed.contains(&tab.tab_id));
+
+        if selected_removed {
+            if project.layout.tabs.is_empty() {
+                project.selected_tab_id.clear();
+            } else {
+                let next_index = selected_index
+                    .unwrap_or_default()
+                    .saturating_sub(removed_before_selected)
+                    .min(project.layout.tabs.len() - 1);
+                let next_tab_id = project.layout.tabs[next_index].id.clone();
+                project.selected_tab_id = next_tab_id.clone();
+                let next_tab_state = project
+                    .tab_state_mut(&next_tab_id)
+                    .ok_or_else(|| WorkspaceError::TabNotFound(next_tab_id.clone()))?;
+                next_tab_state.start_state = TabStartState::Started;
+                if next_tab_state.focused_pane_id.is_none() {
+                    next_tab_state.focused_pane_id = next_tab_state
+                        .pane_states
+                        .first()
+                        .map(|pane| pane.pane_id.clone());
+                }
+            }
+        }
+
+        Ok(removed)
+    }
+
     pub fn rename_selected_tab(&mut self, title: &str) -> Result<(), WorkspaceError> {
         let title = normalized_title(title)?;
         let project = self.selected_project_mut()?;

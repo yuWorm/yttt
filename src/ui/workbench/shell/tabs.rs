@@ -1,14 +1,24 @@
 use gpui::{
-    App, ClickEvent, Div, InteractiveElement as _, IntoElement, Pixels, Rgba, SharedString,
-    Stateful, StatefulInteractiveElement as _, Window, div, prelude::*, px, rgba,
+    App, ClickEvent, Context, Div, InteractiveElement as _, IntoElement, MouseButton,
+    MouseDownEvent, Pixels, Render, Rgba, SharedString, Stateful, StatefulInteractiveElement as _,
+    Window, div, prelude::*, px, rgba,
 };
-use gpui_component::{Icon, IconName, tooltip::Tooltip};
+use gpui_component::{
+    Icon, IconName,
+    menu::{ContextMenuExt as _, PopupMenuItem},
+    tooltip::Tooltip,
+};
 
 use crate::ui::editor::{DocumentId, WorkItemId};
 use crate::{
     model::workspace::{TabStartState, Workspace},
     ui::{
         components::{SelectableState, workbench_icon_button},
+        i18n::{UiText, UiTextKey},
+        interaction::actions::{
+            TabClose, TabCloseAfter, TabCloseAll, TabCloseAllFiles, TabCloseAllTerminals,
+            TabCloseBefore,
+        },
         primitives::{
             icon_button::YtttIconButtonKind,
             row::{YtttRowKind, yttt_row_style},
@@ -34,6 +44,66 @@ pub struct ProjectTabItem {
 pub enum WorkbenchTabKind {
     Terminal,
     File,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkbenchTabCloseScope {
+    All,
+    Before,
+    After,
+    Files,
+    Terminals,
+}
+
+pub fn tab_close_targets(
+    items: &[WorkItemId],
+    anchor: &WorkItemId,
+    scope: WorkbenchTabCloseScope,
+) -> Vec<WorkItemId> {
+    let Some(anchor_index) = items.iter().position(|item| item == anchor) else {
+        return Vec::new();
+    };
+
+    match scope {
+        WorkbenchTabCloseScope::All => items.to_vec(),
+        WorkbenchTabCloseScope::Before => items[..anchor_index].to_vec(),
+        WorkbenchTabCloseScope::After => items[anchor_index + 1..].to_vec(),
+        WorkbenchTabCloseScope::Files => items
+            .iter()
+            .filter(|item| matches!(item, WorkItemId::File(_)))
+            .cloned()
+            .collect(),
+        WorkbenchTabCloseScope::Terminals => items
+            .iter()
+            .filter(|item| matches!(item, WorkItemId::Terminal(_)))
+            .cloned()
+            .collect(),
+    }
+}
+
+#[derive(Clone)]
+struct DraggedWorkbenchTab {
+    id: WorkItemId,
+    title: String,
+    theme: WorkbenchTheme,
+}
+
+impl Render for DraggedWorkbenchTab {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .max_w(px(220.0))
+            .px_3()
+            .py_1()
+            .rounded(px(4.0))
+            .border_1()
+            .border_color(self.theme.accent)
+            .bg(self.theme.surface_elevated)
+            .text_xs()
+            .text_color(self.theme.text)
+            .shadow_md()
+            .truncate()
+            .child(self.title.clone())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,6 +133,8 @@ pub struct ProjectTabsStyle {
     pub border_width: Pixels,
     pub close_slot_size: Pixels,
     pub active_background: Rgba,
+    pub active_indicator: Rgba,
+    pub active_indicator_height: Pixels,
     pub inactive_background: Rgba,
     pub hover_background: Rgba,
     pub close_button_visibility: ProjectTabCloseButtonVisibility,
@@ -111,6 +183,8 @@ pub fn project_tabs_style(theme: WorkbenchTheme) -> ProjectTabsStyle {
         border_width: primitive.border_width,
         close_slot_size: primitive.close_slot_size,
         active_background: primitive.active_background,
+        active_indicator: theme.accent,
+        active_indicator_height: px(2.0),
         inactive_background: primitive.inactive_background,
         hover_background: primitive.hover_background,
         close_button_visibility: ProjectTabCloseButtonVisibility::Hover,
@@ -263,19 +337,39 @@ impl<NewH, SplitVH, SplitHH, ToggleTreeH> ProjectTabsToolbar<NewH, SplitVH, Spli
     }
 }
 
-pub fn project_tabs<SelectH, SelectF, CloseH, CloseF, NewH, SplitVH, SplitHH, ToggleTreeH>(
+pub fn project_tabs<
+    SelectH,
+    SelectF,
+    ContextSelectH,
+    ContextSelectF,
+    CloseH,
+    CloseF,
+    MoveH,
+    MoveF,
+    NewH,
+    SplitVH,
+    SplitHH,
+    ToggleTreeH,
+>(
     items: Vec<WorkbenchTabItem>,
     theme: WorkbenchTheme,
     icon_theme: IconTheme,
+    text: UiText,
     mut on_select_tab: SelectF,
+    mut on_context_select_tab: ContextSelectF,
     mut on_close_tab: CloseF,
+    mut on_move_tab: MoveF,
     toolbar: ProjectTabsToolbar<NewH, SplitVH, SplitHH, ToggleTreeH>,
 ) -> impl IntoElement
 where
     SelectH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     SelectF: FnMut(WorkItemId) -> SelectH,
+    ContextSelectH: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    ContextSelectF: FnMut(WorkItemId) -> ContextSelectH,
     CloseH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     CloseF: FnMut(WorkItemId) -> CloseH,
+    MoveH: Fn(&WorkItemId, &mut Window, &mut App) + 'static,
+    MoveF: FnMut(usize) -> MoveH,
     NewH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     SplitVH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     SplitHH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -290,6 +384,11 @@ where
         on_split_horizontal,
         on_toggle_project_tree,
     } = toolbar;
+    let tab_count = items.len();
+    let has_files = items.iter().any(|item| item.kind == WorkbenchTabKind::File);
+    let has_terminals = items
+        .iter()
+        .any(|item| item.kind == WorkbenchTabKind::Terminal);
 
     let mut tab_row = div()
         .id("project-tab-row")
@@ -299,15 +398,22 @@ where
         .overflow_x_scroll();
     for (index, item) in items.into_iter().enumerate() {
         let select_tab_id = item.id.clone();
+        let context_tab_id = item.id.clone();
         let close_tab_id = item.id.clone();
         tab_row = tab_row.child(project_tab(
             index,
+            tab_count,
+            has_files,
+            has_terminals,
             item,
             &icon_theme,
             theme,
-            style.close_slot_size,
+            style,
+            text,
             on_select_tab(select_tab_id),
+            on_context_select_tab(context_tab_id),
             on_close_tab(close_tab_id),
+            on_move_tab(index),
         ));
     }
 
@@ -332,23 +438,34 @@ where
         .into_any_element()
 }
 
-fn project_tab<SelectH, CloseH>(
+fn project_tab<SelectH, ContextSelectH, CloseH, MoveH>(
     index: usize,
+    tab_count: usize,
+    has_files: bool,
+    has_terminals: bool,
     item: WorkbenchTabItem,
     icon_theme: &IconTheme,
     theme: WorkbenchTheme,
-    close_slot_size: Pixels,
+    style: ProjectTabsStyle,
+    text: UiText,
     on_select_tab: SelectH,
+    on_context_select_tab: ContextSelectH,
     on_close_tab: CloseH,
+    on_move_tab: MoveH,
 ) -> impl IntoElement
 where
     SelectH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ContextSelectH: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
     CloseH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    MoveH: Fn(&WorkItemId, &mut Window, &mut App) + 'static,
 {
     let row_style = yttt_row_style(YtttRowKind::Tab, item.state, true, theme);
     let group_name = format!("project-tab-{index}");
     let tooltip = item.tooltip.clone();
     let kind = item.kind;
+    let active = item.state == SelectableState::Active;
+    let drag_id = item.id.clone();
+    let drag_title = item.title.clone();
     let icon = match kind {
         WorkbenchTabKind::Terminal => Icon::new(IconName::SquareTerminal)
             .size_3()
@@ -369,6 +486,7 @@ where
         .id(("project-tab", index))
         .debug_selector(move || format!("project-tab-{index}"))
         .group(group_name.clone())
+        .relative()
         .flex()
         .items_center()
         .gap_2()
@@ -382,6 +500,24 @@ where
         .text_xs()
         .hover(move |this| this.bg(row_style.hover_background))
         .on_click(on_select_tab)
+        .on_mouse_down(MouseButton::Right, on_context_select_tab)
+        .on_drag(
+            DraggedWorkbenchTab {
+                id: drag_id,
+                title: drag_title,
+                theme,
+            },
+            |drag, _, _, cx| {
+                cx.stop_propagation();
+                cx.new(|_| drag.clone())
+            },
+        )
+        .drag_over::<DraggedWorkbenchTab>(move |this, _, _, _| {
+            this.border_color(theme.accent).bg(theme.selection)
+        })
+        .on_drop(move |drag: &DraggedWorkbenchTab, window, cx| {
+            on_move_tab(&drag.id, window, cx);
+        })
         .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
         .child(icon)
         .child(
@@ -389,6 +525,7 @@ where
                 .flex_1()
                 .truncate()
                 .text_color(row_style.title)
+                .when(active, |this| this.font_weight(gpui::FontWeight::SEMIBOLD))
                 .child(item.title),
         );
 
@@ -401,12 +538,48 @@ where
             group_name,
             dirty,
             theme,
-            close_slot_size,
+            style.close_slot_size,
             on_close_tab,
         )),
     };
 
-    tab
+    tab.children(active.then(|| {
+        div()
+            .absolute()
+            .bottom_0()
+            .left_0()
+            .right_0()
+            .h(style.active_indicator_height)
+            .bg(style.active_indicator)
+    }))
+    .context_menu(move |menu, _, _| {
+        menu.item(
+            PopupMenuItem::new(text.get(UiTextKey::TabCloseCurrent)).action(Box::new(TabClose)),
+        )
+        .item(PopupMenuItem::new(text.get(UiTextKey::TabCloseAll)).action(Box::new(TabCloseAll)))
+        .item(PopupMenuItem::separator())
+        .item(
+            PopupMenuItem::new(text.get(UiTextKey::TabCloseBefore))
+                .action(Box::new(TabCloseBefore))
+                .disabled(index == 0),
+        )
+        .item(
+            PopupMenuItem::new(text.get(UiTextKey::TabCloseAfter))
+                .action(Box::new(TabCloseAfter))
+                .disabled(index + 1 >= tab_count),
+        )
+        .item(PopupMenuItem::separator())
+        .item(
+            PopupMenuItem::new(text.get(UiTextKey::TabCloseAllFiles))
+                .action(Box::new(TabCloseAllFiles))
+                .disabled(!has_files),
+        )
+        .item(
+            PopupMenuItem::new(text.get(UiTextKey::TabCloseAllTerminals))
+                .action(Box::new(TabCloseAllTerminals))
+                .disabled(!has_terminals),
+        )
+    })
 }
 
 fn tab_status_dot(tone: ProjectTabStatusTone, theme: WorkbenchTheme) -> impl IntoElement {
