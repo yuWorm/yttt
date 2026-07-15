@@ -1,4 +1,4 @@
-use gpui::rgb;
+use gpui::{rgb, rgba};
 use tempfile::tempdir;
 use yttt::config::{
     paths::AppConfigPaths,
@@ -92,16 +92,23 @@ fn window_effect_controls_whether_theme_surfaces_use_configured_opacity() {
     ] {
         settings.window.effect = effect;
         let runtime = ThemeRuntime::resolve(&settings, &store);
+        assert!(runtime.window_material.translucent);
+        assert_eq!(runtime.window_material.window_tint_opacity, 0.42);
         assert_eq!(runtime.ui.app_background.a, 0.42);
-        assert_eq!(runtime.editor.background.a, 0.42);
-        assert_eq!(runtime.terminal.background.a, 0.42);
+        assert_eq!(runtime.ui.surface.a, 0.04);
+        assert_eq!(runtime.ui.hover_surface.a, 0.06);
+        assert_eq!(runtime.ui.active_surface.a, 0.12);
+        assert_eq!(runtime.editor.background.a, 0.04);
+        assert_eq!(runtime.editor.active_line.a, 0.06);
+        assert_eq!(runtime.terminal.background.a, 0.04);
         let highlight = runtime.editor.to_highlight_theme_style();
-        assert_eq!(highlight.editor_background.unwrap().a, 0.42);
+        assert_eq!(highlight.editor_background.unwrap().a, 0.04);
         assert_eq!(highlight.editor_gutter_background.unwrap().a, 0.0);
     }
 
     settings.window.effect = WindowBackgroundEffect::None;
     let runtime = ThemeRuntime::resolve(&settings, &store);
+    assert!(!runtime.window_material.translucent);
     assert_eq!(runtime.ui.app_background.a, 1.0);
     assert_eq!(runtime.editor.background.a, 1.0);
     assert_eq!(runtime.terminal.background.a, 1.0);
@@ -144,7 +151,22 @@ fn workbench_theme_maps_to_gpui_component_theme_config() {
         Some("#67769640")
     );
     assert!(config.colors.title_bar.is_some());
-    assert!(config.colors.list_active.is_some());
+    for (color, expected) in [
+        (&config.colors.list, "#23272e00"),
+        (&config.colors.list_hover, "#2c313a0f"),
+        (&config.colors.list_active, "#2c313a1f"),
+        (&config.colors.sidebar, "#23272e00"),
+        (&config.colors.tab, "#23272e00"),
+        (&config.colors.tab_active, "#2c313a1f"),
+        (&config.colors.tab_bar, "#23272e00"),
+        (&config.colors.overlay, "#00000042"),
+        (&config.colors.popover, "#1e2227"),
+    ] {
+        assert_eq!(
+            color.as_ref().map(|color| color.to_string()).as_deref(),
+            Some(expected)
+        );
+    }
     assert_eq!(
         config
             .colors
@@ -152,7 +174,7 @@ fn workbench_theme_maps_to_gpui_component_theme_config() {
             .as_ref()
             .map(|color| color.to_string())
             .as_deref(),
-        Some("#1e2227b8")
+        Some("#1e222714")
     );
     assert_eq!(
         config
@@ -204,7 +226,7 @@ selection = "#445566"
             .as_ref()
             .map(|color| color.to_string())
             .as_deref(),
-        Some("#445566")
+        Some("#44556647")
     );
     assert!(loaded.warnings.is_empty());
 }
@@ -231,12 +253,24 @@ focus_ring = "#112233"
     settings.theme.name = "focus-only".to_string();
     let config = ThemeRuntime::resolve(&settings, &loaded.store).to_gpui_component_theme_config();
 
-    for color in [&config.colors.ring, &config.colors.selection] {
-        assert_eq!(
-            color.as_ref().map(|color| color.to_string()).as_deref(),
-            Some("#112233")
-        );
-    }
+    assert_eq!(
+        config
+            .colors
+            .ring
+            .as_ref()
+            .map(|color| color.to_string())
+            .as_deref(),
+        Some("#112233")
+    );
+    assert_eq!(
+        config
+            .colors
+            .selection
+            .as_ref()
+            .map(|color| color.to_string())
+            .as_deref(),
+        Some("#11223347")
+    );
     assert!(loaded.warnings.is_empty());
 }
 #[test]
@@ -249,9 +283,7 @@ fn builtin_one_dark_theme_maps_editor_and_terminal_palettes() {
 
     assert_eq!(
         highlight.editor_background,
-        Some(gpui::Hsla::from(
-            rgb(0x23272e).alpha(DEFAULT_WINDOW_OPACITY)
-        ))
+        Some(gpui::Hsla::from(rgb(0x23272e).alpha(0.04)))
     );
     assert_eq!(
         highlight.editor_foreground,
@@ -259,9 +291,7 @@ fn builtin_one_dark_theme_maps_editor_and_terminal_palettes() {
     );
     assert_eq!(
         highlight.editor_active_line,
-        Some(gpui::Hsla::from(
-            rgb(0x2c313c).alpha(DEFAULT_WINDOW_OPACITY)
-        ))
+        Some(gpui::Hsla::from(rgb(0x2c313c).alpha(0.06)))
     );
     assert_eq!(
         highlight.editor_line_number,
@@ -298,13 +328,13 @@ fn builtin_one_dark_theme_maps_editor_and_terminal_palettes() {
         );
     }
 
-    assert_eq!(
-        runtime.terminal.background,
-        rgb(0x23272e).alpha(DEFAULT_WINDOW_OPACITY)
-    );
+    assert_eq!(runtime.terminal.background, rgb(0x23272e).alpha(0.04));
     assert_eq!(runtime.terminal.foreground, rgb(0xabb2bf));
     assert_eq!(runtime.terminal.cursor, Some(rgb(0xabb2bf)));
-    assert_eq!(runtime.terminal.selection_background, Some(rgb(0x343b48)));
+    assert_eq!(
+        runtime.terminal.selection_background,
+        Some(rgba(0x67769640))
+    );
     assert_eq!(
         runtime.terminal.normal,
         AnsiColors {
@@ -347,7 +377,7 @@ mode = "dark"
 [editor]
 background = "#111111"
 foreground = "#eeeeee"
-active_line = "#222222"
+active_line = "#22222208"
 line_number = "#333333"
 active_line_number = "#dddddd"
 
@@ -370,15 +400,11 @@ comment = "#555555"
 
     assert_eq!(
         highlight.editor_background,
-        Some(gpui::Hsla::from(
-            rgb(0x111111).alpha(DEFAULT_WINDOW_OPACITY)
-        ))
+        Some(gpui::Hsla::from(rgb(0x111111).alpha(0.04)))
     );
     assert_eq!(
         highlight.editor_active_line,
-        Some(gpui::Hsla::from(
-            rgb(0x222222).alpha(DEFAULT_WINDOW_OPACITY)
-        ))
+        Some(gpui::Hsla::from(rgba(0x22222208)))
     );
     assert_eq!(
         highlight
@@ -430,6 +456,7 @@ fn terminal_config_uses_runtime_settings_and_colors() {
         yttt_terminal::TerminalOsc52Policy::ReadWrite
     );
     assert!(config.kitty_keyboard);
+    assert_eq!(config.colors.selection_background().a, rgba(0x67769640).a);
 }
 
 #[test]

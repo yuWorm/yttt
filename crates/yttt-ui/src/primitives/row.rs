@@ -1,4 +1,4 @@
-use gpui::{Pixels, Rgba, px};
+use gpui::{Pixels, Rgba, px, rgba};
 
 use crate::{SelectableState, theme::WorkbenchTheme};
 
@@ -37,6 +37,7 @@ pub fn yttt_row_style(
         YtttRowKind::Sidebar => (px(28.0), px(8.0), px(0.0), px(6.0), px(0.0)),
         YtttRowKind::Tab => (px(32.0), px(8.0), px(0.0), px(0.0), px(1.0)),
     };
+    let transparent = rgba(0x00000000);
 
     if kind == YtttRowKind::Settings {
         return YtttRowStyle {
@@ -57,7 +58,7 @@ pub fn yttt_row_style(
     if !enabled {
         let background = match kind {
             YtttRowKind::Palette | YtttRowKind::Settings => theme.surface_elevated,
-            YtttRowKind::Sidebar | YtttRowKind::Tab => theme.app_background,
+            YtttRowKind::Sidebar | YtttRowKind::Tab => transparent,
         };
 
         return YtttRowStyle {
@@ -82,8 +83,8 @@ pub fn yttt_row_style(
             padding_y,
             radius,
             border_width,
-            background: theme.surface,
-            hover_background: theme.surface,
+            background: theme.active_surface,
+            hover_background: theme.active_surface,
             border: theme.border,
             title: theme.text,
             subtitle: theme.text_muted,
@@ -108,9 +109,9 @@ pub fn yttt_row_style(
             padding_y,
             radius,
             border_width,
-            background: theme.app_background,
+            background: transparent,
             hover_background: theme.hover_surface,
-            border: theme.app_background,
+            border: transparent,
             title: theme.text_muted,
             subtitle: theme.text_subtle,
             status: theme.text_muted,
@@ -121,7 +122,7 @@ pub fn yttt_row_style(
             padding_y,
             radius,
             border_width,
-            background: theme.app_background,
+            background: transparent,
             hover_background: theme.hover_surface,
             border: theme.border,
             title: theme.text_muted,

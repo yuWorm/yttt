@@ -587,7 +587,6 @@ pub(super) fn empty_workspace(
         .relative()
         .justify_center()
         .items_center()
-        .bg(theme.app_background)
         .text_color(theme.text)
         .child(div().text_xl().child(ui_text.get(UiTextKey::AppName)))
         .child(

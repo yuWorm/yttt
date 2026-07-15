@@ -1,4 +1,4 @@
-use gpui::rgb;
+use gpui::{rgb, rgba};
 use gpui_component::ThemeMode;
 
 use super::{
@@ -41,8 +41,7 @@ pub(super) fn theme() -> AppTheme {
             background: rgb(0x23272e),
             foreground: rgb(0xabb2bf),
             cursor: Some(rgb(0xabb2bf)),
-            // Zed's #67769640 selection composited over the RGB-only terminal background.
-            selection_background: Some(rgb(0x343b48)),
+            selection_background: Some(rgba(0x67769640)),
             selection_foreground: None,
             cursor_text: None,
             search_foreground: rgb(0x181818),

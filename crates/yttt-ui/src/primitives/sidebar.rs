@@ -147,7 +147,7 @@ pub fn yttt_sidebar_style(theme: WorkbenchTheme) -> YtttSidebarStyle {
         resize_hit_area_width: px(SIDEBAR_RESIZE_HIT_AREA_WIDTH),
         item_height: px(28.0),
         item_padding_x: px(8.0),
-        background: theme.app_background,
+        background: theme.sidebar_background,
         active_background: theme.active_surface,
         hover_background: theme.hover_surface,
     }

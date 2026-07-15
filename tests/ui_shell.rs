@@ -645,7 +645,7 @@ fn sidebar_style_uses_passed_theme() {
 #[test]
 fn project_tabs_style_uses_passed_theme() {
     let mut theme = WorkbenchTheme::one_dark();
-    theme.surface = gpui::rgb(0x222244);
+    theme.active_surface = gpui::rgb(0x222244);
 
     let style = project_tabs_style(theme);
 
@@ -748,10 +748,10 @@ fn yttt_row_style_uses_domain_specific_sidebar_and_tab_surfaces() {
     let tab = yttt_row_style(YtttRowKind::Tab, SelectableState::Active, true, theme);
 
     assert_eq!(sidebar.height, gpui::px(28.0));
-    assert_eq!(sidebar.background, theme.app_background);
+    assert_eq!(sidebar.background, gpui::rgba(0x00000000));
     assert_eq!(sidebar.hover_background, theme.hover_surface);
     assert_eq!(tab.height, gpui::px(32.0));
-    assert_eq!(tab.background, theme.surface);
+    assert_eq!(tab.background, theme.active_surface);
     assert_eq!(tab.border, theme.border);
 }
 
@@ -1251,7 +1251,7 @@ fn yttt_sidebar_style_matches_project_sidebar_density() {
     );
     assert_eq!(primitive.item_height, gpui::px(28.0));
     assert_eq!(primitive.item_padding_x, gpui::px(8.0));
-    assert_eq!(primitive.background, theme.app_background);
+    assert_eq!(primitive.background, theme.sidebar_background);
     assert_eq!(primitive.active_background, theme.active_surface);
 }
 
@@ -1269,7 +1269,7 @@ fn yttt_tabbar_style_matches_project_tab_density() {
         yttt_icon_button_style(YtttIconButtonKind::TabClose, theme).size
     );
     assert_eq!(primitive.border_width, gpui::px(1.0));
-    assert_eq!(primitive.active_background, theme.surface);
-    assert_eq!(primitive.inactive_background, theme.tabbar_background);
+    assert_eq!(primitive.active_background, theme.active_surface);
+    assert_eq!(primitive.inactive_background, gpui::rgba(0x00000000));
     assert_eq!(primitive.hover_background, theme.hover_surface);
 }

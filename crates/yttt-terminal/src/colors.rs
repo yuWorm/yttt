@@ -610,6 +610,12 @@ impl ColorPaletteBuilder {
         self
     }
 
+    /// Sets the opacity of the selection background color.
+    pub fn selection_background_alpha(mut self, alpha: f32) -> Self {
+        self.palette.selection_background.a = alpha.clamp(0.0, 1.0);
+        self
+    }
+
     pub fn selection_foreground(mut self, r: u8, g: u8, b: u8) -> Self {
         let rgb = Rgb { r, g, b };
         self.palette.selection_foreground = Some(rgb_to_hsla(rgb));
@@ -850,6 +856,24 @@ mod tests {
             }
         );
         assert_eq!(palette.background.a, 0.35);
+    }
+
+    #[test]
+    fn selection_background_alpha_preserves_color_and_sets_opacity() {
+        let palette = ColorPalette::builder()
+            .selection_background(0x12, 0x34, 0x56)
+            .selection_background_alpha(0.28)
+            .build();
+
+        assert_eq!(
+            palette.selection_background_rgb,
+            Rgb {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56,
+            }
+        );
+        assert_eq!(palette.selection_background.a, 0.28);
     }
 
     #[test]

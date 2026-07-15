@@ -11,7 +11,7 @@ use yttt_terminal::{ColorPalette, TerminalConfig};
 pub use yttt_ui::theme::WorkbenchTheme;
 
 use crate::config::{
-    settings::{AppSettings, TerminalSettings},
+    settings::{AppSettings, TerminalSettings, WindowBackgroundEffect, WindowSettings},
     theme::ThemeStore,
 };
 
@@ -55,38 +55,112 @@ impl AppTheme {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowMaterialTheme {
+    pub translucent: bool,
+    pub window_tint_opacity: f32,
+    pub panel_tint_opacity: f32,
+    pub elevated_tint_opacity: f32,
+    pub hover_overlay_opacity: f32,
+    pub active_overlay_opacity: f32,
+    pub selection_overlay_opacity: f32,
+    pub focused_overlay_opacity: f32,
+    pub scrim: Rgba,
+}
+
+impl WindowMaterialTheme {
+    fn resolve(settings: &WindowSettings) -> Self {
+        if settings.effect == WindowBackgroundEffect::None {
+            return Self {
+                translucent: false,
+                window_tint_opacity: 1.0,
+                panel_tint_opacity: 1.0,
+                elevated_tint_opacity: 1.0,
+                hover_overlay_opacity: 1.0,
+                active_overlay_opacity: 1.0,
+                selection_overlay_opacity: 1.0,
+                focused_overlay_opacity: 1.0,
+                scrim: gpui::rgba(0x00000059),
+            };
+        }
+
+        Self {
+            translucent: true,
+            window_tint_opacity: settings.opacity.clamp(0.0, 1.0),
+            panel_tint_opacity: 0.04,
+            elevated_tint_opacity: 0.08,
+            hover_overlay_opacity: 0.06,
+            active_overlay_opacity: 0.12,
+            selection_overlay_opacity: 0.28,
+            focused_overlay_opacity: 0.36,
+            scrim: gpui::rgba(0x00000042),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ThemeRuntime {
     pub theme_name: String,
     pub mode: ThemeMode,
+    pub window_material: WindowMaterialTheme,
     pub ui: WorkbenchTheme,
     pub editor: EditorTheme,
     pub terminal: TerminalTheme,
     pub terminal_settings: TerminalSettings,
 }
 
-fn cap_window_surface_opacity(color: &mut Rgba, opacity: f32) {
+fn cap_color_opacity(color: &mut Rgba, opacity: f32) {
     color.a = color.a.min(opacity);
 }
 
-fn apply_window_surface_opacity(
+fn apply_window_material(
     ui: &mut WorkbenchTheme,
     editor: &mut EditorTheme,
     terminal: &mut TerminalTheme,
-    opacity: f32,
+    material: WindowMaterialTheme,
 ) {
-    cap_window_surface_opacity(&mut ui.app_background, opacity);
-    cap_window_surface_opacity(&mut ui.surface, opacity);
-    cap_window_surface_opacity(&mut ui.surface_elevated, opacity);
-    cap_window_surface_opacity(&mut ui.titlebar_background, opacity);
-    cap_window_surface_opacity(&mut ui.sidebar_background, opacity);
-    cap_window_surface_opacity(&mut ui.tabbar_background, opacity);
-    cap_window_surface_opacity(&mut ui.terminal_background, opacity);
-    cap_window_surface_opacity(&mut ui.active_surface, opacity);
-    cap_window_surface_opacity(&mut ui.hover_surface, opacity);
-    cap_window_surface_opacity(&mut editor.background, opacity);
-    cap_window_surface_opacity(&mut editor.active_line, opacity);
-    cap_window_surface_opacity(&mut terminal.background, opacity);
+    if !material.translucent {
+        return;
+    }
+
+    cap_color_opacity(&mut ui.app_background, material.window_tint_opacity);
+    for color in [
+        &mut ui.surface,
+        &mut ui.titlebar_background,
+        &mut ui.sidebar_background,
+        &mut ui.tabbar_background,
+        &mut ui.terminal_background,
+    ] {
+        cap_color_opacity(color, material.panel_tint_opacity);
+    }
+    cap_color_opacity(&mut ui.surface_elevated, material.elevated_tint_opacity);
+    cap_color_opacity(&mut ui.hover_surface, material.hover_overlay_opacity);
+    cap_color_opacity(&mut ui.active_surface, material.active_overlay_opacity);
+    cap_color_opacity(&mut ui.selection, material.selection_overlay_opacity);
+
+    cap_color_opacity(&mut editor.background, material.panel_tint_opacity);
+    cap_color_opacity(&mut editor.active_line, material.hover_overlay_opacity);
+
+    cap_color_opacity(&mut terminal.background, material.panel_tint_opacity);
+    if let Some(selection_background) = &mut terminal.selection_background {
+        cap_color_opacity(selection_background, material.selection_overlay_opacity);
+    }
+    cap_color_opacity(
+        &mut terminal.search_background,
+        material.selection_overlay_opacity,
+    );
+    cap_color_opacity(
+        &mut terminal.focused_search_background,
+        material.focused_overlay_opacity,
+    );
+    cap_color_opacity(
+        &mut terminal.hint_start_background,
+        material.selection_overlay_opacity,
+    );
+    cap_color_opacity(
+        &mut terminal.hint_end_background,
+        material.selection_overlay_opacity,
+    );
 }
 
 impl ThemeRuntime {
@@ -105,16 +179,16 @@ impl ThemeRuntime {
             .unwrap_or_else(|| selected.terminal.clone());
         let mut ui = selected.ui;
         let mut editor = selected.editor;
-        apply_window_surface_opacity(
-            &mut ui,
-            &mut editor,
-            &mut terminal,
-            settings.window.resolved_opacity(),
-        );
+        if terminal.selection_background.is_none() {
+            terminal.selection_background = Some(ui.selection);
+        }
+        let window_material = WindowMaterialTheme::resolve(&settings.window);
+        apply_window_material(&mut ui, &mut editor, &mut terminal, window_material);
 
         Self {
             theme_name: selected.name,
             mode: selected.mode,
+            window_material,
             ui,
             editor,
             terminal,
@@ -124,17 +198,34 @@ impl ThemeRuntime {
 
     pub fn to_gpui_component_theme_config(&self) -> ThemeConfig {
         let theme = self.ui;
+        let transparent = theme.app_background.alpha(0.0);
+        let elevated = theme.surface_elevated.alpha(1.0);
         let mut colors = ThemeConfigColors::default();
         colors.background = Some(color_hex(theme.app_background.alpha(1.0)).into());
         colors.foreground = Some(color_hex(theme.text).into());
         colors.border = Some(color_hex(theme.border).into());
         colors.input = Some(color_hex(theme.border).into());
         colors.ring = Some(color_hex(theme.focus_ring).into());
-        colors.muted = Some(color_hex(theme.surface).into());
+        colors.accordion = Some(color_hex(transparent).into());
+        colors.accordion_hover = Some(color_hex(theme.hover_surface).into());
+        colors.button = Some(color_hex(theme.surface).into());
+        colors.button_foreground = Some(color_hex(theme.text).into());
+        colors.button_hover = Some(color_hex(theme.hover_surface).into());
+        colors.button_active = Some(color_hex(theme.active_surface).into());
+        colors.button_primary = Some(color_hex(theme.active_surface).into());
+        colors.button_primary_foreground = Some(color_hex(theme.text).into());
+        colors.button_primary_hover = Some(color_hex(theme.active_surface).into());
+        colors.button_primary_active = Some(color_hex(theme.active_surface).into());
+        colors.button_secondary = Some(color_hex(theme.surface_elevated).into());
+        colors.button_secondary_foreground = Some(color_hex(theme.text_muted).into());
+        colors.button_secondary_hover = Some(color_hex(theme.hover_surface).into());
+        colors.button_secondary_active = Some(color_hex(theme.active_surface).into());
+        colors.muted = Some(color_hex(theme.surface_elevated).into());
         colors.muted_foreground = Some(color_hex(theme.text_subtle).into());
+        colors.overlay = Some(color_hex(self.window_material.scrim).into());
         colors.primary = Some(color_hex(theme.active_surface).into());
         colors.primary_foreground = Some(color_hex(theme.text).into());
-        colors.primary_hover = Some(color_hex(theme.hover_surface).into());
+        colors.primary_hover = Some(color_hex(theme.active_surface).into());
         colors.primary_active = Some(color_hex(theme.active_surface).into());
         colors.secondary = Some(color_hex(theme.surface_elevated).into());
         colors.secondary_foreground = Some(color_hex(theme.text_muted).into());
@@ -143,18 +234,39 @@ impl ThemeRuntime {
         colors.switch = Some(color_hex(theme.surface_elevated).into());
         colors.switch_thumb = Some(color_hex(theme.text).into());
         colors.accent = Some(color_hex(theme.hover_surface).into());
+        colors.accent_foreground = Some(color_hex(theme.text).into());
         colors.caret = Some(color_hex(theme.accent).into());
-        colors.list = Some(color_hex(theme.surface_elevated).into());
+        colors.list = Some(color_hex(transparent).into());
         colors.list_active = Some(color_hex(theme.active_surface).into());
         colors.list_active_border = Some(color_hex(theme.active_surface).into());
+        colors.list_even = Some(color_hex(transparent).into());
+        colors.list_head = Some(color_hex(theme.surface).into());
         colors.list_hover = Some(color_hex(theme.hover_surface).into());
-        colors.popover = Some(color_hex(theme.surface).into());
+        colors.popover = Some(color_hex(elevated).into());
         colors.popover_foreground = Some(color_hex(theme.text).into());
+        colors.scrollbar = Some(color_hex(transparent).into());
+        colors.scrollbar_thumb = Some(color_hex(theme.hover_surface).into());
+        colors.scrollbar_thumb_hover = Some(color_hex(theme.active_surface).into());
         colors.selection = Some(color_hex(theme.selection).into());
-        colors.sidebar = Some(color_hex(theme.sidebar_background).into());
+        colors.sidebar = Some(color_hex(transparent).into());
+        colors.sidebar_accent = Some(color_hex(theme.hover_surface).into());
+        colors.sidebar_accent_foreground = Some(color_hex(theme.text).into());
+        colors.sidebar_border = Some(color_hex(theme.border).into());
         colors.sidebar_foreground = Some(color_hex(theme.text_muted).into());
         colors.sidebar_primary = Some(color_hex(theme.active_surface).into());
         colors.sidebar_primary_foreground = Some(color_hex(theme.text).into());
+        colors.tab = Some(color_hex(transparent).into());
+        colors.tab_active = Some(color_hex(theme.active_surface).into());
+        colors.tab_active_foreground = Some(color_hex(theme.text).into());
+        colors.tab_bar = Some(color_hex(transparent).into());
+        colors.tab_bar_segmented = Some(color_hex(theme.surface).into());
+        colors.tab_foreground = Some(color_hex(theme.text_muted).into());
+        colors.table = Some(color_hex(transparent).into());
+        colors.table_active = Some(color_hex(theme.active_surface).into());
+        colors.table_active_border = Some(color_hex(theme.active_surface).into());
+        colors.table_even = Some(color_hex(transparent).into());
+        colors.table_head = Some(color_hex(theme.surface).into());
+        colors.table_hover = Some(color_hex(theme.hover_surface).into());
         colors.success = Some(color_hex(theme.success).into());
         colors.success_foreground = Some(color_hex(theme.text).into());
         colors.warning = Some(color_hex(theme.warning).into());
@@ -320,7 +432,8 @@ impl TerminalTheme {
             .background_alpha(self.background.a)
             .foreground(foreground_r, foreground_g, foreground_b)
             .cursor(cursor_r, cursor_g, cursor_b)
-            .selection_background(selection_r, selection_g, selection_b);
+            .selection_background(selection_r, selection_g, selection_b)
+            .selection_background_alpha(selection_background.a);
 
         if let Some(color) = self.selection_foreground {
             let (r, g, b) = color_bytes(color);

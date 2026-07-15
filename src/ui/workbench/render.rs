@@ -166,7 +166,7 @@ impl Render for WorkbenchView {
             .flex_col()
             .size_full()
             .relative()
-            .bg(gpui::transparent_black())
+            .bg(self.theme_runtime.ui.app_background)
             .text_color(self.theme_runtime.ui.text)
             .line_height(relative(self.app_settings.general.ui_line_height))
             .child(workbench_titlebar(

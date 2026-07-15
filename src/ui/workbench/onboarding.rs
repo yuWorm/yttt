@@ -62,7 +62,6 @@ pub(super) fn onboarding_view(
         .min_h_0()
         .items_center()
         .justify_center()
-        .bg(theme.app_background)
         .px_8()
         .py_6()
         .child(

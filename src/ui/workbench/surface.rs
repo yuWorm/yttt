@@ -29,7 +29,6 @@ impl WorkbenchView {
         div()
             .flex()
             .flex_1()
-            .bg(self.theme_runtime.ui.terminal_background)
             .text_color(self.theme_runtime.ui.text)
             .child(self.terminal_split_view_for_layout(&layout, &tree_input, window, cx))
     }
@@ -492,8 +491,7 @@ impl WorkbenchView {
             .flex_1()
             .relative()
             .border_1()
-            .border_color(border_color)
-            .bg(self.theme_runtime.ui.terminal_background);
+            .border_color(border_color);
         wrapper.interactivity().on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _, _window, cx| {
