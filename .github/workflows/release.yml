@@ -26,7 +26,7 @@ jobs:
       ref: ${{ steps.version.outputs.ref }}
     steps:
       - name: Check out release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
 
@@ -48,7 +48,7 @@ jobs:
     runs-on: macos-15
     steps:
       - name: Check out release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.metadata.outputs.ref }}
 
@@ -65,7 +65,7 @@ jobs:
         run: scripts/build-macos-dmg.sh --output "dist/yttt-$VERSION-macos-aarch64.dmg"
 
       - name: Upload macOS package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-macos
           path: dist/*.dmg
@@ -77,7 +77,7 @@ jobs:
     runs-on: windows-2025
     steps:
       - name: Check out release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.metadata.outputs.ref }}
 
@@ -99,7 +99,7 @@ jobs:
         run: .\scripts\build-windows-installer.ps1 -Output "dist/yttt-$env:VERSION-windows-x86_64-setup.exe"
 
       - name: Upload Windows package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-windows
           path: dist/*.exe
@@ -111,7 +111,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.metadata.outputs.ref }}
 
@@ -151,7 +151,7 @@ jobs:
         run: scripts/build-linux-tar.sh --output "dist/yttt-$VERSION-linux-x86_64.tar.gz"
 
       - name: Upload Linux package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-linux
           path: dist/*.tar.gz
@@ -169,7 +169,7 @@ jobs:
       contents: write
     steps:
       - name: Download release packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: release-*
           path: dist
