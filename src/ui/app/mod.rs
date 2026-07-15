@@ -13,7 +13,7 @@ use gpui_component::{Root as ComponentRoot, Theme, TitleBar};
 use crate::{
     config::{
         paths::AppConfigPaths,
-        settings::{AppSettings, load_or_create_settings},
+        settings::{AppSettings, WindowBackgroundEffect, load_or_create_settings},
         theme::{ThemeStore, load_theme_store},
     },
     ui::{
@@ -39,30 +39,35 @@ pub fn run() {
             yttt_terminal::init(cx);
             crate::ui::editor::register_builtin_editor_languages();
             let config_paths = AppConfigPaths::for_app();
-            let theme_runtime = load_app_theme_runtime(&config_paths);
+            let (app_settings, theme_runtime) = load_app_runtime(&config_paths);
             Theme::global_mut(cx)
                 .apply_config(&Rc::new(theme_runtime.to_gpui_component_theme_config()));
             cx.bind_keys(app_startup_keybindings());
 
             let bounds = Bounds::centered(None, size(px(960.0), px(640.0)), cx);
-            cx.open_window(workbench_window_options(bounds), |window, cx| {
-                let view = cx.new(|_| {
-                    let force_onboarding = force_onboarding_from_env(
-                        std::env::var(FORCE_ONBOARDING_ENV).ok().as_deref(),
-                    );
-                    match startup_mode_from_fixture(
-                        std::env::var("YTTT_DEV_FIXTURE").ok().as_deref(),
-                    ) {
-                        StartupMode::DevFixture => WorkbenchView::dev_fixture(),
-                        StartupMode::AgentExitFixture => WorkbenchView::agent_exit_fixture(),
-                        StartupMode::Normal => WorkbenchView::from_startup_env(force_onboarding),
-                    }
-                });
-                register_workbench_keybinding_interceptor(cx, &view);
-                register_workbench_focus_restore(window, cx, &view);
-                register_workbench_close_guard(window, cx, &view);
-                cx.new(|cx| ComponentRoot::new(view, window, cx).bg(transparent_black()))
-            })
+            cx.open_window(
+                workbench_window_options(bounds, app_settings.window.effect),
+                |window, cx| {
+                    let view = cx.new(|_| {
+                        let force_onboarding = force_onboarding_from_env(
+                            std::env::var(FORCE_ONBOARDING_ENV).ok().as_deref(),
+                        );
+                        match startup_mode_from_fixture(
+                            std::env::var("YTTT_DEV_FIXTURE").ok().as_deref(),
+                        ) {
+                            StartupMode::DevFixture => WorkbenchView::dev_fixture(),
+                            StartupMode::AgentExitFixture => WorkbenchView::agent_exit_fixture(),
+                            StartupMode::Normal => {
+                                WorkbenchView::from_startup_env(force_onboarding)
+                            }
+                        }
+                    });
+                    register_workbench_keybinding_interceptor(cx, &view);
+                    register_workbench_focus_restore(window, cx, &view);
+                    register_workbench_close_guard(window, cx, &view);
+                    cx.new(|cx| ComponentRoot::new(view, window, cx).bg(transparent_black()))
+                },
+            )
             .expect("failed to open yttt window");
         });
 }
@@ -101,23 +106,35 @@ pub fn register_workbench_close_guard(window: &Window, cx: &App, view: &Entity<W
     });
 }
 
-fn load_app_theme_runtime(config_paths: &AppConfigPaths) -> ThemeRuntime {
+fn load_app_runtime(config_paths: &AppConfigPaths) -> (AppSettings, ThemeRuntime) {
     let settings = load_or_create_settings(config_paths)
         .map(|loaded| loaded.settings)
         .unwrap_or_else(|_| AppSettings::default());
     let theme_store = load_theme_store(config_paths)
         .map(|loaded| loaded.store)
         .unwrap_or_else(|_| ThemeStore::builtin());
+    let theme_runtime = ThemeRuntime::resolve(&settings, &theme_store);
 
-    ThemeRuntime::resolve(&settings, &theme_store)
+    (settings, theme_runtime)
 }
 
-pub fn workbench_window_options(bounds: Bounds<Pixels>) -> WindowOptions {
+pub fn workbench_window_options(
+    bounds: Bounds<Pixels>,
+    effect: WindowBackgroundEffect,
+) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(size(px(960.0), px(640.0))),
-        window_background: WindowBackgroundAppearance::Blurred,
+        window_background: window_background_appearance(effect),
         titlebar: Some(TitleBar::title_bar_options()),
         ..Default::default()
+    }
+}
+
+pub fn window_background_appearance(effect: WindowBackgroundEffect) -> WindowBackgroundAppearance {
+    match effect {
+        WindowBackgroundEffect::None => WindowBackgroundAppearance::Opaque,
+        WindowBackgroundEffect::Transparent => WindowBackgroundAppearance::Transparent,
+        WindowBackgroundEffect::Blurred => WindowBackgroundAppearance::Blurred,
     }
 }

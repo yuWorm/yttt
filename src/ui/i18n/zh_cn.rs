@@ -282,6 +282,15 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::SettingsNewTabCommandPlaceholder => "例如 lazygit、nvim .、codex",
         UiTextKey::SettingsAddCommand => "添加命令",
+        UiTextKey::SettingsWindowEffect => "窗口背景效果",
+        UiTextKey::SettingsWindowEffectDescription => "选择无效果、透明或磨砂玻璃主窗口。",
+        UiTextKey::SettingsWindowEffectNone => "无",
+        UiTextKey::SettingsWindowEffectTransparent => "透明",
+        UiTextKey::SettingsWindowEffectBlurred => "磨砂玻璃",
+        UiTextKey::SettingsWindowOpacity => "主窗口不透明度",
+        UiTextKey::SettingsWindowOpacityDescription => {
+            "统一控制标题栏、侧边栏、编辑器和终端等主页面表面。0.00 完全透明，1.00 完全不透明；仅用于透明和磨砂玻璃模式。"
+        }
         UiTextKey::SettingsUiFontFamily => "界面字体",
         UiTextKey::SettingsUiFontFamilyDescription => "YTTT 外壳、面板和控件使用的字体。",
         UiTextKey::SettingsUiFontSize => "界面字号",

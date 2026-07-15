@@ -16,7 +16,6 @@ use crate::config::{
 };
 
 pub const DEFAULT_THEME_NAME: &str = "one-dark-theme";
-pub const WINDOW_SURFACE_OPACITY: f32 = 0.72;
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
@@ -66,27 +65,28 @@ pub struct ThemeRuntime {
     pub terminal_settings: TerminalSettings,
 }
 
-fn cap_window_surface_opacity(color: &mut Rgba) {
-    color.a = color.a.min(WINDOW_SURFACE_OPACITY);
+fn cap_window_surface_opacity(color: &mut Rgba, opacity: f32) {
+    color.a = color.a.min(opacity);
 }
 
 fn apply_window_surface_opacity(
     ui: &mut WorkbenchTheme,
     editor: &mut EditorTheme,
     terminal: &mut TerminalTheme,
+    opacity: f32,
 ) {
-    cap_window_surface_opacity(&mut ui.app_background);
-    cap_window_surface_opacity(&mut ui.surface);
-    cap_window_surface_opacity(&mut ui.surface_elevated);
-    cap_window_surface_opacity(&mut ui.titlebar_background);
-    cap_window_surface_opacity(&mut ui.sidebar_background);
-    cap_window_surface_opacity(&mut ui.tabbar_background);
-    cap_window_surface_opacity(&mut ui.terminal_background);
-    cap_window_surface_opacity(&mut ui.active_surface);
-    cap_window_surface_opacity(&mut ui.hover_surface);
-    cap_window_surface_opacity(&mut editor.background);
-    cap_window_surface_opacity(&mut editor.active_line);
-    cap_window_surface_opacity(&mut terminal.background);
+    cap_window_surface_opacity(&mut ui.app_background, opacity);
+    cap_window_surface_opacity(&mut ui.surface, opacity);
+    cap_window_surface_opacity(&mut ui.surface_elevated, opacity);
+    cap_window_surface_opacity(&mut ui.titlebar_background, opacity);
+    cap_window_surface_opacity(&mut ui.sidebar_background, opacity);
+    cap_window_surface_opacity(&mut ui.tabbar_background, opacity);
+    cap_window_surface_opacity(&mut ui.terminal_background, opacity);
+    cap_window_surface_opacity(&mut ui.active_surface, opacity);
+    cap_window_surface_opacity(&mut ui.hover_surface, opacity);
+    cap_window_surface_opacity(&mut editor.background, opacity);
+    cap_window_surface_opacity(&mut editor.active_line, opacity);
+    cap_window_surface_opacity(&mut terminal.background, opacity);
 }
 
 impl ThemeRuntime {
@@ -105,7 +105,12 @@ impl ThemeRuntime {
             .unwrap_or_else(|| selected.terminal.clone());
         let mut ui = selected.ui;
         let mut editor = selected.editor;
-        apply_window_surface_opacity(&mut ui, &mut editor, &mut terminal);
+        apply_window_surface_opacity(
+            &mut ui,
+            &mut editor,
+            &mut terminal,
+            settings.window.resolved_opacity(),
+        );
 
         Self {
             theme_name: selected.name,

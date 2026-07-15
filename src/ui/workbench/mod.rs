@@ -70,6 +70,7 @@ const ICON_THEME_BUILTIN: &str = "Built-in";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum SettingsNumberField {
+    WindowOpacity,
     UiFontSize,
     UiLineHeight,
     FontSize,
@@ -104,11 +105,12 @@ use crate::{
         },
         paths::AppConfigPaths,
         settings::{
-            AppSettings, DEFAULT_UI_FONT_SIZE, DEFAULT_UI_LINE_HEIGHT, EditorAutosave,
-            LanguageSetting, MAX_UI_FONT_SIZE, MAX_UI_LINE_HEIGHT, MIN_UI_FONT_SIZE,
-            MIN_UI_LINE_HEIGHT, SettingsLoadWarning, SettingsSaveError, detect_shell_candidates,
-            detect_system_language_setting, load_or_create_settings, resolve_default_shell,
-            save_settings,
+            AppSettings, DEFAULT_UI_FONT_SIZE, DEFAULT_UI_LINE_HEIGHT, DEFAULT_WINDOW_OPACITY,
+            EditorAutosave, LanguageSetting, MAX_UI_FONT_SIZE, MAX_UI_LINE_HEIGHT,
+            MAX_WINDOW_OPACITY, MIN_UI_FONT_SIZE, MIN_UI_LINE_HEIGHT, MIN_WINDOW_OPACITY,
+            SettingsLoadWarning, SettingsSaveError, WindowBackgroundEffect,
+            detect_shell_candidates, detect_system_language_setting, load_or_create_settings,
+            resolve_default_shell, save_settings,
         },
         theme::{ThemeLoadWarning, ThemeStore, load_theme_store},
     },

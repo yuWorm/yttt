@@ -14,6 +14,7 @@ use yttt_terminal::{
 #[serde(default)]
 pub struct AppSettings {
     pub general: GeneralSettings,
+    pub window: WindowSettings,
     pub theme: ThemeSettings,
     pub notifications: NotificationSettings,
     pub terminal: TerminalSettings,
@@ -25,6 +26,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             general: GeneralSettings::default(),
+            window: WindowSettings::default(),
             theme: ThemeSettings::default(),
             notifications: NotificationSettings::default(),
             terminal: TerminalSettings::default(),
@@ -96,6 +98,50 @@ impl Default for GeneralSettings {
                 "nvim".to_string(),
                 "codex".to_string(),
             ],
+        }
+    }
+}
+
+pub const DEFAULT_WINDOW_OPACITY: f32 = 0.72;
+pub const MIN_WINDOW_OPACITY: f32 = 0.0;
+pub const MAX_WINDOW_OPACITY: f32 = 1.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowBackgroundEffect {
+    None,
+    Transparent,
+    Blurred,
+}
+
+impl Default for WindowBackgroundEffect {
+    fn default() -> Self {
+        Self::Blurred
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct WindowSettings {
+    pub effect: WindowBackgroundEffect,
+    pub opacity: f32,
+}
+
+impl WindowSettings {
+    pub fn resolved_opacity(self) -> f32 {
+        if self.effect == WindowBackgroundEffect::None {
+            1.0
+        } else {
+            self.opacity.clamp(MIN_WINDOW_OPACITY, MAX_WINDOW_OPACITY)
+        }
+    }
+}
+
+impl Default for WindowSettings {
+    fn default() -> Self {
+        Self {
+            effect: WindowBackgroundEffect::Blurred,
+            opacity: DEFAULT_WINDOW_OPACITY,
         }
     }
 }
@@ -279,6 +325,7 @@ pub struct LoadedSettings {
 pub enum SettingsLoadWarning {
     InvalidToml { path: PathBuf, message: String },
     InvalidGeneralValue { field: &'static str },
+    InvalidWindowValue { field: &'static str },
     InvalidTerminalValue { field: &'static str },
     InvalidEditorValue { field: &'static str },
     InvalidProjectPanelValue { field: &'static str },
@@ -360,6 +407,7 @@ fn parse_settings_source(
     };
 
     normalize_general_settings(&mut value, warnings);
+    normalize_window_settings(&mut value, warnings);
     normalize_editor_settings(&mut value, warnings);
 
     match value.try_into::<AppSettings>() {
@@ -391,6 +439,25 @@ fn normalize_general_settings(value: &mut toml::Value, warnings: &mut Vec<Settin
         toml::Value::String("system".to_string()),
     );
     warnings.push(SettingsLoadWarning::InvalidGeneralValue { field: "language" });
+}
+
+fn normalize_window_settings(value: &mut toml::Value, warnings: &mut Vec<SettingsLoadWarning>) {
+    let Some(window) = value.get_mut("window").and_then(toml::Value::as_table_mut) else {
+        return;
+    };
+    let Some(effect) = window.get("effect") else {
+        return;
+    };
+
+    if matches!(effect.as_str(), Some("none" | "transparent" | "blurred")) {
+        return;
+    }
+
+    window.insert(
+        "effect".to_string(),
+        toml::Value::String("blurred".to_string()),
+    );
+    warnings.push(SettingsLoadWarning::InvalidWindowValue { field: "effect" });
 }
 
 fn normalize_editor_settings(value: &mut toml::Value, warnings: &mut Vec<SettingsLoadWarning>) {
@@ -635,6 +702,14 @@ fn validate_settings(
         warnings.push(SettingsLoadWarning::InvalidGeneralValue {
             field: "ui_line_height",
         });
+    }
+
+    let window_defaults = WindowSettings::default();
+    if !settings.window.opacity.is_finite()
+        || !(MIN_WINDOW_OPACITY..=MAX_WINDOW_OPACITY).contains(&settings.window.opacity)
+    {
+        settings.window.opacity = window_defaults.opacity;
+        warnings.push(SettingsLoadWarning::InvalidWindowValue { field: "opacity" });
     }
 
     let defaults = TerminalSettings::default();

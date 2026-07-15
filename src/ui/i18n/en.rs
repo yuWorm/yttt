@@ -326,6 +326,17 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::SettingsNewTabCommandPlaceholder => "e.g. lazygit, nvim ., codex",
         UiTextKey::SettingsAddCommand => "Add command",
+        UiTextKey::SettingsWindowEffect => "Window background effect",
+        UiTextKey::SettingsWindowEffectDescription => {
+            "Choose an opaque window, plain transparency, or frosted glass."
+        }
+        UiTextKey::SettingsWindowEffectNone => "None",
+        UiTextKey::SettingsWindowEffectTransparent => "Transparent",
+        UiTextKey::SettingsWindowEffectBlurred => "Frosted glass",
+        UiTextKey::SettingsWindowOpacity => "Main window opacity",
+        UiTextKey::SettingsWindowOpacityDescription => {
+            "Shared opacity for the title bar, sidebars, editors, and terminals. 0.00 is fully transparent; 1.00 is opaque. Used by Transparent and Frosted glass."
+        }
         UiTextKey::SettingsUiFontFamily => "UI font",
         UiTextKey::SettingsUiFontFamilyDescription => {
             "Font used across YTTT chrome, panels, and controls."

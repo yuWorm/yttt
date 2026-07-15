@@ -20,6 +20,8 @@ pub(in super::super) struct SettingsControllerState {
     pub(in super::super) settings_shell_select_subscription: Option<Subscription>,
     pub(in super::super) settings_custom_shell_input: Option<Entity<InputState>>,
     pub(in super::super) settings_new_tab_command_input: Option<Entity<InputState>>,
+    pub(in super::super) settings_window_effect_select: Option<Entity<SettingsStringSelectState>>,
+    pub(in super::super) settings_window_effect_select_subscription: Option<Subscription>,
     pub(in super::super) settings_ui_theme_select: Option<Entity<SettingsStringSelectState>>,
     pub(in super::super) settings_ui_theme_select_subscription: Option<Subscription>,
     pub(in super::super) settings_ui_font_family_select:
@@ -68,6 +70,8 @@ impl SettingsControllerState {
             settings_shell_select_subscription: None,
             settings_custom_shell_input: None,
             settings_new_tab_command_input: None,
+            settings_window_effect_select: None,
+            settings_window_effect_select_subscription: None,
             settings_ui_theme_select: None,
             settings_ui_theme_select_subscription: None,
             settings_ui_font_family_select: None,

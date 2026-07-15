@@ -140,6 +140,8 @@ impl WorkbenchView {
             self.settings.keybinding_warning_lines =
                 format_keybinding_warning_lines(&loaded.warnings, &self.ui_text);
         }
+        self.settings.settings_window_effect_select = None;
+        self.settings.settings_window_effect_select_subscription = None;
         self.reset_palette_input();
         self.reset_settings_search_input();
         Ok(())
@@ -193,6 +195,26 @@ impl WorkbenchView {
             line_height.clamp(MIN_UI_LINE_HEIGHT, MAX_UI_LINE_HEIGHT)
         } else {
             DEFAULT_UI_LINE_HEIGHT
+        };
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_window_background_effect(
+        &mut self,
+        effect: WindowBackgroundEffect,
+        window: &Window,
+    ) -> Result<(), WorkbenchError> {
+        self.app_settings.window.effect = effect;
+        self.save_app_settings_and_refresh_runtime()?;
+        window.set_background_appearance(crate::ui::app::window_background_appearance(effect));
+        Ok(())
+    }
+
+    pub fn set_window_opacity(&mut self, opacity: f32) -> Result<(), WorkbenchError> {
+        self.app_settings.window.opacity = if opacity.is_finite() {
+            opacity.clamp(MIN_WINDOW_OPACITY, MAX_WINDOW_OPACITY)
+        } else {
+            DEFAULT_WINDOW_OPACITY
         };
         self.save_app_settings_and_refresh_runtime()
     }
@@ -613,6 +635,9 @@ impl WorkbenchView {
 
     pub(super) fn settings_number_value(&self, field: SettingsNumberField) -> String {
         match field {
+            SettingsNumberField::WindowOpacity => {
+                format!("{:.2}", self.app_settings.window.opacity)
+            }
             SettingsNumberField::UiFontSize => {
                 format!("{:.1}", self.app_settings.general.ui_font_size)
             }
@@ -658,6 +683,11 @@ impl WorkbenchView {
     ) -> Result<(), WorkbenchError> {
         let value = value.trim();
         match field {
+            SettingsNumberField::WindowOpacity => {
+                if let Ok(value) = value.parse::<f32>() {
+                    self.set_window_opacity(value)?;
+                }
+            }
             SettingsNumberField::UiFontSize => {
                 if let Ok(value) = value.parse::<f32>() {
                     self.set_ui_font_size(value)?;
@@ -733,6 +763,16 @@ impl WorkbenchView {
             StepAction::Decrement => -1.0,
         };
         match field {
+            SettingsNumberField::WindowOpacity => {
+                let value = value
+                    .trim()
+                    .parse::<f32>()
+                    .unwrap_or(self.app_settings.window.opacity);
+                format!(
+                    "{:.2}",
+                    (value + sign * 0.05).clamp(MIN_WINDOW_OPACITY, MAX_WINDOW_OPACITY)
+                )
+            }
             SettingsNumberField::UiFontSize => {
                 let value = value
                     .trim()
@@ -966,6 +1006,41 @@ impl WorkbenchView {
                 cx.subscribe_in(&select, window, Self::on_settings_shell_select_event);
             self.settings.settings_shell_select = Some(select.clone());
             self.settings.settings_shell_select_subscription = Some(subscription);
+            select
+        }
+    }
+
+    pub(super) fn settings_window_effect_select(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SettingsStringSelectState> {
+        let items = [
+            WindowBackgroundEffect::None,
+            WindowBackgroundEffect::Transparent,
+            WindowBackgroundEffect::Blurred,
+        ]
+        .into_iter()
+        .map(|effect| self.ui_text.get(window_effect_text_key(effect)).to_string())
+        .collect::<Vec<_>>();
+        let selected = self
+            .ui_text
+            .get(window_effect_text_key(self.app_settings.window.effect))
+            .to_string();
+
+        if let Some(select) = &self.settings.settings_window_effect_select {
+            select.clone()
+        } else {
+            let selected_index = selected_index_for_settings_option(&items, &selected);
+            let select = cx
+                .new(|cx| SelectState::new(SearchableVec::new(items), selected_index, window, cx));
+            let subscription = cx.subscribe_in(
+                &select,
+                window,
+                Self::on_settings_window_effect_select_event,
+            );
+            self.settings.settings_window_effect_select = Some(select.clone());
+            self.settings.settings_window_effect_select_subscription = Some(subscription);
             select
         }
     }
@@ -1347,6 +1422,34 @@ impl WorkbenchView {
         cx.notify();
     }
 
+    pub(super) fn on_settings_window_effect_select_event(
+        &mut self,
+        _select: &Entity<SettingsStringSelectState>,
+        event: &SelectEvent<SearchableVec<String>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(Some(value)) = event else {
+            return;
+        };
+        let effect = [
+            WindowBackgroundEffect::None,
+            WindowBackgroundEffect::Transparent,
+            WindowBackgroundEffect::Blurred,
+        ]
+        .into_iter()
+        .find(|effect| self.ui_text.get(window_effect_text_key(*effect)) == value);
+        let Some(effect) = effect else {
+            return;
+        };
+        if let Err(error) = self.set_window_background_effect(effect, window) {
+            self.load_error = Some(error.to_string());
+        }
+        self.sync_gpui_component_theme(cx);
+        self.sync_terminal_pane_configs(cx);
+        cx.notify();
+    }
+
     pub(super) fn on_settings_ui_font_family_select_event(
         &mut self,
         _select: &Entity<SettingsFontFamilySelectState>,
@@ -1582,5 +1685,13 @@ impl WorkbenchView {
         self.sync_gpui_component_theme(cx);
         self.sync_terminal_pane_configs(cx);
         cx.notify();
+    }
+}
+
+fn window_effect_text_key(effect: WindowBackgroundEffect) -> UiTextKey {
+    match effect {
+        WindowBackgroundEffect::None => UiTextKey::SettingsWindowEffectNone,
+        WindowBackgroundEffect::Transparent => UiTextKey::SettingsWindowEffectTransparent,
+        WindowBackgroundEffect::Blurred => UiTextKey::SettingsWindowEffectBlurred,
     }
 }

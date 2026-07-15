@@ -15,7 +15,8 @@ use yttt::{
         keybindings::default_keybindings,
         paths::AppConfigPaths,
         settings::{
-            AppSettings, EditorAutosave, LanguageSetting, load_or_create_settings, save_settings,
+            AppSettings, EditorAutosave, LanguageSetting, WindowBackgroundEffect,
+            load_or_create_settings, save_settings,
         },
     },
     model::{
@@ -3509,7 +3510,7 @@ fn enabled_new_tab_toolbar_click_runs_the_selected_configured_command(
 }
 
 #[gpui::test]
-fn appearance_settings_group_renders_zed_import_button(cx: &mut gpui::TestAppContext) {
+fn appearance_settings_group_renders_window_and_theme_controls(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
@@ -3525,6 +3526,14 @@ fn appearance_settings_group_renders_zed_import_button(cx: &mut gpui::TestAppCon
         cx.notify();
     });
     cx.refresh().unwrap();
+    assert!(
+        cx.debug_bounds("settings-window-effect-row").is_some(),
+        "Appearance settings should expose the window effect selector"
+    );
+    assert!(
+        cx.debug_bounds("settings-window-opacity-row").is_some(),
+        "Appearance settings should expose the shared window opacity control"
+    );
     assert!(
         cx.debug_bounds("settings-ui-font-family-row").is_some(),
         "Appearance settings should expose the UI font selector"
@@ -3853,6 +3862,35 @@ fn root_view_ui_font_settings_persist_and_family_can_reset() {
             .ui_font_family,
         ""
     );
+}
+
+#[gpui::test]
+fn window_background_settings_persist_from_live_window(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let paths_for_window = paths.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths(paths_for_window));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+
+    root.update_in(cx, |root, window, _cx| {
+        root.set_window_opacity(0.42).unwrap();
+        root.set_window_background_effect(WindowBackgroundEffect::Transparent, window)
+            .unwrap();
+    });
+
+    let loaded = load_or_create_settings(&paths).unwrap();
+    assert_eq!(
+        loaded.settings.window.effect,
+        WindowBackgroundEffect::Transparent
+    );
+    assert_eq!(loaded.settings.window.opacity, 0.42);
 }
 
 #[gpui::test]

@@ -1,5 +1,8 @@
 use std::{cell::Cell, mem::discriminant, rc::Rc, time::Duration};
-use yttt::config::{paths::AppConfigPaths, settings::TerminalSettings};
+use yttt::config::{
+    paths::AppConfigPaths,
+    settings::{TerminalSettings, WindowBackgroundEffect},
+};
 use yttt::ui::app::workbench_window_options;
 use yttt::ui::components::{
     SelectableState, notification_tone_for_toast, selectable_state_classes,
@@ -126,23 +129,34 @@ fn selectable_state_classes_distinguish_active_rows() {
 }
 
 #[test]
-fn app_window_options_use_custom_titlebar_and_blurred_background() {
+fn app_window_options_apply_configured_background_effect() {
     let bounds = gpui::Bounds {
         origin: gpui::point(gpui::px(0.0), gpui::px(0.0)),
         size: gpui::size(gpui::px(960.0), gpui::px(640.0)),
     };
 
-    let options = workbench_window_options(bounds);
-
-    assert!(options.titlebar.is_some());
-    assert_eq!(
-        options.window_background,
-        gpui::WindowBackgroundAppearance::Blurred
-    );
-    assert_eq!(
-        options.window_min_size,
-        Some(gpui::size(gpui::px(960.0), gpui::px(640.0)))
-    );
+    for (effect, expected) in [
+        (
+            WindowBackgroundEffect::None,
+            gpui::WindowBackgroundAppearance::Opaque,
+        ),
+        (
+            WindowBackgroundEffect::Transparent,
+            gpui::WindowBackgroundAppearance::Transparent,
+        ),
+        (
+            WindowBackgroundEffect::Blurred,
+            gpui::WindowBackgroundAppearance::Blurred,
+        ),
+    ] {
+        let options = workbench_window_options(bounds, effect);
+        assert_eq!(options.window_background, expected);
+        assert!(options.titlebar.is_some());
+        assert_eq!(
+            options.window_min_size,
+            Some(gpui::size(gpui::px(960.0), gpui::px(640.0)))
+        );
+    }
 }
 
 #[test]

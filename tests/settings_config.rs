@@ -5,8 +5,8 @@ use yttt::config::{
     paths::AppConfigPaths,
     settings::{
         AUTO_SHELL, AppSettings, EditorAutosave, LanguageSetting, SettingsLoadWarning,
-        ShellPlatform, detect_shell_candidates_with, language_setting_for_locale,
-        load_or_create_settings, resolve_default_shell, save_settings,
+        ShellPlatform, WindowBackgroundEffect, detect_shell_candidates_with,
+        language_setting_for_locale, load_or_create_settings, resolve_default_shell, save_settings,
     },
 };
 use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
@@ -61,6 +61,11 @@ fn missing_settings_file_writes_defaults() {
         loaded.settings.general.new_tab_commands,
         vec!["lazygit", "nvim", "codex"]
     );
+    assert_eq!(
+        loaded.settings.window.effect,
+        WindowBackgroundEffect::Blurred
+    );
+    assert_eq!(loaded.settings.window.opacity, 0.72);
     assert_eq!(loaded.settings.theme.name, "one-dark-theme");
     assert_eq!(loaded.settings.theme.terminal, None);
     assert!(!loaded.settings.notifications.system);
@@ -107,6 +112,32 @@ fn settings_default_language_is_system() {
     let settings = AppSettings::default();
 
     assert_eq!(settings.general.language, LanguageSetting::System);
+}
+
+#[test]
+fn window_background_settings_load_without_touching_other_defaults() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    std::fs::write(
+        paths.settings_file(),
+        r#"
+[general]
+onboarding_completed = true
+
+[window]
+effect = "none"
+opacity = 0.42
+"#,
+    )
+    .unwrap();
+
+    let loaded = load_or_create_settings(&paths).unwrap();
+
+    assert_eq!(loaded.settings.window.effect, WindowBackgroundEffect::None);
+    assert_eq!(loaded.settings.window.opacity, 0.42);
+    assert!(loaded.settings.general.onboarding_completed);
+    assert_eq!(loaded.settings.theme.name, "one-dark-theme");
+    assert!(loaded.warnings.is_empty());
 }
 
 #[test]
@@ -307,7 +338,7 @@ fn settings_persist_editor_and_project_panel_choices() {
 }
 
 #[test]
-fn invalid_general_editor_and_project_panel_values_are_normalized() {
+fn invalid_general_window_editor_and_project_panel_values_are_normalized() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
     std::fs::create_dir_all(paths.config_dir()).unwrap();
@@ -318,6 +349,10 @@ fn invalid_general_editor_and_project_panel_values_are_normalized() {
 language = "zh-CN"
 ui_font_size = nan
 ui_line_height = 0.5
+
+[window]
+effect = "glass"
+opacity = 2.0
 
 [terminal]
 font_size = 15.0
@@ -342,6 +377,11 @@ project_sidebar_width = 1.0
     assert_eq!(loaded.settings.general.language, LanguageSetting::Chinese);
     assert_eq!(loaded.settings.general.ui_font_size, 16.0);
     assert_eq!(loaded.settings.general.ui_line_height, 1.618_034);
+    assert_eq!(
+        loaded.settings.window.effect,
+        WindowBackgroundEffect::Blurred
+    );
+    assert_eq!(loaded.settings.window.opacity, 0.72);
     assert_eq!(loaded.settings.terminal.font_size, 15.0);
     assert_eq!(loaded.settings.editor.font_family, "JetBrains Mono");
     assert_eq!(loaded.settings.editor.font_size, 14.0);
@@ -359,6 +399,8 @@ project_sidebar_width = 1.0
         SettingsLoadWarning::InvalidGeneralValue {
             field: "ui_line_height",
         },
+        SettingsLoadWarning::InvalidWindowValue { field: "effect" },
+        SettingsLoadWarning::InvalidWindowValue { field: "opacity" },
         SettingsLoadWarning::InvalidEditorValue { field: "autosave" },
         SettingsLoadWarning::InvalidEditorValue { field: "font_size" },
         SettingsLoadWarning::InvalidEditorValue {

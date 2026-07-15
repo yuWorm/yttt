@@ -2,10 +2,10 @@ use gpui::rgb;
 use tempfile::tempdir;
 use yttt::config::{
     paths::AppConfigPaths,
-    settings::AppSettings,
+    settings::{AppSettings, DEFAULT_WINDOW_OPACITY, WindowBackgroundEffect},
     theme::{ThemeStore, load_theme_store},
 };
-use yttt::ui::theme::{AnsiColors, ThemeRuntime, WINDOW_SURFACE_OPACITY};
+use yttt::ui::theme::{AnsiColors, ThemeRuntime};
 
 #[test]
 fn theme_store_contains_builtin_one_dark_theme() {
@@ -77,7 +77,31 @@ fn theme_runtime_resolves_ui_and_terminal_from_theme_name() {
     assert_eq!(runtime.theme_name, "one-dark-theme");
     assert_eq!(runtime.terminal_settings.font_size, 13.0);
     assert_eq!(runtime.ui.terminal_background, runtime.terminal.background);
-    assert_eq!(runtime.ui.app_background.a, WINDOW_SURFACE_OPACITY);
+    assert_eq!(runtime.ui.app_background.a, DEFAULT_WINDOW_OPACITY);
+}
+
+#[test]
+fn window_effect_controls_whether_theme_surfaces_use_configured_opacity() {
+    let store = ThemeStore::builtin();
+    let mut settings = AppSettings::default();
+    settings.window.opacity = 0.42;
+
+    for effect in [
+        WindowBackgroundEffect::Transparent,
+        WindowBackgroundEffect::Blurred,
+    ] {
+        settings.window.effect = effect;
+        let runtime = ThemeRuntime::resolve(&settings, &store);
+        assert_eq!(runtime.ui.app_background.a, 0.42);
+        assert_eq!(runtime.editor.background.a, 0.42);
+        assert_eq!(runtime.terminal.background.a, 0.42);
+    }
+
+    settings.window.effect = WindowBackgroundEffect::None;
+    let runtime = ThemeRuntime::resolve(&settings, &store);
+    assert_eq!(runtime.ui.app_background.a, 1.0);
+    assert_eq!(runtime.editor.background.a, 1.0);
+    assert_eq!(runtime.terminal.background.a, 1.0);
 }
 
 #[test]
@@ -223,7 +247,7 @@ fn builtin_one_dark_theme_maps_editor_and_terminal_palettes() {
     assert_eq!(
         highlight.editor_background,
         Some(gpui::Hsla::from(
-            rgb(0x23272e).alpha(WINDOW_SURFACE_OPACITY)
+            rgb(0x23272e).alpha(DEFAULT_WINDOW_OPACITY)
         ))
     );
     assert_eq!(
@@ -233,7 +257,7 @@ fn builtin_one_dark_theme_maps_editor_and_terminal_palettes() {
     assert_eq!(
         highlight.editor_active_line,
         Some(gpui::Hsla::from(
-            rgb(0x2c313c).alpha(WINDOW_SURFACE_OPACITY)
+            rgb(0x2c313c).alpha(DEFAULT_WINDOW_OPACITY)
         ))
     );
     assert_eq!(
@@ -273,7 +297,7 @@ fn builtin_one_dark_theme_maps_editor_and_terminal_palettes() {
 
     assert_eq!(
         runtime.terminal.background,
-        rgb(0x23272e).alpha(WINDOW_SURFACE_OPACITY)
+        rgb(0x23272e).alpha(DEFAULT_WINDOW_OPACITY)
     );
     assert_eq!(runtime.terminal.foreground, rgb(0xabb2bf));
     assert_eq!(runtime.terminal.cursor, Some(rgb(0xabb2bf)));
@@ -344,13 +368,13 @@ comment = "#555555"
     assert_eq!(
         highlight.editor_background,
         Some(gpui::Hsla::from(
-            rgb(0x111111).alpha(WINDOW_SURFACE_OPACITY)
+            rgb(0x111111).alpha(DEFAULT_WINDOW_OPACITY)
         ))
     );
     assert_eq!(
         highlight.editor_active_line,
         Some(gpui::Hsla::from(
-            rgb(0x222222).alpha(WINDOW_SURFACE_OPACITY)
+            rgb(0x222222).alpha(DEFAULT_WINDOW_OPACITY)
         ))
     );
     assert_eq!(

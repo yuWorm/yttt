@@ -365,6 +365,9 @@ fn settings_appearance_rows(
 ) -> Div {
     let theme = root.theme_runtime.ui;
     let text = root.ui_text;
+    let window_effect_select = root.settings_window_effect_select(window, cx);
+    let window_opacity_input =
+        root.settings_number_input(SettingsNumberField::WindowOpacity, window, cx);
     let ui_font_select = root.settings_ui_font_family_select(window, cx);
     let ui_font_size_input =
         root.settings_number_input(SettingsNumberField::UiFontSize, window, cx);
@@ -377,6 +380,26 @@ fn settings_appearance_rows(
     div()
         .flex()
         .flex_col()
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsWindowEffect),
+                text.get(UiTextKey::SettingsWindowEffectDescription),
+                settings_select_control(window_effect_select, theme, false, "").into_any_element(),
+            )
+            .debug_selector(|| "settings-window-effect-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsWindowOpacity),
+                text.get(UiTextKey::SettingsWindowOpacityDescription),
+                settings_number_control(window_opacity_input, style).into_any_element(),
+            )
+            .debug_selector(|| "settings-window-opacity-row".to_string()),
+        )
         .child(
             setting_row(
                 style,

@@ -327,6 +327,9 @@ pub(super) fn format_settings_warning_line(warning: &SettingsLoadWarning) -> Str
         SettingsLoadWarning::InvalidGeneralValue { field } => {
             format!("Settings general.{field} is invalid; using default")
         }
+        SettingsLoadWarning::InvalidWindowValue { field } => {
+            format!("Settings window.{field} is invalid; using default")
+        }
         SettingsLoadWarning::InvalidTerminalValue { field } => {
             format!("Settings terminal.{field} is invalid; using default")
         }
