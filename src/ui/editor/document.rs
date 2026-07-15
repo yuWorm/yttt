@@ -493,7 +493,14 @@ impl Render for ProjectEditorDocument {
                     }),
             );
 
+        let editor_background = cx
+            .theme()
+            .highlight_theme
+            .style
+            .editor_background
+            .unwrap_or_else(|| cx.theme().input_background());
         let input = styled_code_editor_input(&self.input, &self.appearance)
+            .bg(editor_background)
             .flex_1()
             .min_h_0()
             .w_full()

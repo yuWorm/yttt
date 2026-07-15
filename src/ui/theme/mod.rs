@@ -256,7 +256,9 @@ impl EditorTheme {
             editor_line_number: Some(self.line_number.into()),
             editor_active_line_number: Some(self.active_line_number.into()),
             editor_invisible: Some(self.line_number.into()),
-            editor_gutter_background: Some(self.background.into()),
+            // The input paints the editor background across its full bounds.
+            // A second gutter fill would compound the configured window opacity.
+            editor_gutter_background: Some(gpui::transparent_black()),
             status: Default::default(),
             syntax,
         }

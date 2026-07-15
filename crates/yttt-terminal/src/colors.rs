@@ -336,7 +336,11 @@ impl ColorPalette {
             Color::Named(named) => {
                 // Check if there's a custom color override first
                 if let Some(rgb) = colors[named] {
-                    return rgb_to_hsla(rgb);
+                    let mut resolved = rgb_to_hsla(rgb);
+                    if named == NamedColor::Background {
+                        resolved.a = self.background.a;
+                    }
+                    return resolved;
                 }
 
                 // Handle different named color types
@@ -846,6 +850,27 @@ mod tests {
             }
         );
         assert_eq!(palette.background.a, 0.35);
+    }
+
+    #[test]
+    fn dynamic_background_override_preserves_palette_opacity() {
+        let palette = ColorPalette::builder()
+            .background(0x12, 0x34, 0x56)
+            .background_alpha(0.35)
+            .build();
+        let override_rgb = Rgb {
+            r: 0x65,
+            g: 0x43,
+            b: 0x21,
+        };
+        let mut colors = Colors::default();
+        colors[NamedColor::Background] = Some(override_rgb);
+
+        let resolved = palette.resolve(Color::Named(NamedColor::Background), &colors);
+        let mut expected = rgb_to_hsla(override_rgb);
+        expected.a = 0.35;
+
+        assert_eq!(resolved, expected);
     }
 
     #[test]

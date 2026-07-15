@@ -95,6 +95,9 @@ fn window_effect_controls_whether_theme_surfaces_use_configured_opacity() {
         assert_eq!(runtime.ui.app_background.a, 0.42);
         assert_eq!(runtime.editor.background.a, 0.42);
         assert_eq!(runtime.terminal.background.a, 0.42);
+        let highlight = runtime.editor.to_highlight_theme_style();
+        assert_eq!(highlight.editor_background.unwrap().a, 0.42);
+        assert_eq!(highlight.editor_gutter_background.unwrap().a, 0.0);
     }
 
     settings.window.effect = WindowBackgroundEffect::None;
