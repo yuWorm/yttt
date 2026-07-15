@@ -54,6 +54,7 @@ impl TerminalRenderCache {
             }
         }
 
+        let force_full_snapshot = self.frame.is_none();
         let mut damaged = self
             .previous_selection_rows
             .union(&current_selection_rows)
@@ -73,7 +74,11 @@ impl TerminalRenderCache {
         self.previous_interaction_rows = current_interaction_rows;
         self.previous_selection_rows = current_selection_rows;
         self.previous_cursor_row = cursor_row;
-        damaged.into_iter().collect()
+        if force_full_snapshot {
+            (0..screen_lines).collect()
+        } else {
+            damaged.into_iter().collect()
+        }
     }
 
     /// Merge resolved row updates and return the number of rows whose display

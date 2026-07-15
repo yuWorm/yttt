@@ -3792,6 +3792,78 @@ mod tests {
     }
 
     #[gpui::test]
+    fn font_change_rebuilds_the_complete_visible_frame(cx: &mut TestAppContext) {
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new(io::sink(), io::empty(), TerminalConfig::default(), cx)
+        });
+        terminal.update(cx, |terminal, cx| {
+            terminal
+                .state
+                .process_bytes(b"first\r\nsecond\r\nthird\r\nfourth");
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            let visible_rows = terminal.state.rows();
+            assert!(visible_rows > 1);
+            assert_eq!(
+                terminal
+                    .render_cache
+                    .lock()
+                    .frame()
+                    .expect("initial frame")
+                    .rows
+                    .len(),
+                visible_rows
+            );
+        });
+
+        terminal.update(cx, |terminal, cx| {
+            let mut config = terminal.config().clone();
+            config.font_family = ".SystemUIFont".to_string();
+            terminal.update_config(config, cx);
+        });
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            assert_eq!(
+                terminal
+                    .render_cache
+                    .lock()
+                    .frame()
+                    .expect("frame after font change")
+                    .rows
+                    .len(),
+                terminal.state.rows(),
+                "font invalidation must not replace the cache with a partial frame"
+            );
+        });
+
+        terminal.update(cx, |terminal, cx| {
+            terminal.state.process_bytes(b"\r\nresponsive");
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            let frame = terminal
+                .render_cache
+                .lock()
+                .frame()
+                .expect("frame after input");
+            let rendered = frame
+                .rows
+                .iter()
+                .flat_map(|row| row.cells.iter())
+                .flat_map(|cell| cell.text.iter())
+                .collect::<String>();
+            assert!(rendered.contains("responsive"));
+        });
+    }
+
+    #[gpui::test]
     fn repaint_batches_contiguous_tui_text_into_one_paint_call(cx: &mut TestAppContext) {
         let (terminal, cx) = cx.add_window_view(|_, cx| {
             TerminalView::new(io::sink(), io::empty(), TerminalConfig::default(), cx)
