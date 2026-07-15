@@ -23,6 +23,7 @@ pub struct CommandContext {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CommandId {
+    ProjectCreate,
     ProjectOpen,
     ProjectOpenRecent,
     ProjectClose,
@@ -68,6 +69,7 @@ pub enum CommandId {
 
 impl CommandId {
     pub const ALL: &'static [Self] = &[
+        Self::ProjectCreate,
         Self::ProjectOpen,
         Self::ProjectOpenRecent,
         Self::ProjectClose,
@@ -113,6 +115,7 @@ impl CommandId {
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::ProjectCreate => "project.create",
             Self::ProjectOpen => "project.open",
             Self::ProjectOpenRecent => "project.open_recent",
             Self::ProjectClose => "project.close",
@@ -166,6 +169,9 @@ impl CommandId {
 
     pub fn presentation(self) -> CommandPresentation {
         match self {
+            Self::ProjectCreate => {
+                presentation("Create Project", "Create and open a new project directory")
+            }
             Self::ProjectOpen => presentation("Open Project", "Choose a project directory"),
             Self::ProjectOpenRecent => {
                 presentation("Open Recent Project", "Choose a recent project")
@@ -293,6 +299,7 @@ impl CommandId {
     pub fn availability_for_context(self, context: CommandContext) -> CommandAvailability {
         match self {
             Self::CommandPaletteOpen
+            | Self::ProjectCreate
             | Self::ProjectOpen
             | Self::ProjectOpenRecent
             | Self::ProjectPalette

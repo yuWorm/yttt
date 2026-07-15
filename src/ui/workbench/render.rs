@@ -170,12 +170,22 @@ impl Render for WorkbenchView {
             .child(workbench_titlebar(
                 self.visible_titlebar_info(),
                 self.theme_runtime.ui,
+                self.ui_text.get(UiTextKey::CommandPaletteOpenTitle),
+                self.ui_text.get(UiTextKey::CommandSettingsOpenTitle),
                 cx.listener(|this, _, _window, cx| {
                     let _ = this.run_command(CommandId::GitBranchSwitch);
                     cx.notify();
                 }),
                 cx.listener(|this, _, _window, cx| {
                     let _ = this.run_command(CommandId::GitDiffOpen);
+                    cx.notify();
+                }),
+                cx.listener(|this, _, _window, cx| {
+                    let _ = this.run_command(CommandId::CommandPaletteOpen);
+                    cx.notify();
+                }),
+                cx.listener(|this, _, _window, cx| {
+                    let _ = this.run_command(CommandId::SettingsOpen);
                     cx.notify();
                 }),
             ))
@@ -197,6 +207,7 @@ impl Render for WorkbenchView {
                                 active_palette.selected_index = selected_index;
                             }
                             let _ = this.confirm_palette_selection();
+                            this.handle_pending_create_project_request(cx);
                             this.handle_pending_open_project_request(cx);
                             this.flush_pending_status_notifications(window, cx);
                             cx.notify();
@@ -311,6 +322,7 @@ impl Render for WorkbenchView {
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_move(cx.listener(Self::on_resize_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_resize_mouse_up))
+            .on_action(cx.listener(Self::on_create_project))
             .on_action(cx.listener(Self::on_open_project))
             .on_action(cx.listener(Self::on_open_command_palette))
             .on_action(cx.listener(Self::on_open_project_palette))

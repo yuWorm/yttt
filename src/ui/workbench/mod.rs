@@ -152,9 +152,9 @@ use crate::{
         },
         i18n::{Locale, UiText, UiTextKey},
         interaction::actions::{
-            FileSave, GitBranchSwitch, GitDiffOpen, LayoutDefaultEdit, LayoutDefaultReload,
-            LayoutDefaultReset, LayoutExportProjectConfig, LayoutOpenFile, LayoutProjectEdit,
-            LayoutResetLocalOverride, LayoutSaveCurrent, OpenCommandPalette,
+            CreateProject, FileSave, GitBranchSwitch, GitDiffOpen, LayoutDefaultEdit,
+            LayoutDefaultReload, LayoutDefaultReset, LayoutExportProjectConfig, LayoutOpenFile,
+            LayoutProjectEdit, LayoutResetLocalOverride, LayoutSaveCurrent, OpenCommandPalette,
             OpenOpenedProjectPalette, OpenPanePalette, OpenProject, OpenProjectPalette,
             OpenTabPalette, PaletteCancel, PaletteConfirm, PaletteSelectNext, PaletteSelectPrev,
             PaneClose, PaneFocusDown, PaneFocusLeft, PaneFocusRight, PaneFocusUp, PaneRename,
@@ -248,6 +248,7 @@ pub struct WorkbenchView {
     last_opened_keybindings_file: Option<PathBuf>,
     overlays: OverlayControllerState,
     documents: DocumentLifecycleState,
+    pending_create_project_request: bool,
     pending_open_project_request: bool,
     pending_status_notifications: Vec<ToastItem>,
     focus_handle: Option<FocusHandle>,
@@ -273,7 +274,8 @@ struct ActiveProjectFileWatcher {
     _task: Task<()>,
 }
 
-const EMPTY_WORKSPACE_ACTIONS: [UiTextKey; 3] = [
+const EMPTY_WORKSPACE_ACTIONS: [UiTextKey; 4] = [
+    UiTextKey::CreateProject,
     UiTextKey::OpenDirectory,
     UiTextKey::OpenRecent,
     UiTextKey::CommandPalette,
@@ -496,6 +498,7 @@ impl WorkbenchView {
             last_opened_keybindings_file: None,
             overlays: OverlayControllerState::default(),
             documents: DocumentLifecycleState::default(),
+            pending_create_project_request: false,
             pending_open_project_request: false,
             pending_status_notifications: Vec::new(),
             focus_handle: None,
@@ -1516,6 +1519,10 @@ impl WorkbenchView {
         }
 
         match command_id {
+            CommandId::ProjectCreate => {
+                self.request_create_project();
+                Ok(())
+            }
             CommandId::ProjectOpen => {
                 self.request_open_project();
                 Ok(())
@@ -1705,6 +1712,20 @@ impl WorkbenchView {
                 .pending_dirty_close
                 .as_ref()
                 .is_some_and(|pending| matches!(pending.intent, DirtyCloseIntent::Project(_)))
+    }
+
+    fn request_create_project(&mut self) {
+        self.pending_create_project_request = true;
+    }
+
+    pub fn take_pending_create_project_request(&mut self) -> bool {
+        std::mem::take(&mut self.pending_create_project_request)
+    }
+
+    fn handle_pending_create_project_request(&mut self, cx: &mut Context<Self>) {
+        if self.take_pending_create_project_request() {
+            self.prompt_for_new_project_directory(cx);
+        }
     }
 
     fn request_open_project(&mut self) {
