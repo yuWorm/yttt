@@ -68,6 +68,8 @@ pub fn language_setting_for_locale(locale: Option<&str>) -> LanguageSetting {
 pub struct GeneralSettings {
     pub language: LanguageSetting,
     pub onboarding_completed: bool,
+    pub new_tab_command_picker_enabled: bool,
+    pub new_tab_commands: Vec<String>,
 }
 
 impl Default for GeneralSettings {
@@ -75,6 +77,12 @@ impl Default for GeneralSettings {
         Self {
             language: LanguageSetting::System,
             onboarding_completed: false,
+            new_tab_command_picker_enabled: false,
+            new_tab_commands: vec![
+                "lazygit".to_string(),
+                "nvim".to_string(),
+                "codex".to_string(),
+            ],
         }
     }
 }

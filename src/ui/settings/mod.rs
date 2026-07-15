@@ -132,6 +132,14 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 UiTextKey::SettingsSystemNotifications,
                 UiTextKey::SettingsSystemNotificationsDescription,
             ),
+            row(
+                UiTextKey::SettingsNewTabCommandPicker,
+                UiTextKey::SettingsNewTabCommandPickerDescription,
+            ),
+            row(
+                UiTextKey::SettingsNewTabCommands,
+                UiTextKey::SettingsNewTabCommandsDescription,
+            ),
         ],
         SettingsGroupId::Appearance => vec![
             row(

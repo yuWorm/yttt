@@ -119,10 +119,10 @@ use crate::{
     palette::{
         ActivePalette, CommandPaletteContext, PaletteItem, PaletteKind, RecentProject,
         TabPaletteSnapshot, command_palette_items_with_text, command_title_with_text,
-        decode_tab_palette_item_id, opened_project_palette_items_with_text,
-        pane_palette_items_with_text, project_palette_items_with_text,
-        recent_project_palette_items_with_text, tab_palette_items_with_text,
-        unified_tab_palette_items,
+        decode_tab_palette_item_id, new_tab_command_palette_items,
+        opened_project_palette_items_with_text, pane_palette_items_with_text,
+        project_palette_items_with_text, recent_project_palette_items_with_text,
+        tab_palette_items_with_text, unified_tab_palette_items,
     },
     runtime::{
         git_status::{
@@ -282,6 +282,7 @@ const EMPTY_WORKSPACE_ACTIONS: [UiTextKey; 3] = [
 fn palette_input_scope_id(kind: PaletteKind) -> &'static str {
     match kind {
         PaletteKind::Command => "palette.command",
+        PaletteKind::NewTabCommand => "palette.new_tab_command",
         PaletteKind::Project => "palette.project",
         PaletteKind::OpenedProject => "palette.opened_project",
         PaletteKind::RecentProject => "palette.recent_project",
@@ -2213,6 +2214,7 @@ impl WorkbenchView {
         self.settings.settings_language_select_subscription = None;
         self.settings.settings_shell_select = None;
         self.settings.settings_shell_select_subscription = None;
+        self.settings.settings_new_tab_command_input = None;
         self.settings.settings_ui_theme_select = None;
         self.settings.settings_ui_theme_select_subscription = None;
         self.settings.settings_icon_theme_select = None;

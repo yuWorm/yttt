@@ -19,6 +19,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaletteKind {
     Command,
+    NewTabCommand,
     Project,
     OpenedProject,
     RecentProject,
@@ -213,6 +214,25 @@ pub fn command_palette_items_with_text(
                 disabled_reason: command_disabled_reason_key(availability.disabled_reason)
                     .map(|key| ui_text.get(key).to_string()),
             }
+        })
+        .collect()
+}
+
+pub fn new_tab_command_palette_items(commands: &[String]) -> Vec<PaletteItem> {
+    commands
+        .iter()
+        .filter_map(|command| {
+            let command = command.trim();
+            (!command.is_empty()).then(|| PaletteItem {
+                id: command.to_string(),
+                title: command.to_string(),
+                subtitle: None,
+                status: None,
+                keybinding: None,
+                command: CommandId::TabNew,
+                enabled: true,
+                disabled_reason: None,
+            })
         })
         .collect()
 }

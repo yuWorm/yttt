@@ -122,7 +122,7 @@ impl Render for WorkbenchView {
                                     UiTextKey::ProjectFilesShow
                                 }),
                                 cx.listener(|this, _, _window, cx| {
-                                    let _ = this.run_command(CommandId::TabNew);
+                                    let _ = this.new_tab_from_toolbar();
                                     cx.notify();
                                 }),
                                 cx.listener(|this, _, _window, cx| {

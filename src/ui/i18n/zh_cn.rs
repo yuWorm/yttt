@@ -86,6 +86,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::NoResults => "无结果",
         UiTextKey::TypeToFilter => "输入以筛选",
         UiTextKey::PalettePlaceholderCommand => "执行命令...",
+        UiTextKey::PalettePlaceholderNewTabCommand => "选择新标签页要运行的命令...",
         UiTextKey::PalettePlaceholderProject => "切换项目...",
         UiTextKey::PalettePlaceholderOpenedProject => "切换已打开项目...",
         UiTextKey::PalettePlaceholderRecentProject => "打开最近项目...",
@@ -269,6 +270,14 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSelectLanguage => "选择语言",
         UiTextKey::SettingsSystemNotifications => "系统通知",
         UiTextKey::SettingsSystemNotificationsDescription => "Agent 终端任务完成或失败时通知。",
+        UiTextKey::SettingsNewTabCommandPicker => "新标签页命令选择框",
+        UiTextKey::SettingsNewTabCommandPickerDescription => "点击新建标签页按钮时显示命令选择框。",
+        UiTextKey::SettingsNewTabCommands => "新标签页命令",
+        UiTextKey::SettingsNewTabCommandsDescription => {
+            "配置命令选择框中的命令；命令将在当前项目目录中运行。"
+        }
+        UiTextKey::SettingsNewTabCommandPlaceholder => "例如 lazygit、nvim .、codex",
+        UiTextKey::SettingsAddCommand => "添加命令",
         UiTextKey::SettingsUiTheme => "界面主题",
         UiTextKey::SettingsUiThemeDescription => "用于 YTTT 外壳、面板和控件的主题。",
         UiTextKey::SettingsIconTheme => "图标主题",

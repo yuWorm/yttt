@@ -130,6 +130,7 @@ where
         .fold(
             div()
                 .id("palette-list")
+                .debug_selector(|| "palette-list".to_string())
                 .flex()
                 .flex_col()
                 .gap_1()

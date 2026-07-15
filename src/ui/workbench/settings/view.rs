@@ -214,6 +214,83 @@ fn settings_general_rows(
     let theme = root.theme_runtime.ui;
     let text = root.ui_text;
     let language_select = root.settings_language_select(window, cx);
+    let command_input = root.settings_new_tab_command_input(window, cx);
+    let command_input_for_add = command_input.clone();
+    let command_add_control = div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .w(style.control_width)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .h(style.control_height)
+                .child(Input::new(&command_input).small().appearance(true)),
+        )
+        .child(
+            settings_button(
+                "settings-add-new-tab-command",
+                text.get(UiTextKey::SettingsAddCommand),
+                false,
+                theme,
+                cx,
+                cx.listener(move |this, _, _window, cx| {
+                    let command = command_input_for_add.read(cx).value().to_string();
+                    if let Err(error) = this.add_new_tab_command(&command) {
+                        this.load_error = Some(error.to_string());
+                    }
+                    cx.notify();
+                }),
+            )
+            .debug_selector(|| "settings-add-new-tab-command".to_string()),
+        );
+    let command_list = root
+        .new_tab_commands()
+        .to_vec()
+        .into_iter()
+        .enumerate()
+        .fold(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .w(style.control_width)
+                .child(command_add_control),
+            |list, (index, command)| {
+                list.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .text_xs()
+                                .text_color(theme.text)
+                                .child(command),
+                        )
+                        .child(settings_button(
+                            format!("settings-delete-new-tab-command-{index}"),
+                            text.get(UiTextKey::SettingsDelete),
+                            false,
+                            theme,
+                            cx,
+                            cx.listener(move |this, _, _window, cx| {
+                                if let Err(error) = this.remove_new_tab_command(index) {
+                                    this.load_error = Some(error.to_string());
+                                }
+                                cx.notify();
+                            }),
+                        )),
+                )
+            },
+        );
+
     div()
         .flex()
         .flex_col()
@@ -246,6 +323,38 @@ fn settings_general_rows(
             )
             .into_any_element(),
         ))
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsNewTabCommandPicker),
+                text.get(UiTextKey::SettingsNewTabCommandPickerDescription),
+                settings_switch(
+                    "settings-new-tab-command-picker",
+                    root.new_tab_command_picker_enabled(),
+                    theme,
+                    cx.listener(|this, checked: &bool, _window, cx| {
+                        if let Err(error) = this.set_new_tab_command_picker_enabled(*checked) {
+                            this.load_error = Some(error.to_string());
+                        }
+                        cx.notify();
+                    }),
+                )
+                .debug_selector(|| "settings-new-tab-command-picker".to_string())
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-new-tab-command-picker-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsNewTabCommands),
+                text.get(UiTextKey::SettingsNewTabCommandsDescription),
+                command_list.into_any_element(),
+            )
+            .debug_selector(|| "settings-new-tab-commands-row".to_string()),
+        )
 }
 
 fn settings_appearance_rows(

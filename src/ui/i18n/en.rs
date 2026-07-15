@@ -90,6 +90,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::NoResults => "No results",
         UiTextKey::TypeToFilter => "Type to filter",
         UiTextKey::PalettePlaceholderCommand => "Execute a command...",
+        UiTextKey::PalettePlaceholderNewTabCommand => "Choose a command for the new tab...",
         UiTextKey::PalettePlaceholderProject => "Switch project...",
         UiTextKey::PalettePlaceholderOpenedProject => "Switch opened project...",
         UiTextKey::PalettePlaceholderRecentProject => "Open recent project...",
@@ -311,6 +312,16 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSystemNotificationsDescription => {
             "Notify when agent terminal tasks complete or fail."
         }
+        UiTextKey::SettingsNewTabCommandPicker => "New tab command picker",
+        UiTextKey::SettingsNewTabCommandPickerDescription => {
+            "Show a command picker when clicking the new tab button."
+        }
+        UiTextKey::SettingsNewTabCommands => "New tab commands",
+        UiTextKey::SettingsNewTabCommandsDescription => {
+            "Commands available in the new tab picker. Each command runs in the selected project directory."
+        }
+        UiTextKey::SettingsNewTabCommandPlaceholder => "e.g. lazygit, nvim ., codex",
+        UiTextKey::SettingsAddCommand => "Add command",
         UiTextKey::SettingsUiTheme => "UI theme",
         UiTextKey::SettingsUiThemeDescription => {
             "Theme used for YTTT chrome, panels, and controls."

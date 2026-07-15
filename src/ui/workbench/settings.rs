@@ -83,6 +83,55 @@ impl WorkbenchView {
         Ok(())
     }
 
+    pub fn new_tab_command_picker_enabled(&self) -> bool {
+        self.app_settings.general.new_tab_command_picker_enabled
+    }
+
+    pub fn new_tab_commands(&self) -> &[String] {
+        &self.app_settings.general.new_tab_commands
+    }
+
+    pub fn set_new_tab_command_picker_enabled(
+        &mut self,
+        enabled: bool,
+    ) -> Result<(), WorkbenchError> {
+        self.app_settings.general.new_tab_command_picker_enabled = enabled;
+        save_settings(&self.config_paths, &self.app_settings)?;
+        Ok(())
+    }
+
+    pub fn add_new_tab_command(&mut self, command: &str) -> Result<bool, WorkbenchError> {
+        let command = command.trim();
+        if command.is_empty()
+            || self
+                .app_settings
+                .general
+                .new_tab_commands
+                .iter()
+                .any(|existing| existing == command)
+        {
+            return Ok(false);
+        }
+
+        self.app_settings
+            .general
+            .new_tab_commands
+            .push(command.to_string());
+        save_settings(&self.config_paths, &self.app_settings)?;
+        self.settings.settings_new_tab_command_input = None;
+        Ok(true)
+    }
+
+    pub fn remove_new_tab_command(&mut self, index: usize) -> Result<bool, WorkbenchError> {
+        if index >= self.app_settings.general.new_tab_commands.len() {
+            return Ok(false);
+        }
+
+        self.app_settings.general.new_tab_commands.remove(index);
+        save_settings(&self.config_paths, &self.app_settings)?;
+        Ok(true)
+    }
+
     pub fn set_language(&mut self, language: LanguageSetting) -> Result<(), WorkbenchError> {
         self.app_settings.general.language = language;
         save_settings(&self.config_paths, &self.app_settings)?;
@@ -806,6 +855,25 @@ impl WorkbenchView {
                 .placeholder(self.ui_text.get(UiTextKey::SettingsCustomShellPlaceholder))
         });
         self.settings.settings_custom_shell_input = Some(input.clone());
+        input
+    }
+
+    pub(super) fn settings_new_tab_command_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(input) = &self.settings.settings_new_tab_command_input {
+            return input.clone();
+        }
+
+        let input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(
+                self.ui_text
+                    .get(UiTextKey::SettingsNewTabCommandPlaceholder),
+            )
+        });
+        self.settings.settings_new_tab_command_input = Some(input.clone());
         input
     }
 

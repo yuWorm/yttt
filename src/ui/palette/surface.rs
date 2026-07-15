@@ -113,6 +113,7 @@ pub fn palette_footer_actions(ui_text: &UiText) -> Vec<PaletteFooterAction> {
 pub fn palette_input_placeholder(kind: PaletteKind, ui_text: &UiText) -> &'static str {
     match kind {
         PaletteKind::Command => ui_text.get(UiTextKey::PalettePlaceholderCommand),
+        PaletteKind::NewTabCommand => ui_text.get(UiTextKey::PalettePlaceholderNewTabCommand),
         PaletteKind::Project => ui_text.get(UiTextKey::PalettePlaceholderProject),
         PaletteKind::OpenedProject => ui_text.get(UiTextKey::PalettePlaceholderOpenedProject),
         PaletteKind::RecentProject => ui_text.get(UiTextKey::PalettePlaceholderRecentProject),

@@ -8,9 +8,9 @@ use yttt::{
     },
     palette::{
         ActivePalette, CommandPaletteContext, PaletteItem, PaletteKind, RecentProject,
-        TabPaletteSnapshot, command_palette_items, opened_project_palette_items,
-        pane_palette_items, project_palette_items, recent_project_palette_items, tab_palette_items,
-        unified_tab_palette_items,
+        TabPaletteSnapshot, command_palette_items, new_tab_command_palette_items,
+        opened_project_palette_items, pane_palette_items, project_palette_items,
+        recent_project_palette_items, tab_palette_items, unified_tab_palette_items,
     },
     ui::{
         components::SelectableState,
@@ -19,6 +19,26 @@ use yttt::{
         palette::visible_palette_rows,
     },
 };
+
+#[test]
+fn new_tab_command_palette_preserves_commands_and_ignores_blank_entries() {
+    let commands = vec![
+        "lazygit".to_string(),
+        "  nvim .  ".to_string(),
+        "  ".to_string(),
+    ];
+
+    let items = new_tab_command_palette_items(&commands);
+
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["lazygit", "nvim ."]
+    );
+    assert!(items.iter().all(|item| item.command == CommandId::TabNew));
+}
 
 #[test]
 fn command_palette_contains_all_registered_commands() {
@@ -506,6 +526,7 @@ fn visible_palette_rows_preserve_active_selection_after_picker_migration() {
 fn palette_picker_delegate_exposes_picker_items_for_all_palette_kinds() {
     for kind in [
         PaletteKind::Command,
+        PaletteKind::NewTabCommand,
         PaletteKind::Project,
         PaletteKind::OpenedProject,
         PaletteKind::RecentProject,

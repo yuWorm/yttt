@@ -13,6 +13,15 @@ impl WorkbenchView {
         self.sync_input_owner_state();
     }
 
+    pub fn new_tab_from_toolbar(&mut self) -> Result<(), WorkbenchError> {
+        if self.app_settings.general.new_tab_command_picker_enabled {
+            self.open_palette(PaletteKind::NewTabCommand);
+            Ok(())
+        } else {
+            self.run_command(CommandId::TabNew)
+        }
+    }
+
     pub fn close_palette(&mut self) {
         self.palette.active_palette = None;
         self.reset_palette_input();
@@ -65,6 +74,10 @@ impl WorkbenchView {
                 if opens_palette {
                     return Ok(());
                 }
+            }
+            PaletteKind::NewTabCommand => {
+                let tab_id = self.workspace.create_shell_tab_with_command(item.id)?;
+                self.select_work_item(WorkItemId::Terminal(tab_id))?;
             }
             PaletteKind::Project | PaletteKind::OpenedProject | PaletteKind::RecentProject => {
                 let project_id = self
@@ -126,6 +139,9 @@ impl WorkbenchView {
     pub(super) fn palette_items(&self, kind: PaletteKind) -> Vec<PaletteItem> {
         match kind {
             PaletteKind::Command => self.command_palette_items(),
+            PaletteKind::NewTabCommand => {
+                new_tab_command_palette_items(&self.app_settings.general.new_tab_commands)
+            }
             PaletteKind::Project => project_palette_items_with_text(
                 &self.workspace,
                 &self.palette.recent_projects,

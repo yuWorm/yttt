@@ -3269,6 +3269,170 @@ fn root_view_settings_can_select_and_close_group() {
     assert_eq!(root.selected_settings_group_title(), Some("Terminal"));
 }
 
+#[test]
+fn new_tab_command_settings_edit_and_persist() {
+    let (temp, mut root) = english_test_root();
+
+    assert!(!root.new_tab_command_picker_enabled());
+    assert!(!root.add_new_tab_command("nvim").unwrap());
+    assert!(!root.add_new_tab_command("   ").unwrap());
+    assert!(root.add_new_tab_command("nvim .").unwrap());
+    assert!(root.remove_new_tab_command(0).unwrap());
+    root.set_new_tab_command_picker_enabled(true).unwrap();
+
+    assert_eq!(root.new_tab_commands(), &["nvim", "codex", "nvim ."]);
+    let loaded =
+        load_or_create_settings(&AppConfigPaths::from_config_dir(temp.path().join("config")))
+            .unwrap();
+    assert!(loaded.settings.general.new_tab_command_picker_enabled);
+    assert_eq!(
+        loaded.settings.general.new_tab_commands,
+        vec!["nvim", "codex", "nvim ."]
+    );
+}
+
+#[test]
+fn new_tab_toolbar_defaults_to_creating_a_shell_tab() {
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+    let tab_count = root
+        .workspace()
+        .project(&project_id)
+        .unwrap()
+        .layout
+        .tabs
+        .len();
+
+    root.new_tab_from_toolbar().unwrap();
+
+    assert!(root.active_palette().is_none());
+    let project = root.workspace().project(&project_id).unwrap();
+    assert_eq!(project.layout.tabs.len(), tab_count + 1);
+    let tab = project.layout.tab(&project.selected_tab_id).unwrap();
+    let LayoutNode::Pane(pane) = &tab.layout else {
+        panic!("new shell tab should contain one pane");
+    };
+    assert!(pane.command.is_empty());
+}
+
+#[gpui::test]
+fn general_settings_render_and_toggle_new_tab_command_picker(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut settings = load_or_create_settings(&paths).unwrap().settings;
+    settings.general.onboarding_completed = true;
+    save_settings(&paths, &settings).unwrap();
+    let view_paths = paths.clone();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths(view_paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.open_settings();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+
+    let picker_row = cx
+        .debug_bounds("settings-new-tab-command-picker-row")
+        .expect("general settings should render the new tab command picker row");
+    assert!(cx.debug_bounds("settings-new-tab-commands-row").is_some());
+    let toggle = cx
+        .debug_bounds("settings-new-tab-command-picker")
+        .expect("new tab command picker setting should expose a switch");
+    cx.simulate_click(toggle.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: picker_row.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-160.0))),
+        ..Default::default()
+    });
+    cx.refresh().unwrap();
+    assert!(cx.debug_bounds("settings-add-new-tab-command").is_some());
+
+    cx.read(|app| assert!(root.read(app).new_tab_command_picker_enabled()));
+    assert!(
+        load_or_create_settings(&paths)
+            .unwrap()
+            .settings
+            .general
+            .new_tab_command_picker_enabled
+    );
+}
+
+#[gpui::test]
+fn enabled_new_tab_toolbar_click_runs_the_selected_configured_command(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut settings = load_or_create_settings(&paths).unwrap().settings;
+    settings.general.new_tab_command_picker_enabled = true;
+    settings.general.new_tab_commands = vec![
+        "lazygit".to_string(),
+        "nvim .".to_string(),
+        "codex".to_string(),
+    ];
+    save_settings(&paths, &settings).unwrap();
+    let workspace = workspace_with_sample_project();
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root =
+            cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    cx.refresh().unwrap();
+
+    let new_tab = cx
+        .debug_bounds("tab-new")
+        .expect("workbench should render the new tab button");
+    cx.simulate_click(new_tab.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    cx.read(|app| {
+        let root = root.read(app);
+        assert_eq!(
+            root.active_palette().map(|palette| palette.kind),
+            Some(PaletteKind::NewTabCommand)
+        );
+        assert_eq!(
+            root.visible_palette_titles(),
+            vec!["lazygit", "nvim .", "codex"]
+        );
+    });
+    assert!(
+        cx.debug_bounds("palette-list").is_some(),
+        "clicking new tab should render the command picker"
+    );
+
+    root.update(cx, |root, _cx| {
+        root.set_palette_query("nvim .");
+        root.confirm_palette_selection().unwrap();
+    });
+    cx.read(|app| {
+        let root = root.read(app);
+        assert!(root.active_palette().is_none());
+        let project = root.workspace().project(&project_id).unwrap();
+        let tab = project.layout.tab(&project.selected_tab_id).unwrap();
+        let LayoutNode::Pane(pane) = &tab.layout else {
+            panic!("selected command should create a single-pane tab");
+        };
+        assert_eq!(pane.command, "nvim .");
+        assert_eq!(pane.execution_mode, TerminalExecutionMode::Shell);
+    });
+}
+
 #[gpui::test]
 fn appearance_settings_group_renders_zed_import_button(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
