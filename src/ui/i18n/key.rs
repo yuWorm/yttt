@@ -28,7 +28,6 @@ pub enum UiTextKey {
     OnboardingZedImport,
     EmptySubtitle,
     EmptySidebarNote,
-    CreateProject,
     CreateProjectDirectoryError,
     CreateProjectPickerError,
     OpenDirectory,

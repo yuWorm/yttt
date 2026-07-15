@@ -12,8 +12,8 @@ use crate::model::workspace::Workspace;
 use crate::ui::components::{SelectableState, workbench_icon_button};
 use crate::ui::i18n::{UiText, UiTextKey};
 use crate::ui::interaction::actions::{
-    LayoutExportProjectConfig, LayoutOpenFile, LayoutProjectEdit, LayoutResetLocalOverride,
-    LayoutSaveCurrent, ProjectClose,
+    CreateProject, LayoutExportProjectConfig, LayoutOpenFile, LayoutProjectEdit,
+    LayoutResetLocalOverride, LayoutSaveCurrent, ProjectClose,
 };
 use crate::ui::terminal::status::{agent_status_label, project_agent_status};
 use crate::ui::{
@@ -29,6 +29,7 @@ use crate::ui::{
 };
 
 const PROJECT_CONTEXT_COMMANDS: &[CommandId] = &[
+    CommandId::ProjectCreate,
     CommandId::LayoutProjectEdit,
     CommandId::LayoutSaveCurrent,
     CommandId::LayoutExportProjectConfig,
@@ -286,6 +287,11 @@ where
         }))
         .context_menu(move |menu, _, _| {
             menu.action_context(action_context.clone())
+                .item(
+                    PopupMenuItem::new(text.get(UiTextKey::CommandProjectCreateTitle))
+                        .action(Box::new(CreateProject)),
+                )
+                .item(PopupMenuItem::separator())
                 .item(
                     PopupMenuItem::new(text.get(UiTextKey::CommandLayoutProjectEditTitle))
                         .action(Box::new(LayoutProjectEdit)),

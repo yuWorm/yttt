@@ -278,8 +278,7 @@ struct ActiveProjectFileWatcher {
     _task: Task<()>,
 }
 
-const EMPTY_WORKSPACE_ACTIONS: [UiTextKey; 4] = [
-    UiTextKey::CreateProject,
+const EMPTY_WORKSPACE_ACTIONS: [UiTextKey; 3] = [
     UiTextKey::OpenDirectory,
     UiTextKey::OpenRecent,
     UiTextKey::CommandPalette,
