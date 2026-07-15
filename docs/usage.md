@@ -411,11 +411,8 @@ It does not infer thinking, waiting for input, tool use, or patch application st
 Those require future output detectors.
 
 In-app toast is always produced for agent exit events when `notify_on_exit = true`.
-System notification delivery is controlled by:
-
-```text
-settings.notifications
-```
+`settings.notifications` persists the intended native-notification preference, but the
+platform notifier is currently a no-op placeholder.
 
 User-killed agent exits are not reported as failures.
 
@@ -424,15 +421,18 @@ User-killed agent exits are not reported as failures.
 Run these before marking a product phase complete:
 
 - `cargo run` opens an empty workspace.
-- `YTTT_OPEN_PROJECT=/path/to/project cargo run` opens that project.
+- `cargo run -- /path/to/project`, `cargo run -- --project /path/to/project`, and
+  `YTTT_OPEN_PROJECT=/path/to/project cargo run` open a project.
 - `YTTT_DEV_FIXTURE=1 cargo run` shows the development fixture.
 - `YTTT_DEV_FIXTURE=agent-exit cargo run` produces an agent completion toast.
 - On macOS, `scripts/run-dev-app.sh --fixture dev` creates and opens
   `target/dev-app/yttt.app` for UI-tool-friendly smoke testing.
 - On macOS, `scripts/run-dev-app.sh --fixture agent` opens the agent exit fixture
   through the same `.app` wrapper.
-- On macOS, `scripts/build-macos-bundle.sh` creates the ad-hoc-signed release bundle at
-  `target/macos/yttt.app`.
+- On macOS, `scripts/build-macos-dmg.sh` creates `target/macos/yttt.dmg`.
+- On Windows, `scripts/build-windows-installer.ps1` creates the Inno Setup installer.
+- On Linux, `scripts/build-linux-tar.sh` creates the versioned binary and desktop-integration
+  tarball.
 - Terminal panes accept input and render output.
 - Terminal panes resize with the split area.
 - Command, project, tab, and pane palettes can be opened from keyboard.
@@ -468,6 +468,6 @@ Run these before marking a product phase complete:
 - No live process restore after restart.
 - No output parser for agent internal state.
 - No GUI layout editor.
-- No OS-level notification click handler yet.
-- `scripts/build-macos-bundle.sh` produces an ad-hoc-signed `.app`; Developer ID signing,
-  notarization, and disk-image packaging are not implemented.
+- Native system notifications and notification click routing are not implemented.
+- macOS packages are ad-hoc signed; Developer ID signing and notarization require release
+  credentials.

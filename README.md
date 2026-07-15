@@ -53,9 +53,11 @@ remain visible while only the body hides. Open in-file search with the **Find** 
 cargo run
 ```
 
-Open a project on startup:
+Open one or more projects on startup with positional paths or `--project`:
 
 ```bash
+cargo run -- /path/to/project
+cargo run -- --project /path/to/project
 YTTT_OPEN_PROJECT=/path/to/project cargo run
 ```
 
@@ -75,16 +77,23 @@ scripts/run-dev-app.sh --fixture dev
 scripts/run-dev-app.sh --fixture agent
 ```
 
-Build a release macOS application bundle:
+Build release packages on their native platforms:
 
 ```bash
-scripts/build-macos-bundle.sh
-open target/macos/yttt.app
+# macOS: target/macos/yttt.dmg
+scripts/build-macos-dmg.sh
+
+# Windows: target/windows/yttt-setup.exe (requires Inno Setup 6)
+pwsh scripts/build-windows-installer.ps1
+
+# Linux: target/linux/yttt-<version>-linux-<architecture>.tar.gz
+scripts/build-linux-tar.sh
 ```
 
-The script runs a locked release build, copies the application icon, writes the native
-`Info.plist`, and ad-hoc signs `target/macos/yttt.app`. Use `--help` to package an existing
-binary, select another output path, or skip signing.
+Pushing a `v<package-version>` tag runs the three native GitHub Actions packaging jobs and
+publishes the DMG, Inno Setup installer, Linux tarball, and SHA-256 checksums to GitHub Releases.
+The macOS package is ad-hoc signed; production Developer ID signing and notarization still require
+release credentials.
 
 ## Key Paths
 
@@ -94,8 +103,11 @@ Project layout:
 <project>/.yttt/layout.toml
 ```
 
-The config root is `$XDG_CONFIG_HOME/yttt` when set, otherwise `~/.config/yttt`, with
-`./.yttt` used only when neither location is available.
+`$XDG_CONFIG_HOME/yttt` overrides the platform default when set. Otherwise the config root is
+`~/Library/Application Support/yttt` on macOS, `%APPDATA%\yttt` on Windows, and
+`~/.config/yttt` on Linux. Existing macOS and Windows `~/.config/yttt` data is moved to the
+native location on first launch when the native location does not already exist. `./.yttt` is
+used only when no platform user directory is available.
 
 Global default layout:
 
@@ -124,11 +136,10 @@ with a visible warning.
 - Real terminal input/output and resize should be smoke-tested in the launched app.
 - Pointer split resize has code support, but still needs real GPUI smoke verification.
 - Agent state is process-level only; output parsing is intentionally not implemented.
-- System notification click routing is not wired to the OS yet.
+- Native system notifications are intentionally left as a no-op placeholder.
 - Sessions and running processes are not restored after app restart.
 - Project editing accepts UTF-8 text files up to 10 MiB; binary and invalid UTF-8 files are
   rejected.
 - Continuous filesystem watching is limited to the active project; inactive projects refresh
   when selected.
 - The project tree does not create, rename, move, or delete files and directories.
-- Packaging and release automation are not implemented.

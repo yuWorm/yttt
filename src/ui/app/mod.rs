@@ -58,9 +58,7 @@ pub fn run() {
                         ) {
                             StartupMode::DevFixture => WorkbenchView::dev_fixture(),
                             StartupMode::AgentExitFixture => WorkbenchView::agent_exit_fixture(),
-                            StartupMode::Normal => {
-                                WorkbenchView::from_startup_env(force_onboarding)
-                            }
+                            StartupMode::Normal => WorkbenchView::from_startup(force_onboarding),
                         }
                     });
                     view.update(cx, |view, cx| view.sync_performance_monitoring(cx));
@@ -124,10 +122,12 @@ pub fn workbench_window_options(
     bounds: Bounds<Pixels>,
     effect: WindowBackgroundEffect,
 ) -> WindowOptions {
+    let effect = platform::resolved_window_background_effect(effect);
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(size(px(960.0), px(640.0))),
         window_background: window_background_appearance(effect),
+        app_id: Some(platform::APP_ID.to_string()),
         titlebar: Some(TitleBar::title_bar_options()),
         ..Default::default()
     }

@@ -143,6 +143,7 @@ use crate::{
         },
     },
     ui::{
+        app::{platform, startup::startup_project_paths},
         components::{
             ActionEmphasis, workbench_action_button, workbench_agent_notification,
             workbench_error_notification, workbench_icon_button, workbench_inline_notification,
@@ -408,13 +409,13 @@ impl WorkbenchView {
         Self::with_workspace_and_config_paths(Workspace::new(), config_paths, force_onboarding)
     }
 
-    pub fn from_startup_env(force_onboarding: bool) -> Self {
+    pub fn from_startup(force_onboarding: bool) -> Self {
         let mut root = Self::with_config_paths_and_force_onboarding(
             AppConfigPaths::for_app(),
             force_onboarding,
         );
-        if let Some(project_path) = std::env::var_os("YTTT_OPEN_PROJECT") {
-            let _ = root.open_project_path(PathBuf::from(project_path));
+        for project_path in startup_project_paths() {
+            let _ = root.open_project_path(project_path);
         }
         root
     }
@@ -1715,17 +1716,21 @@ impl WorkbenchView {
                 let (project_path, _layout) = self.selected_project_layout_snapshot()?;
                 let project_layout_file = self.config_paths.project_layout_file(&project_path);
                 let local_layout_file = self.config_paths.local_layout_file(&project_path);
-                if local_layout_file.exists() {
-                    self.show_layout_file_path_status(&local_layout_file);
-                    self.last_opened_layout_file = Some(local_layout_file);
+                let layout_file = if local_layout_file.exists() {
+                    local_layout_file
                 } else if project_layout_file.exists() {
-                    self.show_layout_file_path_status(&project_layout_file);
-                    self.last_opened_layout_file = Some(project_layout_file);
+                    project_layout_file
                 } else {
-                    let default_layout_file = self.default_layout_state.path().to_path_buf();
-                    self.show_layout_file_path_status(&default_layout_file);
-                    self.last_opened_layout_file = Some(default_layout_file);
-                }
+                    self.default_layout_state.path().to_path_buf()
+                };
+                platform::reveal_path(&layout_file).map_err(|error| {
+                    WorkbenchError::SystemIntegration(format!(
+                        "failed to reveal {}: {error}",
+                        layout_file.display()
+                    ))
+                })?;
+                self.show_layout_file_path_status(&layout_file);
+                self.last_opened_layout_file = Some(layout_file);
                 Ok(())
             }
             _ => {
@@ -2717,6 +2722,8 @@ pub enum WorkbenchError {
     KeybindingEdit(Box<KeybindingEditError>),
     #[error("{0}")]
     LayoutTomlEditor(String),
+    #[error("{0}")]
+    SystemIntegration(String),
 }
 
 impl From<ProjectOpenError> for WorkbenchError {

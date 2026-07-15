@@ -1,0 +1,195 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v-prefixed tag to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  metadata:
+    name: Validate release metadata
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      ref: ${{ steps.version.outputs.ref }}
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Validate tag and package version
+        id: version
+        shell: bash
+        run: |
+          version="$(cargo metadata --format-version 1 --no-deps --locked | python3 -c 'import json,sys; print(next(package["version"] for package in json.load(sys.stdin)["packages"] if package["name"] == "yttt"))')"
+          if [[ "$RELEASE_TAG" != "v$version" ]]; then
+            echo "Release tag $RELEASE_TAG does not match Cargo package version $version." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "ref=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+  macos:
+    name: Package macOS DMG
+    needs: metadata
+    runs-on: macos-15
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.ref }}
+
+      - name: Install stable Rust
+        shell: bash
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup target add aarch64-apple-darwin
+
+      - name: Build DMG
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: scripts/build-macos-dmg.sh --output "dist/yttt-$VERSION-macos-aarch64.dmg"
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  windows:
+    name: Package Windows installer
+    needs: metadata
+    runs-on: windows-2025
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.ref }}
+
+      - name: Install stable Rust
+        shell: bash
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup target add x86_64-pc-windows-msvc
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --yes --no-progress
+
+      - name: Build Inno Setup installer
+        shell: powershell
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: .\scripts\build-windows-installer.ps1 -Output "dist/yttt-$env:VERSION-windows-x86_64-setup.exe"
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: dist/*.exe
+          if-no-files-found: error
+
+  linux:
+    name: Package Linux tarball
+    needs: metadata
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.ref }}
+
+      - name: Install stable Rust
+        shell: bash
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup target add x86_64-unknown-linux-gnu
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            clang \
+            cmake \
+            g++ \
+            libasound2-dev \
+            libfontconfig-dev \
+            libglib2.0-dev \
+            libssl-dev \
+            libva-dev \
+            libvulkan1 \
+            libwayland-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libzstd-dev \
+            lld \
+            pkg-config
+
+      - name: Build Linux tarball
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: scripts/build-linux-tar.sh --output "dist/yttt-$VERSION-linux-x86_64.tar.gz"
+
+      - name: Upload Linux package
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs:
+      - metadata
+      - macos
+      - windows
+      - linux
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download release packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --generate-notes \
+              --title "$RELEASE_TAG"
+          fi
