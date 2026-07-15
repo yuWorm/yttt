@@ -576,6 +576,12 @@ impl ColorPaletteBuilder {
         self
     }
 
+    /// Sets the opacity of the default background color.
+    pub fn background_alpha(mut self, alpha: f32) -> Self {
+        self.palette.background.a = alpha.clamp(0.0, 1.0);
+        self
+    }
+
     /// Sets the foreground color.
     pub fn foreground(mut self, r: u8, g: u8, b: u8) -> Self {
         let rgb = Rgb { r, g, b };
@@ -822,6 +828,24 @@ mod tests {
         let palette = ColorPalette::default();
         assert_eq!(palette.ansi_colors.len(), 16);
         assert_eq!(palette.extended_colors.len(), 256);
+    }
+
+    #[test]
+    fn background_alpha_preserves_color_and_sets_opacity() {
+        let palette = ColorPalette::builder()
+            .background(0x12, 0x34, 0x56)
+            .background_alpha(0.35)
+            .build();
+
+        assert_eq!(
+            palette.background_rgb,
+            Rgb {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56,
+            }
+        );
+        assert_eq!(palette.background.a, 0.35);
     }
 
     #[test]

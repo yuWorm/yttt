@@ -5,7 +5,7 @@ use yttt::config::{
     settings::AppSettings,
     theme::{ThemeStore, load_theme_store},
 };
-use yttt::ui::theme::{AnsiColors, ThemeRuntime};
+use yttt::ui::theme::{AnsiColors, ThemeRuntime, WINDOW_SURFACE_OPACITY};
 
 #[test]
 fn theme_store_contains_builtin_one_dark_theme() {
@@ -77,6 +77,7 @@ fn theme_runtime_resolves_ui_and_terminal_from_theme_name() {
     assert_eq!(runtime.theme_name, "one-dark-theme");
     assert_eq!(runtime.terminal_settings.font_size, 13.0);
     assert_eq!(runtime.ui.terminal_background, runtime.terminal.background);
+    assert_eq!(runtime.ui.app_background.a, WINDOW_SURFACE_OPACITY);
 }
 
 #[test]
@@ -116,7 +117,7 @@ fn workbench_theme_maps_to_gpui_component_theme_config() {
             .as_ref()
             .map(|color| color.to_string())
             .as_deref(),
-        Some("#1e2227")
+        Some("#1e222759")
     );
     assert_eq!(
         config
@@ -213,7 +214,9 @@ fn builtin_one_dark_theme_maps_editor_and_terminal_palettes() {
 
     assert_eq!(
         highlight.editor_background,
-        Some(gpui::Hsla::from(rgb(0x23272e)))
+        Some(gpui::Hsla::from(
+            rgb(0x23272e).alpha(WINDOW_SURFACE_OPACITY)
+        ))
     );
     assert_eq!(
         highlight.editor_foreground,
@@ -221,7 +224,9 @@ fn builtin_one_dark_theme_maps_editor_and_terminal_palettes() {
     );
     assert_eq!(
         highlight.editor_active_line,
-        Some(gpui::Hsla::from(rgb(0x2c313c)))
+        Some(gpui::Hsla::from(
+            rgb(0x2c313c).alpha(WINDOW_SURFACE_OPACITY)
+        ))
     );
     assert_eq!(
         highlight.editor_line_number,
@@ -258,7 +263,10 @@ fn builtin_one_dark_theme_maps_editor_and_terminal_palettes() {
         );
     }
 
-    assert_eq!(runtime.terminal.background, rgb(0x23272e));
+    assert_eq!(
+        runtime.terminal.background,
+        rgb(0x23272e).alpha(WINDOW_SURFACE_OPACITY)
+    );
     assert_eq!(runtime.terminal.foreground, rgb(0xabb2bf));
     assert_eq!(runtime.terminal.cursor, Some(rgb(0xabb2bf)));
     assert_eq!(runtime.terminal.selection_background, Some(rgb(0x343b48)));
@@ -327,11 +335,15 @@ comment = "#555555"
 
     assert_eq!(
         highlight.editor_background,
-        Some(gpui::Hsla::from(rgb(0x111111)))
+        Some(gpui::Hsla::from(
+            rgb(0x111111).alpha(WINDOW_SURFACE_OPACITY)
+        ))
     );
     assert_eq!(
         highlight.editor_active_line,
-        Some(gpui::Hsla::from(rgb(0x222222)))
+        Some(gpui::Hsla::from(
+            rgb(0x222222).alpha(WINDOW_SURFACE_OPACITY)
+        ))
     );
     assert_eq!(
         highlight
