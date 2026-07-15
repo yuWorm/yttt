@@ -21,6 +21,15 @@ pub struct EditorAppearance {
     pub soft_wrap: bool,
     pub line_numbers: bool,
 }
+impl EditorAppearance {
+    pub(crate) fn resolved_font_family(&self) -> gpui::SharedString {
+        if self.font_family.is_empty() {
+            ".SystemUIFont".into()
+        } else {
+            self.font_family.clone().into()
+        }
+    }
+}
 
 impl Default for EditorAppearance {
     fn default() -> Self {

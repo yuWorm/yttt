@@ -110,6 +110,7 @@ The settings file is `<app config>/settings.toml`. These are the complete defaul
 ```toml
 [general]
 language = "system"
+ui_font_family = ""
 onboarding_completed = false
 
 [theme]

@@ -293,7 +293,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsGroupGeneral => "General",
         UiTextKey::SettingsGroupGeneralDescription => "Application behavior and notifications",
         UiTextKey::SettingsGroupAppearance => "Appearance",
-        UiTextKey::SettingsGroupAppearanceDescription => "UI and terminal themes",
+        UiTextKey::SettingsGroupAppearanceDescription => "UI font, UI and terminal themes",
         UiTextKey::SettingsGroupLanguages => "Languages",
         UiTextKey::SettingsGroupLanguagesDescription => {
             "Code language detection and language server defaults"
@@ -329,6 +329,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::SettingsNewTabCommandPlaceholder => "e.g. lazygit, nvim ., codex",
         UiTextKey::SettingsAddCommand => "Add command",
+        UiTextKey::SettingsUiFontFamily => "UI font",
+        UiTextKey::SettingsUiFontFamilyDescription => {
+            "Font used across YTTT chrome, panels, and controls."
+        }
         UiTextKey::SettingsUiTheme => "UI theme",
         UiTextKey::SettingsUiThemeDescription => {
             "Theme used for YTTT chrome, panels, and controls."

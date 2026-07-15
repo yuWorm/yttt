@@ -1292,7 +1292,7 @@ fn git_diff_code_pane(
     let font_scale = (editor_appearance.font_size / EditorAppearance::default().font_size).max(0.5);
     let unified_content_width = (unified_content_width * font_scale).max(900.0);
     let split_content_width = (split_content_width * font_scale).max(700.0);
-    let mut file_header = div()
+    let file_header = div()
         .flex()
         .items_center()
         .h(px(42.0))
@@ -1302,11 +1302,9 @@ fn git_diff_code_pane(
         .bg(editor_theme.active_line)
         .text_size(px(editor_appearance.font_size))
         .line_height(relative(editor_appearance.line_height))
+        .font_family(editor_appearance.resolved_font_family())
         .text_color(editor_theme.line_number)
         .child(file_path);
-    if !editor_appearance.font_family.is_empty() {
-        file_header = file_header.font_family(editor_appearance.font_family.clone());
-    }
 
     div()
         .flex()
@@ -1443,7 +1441,7 @@ fn git_diff_source_header(
     appearance: &EditorAppearance,
     theme: EditorTheme,
 ) -> Div {
-    let mut header = div()
+    div()
         .debug_selector(move || debug_selector.to_string())
         .flex()
         .items_center()
@@ -1452,12 +1450,9 @@ fn git_diff_source_header(
         .bg(theme.active_line)
         .text_size(px(appearance.font_size))
         .line_height(relative(appearance.line_height))
+        .font_family(appearance.resolved_font_family())
         .text_color(theme.active_line_number)
-        .child(label);
-    if !appearance.font_family.is_empty() {
-        header = header.font_family(appearance.font_family.clone());
-    }
-    header
+        .child(label)
 }
 
 fn git_diff_line_background(

@@ -3496,6 +3496,10 @@ fn appearance_settings_group_renders_zed_import_button(cx: &mut gpui::TestAppCon
         cx.notify();
     });
     cx.refresh().unwrap();
+    assert!(
+        cx.debug_bounds("settings-ui-font-family-row").is_some(),
+        "Appearance settings should expose the UI font selector"
+    );
 
     assert!(
         cx.debug_bounds("settings-import-zed-themes").is_some(),
@@ -3786,6 +3790,33 @@ fn root_view_custom_terminal_shell_setting_persists() {
     assert_eq!(
         loaded.settings.terminal.custom_shells,
         vec!["/opt/tools/fish"]
+    );
+}
+
+#[test]
+fn root_view_ui_font_family_setting_persists_and_can_reset() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = WorkbenchView::with_config_paths(paths.clone());
+
+    root.set_ui_font_family("  Menlo  ").unwrap();
+    assert_eq!(
+        load_or_create_settings(&paths)
+            .unwrap()
+            .settings
+            .general
+            .ui_font_family,
+        "Menlo"
+    );
+
+    root.set_ui_font_family("").unwrap();
+    assert_eq!(
+        load_or_create_settings(&paths)
+            .unwrap()
+            .settings
+            .general
+            .ui_font_family,
+        ""
     );
 }
 

@@ -365,6 +365,7 @@ fn settings_appearance_rows(
 ) -> Div {
     let theme = root.theme_runtime.ui;
     let text = root.ui_text;
+    let ui_font_select = root.settings_ui_font_family_select(window, cx);
     let ui_theme_select = root.settings_ui_theme_select(window, cx);
     let terminal_theme_select = root.settings_terminal_theme_select(window, cx);
     let icon_theme_select = root.settings_icon_theme_select(window, cx);
@@ -372,6 +373,22 @@ fn settings_appearance_rows(
     div()
         .flex()
         .flex_col()
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsUiFontFamily),
+                text.get(UiTextKey::SettingsUiFontFamilyDescription),
+                settings_select_control(
+                    ui_font_select,
+                    theme,
+                    true,
+                    text.get(UiTextKey::SettingsSearchFont),
+                )
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-ui-font-family-row".to_string()),
+        )
         .child(setting_row(
             style,
             theme,

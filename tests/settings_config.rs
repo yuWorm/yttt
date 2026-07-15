@@ -52,6 +52,7 @@ fn missing_settings_file_writes_defaults() {
     let loaded = load_or_create_settings(&paths).unwrap();
 
     assert_eq!(loaded.settings.general.language, LanguageSetting::System);
+    assert_eq!(loaded.settings.general.ui_font_family, "");
     assert!(!loaded.settings.general.onboarding_completed);
     assert!(!loaded.settings.general.new_tab_command_picker_enabled);
     assert_eq!(
@@ -228,6 +229,7 @@ fn settings_persist_language_and_terminal_scrollbar() {
     let paths = AppConfigPaths::from_config_dir(dir.path());
     let mut settings = AppSettings::default();
     settings.general.language = LanguageSetting::Chinese;
+    settings.general.ui_font_family = "  Menlo  ".to_string();
     settings.general.onboarding_completed = true;
     settings.general.new_tab_command_picker_enabled = true;
     settings.general.new_tab_commands = vec!["nvim .".to_string(), "codex --resume".to_string()];
@@ -237,6 +239,7 @@ fn settings_persist_language_and_terminal_scrollbar() {
     let loaded = load_or_create_settings(&paths).unwrap();
 
     assert_eq!(loaded.settings.general.language, LanguageSetting::Chinese);
+    assert_eq!(loaded.settings.general.ui_font_family, "Menlo");
     assert!(loaded.settings.general.onboarding_completed);
     assert!(loaded.settings.general.new_tab_command_picker_enabled);
     assert_eq!(

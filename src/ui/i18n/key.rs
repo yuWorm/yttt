@@ -275,6 +275,8 @@ pub enum UiTextKey {
     SettingsNewTabCommandsDescription,
     SettingsNewTabCommandPlaceholder,
     SettingsAddCommand,
+    SettingsUiFontFamily,
+    SettingsUiFontFamilyDescription,
     SettingsUiTheme,
     SettingsUiThemeDescription,
     SettingsIconTheme,

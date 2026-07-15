@@ -190,6 +190,9 @@ impl Render for WorkbenchView {
                 }),
             ))
             .child(body);
+        if !self.app_settings.general.ui_font_family.is_empty() {
+            root = root.font_family(self.app_settings.general.ui_font_family.clone());
+        }
 
         if let Some(active_palette) = self.palette.active_palette.clone() {
             let items = self.palette_items(active_palette.kind);

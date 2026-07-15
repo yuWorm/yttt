@@ -2238,6 +2238,8 @@ impl WorkbenchView {
         self.settings.settings_new_tab_command_input = None;
         self.settings.settings_ui_theme_select = None;
         self.settings.settings_ui_theme_select_subscription = None;
+        self.settings.settings_ui_font_family_select = None;
+        self.settings.settings_ui_font_family_select_subscription = None;
         self.settings.settings_icon_theme_select = None;
         self.settings.settings_icon_theme_select_subscription = None;
         self.settings.settings_terminal_theme_select = None;

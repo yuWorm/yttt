@@ -175,6 +175,11 @@ impl WorkbenchView {
         Ok(true)
     }
 
+    pub fn set_ui_font_family(&mut self, font_family: &str) -> Result<(), WorkbenchError> {
+        self.app_settings.general.ui_font_family = font_family.trim().to_string();
+        self.save_app_settings_and_refresh_runtime()
+    }
+
     pub fn set_ui_theme_name(&mut self, theme_name: &str) -> Result<(), WorkbenchError> {
         self.app_settings.theme.name = theme_name.to_string();
         self.save_app_settings_and_refresh_runtime()
@@ -912,6 +917,35 @@ impl WorkbenchView {
         }
     }
 
+    pub(super) fn settings_ui_font_family_select(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SettingsFontFamilySelectState> {
+        if let Some(select) = &self.settings.settings_ui_font_family_select {
+            return select.clone();
+        }
+
+        let selected = font_family_option_for_setting(&self.app_settings.general.ui_font_family);
+        let items = font_family_options_from_system(
+            &self.app_settings.general.ui_font_family,
+            cx.text_system().all_font_names(),
+        );
+        let selected_index = selected_index_for_settings_option(&items, &selected);
+        let select = cx.new(|cx| {
+            SelectState::new(FontFamilyOptions::new(items), selected_index, window, cx)
+                .searchable(true)
+        });
+        let subscription = cx.subscribe_in(
+            &select,
+            window,
+            Self::on_settings_ui_font_family_select_event,
+        );
+        self.settings.settings_ui_font_family_select = Some(select.clone());
+        self.settings.settings_ui_font_family_select_subscription = Some(subscription);
+        select
+    }
+
     pub(super) fn settings_ui_theme_select(
         &mut self,
         window: &mut Window,
@@ -1255,6 +1289,23 @@ impl WorkbenchView {
             value.as_str()
         };
         if let Err(error) = self.set_terminal_shell(shell) {
+            self.load_error = Some(error.to_string());
+        }
+        cx.notify();
+    }
+
+    pub(super) fn on_settings_ui_font_family_select_event(
+        &mut self,
+        _select: &Entity<SettingsFontFamilySelectState>,
+        event: &SelectEvent<FontFamilyOptions>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(Some(value)) = event else {
+            return;
+        };
+        let font_family = font_family_setting_from_option(value.as_ref());
+        if let Err(error) = self.set_ui_font_family(&font_family) {
             self.load_error = Some(error.to_string());
         }
         cx.notify();

@@ -257,7 +257,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsGroupGeneral => "通用",
         UiTextKey::SettingsGroupGeneralDescription => "应用行为和通知",
         UiTextKey::SettingsGroupAppearance => "外观",
-        UiTextKey::SettingsGroupAppearanceDescription => "界面和终端主题",
+        UiTextKey::SettingsGroupAppearanceDescription => "界面字体以及界面和终端主题",
         UiTextKey::SettingsGroupLanguages => "语言",
         UiTextKey::SettingsGroupLanguagesDescription => "代码语言检测和语言服务器默认值",
         UiTextKey::SettingsGroupEditor => "编辑器",
@@ -283,6 +283,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::SettingsNewTabCommandPlaceholder => "例如 lazygit、nvim .、codex",
         UiTextKey::SettingsAddCommand => "添加命令",
+        UiTextKey::SettingsUiFontFamily => "界面字体",
+        UiTextKey::SettingsUiFontFamilyDescription => "YTTT 外壳、面板和控件使用的字体。",
         UiTextKey::SettingsUiTheme => "界面主题",
         UiTextKey::SettingsUiThemeDescription => "用于 YTTT 外壳、面板和控件的主题。",
         UiTextKey::SettingsIconTheme => "图标主题",

@@ -26,13 +26,9 @@ pub fn styled_code_editor_input(
     input: &Entity<InputState>,
     appearance: &EditorAppearance,
 ) -> Input {
-    let input = Input::new(input)
+    Input::new(input)
         .appearance(false)
         .text_size(px(appearance.font_size))
-        .line_height(relative(appearance.line_height));
-    if appearance.font_family.is_empty() {
-        input
-    } else {
-        input.font_family(appearance.font_family.clone())
-    }
+        .line_height(relative(appearance.line_height))
+        .font_family(appearance.resolved_font_family())
 }

@@ -143,6 +143,10 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
         ],
         SettingsGroupId::Appearance => vec![
             row(
+                UiTextKey::SettingsUiFontFamily,
+                UiTextKey::SettingsUiFontFamilyDescription,
+            ),
+            row(
                 UiTextKey::SettingsUiTheme,
                 UiTextKey::SettingsUiThemeDescription,
             ),

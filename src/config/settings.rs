@@ -67,6 +67,7 @@ pub fn language_setting_for_locale(locale: Option<&str>) -> LanguageSetting {
 #[serde(default)]
 pub struct GeneralSettings {
     pub language: LanguageSetting,
+    pub ui_font_family: String,
     pub onboarding_completed: bool,
     pub new_tab_command_picker_enabled: bool,
     pub new_tab_commands: Vec<String>,
@@ -76,6 +77,7 @@ impl Default for GeneralSettings {
     fn default() -> Self {
         Self {
             language: LanguageSetting::System,
+            ui_font_family: String::new(),
             onboarding_completed: false,
             new_tab_command_picker_enabled: false,
             new_tab_commands: vec![
@@ -605,6 +607,8 @@ fn validate_settings(
     mut settings: AppSettings,
     warnings: &mut Vec<SettingsLoadWarning>,
 ) -> AppSettings {
+    settings.general.ui_font_family = settings.general.ui_font_family.trim().to_string();
+
     let defaults = TerminalSettings::default();
 
     if settings.terminal.font_size <= 0.0 {

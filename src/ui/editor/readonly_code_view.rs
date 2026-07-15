@@ -285,12 +285,8 @@ fn render_readonly_code_row(
 }
 
 fn editor_text_div(element: Div, appearance: &EditorAppearance) -> Div {
-    let element = element
+    element
         .text_size(px(appearance.font_size))
-        .line_height(relative(appearance.line_height));
-    if appearance.font_family.is_empty() {
-        element
-    } else {
-        element.font_family(appearance.font_family.clone())
-    }
+        .line_height(relative(appearance.line_height))
+        .font_family(appearance.resolved_font_family())
 }
