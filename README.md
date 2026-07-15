@@ -109,9 +109,10 @@ Personal project layout:
 <app-config>/projects/<encoded-project-path>/layout.toml
 ```
 
-Projects without `.yttt/layout.toml` dynamically inherit the global default. Personal
-project files use strict `version = 1` plus `mode = "patch" | "replace"`; unversioned
-legacy files are rejected with a visible warning.
+Projects without `.yttt/layout.toml` dynamically inherit the global default. The project layout
+may omit `project.name`, in which case the project directory name is used. Personal project files
+use strict `version = 1` plus `mode = "patch" | "replace"`; unversioned legacy files are rejected
+with a visible warning.
 
 ## More Docs
 

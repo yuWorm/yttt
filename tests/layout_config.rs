@@ -657,6 +657,30 @@ fn config_global_default_project_config_does_not_read_broken_global_file() {
 }
 
 #[test]
+fn config_project_layout_without_name_uses_project_directory_name() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("unnamed-project");
+    fs::create_dir_all(project_dir.join(".yttt")).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut default_state = DefaultLayoutState::load_or_create(&paths);
+    fs::write(
+        project_dir.join(".yttt/layout.toml"),
+        toml::to_string_pretty(&DefaultLayoutTemplate::builtin()).unwrap(),
+    )
+    .unwrap();
+
+    let opened = open_project_config(&paths, &project_dir, &mut default_state).unwrap();
+
+    assert_eq!(opened.layout.project.name, "unnamed-project");
+    assert_eq!(opened.layout.project.default_tab.as_deref(), Some("shell"));
+    assert_eq!(
+        opened.layout_source,
+        LayoutSource::ProjectConfig(paths.project_layout_file(&opened.path))
+    );
+    assert!(opened.warnings.is_empty());
+}
+
+#[test]
 fn config_project_layout_resolves_project_dir_in_tab_cwd() {
     let temp = tempdir().unwrap();
     let project_dir = temp.path().join("project-cwd");

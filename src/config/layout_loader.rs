@@ -10,8 +10,8 @@ use crate::{
         personal_layout::{self, PersonalLayoutFileError},
     },
     model::layout::{
-        LayoutError, LayoutNode, PaneConfig, PaneKind, ProcessExitBehavior, ProjectLayout,
-        TerminalExecutionMode,
+        LayoutError, LayoutNode, PaneConfig, PaneKind, ProcessExitBehavior, ProjectConfig,
+        ProjectLayout, TabConfig, TerminalExecutionMode,
     },
 };
 
@@ -428,7 +428,7 @@ fn load_project_layout(
     let project_layout_file = paths.project_layout_file(project_path);
     let (base, base_source, mut warnings) = if project_layout_file.exists() {
         (
-            read_project_layout(&project_layout_file)?,
+            read_project_layout(&project_layout_file, project_path)?,
             LayoutSource::ProjectConfig(project_layout_file),
             Vec::new(),
         )
@@ -574,21 +574,51 @@ fn personal_error_warning(error: ProjectOpenError) -> LayoutLoadWarning {
     }
 }
 
-fn read_project_layout(path: &Path) -> Result<ProjectLayout, ProjectOpenError> {
+#[derive(serde::Deserialize)]
+struct ProjectLayoutFile {
+    project: ProjectLayoutFileProject,
+    #[serde(default)]
+    tabs: Vec<TabConfig>,
+}
+
+#[derive(serde::Deserialize)]
+struct ProjectLayoutFileProject {
+    name: Option<String>,
+    default_tab: Option<String>,
+}
+
+fn read_project_layout(
+    path: &Path,
+    project_path: &Path,
+) -> Result<ProjectLayout, ProjectOpenError> {
     let source =
         fs::read_to_string(path).map_err(|source| ProjectOpenError::ReadProjectLayout {
             path: path.to_path_buf(),
             source,
         })?;
-    parse_project_layout(path, &source)
+    parse_project_layout(path, project_path, &source)
 }
 
-fn parse_project_layout(path: &Path, source: &str) -> Result<ProjectLayout, ProjectOpenError> {
-    let layout: ProjectLayout =
+fn parse_project_layout(
+    path: &Path,
+    project_path: &Path,
+    source: &str,
+) -> Result<ProjectLayout, ProjectOpenError> {
+    let file: ProjectLayoutFile =
         toml::from_str(source).map_err(|source| ProjectOpenError::ParseProjectLayout {
             path: path.to_path_buf(),
             source,
         })?;
+    let layout = ProjectLayout {
+        project: ProjectConfig {
+            name: file
+                .project
+                .name
+                .unwrap_or_else(|| project_name(project_path)),
+            default_tab: file.project.default_tab,
+        },
+        tabs: file.tabs,
+    };
     layout
         .validate()
         .map_err(|source| ProjectOpenError::InvalidProjectLayout {

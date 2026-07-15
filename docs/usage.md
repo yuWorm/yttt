@@ -231,6 +231,7 @@ project .yttt/layout.toml, otherwise global default
   -> personal mode = "replace" replaces the selected base
 ```
 
+The project layout may omit `project.name`; the project directory name is used in that case.
 Projects without `.yttt/layout.toml` do not receive a copied local snapshot. They read the
 latest global default when opened. Already-open projects keep their current tabs, panes, and
 terminal processes when the global default is saved, reloaded, or reset.
