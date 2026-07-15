@@ -1,6 +1,9 @@
 use gpui::Keystroke;
 
-use crate::{commands::CommandId, ui::interaction::input_owner::InputOwnerKind};
+use crate::{
+    commands::{ActiveSurface, CommandContext, CommandId},
+    ui::interaction::input_owner::InputOwnerKind,
+};
 
 pub fn workspace_runtime_command_allowed(owner: InputOwnerKind, command: CommandId) -> bool {
     match owner {
@@ -34,20 +37,10 @@ pub fn workspace_command_for_keystroke(
 }
 
 fn editor_runtime_command_allowed(command: CommandId) -> bool {
-    matches!(
-        command,
-        CommandId::FileSave
-            | CommandId::TabClose
-            | CommandId::TabNext
-            | CommandId::TabPrev
-            | CommandId::ProjectPanelToggle
-            | CommandId::ProjectPanelRefresh
-            | CommandId::GitBranchSwitch
-            | CommandId::GitDiffOpen
-            | CommandId::CommandPaletteOpen
-            | CommandId::ProjectOpenRecent
-            | CommandId::ProjectPalette
-            | CommandId::ProjectOpenedPalette
-            | CommandId::TabPalette
-    )
+    command
+        .availability_for_context(CommandContext {
+            has_selected_project: true,
+            active_surface: ActiveSurface::File,
+        })
+        .enabled
 }

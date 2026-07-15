@@ -152,45 +152,28 @@ fn command_availability_tracks_active_surface() {
 }
 
 #[test]
-fn editor_owner_allows_only_safe_workspace_commands() {
-    for command in [
-        CommandId::FileSave,
-        CommandId::TabClose,
-        CommandId::TabNext,
-        CommandId::TabPrev,
-        CommandId::ProjectPanelToggle,
-        CommandId::ProjectPanelRefresh,
-        CommandId::CommandPaletteOpen,
-        CommandId::ProjectPalette,
-        CommandId::TabPalette,
-    ] {
+fn editor_owner_dispatches_every_command_available_for_files() {
+    let file_context = CommandContext {
+        has_selected_project: true,
+        active_surface: ActiveSurface::File,
+    };
+
+    for &command in CommandId::ALL {
         let actual = workspace_command_for_keystroke(
             InputOwnerKind::Editor,
             &Keystroke::parse("cmd-s").unwrap(),
             |_| Some(command),
             |_| true,
         );
-        assert_eq!(actual, Some(command), "{command:?} should be editor-safe");
-    }
+        let expected = command
+            .availability_for_context(file_context)
+            .enabled
+            .then_some(command);
 
-    for command in [
-        CommandId::TabNew,
-        CommandId::TabRename,
-        CommandId::PaneSplitHorizontal,
-        CommandId::PaneSplitVertical,
-        CommandId::PaneClose,
-        CommandId::PaneFocusLeft,
-        CommandId::PaneResizeRight,
-        CommandId::PaneRename,
-        CommandId::PanePalette,
-    ] {
-        let actual = workspace_command_for_keystroke(
-            InputOwnerKind::Editor,
-            &Keystroke::parse("cmd-d").unwrap(),
-            |_| Some(command),
-            |_| false,
+        assert_eq!(
+            actual, expected,
+            "{command:?} editor dispatch must match file availability"
         );
-        assert_eq!(actual, None, "{command:?} must stay editor-owned");
     }
 }
 
