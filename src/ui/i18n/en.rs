@@ -79,6 +79,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::FileOverwrite => "Overwrite",
         UiTextKey::FileReload => "Reload",
         UiTextKey::FileRecreate => "Recreate file",
+        UiTextKey::MarkdownShowRendered => "Show rendered Markdown",
+        UiTextKey::MarkdownShowSource => "Edit Markdown source",
         UiTextKey::Tabs => "Tabs",
         UiTextKey::TabCloseCurrent => "Close Current",
         UiTextKey::TabCloseAll => "Close All",

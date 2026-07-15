@@ -11,8 +11,8 @@ mod workspace;
 
 pub use breadcrumbs::{EditorSymbol, EditorSymbolKind, breadcrumbs_at, document_symbols};
 pub use document::{
-    EditorAppearance, ProjectEditorDocument, ProjectEditorDocumentEvent, ProjectEditorModel,
-    ProjectEditorSaveState, SaveRequest,
+    EditorAppearance, MarkdownDocumentConfig, ProjectEditorDocument, ProjectEditorDocumentEvent,
+    ProjectEditorModel, ProjectEditorSaveState, SaveRequest,
 };
 pub use file_io::{
     CurrentDiskState, DiskFingerprint, LoadedProjectFile, MAX_PROJECT_FILE_BYTES,

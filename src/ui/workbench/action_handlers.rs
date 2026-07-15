@@ -650,6 +650,9 @@ impl WorkbenchView {
             ProjectEditorDocumentEvent::Blurred => {
                 self.queue_focus_change_autosave(document_id);
             }
+            ProjectEditorDocumentEvent::Error { message } => {
+                self.load_error = Some(message.clone());
+            }
         }
         cx.notify();
     }

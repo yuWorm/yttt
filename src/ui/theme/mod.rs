@@ -1,4 +1,5 @@
 pub mod icons;
+mod markdown;
 mod one_dark;
 pub mod zed;
 

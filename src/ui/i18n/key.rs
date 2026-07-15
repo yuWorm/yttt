@@ -69,6 +69,8 @@ pub enum UiTextKey {
     FileOverwrite,
     FileReload,
     FileRecreate,
+    MarkdownShowRendered,
+    MarkdownShowSource,
     Tabs,
     TabCloseCurrent,
     TabCloseAll,

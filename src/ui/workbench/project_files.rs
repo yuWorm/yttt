@@ -596,6 +596,7 @@ impl WorkbenchView {
         source_relative_path: &Path,
         destination_project_id: &ProjectId,
         destination_relative_path: &Path,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(source_root) = self
@@ -652,6 +653,7 @@ impl WorkbenchView {
                 document.relocate(
                     new_document_id.clone(),
                     breadcrumb_header.clone(),
+                    window,
                     document_cx,
                 );
             });
@@ -790,6 +792,7 @@ impl WorkbenchView {
                             &moved_relative_path,
                             &project_id,
                             &renamed.relative_path,
+                            window,
                             cx,
                         );
                         if let Some(session) = root
@@ -980,6 +983,7 @@ impl WorkbenchView {
                                 &clipboard.relative_path,
                                 &destination_project_id,
                                 &pasted.relative_path,
+                                window,
                                 cx,
                             );
                         }
@@ -1317,9 +1321,16 @@ impl WorkbenchView {
                 loaded.fingerprint,
             );
             let appearance = EditorAppearance::from(&self.app_settings.editor);
+            let markdown_config = self.markdown_document_config();
             let document = cx.new(|document_cx| {
-                ProjectEditorDocument::new(model, appearance, window, document_cx)
-                    .with_breadcrumb_header(breadcrumb_header)
+                ProjectEditorDocument::new_with_markdown_config(
+                    model,
+                    appearance,
+                    markdown_config,
+                    window,
+                    document_cx,
+                )
+                .with_breadcrumb_header(breadcrumb_header)
             });
             let subscription =
                 cx.subscribe_in(&document, window, Self::on_project_editor_document_event);

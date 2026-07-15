@@ -617,6 +617,7 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) {
         let appearance = EditorAppearance::from(&self.app_settings.editor);
+        let markdown_config = self.markdown_document_config();
         if let Some(session) = &mut self.overlays.layout_toml_editor {
             session.set_appearance(appearance.clone());
         }
@@ -643,7 +644,12 @@ impl WorkbenchView {
             .collect::<Vec<_>>();
         for document in documents {
             document.update(cx, |document, document_cx| {
-                document.set_appearance(appearance.clone(), window, document_cx);
+                document.set_appearance_with_markdown_config(
+                    appearance.clone(),
+                    markdown_config.clone(),
+                    window,
+                    document_cx,
+                );
             });
         }
     }

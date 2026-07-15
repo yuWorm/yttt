@@ -366,6 +366,17 @@ pub(super) fn ui_text_for_language(language: LanguageSetting) -> UiText {
     }
 }
 
+pub(super) fn markdown_editor_strings_for_language(
+    language: LanguageSetting,
+) -> Arc<gpui_markdown_editor::MarkdownEditorStrings> {
+    Arc::new(match language {
+        LanguageSetting::System | LanguageSetting::English => {
+            gpui_markdown_editor::MarkdownEditorStrings::en_us()
+        }
+        LanguageSetting::Chinese => gpui_markdown_editor::MarkdownEditorStrings::zh_cn(),
+    })
+}
+
 pub(super) fn format_keybinding_warning_lines(
     warnings: &[KeybindingLoadWarning],
     text: &UiText,

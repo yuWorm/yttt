@@ -75,6 +75,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::FileOverwrite => "覆盖",
         UiTextKey::FileReload => "重新加载",
         UiTextKey::FileRecreate => "重新创建文件",
+        UiTextKey::MarkdownShowRendered => "显示 Markdown 渲染视图",
+        UiTextKey::MarkdownShowSource => "编辑 Markdown 源码",
         UiTextKey::Tabs => "标签页",
         UiTextKey::TabCloseCurrent => "关闭当前",
         UiTextKey::TabCloseAll => "关闭全部",

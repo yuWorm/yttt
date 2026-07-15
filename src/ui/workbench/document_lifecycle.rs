@@ -448,11 +448,11 @@ impl WorkbenchView {
         else {
             return;
         };
-        let request = document.update(cx, |document, _cx| {
+        let request = document.update(cx, |document, document_cx| {
             if !force && !matches!(document.model().save_state(), ProjectEditorSaveState::Idle) {
                 return None;
             }
-            Some(document.model_mut().begin_save())
+            Some(document.begin_save(document_cx))
         });
         let Some(request) = request else {
             return;
@@ -795,8 +795,7 @@ impl WorkbenchView {
                 match result {
                     Ok(loaded) if loaded.fingerprint == expected_fingerprint => {}
                     Ok(loaded) if document.read(cx).model().is_dirty() => {
-                        let request =
-                            document.update(cx, |document, _| document.model_mut().begin_save());
+                        let request = document.update(cx, |document, cx| document.begin_save(cx));
                         root.documents.pending_file_conflict = Some(PendingFileConflict {
                             document_id: document_id.clone(),
                             request,
@@ -820,8 +819,7 @@ impl WorkbenchView {
                     Err(ProjectFileIoError::Io { source, .. })
                         if source.kind() == std::io::ErrorKind::NotFound =>
                     {
-                        let request =
-                            document.update(cx, |document, _| document.model_mut().begin_save());
+                        let request = document.update(cx, |document, cx| document.begin_save(cx));
                         root.documents.pending_file_conflict = Some(PendingFileConflict {
                             document_id: document_id.clone(),
                             request,

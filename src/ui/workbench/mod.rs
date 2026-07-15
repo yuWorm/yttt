@@ -151,11 +151,12 @@ use crate::{
         editor::{
             CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, CurrentDiskState,
             EditorAppearance, EditorDiagnostic, EditorDiagnosticSeverity, EditorLanguageCatalog,
-            EditorLanguageId, LoadedProjectFile, ProjectEditorDocument, ProjectEditorDocumentEvent,
-            ProjectEditorModel, ProjectEditorRuntime, ProjectEditorSaveState, ProjectFileIoError,
-            ProjectFileLoadRequest, ReadonlyCodeRow, ReadonlyCodeView, SaveMode,
-            SaveProjectFileOutcome, SaveRequest, WorkItemId, code_editor_input_state,
-            project_relative_path, read_project_file, save_project_file, styled_code_editor_input,
+            EditorLanguageId, LoadedProjectFile, MarkdownDocumentConfig, ProjectEditorDocument,
+            ProjectEditorDocumentEvent, ProjectEditorModel, ProjectEditorRuntime,
+            ProjectEditorSaveState, ProjectFileIoError, ProjectFileLoadRequest, ReadonlyCodeRow,
+            ReadonlyCodeView, SaveMode, SaveProjectFileOutcome, SaveRequest, WorkItemId,
+            code_editor_input_state, project_relative_path, read_project_file, save_project_file,
+            styled_code_editor_input,
         },
         i18n::{Locale, UiText, UiTextKey},
         interaction::actions::{
@@ -807,6 +808,17 @@ impl WorkbenchView {
 
     pub fn theme_runtime(&self) -> &ThemeRuntime {
         &self.theme_runtime
+    }
+
+    fn markdown_document_config(&self) -> MarkdownDocumentConfig {
+        MarkdownDocumentConfig::new(
+            Arc::new(self.theme_runtime.to_markdown_editor_theme(
+                self.app_settings.editor.font_size,
+                self.app_settings.editor.line_height,
+            )),
+            markdown_editor_strings_for_language(self.app_settings.general.language),
+            self.ui_text,
+        )
     }
 
     pub fn visible_tab_rename_dialog_title(&self) -> Option<String> {
