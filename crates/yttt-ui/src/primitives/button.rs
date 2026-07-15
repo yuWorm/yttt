@@ -1,5 +1,8 @@
 use gpui::{App, ElementId, Pixels, Rgba, SharedString, prelude::*, px};
-use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
+use gpui_component::{
+    Sizable as _,
+    button::{Button, ButtonCustomVariant, ButtonVariants},
+};
 
 use crate::theme::WorkbenchTheme;
 
@@ -13,9 +16,7 @@ pub enum YtttButtonVariant {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct YtttButtonStyle {
-    pub height: Pixels,
     pub radius: Pixels,
-    pub padding_x: Pixels,
     pub background: Rgba,
     pub hover_background: Rgba,
     pub border: Rgba,
@@ -54,9 +55,7 @@ pub fn yttt_button_style(variant: YtttButtonVariant, theme: WorkbenchTheme) -> Y
     };
 
     YtttButtonStyle {
-        height: px(28.0),
         radius: px(6.0),
-        padding_x: px(12.0),
         background,
         hover_background,
         border,
@@ -88,8 +87,8 @@ pub fn yttt_button(
     let style = yttt_button_style(variant, theme);
     Button::new(id)
         .label(label)
-        .h(style.height)
-        .px(style.padding_x)
+        .xsmall()
+        .compact()
         .rounded(style.radius)
         .outline()
         .border_color(style.border)

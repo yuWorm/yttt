@@ -662,7 +662,7 @@ impl WorkbenchView {
                                         .when(file_count > 0, |this| {
                                             this.child(
                                                 div()
-                                                    .h(px(18.0))
+                                                    .h(rems(1.125))
                                                     .border_l_1()
                                                     .border_color(theme.border),
                                             )
@@ -802,7 +802,7 @@ impl WorkbenchView {
                                                 .flex()
                                                 .items_center()
                                                 .justify_center()
-                                                .size(px(28.0))
+                                                .size(rems(1.75))
                                                 .rounded_md()
                                                 .cursor_pointer()
                                                 .text_color(theme.text_muted)
@@ -855,7 +855,7 @@ impl WorkbenchView {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .h(px(30.0))
+                        .h(rems(1.875))
                         .px_3()
                         .cursor_pointer()
                         .text_xs()
@@ -894,7 +894,7 @@ impl WorkbenchView {
                         .items_center()
                         .justify_between()
                         .gap_2()
-                        .h(px(38.0))
+                        .h(rems(2.375))
                         .px_3()
                         .cursor_pointer()
                         .when(selected, |this| this.bg(theme.active_surface))
@@ -916,13 +916,7 @@ impl WorkbenchView {
                                 .items_center()
                                 .gap_2()
                                 .min_w_0()
-                                .child(
-                                    div()
-                                        .w(px(16.0))
-                                        .text_xs()
-                                        .text_color(status_color)
-                                        .child(status),
-                                )
+                                .child(div().w_4().text_xs().text_color(status_color).child(status))
                                 .child(
                                     div()
                                         .truncate()
@@ -978,7 +972,7 @@ impl WorkbenchView {
                 div()
                     .flex()
                     .items_center()
-                    .h(px(42.0))
+                    .h(rems(2.625))
                     .px_4()
                     .border_b_1()
                     .border_color(theme.border)
@@ -1307,13 +1301,17 @@ fn git_diff_code_pane(
     };
     let file_path = file.path().to_string();
     let binary = file.binary;
-    let font_scale = (editor_appearance.font_size / EditorAppearance::default().font_size).max(0.5);
+    let default_editor_appearance = EditorAppearance::default();
+    let font_scale = (editor_appearance.font_size / default_editor_appearance.font_size).max(0.5);
+    let editor_density_scale = ((editor_appearance.font_size * editor_appearance.line_height)
+        / (default_editor_appearance.font_size * default_editor_appearance.line_height))
+        .max(0.5);
     let unified_content_width = (unified_content_width * font_scale).max(900.0);
     let split_content_width = (split_content_width * font_scale).max(700.0);
     let file_header = div()
         .flex()
         .items_center()
-        .h(px(42.0))
+        .h(px(42.0 * editor_density_scale))
         .px_5()
         .border_b_1()
         .border_color(theme.border)
@@ -1372,7 +1370,7 @@ fn git_diff_code_pane(
                         div()
                             .flex()
                             .flex_none()
-                            .h(px(34.0))
+                            .h(px(34.0 * editor_density_scale))
                             .border_b_1()
                             .border_color(theme.border)
                             .child(
@@ -1526,7 +1524,7 @@ where
         .flex()
         .items_center()
         .justify_center()
-        .h(px(30.0))
+        .h(rems(1.875))
         .px_3()
         .rounded_md()
         .cursor_pointer()
@@ -1549,7 +1547,7 @@ where
 }
 
 fn git_diff_separator(theme: WorkbenchTheme) -> Div {
-    div().w(px(1.0)).h(px(22.0)).mx_1().bg(theme.border)
+    div().w(px(1.0)).h(rems(1.375)).mx_1().bg(theme.border)
 }
 
 fn git_diff_footer(text: &UiText, theme: WorkbenchTheme) -> Div {
@@ -1557,7 +1555,7 @@ fn git_diff_footer(text: &UiText, theme: WorkbenchTheme) -> Div {
         .flex()
         .items_center()
         .gap_5()
-        .h(px(46.0))
+        .h(rems(2.875))
         .px_4()
         .border_t_1()
         .border_color(theme.border)

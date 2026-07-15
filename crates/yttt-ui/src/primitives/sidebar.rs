@@ -1,4 +1,4 @@
-use gpui::{Pixels, Rgba, px};
+use gpui::{Pixels, Rems, Rgba, px, rems};
 
 use crate::theme::WorkbenchTheme;
 
@@ -129,8 +129,8 @@ pub struct YtttSidebarStyle {
     pub collapsed_width: Pixels,
     pub border_width: Pixels,
     pub resize_hit_area_width: Pixels,
-    pub item_height: Pixels,
-    pub item_padding_x: Pixels,
+    pub item_height: Rems,
+    pub item_padding_x: Rems,
     pub background: Rgba,
     pub active_background: Rgba,
     pub hover_background: Rgba,
@@ -145,8 +145,8 @@ pub fn yttt_sidebar_style(theme: WorkbenchTheme) -> YtttSidebarStyle {
         collapsed_width: px(PROJECT_SIDEBAR_COLLAPSED_WIDTH),
         border_width: px(1.0),
         resize_hit_area_width: px(SIDEBAR_RESIZE_HIT_AREA_WIDTH),
-        item_height: px(28.0),
-        item_padding_x: px(8.0),
+        item_height: rems(1.75),
+        item_padding_x: rems(0.5),
         background: theme.sidebar_background,
         active_background: theme.active_surface,
         hover_background: theme.hover_surface,

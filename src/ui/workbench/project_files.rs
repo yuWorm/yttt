@@ -832,9 +832,10 @@ impl WorkbenchView {
             .to_string();
         let delete_label = self.ui_text.get(UiTextKey::ProjectFilesDelete).to_string();
         let cancel_label = self.ui_text.get(UiTextKey::Cancel).to_string();
+        let theme = self.theme_runtime.ui;
         let display_path = relative_path.display().to_string();
         let workbench = cx.weak_entity();
-        window.open_alert_dialog(cx, move |alert, _, _| {
+        window.open_alert_dialog(cx, move |alert, _, cx| {
             let workbench = workbench.clone();
             let project_id = project_id.clone();
             let relative_path = relative_path.clone();
@@ -853,29 +854,38 @@ impl WorkbenchView {
                 .footer(
                     DialogFooter::new()
                         .child(
-                            Button::new("project-entry-delete-cancel")
-                                .debug_selector(|| "project-entry-delete-cancel".to_string())
-                                .label(cancel_label.clone())
-                                .on_click(|_, window, cx| {
-                                    window.close_dialog(cx);
-                                }),
+                            yttt_button(
+                                "project-entry-delete-cancel",
+                                cancel_label.clone(),
+                                YtttButtonVariant::Secondary,
+                                theme,
+                                cx,
+                            )
+                            .debug_selector(|| "project-entry-delete-cancel".to_string())
+                            .on_click(|_, window, cx| {
+                                window.close_dialog(cx);
+                            }),
                         )
                         .child(
-                            Button::new("project-entry-delete-confirm")
-                                .debug_selector(|| "project-entry-delete-confirm".to_string())
-                                .danger()
-                                .label(delete_label.clone())
-                                .on_click(move |_, window, cx| {
-                                    let _ = workbench.update(cx, |root, root_cx| {
-                                        root.spawn_project_entry_delete(
-                                            project_id.clone(),
-                                            relative_path.clone(),
-                                            window,
-                                            root_cx,
-                                        );
-                                    });
-                                    window.close_dialog(cx);
-                                }),
+                            yttt_button(
+                                "project-entry-delete-confirm",
+                                delete_label.clone(),
+                                YtttButtonVariant::Danger,
+                                theme,
+                                cx,
+                            )
+                            .debug_selector(|| "project-entry-delete-confirm".to_string())
+                            .on_click(move |_, window, cx| {
+                                let _ = workbench.update(cx, |root, root_cx| {
+                                    root.spawn_project_entry_delete(
+                                        project_id.clone(),
+                                        relative_path.clone(),
+                                        window,
+                                        root_cx,
+                                    );
+                                });
+                                window.close_dialog(cx);
+                            }),
                         ),
                 )
         });

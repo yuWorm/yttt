@@ -1,4 +1,4 @@
-use gpui::{Pixels, Rgba, px};
+use gpui::{Pixels, Rems, Rgba, px, rems};
 
 use crate::{
     palette::PaletteKind,
@@ -16,8 +16,8 @@ pub struct PalettePanelStyle {
     pub max_width: Pixels,
     pub max_height: Pixels,
     pub list_max_height: Pixels,
-    pub row_height: Pixels,
-    pub footer_height: Pixels,
+    pub row_height: Rems,
+    pub footer_height: Rems,
     pub border_width: Pixels,
     pub scrollable: bool,
 }
@@ -32,8 +32,8 @@ pub enum PaletteRowTone {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PaletteRowStyle {
     pub tone: PaletteRowTone,
-    pub height: Pixels,
-    pub padding_x: Pixels,
+    pub height: Rems,
+    pub padding_x: Rems,
     pub radius: Pixels,
     pub border_width: Pixels,
     pub background: Rgba,
@@ -56,8 +56,8 @@ pub fn palette_panel_style() -> PalettePanelStyle {
         max_width: px(900.0),
         max_height: px(480.0),
         list_max_height: px(376.0),
-        row_height: px(54.0),
-        footer_height: px(44.0),
+        row_height: rems(3.375),
+        footer_height: rems(2.75),
         border_width: px(1.0),
         scrollable: true,
     }

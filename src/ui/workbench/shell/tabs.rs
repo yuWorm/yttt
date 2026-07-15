@@ -1,7 +1,7 @@
 use gpui::{
     App, ClickEvent, Context, Div, InteractiveElement as _, IntoElement, MouseButton,
-    MouseDownEvent, Pixels, Render, Rgba, SharedString, Stateful, StatefulInteractiveElement as _,
-    Window, div, prelude::*, px, rgba,
+    MouseDownEvent, Pixels, Rems, Render, Rgba, SharedString, Stateful,
+    StatefulInteractiveElement as _, Window, div, prelude::*, px, rgba,
 };
 use gpui_component::{
     Icon, IconName,
@@ -128,10 +128,10 @@ pub struct WorkbenchTabItem {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProjectTabsStyle {
-    pub height: Pixels,
-    pub item_height: Pixels,
+    pub height: Rems,
+    pub item_height: Rems,
     pub border_width: Pixels,
-    pub close_slot_size: Pixels,
+    pub close_slot_size: Rems,
     pub active_background: Rgba,
     pub active_indicator: Rgba,
     pub active_indicator_height: Pixels,
@@ -627,7 +627,7 @@ fn file_tab_close_slot<CloseH>(
     group_name: String,
     dirty: bool,
     theme: WorkbenchTheme,
-    close_slot_size: Pixels,
+    close_slot_size: Rems,
     on_close_tab: CloseH,
 ) -> impl IntoElement
 where

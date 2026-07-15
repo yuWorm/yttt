@@ -251,7 +251,7 @@ impl WorkbenchView {
                         .flex()
                         .items_center()
                         .justify_between()
-                        .h(px(40.0))
+                        .h_10()
                         .flex_none()
                         .border_b_1()
                         .border_color(theme.border)

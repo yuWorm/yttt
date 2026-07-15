@@ -1,4 +1,4 @@
-use gpui::{Pixels, Rgba, px, rgba};
+use gpui::{Pixels, Rems, Rgba, px, rems, rgba};
 
 use crate::{SelectableState, theme::WorkbenchTheme};
 
@@ -12,9 +12,9 @@ pub enum YtttRowKind {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct YtttRowStyle {
-    pub height: Pixels,
-    pub padding_x: Pixels,
-    pub padding_y: Pixels,
+    pub height: Rems,
+    pub padding_x: Rems,
+    pub padding_y: Rems,
     pub radius: Pixels,
     pub border_width: Pixels,
     pub background: Rgba,
@@ -32,10 +32,10 @@ pub fn yttt_row_style(
     theme: WorkbenchTheme,
 ) -> YtttRowStyle {
     let (height, padding_x, padding_y, radius, border_width) = match kind {
-        YtttRowKind::Palette => (px(54.0), px(12.0), px(0.0), px(6.0), px(1.0)),
-        YtttRowKind::Settings => (px(72.0), px(0.0), px(12.0), px(0.0), px(1.0)),
-        YtttRowKind::Sidebar => (px(28.0), px(8.0), px(0.0), px(6.0), px(0.0)),
-        YtttRowKind::Tab => (px(32.0), px(8.0), px(0.0), px(0.0), px(1.0)),
+        YtttRowKind::Palette => (rems(3.375), rems(0.75), rems(0.0), px(6.0), px(1.0)),
+        YtttRowKind::Settings => (rems(4.5), rems(0.0), rems(0.75), px(0.0), px(1.0)),
+        YtttRowKind::Sidebar => (rems(1.75), rems(0.5), rems(0.0), px(6.0), px(0.0)),
+        YtttRowKind::Tab => (rems(2.0), rems(0.5), rems(0.0), px(0.0), px(1.0)),
     };
     let transparent = rgba(0x00000000);
 

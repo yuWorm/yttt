@@ -1,4 +1,4 @@
-use gpui::{Pixels, Rgba, px};
+use gpui::{Pixels, Rems, Rgba, px, rems};
 
 use crate::theme::WorkbenchTheme;
 
@@ -11,7 +11,7 @@ pub enum YtttInputKind {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct YtttInputStyle {
-    pub height: Pixels,
+    pub height: Rems,
     pub radius: Pixels,
     pub background: Rgba,
     pub border: Rgba,
@@ -23,9 +23,9 @@ pub struct YtttInputStyle {
 pub fn yttt_input_style(kind: YtttInputKind, theme: WorkbenchTheme) -> YtttInputStyle {
     YtttInputStyle {
         height: match kind {
-            YtttInputKind::Dialog => px(34.0),
-            YtttInputKind::Palette => px(42.0),
-            YtttInputKind::Settings => px(32.0),
+            YtttInputKind::Dialog => rems(2.125),
+            YtttInputKind::Palette => rems(2.625),
+            YtttInputKind::Settings => rems(2.0),
         },
         radius: match kind {
             YtttInputKind::Settings => px(6.0),
