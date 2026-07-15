@@ -34,8 +34,13 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::OnboardingZedDetectionWarnings => "Some Zed extensions could not be inspected.",
         UiTextKey::OnboardingZedSkip => "Skip import",
         UiTextKey::OnboardingZedImport => "Import and finish",
-        UiTextKey::EmptySubtitle => "Open a directory or choose a recent project.",
+        UiTextKey::EmptySubtitle => {
+            "Create a project, open a directory, or choose a recent project."
+        }
         UiTextKey::EmptySidebarNote => "Sidebar shows opened projects only.",
+        UiTextKey::CreateProject => "Create Project",
+        UiTextKey::CreateProjectDirectoryError => "Failed to create project directory",
+        UiTextKey::CreateProjectPickerError => "Failed to choose a project location",
         UiTextKey::OpenDirectory => "Open Directory",
         UiTextKey::OpenRecent => "Open Recent",
         UiTextKey::CommandPalette => "Command Palette",
@@ -119,6 +124,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandDisabledOpenWorkItemFirst => "Open a terminal or file first",
         UiTextKey::CommandDisabledSwitchTerminalFirst => "Switch to a terminal tab first",
         UiTextKey::CommandUnavailable => "Command is unavailable",
+        UiTextKey::CommandProjectCreateTitle => "Create Project",
+        UiTextKey::CommandProjectCreateDescription => "Create and open a new project directory",
         UiTextKey::CommandProjectOpenTitle => "Open Project",
         UiTextKey::CommandProjectOpenDescription => "Choose a project directory",
         UiTextKey::CommandProjectOpenRecentTitle => "Open Recent Project",

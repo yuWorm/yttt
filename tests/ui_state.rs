@@ -59,7 +59,7 @@ use yttt::{
         },
     },
     ui::{
-        interaction::actions::TabCloseAllTerminals,
+        interaction::actions::{CreateProject, TabCloseAllTerminals},
         interaction::input_owner::{
             InputOwnerKind, InputOwnerRegistration, InputOwnerStack, InputOwnerToken, InputScopeId,
             TerminalInputGate, TerminalInputPolicy,
@@ -232,7 +232,12 @@ fn root_view_empty_workspace_exposes_visible_actions() {
 
     assert_eq!(
         root.visible_empty_workspace_actions(),
-        vec!["Open Directory", "Open Recent", "Command Palette"]
+        vec![
+            "Create Project",
+            "Open Directory",
+            "Open Recent",
+            "Command Palette",
+        ]
     );
 }
 
@@ -353,6 +358,47 @@ fn root_view_sidebar_release_persists_defaults_without_rewriting_other_sessions(
     let loaded = yttt::config::settings::load_or_create_settings(&paths).unwrap();
     assert_eq!(loaded.settings.project_panel.width, 330.0);
     assert_eq!(loaded.settings.project_panel.project_sidebar_width, 250.0);
+}
+
+#[gpui::test]
+fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::dev_fixture());
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    cx.run_until_parked();
+
+    let command_button = cx
+        .debug_bounds("titlebar-command-palette")
+        .expect("titlebar should expose a command picker button");
+    assert!(cx.debug_bounds("titlebar-settings").is_some());
+    cx.simulate_click(command_button.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).active_palette().map(|palette| palette.kind),
+            Some(PaletteKind::Command)
+        );
+    });
+
+    root.update(cx, |root, cx| {
+        root.close_palette();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let settings_button = cx
+        .debug_bounds("titlebar-settings")
+        .expect("titlebar should expose a settings button");
+    cx.simulate_click(settings_button.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert!(root.read(app).settings_is_open());
+    });
 }
 
 #[gpui::test]
@@ -3585,13 +3631,13 @@ fn root_view_language_setting_persists_and_updates_visible_text() {
 
     assert_eq!(
         root.visible_empty_workspace_actions(),
-        vec!["打开目录", "打开最近项目", "命令面板"]
+        vec!["创建项目", "打开目录", "打开最近项目", "命令面板"]
     );
 
     let reloaded = WorkbenchView::with_config_paths(paths);
     assert_eq!(
         reloaded.visible_empty_workspace_actions(),
-        vec!["打开目录", "打开最近项目", "命令面板"]
+        vec!["创建项目", "打开目录", "打开最近项目", "命令面板"]
     );
 }
 
@@ -3690,6 +3736,19 @@ fn root_view_command_palette_items_show_current_platform_keybindings() {
         assert_eq!(command_palette.keybinding.as_deref(), Some("ctrl-p"));
         assert_eq!(tab_new.keybinding.as_deref(), Some("ctrl-t"));
     }
+}
+
+#[test]
+fn root_view_command_palette_can_request_create_project() {
+    let (_temp, mut root) = english_test_root();
+
+    root.open_palette(PaletteKind::Command);
+    root.set_palette_query("Create Project");
+    root.confirm_palette_selection().unwrap();
+
+    assert!(root.active_palette().is_none());
+    assert!(root.take_pending_create_project_request());
+    assert_eq!(root.visible_error_message(), None);
 }
 
 #[test]
@@ -4713,6 +4772,49 @@ fn root_view_keeps_platform_shortcuts_available_when_terminal_is_focused() {
             .len(),
         initial_tab_count + 1
     );
+}
+
+#[gpui::test]
+fn create_project_action_creates_and_opens_new_directory(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("new-project");
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut settings = AppSettings::default();
+    settings.general.onboarding_completed = true;
+    save_settings(&paths, &settings).unwrap();
+
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths(paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    cx.refresh().unwrap();
+
+    root.update_in(cx, |_root, window, cx| {
+        window.dispatch_action(Box::new(CreateProject), cx);
+    });
+    cx.run_until_parked();
+    assert!(cx.did_prompt_for_new_path());
+
+    let selected_path = project_dir.clone();
+    cx.simulate_new_path_selection(move |parent| {
+        assert!(parent.is_dir());
+        Some(selected_path)
+    });
+    cx.run_until_parked();
+
+    assert!(project_dir.is_dir());
+    let canonical_project_dir = project_dir.canonicalize().unwrap();
+    root.update(cx, |root, _| {
+        let project_id = root.workspace().selected_project_id().unwrap();
+        let project = root.workspace().project(project_id).unwrap();
+        assert_eq!(project.path, canonical_project_dir);
+        assert_eq!(root.visible_error_message(), None);
+    });
 }
 
 #[gpui::test]

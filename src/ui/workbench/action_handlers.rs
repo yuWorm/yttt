@@ -48,6 +48,17 @@ impl WorkbenchView {
         self.dispatch_command_action(CommandId::ProjectPanelRefresh, cx);
     }
 
+    pub(super) fn on_create_project(
+        &mut self,
+        _: &CreateProject,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_create_project();
+        self.handle_pending_create_project_request(cx);
+        cx.notify();
+    }
+
     pub(super) fn on_open_project(
         &mut self,
         _: &OpenProject,
@@ -57,6 +68,62 @@ impl WorkbenchView {
         self.request_open_project();
         self.handle_pending_open_project_request(cx);
         cx.notify();
+    }
+
+    pub(super) fn prompt_for_new_project_directory(&mut self, cx: &mut Context<Self>) {
+        let parent_directory = self
+            .workspace
+            .selected_project_id()
+            .and_then(|project_id| self.workspace.project(project_id))
+            .and_then(|project| project.path.parent())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(default_new_project_parent_directory);
+        let picked_path = cx.prompt_for_new_path(&parent_directory, None);
+
+        cx.spawn(async move |this, cx| match picked_path.await {
+            Ok(Ok(Some(project_path))) => {
+                let path_to_create = project_path.clone();
+                let create_task = cx
+                    .background_executor()
+                    .spawn(async move { std::fs::create_dir(path_to_create) });
+                let result = create_task.await;
+                let _ = this.update(cx, |this, cx| {
+                    match result {
+                        Ok(()) => {
+                            let _ = this.open_project_path(project_path);
+                        }
+                        Err(error) => {
+                            this.load_error = Some(format!(
+                                "{} '{}': {error}",
+                                this.ui_text.get(UiTextKey::CreateProjectDirectoryError),
+                                project_path.display(),
+                            ));
+                        }
+                    }
+                    cx.notify();
+                });
+            }
+            Ok(Ok(None)) => {}
+            Ok(Err(error)) => {
+                let _ = this.update(cx, |this, cx| {
+                    this.load_error = Some(format!(
+                        "{}: {error}",
+                        this.ui_text.get(UiTextKey::CreateProjectPickerError),
+                    ));
+                    cx.notify();
+                });
+            }
+            Err(error) => {
+                let _ = this.update(cx, |this, cx| {
+                    this.load_error = Some(format!(
+                        "{}: {error}",
+                        this.ui_text.get(UiTextKey::CreateProjectPickerError),
+                    ));
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     pub(super) fn prompt_for_project_directory(&mut self, cx: &mut Context<Self>) {
@@ -159,6 +226,7 @@ impl WorkbenchView {
 
         if self.palette.active_palette.is_some() {
             let _ = self.confirm_palette_selection();
+            self.handle_pending_create_project_request(cx);
             self.handle_pending_open_project_request(cx);
             self.flush_pending_status_notifications(window, cx);
             cx.notify();
@@ -681,4 +749,14 @@ impl WorkbenchView {
             cx.propagate();
         }
     }
+}
+
+fn default_new_project_parent_directory() -> PathBuf {
+    ["HOME", "USERPROFILE"]
+        .into_iter()
+        .find_map(std::env::var_os)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
 }

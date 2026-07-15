@@ -203,6 +203,17 @@ fn notification_settings_command_is_available_without_project() {
 }
 
 #[test]
+fn create_project_command_is_registered_and_available_without_project() {
+    let registry = default_registry();
+    let command = CommandId::ProjectCreate;
+
+    assert!(registry.contains(command));
+    assert_eq!(command.as_str(), "project.create");
+    assert!(command.availability(false).enabled);
+    assert_eq!(command.presentation().title, "Create Project");
+}
+
+#[test]
 fn settings_open_command_is_available_without_project() {
     let availability = CommandId::SettingsOpen.availability(false);
 

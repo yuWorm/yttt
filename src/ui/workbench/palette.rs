@@ -337,6 +337,7 @@ impl WorkbenchView {
             }
             InputEvent::PressEnter { .. } => {
                 let _ = self.confirm_palette_selection();
+                self.handle_pending_create_project_request(cx);
                 self.handle_pending_open_project_request(cx);
                 self.flush_pending_status_notifications(window, cx);
                 cx.notify();

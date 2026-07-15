@@ -17,6 +17,7 @@ actions!(
     yttt,
     [
         OpenCommandPalette,
+        CreateProject,
         OpenProject,
         ProjectClose,
         OpenProjectPalette,
@@ -326,6 +327,7 @@ pub fn runtime_command_for_keystroke(
 
 pub fn ui_action_for_command(command: CommandId) -> Option<Box<dyn Action>> {
     let action: Box<dyn Action> = match command {
+        CommandId::ProjectCreate => Box::new(CreateProject),
         CommandId::ProjectOpen => Box::new(OpenProject),
         CommandId::ProjectOpenRecent => return None,
         CommandId::ProjectClose => Box::new(ProjectClose),

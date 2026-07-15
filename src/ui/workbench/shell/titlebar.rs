@@ -1,7 +1,10 @@
 use gpui::{App, ClickEvent, IntoElement, Window, div, prelude::*, rgb};
-use gpui_component::{StyledExt, TitleBar};
+use gpui_component::{IconName, StyledExt, TitleBar, tooltip::Tooltip};
 
-use crate::ui::theme::WorkbenchTheme;
+use crate::ui::{
+    components::workbench_icon_button, primitives::icon_button::YtttIconButtonKind,
+    theme::WorkbenchTheme,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TitlebarInfo {
@@ -43,15 +46,21 @@ pub fn compact_path_for_titlebar(path: &str) -> String {
     }
 }
 
-pub fn workbench_titlebar<BranchH, DiffH>(
+pub fn workbench_titlebar<BranchH, DiffH, CommandH, SettingsH>(
     info: TitlebarInfo,
     theme: WorkbenchTheme,
+    command_tooltip: &'static str,
+    settings_tooltip: &'static str,
     on_branch_click: BranchH,
     on_diff_click: DiffH,
+    on_command_click: CommandH,
+    on_settings_click: SettingsH,
 ) -> impl IntoElement
 where
     BranchH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     DiffH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    CommandH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    SettingsH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
     TitleBar::new()
         .bg(theme.titlebar_background)
@@ -120,7 +129,40 @@ where
                                 .on_click(on_diff_click)
                                 .child(counters),
                         )
-                })),
+                }))
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .h_full()
+                        .child(
+                            workbench_icon_button(
+                                "titlebar-command-palette",
+                                IconName::Search,
+                                YtttIconButtonKind::Toolbar,
+                                theme,
+                                on_command_click,
+                            )
+                            .debug_selector(|| "titlebar-command-palette".to_string())
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(command_tooltip).build(window, cx)
+                            }),
+                        )
+                        .child(
+                            workbench_icon_button(
+                                "titlebar-settings",
+                                IconName::Settings,
+                                YtttIconButtonKind::Toolbar,
+                                theme,
+                                on_settings_click,
+                            )
+                            .debug_selector(|| "titlebar-settings".to_string())
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(settings_tooltip).build(window, cx)
+                            }),
+                        ),
+                ),
         )
 }
 
