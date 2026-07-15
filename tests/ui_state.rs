@@ -4456,6 +4456,34 @@ fn focused_terminal_platform_open_shortcut_prompts_immediately(cx: &mut gpui::Te
     cx.run_until_parked();
 }
 
+#[gpui::test]
+fn focused_editor_global_settings_shortcut_opens_settings(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (_temp, _project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
+
+    document.update_in(cx, |document, window, document_cx| {
+        document.focus(window, document_cx);
+    });
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).foreground_input_owner_kind(),
+            InputOwnerKind::Editor
+        );
+        assert!(!root.read(app).settings_is_open());
+    });
+
+    cx.simulate_keystrokes("cmd-,");
+    cx.run_until_parked();
+
+    cx.read(|app| {
+        assert!(
+            root.read(app).settings_is_open(),
+            "the editor must not swallow global shortcuts"
+        );
+    });
+}
+
 #[test]
 fn root_view_pane_focus_command_queues_target_terminal_focus() {
     let mut root = WorkbenchView::dev_fixture();
@@ -5135,6 +5163,7 @@ autosave_delay_ms = {delay_ms}
             root
         });
         *root_slot_for_window.borrow_mut() = Some(root.clone());
+        register_workbench_keybinding_interceptor(cx, &root);
         register_workbench_close_guard(window, cx, &root);
         gpui_component::Root::new(root, window, cx)
     });
