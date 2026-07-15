@@ -5,11 +5,18 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::AppName => "yttt",
         UiTextKey::OnboardingTitle => "欢迎使用 yttt",
         UiTextKey::OnboardingSubtitle => {
-            "选择语言、默认布局和编程 Agent，然后可选择从 Zed 导入主题。"
+            "选择语言、终端字体、默认布局和编程 Agent，然后可选择从 Zed 导入主题。"
         }
         UiTextKey::OnboardingLanguageHeading => "选择语言",
         UiTextKey::OnboardingLanguageSubtitle => {
             "已保存自动识别的默认语言，你可以在此修改，也可以稍后在设置中修改。"
+        }
+        UiTextKey::OnboardingFontHeading => "选择终端字体",
+        UiTextKey::OnboardingFontSubtitle => {
+            "为所有终端选择一个已安装的字体，之后也可以在设置中修改。"
+        }
+        UiTextKey::OnboardingFontRecommendation => {
+            "建议使用等宽 Nerd Font。它包含终端常用的图标和符号，可避免许多系统默认字体出现方框或乱码。"
         }
         UiTextKey::OnboardingAgentHeading => "选择编程 Agent",
         UiTextKey::OnboardingAgentSubtitle => "所选 Agent 将用于刚才选择的默认布局。",

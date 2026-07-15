@@ -5,11 +5,18 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::AppName => "yttt",
         UiTextKey::OnboardingTitle => "Welcome to yttt",
         UiTextKey::OnboardingSubtitle => {
-            "Choose a language, default layout, and coding agent, then optionally import themes from Zed."
+            "Choose a language, terminal font, default layout, and coding agent, then optionally import themes from Zed."
         }
         UiTextKey::OnboardingLanguageHeading => "Choose your language",
         UiTextKey::OnboardingLanguageSubtitle => {
             "The detected default is saved now. You can change it here or later in Settings."
+        }
+        UiTextKey::OnboardingFontHeading => "Choose a terminal font",
+        UiTextKey::OnboardingFontSubtitle => {
+            "Select an installed font for every terminal. You can change it later in Settings."
+        }
+        UiTextKey::OnboardingFontRecommendation => {
+            "Recommended: use a monospaced Nerd Font. It includes terminal icons and symbols that many system default fonts lack, preventing boxes or garbled glyphs."
         }
         UiTextKey::OnboardingAgentHeading => "Choose a coding agent",
         UiTextKey::OnboardingAgentSubtitle => "This agent will be used in the layout you selected.",

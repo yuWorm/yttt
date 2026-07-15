@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=yttt
+Comment=Project-first terminal workbench
+TryExec=yttt
+Exec=yttt %F
+Icon=com.yttt.app
+Terminal=false
+Categories=Development;TerminalEmulator;
+Keywords=terminal;development;shell;project;
+MimeType=inode/directory;
+StartupWMClass=com.yttt.app

@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppConfigPaths {
@@ -62,32 +65,109 @@ impl AppConfigPaths {
     }
 }
 
-fn fallback_config_dir() -> PathBuf {
-    fallback_config_dir_from_parts(
-        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
-        std::env::var_os("HOME").map(PathBuf::from),
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-    )
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConfigPlatform {
+    MacOs,
+    Windows,
+    Linux,
+}
+
+impl ConfigPlatform {
+    fn current() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else if cfg!(target_os = "windows") {
+            Self::Windows
+        } else {
+            Self::Linux
+        }
+    }
 }
 
 fn default_config_dir() -> PathBuf {
-    fallback_config_dir()
+    let xdg_config_home = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let user_profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let native = native_config_dir_from_parts(
+        ConfigPlatform::current(),
+        xdg_config_home.clone(),
+        home.clone(),
+        user_profile.clone(),
+        std::env::var_os("APPDATA").map(PathBuf::from),
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+        current_dir.clone(),
+    );
+    let legacy = legacy_config_dir_from_parts(xdg_config_home, home.or(user_profile), current_dir);
+
+    migrate_legacy_config_dir(native, legacy)
 }
 
-fn fallback_config_dir_from_parts(
+fn native_config_dir_from_parts(
+    platform: ConfigPlatform,
+    xdg_config_home: Option<PathBuf>,
+    home: Option<PathBuf>,
+    user_profile: Option<PathBuf>,
+    app_data: Option<PathBuf>,
+    local_app_data: Option<PathBuf>,
+    current_dir: PathBuf,
+) -> PathBuf {
+    if let Some(config_home) = non_empty_path(xdg_config_home) {
+        return config_home.join("yttt");
+    }
+
+    match platform {
+        ConfigPlatform::MacOs => non_empty_path(home)
+            .map(|home| {
+                home.join("Library")
+                    .join("Application Support")
+                    .join("yttt")
+            })
+            .unwrap_or_else(|| current_dir.join(".yttt")),
+        ConfigPlatform::Windows => non_empty_path(app_data)
+            .or_else(|| non_empty_path(local_app_data))
+            .or_else(|| {
+                non_empty_path(user_profile).map(|home| home.join("AppData").join("Roaming"))
+            })
+            .or_else(|| non_empty_path(home).map(|home| home.join("AppData").join("Roaming")))
+            .map(|config_home| config_home.join("yttt"))
+            .unwrap_or_else(|| current_dir.join(".yttt")),
+        ConfigPlatform::Linux => non_empty_path(home)
+            .map(|home| home.join(".config").join("yttt"))
+            .unwrap_or_else(|| current_dir.join(".yttt")),
+    }
+}
+
+fn legacy_config_dir_from_parts(
     xdg_config_home: Option<PathBuf>,
     home: Option<PathBuf>,
     current_dir: PathBuf,
 ) -> PathBuf {
-    if let Some(config_home) = xdg_config_home.filter(|path| !path.as_os_str().is_empty()) {
+    if let Some(config_home) = non_empty_path(xdg_config_home) {
         return config_home.join("yttt");
     }
+    non_empty_path(home)
+        .map(|home| home.join(".config").join("yttt"))
+        .unwrap_or_else(|| current_dir.join(".yttt"))
+}
 
-    if let Some(home) = home.filter(|path| !path.as_os_str().is_empty()) {
-        return home.join(".config").join("yttt");
+fn non_empty_path(path: Option<PathBuf>) -> Option<PathBuf> {
+    path.filter(|path| !path.as_os_str().is_empty())
+}
+
+fn migrate_legacy_config_dir(native: PathBuf, legacy: PathBuf) -> PathBuf {
+    if native == legacy || native.exists() || !legacy.exists() {
+        return native;
     }
 
-    current_dir.join(".yttt")
+    let Some(parent) = native.parent() else {
+        return legacy;
+    };
+    if fs::create_dir_all(parent).is_ok() && fs::rename(&legacy, &native).is_ok() {
+        native
+    } else {
+        legacy
+    }
 }
 
 fn encode_path(path: &Path) -> String {
@@ -110,10 +190,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fallback_config_dir_prefers_xdg_config_home() {
-        let dir = fallback_config_dir_from_parts(
+    fn xdg_config_home_overrides_platform_defaults() {
+        let dir = native_config_dir_from_parts(
+            ConfigPlatform::Windows,
             Some(PathBuf::from("/tmp/xdg")),
-            Some(PathBuf::from("/Users/example")),
+            Some(PathBuf::from("/home/example")),
+            Some(PathBuf::from("C:/Users/example")),
+            Some(PathBuf::from("C:/Users/example/AppData/Roaming")),
+            None,
             PathBuf::from("/repo"),
         );
 
@@ -121,20 +205,88 @@ mod tests {
     }
 
     #[test]
-    fn fallback_config_dir_uses_home_config_when_xdg_is_missing() {
-        let dir = fallback_config_dir_from_parts(
+    fn macos_uses_application_support() {
+        let dir = native_config_dir_from_parts(
+            ConfigPlatform::MacOs,
             None,
             Some(PathBuf::from("/Users/example")),
+            None,
+            None,
+            None,
             PathBuf::from("/repo"),
         );
 
-        assert_eq!(dir, PathBuf::from("/Users/example/.config/yttt"));
+        assert_eq!(
+            dir,
+            PathBuf::from("/Users/example/Library/Application Support/yttt")
+        );
     }
 
     #[test]
-    fn fallback_config_dir_uses_local_directory_only_without_home() {
-        let dir = fallback_config_dir_from_parts(None, None, PathBuf::from("/repo"));
+    fn windows_prefers_roaming_app_data() {
+        let dir = native_config_dir_from_parts(
+            ConfigPlatform::Windows,
+            None,
+            None,
+            Some(PathBuf::from("C:/Users/example")),
+            Some(PathBuf::from("C:/Users/example/AppData/Roaming")),
+            Some(PathBuf::from("C:/Users/example/AppData/Local")),
+            PathBuf::from("C:/repo"),
+        );
+
+        assert_eq!(dir, PathBuf::from("C:/Users/example/AppData/Roaming/yttt"));
+    }
+
+    #[test]
+    fn linux_uses_home_config_without_xdg() {
+        let dir = native_config_dir_from_parts(
+            ConfigPlatform::Linux,
+            None,
+            Some(PathBuf::from("/home/example")),
+            None,
+            None,
+            None,
+            PathBuf::from("/repo"),
+        );
+
+        assert_eq!(dir, PathBuf::from("/home/example/.config/yttt"));
+    }
+
+    #[test]
+    fn native_config_dir_falls_back_to_current_directory() {
+        let dir = native_config_dir_from_parts(
+            ConfigPlatform::Linux,
+            None,
+            None,
+            None,
+            None,
+            None,
+            PathBuf::from("/repo"),
+        );
 
         assert_eq!(dir, PathBuf::from("/repo/.yttt"));
+    }
+
+    #[test]
+    fn existing_legacy_config_is_moved_to_native_location() {
+        let temp = tempfile::tempdir().unwrap();
+        let legacy = temp.path().join(".config").join("yttt");
+        let native = temp
+            .path()
+            .join("Library")
+            .join("Application Support")
+            .join("yttt");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("settings.toml"), "version = 1").unwrap();
+
+        assert_eq!(
+            migrate_legacy_config_dir(native.clone(), legacy.clone()),
+            native
+        );
+        assert!(!legacy.exists());
+        assert_eq!(
+            fs::read_to_string(native.join("settings.toml")).unwrap(),
+            "version = 1"
+        );
     }
 }
