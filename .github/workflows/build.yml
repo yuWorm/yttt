@@ -70,3 +70,12 @@ jobs:
       - name: Build workspace
         run: cargo build --workspace --locked --target "${{ matrix.target }}"
 
+      - name: Test Windows config file synchronization
+        if: runner.os == 'Windows'
+        run: cargo test --locked --target "${{ matrix.target }}" -p yttt --lib std_layout_file_system_syncs_with_a_writable_handle
+
+      - name: Verify Windows executable resources
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: scripts/verify-windows-binary.ps1 -Binary "target/${{ matrix.target }}/debug/yttt.exe"
+

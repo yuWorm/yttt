@@ -14,6 +14,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $manifest = Join-Path $repoRoot "Cargo.toml"
 $installerScript = Join-Path $repoRoot "packaging/windows/yttt.iss"
 $setupIcon = Join-Path $repoRoot "assets/app-icon/windows/AppIcon.ico"
+$binaryVerifier = Join-Path $repoRoot "scripts/verify-windows-binary.ps1"
 
 function Resolve-RepoPath([string]$Path) {
     if ([System.IO.Path]::IsPathRooted($Path)) {
@@ -44,6 +45,8 @@ if (-not (Test-Path -LiteralPath $binaryPath -PathType Leaf)) {
 if (-not (Test-Path -LiteralPath $setupIcon -PathType Leaf)) {
     throw "Missing installer icon: $setupIcon"
 }
+
+& $binaryVerifier -Binary $binaryPath
 
 $metadataJson = & cargo metadata --format-version 1 --no-deps --locked --manifest-path $manifest
 if ($LASTEXITCODE -ne 0) {
