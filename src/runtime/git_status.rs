@@ -80,6 +80,10 @@ pub struct GitFileDiff {
     pub binary: bool,
     pub added: usize,
     pub removed: usize,
+    hunk_line_starts: Vec<usize>,
+    line_count: usize,
+    max_line_chars: usize,
+    content_bytes: usize,
 }
 
 impl GitFileDiff {
@@ -99,20 +103,51 @@ impl GitFileDiff {
             GitFileChangeKind::Modified
         }
     }
+
+    pub fn lines(&self) -> impl Iterator<Item = &GitDiffLine> {
+        self.hunks.iter().flat_map(|hunk| hunk.lines.iter())
+    }
+
+    pub fn line_count(&self) -> usize {
+        self.line_count
+    }
+
+    pub fn line(&self, index: usize) -> Option<&GitDiffLine> {
+        if index >= self.line_count {
+            return None;
+        }
+        let hunk_index = self
+            .hunk_line_starts
+            .partition_point(|start| *start <= index)
+            .checked_sub(1)?;
+        self.hunks[hunk_index]
+            .lines
+            .get(index - self.hunk_line_starts[hunk_index])
+    }
+
+    pub fn max_line_chars(&self) -> usize {
+        self.max_line_chars
+    }
+
+    pub fn content_bytes(&self) -> usize {
+        self.content_bytes
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GitDiffResult {
     pub files: Vec<GitFileDiff>,
+    total_added: usize,
+    total_removed: usize,
 }
 
 impl GitDiffResult {
     pub fn total_added(&self) -> usize {
-        self.files.iter().map(|file| file.added).sum()
+        self.total_added
     }
 
     pub fn total_removed(&self) -> usize {
-        self.files.iter().map(|file| file.removed).sum()
+        self.total_removed
     }
 }
 
@@ -424,6 +459,10 @@ pub fn parse_unified_git_diff(output: &str) -> GitDiffResult {
                 binary: false,
                 added: 0,
                 removed: 0,
+                hunk_line_starts: Vec::new(),
+                line_count: 0,
+                max_line_chars: 0,
+                content_bytes: 0,
             });
             continue;
         }
@@ -531,6 +570,19 @@ fn finish_git_diff_file(
         if let Some(last_hunk) = hunk.take() {
             completed.hunks.push(last_hunk);
         }
+        completed.hunk_line_starts = Vec::with_capacity(completed.hunks.len());
+        for hunk in &completed.hunks {
+            completed.hunk_line_starts.push(completed.line_count);
+            completed.line_count = completed.line_count.saturating_add(hunk.lines.len());
+            for line in &hunk.lines {
+                completed.max_line_chars =
+                    completed.max_line_chars.max(line.content.chars().count());
+                completed.content_bytes =
+                    completed.content_bytes.saturating_add(line.content.len());
+            }
+        }
+        result.total_added = result.total_added.saturating_add(completed.added);
+        result.total_removed = result.total_removed.saturating_add(completed.removed);
         result.files.push(completed);
     }
 }

@@ -77,11 +77,15 @@ impl ReadonlyCodeRow {
     }
 }
 
+type ReadonlyCodeRowSource = Arc<dyn Fn(usize) -> Option<ReadonlyCodeRow> + Send + Sync + 'static>;
+
 #[derive(IntoElement)]
 pub struct ReadonlyCodeView {
     id: SharedString,
     row_debug_prefix: SharedString,
     rows: Arc<Vec<ReadonlyCodeRow>>,
+    lazy_rows: Option<ReadonlyCodeRowSource>,
+    row_count: usize,
     number_columns: usize,
     content_width: f32,
     vertical_scroll: UniformListScrollHandle,
@@ -102,10 +106,40 @@ impl ReadonlyCodeView {
         border: Rgba,
     ) -> Self {
         let id = id.into();
+        let row_count = rows.len();
         Self {
             row_debug_prefix: id.clone(),
             id,
             rows,
+            lazy_rows: None,
+            row_count,
+            number_columns: 1,
+            content_width: 900.0,
+            vertical_scroll,
+            horizontal_scroll,
+            appearance,
+            theme,
+            border,
+        }
+    }
+
+    pub fn new_lazy(
+        id: impl Into<SharedString>,
+        row_count: usize,
+        row_source: impl Fn(usize) -> Option<ReadonlyCodeRow> + Send + Sync + 'static,
+        vertical_scroll: UniformListScrollHandle,
+        horizontal_scroll: ScrollHandle,
+        appearance: EditorAppearance,
+        theme: EditorTheme,
+        border: Rgba,
+    ) -> Self {
+        let id = id.into();
+        Self {
+            row_debug_prefix: id.clone(),
+            id,
+            rows: Arc::new(Vec::new()),
+            lazy_rows: Some(Arc::new(row_source)),
+            row_count,
             number_columns: 1,
             content_width: 900.0,
             vertical_scroll,
@@ -134,8 +168,9 @@ impl ReadonlyCodeView {
 
 impl RenderOnce for ReadonlyCodeView {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let row_count = self.rows.len();
+        let row_count = self.row_count;
         let rows = self.rows.clone();
+        let lazy_rows = self.lazy_rows.clone();
         let appearance = self.appearance.clone();
         let theme = self.theme;
         let border = self.border;
@@ -160,8 +195,8 @@ impl RenderOnce for ReadonlyCodeView {
                 uniform_list(self.id, row_count, move |range, _window, _cx| {
                     range
                         .filter_map(|index| {
-                            rows.get(index).map(|row| {
-                                render_readonly_code_row(
+                            if let Some(row) = rows.get(index) {
+                                return Some(render_readonly_code_row(
                                     index,
                                     row,
                                     number_columns,
@@ -169,8 +204,18 @@ impl RenderOnce for ReadonlyCodeView {
                                     &appearance,
                                     theme,
                                     border,
-                                )
-                            })
+                                ));
+                            }
+                            let row = lazy_rows.as_ref()?.as_ref()(index)?;
+                            Some(render_readonly_code_row(
+                                index,
+                                &row,
+                                number_columns,
+                                &row_debug_prefix,
+                                &appearance,
+                                theme,
+                                border,
+                            ))
                         })
                         .collect()
                 })

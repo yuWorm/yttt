@@ -484,6 +484,16 @@ fn git_diff_panel_renders_controls_and_handles_shortcuts(cx: &mut TestAppContext
 
     let first_folder = cx.debug_bounds("git-diff-folder-0").unwrap();
     cx.simulate_click(first_folder.center(), gpui::Modifiers::none());
+    cx.update(|_window, app| {
+        let panel = root.read(app).overlays.git_diff_panel.as_ref().unwrap();
+        assert!(panel.collapsed_folders.contains("src"));
+        assert!(
+            !panel
+                .sidebar_rows
+                .iter()
+                .any(|row| { matches!(row, GitDiffSidebarRow::File { file_index: 0, .. }) })
+        );
+    });
     assert!(cx.debug_bounds("git-diff-file-0").is_none());
     assert!(cx.debug_bounds("git-diff-file-1").is_some());
     let first_folder = cx.debug_bounds("git-diff-folder-0").unwrap();
@@ -586,6 +596,90 @@ fn git_diff_panel_renders_controls_and_handles_shortcuts(cx: &mut TestAppContext
     cx.update(|_window, app| {
         assert!(!root.read(app).git_diff_panel_is_open());
     });
+}
+
+#[gpui::test]
+fn git_diff_panel_virtualizes_many_files_and_large_file_rows(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    let bulk_path = project_path.join("bulk");
+    fs::create_dir_all(&bulk_path).unwrap();
+    git(&project_path, &["init"]);
+    git(&project_path, &["config", "user.email", "test@example.com"]);
+    git(&project_path, &["config", "user.name", "YTTT Test"]);
+    for index in 0..400 {
+        fs::write(
+            bulk_path.join(format!("file_{index:04}.rs")),
+            "fn original() {}\n",
+        )
+        .unwrap();
+    }
+    git(&project_path, &["add", "."]);
+    git(&project_path, &["commit", "-m", "initial"]);
+    for index in 0..400 {
+        fs::write(
+            bulk_path.join(format!("file_{index:04}.rs")),
+            "fn changed() {}\n",
+        )
+        .unwrap();
+    }
+    let large_file = (0..30_000)
+        .map(|line| format!("fn added_{line}() {{}}\n"))
+        .collect::<String>();
+    fs::write(project_path.join("large.rs"), large_file).unwrap();
+
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(project_path, dev_fixture_layout())
+        .unwrap();
+    let (root, cx) = cx.add_window_view(|_, _| {
+        WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
+    });
+    root.update_in(cx, |root, _window, cx| {
+        root.open_git_diff_panel().unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("git-diff-file-399").is_none());
+    root.update_in(cx, |root, _window, cx| {
+        let panel = root.overlays.git_diff_panel.as_ref().unwrap();
+        let GitDiffPanelContent::Ready(result) = &panel.content else {
+            panic!("Git diff must finish loading");
+        };
+        let large_index = result
+            .files
+            .iter()
+            .position(|file| file.path() == "large.rs")
+            .unwrap();
+        assert!(root.select_git_diff_file(large_index));
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let panel = root.read(app).overlays.git_diff_panel.as_ref().unwrap();
+        let GitDiffPanelContent::Ready(result) = &panel.content else {
+            panic!("Git diff must remain loaded");
+        };
+        let file = &result.files[panel.selected_file];
+        assert!(file.line_count() > 30_000);
+        assert!(panel.syntax_highlights.is_empty());
+        assert!(panel.unified_view_rows.is_empty());
+        assert!(panel.split_left_view_rows.is_empty());
+        assert!(panel.split_right_view_rows.is_empty());
+    });
+    assert!(cx.debug_bounds("git-diff-line-1").is_some());
+    assert!(cx.debug_bounds("git-diff-line-20000").is_none());
+    cx.simulate_keystrokes("s");
+    assert!(
+        cx.debug_bounds("git-diff-split-left-row-1").is_some()
+            && cx.debug_bounds("git-diff-split-right-row-1").is_some()
+    );
+    assert!(cx.debug_bounds("git-diff-split-left-row-20000").is_none());
+    assert!(cx.debug_bounds("git-diff-split-right-row-20000").is_none());
 }
 
 #[gpui::test]

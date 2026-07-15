@@ -134,8 +134,8 @@ use crate::{
     runtime::{
         git_status::{
             GitDiffLine, GitDiffLineKind, GitDiffMode, GitDiffResult, GitFileChangeKind,
-            read_project_git_branches, read_project_git_diff_result, read_project_git_status,
-            switch_project_git_branch,
+            GitFileDiff, read_project_git_branches, read_project_git_diff_result,
+            read_project_git_status, switch_project_git_branch,
         },
         notification::{
             NoopSystemNotifier, NotificationEvent, NotificationKind, maybe_notify_system,
