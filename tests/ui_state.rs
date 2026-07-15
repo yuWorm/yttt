@@ -232,12 +232,7 @@ fn root_view_empty_workspace_exposes_visible_actions() {
 
     assert_eq!(
         root.visible_empty_workspace_actions(),
-        vec![
-            "Create Project",
-            "Open Directory",
-            "Open Recent",
-            "Command Palette",
-        ]
+        vec!["Open Directory", "Open Recent", "Command Palette"]
     );
 }
 
@@ -441,6 +436,40 @@ fn root_view_renders_sidebar_resize_handles_only_for_visible_expanded_panels(
     cx.read(|app| {
         assert!(!root.read(app).selected_project_panel_visible());
     });
+}
+
+#[gpui::test]
+fn project_sidebar_context_menu_can_create_project(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::dev_fixture());
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.toggle_sidebar();
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    let project = cx
+        .debug_bounds("project-sidebar-initial-0")
+        .expect("collapsed project sidebar should expose its project item");
+    cx.simulate_mouse_down(
+        project.center(),
+        gpui::MouseButton::Right,
+        gpui::Modifiers::none(),
+    );
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+
+    assert!(cx.did_prompt_for_new_path());
+    cx.simulate_new_path_selection(|_| None);
+    cx.run_until_parked();
 }
 
 #[gpui::test]
@@ -3643,13 +3672,13 @@ fn root_view_language_setting_persists_and_updates_visible_text() {
 
     assert_eq!(
         root.visible_empty_workspace_actions(),
-        vec!["创建项目", "打开目录", "打开最近项目", "命令面板"]
+        vec!["打开目录", "打开最近项目", "命令面板"]
     );
 
     let reloaded = WorkbenchView::with_config_paths(paths);
     assert_eq!(
         reloaded.visible_empty_workspace_actions(),
-        vec!["创建项目", "打开目录", "打开最近项目", "命令面板"]
+        vec!["打开目录", "打开最近项目", "命令面板"]
     );
 }
 
@@ -4249,6 +4278,36 @@ fn root_view_keybindings_editor_updates_and_persists_command_keys() {
         .find(|row| row.command == CommandId::TabPalette)
         .unwrap();
     assert_eq!(row.keys, vec!["cmd-l".to_string()]);
+}
+
+#[test]
+fn create_project_command_is_configurable_in_keybinding_settings() {
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut root = WorkbenchView::with_config_paths(paths.clone());
+
+    let initial = root
+        .visible_keybinding_rows()
+        .into_iter()
+        .find(|row| row.command == CommandId::ProjectCreate)
+        .expect("create project should be listed in keybinding settings");
+    assert_eq!(initial.title, "Create Project");
+    assert!(initial.keys.is_empty());
+
+    root.set_keybinding_command_keys(CommandId::ProjectCreate, vec!["cmd-alt-n".to_string()])
+        .unwrap();
+    assert_eq!(
+        root.runtime_command_for_keystroke(&Keystroke::parse("cmd-alt-n").unwrap()),
+        Some(CommandId::ProjectCreate)
+    );
+
+    let reloaded = WorkbenchView::with_config_paths(paths);
+    let persisted = reloaded
+        .visible_keybinding_rows()
+        .into_iter()
+        .find(|row| row.command == CommandId::ProjectCreate)
+        .unwrap();
+    assert_eq!(persisted.keys, vec!["cmd-alt-n".to_string()]);
 }
 
 #[test]

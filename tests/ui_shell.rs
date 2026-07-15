@@ -603,6 +603,7 @@ fn project_sidebar_context_exposes_project_commands() {
     assert_eq!(
         project_context_commands(),
         &[
+            CommandId::ProjectCreate,
             CommandId::LayoutProjectEdit,
             CommandId::LayoutSaveCurrent,
             CommandId::LayoutExportProjectConfig,

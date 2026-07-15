@@ -618,21 +618,10 @@ pub(super) fn empty_workspace(
                 .justify_center()
                 .child(
                     workbench_action_button(
-                        "empty-create-project",
-                        ui_text.get(UiTextKey::CreateProject),
-                        None,
-                        ActionEmphasis::Primary,
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.on_create_project(&CreateProject, window, cx);
-                    })),
-                )
-                .child(
-                    workbench_action_button(
                         "empty-open-directory",
                         ui_text.get(UiTextKey::OpenDirectory),
-                        Some("secondary-o"),
-                        ActionEmphasis::Secondary,
+                        "secondary-o",
+                        ActionEmphasis::Primary,
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.on_open_project(&OpenProject, window, cx);
@@ -642,7 +631,7 @@ pub(super) fn empty_workspace(
                     workbench_action_button(
                         "empty-open-recent",
                         ui_text.get(UiTextKey::OpenRecent),
-                        Some("secondary-shift-o"),
+                        "secondary-shift-o",
                         ActionEmphasis::Secondary,
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -653,7 +642,7 @@ pub(super) fn empty_workspace(
                     workbench_action_button(
                         "empty-command-palette",
                         ui_text.get(UiTextKey::CommandPalette),
-                        Some("secondary-p"),
+                        "secondary-p",
                         ActionEmphasis::Secondary,
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -688,7 +677,7 @@ pub(super) fn project_empty_terminal_state(
             workbench_action_button(
                 "project-empty-new-tab",
                 ui_text.get(UiTextKey::NewTab),
-                Some("secondary-t"),
+                "secondary-t",
                 ActionEmphasis::Primary,
             )
             .on_click(cx.listener(|this, _, _window, cx| {

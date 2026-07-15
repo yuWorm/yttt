@@ -34,11 +34,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::OnboardingZedDetectionWarnings => "Some Zed extensions could not be inspected.",
         UiTextKey::OnboardingZedSkip => "Skip import",
         UiTextKey::OnboardingZedImport => "Import and finish",
-        UiTextKey::EmptySubtitle => {
-            "Create a project, open a directory, or choose a recent project."
-        }
+        UiTextKey::EmptySubtitle => "Open a directory or choose a recent project.",
         UiTextKey::EmptySidebarNote => "Sidebar shows opened projects only.",
-        UiTextKey::CreateProject => "Create Project",
         UiTextKey::CreateProjectDirectoryError => "Failed to create project directory",
         UiTextKey::CreateProjectPickerError => "Failed to choose a project location",
         UiTextKey::OpenDirectory => "Open Directory",
