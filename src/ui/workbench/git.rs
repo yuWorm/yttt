@@ -698,6 +698,24 @@ impl WorkbenchView {
                                         .flex()
                                         .items_center()
                                         .gap_2()
+                                        .when(file_count > 0, |this| {
+                                            this.child(git_diff_header_button(
+                                                "git-diff-copy",
+                                                self.ui_text.get(UiTextKey::GitDiffCopyHint),
+                                                false,
+                                                theme,
+                                                cx.listener(|this, _, _window, cx| {
+                                                    if let Some(text) =
+                                                        this.selected_git_diff_text()
+                                                    {
+                                                        cx.write_to_clipboard(
+                                                            ClipboardItem::new_string(text),
+                                                        );
+                                                    }
+                                                }),
+                                            ))
+                                            .child(git_diff_separator(theme))
+                                        })
                                         .child(git_diff_header_button(
                                             "git-diff-whitespace",
                                             self.ui_text.get(UiTextKey::GitDiffWhitespace),

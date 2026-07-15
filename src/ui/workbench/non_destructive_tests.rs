@@ -568,6 +568,15 @@ fn git_diff_panel_renders_controls_and_handles_shortcuts(cx: &mut TestAppContext
     assert!(copied.contains("-fn base() {}"));
     assert!(copied.contains("+fn changed() {}"));
 
+    cx.update(|_window, app| {
+        app.write_to_clipboard(ClipboardItem::new_string("sentinel".to_string()));
+    });
+    let copy = cx.debug_bounds("git-diff-copy").unwrap();
+    cx.simulate_click(copy.center(), gpui::Modifiers::none());
+    let copied = cx.read_from_clipboard().unwrap().text().unwrap();
+    assert!(copied.contains("-fn base() {}"));
+    assert!(copied.contains("+fn changed() {}"));
+
     cx.simulate_keystrokes("tab");
     cx.update(|_window, app| {
         assert_eq!(root.read(app).git_diff_mode(), Some(GitDiffMode::Staged));
