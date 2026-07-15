@@ -236,6 +236,16 @@ impl Render for WorkbenchView {
                 root = root.child(settings_overlay(self, &search_input, window, cx));
             }
         }
+        if let Some(dialog) = self.settings.zed_theme_import_dialog.clone() {
+            root = root.child(zed_theme_import_dialog(
+                cx,
+                &self.ui_text,
+                &dialog.detection,
+                dialog.conflict_policy,
+                &self.config_paths,
+                self.theme_runtime.ui,
+            ));
+        }
         if self.overlays.layout_toml_editor.is_some() {
             if let Some(input) = self.layout_toml_input(window, cx) {
                 root = root.child(layout_toml_editor_overlay(self, &input, cx));

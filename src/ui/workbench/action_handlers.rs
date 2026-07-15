@@ -212,6 +212,10 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.zed_theme_import_dialog_is_open() {
+            return;
+        }
+
         if self.overlays.pending_tab_rename.is_some() {
             let _ = self.confirm_tab_rename_dialog_from_input(cx);
             cx.notify();
@@ -241,6 +245,12 @@ impl WorkbenchView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.zed_theme_import_dialog_is_open() {
+            self.cancel_zed_theme_import_dialog();
+            cx.notify();
+            return;
+        }
+
         if self.overlays.git_diff_panel.is_some() {
             self.close_git_diff_panel();
             cx.notify();
@@ -654,6 +664,7 @@ impl WorkbenchView {
             || self.overlays.pending_keybinding_edit.is_some()
             || self.overlays.layout_toml_editor.is_some()
             || self.overlays.git_diff_panel.is_some()
+            || self.zed_theme_import_dialog_is_open()
         {
             cx.propagate();
             return;

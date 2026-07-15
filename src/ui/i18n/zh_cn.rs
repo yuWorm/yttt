@@ -318,6 +318,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsImportZedThemesAction => "导入",
         UiTextKey::SettingsImportZedThemesComplete => "Zed 主题导入完成",
         UiTextKey::SettingsImportZedThemesNone => "未探测到兼容的 Zed 主题。",
+        UiTextKey::SettingsImportZedThemesImported => "已导入",
+        UiTextKey::SettingsImportZedThemesConflictHint => "对于已导入的主题：",
+        UiTextKey::SettingsImportZedThemesSkipExisting => "跳过导入",
+        UiTextKey::SettingsImportZedThemesOverwriteExisting => "覆盖导入",
         UiTextKey::SettingsLanguageDetection => "语言检测",
         UiTextKey::SettingsLanguageDetectionDescription => {
             "根据文件名、扩展名和首行检测代码编辑器语言。"

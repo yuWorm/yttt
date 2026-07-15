@@ -69,6 +69,7 @@ impl WorkbenchView {
 
     pub fn close_settings(&mut self) {
         self.settings.settings_page.is_open = false;
+        self.settings.zed_theme_import_dialog = None;
         self.reset_settings_search_input();
         self.sync_input_owner_state();
     }
@@ -237,16 +238,63 @@ impl WorkbenchView {
         self.save_app_settings_and_refresh_runtime()
     }
 
-    pub fn import_zed_themes_from_settings(&mut self) -> Result<(usize, usize), String> {
-        let detection = detect_installed_zed_themes();
+    pub fn zed_theme_import_dialog_is_open(&self) -> bool {
+        self.settings.zed_theme_import_dialog.is_some()
+    }
+
+    pub fn zed_theme_import_conflict_policy(&self) -> Option<ZedThemeImportConflictPolicy> {
+        self.settings
+            .zed_theme_import_dialog
+            .as_ref()
+            .map(|dialog| dialog.conflict_policy)
+    }
+
+    pub fn open_zed_theme_import_dialog(&mut self) -> Result<(), String> {
+        self.open_zed_theme_import_dialog_with_detection(detect_installed_zed_themes())
+    }
+
+    pub fn open_zed_theme_import_dialog_with_detection(
+        &mut self,
+        detection: ZedThemeDetection,
+    ) -> Result<(), String> {
         if detection.is_empty() {
             return Err(self
                 .ui_text
                 .get(UiTextKey::SettingsImportZedThemesNone)
                 .to_string());
         }
-        let imported = import_detected_zed_themes(&detection, &self.config_paths)
-            .map_err(|error| error.to_string())?;
+        self.settings.zed_theme_import_dialog = Some(ZedThemeImportDialogState {
+            detection,
+            conflict_policy: ZedThemeImportConflictPolicy::SkipExisting,
+        });
+        self.sync_input_owner_state();
+        Ok(())
+    }
+
+    pub fn set_zed_theme_import_conflict_policy(
+        &mut self,
+        conflict_policy: ZedThemeImportConflictPolicy,
+    ) {
+        if let Some(dialog) = &mut self.settings.zed_theme_import_dialog {
+            dialog.conflict_policy = conflict_policy;
+        }
+    }
+
+    pub fn cancel_zed_theme_import_dialog(&mut self) {
+        self.settings.zed_theme_import_dialog = None;
+        self.sync_input_owner_state();
+    }
+
+    pub fn confirm_zed_theme_import_dialog(&mut self) -> Result<(usize, usize), String> {
+        let Some(dialog) = self.settings.zed_theme_import_dialog.clone() else {
+            return Ok((0, 0));
+        };
+        let imported = import_detected_zed_themes_with_policy(
+            &dialog.detection,
+            &self.config_paths,
+            dialog.conflict_policy,
+        )
+        .map_err(|error| error.to_string())?;
         let ui_theme_count = imported.ui_themes.len();
         let icon_theme_count = imported
             .icon_themes
@@ -254,6 +302,7 @@ impl WorkbenchView {
             .map(|package| package.theme_names.len())
             .sum();
 
+        self.settings.zed_theme_import_dialog = None;
         self.settings.settings_ui_theme_select = None;
         self.settings.settings_ui_theme_select_subscription = None;
         self.settings.settings_terminal_theme_select = None;
@@ -261,6 +310,7 @@ impl WorkbenchView {
         self.settings.settings_icon_theme_select = None;
         self.settings.settings_icon_theme_select_subscription = None;
         self.refresh_theme_runtime_from_settings();
+        self.sync_input_owner_state();
         Ok((ui_theme_count, icon_theme_count))
     }
 

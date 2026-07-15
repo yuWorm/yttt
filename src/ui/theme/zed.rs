@@ -2,9 +2,11 @@ mod installed;
 
 pub use installed::{
     DetectedZedExtension, ImportedZedIconTheme, ImportedZedThemes, ZedIconThemeImportError,
-    ZedThemeDetection, ZedThemeDetectionWarning, ZedThemeImportSummaryError,
-    detect_installed_zed_themes, detect_zed_theme_extension, detect_zed_themes_in,
-    import_detected_zed_themes, import_detected_zed_themes_to, import_zed_icon_theme_extension,
+    ZedThemeDetection, ZedThemeDetectionWarning, ZedThemeImportConflictPolicy,
+    ZedThemeImportSummaryError, detect_installed_zed_themes, detect_zed_theme_extension,
+    detect_zed_themes_in, import_detected_zed_themes, import_detected_zed_themes_to,
+    import_detected_zed_themes_to_with_policy, import_detected_zed_themes_with_policy,
+    import_zed_icon_theme_extension, zed_icon_theme_output_path,
 };
 
 use std::{
@@ -41,6 +43,27 @@ impl ConvertedZedTheme {
 pub struct ImportedZedTheme {
     pub theme_name: String,
     pub path: PathBuf,
+}
+
+pub fn zed_ui_theme_output_path(
+    extension_id: &str,
+    theme_name: &str,
+    output_dir: impl AsRef<Path>,
+) -> PathBuf {
+    output_dir
+        .as_ref()
+        .join(zed_ui_theme_file_name(extension_id, theme_name))
+}
+
+fn zed_ui_theme_file_name(extension_id: &str, theme_name: &str) -> String {
+    let package_slug = slugify(extension_id);
+    let theme_slug = slugify(theme_name);
+    let stem = if package_slug == theme_slug {
+        package_slug
+    } else {
+        format!("{package_slug}-{theme_slug}")
+    };
+    format!("{stem}.toml")
 }
 
 #[derive(Debug, Error)]
@@ -173,14 +196,7 @@ pub fn convert_zed_theme_extension(
                 family.author.as_deref(),
             );
             let theme = convert_theme(definition, metadata)?;
-            let package_slug = slugify(&manifest.id);
-            let theme_slug = slugify(&theme.name);
-            let stem = if package_slug == theme_slug {
-                package_slug
-            } else {
-                format!("{package_slug}-{theme_slug}")
-            };
-            let suggested_file_name = format!("{stem}.toml");
+            let suggested_file_name = zed_ui_theme_file_name(&manifest.id, &theme.name);
             if !output_names.insert(suggested_file_name.clone()) {
                 return Err(ZedThemeImportError::DuplicateOutputFile {
                     file_name: suggested_file_name,

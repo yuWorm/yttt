@@ -69,6 +69,13 @@ pub struct ImportedZedThemes {
     pub icon_themes: Vec<ImportedZedIconTheme>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ZedThemeImportConflictPolicy {
+    #[default]
+    SkipExisting,
+    OverwriteExisting,
+}
+
 #[derive(Debug, Error)]
 pub enum ZedThemeImportSummaryError {
     #[error("failed to import UI themes from Zed extension {extension:?}: {source}")]
@@ -81,6 +88,8 @@ pub enum ZedThemeImportSummaryError {
         extension: String,
         source: ZedIconThemeImportError,
     },
+    #[error("failed to install staged Zed themes: {source}")]
+    Install { source: std::io::Error },
 }
 
 #[derive(Debug, Error)]
@@ -340,6 +349,158 @@ pub fn import_detected_zed_themes_to(
     Ok(imported)
 }
 
+pub fn import_detected_zed_themes_with_policy(
+    detection: &ZedThemeDetection,
+    config_paths: &AppConfigPaths,
+    conflict_policy: ZedThemeImportConflictPolicy,
+) -> Result<ImportedZedThemes, ZedThemeImportSummaryError> {
+    import_detected_zed_themes_to_with_policy(
+        detection,
+        config_paths.themes_dir(),
+        config_paths.icon_themes_dir(),
+        conflict_policy,
+    )
+}
+
+pub fn import_detected_zed_themes_to_with_policy(
+    detection: &ZedThemeDetection,
+    ui_theme_output_dir: impl AsRef<Path>,
+    icon_theme_output_dir: impl AsRef<Path>,
+    conflict_policy: ZedThemeImportConflictPolicy,
+) -> Result<ImportedZedThemes, ZedThemeImportSummaryError> {
+    let ui_theme_output_dir = ui_theme_output_dir.as_ref();
+    let icon_theme_output_dir = icon_theme_output_dir.as_ref();
+    let staging_name = format!(".zed-theme-import-{}", uuid::Uuid::new_v4());
+    let ui_staging_dir = ui_theme_output_dir.join(&staging_name);
+    let icon_staging_dir = icon_theme_output_dir.join(&staging_name);
+    let staged = match import_detected_zed_themes_to(detection, &ui_staging_dir, &icon_staging_dir)
+    {
+        Ok(staged) => staged,
+        Err(error) => {
+            cleanup_staging_dirs(&ui_staging_dir, &icon_staging_dir);
+            return Err(error);
+        }
+    };
+
+    let mut applied = Vec::new();
+    let mut imported = ImportedZedThemes::default();
+    let commit_result = (|| -> std::io::Result<()> {
+        for theme in staged.ui_themes {
+            let destination = staged_import_destination(ui_theme_output_dir, &theme.path)?;
+            if install_staged_import(
+                &theme.path,
+                &destination,
+                &ui_staging_dir,
+                conflict_policy,
+                &mut applied,
+            )? {
+                imported.ui_themes.push(ImportedZedTheme {
+                    theme_name: theme.theme_name,
+                    path: destination,
+                });
+            }
+        }
+        for package in staged.icon_themes {
+            let destination = staged_import_destination(icon_theme_output_dir, &package.path)?;
+            if install_staged_import(
+                &package.path,
+                &destination,
+                &icon_staging_dir,
+                conflict_policy,
+                &mut applied,
+            )? {
+                imported.icon_themes.push(ImportedZedIconTheme {
+                    extension_name: package.extension_name,
+                    theme_names: package.theme_names,
+                    path: destination,
+                });
+            }
+        }
+        Ok(())
+    })();
+
+    if let Err(source) = commit_result {
+        rollback_applied_imports(&applied);
+        cleanup_staging_dirs(&ui_staging_dir, &icon_staging_dir);
+        return Err(ZedThemeImportSummaryError::Install { source });
+    }
+
+    cleanup_staging_dirs(&ui_staging_dir, &icon_staging_dir);
+    Ok(imported)
+}
+
+fn staged_import_destination(output_dir: &Path, staged_path: &Path) -> std::io::Result<PathBuf> {
+    let file_name = staged_path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "staged import path has no file name: {}",
+                staged_path.display()
+            ),
+        )
+    })?;
+    Ok(output_dir.join(file_name))
+}
+
+fn install_staged_import(
+    staged_path: &Path,
+    destination: &Path,
+    backup_root: &Path,
+    conflict_policy: ZedThemeImportConflictPolicy,
+    applied: &mut Vec<AppliedZedImport>,
+) -> std::io::Result<bool> {
+    if destination.exists() && conflict_policy == ZedThemeImportConflictPolicy::SkipExisting {
+        return Ok(false);
+    }
+
+    let backup = if destination.exists() {
+        let backup = backup_root.join(format!(".backup-{}", applied.len()));
+        fs::rename(destination, &backup)?;
+        Some(backup)
+    } else {
+        None
+    };
+
+    if let Err(error) = fs::rename(staged_path, destination) {
+        if let Some(backup) = &backup {
+            let _ = fs::rename(backup, destination);
+        }
+        return Err(error);
+    }
+    applied.push(AppliedZedImport {
+        destination: destination.to_path_buf(),
+        backup,
+    });
+    Ok(true)
+}
+
+fn rollback_applied_imports(applied: &[AppliedZedImport]) {
+    for import in applied.iter().rev() {
+        remove_import_path(&import.destination);
+        if let Some(backup) = &import.backup {
+            let _ = fs::rename(backup, &import.destination);
+        }
+    }
+}
+
+fn cleanup_staging_dirs(ui_staging_dir: &Path, icon_staging_dir: &Path) {
+    let _ = fs::remove_dir_all(ui_staging_dir);
+    let _ = fs::remove_dir_all(icon_staging_dir);
+}
+
+fn remove_import_path(path: &Path) {
+    if path.is_dir() {
+        let _ = fs::remove_dir_all(path);
+    } else {
+        let _ = fs::remove_file(path);
+    }
+}
+
+struct AppliedZedImport {
+    destination: PathBuf,
+    backup: Option<PathBuf>,
+}
+
 pub fn import_zed_icon_theme_extension(
     extension_dir: impl AsRef<Path>,
     output_dir: impl AsRef<Path>,
@@ -423,6 +584,10 @@ pub fn import_zed_icon_theme_extension(
         theme_names,
         path: destination,
     })
+}
+
+pub fn zed_icon_theme_output_path(extension_id: &str, output_dir: impl AsRef<Path>) -> PathBuf {
+    output_dir.as_ref().join(slugify(extension_id))
 }
 
 fn installed_extension_roots() -> Vec<PathBuf> {
@@ -646,6 +811,56 @@ mod tests {
         assert_eq!(
             available_icon_theme_names(&paths).expect("icon themes load"),
             ["Test File Icons"]
+        );
+    }
+
+    #[test]
+    fn conflict_policy_skips_or_overwrites_existing_themes() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let installed_root = temp.path().join("installed");
+        write_combined_extension(&installed_root.join("test-pack"));
+        let detection = detect_zed_themes_in(&installed_root);
+        let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+        let first = import_detected_zed_themes(&detection, &paths).expect("first import succeeds");
+        let ui_path = first.ui_themes[0].path.clone();
+        let icon_path = first.icon_themes[0].path.join("icons/rust.svg");
+        fs::write(&ui_path, "custom ui theme").expect("customize imported UI theme");
+        fs::write(&icon_path, "custom icon").expect("customize imported icon");
+
+        let skipped = import_detected_zed_themes_with_policy(
+            &detection,
+            &paths,
+            ZedThemeImportConflictPolicy::SkipExisting,
+        )
+        .expect("skipping existing themes succeeds");
+
+        assert!(skipped.ui_themes.is_empty());
+        assert!(skipped.icon_themes.is_empty());
+        assert_eq!(
+            fs::read_to_string(&ui_path).expect("read skipped UI theme"),
+            "custom ui theme"
+        );
+        assert_eq!(
+            fs::read_to_string(&icon_path).expect("read skipped icon"),
+            "custom icon"
+        );
+
+        let overwritten = import_detected_zed_themes_with_policy(
+            &detection,
+            &paths,
+            ZedThemeImportConflictPolicy::OverwriteExisting,
+        )
+        .expect("overwriting existing themes succeeds");
+
+        assert_eq!(overwritten.ui_themes.len(), 1);
+        assert_eq!(overwritten.icon_themes.len(), 1);
+        assert_ne!(
+            fs::read_to_string(&ui_path).expect("read overwritten UI theme"),
+            "custom ui theme"
+        );
+        assert_eq!(
+            fs::read_to_string(&icon_path).expect("read overwritten icon"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"
         );
     }
 

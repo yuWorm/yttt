@@ -49,6 +49,10 @@ use yttt::{
     ui::workbench::shell::sidebar::visible_project_items,
     ui::{
         app::{register_workbench_close_guard, register_workbench_keybinding_interceptor},
+        theme::zed::{
+            DetectedZedExtension, ZedThemeDetection, ZedThemeImportConflictPolicy,
+            zed_icon_theme_output_path, zed_ui_theme_output_path,
+        },
         workbench::WorkbenchView,
         workbench::shell::split_view::{
             pointer_resize_for_drag_delta, resize_command_for_drag_delta, root_split_child_basis,
@@ -3550,6 +3554,110 @@ fn appearance_settings_group_renders_window_and_theme_controls(cx: &mut gpui::Te
     assert!(
         cx.debug_bounds("settings-import-zed-themes").is_some(),
         "Appearance settings should expose the Zed theme import action"
+    );
+}
+
+#[gpui::test]
+fn zed_theme_import_opens_review_dialog_before_writing(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut settings = load_or_create_settings(&paths).unwrap().settings;
+    settings.general.onboarding_completed = true;
+    save_settings(&paths, &settings).unwrap();
+    let extension = DetectedZedExtension {
+        path: temp.path().join("installed/test-pack"),
+        id: "test-pack".to_string(),
+        name: "Test Theme Pack".to_string(),
+        version: "1.0.0".to_string(),
+        ui_theme_names: vec!["Test UI".to_string()],
+        icon_theme_names: vec!["Test File Icons".to_string()],
+    };
+    let existing_ui_path = zed_ui_theme_output_path(
+        &extension.id,
+        &extension.ui_theme_names[0],
+        paths.themes_dir(),
+    );
+    fs::create_dir_all(existing_ui_path.parent().unwrap()).unwrap();
+    fs::write(&existing_ui_path, "existing theme").unwrap();
+    let pending_icon_path = zed_icon_theme_output_path(&extension.id, paths.icon_themes_dir());
+    let detection = ZedThemeDetection {
+        extensions: vec![extension],
+        ..Default::default()
+    };
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let view_paths = paths.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths(view_paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.open_settings();
+        root.select_settings_group("appearance").unwrap();
+        root.open_zed_theme_import_dialog_with_detection(detection)
+            .unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+
+    cx.read(|app| {
+        let root = root.read(app);
+        assert!(root.zed_theme_import_dialog_is_open());
+        assert_eq!(
+            root.zed_theme_import_conflict_policy(),
+            Some(ZedThemeImportConflictPolicy::SkipExisting)
+        );
+        assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Dialog);
+    });
+    assert!(cx.debug_bounds("zed-theme-import-dialog").is_some());
+    assert!(cx.debug_bounds("zed-theme-import-ui-theme-0").is_some());
+    assert!(
+        cx.debug_bounds("zed-theme-import-ui-theme-imported-0")
+            .is_some()
+    );
+    assert!(cx.debug_bounds("zed-theme-import-icon-theme-0").is_some());
+    assert!(
+        cx.debug_bounds("zed-theme-import-icon-theme-imported-0")
+            .is_none()
+    );
+    assert!(cx.debug_bounds("confirm-zed-theme-import").is_some());
+    assert!(
+        !pending_icon_path.exists(),
+        "opening the review dialog must not write detected themes"
+    );
+
+    let overwrite = cx
+        .debug_bounds("zed-theme-import-policy-overwrite")
+        .expect("existing themes should expose overwrite policy");
+    cx.simulate_click(overwrite.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).zed_theme_import_conflict_policy(),
+            Some(ZedThemeImportConflictPolicy::OverwriteExisting)
+        );
+    });
+
+    let cancel = cx
+        .debug_bounds("cancel-zed-theme-import")
+        .expect("review dialog should expose cancel");
+    cx.simulate_click(cancel.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.read(|app| {
+        let root = root.read(app);
+        assert!(!root.zed_theme_import_dialog_is_open());
+        assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Settings);
+    });
+    assert_eq!(
+        fs::read_to_string(existing_ui_path).unwrap(),
+        "existing theme"
+    );
+    assert!(
+        !pending_icon_path.exists(),
+        "canceling the review dialog must not import themes"
     );
 }
 
