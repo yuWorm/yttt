@@ -1,16 +1,16 @@
-use gpui::{Pixels, Rgba, px};
+use gpui::{Rems, Rgba, rems};
 
 use crate::theme::WorkbenchTheme;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct YtttSwitchStyle {
-    pub width: Pixels,
-    pub height: Pixels,
-    pub track_width: Pixels,
-    pub track_height: Pixels,
-    pub track_padding: Pixels,
-    pub thumb_size: Pixels,
-    pub control_height: Pixels,
+    pub width: Rems,
+    pub height: Rems,
+    pub track_width: Rems,
+    pub track_height: Rems,
+    pub track_padding: Rems,
+    pub thumb_size: Rems,
+    pub control_height: Rems,
     pub active_background: Rgba,
     pub inactive_background: Rgba,
     pub active_border: Rgba,
@@ -21,13 +21,13 @@ pub struct YtttSwitchStyle {
 
 pub fn yttt_switch_style(theme: WorkbenchTheme) -> YtttSwitchStyle {
     YtttSwitchStyle {
-        width: px(42.0),
-        height: px(26.0),
-        track_width: px(34.0),
-        track_height: px(20.0),
-        track_padding: px(2.0),
-        thumb_size: px(14.0),
-        control_height: px(32.0),
+        width: rems(2.625),
+        height: rems(1.625),
+        track_width: rems(2.125),
+        track_height: rems(1.25),
+        track_padding: rems(0.125),
+        thumb_size: rems(0.875),
+        control_height: rems(2.0),
         active_background: theme.accent,
         inactive_background: theme.active_surface,
         active_border: theme.focus_ring,

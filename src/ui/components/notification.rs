@@ -123,8 +123,8 @@ fn notification_content(
                     .flex_none()
                     .rounded(px(5.0))
                     .bg(style.action_background)
-                    .px(px(6.0))
-                    .py(px(2.0))
+                    .px_1p5()
+                    .py_0p5()
                     .text_xs()
                     .text_color(style.action)
                     .child(action_label),

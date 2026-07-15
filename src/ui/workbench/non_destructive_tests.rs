@@ -873,8 +873,14 @@ fn project_entry_delete_alert_renders_and_executes_confirmation(cx: &mut TestApp
     });
     cx.run_until_parked();
 
-    cx.debug_bounds("project-entry-delete-confirm")
+    let confirm = cx
+        .debug_bounds("project-entry-delete-confirm")
         .expect("delete confirmation must render an actionable button");
+    let cancel = cx
+        .debug_bounds("project-entry-delete-cancel")
+        .expect("delete confirmation must render a compact cancel button");
+    assert_eq!(confirm.size.height, gpui::px(DEFAULT_UI_FONT_SIZE * 1.25));
+    assert_eq!(cancel.size.height, confirm.size.height);
     root.update_in(cx, |root, window, root_cx| {
         root.spawn_project_entry_delete(project_id, PathBuf::from("victim.txt"), window, root_cx);
     });

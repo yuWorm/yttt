@@ -1,4 +1,4 @@
-use gpui::{Pixels, Rgba, px, rgba};
+use gpui::{Pixels, Rems, Rgba, px, rems, rgba};
 
 use crate::theme::WorkbenchTheme;
 
@@ -12,8 +12,8 @@ pub enum YtttIconButtonKind {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct YtttIconButtonStyle {
-    pub size: Pixels,
-    pub icon_size: Pixels,
+    pub size: Rems,
+    pub icon_size: Rems,
     pub radius: Pixels,
     pub border_width: Pixels,
     pub background: Rgba,
@@ -29,15 +29,15 @@ pub fn yttt_icon_button_style(
 ) -> YtttIconButtonStyle {
     let transparent = rgba(0x00000000);
     let (size, radius, border_width, text) = match kind {
-        YtttIconButtonKind::Toolbar => (px(28.0), px(0.0), px(1.0), theme.text_muted),
-        YtttIconButtonKind::SidebarHeader => (px(24.0), px(4.0), px(0.0), theme.text_subtle),
-        YtttIconButtonKind::TabClose => (px(16.0), px(4.0), px(0.0), theme.text_subtle),
-        YtttIconButtonKind::OverlayClose => (px(28.0), px(6.0), px(0.0), theme.text_muted),
+        YtttIconButtonKind::Toolbar => (rems(1.75), px(0.0), px(1.0), theme.text_muted),
+        YtttIconButtonKind::SidebarHeader => (rems(1.5), px(4.0), px(0.0), theme.text_subtle),
+        YtttIconButtonKind::TabClose => (rems(1.0), px(4.0), px(0.0), theme.text_subtle),
+        YtttIconButtonKind::OverlayClose => (rems(1.75), px(6.0), px(0.0), theme.text_muted),
     };
 
     YtttIconButtonStyle {
         size,
-        icon_size: px(12.0),
+        icon_size: rems(0.75),
         radius,
         border_width,
         background: transparent,

@@ -127,7 +127,7 @@ fn language_step(
                 .flex_1()
                 .items_center()
                 .justify_center()
-                .h(px(88.0))
+                .h(rems(5.5))
                 .rounded_lg()
                 .border(if selected { px(2.0) } else { px(1.0) })
                 .border_color(if selected { theme.accent } else { theme.border })
@@ -330,7 +330,7 @@ fn agent_step(
                 .items_center()
                 .justify_center()
                 .gap_2()
-                .h(px(88.0))
+                .h(rems(5.5))
                 .rounded_lg()
                 .border(if selected { px(2.0) } else { px(1.0) })
                 .border_color(if selected { theme.accent } else { theme.border })
@@ -662,7 +662,7 @@ fn detected_theme_panel(
                 .text_color(theme.text_muted)
                 .child(format!("{title} ({index})")),
         )
-        .child(div().max_h(px(180.0)).overflow_y_scrollbar().child(rows))
+        .child(div().max_h(rems(11.25)).overflow_y_scrollbar().child(rows))
 }
 
 fn layout_text(layout_kind: DefaultLayoutKind, ui_text: &UiText) -> (&'static str, &'static str) {
@@ -687,7 +687,7 @@ fn layout_preview(
     match layout_kind {
         DefaultLayoutKind::SplitPane => div()
             .flex()
-            .h(px(72.0))
+            .h(rems(4.5))
             .w_full()
             .overflow_hidden()
             .rounded_md()
@@ -718,7 +718,7 @@ fn layout_preview(
             ),
         DefaultLayoutKind::SeparateTabs => div()
             .flex()
-            .h(px(72.0))
+            .h(rems(4.5))
             .w_full()
             .flex_col()
             .overflow_hidden()
@@ -729,7 +729,7 @@ fn layout_preview(
             .child(
                 div()
                     .flex()
-                    .h(px(26.0))
+                    .h(rems(1.625))
                     .border_b_1()
                     .border_color(theme.border)
                     .child(

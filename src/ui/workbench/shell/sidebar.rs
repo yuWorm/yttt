@@ -1,6 +1,6 @@
 use gpui::{
     App, ClickEvent, FocusHandle, InteractiveElement as _, IntoElement, MouseButton,
-    MouseDownEvent, Pixels, Rgba, StatefulInteractiveElement as _, Window, div, prelude::*,
+    MouseDownEvent, Pixels, Rems, Rgba, StatefulInteractiveElement as _, Window, div, prelude::*,
 };
 use gpui_component::{
     Icon, IconName,
@@ -61,8 +61,8 @@ pub struct ProjectSidebarStyle {
     pub collapsed_width: Pixels,
     pub border_width: Pixels,
     pub resize_hit_area_width: Pixels,
-    pub item_height: Pixels,
-    pub item_padding_x: Pixels,
+    pub item_height: Rems,
+    pub item_padding_x: Rems,
     pub background: Rgba,
     pub active_background: Rgba,
     pub hover_background: Rgba,

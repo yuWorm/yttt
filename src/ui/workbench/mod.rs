@@ -3,7 +3,7 @@ use gpui::{
     FontWeight, HighlightStyle, InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
     PathPromptOptions, Pixels, Point, Render, Rgba, ScrollHandle, SharedString, Stateful,
-    Subscription, Task, UniformListScrollHandle, Window, div, prelude::*, px, relative, rgba,
+    Subscription, Task, UniformListScrollHandle, Window, div, prelude::*, px, relative, rems, rgba,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, IconName, IndexPath, Root as ComponentRoot, Sizable as _,
