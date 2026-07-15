@@ -5,9 +5,8 @@ mod settings;
 
 pub use action::{workbench_action_button, workbench_icon_button};
 pub use notification::{
-    notification_tone_for_toast, workbench_agent_notification,
-    workbench_closable_inline_notification, workbench_inline_notification,
-    workbench_status_notification,
+    notification_tone_for_toast, workbench_agent_notification, workbench_error_notification,
+    workbench_inline_notification, workbench_status_notification,
 };
 pub use palette_item::{workbench_keybinding_badge, workbench_palette_item};
 pub use settings::{workbench_settings_row, workbench_switch};

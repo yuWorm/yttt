@@ -143,9 +143,9 @@ use crate::{
     ui::{
         components::{
             ActionEmphasis, workbench_action_button, workbench_agent_notification,
-            workbench_closable_inline_notification, workbench_icon_button,
-            workbench_inline_notification, workbench_keybinding_badge, workbench_settings_row,
-            workbench_status_notification, workbench_switch,
+            workbench_error_notification, workbench_icon_button, workbench_inline_notification,
+            workbench_keybinding_badge, workbench_settings_row, workbench_status_notification,
+            workbench_switch,
         },
         editor::{
             CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, CurrentDiskState,
@@ -248,6 +248,7 @@ pub struct WorkbenchView {
     palette: PaletteControllerState,
     command_registry: CommandRegistry,
     load_error: Option<String>,
+    presented_error_notification: Option<String>,
     project: ProjectControllerState,
     settings: SettingsControllerState,
     last_opened_layout_file: Option<PathBuf>,
@@ -273,6 +274,8 @@ pub struct WorkbenchView {
     active_project_file_watcher: Option<ActiveProjectFileWatcher>,
     project_file_watching_enabled: bool,
 }
+
+struct WorkbenchErrorNotification;
 
 struct ActiveProjectFileWatcher {
     project_id: ProjectId,
@@ -492,6 +495,7 @@ impl WorkbenchView {
             palette: PaletteControllerState::new(recent_projects),
             command_registry,
             load_error,
+            presented_error_notification: None,
             project: ProjectControllerState {
                 project_editor_runtime,
                 ..Default::default()
@@ -1150,8 +1154,8 @@ impl WorkbenchView {
 
     pub fn visible_error_notification_item(&self) -> Option<ToastItem> {
         self.load_error.as_ref().map(|message| ToastItem {
-            title: message.clone(),
-            context: self.ui_text.get(UiTextKey::StatusErrorContext).to_string(),
+            title: self.ui_text.get(UiTextKey::StatusErrorContext).to_string(),
+            context: message.clone(),
             tone: ToastTone::Error,
         })
     }
@@ -1792,6 +1796,50 @@ impl WorkbenchView {
 
     pub fn toast_queue(&self) -> &ToastQueue {
         &self.toast_queue
+    }
+
+    fn sync_error_notification(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.presented_error_notification == self.load_error {
+            return;
+        }
+
+        let message = self.load_error.clone();
+        self.presented_error_notification = message.clone();
+        let Some(message) = message else {
+            cx.defer_in(window, |_, window, cx| {
+                window.remove_notification::<WorkbenchErrorNotification>(cx);
+            });
+            return;
+        };
+
+        let root = cx.entity();
+        let item = ToastItem {
+            title: self.ui_text.get(UiTextKey::StatusErrorContext).to_string(),
+            context: message.clone(),
+            tone: ToastTone::Error,
+        };
+        let theme = self.theme_runtime.ui;
+        cx.defer_in(window, move |this, window, cx| {
+            if this.load_error.as_deref() != Some(message.as_str()) {
+                return;
+            }
+
+            let expected_message = message.clone();
+            window.push_notification(
+                workbench_error_notification(item, theme)
+                    .id::<WorkbenchErrorNotification>()
+                    .on_close(move |_, cx| {
+                        root.update(cx, |root, cx| {
+                            if root.load_error.as_deref() == Some(expected_message.as_str()) {
+                                root.load_error = None;
+                                root.presented_error_notification = None;
+                                cx.notify();
+                            }
+                        });
+                    }),
+                cx,
+            );
+        });
     }
 
     fn queue_status_notification(&mut self, title: impl Into<String>, context: impl Into<String>) {

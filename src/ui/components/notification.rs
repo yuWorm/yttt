@@ -20,34 +20,11 @@ pub fn workbench_status_notification(item: ToastItem, theme: WorkbenchTheme) -> 
     workbench_notification(item, None, theme)
 }
 
+pub fn workbench_error_notification(item: ToastItem, theme: WorkbenchTheme) -> Notification {
+    workbench_notification(item, None, theme).autohide(true)
+}
+
 pub fn workbench_inline_notification(item: ToastItem, theme: WorkbenchTheme) -> Div {
-    workbench_inline_notification_with_close(item, theme, None)
-}
-
-pub fn workbench_closable_inline_notification<H>(
-    item: ToastItem,
-    theme: WorkbenchTheme,
-    on_close: H,
-) -> Div
-where
-    H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-{
-    let close_button = workbench_icon_button(
-        "error-notification-close",
-        IconName::Close,
-        YtttIconButtonKind::TabClose,
-        theme,
-        on_close,
-    )
-    .debug_selector(|| "error-notification-close".to_string());
-    workbench_inline_notification_with_close(item, theme, Some(close_button))
-}
-
-fn workbench_inline_notification_with_close(
-    item: ToastItem,
-    theme: WorkbenchTheme,
-    close_button: Option<Stateful<Div>>,
-) -> Div {
     let tone = notification_tone_for_toast(item.tone);
     let style = yttt_notification_style(tone, theme);
     let icon = notification_icon(tone);
@@ -63,12 +40,7 @@ fn workbench_inline_notification_with_close(
         .px(style.padding_x)
         .py(style.padding_y)
         .child(notification_content(
-            title,
-            context,
-            None,
-            icon,
-            style,
-            close_button,
+            title, context, None, icon, style, None,
         ))
 }
 
@@ -84,6 +56,7 @@ fn workbench_notification(
     let context = SharedString::from(item.context);
 
     Notification::new()
+        .autohide(true)
         .always_show_close_button(true)
         .w(style.width)
         .border(style.border_width)
@@ -140,16 +113,9 @@ fn notification_content(
                         .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(style.title)
-                        .truncate()
                         .child(title),
                 )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(style.context)
-                        .truncate()
-                        .child(context),
-                ),
+                .child(div().text_xs().text_color(style.context).child(context)),
         )
         .when_some(action_label, |this, action_label| {
             this.child(

@@ -3,6 +3,7 @@ use super::*;
 impl Render for WorkbenchView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_rem_size(px(self.app_settings.general.ui_font_size));
+        self.sync_error_notification(window, cx);
         self.ensure_active_project_file_watcher(window, cx);
         self.flush_pending_git_operations(window, cx);
         self.flush_pending_project_tree_loads(window, cx);
@@ -220,16 +221,6 @@ impl Render for WorkbenchView {
                     },
                 ));
             }
-        }
-        if let Some(error_item) = self.visible_error_notification_item() {
-            root = root.child(error_notification_overlay(
-                error_item,
-                self.theme_runtime.ui,
-                cx.listener(|this, _, _window, cx| {
-                    this.dismiss_error_notification();
-                    cx.notify();
-                }),
-            ));
         }
         if self.settings.settings_page.is_open {
             if let Some(search_input) = self.settings_search_input(window, cx) {
@@ -538,19 +529,6 @@ fn layout_toml_editor_overlay(
                     ),
             ),
     )
-}
-
-fn error_notification_overlay<H>(item: ToastItem, theme: WorkbenchTheme, on_close: H) -> Div
-where
-    H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-{
-    div()
-        .absolute()
-        .top(px(48.0))
-        .right(px(12.0))
-        .child(workbench_closable_inline_notification(
-            item, theme, on_close,
-        ))
 }
 
 pub(super) fn push_component_notification(
