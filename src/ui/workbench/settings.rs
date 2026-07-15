@@ -1018,59 +1018,57 @@ impl WorkbenchView {
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<SettingsStringSelectState> {
+    ) -> Entity<SettingsFontFamilySelectState> {
+        if let Some(select) = &self.settings.settings_font_family_select {
+            return select.clone();
+        }
+
         let selected =
             terminal_font_family_option_for_setting(&self.app_settings.terminal.font_family);
         let items = terminal_font_family_options_from_system(
             &self.app_settings.terminal.font_family,
             cx.text_system().all_font_names(),
         );
-
-        if let Some(select) = &self.settings.settings_font_family_select {
-            select.clone()
-        } else {
-            let selected_index = selected_index_for_settings_option(&items, &selected);
-            let select = cx.new(|cx| {
-                SelectState::new(SearchableVec::new(items), selected_index, window, cx)
-                    .searchable(true)
-            });
-            let subscription =
-                cx.subscribe_in(&select, window, Self::on_settings_font_family_select_event);
-            self.settings.settings_font_family_select = Some(select.clone());
-            self.settings.settings_font_family_select_subscription = Some(subscription);
-            select
-        }
+        let selected_index = selected_index_for_settings_option(&items, &selected);
+        let select = cx.new(|cx| {
+            SelectState::new(FontFamilyOptions::new(items), selected_index, window, cx)
+                .searchable(true)
+        });
+        let subscription =
+            cx.subscribe_in(&select, window, Self::on_settings_font_family_select_event);
+        self.settings.settings_font_family_select = Some(select.clone());
+        self.settings.settings_font_family_select_subscription = Some(subscription);
+        select
     }
 
     pub(super) fn settings_editor_font_family_select(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<SettingsStringSelectState> {
+    ) -> Entity<SettingsFontFamilySelectState> {
+        if let Some(select) = &self.settings.settings_editor_font_family_select {
+            return select.clone();
+        }
+
         let selected = font_family_option_for_setting(&self.app_settings.editor.font_family);
         let items = font_family_options_from_system(
             &self.app_settings.editor.font_family,
             cx.text_system().all_font_names(),
         );
-
-        if let Some(select) = &self.settings.settings_editor_font_family_select {
-            select.clone()
-        } else {
-            let selected_index = selected_index_for_settings_option(&items, &selected);
-            let select = cx.new(|cx| {
-                SelectState::new(SearchableVec::new(items), selected_index, window, cx)
-                    .searchable(true)
-            });
-            let subscription = cx.subscribe_in(
-                &select,
-                window,
-                Self::on_settings_editor_font_family_select_event,
-            );
-            self.settings.settings_editor_font_family_select = Some(select.clone());
-            self.settings
-                .settings_editor_font_family_select_subscription = Some(subscription);
-            select
-        }
+        let selected_index = selected_index_for_settings_option(&items, &selected);
+        let select = cx.new(|cx| {
+            SelectState::new(FontFamilyOptions::new(items), selected_index, window, cx)
+                .searchable(true)
+        });
+        let subscription = cx.subscribe_in(
+            &select,
+            window,
+            Self::on_settings_editor_font_family_select_event,
+        );
+        self.settings.settings_editor_font_family_select = Some(select.clone());
+        self.settings
+            .settings_editor_font_family_select_subscription = Some(subscription);
+        select
     }
 
     pub(super) fn editor_autosave_label(&self, autosave: EditorAutosave) -> &'static str {
@@ -1306,15 +1304,15 @@ impl WorkbenchView {
 
     pub(super) fn on_settings_font_family_select_event(
         &mut self,
-        _select: &Entity<SettingsStringSelectState>,
-        event: &SelectEvent<SearchableVec<String>>,
+        _select: &Entity<SettingsFontFamilySelectState>,
+        event: &SelectEvent<FontFamilyOptions>,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let SelectEvent::Confirm(Some(value)) = event else {
             return;
         };
-        let font_family = terminal_font_family_setting_from_option(value);
+        let font_family = terminal_font_family_setting_from_option(value.as_ref());
         if let Err(error) = self.set_terminal_font_family(&font_family) {
             self.load_error = Some(error.to_string());
         }
@@ -1325,15 +1323,15 @@ impl WorkbenchView {
 
     pub(super) fn on_settings_editor_font_family_select_event(
         &mut self,
-        _select: &Entity<SettingsStringSelectState>,
-        event: &SelectEvent<SearchableVec<String>>,
+        _select: &Entity<SettingsFontFamilySelectState>,
+        event: &SelectEvent<FontFamilyOptions>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let SelectEvent::Confirm(Some(value)) = event else {
             return;
         };
-        let font_family = font_family_setting_from_option(value);
+        let font_family = font_family_setting_from_option(value.as_ref());
         if let Err(error) = self.set_editor_font_family(&font_family, window, cx) {
             self.load_error = Some(error.to_string());
         }

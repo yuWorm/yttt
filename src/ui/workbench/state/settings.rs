@@ -5,7 +5,7 @@ use gpui_component::input::InputState;
 
 use crate::ui::settings::{SettingsPageState, keybindings::KeybindingsEditorState};
 
-use super::super::{SettingsNumberField, SettingsStringSelectState};
+use super::super::{SettingsFontFamilySelectState, SettingsNumberField, SettingsStringSelectState};
 
 pub(in super::super) struct SettingsControllerState {
     pub(in super::super) keybinding_warning_lines: Vec<String>,
@@ -33,10 +33,10 @@ pub(in super::super) struct SettingsControllerState {
     pub(in super::super) settings_terminal_osc52_policy_select_subscription: Option<Subscription>,
     pub(in super::super) settings_editor_language_select: Option<Entity<SettingsStringSelectState>>,
     pub(in super::super) settings_editor_language_select_subscription: Option<Subscription>,
-    pub(in super::super) settings_font_family_select: Option<Entity<SettingsStringSelectState>>,
+    pub(in super::super) settings_font_family_select: Option<Entity<SettingsFontFamilySelectState>>,
     pub(in super::super) settings_font_family_select_subscription: Option<Subscription>,
     pub(in super::super) settings_editor_font_family_select:
-        Option<Entity<SettingsStringSelectState>>,
+        Option<Entity<SettingsFontFamilySelectState>>,
     pub(in super::super) settings_editor_font_family_select_subscription: Option<Subscription>,
     pub(in super::super) settings_editor_autosave_select: Option<Entity<SettingsStringSelectState>>,
     pub(in super::super) settings_editor_autosave_select_subscription: Option<Subscription>,

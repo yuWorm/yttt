@@ -13,6 +13,7 @@ use gpui_component::{
     highlighter::SyntaxHighlighter,
     input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent, Rope, StepAction},
     scroll::ScrollableElement as _,
+    searchable_list::{SearchableListDelegate, SearchableListItem},
     select::{SearchableVec, Select, SelectEvent, SelectState},
 };
 use yttt_terminal::input::{KeyState, TerminalKeyEvent};
@@ -62,6 +63,7 @@ use std::{
 };
 
 type SettingsStringSelectState = SelectState<SearchableVec<String>>;
+type SettingsFontFamilySelectState = SelectState<FontFamilyOptions>;
 
 const TERMINAL_THEME_FOLLOW_UI: &str = "Follow UI theme";
 const ICON_THEME_BUILTIN: &str = "Built-in";
@@ -191,7 +193,7 @@ use crate::{
             rename_project_entry, scan_project_directory,
         },
         settings::font_options::{
-            font_family_option_for_setting, font_family_options_from_system,
+            FontFamilyOptions, font_family_option_for_setting, font_family_options_from_system,
             font_family_setting_from_option, terminal_font_family_option_for_setting,
             terminal_font_family_options_from_system, terminal_font_family_setting_from_option,
         },

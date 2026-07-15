@@ -1123,12 +1123,16 @@ fn setting_row(
     workbench_settings_row(style.control_width, theme, title, description, control)
 }
 
-fn settings_select_control(
-    select: Entity<SettingsStringSelectState>,
+fn settings_select_control<D>(
+    select: Entity<SelectState<D>>,
     theme: WorkbenchTheme,
     searchable: bool,
     search_placeholder: &'static str,
-) -> Select<SearchableVec<String>> {
+) -> Select<D>
+where
+    D: SearchableListDelegate + 'static,
+    <D::Item as SearchableListItem>::Value: Clone + PartialEq,
+{
     let select_style = yttt_select_style(theme);
     Select::new(&select)
         .small()
