@@ -5,8 +5,8 @@ pub mod startup;
 use std::rc::Rc;
 
 use gpui::{
-    App, AppContext, Bounds, Entity, Pixels, QuitMode, Window, WindowBounds, WindowOptions, px,
-    size,
+    App, AppContext, Bounds, Entity, Pixels, QuitMode, Styled, Window, WindowBackgroundAppearance,
+    WindowBounds, WindowOptions, px, size, transparent_black,
 };
 use gpui_component::{Root as ComponentRoot, Theme, TitleBar};
 
@@ -61,7 +61,7 @@ pub fn run() {
                 register_workbench_keybinding_interceptor(cx, &view);
                 register_workbench_focus_restore(window, cx, &view);
                 register_workbench_close_guard(window, cx, &view);
-                cx.new(|cx| ComponentRoot::new(view, window, cx))
+                cx.new(|cx| ComponentRoot::new(view, window, cx).bg(transparent_black()))
             })
             .expect("failed to open yttt window");
         });
@@ -116,6 +116,7 @@ pub fn workbench_window_options(bounds: Bounds<Pixels>) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(size(px(960.0), px(640.0))),
+        window_background: WindowBackgroundAppearance::Blurred,
         titlebar: Some(TitleBar::title_bar_options()),
         ..Default::default()
     }

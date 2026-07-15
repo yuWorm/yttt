@@ -16,6 +16,8 @@ use crate::config::{
 };
 
 pub const DEFAULT_THEME_NAME: &str = "one-dark-theme";
+pub const WINDOW_BASE_OPACITY: f32 = 0.70;
+pub const WINDOW_SURFACE_OPACITY: f32 = 0.35;
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
@@ -65,6 +67,29 @@ pub struct ThemeRuntime {
     pub terminal_settings: TerminalSettings,
 }
 
+fn cap_window_surface_opacity(color: &mut Rgba) {
+    color.a = color.a.min(WINDOW_SURFACE_OPACITY);
+}
+
+fn apply_window_surface_opacity(
+    ui: &mut WorkbenchTheme,
+    editor: &mut EditorTheme,
+    terminal: &mut TerminalTheme,
+) {
+    cap_window_surface_opacity(&mut ui.app_background);
+    cap_window_surface_opacity(&mut ui.surface);
+    cap_window_surface_opacity(&mut ui.surface_elevated);
+    cap_window_surface_opacity(&mut ui.titlebar_background);
+    cap_window_surface_opacity(&mut ui.sidebar_background);
+    cap_window_surface_opacity(&mut ui.tabbar_background);
+    cap_window_surface_opacity(&mut ui.terminal_background);
+    cap_window_surface_opacity(&mut ui.active_surface);
+    cap_window_surface_opacity(&mut ui.hover_surface);
+    cap_window_surface_opacity(&mut editor.background);
+    cap_window_surface_opacity(&mut editor.active_line);
+    cap_window_surface_opacity(&mut terminal.background);
+}
+
 impl ThemeRuntime {
     pub fn resolve(settings: &AppSettings, store: &ThemeStore) -> Self {
         let selected = store
@@ -72,19 +97,22 @@ impl ThemeRuntime {
             .or_else(|| store.theme(DEFAULT_THEME_NAME))
             .cloned()
             .unwrap_or_else(AppTheme::one_dark);
-        let terminal = settings
+        let mut terminal = settings
             .theme
             .terminal
             .as_deref()
             .and_then(|terminal_theme| store.theme(terminal_theme))
             .map(|theme| theme.terminal.clone())
             .unwrap_or_else(|| selected.terminal.clone());
+        let mut ui = selected.ui;
+        let mut editor = selected.editor;
+        apply_window_surface_opacity(&mut ui, &mut editor, &mut terminal);
 
         Self {
             theme_name: selected.name,
             mode: selected.mode,
-            ui: selected.ui,
-            editor: selected.editor,
+            ui,
+            editor,
             terminal,
             terminal_settings: settings.terminal.clone(),
         }
@@ -283,6 +311,7 @@ impl TerminalTheme {
 
         let mut builder = ColorPalette::builder()
             .background(background_r, background_g, background_b)
+            .background_alpha(self.background.a)
             .foreground(foreground_r, foreground_g, foreground_b)
             .cursor(cursor_r, cursor_g, cursor_b)
             .selection_background(selection_r, selection_g, selection_b);

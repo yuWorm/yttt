@@ -126,7 +126,7 @@ fn selectable_state_classes_distinguish_active_rows() {
 }
 
 #[test]
-fn app_window_options_use_custom_titlebar() {
+fn app_window_options_use_custom_titlebar_and_blurred_background() {
     let bounds = gpui::Bounds {
         origin: gpui::point(gpui::px(0.0), gpui::px(0.0)),
         size: gpui::size(gpui::px(960.0), gpui::px(640.0)),
@@ -135,6 +135,10 @@ fn app_window_options_use_custom_titlebar() {
     let options = workbench_window_options(bounds);
 
     assert!(options.titlebar.is_some());
+    assert_eq!(
+        options.window_background,
+        gpui::WindowBackgroundAppearance::Blurred
+    );
     assert_eq!(
         options.window_min_size,
         Some(gpui::size(gpui::px(960.0), gpui::px(640.0)))
