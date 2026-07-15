@@ -4,8 +4,15 @@ use gpui::{Entity, Subscription};
 use gpui_component::input::InputState;
 
 use crate::ui::settings::{SettingsPageState, keybindings::KeybindingsEditorState};
+use crate::ui::theme::zed::{ZedThemeDetection, ZedThemeImportConflictPolicy};
 
 use super::super::{SettingsFontFamilySelectState, SettingsNumberField, SettingsStringSelectState};
+
+#[derive(Clone)]
+pub(in super::super) struct ZedThemeImportDialogState {
+    pub(in super::super) detection: ZedThemeDetection,
+    pub(in super::super) conflict_policy: ZedThemeImportConflictPolicy,
+}
 
 pub(in super::super) struct SettingsControllerState {
     pub(in super::super) keybinding_warning_lines: Vec<String>,
@@ -50,6 +57,7 @@ pub(in super::super) struct SettingsControllerState {
     pub(in super::super) settings_number_input_subscriptions:
         HashMap<SettingsNumberField, Vec<Subscription>>,
     pub(in super::super) settings_page: SettingsPageState,
+    pub(in super::super) zed_theme_import_dialog: Option<ZedThemeImportDialogState>,
 }
 
 impl SettingsControllerState {
@@ -95,6 +103,7 @@ impl SettingsControllerState {
             settings_number_inputs: HashMap::new(),
             settings_number_input_subscriptions: HashMap::new(),
             settings_page: SettingsPageState::default(),
+            zed_theme_import_dialog: None,
         }
     }
 }

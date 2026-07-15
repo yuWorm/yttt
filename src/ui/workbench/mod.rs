@@ -12,6 +12,7 @@ use gpui_component::{
     dialog::DialogFooter,
     highlighter::SyntaxHighlighter,
     input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent, Rope, StepAction},
+    radio::Radio,
     scroll::ScrollableElement as _,
     searchable_list::{SearchableListDelegate, SearchableListItem},
     select::{SearchableVec, Select, SelectEvent, SelectState},
@@ -48,7 +49,7 @@ use state::{
     overlays::OverlayControllerState,
     palette::PaletteControllerState,
     project::{ProjectControllerState, ProjectTreeClipboard},
-    settings::SettingsControllerState,
+    settings::{SettingsControllerState, ZedThemeImportDialogState},
     terminal::TerminalControllerState,
 };
 
@@ -219,8 +220,10 @@ use crate::{
                 IconTheme, available_icon_theme_names as load_icon_theme_names, load_icon_theme,
             },
             zed::{
-                DetectedZedExtension, ZedThemeDetection, detect_installed_zed_themes,
-                import_detected_zed_themes,
+                DetectedZedExtension, ZedThemeDetection, ZedThemeImportConflictPolicy,
+                detect_installed_zed_themes, import_detected_zed_themes,
+                import_detected_zed_themes_with_policy, zed_icon_theme_output_path,
+                zed_ui_theme_output_path,
             },
         },
         workbench::layout_editor::{
@@ -2509,6 +2512,11 @@ impl WorkbenchView {
             InputOwnerRegistration::blocking(
                 InputOwnerKind::Dialog,
                 InputScopeId::new("overlay.git_diff"),
+            )
+        } else if self.settings.zed_theme_import_dialog.is_some() {
+            InputOwnerRegistration::blocking(
+                InputOwnerKind::Dialog,
+                InputScopeId::new("dialog.zed_theme_import"),
             )
         } else if self.settings.settings_page.is_open {
             InputOwnerRegistration::blocking(

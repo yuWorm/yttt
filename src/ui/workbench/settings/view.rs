@@ -525,21 +525,8 @@ fn settings_appearance_rows(
                 theme,
                 cx,
                 cx.listener(move |this, _, window, cx| {
-                    match this.import_zed_themes_from_settings() {
-                        Ok((ui_theme_count, icon_theme_count)) => {
-                            let context = format!(
-                                "{}: {}; {}: {}",
-                                this.ui_text.get(UiTextKey::SettingsUiTheme),
-                                ui_theme_count,
-                                this.ui_text.get(UiTextKey::SettingsIconTheme),
-                                icon_theme_count
-                            );
-                            this.queue_status_notification(
-                                this.ui_text.get(UiTextKey::SettingsImportZedThemesComplete),
-                                context,
-                            );
-                        }
-                        Err(error) => this.load_error = Some(error),
+                    if let Err(error) = this.open_zed_theme_import_dialog() {
+                        this.load_error = Some(error);
                     }
                     this.flush_pending_status_notifications(window, cx);
                     cx.notify();

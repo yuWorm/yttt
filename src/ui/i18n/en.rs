@@ -374,6 +374,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsImportZedThemesAction => "Import",
         UiTextKey::SettingsImportZedThemesComplete => "Zed themes imported",
         UiTextKey::SettingsImportZedThemesNone => "No compatible Zed themes were detected.",
+        UiTextKey::SettingsImportZedThemesImported => "Already imported",
+        UiTextKey::SettingsImportZedThemesConflictHint => "For already imported themes:",
+        UiTextKey::SettingsImportZedThemesSkipExisting => "Skip existing",
+        UiTextKey::SettingsImportZedThemesOverwriteExisting => "Overwrite existing",
         UiTextKey::SettingsLanguageDetection => "Language detection",
         UiTextKey::SettingsLanguageDetectionDescription => {
             "Detect code editor language from filename, extension, and first line."

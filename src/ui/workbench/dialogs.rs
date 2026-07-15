@@ -214,6 +214,362 @@ pub(super) fn keybinding_edit_dialog(
     )
 }
 
+pub(super) fn zed_theme_import_dialog(
+    cx: &mut Context<WorkbenchView>,
+    ui_text: &UiText,
+    detection: &ZedThemeDetection,
+    conflict_policy: ZedThemeImportConflictPolicy,
+    config_paths: &AppConfigPaths,
+    theme: WorkbenchTheme,
+) -> Div {
+    let dialog = yttt_dialog_style(theme);
+    let ui_output_dir = config_paths.themes_dir();
+    let icon_output_dir = config_paths.icon_themes_dir();
+    let existing_count =
+        detected_zed_theme_existing_count(detection, &ui_output_dir, &icon_output_dir);
+
+    capture_overlay_input(
+        div()
+            .debug_selector(|| "zed-theme-import-dialog".to_string())
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_start()
+            .justify_center()
+            .pt_16()
+            .bg(dialog.overlay)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .w(dialog.max_width)
+                    .max_h(px(640.0))
+                    .rounded(dialog.radius)
+                    .border_1()
+                    .border_color(dialog.border)
+                    .bg(dialog.background)
+                    .p(dialog.padding)
+                    .text_color(dialog.text)
+                    .child(yttt_dialog_header(
+                        "close-zed-theme-import-dialog",
+                        ui_text.get(UiTextKey::SettingsImportZedThemes),
+                        theme,
+                        cx.listener(|this, _, _window, cx| {
+                            this.cancel_zed_theme_import_dialog();
+                            cx.notify();
+                        }),
+                    ))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(dialog.hint)
+                            .child(ui_text.get(UiTextKey::SettingsImportZedThemesDescription)),
+                    )
+                    .when(detection.ui_theme_count() > 0, |this| {
+                        this.child(zed_theme_import_panel(
+                            ui_text.get(UiTextKey::OnboardingZedUiThemes),
+                            &detection.extensions,
+                            false,
+                            &ui_output_dir,
+                            &icon_output_dir,
+                            ui_text,
+                            theme,
+                        ))
+                    })
+                    .when(detection.icon_theme_count() > 0, |this| {
+                        this.child(zed_theme_import_panel(
+                            ui_text.get(UiTextKey::OnboardingZedIconThemes),
+                            &detection.extensions,
+                            true,
+                            &ui_output_dir,
+                            &icon_output_dir,
+                            ui_text,
+                            theme,
+                        ))
+                    })
+                    .when(!detection.warnings.is_empty(), |this| {
+                        this.child(
+                            div()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(theme.warning)
+                                .bg(theme.surface_elevated)
+                                .px_3()
+                                .py_2()
+                                .text_xs()
+                                .text_color(theme.warning)
+                                .child(format!(
+                                    "{} ({})",
+                                    ui_text.get(UiTextKey::OnboardingZedDetectionWarnings),
+                                    detection.warnings.len()
+                                )),
+                        )
+                    })
+                    .when(existing_count > 0, |this| {
+                        this.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(theme.border)
+                                .bg(theme.surface_elevated)
+                                .px_3()
+                                .py_2()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(dialog.hint)
+                                        .child(
+                                            ui_text.get(
+                                                UiTextKey::SettingsImportZedThemesConflictHint,
+                                            ),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_4()
+                                        .child(
+                                            div()
+                                                .debug_selector(|| {
+                                                    "zed-theme-import-policy-skip".to_string()
+                                                })
+                                                .child(
+                                                    Radio::new("zed-theme-import-policy-skip-radio")
+                                                        .small()
+                                                        .label(
+                                                            ui_text.get(
+                                                                UiTextKey::SettingsImportZedThemesSkipExisting,
+                                                            ),
+                                                        )
+                                                        .checked(
+                                                            conflict_policy
+                                                                == ZedThemeImportConflictPolicy::SkipExisting,
+                                                        )
+                                                        .on_click(cx.listener(
+                                                            |this, checked, _window, cx| {
+                                                                if *checked {
+                                                                    this.set_zed_theme_import_conflict_policy(
+                                                                        ZedThemeImportConflictPolicy::SkipExisting,
+                                                                    );
+                                                                    cx.notify();
+                                                                }
+                                                            },
+                                                        )),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .debug_selector(|| {
+                                                    "zed-theme-import-policy-overwrite".to_string()
+                                                })
+                                                .child(
+                                                    Radio::new(
+                                                        "zed-theme-import-policy-overwrite-radio",
+                                                    )
+                                                    .small()
+                                                    .label(
+                                                        ui_text.get(
+                                                            UiTextKey::SettingsImportZedThemesOverwriteExisting,
+                                                        ),
+                                                    )
+                                                    .checked(
+                                                        conflict_policy
+                                                            == ZedThemeImportConflictPolicy::OverwriteExisting,
+                                                    )
+                                                    .on_click(cx.listener(
+                                                        |this, checked, _window, cx| {
+                                                            if *checked {
+                                                                this.set_zed_theme_import_conflict_policy(
+                                                                    ZedThemeImportConflictPolicy::OverwriteExisting,
+                                                                );
+                                                                cx.notify();
+                                                            }
+                                                        },
+                                                    )),
+                                                ),
+                                        ),
+                                ),
+                        )
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(yttt_dialog_button(
+                                cx,
+                                "cancel-zed-theme-import",
+                                ui_text.get(UiTextKey::Cancel),
+                                YtttButtonVariant::Secondary,
+                                theme,
+                                cx.listener(|this, _, _window, cx| {
+                                    this.cancel_zed_theme_import_dialog();
+                                    cx.notify();
+                                }),
+                            )
+                            .debug_selector(|| "cancel-zed-theme-import".to_string()),
+                        )
+                            .child(yttt_dialog_button(
+                                cx,
+                                "confirm-zed-theme-import",
+                                ui_text.get(UiTextKey::SettingsImportZedThemesAction),
+                                YtttButtonVariant::Primary,
+                                theme,
+                                cx.listener(|this, _, window, cx| {
+                                    match this.confirm_zed_theme_import_dialog() {
+                                        Ok((ui_theme_count, icon_theme_count)) => {
+                                            let context = format!(
+                                                "{}: {}; {}: {}",
+                                                this.ui_text.get(UiTextKey::SettingsUiTheme),
+                                                ui_theme_count,
+                                                this.ui_text.get(UiTextKey::SettingsIconTheme),
+                                                icon_theme_count
+                                            );
+                                            this.queue_status_notification(
+                                                this.ui_text.get(
+                                                    UiTextKey::SettingsImportZedThemesComplete,
+                                                ),
+                                                context,
+                                            );
+                                        }
+                                        Err(error) => this.load_error = Some(error),
+                                    }
+                                    this.flush_pending_status_notifications(window, cx);
+                                    cx.notify();
+                                }),
+                            )
+                            .debug_selector(|| "confirm-zed-theme-import".to_string()),
+                        )
+                    ),
+            ),
+    )
+}
+
+fn detected_zed_theme_existing_count(
+    detection: &ZedThemeDetection,
+    ui_output_dir: &Path,
+    icon_output_dir: &Path,
+) -> usize {
+    detection
+        .extensions
+        .iter()
+        .map(|extension| {
+            extension
+                .ui_theme_names
+                .iter()
+                .filter(|name| {
+                    zed_ui_theme_output_path(&extension.id, name, ui_output_dir).exists()
+                })
+                .count()
+                + if zed_icon_theme_output_path(&extension.id, icon_output_dir).exists() {
+                    extension.icon_theme_names.len()
+                } else {
+                    0
+                }
+        })
+        .sum()
+}
+
+fn zed_theme_import_panel(
+    title: &'static str,
+    extensions: &[DetectedZedExtension],
+    icon_themes: bool,
+    ui_output_dir: &Path,
+    icon_output_dir: &Path,
+    ui_text: &UiText,
+    theme: WorkbenchTheme,
+) -> Div {
+    let id_prefix = if icon_themes {
+        "zed-theme-import-icon-theme"
+    } else {
+        "zed-theme-import-ui-theme"
+    };
+    let mut rows = div().flex().flex_col().gap_1();
+    let mut index = 0usize;
+    for extension in extensions {
+        let names = if icon_themes {
+            &extension.icon_theme_names
+        } else {
+            &extension.ui_theme_names
+        };
+        for name in names {
+            let row_index = index;
+            index += 1;
+            let imported = if icon_themes {
+                zed_icon_theme_output_path(&extension.id, icon_output_dir).exists()
+            } else {
+                zed_ui_theme_output_path(&extension.id, name, ui_output_dir).exists()
+            };
+            let row_selector = format!("{id_prefix}-{row_index}");
+            let imported_selector = format!("{id_prefix}-imported-{row_index}");
+            rows = rows.child(
+                div()
+                    .id(SharedString::from(row_selector.clone()))
+                    .debug_selector(move || row_selector.clone())
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .rounded_md()
+                    .px_3()
+                    .py_2()
+                    .bg(theme.surface_elevated)
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .text_sm()
+                            .text_color(theme.text)
+                            .truncate()
+                            .child(name.clone()),
+                    )
+                    .when(imported, |this| {
+                        this.child(
+                            div()
+                                .id(SharedString::from(imported_selector.clone()))
+                                .debug_selector(move || imported_selector.clone())
+                                .flex_none()
+                                .rounded_full()
+                                .bg(theme.active_surface)
+                                .px_2()
+                                .py_1()
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(ui_text.get(UiTextKey::SettingsImportZedThemesImported)),
+                        )
+                    })
+                    .child(
+                        div()
+                            .max_w(px(120.0))
+                            .flex_none()
+                            .text_xs()
+                            .text_color(theme.text_subtle)
+                            .truncate()
+                            .child(extension.name.clone()),
+                    ),
+            );
+        }
+    }
+
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.text_muted)
+                .child(format!("{title} ({index})")),
+        )
+        .child(div().max_h(px(160.0)).overflow_y_scrollbar().child(rows))
+}
+
 pub(super) fn file_conflict_dialog(
     cx: &mut Context<WorkbenchView>,
     ui_text: &UiText,
