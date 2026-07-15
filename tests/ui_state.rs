@@ -478,7 +478,7 @@ fn project_sidebar_context_menu_can_create_project(cx: &mut gpui::TestAppContext
 }
 
 #[gpui::test]
-fn root_view_error_notification_close_button_dismisses_error(cx: &mut gpui::TestAppContext) {
+fn root_view_error_notification_auto_dismisses(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
@@ -495,18 +495,19 @@ fn root_view_error_notification_close_button_dismisses_error(cx: &mut gpui::Test
         cx.notify();
     });
     cx.refresh().unwrap();
+    cx.run_until_parked();
 
-    let close = cx
-        .debug_bounds("error-notification-close")
-        .expect("error notification should expose a visible close button");
-    cx.simulate_click(close.center(), gpui::Modifiers::none());
-    cx.refresh().unwrap();
+    cx.background_executor.advance_clock(Duration::from_secs(5));
+    cx.run_until_parked();
+    cx.background_executor
+        .advance_clock(Duration::from_millis(200));
+    cx.run_until_parked();
 
     cx.read(|app| {
         let message = root.read(app).visible_error_message();
         assert!(
             message.is_none(),
-            "clicking the close button should dismiss the error notification, got {message:?}"
+            "error notification should auto-dismiss, got {message:?}"
         );
     });
 }
@@ -967,8 +968,8 @@ fn root_view_open_project_path_records_visible_load_error() {
             .contains("failed to parse project layout")
     );
     let item = root.visible_error_notification_item().unwrap();
-    assert!(item.title.contains("failed to parse project layout"));
-    assert_eq!(item.context, "Error");
+    assert!(matches!(item.title.as_str(), "Error" | "错误"));
+    assert!(item.context.contains("failed to parse project layout"));
     assert_eq!(item.tone, ToastTone::Error);
 }
 
@@ -2869,8 +2870,9 @@ fn root_view_project_open_surfaces_personal_layout_warning() {
     root.open_project_path(&project_dir).unwrap();
 
     let notification = root.visible_error_notification_item().unwrap();
-    assert!(notification.title.contains("invalid personal layout"));
-    assert!(notification.title.contains(&local.display().to_string()));
+    assert!(matches!(notification.title.as_str(), "Error" | "错误"));
+    assert!(notification.context.contains("invalid personal layout"));
+    assert!(notification.context.contains(&local.display().to_string()));
     assert_eq!(notification.tone, ToastTone::Error);
 }
 
@@ -5487,8 +5489,8 @@ fn root_view_reports_missing_notification_target() {
         Some("pane not found: missing-pane")
     );
     let item = root.visible_error_notification_item().unwrap();
-    assert_eq!(item.title, "pane not found: missing-pane");
-    assert_eq!(item.context, "Error");
+    assert_eq!(item.title, "Error");
+    assert_eq!(item.context, "pane not found: missing-pane");
     assert_eq!(item.tone, ToastTone::Error);
 }
 

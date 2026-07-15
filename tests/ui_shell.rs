@@ -6,7 +6,7 @@ use yttt::config::{
 use yttt::ui::app::workbench_window_options;
 use yttt::ui::components::{
     SelectableState, notification_tone_for_toast, selectable_state_classes,
-    workbench_agent_notification,
+    workbench_agent_notification, workbench_error_notification,
 };
 use yttt::ui::editor::{DocumentId, WorkItemId};
 use yttt::ui::i18n::{Locale, UiText};
@@ -568,6 +568,45 @@ fn agent_notifications_have_a_visible_working_close_button(cx: &mut gpui::TestAp
     assert!(
         closed.get(),
         "clicking the close button should dismiss the notification"
+    );
+}
+
+#[gpui::test]
+fn error_notifications_have_a_visible_working_close_button(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let closed = Rc::new(Cell::new(false));
+    let closed_for_callback = closed.clone();
+    let (_notification, cx) = cx.add_window_view(move |_, _| {
+        workbench_error_notification(
+            ToastItem {
+                title: "Error".to_string(),
+                context: "Could not open the requested project because its layout is invalid"
+                    .to_string(),
+                tone: ToastTone::Error,
+            },
+            WorkbenchTheme::one_dark(),
+        )
+        .autohide(false)
+        .on_close(move |_, _| closed_for_callback.set(true))
+    });
+    cx.background_executor
+        .advance_clock(Duration::from_millis(300));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    cx.simulate_click(
+        gpui::point(gpui::px(346.0), gpui::px(14.0)),
+        gpui::Modifiers::none(),
+    );
+    cx.background_executor
+        .advance_clock(Duration::from_millis(200));
+    cx.run_until_parked();
+
+    assert!(
+        closed.get(),
+        "clicking the close button should dismiss the error notification"
     );
 }
 
