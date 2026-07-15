@@ -17,6 +17,11 @@ impl Render for WorkbenchView {
             && !focus_handle.contains_focused(window, cx)
             && self.queue_default_active_work_item_focus();
 
+        let onboarding_terminal_font_select = self
+            .onboarding
+            .as_ref()
+            .is_some_and(|state| state.step == OnboardingStep::Font)
+            .then(|| self.settings_font_family_select(window, cx));
         let body = if let Some(onboarding) = self.onboarding.as_ref() {
             let command_palette_keybinding =
                 self.display_keybinding_for_command(CommandId::CommandPaletteOpen);
@@ -25,6 +30,7 @@ impl Render for WorkbenchView {
                 onboarding,
                 &self.ui_text,
                 self.theme_runtime.ui,
+                onboarding_terminal_font_select.as_ref(),
                 command_palette_keybinding,
             )
         } else if self.workspace.opened_projects().is_empty() {
@@ -317,7 +323,8 @@ impl Render for WorkbenchView {
             root = root.child(dialog_layer);
         }
 
-        if self.should_auto_focus_workspace()
+        if self.onboarding.is_none()
+            && self.should_auto_focus_workspace()
             && !focus_handle.contains_focused(window, cx)
             && !default_active_content_focus_scheduled
         {

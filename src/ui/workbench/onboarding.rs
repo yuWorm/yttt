@@ -4,6 +4,7 @@ use super::*;
 pub(super) enum OnboardingStep {
     #[default]
     Language,
+    Font,
     Layout,
     Agent,
     ZedImport,
@@ -46,10 +47,17 @@ pub(super) fn onboarding_view(
     state: &OnboardingState,
     ui_text: &UiText,
     theme: WorkbenchTheme,
+    terminal_font_select: Option<&Entity<SettingsFontFamilySelectState>>,
     command_palette_keybinding: Option<String>,
 ) -> Div {
     let step = match state.step {
         OnboardingStep::Language => language_step(cx, state, ui_text, theme),
+        OnboardingStep::Font => terminal_font_step(
+            cx,
+            ui_text,
+            theme,
+            terminal_font_select.expect("terminal font select must exist on the font step"),
+        ),
         OnboardingStep::Layout => layout_step(cx, state, ui_text, theme),
         OnboardingStep::Agent => agent_step(cx, state, ui_text, theme),
         OnboardingStep::ZedImport => zed_import_step(cx, state, ui_text, theme),
@@ -200,6 +208,116 @@ fn language_step(
         )
 }
 
+fn terminal_font_step(
+    cx: &mut Context<WorkbenchView>,
+    ui_text: &UiText,
+    theme: WorkbenchTheme,
+    font_select: &Entity<SettingsFontFamilySelectState>,
+) -> Div {
+    let select_style = yttt_select_style(theme);
+    let font_select = Select::new(font_select)
+        .small()
+        .menu_width(select_style.menu_width)
+        .search_placeholder(ui_text.get(UiTextKey::SettingsSearchFont))
+        .appearance(true)
+        .cleanable(false)
+        .w(select_style.width)
+        .h(select_style.height)
+        .rounded(select_style.radius)
+        .bg(select_style.background)
+        .border_color(select_style.border)
+        .text_color(select_style.text);
+
+    div()
+        .debug_selector(|| "onboarding-terminal-font-step".to_string())
+        .flex()
+        .flex_col()
+        .gap_4()
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.text)
+                        .child(ui_text.get(UiTextKey::OnboardingFontHeading)),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.text_muted)
+                        .child(ui_text.get(UiTextKey::OnboardingFontSubtitle)),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .rounded_lg()
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.surface_elevated)
+                .p_4()
+                .child(
+                    div()
+                        .debug_selector(|| "onboarding-terminal-font-select".to_string())
+                        .w(select_style.width)
+                        .h(select_style.height)
+                        .child(font_select),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "onboarding-terminal-font-recommendation".to_string())
+                        .rounded_md()
+                        .border_1()
+                        .border_color(theme.warning)
+                        .bg(theme.surface_elevated)
+                        .px_3()
+                        .py_2()
+                        .text_xs()
+                        .text_color(theme.warning)
+                        .child(ui_text.get(UiTextKey::OnboardingFontRecommendation)),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .justify_between()
+                .child(
+                    yttt_button(
+                        "onboarding-font-back",
+                        ui_text.get(UiTextKey::OnboardingBack),
+                        YtttButtonVariant::Secondary,
+                        theme,
+                        cx,
+                    )
+                    .debug_selector(|| "onboarding-font-back".to_string())
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.return_to_onboarding_language();
+                        cx.notify();
+                    })),
+                )
+                .child(
+                    yttt_button(
+                        "onboarding-font-next",
+                        ui_text.get(UiTextKey::OnboardingNext),
+                        YtttButtonVariant::Primary,
+                        theme,
+                        cx,
+                    )
+                    .debug_selector(|| "onboarding-font-next".to_string())
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.advance_onboarding();
+                        cx.notify();
+                    })),
+                ),
+        )
+}
+
 fn layout_step(
     cx: &mut Context<WorkbenchView>,
     state: &OnboardingState,
@@ -280,15 +398,15 @@ fn layout_step(
                 .justify_between()
                 .child(
                     yttt_button(
-                        "onboarding-language-back",
+                        "onboarding-layout-back",
                         ui_text.get(UiTextKey::OnboardingBack),
                         YtttButtonVariant::Secondary,
                         theme,
                         cx,
                     )
-                    .debug_selector(|| "onboarding-language-back".to_string())
+                    .debug_selector(|| "onboarding-layout-back".to_string())
                     .on_click(cx.listener(|this, _, _window, cx| {
-                        this.return_to_onboarding_language();
+                        this.return_to_onboarding_terminal_font();
                         cx.notify();
                     })),
                 )

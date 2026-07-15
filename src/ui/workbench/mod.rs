@@ -588,7 +588,8 @@ impl WorkbenchView {
     pub fn advance_onboarding(&mut self) {
         if let Some(state) = &mut self.onboarding {
             state.step = match state.step {
-                OnboardingStep::Language => OnboardingStep::Layout,
+                OnboardingStep::Language => OnboardingStep::Font,
+                OnboardingStep::Font => OnboardingStep::Layout,
                 OnboardingStep::Layout => OnboardingStep::Agent,
                 OnboardingStep::Agent => OnboardingStep::ZedImport,
                 OnboardingStep::ZedImport => OnboardingStep::ZedImport,
@@ -599,6 +600,12 @@ impl WorkbenchView {
     pub fn return_to_onboarding_language(&mut self) {
         if let Some(state) = &mut self.onboarding {
             state.step = OnboardingStep::Language;
+        }
+    }
+
+    pub fn return_to_onboarding_terminal_font(&mut self) {
+        if let Some(state) = &mut self.onboarding {
+            state.step = OnboardingStep::Font;
         }
     }
 

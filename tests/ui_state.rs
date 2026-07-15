@@ -697,6 +697,7 @@ fn first_run_onboarding_persists_separate_tabs_and_does_not_repeat() {
     root.select_onboarding_agent(BuiltinAgent::OpenCode);
     assert_eq!(root.onboarding_agent(), Some(BuiltinAgent::Codex));
     root.advance_onboarding();
+    root.advance_onboarding();
     root.select_onboarding_layout(DefaultLayoutKind::SeparateTabs);
     root.advance_onboarding();
     root.select_onboarding_agent(BuiltinAgent::OpenCode);
@@ -734,6 +735,7 @@ fn first_run_onboarding_persists_split_view() {
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut root = WorkbenchView::with_config_paths(paths.clone());
 
+    root.advance_onboarding();
     root.advance_onboarding();
     root.advance_onboarding();
     root.select_onboarding_agent(BuiltinAgent::Claude);
@@ -786,10 +788,13 @@ fn force_onboarding_overrides_the_persisted_completion_marker() {
 }
 
 #[gpui::test]
-fn first_run_onboarding_selects_layout_before_agent(cx: &mut gpui::TestAppContext) {
+fn first_run_onboarding_selects_font_then_layout_before_agent(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut settings = AppSettings::default();
+    settings.terminal.font_family = "Onboarding Test Font".to_string();
+    save_settings(&paths, &settings).unwrap();
     let view_paths = paths.clone();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
@@ -861,6 +866,51 @@ fn first_run_onboarding_selects_layout_before_agent(cx: &mut gpui::TestAppContex
     cx.simulate_click(language_next.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     assert!(cx.debug_bounds("onboarding-language-step").is_none());
+    assert!(cx.debug_bounds("onboarding-terminal-font-step").is_some());
+    assert!(cx.debug_bounds("onboarding-terminal-font-select").is_some());
+    assert!(
+        cx.debug_bounds("onboarding-terminal-font-recommendation")
+            .is_some()
+    );
+    assert!(cx.debug_bounds("onboarding-layout-split").is_none());
+    let font_select = cx.debug_bounds("onboarding-terminal-font-select").unwrap();
+    cx.simulate_click(font_select.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("up");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        load_or_create_settings(&paths)
+            .unwrap()
+            .settings
+            .terminal
+            .font_family,
+        ""
+    );
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).theme_runtime().terminal_settings.font_family,
+            ""
+        );
+    });
+
+    let font_back = cx
+        .debug_bounds("onboarding-font-back")
+        .expect("terminal font step should allow returning to language");
+    cx.simulate_click(font_back.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("onboarding-language-step").is_some());
+
+    let language_next = cx.debug_bounds("onboarding-language-next").unwrap();
+    cx.simulate_click(language_next.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    let font_next = cx
+        .debug_bounds("onboarding-font-next")
+        .expect("terminal font step should expose next");
+    cx.simulate_click(font_next.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("onboarding-terminal-font-step").is_none());
     assert!(cx.debug_bounds("onboarding-layout-split").is_some());
     assert!(cx.debug_bounds("onboarding-layout-tabs").is_some());
     assert!(cx.debug_bounds("onboarding-next").is_some());
@@ -892,7 +942,7 @@ fn first_run_onboarding_selects_layout_before_agent(cx: &mut gpui::TestAppContex
     ] {
         assert!(
             cx.debug_bounds(selector).is_some(),
-            "{agent} choice should render on the second step"
+            "{agent} choice should render on the agent step"
         );
     }
 
