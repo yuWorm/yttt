@@ -554,6 +554,7 @@ impl WorkbenchView {
     ) -> Option<Div> {
         let theme = self.theme_runtime.ui;
         let editor_theme = self.theme_runtime.editor;
+        let panel_background = git_diff_panel_background(theme);
         let editor_appearance = EditorAppearance::from(&self.app_settings.editor);
         let panel = self.overlays.git_diff_panel.as_mut()?;
         let focus_handle = panel
@@ -683,7 +684,7 @@ impl WorkbenchView {
                         .rounded_lg()
                         .border_1()
                         .border_color(theme.border)
-                        .bg(theme.surface)
+                        .bg(panel_background)
                         .child(
                             div()
                                 .flex()
@@ -1767,6 +1768,10 @@ fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
     color
 }
 
+fn git_diff_panel_background(theme: WorkbenchTheme) -> Rgba {
+    yttt_panel_style(YtttPanelKind::Editor, theme).background
+}
+
 fn git_diff_message(message: impl Into<SharedString>, color: Rgba) -> AnyElement {
     div()
         .flex()
@@ -1898,6 +1903,14 @@ mod tests {
             new_line,
             content: content.to_string(),
         }
+    }
+
+    #[test]
+    fn diff_panel_background_is_opaque_for_translucent_window_themes() {
+        let mut theme = WorkbenchTheme::one_dark();
+        theme.surface.a = 0.04;
+
+        assert_eq!(git_diff_panel_background(theme), theme.surface.alpha(1.0));
     }
 
     #[test]
