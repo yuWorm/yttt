@@ -186,6 +186,20 @@ fn parser_language(language_id: EditorLanguageId) -> Option<Language> {
         | EditorLanguageId::Jsonc
         | EditorLanguageId::Yaml
         | EditorLanguageId::Markdown
+        | EditorLanguageId::Html
+        | EditorLanguageId::Vue
+        | EditorLanguageId::Xml
+        | EditorLanguageId::Css
+        | EditorLanguageId::Scss
+        | EditorLanguageId::Astro
+        | EditorLanguageId::Svelte
+        | EditorLanguageId::Ejs
+        | EditorLanguageId::Erb
+        | EditorLanguageId::Graphql
+        | EditorLanguageId::Sql
+        | EditorLanguageId::Proto
+        | EditorLanguageId::Diff
+        | EditorLanguageId::CMake
         | EditorLanguageId::Make
         | EditorLanguageId::Dockerfile => return None,
         EditorLanguageId::Bash => tree_sitter_bash::LANGUAGE.into(),

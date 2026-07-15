@@ -209,6 +209,20 @@ fn language_catalog_resolves_expanded_editor_languages() {
         ("main.zig", EditorLanguageId::Zig, "zig"),
         ("config.fish", EditorLanguageId::Fish, "fish"),
         ("player.gd", EditorLanguageId::Gdscript, "gdscript"),
+        ("index.html", EditorLanguageId::Html, "html"),
+        ("App.vue", EditorLanguageId::Vue, "html"),
+        ("document.xml", EditorLanguageId::Xml, "html"),
+        ("styles.css", EditorLanguageId::Css, "css"),
+        ("styles.scss", EditorLanguageId::Scss, "css"),
+        ("page.astro", EditorLanguageId::Astro, "astro"),
+        ("Widget.svelte", EditorLanguageId::Svelte, "svelte"),
+        ("view.ejs", EditorLanguageId::Ejs, "ejs"),
+        ("view.erb", EditorLanguageId::Erb, "erb"),
+        ("schema.graphql", EditorLanguageId::Graphql, "graphql"),
+        ("query.sql", EditorLanguageId::Sql, "sql"),
+        ("messages.proto", EditorLanguageId::Proto, "proto"),
+        ("change.patch", EditorLanguageId::Diff, "diff"),
+        ("module.cmake", EditorLanguageId::CMake, "cmake"),
     ];
 
     for (path, expected_language, expected_highlighter) in cases {

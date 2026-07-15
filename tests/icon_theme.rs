@@ -30,12 +30,18 @@ const THEME_JSON: &str = r#"
       "expanded": "icons/chevron-down.svg"
     },
     "file_stems": { "Cargo.toml": "toml" },
-    "file_suffixes": { "rs": "rust", "config.js": "javascript" },
+    "file_suffixes": {
+      "rs": "rust",
+      "config.js": "javascript",
+      "vue": "vue",
+      "html": "missing"
+    },
     "file_icons": {
       "default": { "path": "icons/default.svg" },
       "rust": { "path": "icons/rust.svg" },
       "toml": { "path": "icons/toml.svg" },
-      "javascript": { "path": "icons/javascript.svg" }
+      "javascript": { "path": "icons/javascript.svg" },
+      "vue": { "path": "icons/vue.svg" }
     }
   }]
 }
@@ -54,6 +60,7 @@ fn zed_compatible_icon_theme_resolves_icons_and_loads_svg_assets() {
         "rust",
         "toml",
         "javascript",
+        "vue",
         "folder",
         "folder-open",
         "src",
@@ -91,6 +98,14 @@ fn zed_compatible_icon_theme_resolves_icons_and_loads_svg_assets() {
     assert_asset_path(
         theme.resolve_file(Path::new("eslint.config.js")),
         "fixture-theme/icons/javascript.svg",
+    );
+    assert_asset_path(
+        theme.resolve_file(Path::new("App.vue")),
+        "fixture-theme/icons/vue.svg",
+    );
+    assert_asset_path(
+        theme.resolve_file(Path::new("index.html")),
+        "fixture-theme/icons/default.svg",
     );
     assert_asset_path(
         theme.resolve_directory(Path::new("src"), false),
