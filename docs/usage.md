@@ -111,6 +111,8 @@ The settings file is `<app config>/settings.toml`. These are the complete defaul
 [general]
 language = "system"
 ui_font_family = ""
+ui_font_size = 16.0
+ui_line_height = 1.618034
 onboarding_completed = false
 
 [theme]

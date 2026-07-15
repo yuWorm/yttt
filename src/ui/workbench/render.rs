@@ -2,6 +2,7 @@ use super::*;
 
 impl Render for WorkbenchView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        window.set_rem_size(px(self.app_settings.general.ui_font_size));
         self.ensure_active_project_file_watcher(window, cx);
         self.flush_pending_git_operations(window, cx);
         self.flush_pending_project_tree_loads(window, cx);
@@ -167,6 +168,7 @@ impl Render for WorkbenchView {
             .relative()
             .bg(self.theme_runtime.ui.app_background)
             .text_color(self.theme_runtime.ui.text)
+            .line_height(relative(self.app_settings.general.ui_line_height))
             .child(workbench_titlebar(
                 self.visible_titlebar_info(),
                 self.theme_runtime.ui,

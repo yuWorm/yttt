@@ -366,6 +366,10 @@ fn settings_appearance_rows(
     let theme = root.theme_runtime.ui;
     let text = root.ui_text;
     let ui_font_select = root.settings_ui_font_family_select(window, cx);
+    let ui_font_size_input =
+        root.settings_number_input(SettingsNumberField::UiFontSize, window, cx);
+    let ui_line_height_input =
+        root.settings_number_input(SettingsNumberField::UiLineHeight, window, cx);
     let ui_theme_select = root.settings_ui_theme_select(window, cx);
     let terminal_theme_select = root.settings_terminal_theme_select(window, cx);
     let icon_theme_select = root.settings_icon_theme_select(window, cx);
@@ -388,6 +392,26 @@ fn settings_appearance_rows(
                 .into_any_element(),
             )
             .debug_selector(|| "settings-ui-font-family-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsUiFontSize),
+                text.get(UiTextKey::SettingsUiFontSizeDescription),
+                settings_number_control(ui_font_size_input, style).into_any_element(),
+            )
+            .debug_selector(|| "settings-ui-font-size-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsUiLineHeight),
+                text.get(UiTextKey::SettingsUiLineHeightDescription),
+                settings_number_control(ui_line_height_input, style).into_any_element(),
+            )
+            .debug_selector(|| "settings-ui-line-height-row".to_string()),
         )
         .child(setting_row(
             style,

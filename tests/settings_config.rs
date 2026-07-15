@@ -53,6 +53,8 @@ fn missing_settings_file_writes_defaults() {
 
     assert_eq!(loaded.settings.general.language, LanguageSetting::System);
     assert_eq!(loaded.settings.general.ui_font_family, "");
+    assert_eq!(loaded.settings.general.ui_font_size, 16.0);
+    assert_eq!(loaded.settings.general.ui_line_height, 1.618_034);
     assert!(!loaded.settings.general.onboarding_completed);
     assert!(!loaded.settings.general.new_tab_command_picker_enabled);
     assert_eq!(
@@ -230,6 +232,8 @@ fn settings_persist_language_and_terminal_scrollbar() {
     let mut settings = AppSettings::default();
     settings.general.language = LanguageSetting::Chinese;
     settings.general.ui_font_family = "  Menlo  ".to_string();
+    settings.general.ui_font_size = 20.0;
+    settings.general.ui_line_height = 1.75;
     settings.general.onboarding_completed = true;
     settings.general.new_tab_command_picker_enabled = true;
     settings.general.new_tab_commands = vec!["nvim .".to_string(), "codex --resume".to_string()];
@@ -240,6 +244,8 @@ fn settings_persist_language_and_terminal_scrollbar() {
 
     assert_eq!(loaded.settings.general.language, LanguageSetting::Chinese);
     assert_eq!(loaded.settings.general.ui_font_family, "Menlo");
+    assert_eq!(loaded.settings.general.ui_font_size, 20.0);
+    assert_eq!(loaded.settings.general.ui_line_height, 1.75);
     assert!(loaded.settings.general.onboarding_completed);
     assert!(loaded.settings.general.new_tab_command_picker_enabled);
     assert_eq!(
@@ -301,7 +307,7 @@ fn settings_persist_editor_and_project_panel_choices() {
 }
 
 #[test]
-fn invalid_editor_and_project_panel_values_are_normalized() {
+fn invalid_general_editor_and_project_panel_values_are_normalized() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
     std::fs::create_dir_all(paths.config_dir()).unwrap();
@@ -310,6 +316,8 @@ fn invalid_editor_and_project_panel_values_are_normalized() {
         r#"
 [general]
 language = "zh-CN"
+ui_font_size = nan
+ui_line_height = 0.5
 
 [terminal]
 font_size = 15.0
@@ -332,6 +340,8 @@ project_sidebar_width = 1.0
     let loaded = load_or_create_settings(&paths).unwrap();
 
     assert_eq!(loaded.settings.general.language, LanguageSetting::Chinese);
+    assert_eq!(loaded.settings.general.ui_font_size, 16.0);
+    assert_eq!(loaded.settings.general.ui_line_height, 1.618_034);
     assert_eq!(loaded.settings.terminal.font_size, 15.0);
     assert_eq!(loaded.settings.editor.font_family, "JetBrains Mono");
     assert_eq!(loaded.settings.editor.font_size, 14.0);
@@ -343,6 +353,12 @@ project_sidebar_width = 1.0
     assert_eq!(loaded.settings.project_panel.project_sidebar_width, 160.0);
 
     for warning in [
+        SettingsLoadWarning::InvalidGeneralValue {
+            field: "ui_font_size",
+        },
+        SettingsLoadWarning::InvalidGeneralValue {
+            field: "ui_line_height",
+        },
         SettingsLoadWarning::InvalidEditorValue { field: "autosave" },
         SettingsLoadWarning::InvalidEditorValue { field: "font_size" },
         SettingsLoadWarning::InvalidEditorValue {

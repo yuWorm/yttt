@@ -3500,6 +3500,14 @@ fn appearance_settings_group_renders_zed_import_button(cx: &mut gpui::TestAppCon
         cx.debug_bounds("settings-ui-font-family-row").is_some(),
         "Appearance settings should expose the UI font selector"
     );
+    assert!(
+        cx.debug_bounds("settings-ui-font-size-row").is_some(),
+        "Appearance settings should expose the UI font size control"
+    );
+    assert!(
+        cx.debug_bounds("settings-ui-line-height-row").is_some(),
+        "Appearance settings should expose the UI line-height control"
+    );
 
     assert!(
         cx.debug_bounds("settings-import-zed-themes").is_some(),
@@ -3794,20 +3802,18 @@ fn root_view_custom_terminal_shell_setting_persists() {
 }
 
 #[test]
-fn root_view_ui_font_family_setting_persists_and_can_reset() {
+fn root_view_ui_font_settings_persist_and_family_can_reset() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut root = WorkbenchView::with_config_paths(paths.clone());
 
     root.set_ui_font_family("  Menlo  ").unwrap();
-    assert_eq!(
-        load_or_create_settings(&paths)
-            .unwrap()
-            .settings
-            .general
-            .ui_font_family,
-        "Menlo"
-    );
+    root.set_ui_font_size(20.0).unwrap();
+    root.set_ui_line_height(1.75).unwrap();
+    let loaded = load_or_create_settings(&paths).unwrap();
+    assert_eq!(loaded.settings.general.ui_font_family, "Menlo");
+    assert_eq!(loaded.settings.general.ui_font_size, 20.0);
+    assert_eq!(loaded.settings.general.ui_line_height, 1.75);
 
     root.set_ui_font_family("").unwrap();
     assert_eq!(
@@ -3818,6 +3824,31 @@ fn root_view_ui_font_family_setting_persists_and_can_reset() {
             .ui_font_family,
         ""
     );
+}
+
+#[gpui::test]
+fn ui_font_size_updates_window_scale(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths(paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+
+    root.update_in(cx, |root, _window, cx| {
+        root.set_ui_font_size(20.0).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+
+    root.update_in(cx, |_root, window, _cx| {
+        assert_eq!(window.rem_size(), gpui::px(20.0));
+    });
 }
 
 #[test]

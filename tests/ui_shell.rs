@@ -834,6 +834,16 @@ fn settings_rows_are_grouped_by_user_facing_sections() {
     assert!(general_rows.iter().any(|row| row.title == "Language"));
     let appearance_rows = settings_rows_for_group(SettingsGroupId::Appearance, &text);
     assert!(appearance_rows.iter().any(|row| row.title == "UI font"));
+    assert!(
+        appearance_rows
+            .iter()
+            .any(|row| row.title == "UI font size")
+    );
+    assert!(
+        appearance_rows
+            .iter()
+            .any(|row| row.title == "UI line height")
+    );
     assert!(appearance_rows.iter().any(|row| row.title == "Icon theme"));
     assert!(
         appearance_rows

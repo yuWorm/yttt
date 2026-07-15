@@ -147,6 +147,14 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 UiTextKey::SettingsUiFontFamilyDescription,
             ),
             row(
+                UiTextKey::SettingsUiFontSize,
+                UiTextKey::SettingsUiFontSizeDescription,
+            ),
+            row(
+                UiTextKey::SettingsUiLineHeight,
+                UiTextKey::SettingsUiLineHeightDescription,
+            ),
+            row(
                 UiTextKey::SettingsUiTheme,
                 UiTextKey::SettingsUiThemeDescription,
             ),

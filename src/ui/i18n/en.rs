@@ -333,6 +333,12 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsUiFontFamilyDescription => {
             "Font used across YTTT chrome, panels, and controls."
         }
+        UiTextKey::SettingsUiFontSize => "UI font size",
+        UiTextKey::SettingsUiFontSizeDescription => {
+            "Base UI font size in pixels; controls scale proportionally."
+        }
+        UiTextKey::SettingsUiLineHeight => "UI line height",
+        UiTextKey::SettingsUiLineHeightDescription => "Line-height multiplier for interface text.",
         UiTextKey::SettingsUiTheme => "UI theme",
         UiTextKey::SettingsUiThemeDescription => {
             "Theme used for YTTT chrome, panels, and controls."

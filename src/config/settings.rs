@@ -63,11 +63,20 @@ pub fn language_setting_for_locale(locale: Option<&str>) -> LanguageSetting {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub const DEFAULT_UI_FONT_SIZE: f32 = 16.0;
+pub const DEFAULT_UI_LINE_HEIGHT: f32 = 1.618_034;
+pub const MIN_UI_FONT_SIZE: f32 = 8.0;
+pub const MAX_UI_FONT_SIZE: f32 = 32.0;
+pub const MIN_UI_LINE_HEIGHT: f32 = 1.0;
+pub const MAX_UI_LINE_HEIGHT: f32 = 2.5;
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct GeneralSettings {
     pub language: LanguageSetting,
     pub ui_font_family: String,
+    pub ui_font_size: f32,
+    pub ui_line_height: f32,
     pub onboarding_completed: bool,
     pub new_tab_command_picker_enabled: bool,
     pub new_tab_commands: Vec<String>,
@@ -78,6 +87,8 @@ impl Default for GeneralSettings {
         Self {
             language: LanguageSetting::System,
             ui_font_family: String::new(),
+            ui_font_size: DEFAULT_UI_FONT_SIZE,
+            ui_line_height: DEFAULT_UI_LINE_HEIGHT,
             onboarding_completed: false,
             new_tab_command_picker_enabled: false,
             new_tab_commands: vec![
@@ -608,6 +619,23 @@ fn validate_settings(
     warnings: &mut Vec<SettingsLoadWarning>,
 ) -> AppSettings {
     settings.general.ui_font_family = settings.general.ui_font_family.trim().to_string();
+    let general_defaults = GeneralSettings::default();
+    if !settings.general.ui_font_size.is_finite()
+        || !(MIN_UI_FONT_SIZE..=MAX_UI_FONT_SIZE).contains(&settings.general.ui_font_size)
+    {
+        settings.general.ui_font_size = general_defaults.ui_font_size;
+        warnings.push(SettingsLoadWarning::InvalidGeneralValue {
+            field: "ui_font_size",
+        });
+    }
+    if !settings.general.ui_line_height.is_finite()
+        || !(MIN_UI_LINE_HEIGHT..=MAX_UI_LINE_HEIGHT).contains(&settings.general.ui_line_height)
+    {
+        settings.general.ui_line_height = general_defaults.ui_line_height;
+        warnings.push(SettingsLoadWarning::InvalidGeneralValue {
+            field: "ui_line_height",
+        });
+    }
 
     let defaults = TerminalSettings::default();
 

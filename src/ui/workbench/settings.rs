@@ -179,6 +179,23 @@ impl WorkbenchView {
         self.app_settings.general.ui_font_family = font_family.trim().to_string();
         self.save_app_settings_and_refresh_runtime()
     }
+    pub fn set_ui_font_size(&mut self, font_size: f32) -> Result<(), WorkbenchError> {
+        self.app_settings.general.ui_font_size = if font_size.is_finite() {
+            font_size.clamp(MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE)
+        } else {
+            DEFAULT_UI_FONT_SIZE
+        };
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn set_ui_line_height(&mut self, line_height: f32) -> Result<(), WorkbenchError> {
+        self.app_settings.general.ui_line_height = if line_height.is_finite() {
+            line_height.clamp(MIN_UI_LINE_HEIGHT, MAX_UI_LINE_HEIGHT)
+        } else {
+            DEFAULT_UI_LINE_HEIGHT
+        };
+        self.save_app_settings_and_refresh_runtime()
+    }
 
     pub fn set_ui_theme_name(&mut self, theme_name: &str) -> Result<(), WorkbenchError> {
         self.app_settings.theme.name = theme_name.to_string();
@@ -596,6 +613,12 @@ impl WorkbenchView {
 
     pub(super) fn settings_number_value(&self, field: SettingsNumberField) -> String {
         match field {
+            SettingsNumberField::UiFontSize => {
+                format!("{:.1}", self.app_settings.general.ui_font_size)
+            }
+            SettingsNumberField::UiLineHeight => {
+                format!("{:.2}", self.app_settings.general.ui_line_height)
+            }
             SettingsNumberField::FontSize => {
                 format!("{:.1}", self.app_settings.terminal.font_size)
             }
@@ -635,6 +658,16 @@ impl WorkbenchView {
     ) -> Result<(), WorkbenchError> {
         let value = value.trim();
         match field {
+            SettingsNumberField::UiFontSize => {
+                if let Ok(value) = value.parse::<f32>() {
+                    self.set_ui_font_size(value)?;
+                }
+            }
+            SettingsNumberField::UiLineHeight => {
+                if let Ok(value) = value.parse::<f32>() {
+                    self.set_ui_line_height(value)?;
+                }
+            }
             SettingsNumberField::FontSize => {
                 if let Ok(value) = value.parse::<f32>() {
                     self.set_terminal_font_size(value)?;
@@ -700,6 +733,26 @@ impl WorkbenchView {
             StepAction::Decrement => -1.0,
         };
         match field {
+            SettingsNumberField::UiFontSize => {
+                let value = value
+                    .trim()
+                    .parse::<f32>()
+                    .unwrap_or(self.app_settings.general.ui_font_size);
+                format!(
+                    "{:.1}",
+                    (value + sign).clamp(MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE)
+                )
+            }
+            SettingsNumberField::UiLineHeight => {
+                let value = value
+                    .trim()
+                    .parse::<f32>()
+                    .unwrap_or(self.app_settings.general.ui_line_height);
+                format!(
+                    "{:.2}",
+                    (value + sign * 0.05).clamp(MIN_UI_LINE_HEIGHT, MAX_UI_LINE_HEIGHT)
+                )
+            }
             SettingsNumberField::FontSize => {
                 let value = value
                     .trim()
