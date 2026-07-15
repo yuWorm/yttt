@@ -59,7 +59,7 @@ pub fn yttt_panel_style(kind: YtttPanelKind, theme: WorkbenchTheme) -> YtttPanel
         radius,
         padding,
         overlay,
-        background: theme.surface,
+        background: theme.surface.alpha(1.0),
         border: theme.border_strong,
     }
 }

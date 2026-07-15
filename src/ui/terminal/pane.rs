@@ -604,12 +604,7 @@ impl Render for TerminalPaneView {
                 })
         };
 
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .bg(self.theme.terminal_background)
-            .child(body)
+        div().flex().flex_col().flex_1().child(body)
     }
 }
 

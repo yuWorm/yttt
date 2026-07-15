@@ -16,8 +16,7 @@ use crate::config::{
 };
 
 pub const DEFAULT_THEME_NAME: &str = "one-dark-theme";
-pub const WINDOW_BASE_OPACITY: f32 = 0.70;
-pub const WINDOW_SURFACE_OPACITY: f32 = 0.35;
+pub const WINDOW_SURFACE_OPACITY: f32 = 0.72;
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
@@ -121,7 +120,7 @@ impl ThemeRuntime {
     pub fn to_gpui_component_theme_config(&self) -> ThemeConfig {
         let theme = self.ui;
         let mut colors = ThemeConfigColors::default();
-        colors.background = Some(color_hex(theme.app_background).into());
+        colors.background = Some(color_hex(theme.app_background.alpha(1.0)).into());
         colors.foreground = Some(color_hex(theme.text).into());
         colors.border = Some(color_hex(theme.border).into());
         colors.input = Some(color_hex(theme.border).into());

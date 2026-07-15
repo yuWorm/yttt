@@ -40,7 +40,7 @@ impl Render for WorkbenchView {
                 .flex()
                 .flex_1()
                 .relative()
-                .bg(self.theme_runtime.ui.app_background)
+                .bg(gpui::transparent_black())
                 .text_color(self.theme_runtime.ui.text)
                 .child({
                     let sidebar = project_sidebar(
@@ -166,11 +166,7 @@ impl Render for WorkbenchView {
             .flex_col()
             .size_full()
             .relative()
-            .bg(self
-                .theme_runtime
-                .ui
-                .app_background
-                .alpha(crate::ui::theme::WINDOW_BASE_OPACITY))
+            .bg(gpui::transparent_black())
             .text_color(self.theme_runtime.ui.text)
             .line_height(relative(self.app_settings.general.ui_line_height))
             .child(workbench_titlebar(

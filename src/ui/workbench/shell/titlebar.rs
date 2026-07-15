@@ -74,7 +74,6 @@ where
                 .px_3()
                 .text_sm()
                 .text_color(theme.text)
-                .bg(theme.titlebar_background)
                 .child(div().font_semibold().child(info.project_name))
                 .children(info.compact_path.map(|path| {
                     div()

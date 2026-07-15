@@ -87,7 +87,15 @@ fn workbench_theme_maps_to_gpui_component_theme_config() {
 
     assert_eq!(config.name.as_ref(), "one-dark-theme");
     assert_eq!(config.mode, gpui_component::ThemeMode::Dark);
-    assert!(config.colors.background.is_some());
+    assert_eq!(
+        config
+            .colors
+            .background
+            .as_ref()
+            .map(|color| color.to_string())
+            .as_deref(),
+        Some("#23272e")
+    );
     assert!(config.colors.border.is_some());
     assert!(config.colors.input.is_some());
     assert_eq!(
@@ -117,7 +125,7 @@ fn workbench_theme_maps_to_gpui_component_theme_config() {
             .as_ref()
             .map(|color| color.to_string())
             .as_deref(),
-        Some("#1e222759")
+        Some("#1e2227b8")
     );
     assert_eq!(
         config

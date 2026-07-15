@@ -1127,6 +1127,11 @@ fn yttt_panel_style_centralizes_overlay_bounds() {
     assert_eq!(palette.background, theme.surface);
     assert_eq!(settings.border, theme.border_strong);
     assert_eq!(dialog.overlay, gpui::rgba(0x00000073));
+
+    let mut translucent_theme = theme;
+    translucent_theme.surface.a = 0.25;
+    let translucent_settings = yttt_panel_style(YtttPanelKind::Settings, translucent_theme);
+    assert_eq!(translucent_settings.background.a, 1.0);
 }
 
 #[test]
