@@ -884,6 +884,66 @@ mod tests {
     use crate::{model::ids::ProjectId, ui::theme::ThemeRuntime};
 
     #[gpui::test]
+    fn markdown_document_initial_render_mounts_complete_value(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let path = PathBuf::from("/tmp/yttt/LONG.md");
+        let markdown = (0..100)
+            .map(|index| format!("# Heading {index}\n\nBody {index}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let document_id = DocumentId {
+            project_id: ProjectId::new("project"),
+            canonical_path: path.clone(),
+        };
+        let config = super::super::CodeEditorConfig::new(
+            "LONG.md",
+            super::super::CodeEditorLanguageMode::Auto,
+        );
+        let model = ProjectEditorModel::new(
+            document_id,
+            CodeEditorState::new(&path, config, markdown.clone()),
+            DiskFingerprint {
+                exists: true,
+                byte_len: markdown.len() as u64,
+                modified: None,
+                content_hash: 1,
+            },
+        );
+        let appearance = EditorAppearance::default();
+        let markdown_config = MarkdownDocumentConfig::new(
+            Arc::new(
+                ThemeRuntime::default()
+                    .to_markdown_editor_theme(appearance.font_size, appearance.line_height),
+            ),
+            Arc::new(MarkdownEditorStrings::en_us()),
+            UiText::english(),
+        );
+        let (document, mut cx) = cx.add_window_view(move |window, cx| {
+            ProjectEditorDocument::new_with_markdown_config(
+                model,
+                appearance,
+                markdown_config,
+                window,
+                cx,
+            )
+        });
+
+        cx.refresh().unwrap();
+        let rendered_markdown = document.read_with(cx, |document, app| {
+            document
+                .markdown_editor()
+                .expect("Markdown document must use the dedicated editor")
+                .read(app)
+                .markdown(app)
+        });
+        assert_eq!(rendered_markdown, markdown);
+        assert!(
+            cx.debug_bounds("markdown-complete-render-window").is_some(),
+            "the first rendered frame must mount the complete Markdown value"
+        );
+    }
+
+    #[gpui::test]
     fn markdown_document_renders_toggles_edits_and_serializes(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
         let path = PathBuf::from("/tmp/yttt/README.md");
