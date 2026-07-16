@@ -39,6 +39,7 @@ pub fn run() {
             cx.bind_keys(gpui_markdown_editor::default_key_bindings());
             yttt_terminal::init(cx);
             crate::ui::editor::register_builtin_editor_languages();
+            crate::ui::editor::init_vim_mode(cx);
             let config_paths = AppConfigPaths::for_app();
             let (app_settings, theme_runtime) = load_app_runtime(&config_paths);
             Theme::global_mut(cx)

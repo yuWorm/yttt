@@ -353,6 +353,8 @@ pub enum UiTextKey {
     SettingsEditorSoftWrapDescription,
     SettingsEditorLineNumbers,
     SettingsEditorLineNumbersDescription,
+    SettingsEditorVimMode,
+    SettingsEditorVimModeDescription,
     SettingsEditorAutosave,
     SettingsEditorAutosaveDescription,
     SettingsEditorAutosaveOff,

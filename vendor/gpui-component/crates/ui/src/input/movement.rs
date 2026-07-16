@@ -135,6 +135,15 @@ impl InputState {
         self.preferred_column = was_preferred_column;
         cx.notify();
     }
+    /// Move across rendered display lines, including soft-wrapped rows.
+    pub fn move_display_lines(
+        &mut self,
+        lines: isize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_vertical(lines, window, cx);
+    }
 
     pub(super) fn left(&mut self, _: &MoveLeft, _: &mut Window, cx: &mut Context<Self>) {
         self.pause_blink_cursor(cx);

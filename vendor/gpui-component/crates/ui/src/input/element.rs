@@ -521,11 +521,20 @@ impl TextElement {
             }
 
             // cursor bounds
-            let cursor_height = match state.size {
-                crate::Size::Large => 1.,
-                crate::Size::Small => 0.75,
-                _ => 0.85,
-            } * line_height;
+            let cursor_width = match state.cursor_shape {
+                super::InputCursorShape::Bar => CURSOR_WIDTH,
+                super::InputCursorShape::Block => line_height * 0.6,
+            };
+            let cursor_height = match state.cursor_shape {
+                super::InputCursorShape::Bar => {
+                    (match state.size {
+                        crate::Size::Large => 1.,
+                        crate::Size::Small => 0.75,
+                        _ => 0.85,
+                    }) * line_height
+                }
+                super::InputCursorShape::Block => line_height,
+            };
 
             // Match the caret to the deferred scroll target (applied below) that
             // the text paints at; otherwise the caret follows the cursor-scroll
@@ -535,11 +544,9 @@ impl TextElement {
                 .map(|offset| offset.x)
                 .unwrap_or(scroll_offset.x);
 
-            // For Right alignment, clamp cursor within the right edge of bounds so it
-            // stays visible without having to shift the text via scroll_offset.
             let cursor_x = bounds.left() + cursor_pos.x + line_number_width + cursor_scroll_x;
             let cursor_x = if last_layout.text_align == TextAlign::Right {
-                cursor_x.min(bounds.right() - CURSOR_WIDTH)
+                cursor_x.min(bounds.right() - cursor_width)
             } else {
                 cursor_x
             };
@@ -548,7 +555,7 @@ impl TextElement {
                     cursor_x,
                     bounds.top() + cursor_pos.y + ((line_height - cursor_height) / 2.),
                 ),
-                size(CURSOR_WIDTH, cursor_height),
+                size(cursor_width, cursor_height),
             ));
         }
 

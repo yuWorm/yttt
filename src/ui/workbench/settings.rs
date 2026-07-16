@@ -38,6 +38,9 @@ impl WorkbenchView {
     pub fn editor_auto_detect_language(&self) -> bool {
         self.app_settings.editor.auto_detect_language
     }
+    pub fn editor_vim_mode(&self) -> bool {
+        self.app_settings.editor.vim_mode
+    }
 
     pub fn editor_default_language(&self) -> &str {
         &self.app_settings.editor.default_language
@@ -507,6 +510,17 @@ impl WorkbenchView {
         self.sync_editor_document_appearances(window, cx);
         Ok(())
     }
+    pub fn set_editor_vim_mode(
+        &mut self,
+        vim_mode: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), WorkbenchError> {
+        self.app_settings.editor.vim_mode = vim_mode;
+        self.save_app_settings_and_refresh_runtime()?;
+        self.sync_editor_vim_modes(window, cx);
+        Ok(())
+    }
 
     pub fn set_editor_autosave(&mut self, autosave: EditorAutosave) -> Result<(), WorkbenchError> {
         self.app_settings.editor.autosave = autosave;
@@ -648,6 +662,30 @@ impl WorkbenchView {
         for pane in self.terminal.terminal_panes.values() {
             pane.update(cx, |pane, cx| {
                 pane.update_terminal_appearance(terminal_config.clone(), theme, cx);
+            });
+        }
+    }
+
+    fn sync_editor_vim_modes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let enabled = self.app_settings.editor.vim_mode;
+        let project_ids = self
+            .workspace
+            .opened_projects()
+            .iter()
+            .map(|project| project.id.clone())
+            .collect::<Vec<_>>();
+        let documents = project_ids
+            .iter()
+            .flat_map(|project_id| {
+                self.project
+                    .project_editor_runtime
+                    .documents_for_project(project_id)
+                    .map(|(_, document)| document.clone())
+            })
+            .collect::<Vec<_>>();
+        for document in documents {
+            document.update(cx, |document, document_cx| {
+                document.set_vim_mode(enabled, window, document_cx);
             });
         }
     }

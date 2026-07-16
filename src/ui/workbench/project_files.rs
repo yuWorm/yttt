@@ -1447,6 +1447,7 @@ impl WorkbenchView {
             );
             let appearance = EditorAppearance::from(&self.app_settings.editor);
             let markdown_config = self.markdown_document_config();
+            let vim_mode = self.app_settings.editor.vim_mode;
             let document = cx.new(|document_cx| {
                 ProjectEditorDocument::new_with_markdown_config(
                     model,
@@ -1456,6 +1457,7 @@ impl WorkbenchView {
                     document_cx,
                 )
                 .with_breadcrumb_header(breadcrumb_header)
+                .with_vim_mode(vim_mode, window, document_cx)
             });
             let subscription =
                 cx.subscribe_in(&document, window, Self::on_project_editor_document_event);

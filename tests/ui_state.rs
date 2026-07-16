@@ -35,7 +35,7 @@ use yttt::{
     ui::editor::{
         CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, DiskFingerprint, DocumentId,
         EditorAppearance, EditorDiagnosticSeverity, EditorLanguageId, ProjectEditorDocument,
-        ProjectEditorModel, WorkItemId, read_project_file,
+        ProjectEditorModel, VimMode, WorkItemId, read_project_file,
     },
     ui::i18n::{Locale, UiText},
     ui::notifications::{ToastTone, toast_item_for_event, visible_toast_items},
@@ -2325,6 +2325,7 @@ fn editor_display_settings_update_open_documents_without_replacing_state(
         root.set_editor_line_height(1.65, window, cx).unwrap();
         root.set_editor_soft_wrap(true, window, cx).unwrap();
         root.set_editor_line_numbers(false, window, cx).unwrap();
+        root.set_editor_vim_mode(true, window, cx).unwrap();
     });
 
     cx.read(|app| {
@@ -2344,6 +2345,7 @@ fn editor_display_settings_update_open_documents_without_replacing_state(
         assert_eq!(document.appearance().line_height, 1.65);
         assert!(document.appearance().soft_wrap);
         assert!(!document.appearance().line_numbers);
+        assert_eq!(document.vim_mode(), Some(VimMode::Normal));
     });
 
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
@@ -2353,6 +2355,7 @@ fn editor_display_settings_update_open_documents_without_replacing_state(
     assert_eq!(loaded.settings.editor.line_height, 1.65);
     assert!(loaded.settings.editor.soft_wrap);
     assert!(!loaded.settings.editor.line_numbers);
+    assert!(loaded.settings.editor.vim_mode);
 }
 
 #[gpui::test]
@@ -3942,6 +3945,7 @@ fn editor_settings_group_renders_all_effective_controls(cx: &mut gpui::TestAppCo
         "settings-editor-tab-size-row",
         "settings-editor-soft-wrap-row",
         "settings-editor-line-numbers-row",
+        "settings-editor-vim-mode-row",
         "settings-editor-autosave-row",
         "settings-editor-autosave-delay-row",
         "settings-project-panel-default-open-row",

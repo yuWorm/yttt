@@ -72,6 +72,13 @@ where
     pub fn start_grouping(&mut self) {
         self.grouping = true;
     }
+    /// Start a new explicit group, forcing its first change into a fresh undo version.
+    pub fn start_grouping_new_version(&mut self) {
+        if !self.grouping {
+            self.version = self.version.saturating_add(1);
+        }
+        self.grouping = true;
+    }
 
     /// End grouping changes, this will allow the version to be incremented again.
     pub fn end_grouping(&mut self) {

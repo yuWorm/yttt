@@ -447,6 +447,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::SettingsEditorLineNumbers => "Line numbers",
         UiTextKey::SettingsEditorLineNumbersDescription => "Show line numbers in project files.",
+        UiTextKey::SettingsEditorVimMode => "Vim mode",
+        UiTextKey::SettingsEditorVimModeDescription => {
+            "Use modal Vim keybindings in project code editors."
+        }
         UiTextKey::SettingsEditorAutosave => "Autosave",
         UiTextKey::SettingsEditorAutosaveDescription => "Choose when edited files are saved.",
         UiTextKey::SettingsEditorAutosaveOff => "Off",

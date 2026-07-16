@@ -7,6 +7,7 @@ mod readonly_code_view;
 mod runtime;
 mod state;
 mod view;
+mod vim;
 mod workspace;
 
 pub use breadcrumbs::{EditorSymbol, EditorSymbolKind, breadcrumbs_at, document_symbols};
@@ -31,4 +32,5 @@ pub use state::{
     EditorDiagnosticSeverity, EditorLanguageService, EditorRange,
 };
 pub use view::{code_editor_input_state, styled_code_editor_input};
+pub use vim::{VimMode, init as init_vim_mode};
 pub use workspace::{DocumentId, ProjectEditorWorkspaceState, ProjectWorkItemSession, WorkItemId};

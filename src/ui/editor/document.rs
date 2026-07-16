@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement as _, Render, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Window, div, px,
+    AnyElement, AppContext as _, Context, Entity, EventEmitter, Focusable as _,
+    InteractiveElement as _, IntoElement, KeystrokeEvent, MouseButton, ParentElement as _, Render,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _,
@@ -23,6 +23,12 @@ use crate::{
 use super::{
     CodeEditorState, DiskFingerprint, DocumentId, EditorSymbol, breadcrumbs_at,
     code_editor_input_state, document_symbols, styled_code_editor_input,
+    vim::{
+        DeleteCharacters, EnterInsert, Escape as VimEscape, MoveAction, Number, Paste as VimPaste,
+        PushOperator, Redo as VimRedo, ReplaceCharacters, SearchForward, SearchNext,
+        SearchPrevious, SubstituteCharacters, ToggleVisual, ToggleVisualLine, Undo as VimUndo,
+        VimState, Zero,
+    },
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -311,6 +317,9 @@ pub struct ProjectEditorDocument {
     symbols: Vec<EditorSymbol>,
     breadcrumbs: Vec<EditorSymbol>,
     breadcrumb_cursor_line: usize,
+    vim_enabled: bool,
+    vim: Option<VimState>,
+    _vim_keystroke_subscription: Subscription,
 }
 
 impl ProjectEditorDocument {
@@ -345,6 +354,7 @@ impl ProjectEditorDocument {
         let breadcrumb_header = model.editor().config().title().to_string();
         let breadcrumbs = breadcrumbs_at(&symbols, 0);
         let surface = Self::new_surface(&model, &appearance, &markdown_config, window, cx);
+        let vim_keystroke_subscription = cx.observe_keystrokes(Self::observe_vim_keystrokes);
         Self {
             model,
             surface,
@@ -354,7 +364,44 @@ impl ProjectEditorDocument {
             symbols,
             breadcrumbs,
             breadcrumb_cursor_line: 0,
+            vim_enabled: false,
+            vim: None,
+            _vim_keystroke_subscription: vim_keystroke_subscription,
         }
+    }
+    pub fn with_vim_mode(
+        mut self,
+        enabled: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        self.set_vim_mode(enabled, window, cx);
+        self
+    }
+
+    pub fn set_vim_mode(&mut self, enabled: bool, _window: &mut Window, cx: &mut Context<Self>) {
+        self.vim_enabled = enabled;
+        let Some(input) = self.code_input().cloned() else {
+            self.vim = None;
+            cx.notify();
+            return;
+        };
+        if enabled {
+            if self.vim.is_none() {
+                self.vim = Some(input.update(cx, |input, input_cx| VimState::new(input, input_cx)));
+            }
+        } else if let Some(mut vim) = self.vim.take() {
+            input.update(cx, |input, input_cx| vim.disable(input, input_cx));
+        }
+        cx.notify();
+    }
+
+    pub fn vim_mode(&self) -> Option<super::VimMode> {
+        self.vim.as_ref().map(VimState::mode)
+    }
+
+    pub fn vim_status(&self) -> Option<String> {
+        self.vim.as_ref().map(VimState::status)
     }
 
     fn new_surface(
@@ -482,6 +529,9 @@ impl ProjectEditorDocument {
 
         let is_markdown = self.model.editor().language_id() == super::EditorLanguageId::Markdown;
         if was_markdown != is_markdown {
+            if let (Some(input), Some(mut vim)) = (self.code_input().cloned(), self.vim.take()) {
+                input.update(cx, |input, input_cx| vim.disable(input, input_cx));
+            }
             self.surface = Self::new_surface(
                 &self.model,
                 &self.appearance,
@@ -489,6 +539,12 @@ impl ProjectEditorDocument {
                 window,
                 cx,
             );
+            if self.vim_enabled {
+                if let Some(input) = self.code_input().cloned() {
+                    self.vim =
+                        Some(input.update(cx, |input, input_cx| VimState::new(input, input_cx)));
+                }
+            }
         } else if let ProjectEditorSurface::Code { input, .. } = &self.surface {
             let language = self.model.editor().language().to_string();
             input.update(cx, |input, input_cx| {
@@ -714,6 +770,209 @@ impl ProjectEditorDocument {
         }
     }
 
+    fn observe_vim_keystrokes(
+        &mut self,
+        event: &KeystrokeEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(input) = self.code_input().cloned() else {
+            return;
+        };
+        if !input.read(cx).focus_handle(cx).is_focused(window) {
+            return;
+        }
+        let Some(vim) = self.vim.as_mut() else {
+            return;
+        };
+        let handled = input.update(cx, |input, input_cx| {
+            vim.handle_pending_character(event, input, window, input_cx)
+        });
+        if handled {
+            cx.notify();
+        }
+    }
+
+    fn on_vim_move(&mut self, action: &MoveAction, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(input), Some(vim)) = (self.code_input().cloned(), self.vim.as_mut()) else {
+            return;
+        };
+        input.update(cx, |input, input_cx| {
+            vim.motion(action.motion, input, window, input_cx)
+        });
+        cx.notify();
+    }
+
+    fn on_vim_number(&mut self, action: &Number, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(vim) = self.vim.as_mut() {
+            vim.push_digit(action.0);
+            cx.notify();
+        }
+    }
+
+    fn on_vim_zero(&mut self, _: &Zero, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(input), Some(vim)) = (self.code_input().cloned(), self.vim.as_mut()) else {
+            return;
+        };
+        input.update(cx, |input, input_cx| vim.zero(input, window, input_cx));
+        cx.notify();
+    }
+
+    fn on_vim_escape(&mut self, _: &VimEscape, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(input), Some(vim)) = (self.code_input().cloned(), self.vim.as_mut()) else {
+            return;
+        };
+        input.update(cx, |input, input_cx| vim.escape(input, window, input_cx));
+        cx.notify();
+    }
+
+    fn on_vim_operator(
+        &mut self,
+        action: &PushOperator,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(input), Some(vim)) = (self.code_input().cloned(), self.vim.as_mut()) else {
+            return;
+        };
+        input.update(cx, |input, input_cx| {
+            vim.push_operator(action.operator, input, window, input_cx)
+        });
+        cx.notify();
+    }
+
+    fn on_vim_insert(&mut self, action: &EnterInsert, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(input), Some(vim)) = (self.code_input().cloned(), self.vim.as_mut()) else {
+            return;
+        };
+        input.update(cx, |input, input_cx| {
+            vim.enter_insert(action.placement, input, window, input_cx)
+        });
+        cx.notify();
+    }
+
+    fn on_vim_visual(&mut self, _: &ToggleVisual, _: &mut Window, cx: &mut Context<Self>) {
+        let (Some(input), Some(vim)) = (self.code_input().cloned(), self.vim.as_mut()) else {
+            return;
+        };
+        input.update(cx, |input, input_cx| {
+            vim.toggle_visual(false, input, input_cx)
+        });
+        cx.notify();
+    }
+
+    fn on_vim_visual_line(&mut self, _: &ToggleVisualLine, _: &mut Window, cx: &mut Context<Self>) {
+        let (Some(input), Some(vim)) = (self.code_input().cloned(), self.vim.as_mut()) else {
+            return;
+        };
+        input.update(cx, |input, input_cx| {
+            vim.toggle_visual(true, input, input_cx)
+        });
+        cx.notify();
+    }
+
+    fn on_vim_delete_characters(
+        &mut self,
+        _: &DeleteCharacters,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.vim_delete_characters(false, window, cx);
+    }
+
+    fn on_vim_substitute_characters(
+        &mut self,
+        _: &SubstituteCharacters,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.vim_delete_characters(true, window, cx);
+    }
+
+    fn vim_delete_characters(
+        &mut self,
+        substitute: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(input), Some(vim)) = (self.code_input().cloned(), self.vim.as_mut()) else {
+            return;
+        };
+        input.update(cx, |input, input_cx| {
+            vim.delete_characters(substitute, input, window, input_cx)
+        });
+        cx.notify();
+    }
+
+    fn on_vim_replace_characters(
+        &mut self,
+        _: &ReplaceCharacters,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(vim) = self.vim.as_mut() {
+            vim.begin_replace_character();
+            cx.notify();
+        }
+    }
+
+    fn on_vim_paste(&mut self, action: &VimPaste, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(input), Some(vim)) = (self.code_input().cloned(), self.vim.as_mut()) else {
+            return;
+        };
+        input.update(cx, |input, input_cx| {
+            vim.paste(action.before, input, window, input_cx)
+        });
+        cx.notify();
+    }
+
+    fn on_vim_undo(&mut self, _: &VimUndo, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(input), Some(vim)) = (self.code_input().cloned(), self.vim.as_mut()) else {
+            return;
+        };
+        input.update(cx, |input, input_cx| vim.undo(input, window, input_cx));
+        cx.notify();
+    }
+
+    fn on_vim_redo(&mut self, _: &VimRedo, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(input), Some(vim)) = (self.code_input().cloned(), self.vim.as_mut()) else {
+            return;
+        };
+        input.update(cx, |input, input_cx| vim.redo(input, window, input_cx));
+        cx.notify();
+    }
+
+    fn on_vim_search(&mut self, _: &SearchForward, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(input), Some(vim)) = (self.code_input().cloned(), self.vim.as_mut()) else {
+            return;
+        };
+        input.update(cx, |input, input_cx| vim.search(input, window, input_cx));
+        cx.notify();
+    }
+
+    fn on_vim_search_next(&mut self, _: &SearchNext, window: &mut Window, cx: &mut Context<Self>) {
+        self.vim_search_match(false, window, cx);
+    }
+
+    fn on_vim_search_previous(
+        &mut self,
+        _: &SearchPrevious,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.vim_search_match(true, window, cx);
+    }
+
+    fn vim_search_match(&mut self, backwards: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(input), Some(vim)) = (self.code_input().cloned(), self.vim.as_mut()) else {
+            return;
+        };
+        input.update(cx, |input, input_cx| {
+            vim.search_next(backwards, input, window, input_cx)
+        });
+        cx.notify();
+    }
+
     fn focus_symbol(&mut self, symbol: EditorSymbol, window: &mut Window, cx: &mut Context<Self>) {
         let ProjectEditorSurface::Code { input, .. } = &self.surface else {
             return;
@@ -735,6 +994,11 @@ impl EventEmitter<ProjectEditorDocumentEvent> for ProjectEditorDocument {}
 
 impl Render for ProjectEditorDocument {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let vim_key_context = self
+            .vim
+            .as_ref()
+            .map(VimState::key_context)
+            .unwrap_or_default();
         let breadcrumb_hover = cx.theme().foreground;
         let mut breadcrumb_items = div()
             .id("editor-breadcrumb-items")
@@ -769,7 +1033,7 @@ impl Render for ProjectEditorDocument {
             ProjectEditorSurface::Code { input, .. } => {
                 let input = input.clone();
                 let search_hover = cx.theme().accent;
-                div()
+                let search = div()
                     .id("editor-search")
                     .flex()
                     .flex_none()
@@ -784,8 +1048,23 @@ impl Render for ProjectEditorDocument {
                     .on_click(move |_, window, cx| {
                         input.update(cx, |input, input_cx| input.focus(window, input_cx));
                         window.dispatch_action(Box::new(Search), cx);
-                    })
-                    .into_any_element()
+                    });
+                let mut actions = div()
+                    .id("editor-actions")
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap_1();
+                if let Some(status) = self.vim_status() {
+                    actions = actions.child(
+                        div()
+                            .debug_selector(|| "vim-mode-indicator".to_string())
+                            .px_2()
+                            .text_color(cx.theme().accent_foreground)
+                            .child(status),
+                    );
+                }
+                actions.child(search).into_any_element()
             }
             ProjectEditorSurface::Markdown { editor, .. } => {
                 let editor = editor.clone();
@@ -864,11 +1143,29 @@ impl Render for ProjectEditorDocument {
 
         div()
             .id("project-editor-document")
+            .key_context(vim_key_context)
             .flex()
             .flex_col()
             .size_full()
             .text_color(cx.theme().foreground)
             .min_h_0()
+            .on_action(cx.listener(Self::on_vim_move))
+            .on_action(cx.listener(Self::on_vim_number))
+            .on_action(cx.listener(Self::on_vim_zero))
+            .on_action(cx.listener(Self::on_vim_escape))
+            .on_action(cx.listener(Self::on_vim_operator))
+            .on_action(cx.listener(Self::on_vim_insert))
+            .on_action(cx.listener(Self::on_vim_visual))
+            .on_action(cx.listener(Self::on_vim_visual_line))
+            .on_action(cx.listener(Self::on_vim_delete_characters))
+            .on_action(cx.listener(Self::on_vim_substitute_characters))
+            .on_action(cx.listener(Self::on_vim_replace_characters))
+            .on_action(cx.listener(Self::on_vim_paste))
+            .on_action(cx.listener(Self::on_vim_undo))
+            .on_action(cx.listener(Self::on_vim_redo))
+            .on_action(cx.listener(Self::on_vim_search))
+            .on_action(cx.listener(Self::on_vim_search_next))
+            .on_action(cx.listener(Self::on_vim_search_previous))
             .child(breadcrumbs)
             .child(body)
     }

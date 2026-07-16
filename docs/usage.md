@@ -144,6 +144,7 @@ line_height = 1.4
 tab_size = 4
 soft_wrap = false
 line_numbers = true
+vim_mode = false
 autosave = "off"
 autosave_delay_ms = 1000
 auto_detect_language = true
@@ -161,12 +162,18 @@ project_sidebar_width = 216.0
 ```
 
 Editor font family, font size, line height, soft wrap, and line numbers update all open files
-without replacing their text or saved baseline. `tab_size` applies to files opened after the
-change; reopen an existing file to apply it. Changing autosave to `off` cancels pending delayed
-saves. `default_open` affects new project sessions. Editing `width` updates the selected
+without replacing their text or saved baseline. `vim_mode` enables modal keybindings immediately
+for open project code editors; mode state is kept per document. `tab_size` applies to files opened
+after the change; reopen an existing file to apply it. Changing autosave to `off` cancels pending
+delayed saves. `default_open` affects new project sessions. Editing `width` updates the selected
 project and the default for future projects, while other open projects retain their own
 widths. Valid width ranges are 200–520 px for the right tree and 160–420 px for the left
 sidebar.
+
+Vim mode supports Normal, Insert, Visual, and Visual Line modes; counts; `h/j/k/l`, word,
+line, document, and `gj`/`gk` display-line motions; `i/a/I/A/o/O`; `d/c/y` with motions or
+doubled linewise operators; `x/s/r/p/P/u/Ctrl-R`; and `/`, `n`, and `N` search navigation.
+The unnamed register is shared across documents and mirrored to the system clipboard.
 
 `terminal.shell = "auto"` selects the first detected shell for the current platform. Detection
 covers `SHELL` and common macOS/Linux shells, plus `COMSPEC`, PowerShell, `cmd.exe`, and shells

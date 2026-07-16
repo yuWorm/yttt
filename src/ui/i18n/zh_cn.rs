@@ -381,6 +381,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsEditorSoftWrapDescription => "按编辑器可用宽度换行显示长行。",
         UiTextKey::SettingsEditorLineNumbers => "行号",
         UiTextKey::SettingsEditorLineNumbersDescription => "在项目文件中显示行号。",
+        UiTextKey::SettingsEditorVimMode => "Vim 模式",
+        UiTextKey::SettingsEditorVimModeDescription => "在项目代码编辑器中使用 Vim 模态键位。",
         UiTextKey::SettingsEditorAutosave => "自动保存",
         UiTextKey::SettingsEditorAutosaveDescription => "选择编辑文件的自动保存时机。",
         UiTextKey::SettingsEditorAutosaveOff => "关闭",

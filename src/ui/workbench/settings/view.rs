@@ -802,6 +802,27 @@ fn settings_editor_rows(
             setting_row(
                 style,
                 theme,
+                text.get(UiTextKey::SettingsEditorVimMode),
+                text.get(UiTextKey::SettingsEditorVimModeDescription),
+                settings_switch(
+                    "settings-editor-vim-mode",
+                    root.editor_vim_mode(),
+                    theme,
+                    cx.listener(|this, checked: &bool, window, cx| {
+                        if let Err(error) = this.set_editor_vim_mode(*checked, window, cx) {
+                            this.load_error = Some(error.to_string());
+                        }
+                        cx.notify();
+                    }),
+                )
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-editor-vim-mode-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
                 text.get(UiTextKey::SettingsEditorAutosave),
                 text.get(UiTextKey::SettingsEditorAutosaveDescription),
                 settings_select_control(

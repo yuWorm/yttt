@@ -191,6 +191,43 @@ impl InputState {
             this.matcher.update(&text);
         });
     }
+    /// Move the editor cursor to the next or previous match from the active search query.
+    pub fn move_to_search_match(
+        &mut self,
+        backwards: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(search_panel) = self.search_panel.clone() else {
+            return;
+        };
+        let text = self.text.clone();
+        let (range, direction) = search_panel.update(cx, |panel, _| {
+            panel.matcher.update(&text);
+            let previous_match_ix = panel.matcher.current_match_ix;
+            let range = if backwards {
+                panel.matcher.next_back()
+            } else {
+                panel.matcher.next()
+            };
+            let direction = if backwards {
+                SearchPanel::prev_scroll_direction(
+                    previous_match_ix,
+                    panel.matcher.current_match_ix,
+                )
+            } else {
+                SearchPanel::next_scroll_direction(
+                    previous_match_ix,
+                    panel.matcher.current_match_ix,
+                )
+            };
+            (range, direction)
+        });
+        if let Some(range) = range {
+            self.move_to(range.start, direction, cx);
+            self.focus(window, cx);
+        }
+    }
 
     pub(super) fn on_action_search(
         &mut self,

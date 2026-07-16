@@ -336,6 +336,13 @@ impl LastLayout {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InputCursorShape {
+    #[default]
+    Bar,
+    Block,
+}
+
 /// InputState to keep editing state of the [`super::Input`].
 pub struct InputState {
     pub(super) focus_handle: FocusHandle,
@@ -369,6 +376,8 @@ pub struct InputState {
     pub(super) selecting: bool,
     pub(super) size: Size,
     pub(super) disabled: bool,
+    pub(super) text_input_enabled: bool,
+    pub(super) cursor_shape: InputCursorShape,
     pub(super) masked: bool,
     pub(super) clean_on_escape: bool,
     pub(super) submit_on_enter: bool,
@@ -500,6 +509,8 @@ impl InputState {
             input_bounds: Bounds::default(),
             selecting: false,
             disabled: false,
+            text_input_enabled: true,
+            cursor_shape: InputCursorShape::Bar,
             masked: false,
             clean_on_escape: false,
             submit_on_enter: false,
@@ -831,11 +842,14 @@ impl InputState {
         cx: &mut Context<Self>,
     ) {
         let was_disabled = self.disabled;
+        let was_text_input_enabled = self.text_input_enabled;
         self.disabled = false;
+        self.text_input_enabled = true;
         let text: SharedString = text.into();
         let range_utf16 = self.range_to_utf16(&(self.cursor()..self.cursor()));
         self.replace_text_in_range_silent(Some(range_utf16), &text, window, cx);
         self.selected_range = (self.selected_range.end..self.selected_range.end).into();
+        self.text_input_enabled = was_text_input_enabled;
         self.disabled = was_disabled;
     }
 
@@ -849,10 +863,13 @@ impl InputState {
         cx: &mut Context<Self>,
     ) {
         let was_disabled = self.disabled;
+        let was_text_input_enabled = self.text_input_enabled;
         self.disabled = false;
+        self.text_input_enabled = true;
         let text: SharedString = text.into();
         self.replace_text_in_range_silent(None, &text, window, cx);
         self.selected_range = (self.selected_range.end..self.selected_range.end).into();
+        self.text_input_enabled = was_text_input_enabled;
         self.disabled = was_disabled;
     }
 
@@ -1208,6 +1225,167 @@ impl InputState {
         self.move_to(offset, None, cx);
         self.update_preferred_column();
         self.focus(window, cx);
+    }
+    /// Return the fixed end of the current selection.
+    pub fn selection_anchor(&self) -> usize {
+        if self.selection_reversed {
+            self.selected_range.end
+        } else {
+            self.selected_range.start
+        }
+    }
+
+    /// Return the moving end of the current selection.
+    pub fn selection_head(&self) -> usize {
+        self.cursor()
+    }
+
+    /// Move the cursor to a UTF-8 byte offset and collapse the selection.
+    pub fn set_cursor_offset(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.move_to(
+            self.text
+                .clip_offset(offset.min(self.text.len()), Bias::Left),
+            None,
+            cx,
+        );
+    }
+
+    /// Set a selection from fixed anchor to moving head using UTF-8 byte offsets.
+    pub fn set_selection(&mut self, anchor: usize, head: usize, cx: &mut Context<Self>) {
+        let anchor = self
+            .text
+            .clip_offset(anchor.min(self.text.len()), Bias::Left);
+        let head = self.text.clip_offset(head.min(self.text.len()), Bias::Left);
+        self.selection_reversed = head < anchor;
+        self.selected_range = if self.selection_reversed {
+            (head..anchor).into()
+        } else {
+            (anchor..head).into()
+        };
+        self.selected_word_range = None;
+        self.ime_marked_range = None;
+        self.scroll_to(head, None, cx);
+        self.pause_blink_cursor(cx);
+        self.update_preferred_column();
+        self.hide_context_menu(cx);
+        self.clear_inline_completion(cx);
+        cx.notify();
+    }
+
+    /// Replace a UTF-8 byte range as an editor operation.
+    pub fn replace_range(
+        &mut self,
+        range: Range<usize>,
+        text: impl AsRef<str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let start = self
+            .text
+            .clip_offset(range.start.min(self.text.len()), Bias::Left);
+        let end = self
+            .text
+            .clip_offset(range.end.min(self.text.len()), Bias::Right);
+        let was_text_input_enabled = self.text_input_enabled;
+        self.text_input_enabled = true;
+        let range_utf16 = self.range_to_utf16(&(start..end));
+        self.replace_text_in_range_silent(Some(range_utf16), text.as_ref(), window, cx);
+        self.text_input_enabled = was_text_input_enabled;
+    }
+
+    /// Start a fresh undo group for a compound editor command.
+    pub fn begin_history_group(&mut self) {
+        self.history.start_grouping_new_version();
+    }
+
+    /// Finish a compound editor command's undo group.
+    pub fn end_history_group(&mut self) {
+        self.history.end_grouping();
+    }
+
+    /// Enable or disable text supplied by the platform input handler.
+    pub fn set_text_input_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.text_input_enabled = enabled;
+        if !enabled {
+            self.ime_marked_range = None;
+        }
+        cx.notify();
+    }
+
+    pub fn text_input_enabled(&self) -> bool {
+        self.text_input_enabled
+    }
+
+    pub fn set_cursor_shape(&mut self, shape: InputCursorShape, cx: &mut Context<Self>) {
+        if self.cursor_shape != shape {
+            self.cursor_shape = shape;
+            cx.notify();
+        }
+    }
+
+    pub fn cursor_shape(&self) -> InputCursorShape {
+        self.cursor_shape
+    }
+
+    pub fn previous_grapheme_boundary(&self, offset: usize) -> usize {
+        let offset = self
+            .text
+            .clip_offset(offset.min(self.text.len()), Bias::Left);
+        if offset == 0 {
+            return 0;
+        }
+        let row = self.text.offset_to_point(offset).row;
+        let start = self.text.line_start_offset(row.saturating_sub(1));
+        let end = if row.saturating_add(1) < self.text.lines_len() {
+            self.text.line_start_offset(row + 1)
+        } else {
+            self.text.len()
+        };
+        let text = self.text.slice(start..end).to_string();
+        let relative = offset.saturating_sub(start);
+        text.grapheme_indices(true)
+            .take_while(|(index, _)| *index < relative)
+            .map(|(index, _)| start + index)
+            .last()
+            .unwrap_or(0)
+    }
+
+    pub fn next_grapheme_boundary(&self, offset: usize) -> usize {
+        let offset = self
+            .text
+            .clip_offset(offset.min(self.text.len()), Bias::Left);
+        if offset >= self.text.len() {
+            return self.text.len();
+        }
+        let row = self.text.offset_to_point(offset).row;
+        let start = self.text.line_start_offset(row);
+        let end = if row.saturating_add(1) < self.text.lines_len() {
+            self.text.line_start_offset(row + 1)
+        } else {
+            self.text.len()
+        };
+        let text = self.text.slice(start..end).to_string();
+        let relative = offset.saturating_sub(start);
+        text.grapheme_indices(true)
+            .find(|(index, _)| *index > relative)
+            .map(|(index, _)| start + index)
+            .unwrap_or(end)
+    }
+
+    pub fn undo_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<usize> {
+        let was_text_input_enabled = self.text_input_enabled;
+        self.text_input_enabled = true;
+        let cursor = self.apply_history_undo(window, cx);
+        self.text_input_enabled = was_text_input_enabled;
+        cursor
+    }
+
+    pub fn redo_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<usize> {
+        let was_text_input_enabled = self.text_input_enabled;
+        self.text_input_enabled = true;
+        let cursor = self.apply_history_redo(window, cx);
+        self.text_input_enabled = was_text_input_enabled;
+        cursor
     }
 
     /// Focus the input field.
@@ -2029,25 +2207,43 @@ impl InputState {
     }
 
     pub(super) fn undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
+        if self.text_input_enabled {
+            let _ = self.apply_history_undo(window, cx);
+        }
+    }
+
+    fn apply_history_undo(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<usize> {
         self.history.ignore = true;
-        if let Some(changes) = self.history.undo() {
+        let cursor = self.history.undo().and_then(|changes| {
+            let cursor = changes.iter().map(|change| change.new_range.start).min();
             for change in changes {
                 let range_utf16 = self.range_to_utf16(&change.new_range.into());
                 self.replace_text_in_range_silent(Some(range_utf16), &change.old_text, window, cx);
             }
-        }
+            cursor
+        });
         self.history.ignore = false;
+        cursor
     }
 
     pub(super) fn redo(&mut self, _: &Redo, window: &mut Window, cx: &mut Context<Self>) {
+        if self.text_input_enabled {
+            let _ = self.apply_history_redo(window, cx);
+        }
+    }
+
+    fn apply_history_redo(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<usize> {
         self.history.ignore = true;
-        if let Some(changes) = self.history.redo() {
+        let cursor = self.history.redo().and_then(|changes| {
+            let cursor = changes.iter().map(|change| change.old_range.start).min();
             for change in changes {
                 let range_utf16 = self.range_to_utf16(&change.old_range.into());
                 self.replace_text_in_range_silent(Some(range_utf16), &change.new_text, window, cx);
             }
-        }
+            cursor
+        });
         self.history.ignore = false;
+        cursor
     }
 
     /// Get byte offset of the cursor.
@@ -2771,7 +2967,7 @@ impl EntityInputHandler for InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.disabled {
+        if self.disabled || !self.text_input_enabled {
             return;
         }
 
