@@ -51,7 +51,7 @@ use yttt::ui::workbench::shell::tabs::{
     WorkbenchTabItem, WorkbenchTabKind, project_tabs, project_tabs_style, project_tree_toggle_icon,
     project_tree_toggle_tooltip, tab_close_targets, tab_toolbar_icon,
 };
-use yttt::ui::workbench::shell::titlebar::TitlebarInfo;
+use yttt::ui::workbench::shell::titlebar::{TitlebarInfo, compact_path_for_titlebar};
 use yttt::{
     commands::CommandId,
     model::{ids::ProjectId, layout::SplitDirection},
@@ -174,6 +174,20 @@ fn titlebar_info_parts_use_compact_project_metadata() {
     assert_eq!(
         info.parts(),
         vec!["yttt", "/Volumes/.../yttt", "main", "+2 ~4 -1"]
+    );
+}
+
+#[test]
+fn titlebar_compacts_windows_paths_without_verbatim_prefixes() {
+    assert_eq!(
+        compact_path_for_titlebar(r"\\?\D:\work\yttt"),
+        r"D:\work\yttt"
+    );
+    assert_eq!(
+        compact_path_for_titlebar(
+            r"\\?\C:\Users\example\Projects\Idea\very-long-project-directory"
+        ),
+        r"...\Idea\very-long-project-directory"
     );
 }
 

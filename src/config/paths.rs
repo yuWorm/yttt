@@ -1,5 +1,5 @@
 use std::{
-    fs,
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -32,9 +32,8 @@ impl AppConfigPaths {
     }
 
     pub fn local_project_dir(&self, project_path: &Path) -> PathBuf {
-        let project_path = project_path
-            .canonicalize()
-            .unwrap_or_else(|_| project_path.to_path_buf());
+        let project_path =
+            canonicalize_path(project_path).unwrap_or_else(|_| project_path.to_path_buf());
         self.config_dir
             .join("projects")
             .join(encode_path(&project_path))
@@ -62,6 +61,22 @@ impl AppConfigPaths {
 
     pub fn icon_themes_dir(&self) -> PathBuf {
         self.themes_dir().join("icons")
+    }
+}
+
+pub fn canonicalize_path(path: &Path) -> io::Result<PathBuf> {
+    dunce::canonicalize(path)
+}
+
+pub fn display_path(path: &Path) -> String {
+    windows_path_for_display(dunce::simplified(path).to_string_lossy().as_ref())
+}
+
+fn windows_path_for_display(path: &str) -> String {
+    if let Some(path) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{path}")
+    } else {
+        path.strip_prefix(r"\\?\").unwrap_or(path).to_string()
     }
 }
 
@@ -288,5 +303,27 @@ mod tests {
             fs::read_to_string(native.join("settings.toml")).unwrap(),
             "version = 1"
         );
+    }
+
+    #[test]
+    fn windows_verbatim_paths_are_readable_in_the_ui() {
+        assert_eq!(
+            windows_path_for_display(r"\\?\C:\Users\example\project"),
+            r"C:\Users\example\project"
+        );
+        assert_eq!(
+            windows_path_for_display(r"\\?\UNC\server\share\project"),
+            r"\\server\share\project"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn canonical_project_paths_prefer_drive_letter_form() {
+        let temp = tempfile::tempdir().unwrap();
+
+        let canonical = canonicalize_path(temp.path()).unwrap();
+
+        assert!(!canonical.to_string_lossy().starts_with(r"\\?\"));
     }
 }

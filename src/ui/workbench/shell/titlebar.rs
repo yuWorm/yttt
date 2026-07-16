@@ -60,17 +60,27 @@ impl TitlebarInfo {
 
 pub fn compact_path_for_titlebar(path: &str) -> String {
     const MAX_LEN: usize = 48;
+    let path = if let Some(path) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{path}")
+    } else {
+        path.strip_prefix(r"\\?\").unwrap_or(path).to_string()
+    };
     if path.chars().count() <= MAX_LEN {
-        return path.to_string();
+        return path;
     }
 
-    let mut parts = path.rsplit('/').filter(|part| !part.is_empty());
-    let tail = parts.next().unwrap_or(path);
+    let separator = if path.rfind('\\') > path.rfind('/') {
+        '\\'
+    } else {
+        '/'
+    };
+    let mut parts = path.rsplit(['/', '\\']).filter(|part| !part.is_empty());
+    let tail = parts.next().unwrap_or(&path);
     let parent = parts.next();
 
     match parent {
-        Some(parent) => format!(".../{parent}/{tail}"),
-        None => format!(".../{tail}"),
+        Some(parent) => format!("...{separator}{parent}{separator}{tail}"),
+        None => format!("...{separator}{tail}"),
     }
 }
 

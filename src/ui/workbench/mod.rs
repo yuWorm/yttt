@@ -105,7 +105,7 @@ use crate::{
             export_project_layout, load_recent_projects, open_project_config,
             parse_personal_layout, reset_local_override, save_local_layout,
         },
-        paths::AppConfigPaths,
+        paths::{AppConfigPaths, display_path},
         settings::{
             AppSettings, DEFAULT_UI_FONT_SIZE, DEFAULT_UI_LINE_HEIGHT, DEFAULT_WINDOW_OPACITY,
             EditorAutosave, LanguageSetting, MAX_UI_FONT_SIZE, MAX_UI_LINE_HEIGHT,
@@ -224,9 +224,8 @@ use crate::{
             },
             zed::{
                 DetectedZedExtension, ZedThemeDetection, ZedThemeImportConflictPolicy,
-                detect_installed_zed_themes, import_detected_zed_themes,
-                import_detected_zed_themes_with_policy, zed_icon_theme_output_path,
-                zed_ui_theme_output_path,
+                detect_installed_zed_themes, import_detected_zed_themes_with_policy,
+                zed_icon_theme_output_path, zed_ui_theme_output_path,
             },
         },
         workbench::layout_editor::{
@@ -641,8 +640,12 @@ impl WorkbenchView {
         }
 
         if import_zed_themes && !state.zed_import_completed {
-            import_detected_zed_themes(&state.zed_detection, &self.config_paths)
-                .map_err(|error| error.to_string())?;
+            import_detected_zed_themes_with_policy(
+                &state.zed_detection,
+                &self.config_paths,
+                ZedThemeImportConflictPolicy::SkipExisting,
+            )
+            .map_err(|error| error.to_string())?;
             if let Some(current_state) = &mut self.onboarding {
                 current_state.zed_import_completed = true;
             }
@@ -1390,9 +1393,7 @@ impl WorkbenchView {
 
         TitlebarInfo {
             project_name: project.layout.project.name.clone(),
-            compact_path: Some(compact_path_for_titlebar(
-                &project.path.display().to_string(),
-            )),
+            compact_path: Some(compact_path_for_titlebar(&display_path(&project.path))),
             git_branch: git_status.and_then(|status| status.branch.clone()),
             git_counters: git_status.and_then(|status| status.summary.compact_counters()),
         }

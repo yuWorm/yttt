@@ -4616,6 +4616,21 @@ fn visible_project_items_mark_selection_and_distinct_initials() {
 }
 
 #[test]
+fn visible_project_items_fall_back_to_the_project_directory_name() {
+    let mut workspace = Workspace::new();
+    let mut layout = sample_layout();
+    layout.project.name = r"\\?\C:\Users\example\repository-name".to_string();
+    workspace
+        .open_project(PathBuf::from("/tmp/repository-name"), layout)
+        .unwrap();
+
+    let items = visible_project_items(&workspace);
+
+    assert_eq!(items[0].title, "repository-name");
+    assert_eq!(items[0].initial, "R");
+}
+
+#[test]
 fn visible_project_items_show_agent_running_status() {
     let mut workspace = workspace_with_sample_project();
     let project_id = workspace.selected_project_id().unwrap().clone();
@@ -5021,6 +5036,7 @@ fn root_view_focus_visible_terminal_pane_queues_terminal_focus() {
     assert_eq!(root.pending_terminal_focus_pane_id(), Some("shell"));
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn root_view_leaves_terminal_control_keybindings_for_focused_terminal() {
     let mut root = WorkbenchView::dev_fixture();
@@ -5047,6 +5063,18 @@ fn root_view_leaves_terminal_control_keybindings_for_focused_terminal() {
             .tabs
             .len(),
         initial_tab_count
+    );
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn root_view_reserves_control_keybindings_when_terminal_is_focused() {
+    let mut root = WorkbenchView::dev_fixture();
+    root.focus_visible_terminal_pane("shell").unwrap();
+
+    assert_eq!(
+        root.runtime_command_for_dispatch(&Keystroke::parse("ctrl-t").unwrap()),
+        Some(CommandId::TabNew)
     );
 }
 

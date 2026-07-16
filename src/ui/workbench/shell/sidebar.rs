@@ -8,6 +8,7 @@ use gpui_component::{
 };
 
 use crate::commands::CommandId;
+use crate::config::paths::display_path;
 use crate::model::workspace::Workspace;
 use crate::ui::components::{SelectableState, workbench_icon_button};
 use crate::ui::i18n::{UiText, UiTextKey};
@@ -100,19 +101,28 @@ pub fn visible_project_items(workspace: &Workspace) -> Vec<ProjectSidebarItem> {
     workspace
         .opened_projects()
         .iter()
-        .map(|project| ProjectSidebarItem {
-            id: project.id.as_str().to_string(),
-            title: project.layout.project.name.clone(),
-            initial: project_initial(&project.layout.project.name),
-            path: project.path.display().to_string(),
-            agent_status: project_agent_status(project)
-                .map(agent_status_label)
-                .map(String::from),
-            state: if Some(&project.id) == selected_project_id {
-                SelectableState::Active
+        .map(|project| {
+            let configured_name = &project.layout.project.name;
+            let path = display_path(&project.path);
+            let title = if configured_name.contains(['/', '\\']) {
+                compact_path(&path)
             } else {
-                SelectableState::Inactive
-            },
+                configured_name.clone()
+            };
+            ProjectSidebarItem {
+                id: project.id.as_str().to_string(),
+                initial: project_initial(&title),
+                title,
+                path,
+                agent_status: project_agent_status(project)
+                    .map(agent_status_label)
+                    .map(String::from),
+                state: if Some(&project.id) == selected_project_id {
+                    SelectableState::Active
+                } else {
+                    SelectableState::Inactive
+                },
+            }
         })
         .collect()
 }
@@ -322,5 +332,8 @@ where
 }
 
 fn compact_path(path: &str) -> String {
-    path.rsplit('/').next().unwrap_or(path).to_string()
+    path.rsplit(['/', '\\'])
+        .find(|part| !part.is_empty())
+        .unwrap_or(path)
+        .to_string()
 }

@@ -6,7 +6,7 @@ use std::{
 use crate::{
     config::{
         default_layout::{DefaultLayoutState, LayoutLoadWarning},
-        paths::AppConfigPaths,
+        paths::{AppConfigPaths, canonicalize_path},
         personal_layout::{self, PersonalLayoutFileError},
     },
     model::layout::{
@@ -226,13 +226,12 @@ pub fn open_project_config(
     project_path: &Path,
     default_state: &mut DefaultLayoutState,
 ) -> Result<ProjectOpenConfig, ProjectOpenError> {
-    let project_path =
-        project_path
-            .canonicalize()
-            .map_err(|source| ProjectOpenError::OpenProjectDirectory {
-                path: project_path.to_path_buf(),
-                source,
-            })?;
+    let project_path = canonicalize_path(project_path).map_err(|source| {
+        ProjectOpenError::OpenProjectDirectory {
+            path: project_path.to_path_buf(),
+            source,
+        }
+    })?;
     if !project_path.is_dir() {
         return Err(ProjectOpenError::NotDirectory(project_path));
     }
