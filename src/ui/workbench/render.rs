@@ -35,7 +35,12 @@ impl Render for WorkbenchView {
                 command_palette_keybinding,
             )
         } else if self.workspace.opened_projects().is_empty() {
-            empty_workspace(cx, &self.ui_text, &self.theme_runtime.ui)
+            empty_workspace(
+                cx,
+                &self.ui_text,
+                &self.theme_runtime.ui,
+                self.has_last_opened_projects(),
+            )
         } else {
             let tab_items = self.workbench_tab_items(cx);
             let project_panel_visible = self.selected_project_panel_visible();

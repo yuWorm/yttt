@@ -87,13 +87,13 @@ pub(super) fn collect_terminal_pane_contexts(
     }
 }
 
-pub(super) fn recent_projects_for_palette(config: RecentProjectsConfig) -> Vec<RecentProject> {
+pub(super) fn recent_projects_for_palette(config: &RecentProjectsConfig) -> Vec<RecentProject> {
     config
         .projects
-        .into_iter()
+        .iter()
         .map(|project| RecentProject {
-            title: project.title,
-            path: project.path,
+            title: project.title.clone(),
+            path: project.path.clone(),
         })
         .collect()
 }

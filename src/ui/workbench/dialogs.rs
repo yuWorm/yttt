@@ -933,6 +933,7 @@ pub(super) fn empty_workspace(
     cx: &mut Context<WorkbenchView>,
     ui_text: &UiText,
     theme: &WorkbenchTheme,
+    can_restore_last_session: bool,
 ) -> Div {
     div()
         .flex()
@@ -975,7 +976,7 @@ pub(super) fn empty_workspace(
                     workbench_action_button(
                         "empty-open-directory",
                         ui_text.get(UiTextKey::OpenDirectory),
-                        "secondary-o",
+                        Some("secondary-o"),
                         ActionEmphasis::Primary,
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -986,18 +987,33 @@ pub(super) fn empty_workspace(
                     workbench_action_button(
                         "empty-open-recent",
                         ui_text.get(UiTextKey::OpenRecent),
-                        "secondary-shift-o",
+                        Some("secondary-shift-o"),
                         ActionEmphasis::Secondary,
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.on_open_project_palette(&OpenProjectPalette, window, cx);
                     })),
                 )
+                .when(can_restore_last_session, |actions| {
+                    actions.child(
+                        workbench_action_button(
+                            "empty-restore-last-session",
+                            ui_text.get(UiTextKey::RestoreLastSession),
+                            None,
+                            ActionEmphasis::Secondary,
+                        )
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            this.restore_last_opened_projects();
+                            cx.notify();
+                        }))
+                        .debug_selector(|| "empty-restore-last-session".to_string()),
+                    )
+                })
                 .child(
                     workbench_action_button(
                         "empty-command-palette",
                         ui_text.get(UiTextKey::CommandPalette),
-                        "secondary-p",
+                        Some("secondary-p"),
                         ActionEmphasis::Secondary,
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -1032,7 +1048,7 @@ pub(super) fn project_empty_terminal_state(
             workbench_action_button(
                 "project-empty-new-tab",
                 ui_text.get(UiTextKey::NewTab),
-                "secondary-t",
+                Some("secondary-t"),
                 ActionEmphasis::Primary,
             )
             .on_click(cx.listener(|this, _, _window, cx| {

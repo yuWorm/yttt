@@ -173,6 +173,8 @@ pub struct ProjectOpenConfig {
 pub struct RecentProjectsConfig {
     #[serde(default)]
     pub projects: Vec<RecentProjectConfig>,
+    #[serde(default)]
+    pub last_opened_projects: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
@@ -827,6 +829,15 @@ fn record_recent_project(
     recent_projects.projects.truncate(20);
     write_recent_projects(paths, &recent_projects)?;
     Ok(recent_projects)
+}
+
+pub fn save_last_opened_projects(
+    paths: &AppConfigPaths,
+    recent_projects: &mut RecentProjectsConfig,
+    project_paths: Vec<PathBuf>,
+) -> Result<(), ProjectOpenError> {
+    recent_projects.last_opened_projects = project_paths;
+    write_recent_projects(paths, recent_projects)
 }
 
 fn write_recent_projects(

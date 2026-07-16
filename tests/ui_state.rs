@@ -242,6 +242,94 @@ fn root_view_empty_workspace_exposes_visible_actions() {
 }
 
 #[test]
+fn root_view_restores_all_last_opened_projects_when_enabled() {
+    let temp = tempdir().unwrap();
+    let first_project = temp.path().join("first-project");
+    let second_project = temp.path().join("second-project");
+    fs::create_dir(&first_project).unwrap();
+    fs::create_dir(&second_project).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut settings = AppSettings::default();
+    settings.general.onboarding_completed = true;
+    save_settings(&paths, &settings).unwrap();
+
+    let mut initial = WorkbenchView::with_config_paths(paths.clone());
+    initial.open_project_path(&first_project).unwrap();
+    initial.open_project_path(&second_project).unwrap();
+    drop(initial);
+
+    let mut restore_disabled = WorkbenchView::with_config_paths(paths.clone());
+    assert!(restore_disabled.workspace().opened_projects().is_empty());
+    assert!(restore_disabled.has_last_opened_projects());
+    assert_eq!(
+        restore_disabled.visible_empty_workspace_actions(),
+        vec![
+            "Open Directory",
+            "Open Recent",
+            "Restore Last Session",
+            "Command Palette"
+        ]
+    );
+    restore_disabled
+        .set_restore_last_session_enabled(true)
+        .unwrap();
+    drop(restore_disabled);
+
+    let restored = WorkbenchView::with_config_paths(paths);
+    let restored_paths = restored
+        .workspace()
+        .opened_projects()
+        .iter()
+        .map(|project| project.path.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        restored_paths,
+        vec![
+            first_project.canonicalize().unwrap(),
+            second_project.canonicalize().unwrap()
+        ]
+    );
+}
+
+#[gpui::test]
+fn empty_workspace_restore_button_opens_last_session(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let first_project = temp.path().join("first-project");
+    let second_project = temp.path().join("second-project");
+    fs::create_dir(&first_project).unwrap();
+    fs::create_dir(&second_project).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut settings = AppSettings::default();
+    settings.general.onboarding_completed = true;
+    save_settings(&paths, &settings).unwrap();
+
+    let mut initial = WorkbenchView::with_config_paths(paths.clone());
+    initial.open_project_path(&first_project).unwrap();
+    initial.open_project_path(&second_project).unwrap();
+    drop(initial);
+
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths(paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    cx.refresh().unwrap();
+
+    let restore = cx
+        .debug_bounds("empty-restore-last-session")
+        .expect("empty workspace should show the restore button");
+    cx.simulate_click(restore.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+
+    cx.read(|app| {
+        assert_eq!(root.read(app).workspace().opened_projects().len(), 2);
+    });
+}
+#[test]
 fn root_view_dev_fixture_contains_sample_project() {
     let root = WorkbenchView::dev_fixture();
 
@@ -3454,7 +3542,7 @@ fn new_tab_toolbar_defaults_to_creating_a_shell_tab() {
 }
 
 #[gpui::test]
-fn general_settings_render_and_toggle_new_tab_command_picker(cx: &mut gpui::TestAppContext) {
+fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
@@ -3475,6 +3563,15 @@ fn general_settings_render_and_toggle_new_tab_command_picker(cx: &mut gpui::Test
         cx.notify();
     });
     cx.refresh().unwrap();
+    assert!(
+        cx.debug_bounds("settings-restore-last-session-row")
+            .is_some()
+    );
+    let restore_toggle = cx
+        .debug_bounds("settings-restore-last-session")
+        .expect("restore-last-session setting should expose a switch");
+    cx.simulate_click(restore_toggle.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
 
     let picker_row = cx
         .debug_bounds("settings-new-tab-command-picker-row")
@@ -3500,6 +3597,14 @@ fn general_settings_render_and_toggle_new_tab_command_picker(cx: &mut gpui::Test
             .settings
             .general
             .new_tab_command_picker_enabled
+    );
+    cx.read(|app| assert!(root.read(app).restore_last_session_enabled()));
+    assert!(
+        load_or_create_settings(&paths)
+            .unwrap()
+            .settings
+            .general
+            .restore_last_session
     );
 }
 

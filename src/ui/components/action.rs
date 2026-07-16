@@ -3,14 +3,15 @@ use super::*;
 pub fn workbench_action_button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
-    shortcut: &'static str,
+    shortcut: Option<&'static str>,
     emphasis: ActionEmphasis,
 ) -> Button {
-    let button = Button::new(id)
-        .label(label)
-        .compact()
-        .rounded(px(6.0))
-        .child(Kbd::new(shortcut_keystroke(shortcut)));
+    let button = Button::new(id).label(label).compact().rounded(px(6.0));
+    let button = if let Some(shortcut) = shortcut {
+        button.child(Kbd::new(shortcut_keystroke(shortcut)))
+    } else {
+        button
+    };
 
     match emphasis {
         ActionEmphasis::Primary => button.primary(),

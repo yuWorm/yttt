@@ -45,6 +45,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CreateProjectPickerError => "选择项目位置失败",
         UiTextKey::OpenDirectory => "打开目录",
         UiTextKey::OpenRecent => "打开最近项目",
+        UiTextKey::RestoreLastSession => "恢复上次打开",
         UiTextKey::CommandPalette => "命令面板",
         UiTextKey::NewTab => "新建标签页",
         UiTextKey::NoTerminalTabs => "暂无终端标签页",
@@ -285,6 +286,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSelectLanguage => "选择语言",
         UiTextKey::SettingsSystemNotifications => "系统通知",
         UiTextKey::SettingsSystemNotificationsDescription => "Agent 终端任务完成或失败时通知。",
+        UiTextKey::SettingsRestoreLastSession => "启动时恢复项目",
+        UiTextKey::SettingsRestoreLastSessionDescription => {
+            "启动 YTTT 时，重新打开上次退出时仍保持打开的所有项目。"
+        }
         UiTextKey::SettingsPerformanceMetrics => "应用性能指标",
         UiTextKey::SettingsPerformanceMetricsDescription => {
             "在标题栏显示项目、终端、标签页、编辑器和当前应用资源指标。"

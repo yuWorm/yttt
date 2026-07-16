@@ -133,6 +133,10 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 UiTextKey::SettingsSystemNotificationsDescription,
             ),
             row(
+                UiTextKey::SettingsRestoreLastSession,
+                UiTextKey::SettingsRestoreLastSessionDescription,
+            ),
+            row(
                 UiTextKey::SettingsNewTabCommandPicker,
                 UiTextKey::SettingsNewTabCommandPickerDescription,
             ),

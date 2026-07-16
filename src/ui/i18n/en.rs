@@ -47,6 +47,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CreateProjectPickerError => "Failed to choose a project location",
         UiTextKey::OpenDirectory => "Open Directory",
         UiTextKey::OpenRecent => "Open Recent",
+        UiTextKey::RestoreLastSession => "Restore Last Session",
         UiTextKey::CommandPalette => "Command Palette",
         UiTextKey::NewTab => "New Tab",
         UiTextKey::NoTerminalTabs => "No terminal tabs",
@@ -326,6 +327,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSystemNotifications => "System notifications",
         UiTextKey::SettingsSystemNotificationsDescription => {
             "Notify when agent terminal tasks complete or fail."
+        }
+        UiTextKey::SettingsRestoreLastSession => "Restore projects on startup",
+        UiTextKey::SettingsRestoreLastSessionDescription => {
+            "Open every project that was still open when YTTT last exited."
         }
         UiTextKey::SettingsPerformanceMetrics => "Application performance metrics",
         UiTextKey::SettingsPerformanceMetricsDescription => {

@@ -82,6 +82,7 @@ pub struct GeneralSettings {
     pub onboarding_completed: bool,
     pub performance_metrics_enabled: bool,
     pub system_performance_metrics_enabled: bool,
+    pub restore_last_session: bool,
     pub new_tab_command_picker_enabled: bool,
     pub new_tab_commands: Vec<String>,
 }
@@ -96,6 +97,7 @@ impl Default for GeneralSettings {
             onboarding_completed: false,
             performance_metrics_enabled: true,
             system_performance_metrics_enabled: false,
+            restore_last_session: false,
             new_tab_command_picker_enabled: false,
             new_tab_commands: vec![
                 "lazygit".to_string(),

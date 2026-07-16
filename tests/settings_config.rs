@@ -58,6 +58,7 @@ fn missing_settings_file_writes_defaults() {
     assert!(!loaded.settings.general.onboarding_completed);
     assert!(loaded.settings.general.performance_metrics_enabled);
     assert!(!loaded.settings.general.system_performance_metrics_enabled);
+    assert!(!loaded.settings.general.restore_last_session);
     assert!(!loaded.settings.general.new_tab_command_picker_enabled);
     assert_eq!(
         loaded.settings.general.new_tab_commands,
@@ -270,6 +271,7 @@ fn settings_persist_language_and_terminal_scrollbar() {
     settings.general.onboarding_completed = true;
     settings.general.performance_metrics_enabled = false;
     settings.general.system_performance_metrics_enabled = true;
+    settings.general.restore_last_session = true;
     settings.general.new_tab_command_picker_enabled = true;
     settings.general.new_tab_commands = vec!["nvim .".to_string(), "codex --resume".to_string()];
     settings.terminal.show_scrollbar = false;
@@ -284,6 +286,7 @@ fn settings_persist_language_and_terminal_scrollbar() {
     assert!(loaded.settings.general.onboarding_completed);
     assert!(!loaded.settings.general.performance_metrics_enabled);
     assert!(loaded.settings.general.system_performance_metrics_enabled);
+    assert!(loaded.settings.general.restore_last_session);
     assert!(loaded.settings.general.new_tab_command_picker_enabled);
     assert_eq!(
         loaded.settings.general.new_tab_commands,

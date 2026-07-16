@@ -103,7 +103,8 @@ use crate::{
         layout_loader::{
             LayoutSource, PersonalLayout, ProjectOpenError, RecentProjectsConfig,
             create_project_layout_scaffold, export_project_layout, load_recent_projects,
-            open_project_config, parse_personal_layout, reset_local_override, save_local_layout,
+            open_project_config, parse_personal_layout, reset_local_override,
+            save_last_opened_projects, save_local_layout,
         },
         paths::{AppConfigPaths, display_path},
         settings::{
@@ -251,6 +252,7 @@ pub struct WorkbenchView {
     default_layout_state: DefaultLayoutState,
     onboarding: Option<OnboardingState>,
     palette: PaletteControllerState,
+    recent_projects_config: RecentProjectsConfig,
     command_registry: CommandRegistry,
     load_error: Option<String>,
     presented_error_notification: Option<String>,
@@ -405,7 +407,12 @@ impl WorkbenchView {
         config_paths: AppConfigPaths,
         force_onboarding: bool,
     ) -> Self {
-        Self::with_workspace_and_config_paths(Workspace::new(), config_paths, force_onboarding)
+        let mut root =
+            Self::with_workspace_and_config_paths(Workspace::new(), config_paths, force_onboarding);
+        if root.restore_last_session_enabled() {
+            root.restore_last_opened_projects();
+        }
+        root
     }
 
     pub fn from_startup(force_onboarding: bool) -> Self {
@@ -418,6 +425,41 @@ impl WorkbenchView {
         }
         root
     }
+    pub fn has_last_opened_projects(&self) -> bool {
+        !self.recent_projects_config.last_opened_projects.is_empty()
+    }
+
+    pub fn restore_last_opened_projects(&mut self) -> usize {
+        let project_paths = self.recent_projects_config.last_opened_projects.clone();
+        let mut restored = 0;
+        let mut messages = self.load_error.take().into_iter().collect::<Vec<_>>();
+        for project_path in project_paths {
+            if self.open_project_path(project_path).is_ok() {
+                restored += 1;
+            }
+            if let Some(message) = self.load_error.take() {
+                push_unique_string(&mut messages, message);
+            }
+        }
+        self.load_error = (!messages.is_empty()).then(|| messages.join("; "));
+        restored
+    }
+
+    fn persist_opened_project_paths(&mut self) -> Option<String> {
+        let project_paths = self
+            .workspace
+            .opened_projects()
+            .iter()
+            .map(|project| project.path.clone())
+            .collect();
+        save_last_opened_projects(
+            &self.config_paths,
+            &mut self.recent_projects_config,
+            project_paths,
+        )
+        .err()
+        .map(|error| error.to_string())
+    }
 
     fn with_workspace_and_config_paths(
         workspace: Workspace,
@@ -426,9 +468,8 @@ impl WorkbenchView {
     ) -> Self {
         let default_layout_state = DefaultLayoutState::load_or_create(&config_paths);
         let command_registry = default_registry();
-        let recent_projects = load_recent_projects(&config_paths)
-            .map(recent_projects_for_palette)
-            .unwrap_or_default();
+        let recent_projects_config = load_recent_projects(&config_paths).unwrap_or_default();
+        let recent_projects = recent_projects_for_palette(&recent_projects_config);
         let keybindings_editor = load_keybindings_editor_state(&config_paths, &command_registry);
         let (mut app_settings, settings_warning_lines) = load_app_settings_messages(&config_paths);
         let language_detection_error = (!app_settings.general.onboarding_completed
@@ -499,6 +540,7 @@ impl WorkbenchView {
             default_layout_state,
             onboarding,
             palette: PaletteControllerState::new(recent_projects),
+            recent_projects_config,
             command_registry,
             load_error,
             presented_error_notification: None,
@@ -1365,10 +1407,14 @@ impl WorkbenchView {
     }
 
     pub fn visible_empty_workspace_actions(&self) -> Vec<&'static str> {
-        EMPTY_WORKSPACE_ACTIONS
+        let mut actions = EMPTY_WORKSPACE_ACTIONS
             .iter()
             .map(|key| self.ui_text.get(*key))
-            .collect()
+            .collect::<Vec<_>>();
+        if self.has_last_opened_projects() {
+            actions.insert(2, self.ui_text.get(UiTextKey::RestoreLastSession));
+        }
+        actions
     }
 
     pub fn visible_titlebar_info(&self) -> TitlebarInfo {
@@ -1942,8 +1988,11 @@ impl WorkbenchView {
                 self.project
                     .layout_source_messages
                     .insert(project_id, source_message);
-                self.palette.recent_projects = recent_projects_for_palette(opened.recent_projects);
-                self.load_error = warning_message;
+                self.recent_projects_config = opened.recent_projects;
+                let persistence_error = self.persist_opened_project_paths();
+                self.palette.recent_projects =
+                    recent_projects_for_palette(&self.recent_projects_config);
+                self.load_error = combine_load_messages(warning_message, persistence_error);
                 Ok(())
             }
             Err(error) => {
@@ -2118,6 +2167,8 @@ impl WorkbenchView {
         {
             self.project.pending_editor_focus_document_id = None;
         }
+        let persistence_error = self.persist_opened_project_paths();
+        self.load_error = combine_load_messages(self.load_error.take(), persistence_error);
     }
 
     fn close_active_work_item(&mut self) -> Result<(), WorkbenchError> {

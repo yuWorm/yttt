@@ -327,6 +327,28 @@ fn settings_general_rows(
             setting_row(
                 style,
                 theme,
+                text.get(UiTextKey::SettingsRestoreLastSession),
+                text.get(UiTextKey::SettingsRestoreLastSessionDescription),
+                settings_switch(
+                    "settings-restore-last-session",
+                    root.restore_last_session_enabled(),
+                    theme,
+                    cx.listener(|this, checked: &bool, _window, cx| {
+                        if let Err(error) = this.set_restore_last_session_enabled(*checked) {
+                            this.load_error = Some(error.to_string());
+                        }
+                        cx.notify();
+                    }),
+                )
+                .debug_selector(|| "settings-restore-last-session".to_string())
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-restore-last-session-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
                 text.get(UiTextKey::SettingsPerformanceMetrics),
                 text.get(UiTextKey::SettingsPerformanceMetricsDescription),
                 settings_switch(

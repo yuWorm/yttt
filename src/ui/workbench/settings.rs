@@ -83,6 +83,19 @@ impl WorkbenchView {
         self.system_notifications_enabled = enabled;
         Ok(())
     }
+    pub fn restore_last_session_enabled(&self) -> bool {
+        self.app_settings.general.restore_last_session
+    }
+
+    pub fn set_restore_last_session_enabled(
+        &mut self,
+        enabled: bool,
+    ) -> Result<(), WorkbenchError> {
+        self.app_settings.general.restore_last_session = enabled;
+        save_settings(&self.config_paths, &self.app_settings)?;
+        Ok(())
+    }
+
     pub fn performance_metrics_enabled(&self) -> bool {
         self.app_settings.general.performance_metrics_enabled
     }
