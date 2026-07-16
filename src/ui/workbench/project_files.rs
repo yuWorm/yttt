@@ -1039,7 +1039,25 @@ impl WorkbenchView {
         }
         self.check_project_documents_for_external_changes(&project_id, window, cx);
         if let Some(project_path) = project_path {
-            self.refresh_project_git_status(&project_id, &project_path);
+            let status_project_path = project_path.clone();
+            let task =
+                cx.background_spawn(async move { read_project_git_status(&status_project_path) });
+            cx.spawn_in(window, async move |this, cx| {
+                let status = task.await;
+                let _ = this.update_in(cx, |root, _window, cx| {
+                    if root
+                        .workspace
+                        .project(&project_id)
+                        .map(|project| &project.path)
+                        != Some(&project_path)
+                    {
+                        return;
+                    }
+                    root.apply_project_git_status(&project_id, status);
+                    cx.notify();
+                });
+            })
+            .detach();
         }
     }
 
