@@ -87,12 +87,36 @@ fn command_mode_exposes_program_output_through_the_pty() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn shell_mode_returns_to_the_shell_after_the_initial_command() {
+    use std::io::{Read as _, Write as _};
+
+    let mut session =
+        spawn_portable_pty_session(TerminalSpawnRequest::for_shell("probe", "/bin/sh", "false"))
+            .unwrap();
+    let mut io = session.take_io().unwrap();
+
+    io.writer.write_all(b"true\nexit\n").unwrap();
+    io.writer.flush().unwrap();
+    let mut output = String::new();
+    io.reader.read_to_string(&mut output).unwrap();
+    let status = session.finish(ExitReason::Completed).unwrap();
+
+    assert_eq!(status, ProcessStatus::Exited { code: Some(0) });
+}
+
 #[test]
 #[ignore = "spawns a real PTY process"]
 fn real_runtime_runs_short_command_to_exit() {
     let mut runtime = PortablePtyRuntime::default();
     let handle = runtime
-        .spawn(TerminalSpawnRequest::for_shell("probe", "sh", "printf ok"))
+        .spawn(TerminalSpawnRequest::for_command(
+            "probe",
+            "sh",
+            "printf",
+            vec!["ok".to_string()],
+        ))
         .unwrap();
 
     runtime

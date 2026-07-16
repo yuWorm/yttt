@@ -10,7 +10,12 @@ use yttt::runtime::terminal::{
 fn real_runtime_runs_short_command_to_exit() {
     let mut runtime = PortablePtyRuntime::default();
     let handle = runtime
-        .spawn(TerminalSpawnRequest::for_shell("probe", "sh", "printf ok"))
+        .spawn(TerminalSpawnRequest::for_command(
+            "probe",
+            "sh",
+            "printf",
+            vec!["ok".to_string()],
+        ))
         .unwrap();
 
     runtime

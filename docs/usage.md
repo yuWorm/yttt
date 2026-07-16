@@ -290,16 +290,21 @@ title = "Agent"
 layout = { type = "pane", id = "codex", title = "Codex", command = "codex", execution_mode = "command", exit_behavior = "manual_restart", kind = "agent", notify_on_exit = true, detector = "codex" }
 ```
 
-`execution_mode = "shell"` starts the configured shell and passes the pane `command` to it; an
-empty command opens an interactive shell. On Unix, non-empty shell commands run in an interactive
-login shell. `execution_mode = "command"` uses that login shell to load the user's environment,
-then replaces it with `command`; `args` keep their argument boundaries and receive no shell
-expansion. Command stdout and stderr remain connected to the pane PTY.
+`execution_mode = "shell"` starts a persistent interactive shell and queues the pane `command`
+as shell input. When that command finishes, the shell remains open at its prompt; an empty command
+just opens the shell. Shell syntax, expansion, aliases, and functions apply, while the separate
+`args` field is ignored. On Unix, supported shells start as interactive login shells.
 
-`exit_behavior` accepts `close`, `auto_restart`, or `manual_restart`. Automatic restarts wait
-500 ms before starting a fresh PTY, avoiding a tight respawn loop. Manual restart keeps the pane
-visible and shows a Restart action. Existing layouts may omit `args`, `execution_mode`, and
-`exit_behavior`; their defaults are `[]`, `shell`, and `close`.
+`execution_mode = "command"` loads the user's shell environment on supported Unix shells, then
+replaces that shell with `command`. `args` keep their argument boundaries and receive no shell
+expansion. The pane process exits when the command exits. Command stdout and stderr remain
+connected to the pane PTY.
+
+`exit_behavior` accepts `close`, `auto_restart`, or `manual_restart` and applies when the pane
+process exits. In shell mode that means the persistent shell itself, not each command run inside
+it. Use command mode for services that must close or restart when their command exits. Automatic
+restarts wait 500 ms before starting a fresh PTY. Existing layouts may omit `args`,
+`execution_mode`, and `exit_behavior`; their defaults are `[]`, `shell`, and `close`.
 
 `detector` is reserved for future output parsing. The current MVP does not parse agent
 output.

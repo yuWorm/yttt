@@ -206,10 +206,14 @@ impl TerminalRuntime for PortablePtyRuntime {
         })?;
         let portable_pty::PtyPair { slave, master } = pair;
         let command_builder = command_builder(&request.execution, &request.cwd)?;
-        let child = slave.spawn_command(command_builder)?;
+        let mut child = slave.spawn_command(command_builder)?;
         drop(slave);
 
-        let writer = master.take_writer()?;
+        let mut writer = master.take_writer()?;
+        if let Err(error) = write_shell_startup_command(&request.execution, &mut writer) {
+            let _ = child.kill();
+            return Err(error.into());
+        }
         if cfg!(target_os = "macos") {
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -297,11 +301,15 @@ pub fn spawn_portable_pty_session(
     })?;
     let portable_pty::PtyPair { slave, master } = pair;
     let command_builder = command_builder(&request.execution, &request.cwd)?;
-    let child = slave.spawn_command(command_builder)?;
+    let mut child = slave.spawn_command(command_builder)?;
     drop(slave);
 
     let reader = master.try_clone_reader()?;
-    let writer = master.take_writer()?;
+    let mut writer = master.take_writer()?;
+    if let Err(error) = write_shell_startup_command(&request.execution, &mut writer) {
+        let _ = child.kill();
+        return Err(error.into());
+    }
     let master = Arc::new(Mutex::new(master));
 
     Ok(PortablePtySession {
@@ -462,18 +470,14 @@ struct PortablePtyProcess {
 
 fn command_builder(execution: &TerminalExecution, cwd: &Path) -> anyhow::Result<CommandBuilder> {
     let mut builder = match execution {
-        TerminalExecution::Shell { shell, command } => {
+        TerminalExecution::Shell { shell, .. } => {
             let shell = shell.trim();
             if shell.is_empty() {
                 anyhow::bail!("shell executable cannot be empty");
             }
 
             let mut builder = CommandBuilder::new(shell);
-            if !command.trim().is_empty() {
-                for arg in shell_execution_args(shell, command) {
-                    builder.arg(arg);
-                }
-            }
+            builder.args(interactive_shell_args(shell));
             builder
         }
         TerminalExecution::Command {
@@ -568,25 +572,16 @@ fn shell_executable_name(shell: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn shell_execution_args(shell: &str, command: &str) -> Vec<String> {
+fn interactive_shell_args(shell: &str) -> Vec<String> {
     let shell_name = shell_executable_name(shell);
 
     if matches!(shell_name.as_str(), "cmd" | "cmd.exe") {
-        vec![
-            "/D".to_string(),
-            "/S".to_string(),
-            "/C".to_string(),
-            command.to_string(),
-        ]
+        vec!["/D".to_string()]
     } else if matches!(
         shell_name.as_str(),
         "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe"
     ) {
-        vec![
-            "-NoLogo".to_string(),
-            "-Command".to_string(),
-            command.to_string(),
-        ]
+        vec!["-NoLogo".to_string()]
     } else if matches!(
         shell_name.as_str(),
         "sh" | "sh.exe"
@@ -605,10 +600,26 @@ fn shell_execution_args(shell: &str, command: &str) -> Vec<String> {
             | "zsh"
             | "zsh.exe"
     ) {
-        vec!["-lic".to_string(), command.to_string()]
+        vec!["-li".to_string()]
     } else {
-        vec!["-c".to_string(), command.to_string()]
+        Vec::new()
     }
+}
+
+fn write_shell_startup_command(
+    execution: &TerminalExecution,
+    writer: &mut dyn Write,
+) -> io::Result<()> {
+    let TerminalExecution::Shell { command, .. } = execution else {
+        return Ok(());
+    };
+    if command.trim().is_empty() {
+        return Ok(());
+    }
+
+    writer.write_all(command.as_bytes())?;
+    writer.write_all(b"\n")?;
+    writer.flush()
 }
 
 fn exit_status_code(status: portable_pty::ExitStatus) -> i32 {
@@ -698,7 +709,7 @@ mod tests {
     }
 
     #[test]
-    fn shell_execution_uses_shell_specific_command_flags() {
+    fn shell_execution_starts_persistent_shell_and_queues_command_input() {
         let sh = TerminalExecution::Shell {
             shell: "/bin/sh".to_string(),
             command: "echo ok".to_string(),
@@ -707,24 +718,37 @@ mod tests {
             shell: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe".to_string(),
             command: "Write-Output ok".to_string(),
         };
+        let command = TerminalExecution::Command {
+            shell: "/bin/sh".to_string(),
+            program: "printf".to_string(),
+            args: vec!["ok".to_string()],
+        };
 
         assert_eq!(
             argv(command_builder(&sh, Path::new("/tmp")).unwrap()),
-            vec!["/bin/sh", "-lic", "echo ok"]
+            vec!["/bin/sh", "-li"]
         );
         assert_eq!(
             argv(command_builder(&powershell, Path::new("/tmp")).unwrap()),
             vec![
                 "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
                 "-NoLogo",
-                "-Command",
-                "Write-Output ok",
             ]
         );
+
+        let mut sh_input = Vec::new();
+        write_shell_startup_command(&sh, &mut sh_input).unwrap();
+        assert_eq!(sh_input, b"echo ok\n");
+        let mut powershell_input = Vec::new();
+        write_shell_startup_command(&powershell, &mut powershell_input).unwrap();
+        assert_eq!(powershell_input, b"Write-Output ok\n");
+        let mut command_input = Vec::new();
+        write_shell_startup_command(&command, &mut command_input).unwrap();
+        assert!(command_input.is_empty());
     }
 
     #[test]
-    fn empty_shell_command_starts_an_interactive_shell() {
+    fn empty_shell_command_starts_an_interactive_shell_without_input() {
         let execution = TerminalExecution::Shell {
             shell: "/bin/zsh".to_string(),
             command: String::new(),
@@ -732,8 +756,11 @@ mod tests {
 
         assert_eq!(
             argv(command_builder(&execution, Path::new("/tmp")).unwrap()),
-            vec!["/bin/zsh"]
+            vec!["/bin/zsh", "-li"]
         );
+        let mut input = Vec::new();
+        write_shell_startup_command(&execution, &mut input).unwrap();
+        assert!(input.is_empty());
     }
 
     #[test]

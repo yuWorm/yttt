@@ -1175,6 +1175,7 @@ fn project_layout_scaffold_creates_layout_and_ai_guide() {
     assert!(guide.contains("Pane IDs must be unique within each tab"));
     assert!(guide.contains("Do not add `version` or `mode`"));
     assert!(guide.contains("startup = \"eager\""));
+    assert!(guide.contains("shell remains open after that command finishes"));
 }
 
 #[test]

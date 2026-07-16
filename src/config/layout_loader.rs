@@ -50,10 +50,11 @@ Pane IDs must be unique within each tab. `default_tab` must match an existing ta
 `startup = "eager"` starts every pane in that tab when the project opens, even when another
 tab is selected. Omitted or `startup = "lazy"` tabs start when first selected. The
 `default_tab` always starts because it is initially selected.
-Use `execution_mode = "shell"` for shell syntax and interactive shells. Use
-`execution_mode = "command"` with `args` when argument boundaries must be preserved.
-`exit_behavior` accepts `close`, `auto_restart`, or `manual_restart`. `kind` accepts
-`shell` or `agent`.
+`execution_mode = "shell"` starts a persistent interactive shell and queues `command` as shell
+input. The shell remains open after that command finishes; `args` is ignored. Use
+`execution_mode = "command"` with `args` for one-shot programs that should exit with the command.
+`exit_behavior` applies to the persistent shell in shell mode and to the program in command mode;
+it accepts `close`, `auto_restart`, or `manual_restart`. `kind` accepts `shell` or `agent`.
 
 ## Example
 
