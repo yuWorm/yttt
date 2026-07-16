@@ -343,6 +343,7 @@ pub struct EditorTheme {
 impl EditorTheme {
     pub fn to_highlight_theme_style(self) -> HighlightThemeStyle {
         let mut syntax = SyntaxColors::default();
+        syntax.attribute = Some(theme_style(self.syntax.constant));
         syntax.boolean = Some(theme_style(self.syntax.boolean));
         syntax.comment = Some(theme_style(self.syntax.comment));
         syntax.comment_doc = Some(theme_style(self.syntax.comment_doc));
@@ -358,6 +359,11 @@ impl EditorTheme {
         syntax.punctuation_delimiter = Some(theme_style(self.syntax.punctuation));
         syntax.string = Some(theme_style(self.syntax.string));
         syntax.string_escape = Some(theme_style(self.syntax.string_escape));
+        syntax.string_regex = Some(theme_style(self.syntax.string));
+        syntax.string_special = Some(theme_style(self.syntax.constant));
+        syntax.string_special_symbol = Some(theme_style(self.syntax.constant));
+        syntax.tag = Some(theme_style(self.syntax.constructor));
+        syntax.tag_doctype = Some(theme_style(self.syntax.constant));
         syntax.type_ = Some(theme_style(self.syntax.type_));
         syntax.variable = Some(theme_style(self.syntax.variable));
         syntax.variable_special = Some(theme_style(self.syntax.variable_special));
@@ -542,4 +548,32 @@ fn color_bytes(color: Rgba) -> (u8, u8, u8) {
 fn theme_style(color: Rgba) -> ThemeStyle {
     toml::from_str(&format!("color = \"{}\"", color_hex(color)))
         .expect("valid editor syntax theme style")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn editor_theme_styles_frontend_captures() {
+        let editor = ThemeRuntime::default().editor;
+        let syntax = editor.to_highlight_theme_style().syntax;
+
+        assert_eq!(
+            syntax.style("tag").and_then(|style| style.color),
+            Some(editor.syntax.constructor.into())
+        );
+        assert_eq!(
+            syntax.style("attribute").and_then(|style| style.color),
+            Some(editor.syntax.constant.into())
+        );
+        assert_eq!(
+            syntax.style("tag.doctype").and_then(|style| style.color),
+            Some(editor.syntax.constant.into())
+        );
+        assert_eq!(
+            syntax.style("string.special").and_then(|style| style.color),
+            Some(editor.syntax.constant.into())
+        );
+    }
 }
