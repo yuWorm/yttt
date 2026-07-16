@@ -200,6 +200,7 @@ fn parser_language(language_id: EditorLanguageId) -> Option<Language> {
         | EditorLanguageId::Proto
         | EditorLanguageId::Diff
         | EditorLanguageId::CMake
+        | EditorLanguageId::Powershell
         | EditorLanguageId::Make
         | EditorLanguageId::Dockerfile => return None,
         EditorLanguageId::Bash => tree_sitter_bash::LANGUAGE.into(),

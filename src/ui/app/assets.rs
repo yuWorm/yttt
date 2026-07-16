@@ -11,6 +11,30 @@ use crate::config::paths::AppConfigPaths;
 
 pub const REQUIRED_COMPONENT_ICON_ASSET_PATHS: &[&str] = &["icons/search.svg"];
 pub(crate) const EXTERNAL_ICON_ASSET_PREFIX: &str = "yttt-icon://";
+pub const BUILTIN_FILE_ICON_ASSET_PATHS: &[&str] = &[
+    "icons/file-csharp.svg",
+    "icons/file-powershell.svg",
+    "icons/file-windows-project.svg",
+    "icons/file-xml.svg",
+];
+
+fn builtin_file_icon_asset(path: &str) -> Option<&'static [u8]> {
+    match path {
+        "icons/file-csharp.svg" => {
+            Some(include_bytes!("../../../assets/icons/file-csharp.svg").as_slice())
+        }
+        "icons/file-powershell.svg" => {
+            Some(include_bytes!("../../../assets/icons/file-powershell.svg").as_slice())
+        }
+        "icons/file-windows-project.svg" => {
+            Some(include_bytes!("../../../assets/icons/file-windows-project.svg").as_slice())
+        }
+        "icons/file-xml.svg" => {
+            Some(include_bytes!("../../../assets/icons/file-xml.svg").as_slice())
+        }
+        _ => None,
+    }
+}
 
 pub struct YtttAssets {
     icon_themes_root: PathBuf,
@@ -37,11 +61,22 @@ impl AssetSource for YtttAssets {
             return Ok(Some(Cow::Owned(fs::read(resolved)?)));
         }
 
+        if let Some(asset) = builtin_file_icon_asset(path) {
+            return Ok(Some(Cow::Borrowed(asset)));
+        }
+
         gpui_component_assets::Assets.load(path)
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
-        gpui_component_assets::Assets.list(path)
+        let mut assets = gpui_component_assets::Assets.list(path)?;
+        assets.extend(
+            BUILTIN_FILE_ICON_ASSET_PATHS
+                .iter()
+                .filter(|asset_path| asset_path.starts_with(path))
+                .map(|asset_path| (*asset_path).into()),
+        );
+        Ok(assets)
     }
 }
 

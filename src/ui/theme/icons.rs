@@ -11,6 +11,11 @@ use serde::Deserialize;
 
 use crate::{config::paths::AppConfigPaths, ui::app::assets::external_icon_asset_path};
 
+const CSHARP_FILE_ICON: &str = "icons/file-csharp.svg";
+const POWERSHELL_FILE_ICON: &str = "icons/file-powershell.svg";
+const WINDOWS_PROJECT_FILE_ICON: &str = "icons/file-windows-project.svg";
+const XML_FILE_ICON: &str = "icons/file-xml.svg";
+
 #[derive(Clone)]
 pub enum IconVisual {
     Asset(SharedString),
@@ -54,12 +59,88 @@ struct ChevronIcons {
     expanded: Option<String>,
 }
 
+fn resolve_builtin_file_icon(name: &str) -> Option<IconVisual> {
+    let icon_path = if ["cs", "csx"]
+        .iter()
+        .any(|extension| matches_extension(name, extension))
+    {
+        CSHARP_FILE_ICON
+    } else if ["ps1", "psm1", "psd1", "pssc", "ps1xml", "psc1", "cdxml"]
+        .iter()
+        .any(|extension| matches_extension(name, extension))
+    {
+        POWERSHELL_FILE_ICON
+    } else if [
+        "sln",
+        "slnx",
+        "slnf",
+        "csproj",
+        "fsproj",
+        "vbproj",
+        "vcxproj",
+        "vcxproj.filters",
+        "wixproj",
+        "proj",
+        "projitems",
+    ]
+    .iter()
+    .any(|extension| matches_extension(name, extension))
+    {
+        WINDOWS_PROJECT_FILE_ICON
+    } else if [
+        "xml",
+        "xsd",
+        "xsl",
+        "xslt",
+        "svg",
+        "xaml",
+        "axaml",
+        "props",
+        "targets",
+        "resx",
+        "resw",
+        "config",
+        "nuspec",
+        "manifest",
+        "appxmanifest",
+        "application",
+        "wxs",
+        "wxi",
+        "wxl",
+        "natvis",
+        "ruleset",
+        "pubxml",
+        "runsettings",
+        "testsettings",
+    ]
+    .iter()
+    .any(|extension| matches_extension(name, extension))
+    {
+        XML_FILE_ICON
+    } else {
+        return None;
+    };
+
+    Some(IconVisual::Asset(icon_path.into()))
+}
+
+fn matches_extension(name: &str, extension: &str) -> bool {
+    let start = name.len().saturating_sub(extension.len());
+    let Some(suffix) = name.get(start..) else {
+        return false;
+    };
+
+    suffix.eq_ignore_ascii_case(extension)
+        && start > 0
+        && name.as_bytes().get(start - 1) == Some(&b'.')
+}
+
 impl IconTheme {
     pub fn resolve_file(&self, path: &Path) -> IconVisual {
-        let icon = path
-            .file_name()
-            .and_then(|name| name.to_str())
+        let file_name = path.file_name().and_then(|name| name.to_str());
+        let icon = file_name
             .and_then(|name| self.resolve_file_name(name))
+            .or_else(|| file_name.and_then(resolve_builtin_file_icon))
             .or_else(|| self.resolve_icon_key("default"));
 
         icon.unwrap_or(IconVisual::Component(IconName::File))

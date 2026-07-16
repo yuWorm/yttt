@@ -63,8 +63,12 @@ by `project_panel.show_hidden`.
 
 The editor resolves its language from the explicit editor setting, file name, or file
 extension. Language-aware highlighting covers plain text, TOML, JSON, JSONC, YAML, Markdown,
-Bash, C, C#, C++, Fish, GDScript, Go, Java, JavaScript, Kotlin, Lua, PHP, Python, Ruby,
-Rust, Scala, Swift, TypeScript, and Zig.
+Bash, C, C#, C++, Fish, GDScript, Go, Java, JavaScript, Kotlin, Lua, PHP, PowerShell, Python,
+Ruby, Rust, Scala, Swift, TypeScript, XML, and Zig.
+Windows development files such as `.csx`, `.ps1`, `.psm1`, `.csproj`, `.vcxproj.filters`,
+`.props`, `.targets`, `.xaml`, and `.sln` are detected by extension. The default icon theme
+distinguishes C#, PowerShell, XML, and Windows solution/project files; matching icons from an
+imported icon theme take precedence.
 
 When the language has a syntax tree, cursor-following breadcrumbs show the enclosing symbols
 above the document. Select a breadcrumb to move the cursor to that declaration. Multiline

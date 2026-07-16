@@ -48,6 +48,32 @@ const THEME_JSON: &str = r#"
 "#;
 
 #[test]
+fn default_icon_theme_detects_windows_development_files() {
+    let theme = load_icon_theme(
+        &AppConfigPaths::from_config_dir(tempdir().unwrap().path()),
+        None,
+    )
+    .unwrap();
+
+    for (filename, expected) in [
+        ("Program.CS", "icons/file-csharp.svg"),
+        ("build.psm1", "icons/file-powershell.svg"),
+        ("Types.ps1xml", "icons/file-powershell.svg"),
+        ("Demo.csproj", "icons/file-windows-project.svg"),
+        ("Solution.sln", "icons/file-windows-project.svg"),
+        ("App.xaml", "icons/file-xml.svg"),
+        ("Directory.Build.props", "icons/file-xml.svg"),
+    ] {
+        assert_builtin_asset_path(theme.resolve_file(Path::new(filename)), expected);
+    }
+
+    assert!(matches!(
+        theme.resolve_file(Path::new("README.unknown")),
+        IconVisual::Component(_)
+    ));
+}
+
+#[test]
 fn zed_compatible_icon_theme_resolves_icons_and_loads_svg_assets() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path());
@@ -161,4 +187,11 @@ fn assert_asset_path(visual: IconVisual, expected_suffix: &str) {
         panic!("expected an external icon asset");
     };
     assert_eq!(path, format!("yttt-icon://{expected_suffix}"));
+}
+
+fn assert_builtin_asset_path(visual: IconVisual, expected: &str) {
+    let IconVisual::Asset(path) = visual else {
+        panic!("expected a built-in icon asset");
+    };
+    assert_eq!(path, expected);
 }

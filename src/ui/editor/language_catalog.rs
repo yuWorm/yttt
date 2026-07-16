@@ -25,6 +25,7 @@ pub enum EditorLanguageId {
     Diff,
     CMake,
     Bash,
+    Powershell,
     Fish,
     Gdscript,
     Rust,
@@ -72,6 +73,7 @@ impl EditorLanguageId {
             Self::Diff => "diff",
             Self::CMake => "cmake",
             Self::Bash => "bash",
+            Self::Powershell => "powershell",
             Self::Fish => "fish",
             Self::Gdscript => "gdscript",
             Self::Rust => "rust",
@@ -232,7 +234,7 @@ impl EditorLanguageCatalog {
                 definition
                     .filenames
                     .iter()
-                    .any(|candidate| *candidate == filename)
+                    .any(|candidate| filename.eq_ignore_ascii_case(candidate))
             })
             .map(|definition| {
                 self.resolution_for(
@@ -249,7 +251,7 @@ impl EditorLanguageCatalog {
             .iter()
             .flat_map(|definition| {
                 definition.extensions.iter().filter_map(move |extension| {
-                    if filename == *extension || filename.ends_with(&format!(".{extension}")) {
+                    if matches_extension(filename, extension) {
                         Some((definition, *extension))
                     } else {
                         None
@@ -316,6 +318,16 @@ impl EditorLanguageCatalog {
     }
 }
 
+fn matches_extension(filename: &str, extension: &str) -> bool {
+    let start = filename.len().saturating_sub(extension.len());
+    let Some(suffix) = filename.get(start..) else {
+        return false;
+    };
+
+    suffix.eq_ignore_ascii_case(extension)
+        && (start == 0 || filename.as_bytes().get(start - 1) == Some(&b'.'))
+}
+
 fn valid_highlighter_or_text(highlighter_name: &str) -> String {
     let registry = LanguageRegistry::singleton();
     if registry
@@ -358,7 +370,7 @@ fn builtin_language_definitions() -> Vec<EditorLanguageDefinition> {
             EditorLanguageId::Json,
             "JSON",
             &[],
-            &["json"],
+            &["json", "slnf"],
             &["package.json", "tsconfig.json"],
             &[],
             "json",
@@ -411,11 +423,48 @@ fn builtin_language_definitions() -> Vec<EditorLanguageDefinition> {
         language(
             EditorLanguageId::Xml,
             "XML",
+            &["xaml", "msbuild"],
+            &[
+                "xml",
+                "xsd",
+                "xsl",
+                "xslt",
+                "svg",
+                "xaml",
+                "axaml",
+                "csproj",
+                "fsproj",
+                "vbproj",
+                "vcxproj",
+                "vcxproj.filters",
+                "props",
+                "targets",
+                "resx",
+                "resw",
+                "config",
+                "nuspec",
+                "manifest",
+                "appxmanifest",
+                "application",
+                "wixproj",
+                "wxs",
+                "wxi",
+                "wxl",
+                "natvis",
+                "ruleset",
+                "ps1xml",
+                "psc1",
+                "cdxml",
+                "slnx",
+                "pubxml",
+                "runsettings",
+                "testsettings",
+                "proj",
+                "projitems",
+            ],
             &[],
-            &["xml", "xsd", "xsl", "xslt", "svg"],
             &[],
-            &[],
-            "html",
+            "xml",
         ),
         language(EditorLanguageId::Css, "CSS", &[], &["css"], &[], &[], "css"),
         language(
@@ -494,6 +543,15 @@ fn builtin_language_definitions() -> Vec<EditorLanguageDefinition> {
             "bash",
         ),
         language(
+            EditorLanguageId::Powershell,
+            "PowerShell",
+            &["ps", "pwsh"],
+            &["ps1", "psm1", "psd1", "pssc"],
+            &[],
+            &["pwsh", "powershell"],
+            "powershell",
+        ),
+        language(
             EditorLanguageId::Fish,
             "Fish",
             &["fish"],
@@ -535,7 +593,7 @@ fn builtin_language_definitions() -> Vec<EditorLanguageDefinition> {
             EditorLanguageId::CSharp,
             "C#",
             &["c#", "cs"],
-            &["cs"],
+            &["cs", "csx"],
             &[],
             &[],
             "csharp",
