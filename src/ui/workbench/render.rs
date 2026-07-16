@@ -399,6 +399,10 @@ pub(super) fn split_child(child: Div, basis: f32) -> Div {
         .child(child)
 }
 
+fn layout_editor_panel_background(theme: WorkbenchTheme) -> Rgba {
+    yttt_panel_style(YtttPanelKind::Editor, theme).background
+}
+
 fn layout_toml_editor_overlay(
     root: &WorkbenchView,
     input: &Entity<InputState>,
@@ -406,6 +410,7 @@ fn layout_toml_editor_overlay(
 ) -> Div {
     let theme = root.theme_runtime.ui;
     let editor_theme = root.theme_runtime.editor;
+    let panel_background = layout_editor_panel_background(theme);
     let Some(session) = root.overlays.layout_toml_editor.as_ref() else {
         return div();
     };
@@ -434,7 +439,7 @@ fn layout_toml_editor_overlay(
                     .rounded_md()
                     .border_1()
                     .border_color(theme.border_strong)
-                    .bg(theme.surface)
+                    .bg(panel_background)
                     .text_color(theme.text)
                     .overflow_hidden()
                     .child(
@@ -568,4 +573,20 @@ pub(super) fn push_component_notification(
         }),
         cx,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layout_editor_panel_background_is_opaque_for_translucent_window_themes() {
+        let mut theme = WorkbenchTheme::one_dark();
+        theme.surface.a = 0.04;
+
+        assert_eq!(
+            layout_editor_panel_background(theme),
+            theme.surface.alpha(1.0)
+        );
+    }
 }
