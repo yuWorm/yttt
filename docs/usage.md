@@ -261,16 +261,21 @@ time the project is opened. It does not replace the currently running workspace.
 `layout.open_file` reveals the personal file first, then project config, then the global
 default used by an inherited project.
 
+Each tab accepts `startup = "lazy" | "eager"`. The field defaults to `lazy`; a lazy tab starts
+when it is first selected. An eager tab starts all of its panes when the project opens, even when
+another tab is selected. The `default_tab` always starts because it is initially selected.
+
 Example:
 
 ```toml
 [project]
 name = "yttt"
-default_tab = "dev"
+default_tab = "agent"
 
 [[tabs]]
 id = "dev"
 title = "Dev"
+startup = "eager"
 
 [tabs.layout]
 type = "split"

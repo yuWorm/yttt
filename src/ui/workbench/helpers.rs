@@ -43,6 +43,7 @@ pub(super) fn collect_terminal_pane_contexts(
     shell: &str,
     layout: &LayoutNode,
     focused_pane_id: Option<&str>,
+    terminal_input_gate: &TerminalInputGate,
     contexts: &mut Vec<TerminalPaneContext>,
 ) {
     match layout {
@@ -55,7 +56,7 @@ pub(super) fn collect_terminal_pane_contexts(
             pane: pane.clone(),
             shell: shell.to_string(),
             is_focused: focused_pane_id == Some(pane.id.as_str()),
-            terminal_input_gate: TerminalInputGate::default(),
+            terminal_input_gate: terminal_input_gate.clone(),
         }),
         LayoutNode::Split(split) => {
             collect_terminal_pane_contexts(
@@ -67,6 +68,7 @@ pub(super) fn collect_terminal_pane_contexts(
                 shell,
                 &split.left,
                 focused_pane_id,
+                terminal_input_gate,
                 contexts,
             );
             collect_terminal_pane_contexts(
@@ -78,6 +80,7 @@ pub(super) fn collect_terminal_pane_contexts(
                 shell,
                 &split.right,
                 focused_pane_id,
+                terminal_input_gate,
                 contexts,
             );
         }

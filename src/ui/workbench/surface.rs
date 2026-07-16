@@ -420,53 +420,126 @@ impl WorkbenchView {
         ))
     }
 
+    fn pending_eager_terminal_pane_contexts(&self) -> Vec<TerminalPaneContext> {
+        let mut contexts = Vec::new();
+        let shell = self.resolved_terminal_shell();
+        for project in self.workspace.opened_projects() {
+            for tab in &project.layout.tabs {
+                if !tab.startup.is_eager()
+                    || !self.layout_has_uninitialized_terminal_pane(
+                        project.id.as_str(),
+                        &tab.id,
+                        &tab.layout,
+                    )
+                {
+                    continue;
+                }
+                collect_terminal_pane_contexts(
+                    project.id.as_str(),
+                    &project.path,
+                    &project.layout.project.name,
+                    &tab.id,
+                    &tab.title,
+                    &shell,
+                    &tab.layout,
+                    None,
+                    &self.terminal.terminal_input_gate,
+                    &mut contexts,
+                );
+            }
+        }
+        contexts.retain(|context| {
+            let key = terminal_pane_key(&context.project_id, &context.tab_id, &context.pane.id);
+            !self.terminal.terminal_panes.contains_key(&key)
+        });
+        contexts
+    }
+
+    fn layout_has_uninitialized_terminal_pane(
+        &self,
+        project_id: &str,
+        tab_id: &str,
+        layout: &LayoutNode,
+    ) -> bool {
+        match layout {
+            LayoutNode::Pane(pane) => {
+                let key = terminal_pane_key(project_id, tab_id, &pane.id);
+                !self.terminal.terminal_panes.contains_key(&key)
+            }
+            LayoutNode::Split(split) => {
+                self.layout_has_uninitialized_terminal_pane(project_id, tab_id, &split.left)
+                    || self.layout_has_uninitialized_terminal_pane(project_id, tab_id, &split.right)
+            }
+        }
+    }
+
+    pub(super) fn ensure_eager_terminal_panes(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for context in self.pending_eager_terminal_pane_contexts() {
+            self.ensure_terminal_pane(context, window, cx);
+        }
+    }
+
+    fn ensure_terminal_pane(
+        &mut self,
+        context: TerminalPaneContext,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TerminalPaneView> {
+        let key = terminal_pane_key(&context.project_id, &context.tab_id, &context.pane.id);
+        if let Some(pane_view) = self.terminal.terminal_panes.get(&key) {
+            return pane_view.clone();
+        }
+
+        let project_id = context.project_id.clone();
+        let tab_id = context.tab_id.clone();
+        let pane_id = context.pane.id.clone();
+        let terminal_config = self.theme_runtime.to_terminal_config();
+        let theme = self.theme_runtime.ui;
+        let start_processes = self.terminal.start_processes;
+        let pane_view = cx.new(|cx| {
+            if start_processes {
+                TerminalPaneView::new(context, terminal_config, theme, cx)
+            } else {
+                TerminalPaneView::new_without_processes(context, terminal_config, theme, cx)
+            }
+        });
+        if pane_view.read(cx).is_running()
+            && let Err(error) =
+                self.workspace
+                    .mark_pane_running(&ProjectId::new(&project_id), &tab_id, &pane_id)
+        {
+            self.load_error = Some(error.to_string());
+        }
+        let subscription = cx.subscribe_in(&pane_view, window, Self::on_terminal_pane_event);
+        self.terminal
+            .terminal_pane_subscriptions
+            .insert(key.clone(), subscription);
+        self.terminal.terminal_panes.insert(key, pane_view.clone());
+        pane_view
+    }
+
     pub(super) fn render_terminal_pane(
         &mut self,
         input: RenderTerminalPaneInput<'_>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        let key = terminal_pane_key(input.project_id, input.tab_id, &input.pane.id);
-        let pane_view = if let Some(pane_view) = self.terminal.terminal_panes.get(&key) {
-            pane_view.clone()
-        } else {
-            let context = TerminalPaneContext {
-                project_id: input.project_id.to_string(),
-                project_path: input.project_path.to_path_buf(),
-                project_title: input.project_title.to_string(),
-                tab_id: input.tab_id.to_string(),
-                tab_title: input.tab_title.to_string(),
-                pane: input.pane.clone(),
-                shell: self.resolved_terminal_shell(),
-                is_focused: input.is_focused,
-                terminal_input_gate: self.terminal.terminal_input_gate.clone(),
-            };
-            let terminal_config = self.theme_runtime.to_terminal_config();
-            let theme = self.theme_runtime.ui;
-            let start_processes = self.terminal.start_processes;
-            let pane_view = cx.new(|cx| {
-                if start_processes {
-                    TerminalPaneView::new(context, terminal_config, theme, cx)
-                } else {
-                    TerminalPaneView::new_without_processes(context, terminal_config, theme, cx)
-                }
-            });
-            if pane_view.read(cx).is_running()
-                && let Err(error) = self.workspace.mark_pane_running(
-                    &ProjectId::new(input.project_id),
-                    input.tab_id,
-                    &input.pane.id,
-                )
-            {
-                self.load_error = Some(error.to_string());
-            }
-            let subscription = cx.subscribe_in(&pane_view, window, Self::on_terminal_pane_event);
-            self.terminal
-                .terminal_pane_subscriptions
-                .insert(key.clone(), subscription);
-            self.terminal.terminal_panes.insert(key, pane_view.clone());
-            pane_view
+        let context = TerminalPaneContext {
+            project_id: input.project_id.to_string(),
+            project_path: input.project_path.to_path_buf(),
+            project_title: input.project_title.to_string(),
+            tab_id: input.tab_id.to_string(),
+            tab_title: input.tab_title.to_string(),
+            pane: input.pane.clone(),
+            shell: self.resolved_terminal_shell(),
+            is_focused: input.is_focused,
+            terminal_input_gate: self.terminal.terminal_input_gate.clone(),
         };
+        let pane_view = self.ensure_terminal_pane(context, window, cx);
 
         let pane_id = input.pane.id.clone();
         if self

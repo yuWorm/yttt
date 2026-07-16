@@ -1417,6 +1417,7 @@ impl WorkbenchView {
             &shell,
             &layout,
             focused_pane_id.as_deref(),
+            &self.terminal.terminal_input_gate,
             &mut contexts,
         );
         contexts

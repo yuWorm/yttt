@@ -6,7 +6,7 @@ use crate::{
     },
     model::layout::{
         LayoutNode, PaneConfig, PaneKind, ProcessExitBehavior, ProjectConfig, ProjectLayout,
-        SplitConfig, SplitDirection, TabConfig, TerminalExecutionMode,
+        SplitConfig, SplitDirection, TabConfig, TabStartup, TerminalExecutionMode,
     },
 };
 
@@ -207,6 +207,8 @@ struct StrictTabOverride {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cwd: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    startup: Option<TabStartup>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     layout: Option<StrictLayoutNodeOverride>,
 }
 
@@ -216,6 +218,7 @@ impl From<StrictTabOverride> for TabOverride {
             id: value.id,
             title: value.title,
             cwd: value.cwd,
+            startup: value.startup,
             layout: value.layout.map(Into::into),
         }
     }
@@ -227,6 +230,7 @@ impl From<&TabOverride> for StrictTabOverride {
             id: value.id.clone(),
             title: value.title.clone(),
             cwd: value.cwd.clone(),
+            startup: value.startup,
             layout: value.layout.as_ref().map(Into::into),
         }
     }
@@ -366,6 +370,8 @@ struct StrictTabConfig {
     title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cwd: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "TabStartup::is_lazy")]
+    startup: TabStartup,
     layout: StrictLayoutNode,
 }
 
@@ -375,6 +381,7 @@ impl From<StrictTabConfig> for TabConfig {
             id: value.id,
             title: value.title,
             cwd: value.cwd,
+            startup: value.startup,
             layout: value.layout.into(),
         }
     }
@@ -386,6 +393,7 @@ impl From<&TabConfig> for StrictTabConfig {
             id: value.id.clone(),
             title: value.title.clone(),
             cwd: value.cwd.clone(),
+            startup: value.startup,
             layout: (&value.layout).into(),
         }
     }

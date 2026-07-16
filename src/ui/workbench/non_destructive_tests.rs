@@ -12,6 +12,10 @@ use gpui::{EntityId, TestAppContext};
 use tempfile::tempdir;
 
 use super::*;
+use crate::model::{
+    layout::TabStartup,
+    workspace::{PaneProcessState, TabStartState},
+};
 
 #[derive(Clone)]
 struct RuntimeSnapshot {
@@ -87,6 +91,44 @@ fn active_terminal_content_receives_default_focus(cx: &mut TestAppContext) {
             root.terminal.pending_terminal_focus_pane_id.is_none(),
             "render must consume the active terminal focus request"
         );
+    });
+}
+
+#[gpui::test]
+fn eager_tab_starts_terminal_before_selection(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("eager-project");
+    fs::create_dir(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut layout = dev_fixture_layout();
+    layout
+        .tabs
+        .iter_mut()
+        .find(|tab| tab.id == "agent")
+        .unwrap()
+        .startup = TabStartup::Eager;
+    let mut workspace = Workspace::new();
+    let project_id = workspace.open_project(project_path, layout).unwrap();
+    let eager_pane_key = terminal_pane_key(project_id.as_str(), "agent", "codex");
+
+    let (root, cx) = cx.add_window_view(|_, _| {
+        WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
+    });
+    cx.run_until_parked();
+
+    cx.update(|_, cx| {
+        let root = root.read(cx);
+        let project = root.workspace.project(&project_id).unwrap();
+        let agent_state = project.tab_state("agent").unwrap();
+
+        assert_eq!(project.selected_tab_id, "dev");
+        assert_eq!(agent_state.start_state, TabStartState::Started);
+        assert_eq!(
+            agent_state.pane_states[0].process_state,
+            PaneProcessState::Running
+        );
+        assert!(root.terminal.terminal_panes.contains_key(&eager_pane_key));
     });
 }
 

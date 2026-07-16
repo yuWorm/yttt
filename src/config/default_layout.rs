@@ -6,7 +6,7 @@ use std::{
 use crate::config::paths::AppConfigPaths;
 use crate::model::layout::{
     LayoutError, LayoutNode, PaneConfig, PaneKind, ProcessExitBehavior, ProjectConfig,
-    ProjectLayout, SplitConfig, SplitDirection, TabConfig, TerminalExecutionMode,
+    ProjectLayout, SplitConfig, SplitDirection, TabConfig, TabStartup, TerminalExecutionMode,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -135,6 +135,7 @@ impl DefaultLayoutTemplate {
                 id: "shell".to_string(),
                 title: "Shell".to_string(),
                 cwd: None,
+                startup: TabStartup::Lazy,
                 layout: LayoutNode::Pane(shell_pane()),
             }],
         }
@@ -150,6 +151,7 @@ impl DefaultLayoutTemplate {
                     id: "workspace".to_string(),
                     title: "Workspace".to_string(),
                     cwd: None,
+                    startup: TabStartup::Lazy,
                     layout: LayoutNode::Split(SplitConfig {
                         direction: SplitDirection::Horizontal,
                         ratio: 0.65,
@@ -167,12 +169,14 @@ impl DefaultLayoutTemplate {
                         id: "agent".to_string(),
                         title: agent.display_name().to_string(),
                         cwd: None,
+                        startup: TabStartup::Lazy,
                         layout: LayoutNode::Pane(agent_pane(agent)),
                     },
                     TabConfig {
                         id: "shell".to_string(),
                         title: "Shell".to_string(),
                         cwd: None,
+                        startup: TabStartup::Lazy,
                         layout: LayoutNode::Pane(shell_pane()),
                     },
                 ],

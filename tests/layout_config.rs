@@ -12,7 +12,9 @@ use yttt::config::{
     },
     paths::AppConfigPaths,
 };
-use yttt::model::layout::{LayoutError, ProcessExitBehavior, ProjectLayout, TerminalExecutionMode};
+use yttt::model::layout::{
+    LayoutError, ProcessExitBehavior, ProjectLayout, TabStartup, TerminalExecutionMode,
+};
 
 #[test]
 fn parses_project_layout_with_split_and_agent_pane() {
@@ -63,6 +65,25 @@ fn parses_project_layout_with_split_and_agent_pane() {
             .exit_behavior,
         ProcessExitBehavior::ManualRestart
     );
+}
+
+#[test]
+fn tab_startup_defaults_to_lazy_and_serializes_eager_only() {
+    let mut layout = sample_layout();
+
+    assert!(
+        layout
+            .tabs
+            .iter()
+            .all(|tab| tab.startup == TabStartup::Lazy)
+    );
+    layout.tabs[1].startup = TabStartup::Eager;
+    let source = toml::to_string_pretty(&layout).unwrap();
+    let parsed: ProjectLayout = toml::from_str(&source).unwrap();
+
+    assert!(source.contains("startup = \"eager\""));
+    assert!(!source.contains("startup = \"lazy\""));
+    assert_eq!(parsed, layout);
 }
 
 #[test]
@@ -521,6 +542,7 @@ fn personal_layout_v1_serializes_patch_and_replace_through_strict_wire_dtos() {
         tabs: vec![TabOverride {
             id: "dev".to_string(),
             cwd: Some(PathBuf::from("<ProjectDir>/dev")),
+            startup: Some(TabStartup::Eager),
             ..Default::default()
         }],
         ..Default::default()
@@ -553,6 +575,7 @@ fn local_override_renames_tab_and_command_by_id() {
             id: "dev".to_string(),
             title: Some("Development".to_string()),
             cwd: Some(PathBuf::from("<ProjectDir>/frontend")),
+            startup: Some(TabStartup::Eager),
             layout: Some(LayoutNodeOverride::Pane(PaneOverride {
                 id: "server".to_string(),
                 title: None,
@@ -576,6 +599,7 @@ fn local_override_renames_tab_and_command_by_id() {
         dev.cwd.as_deref(),
         Some(std::path::Path::new("<ProjectDir>/frontend"))
     );
+    assert_eq!(dev.startup, TabStartup::Eager);
     assert_eq!(dev.layout.find_pane("server").unwrap().command, "pnpm");
     let server = dev.layout.find_pane("server").unwrap();
     assert_eq!(server.args, vec!["dev"]);
@@ -596,6 +620,7 @@ fn stale_override_ids_are_reported_and_ignored() {
             id: "missing".to_string(),
             title: Some("Missing".to_string()),
             cwd: None,
+            startup: None,
             layout: None,
         }],
         ..Default::default()
@@ -857,12 +882,14 @@ fn personal_layout_warning_reports_stale_tab_and_pane_with_path() {
                 id: "missing-tab".to_string(),
                 title: Some("Missing".to_string()),
                 cwd: None,
+                startup: None,
                 layout: None,
             },
             TabOverride {
                 id: "dev".to_string(),
                 title: None,
                 cwd: None,
+                startup: None,
                 layout: Some(LayoutNodeOverride::Pane(PaneOverride {
                     id: "missing-pane".to_string(),
                     command: Some("echo missing".to_string()),
@@ -954,6 +981,7 @@ fn config_project_layout_merges_app_local_override() {
             id: "dev".to_string(),
             title: Some("Development".to_string()),
             cwd: None,
+            startup: None,
             layout: Some(LayoutNodeOverride::Pane(PaneOverride {
                 id: "server".to_string(),
                 command: Some("pnpm dev".to_string()),
@@ -1146,6 +1174,7 @@ fn project_layout_scaffold_creates_layout_and_ai_guide() {
     assert!(guide.contains("AI agents should edit `.yttt/layout.toml`"));
     assert!(guide.contains("Pane IDs must be unique within each tab"));
     assert!(guide.contains("Do not add `version` or `mode`"));
+    assert!(guide.contains("startup = \"eager\""));
 }
 
 #[test]

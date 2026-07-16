@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use yttt::model::layout::TabStartup;
 use yttt::model::workspace::{
     AgentStatus, CloseProjectDecision, CloseProjectError, ClosedProject, PaneExitCloseOutcome,
     PaneProcessState, TabStartState, Workspace,
@@ -59,6 +60,24 @@ fn opening_project_marks_only_default_tab_started() {
     assert_eq!(
         project.tab_state("agent").unwrap().start_state,
         TabStartState::Lazy
+    );
+}
+
+#[test]
+fn opening_project_marks_eager_tabs_started_before_selection() {
+    let mut workspace = Workspace::new();
+    let mut layout = sample_layout();
+    layout.tabs[1].startup = TabStartup::Eager;
+
+    let project_id = workspace
+        .open_project(PathBuf::from("/tmp/yttt-eager"), layout)
+        .unwrap();
+    let project = workspace.project(&project_id).unwrap();
+
+    assert_eq!(project.selected_tab_id, "dev");
+    assert_eq!(
+        project.tab_state("agent").unwrap().start_state,
+        TabStartState::Started
     );
 }
 

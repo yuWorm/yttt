@@ -12,6 +12,7 @@ impl Render for WorkbenchView {
         self.flush_pending_file_close_requests(window, cx);
         self.flush_pending_project_close_requests(cx);
         self.sync_input_owner_state();
+        self.ensure_eager_terminal_panes(window, cx);
         let focus_handle = self.workbench_focus_handle(cx);
         let default_active_content_focus_requested = self.onboarding.is_none()
             && !focus_handle.contains_focused(window, cx)

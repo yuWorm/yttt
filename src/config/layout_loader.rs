@@ -12,7 +12,7 @@ use crate::{
     },
     model::layout::{
         LayoutError, LayoutNode, PaneConfig, PaneKind, ProcessExitBehavior, ProjectConfig,
-        ProjectLayout, TabConfig, TerminalExecutionMode,
+        ProjectLayout, TabConfig, TabStartup, TerminalExecutionMode,
     },
 };
 
@@ -35,6 +35,7 @@ Do not add `version` or `mode`; those fields belong only to personal app-local l
   - `id`: stable, unique tab ID.
   - `title`: visible tab title.
   - `cwd`: optional working directory, relative to the project root or prefixed with `<ProjectDir>`.
+  - `startup`: optional `lazy` or `eager`; defaults to `lazy`.
   - `layout`: one pane or a recursive split.
 - Pane node (`type = "pane"`)
   - Required: `id`, `title`, `command`.
@@ -46,6 +47,9 @@ Do not add `version` or `mode`; those fields belong only to personal app-local l
   - `left` and `right`: pane or split nodes.
 
 Pane IDs must be unique within each tab. `default_tab` must match an existing tab ID.
+`startup = "eager"` starts every pane in that tab when the project opens, even when another
+tab is selected. Omitted or `startup = "lazy"` tabs start when first selected. The
+`default_tab` always starts because it is initially selected.
 Use `execution_mode = "shell"` for shell syntax and interactive shells. Use
 `execution_mode = "command"` with `args` when argument boundaries must be preserved.
 `exit_behavior` accepts `close`, `auto_restart`, or `manual_restart`. `kind` accepts
@@ -56,11 +60,12 @@ Use `execution_mode = "shell"` for shell syntax and interactive shells. Use
 ```toml
 [project]
 name = "Example"
-default_tab = "dev"
+default_tab = "shell"
 
 [[tabs]]
-id = "dev"
-title = "Development"
+id = "services"
+title = "Services"
+startup = "eager"
 cwd = "<ProjectDir>"
 
 [tabs.layout]
@@ -68,7 +73,12 @@ type = "split"
 direction = "horizontal"
 ratio = 0.6
 left = { type = "pane", id = "server", title = "Server", command = "npm", args = ["run", "dev"], execution_mode = "command", exit_behavior = "auto_restart" }
-right = { type = "pane", id = "shell", title = "Shell", command = "", execution_mode = "shell", exit_behavior = "manual_restart" }
+right = { type = "pane", id = "worker", title = "Worker", command = "npm", args = ["run", "worker"], execution_mode = "command", exit_behavior = "auto_restart" }
+
+[[tabs]]
+id = "shell"
+title = "Shell"
+layout = { type = "pane", id = "shell", title = "Shell", command = "", execution_mode = "shell", exit_behavior = "manual_restart" }
 ```
 
 ## AI checklist
@@ -76,8 +86,9 @@ right = { type = "pane", id = "shell", title = "Shell", command = "", execution_
 1. Inspect the repository's real scripts and tools before choosing commands.
 2. Preserve stable tab and pane IDs when updating an existing layout.
 3. Keep commands portable; prefer project-relative `cwd` values.
-4. Produce valid TOML and keep split ratios within the supported range.
-5. Do not invent services or commands that are not present in the repository.
+4. Use `startup = "eager"` only for services that must start with the project.
+5. Produce valid TOML and keep split ratios within the supported range.
+6. Do not invent services or commands that are not present in the repository.
 "#;
 
 #[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize, PartialEq)]
@@ -98,6 +109,7 @@ pub struct TabOverride {
     pub id: String,
     pub title: Option<String>,
     pub cwd: Option<PathBuf>,
+    pub startup: Option<TabStartup>,
     pub layout: Option<LayoutNodeOverride>,
 }
 
@@ -510,6 +522,9 @@ pub fn merge_layouts(
         }
         if let Some(cwd) = &tab_override.cwd {
             tab.cwd = Some(cwd.clone());
+        }
+        if let Some(startup) = tab_override.startup {
+            tab.startup = startup;
         }
 
         if let Some(layout_override) = &tab_override.layout {

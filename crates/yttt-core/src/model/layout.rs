@@ -47,7 +47,27 @@ pub struct TabConfig {
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "TabStartup::is_lazy")]
+    pub startup: TabStartup,
     pub layout: LayoutNode,
+}
+
+#[derive(Clone, Copy, Debug, Default, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TabStartup {
+    #[default]
+    Lazy,
+    Eager,
+}
+
+impl TabStartup {
+    pub fn is_lazy(&self) -> bool {
+        self == &Self::Lazy
+    }
+
+    pub fn is_eager(self) -> bool {
+        self == Self::Eager
+    }
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq)]

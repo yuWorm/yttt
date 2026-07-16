@@ -4,7 +4,7 @@ use crate::model::{
     ids::ProjectId,
     layout::{
         LayoutNode, PaneConfig, PaneKind, ProcessExitBehavior, ProjectLayout, SplitConfig,
-        SplitDirection, TabConfig, TerminalExecutionMode,
+        SplitDirection, TabConfig, TabStartup, TerminalExecutionMode,
     },
     split_tree::{FocusDirection, ResizeDirection},
 };
@@ -43,30 +43,7 @@ impl Workspace {
 
         let id = ProjectId::new(path.to_string_lossy().into_owned());
         let selected_tab_id = default_tab_id(&layout).unwrap_or_default();
-        let tab_states = layout
-            .tabs
-            .iter()
-            .map(|tab| {
-                let pane_ids = pane_ids(&tab.layout);
-                TabState {
-                    tab_id: tab.id.clone(),
-                    start_state: if tab.id == selected_tab_id {
-                        TabStartState::Started
-                    } else {
-                        TabStartState::Lazy
-                    },
-                    focused_pane_id: pane_ids.first().cloned(),
-                    pane_states: pane_ids
-                        .into_iter()
-                        .map(|pane_id| PaneState {
-                            pane_id,
-                            process_state: PaneProcessState::Idle,
-                            agent_status: None,
-                        })
-                        .collect(),
-                }
-            })
-            .collect();
+        let tab_states = tab_states_for_layout(&layout, &selected_tab_id);
 
         self.opened_projects.push(OpenedProject {
             id: id.clone(),
@@ -254,6 +231,7 @@ impl Workspace {
             id: tab_id.clone(),
             title,
             cwd: None,
+            startup: TabStartup::Lazy,
             layout: LayoutNode::Pane(PaneConfig {
                 id: pane_id.clone(),
                 title: "shell".to_string(),
@@ -906,7 +884,7 @@ fn tab_states_for_layout(layout: &ProjectLayout, selected_tab_id: &str) -> Vec<T
             let pane_ids = pane_ids(&tab.layout);
             TabState {
                 tab_id: tab.id.clone(),
-                start_state: if tab.id == selected_tab_id {
+                start_state: if tab.id == selected_tab_id || tab.startup.is_eager() {
                     TabStartState::Started
                 } else {
                     TabStartState::Lazy
