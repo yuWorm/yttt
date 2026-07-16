@@ -243,15 +243,28 @@ impl Editor {
         }));
     }
 
-    fn sync_scroll_viewport(&mut self, viewport_size: Size<Pixels>, cx: &mut Context<Self>) {
+    fn sync_scroll_viewport(
+        &mut self,
+        viewport_size: Size<Pixels>,
+        cx: &mut Context<Self>,
+    ) -> bool {
         match self.last_scroll_viewport_size {
             Some(previous) if Self::viewport_size_changed(previous, viewport_size) => {
+                const EPSILON: f32 = 0.5;
+                let width_changed =
+                    (f32::from(previous.width) - f32::from(viewport_size.width)).abs() > EPSILON;
                 self.last_scroll_viewport_size = Some(viewport_size);
+                if width_changed {
+                    self.row_stride_cache.clear();
+                    self.prev_render_window = None;
+                }
                 self.request_active_block_scroll_into_view(cx);
+                width_changed
             }
-            Some(_) => {}
+            Some(_) => false,
             None => {
                 self.last_scroll_viewport_size = Some(viewport_size);
+                false
             }
         }
     }
@@ -264,7 +277,7 @@ impl Render for Editor {
 
         let viewport_bounds = self.scroll_handle.bounds();
         let viewport_size = viewport_bounds.size;
-        self.sync_scroll_viewport(viewport_size, cx);
+        let viewport_width_changed = self.sync_scroll_viewport(viewport_size, cx);
 
         let theme = self.environment.theme.clone();
 
@@ -551,7 +564,7 @@ impl Render for Editor {
         // Rows mounted together last frame shared one scroll offset, so their
         // adjacent painted-top differences are scroll-free heights. Caching those,
         // not raw positions, is what keeps the window stable while scrolling.
-        if !structural_change {
+        if !structural_change && !viewport_width_changed {
             if let Some((prev_start, prev_end)) = self.prev_render_window {
                 let prev_end = prev_end.min(row_first_ids.len());
                 for row in prev_start..prev_end.saturating_sub(1) {

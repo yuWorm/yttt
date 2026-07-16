@@ -878,25 +878,30 @@ impl Render for ProjectEditorDocument {
 mod tests {
     use std::path::PathBuf;
 
-    use gpui::{Modifiers, TestAppContext};
+    use gpui::{Modifiers, Size, TestAppContext, px};
 
     use super::*;
     use crate::{model::ids::ProjectId, ui::theme::ThemeRuntime};
 
     #[gpui::test]
-    fn markdown_document_initial_render_mounts_complete_value(cx: &mut TestAppContext) {
+    fn markdown_document_remeasures_initial_render_when_tab_gets_width(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
-        let path = PathBuf::from("/tmp/yttt/LONG.md");
-        let markdown = (0..100)
-            .map(|index| format!("# Heading {index}\n\nBody {index}"))
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        let path = PathBuf::from("/tmp/yttt/AGENTS.md");
+        let markdown = "## Rules\n\n\
+            - Execute Superpowers plans inline; do not delegate plan execution to subagents.\n\
+            - After completing the Superpowers design and planning workflow, ask whether to launch a reviewer subagent; never launch one automatically.\n\
+            - Ask for confirmation before removing any entry from `.gitignore`.\n\
+            - For every task that changes repository files, create a dedicated Git worktree.\n\
+            - Perform all file edits and task commands from that worktree.\n\
+            - Never edit the primary checkout.\n\
+            - Stop before using a file-mutating tool outside the worktree."
+            .to_string();
         let document_id = DocumentId {
             project_id: ProjectId::new("project"),
             canonical_path: path.clone(),
         };
         let config = super::super::CodeEditorConfig::new(
-            "LONG.md",
+            "AGENTS.md",
             super::super::CodeEditorLanguageMode::Auto,
         );
         let model = ProjectEditorModel::new(
@@ -928,6 +933,10 @@ mod tests {
             )
         });
 
+        cx.simulate_resize(Size {
+            width: px(1.0),
+            height: px(452.0),
+        });
         cx.refresh().unwrap();
         let rendered_markdown = document.read_with(cx, |document, app| {
             document
@@ -937,9 +946,15 @@ mod tests {
                 .markdown(app)
         });
         assert_eq!(rendered_markdown, markdown);
+
+        cx.simulate_resize(Size {
+            width: px(1_568.0),
+            height: px(452.0),
+        });
+        cx.refresh().unwrap();
         assert!(
             cx.debug_bounds("markdown-complete-render-window").is_some(),
-            "the first rendered frame must mount the complete Markdown value"
+            "the Markdown value must be completely remeasured when its tab gets its final width"
         );
     }
 
