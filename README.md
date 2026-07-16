@@ -32,7 +32,8 @@ external-change conflicts, and dirty file/project/window close protection. See
 [Usage](docs/usage.md) for commands, settings, and detailed behavior.
 
 Supported source highlighting includes Bash, C, C#, C++, Fish, GDScript, Go, Java,
-JavaScript, Kotlin, Lua, PHP, Python, Ruby, Rust, Scala, Swift, TypeScript, and Zig.
+JavaScript, Kotlin, Lua, PHP, PowerShell, Python, Ruby, Rust, Scala, Swift, TypeScript, XML,
+and Zig.
 Breadcrumbs follow the cursor through enclosing declarations; select one to move to that
 declaration. Fold multiline structures from the line-number gutter—the header and closing line
 remain visible while only the body hides. Open in-file search with the **Find** toolbar control,

@@ -1,5 +1,5 @@
 use gpui_component::{
-    highlighter::LanguageRegistry,
+    highlighter::{HighlightTheme, LanguageRegistry, SyntaxHighlighter},
     input::{DisplayMap, FoldRange, Rope},
 };
 use yttt::ui::editor::{
@@ -21,6 +21,34 @@ fn extended_language_registration_adds_fish_and_gdscript_highlighters() {
 
     assert!(LanguageRegistry::singleton().language("fish").is_some());
     assert!(LanguageRegistry::singleton().language("gdscript").is_some());
+}
+
+#[test]
+fn windows_language_registration_produces_syntax_highlights() {
+    register_builtin_editor_languages();
+    let theme = HighlightTheme::default_dark();
+    let cases = [
+        ("csharp", "public class Program { static void Main() { } }"),
+        (
+            "powershell",
+            "param([string]$Name)\nWrite-Host \"Hello $Name\"\n",
+        ),
+        (
+            "xml",
+            "<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>",
+        ),
+    ];
+
+    for (language, source) in cases {
+        let text = Rope::from_str(source);
+        let mut highlighter = SyntaxHighlighter::new(language);
+        assert!(highlighter.update(None, &text, None), "{language}");
+        let styles = highlighter.styles(&(0..source.len()), &theme);
+        assert!(
+            styles.len() > 1,
+            "{language} should produce syntax-highlighted ranges"
+        );
+    }
 }
 
 #[gpui::test]
@@ -211,7 +239,7 @@ fn language_catalog_resolves_expanded_editor_languages() {
         ("player.gd", EditorLanguageId::Gdscript, "gdscript"),
         ("index.html", EditorLanguageId::Html, "html"),
         ("App.vue", EditorLanguageId::Vue, "html"),
-        ("document.xml", EditorLanguageId::Xml, "html"),
+        ("document.xml", EditorLanguageId::Xml, "xml"),
         ("styles.css", EditorLanguageId::Css, "css"),
         ("styles.scss", EditorLanguageId::Scss, "css"),
         ("page.astro", EditorLanguageId::Astro, "astro"),
@@ -232,6 +260,51 @@ fn language_catalog_resolves_expanded_editor_languages() {
         assert_eq!(
             resolution.source,
             EditorLanguageResolutionSource::Extension,
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn language_catalog_resolves_windows_development_files() {
+    register_builtin_editor_languages();
+    let catalog = EditorLanguageCatalog::builtin();
+    let cases = [
+        ("script.csx", EditorLanguageId::CSharp, "csharp", "csx"),
+        (
+            "BUILD.PS1",
+            EditorLanguageId::Powershell,
+            "powershell",
+            "ps1",
+        ),
+        ("Types.ps1xml", EditorLanguageId::Xml, "xml", "ps1xml"),
+        (
+            "Demo.vcxproj.filters",
+            EditorLanguageId::Xml,
+            "xml",
+            "vcxproj.filters",
+        ),
+        (
+            "Directory.Build.props",
+            EditorLanguageId::Xml,
+            "xml",
+            "props",
+        ),
+        ("Solution.slnf", EditorLanguageId::Json, "json", "slnf"),
+    ];
+
+    for (path, expected_language, expected_highlighter, expected_rule) in cases {
+        let resolution = catalog.resolve_for_path(path, None);
+        assert_eq!(resolution.language_id, expected_language, "{path}");
+        assert_eq!(resolution.highlighter_name, expected_highlighter, "{path}");
+        assert_eq!(
+            resolution.source,
+            EditorLanguageResolutionSource::Extension,
+            "{path}"
+        );
+        assert_eq!(
+            resolution.matched_rule.as_deref(),
+            Some(expected_rule),
             "{path}"
         );
     }

@@ -878,10 +878,85 @@ impl Render for ProjectEditorDocument {
 mod tests {
     use std::path::PathBuf;
 
-    use gpui::{Modifiers, TestAppContext};
+    use gpui::{Modifiers, Size, TestAppContext, px};
 
     use super::*;
     use crate::{model::ids::ProjectId, ui::theme::ThemeRuntime};
+
+    #[gpui::test]
+    fn markdown_document_remeasures_initial_render_when_tab_gets_width(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let path = PathBuf::from("/tmp/yttt/AGENTS.md");
+        let markdown = "## Rules\n\n\
+            - Execute Superpowers plans inline; do not delegate plan execution to subagents.\n\
+            - After completing the Superpowers design and planning workflow, ask whether to launch a reviewer subagent; never launch one automatically.\n\
+            - Ask for confirmation before removing any entry from `.gitignore`.\n\
+            - For every task that changes repository files, create a dedicated Git worktree.\n\
+            - Perform all file edits and task commands from that worktree.\n\
+            - Never edit the primary checkout.\n\
+            - Stop before using a file-mutating tool outside the worktree."
+            .to_string();
+        let document_id = DocumentId {
+            project_id: ProjectId::new("project"),
+            canonical_path: path.clone(),
+        };
+        let config = super::super::CodeEditorConfig::new(
+            "AGENTS.md",
+            super::super::CodeEditorLanguageMode::Auto,
+        );
+        let model = ProjectEditorModel::new(
+            document_id,
+            CodeEditorState::new(&path, config, markdown.clone()),
+            DiskFingerprint {
+                exists: true,
+                byte_len: markdown.len() as u64,
+                modified: None,
+                content_hash: 1,
+            },
+        );
+        let appearance = EditorAppearance::default();
+        let markdown_config = MarkdownDocumentConfig::new(
+            Arc::new(
+                ThemeRuntime::default()
+                    .to_markdown_editor_theme(appearance.font_size, appearance.line_height),
+            ),
+            Arc::new(MarkdownEditorStrings::en_us()),
+            UiText::english(),
+        );
+        let (document, mut cx) = cx.add_window_view(move |window, cx| {
+            ProjectEditorDocument::new_with_markdown_config(
+                model,
+                appearance,
+                markdown_config,
+                window,
+                cx,
+            )
+        });
+
+        cx.simulate_resize(Size {
+            width: px(1.0),
+            height: px(452.0),
+        });
+        cx.refresh().unwrap();
+        let rendered_markdown = document.read_with(cx, |document, app| {
+            document
+                .markdown_editor()
+                .expect("Markdown document must use the dedicated editor")
+                .read(app)
+                .markdown(app)
+        });
+        assert_eq!(rendered_markdown, markdown);
+
+        cx.simulate_resize(Size {
+            width: px(1_568.0),
+            height: px(452.0),
+        });
+        cx.refresh().unwrap();
+        assert!(
+            cx.debug_bounds("markdown-complete-render-window").is_some(),
+            "the Markdown value must be completely remeasured when its tab gets its final width"
+        );
+    }
 
     #[gpui::test]
     fn markdown_document_renders_toggles_edits_and_serializes(cx: &mut TestAppContext) {

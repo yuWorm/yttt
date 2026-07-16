@@ -1,3 +1,5 @@
+const CSHARP_HIGHLIGHTS: &str = include_str!("queries/csharp.scm");
+
 const GDSCRIPT_HIGHLIGHTS: &str = r#"
 (comment) @comment
 (string) @string
@@ -20,6 +22,39 @@ pub fn register_builtin_editor_languages() {
             tree_sitter_toml_ng::LANGUAGE.into(),
             Vec::new(),
             tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        ),
+    );
+    registry.register(
+        "csharp",
+        &LanguageConfig::new(
+            "csharp",
+            tree_sitter_c_sharp::LANGUAGE.into(),
+            Vec::new(),
+            CSHARP_HIGHLIGHTS,
+            "",
+            "",
+        ),
+    );
+    registry.register(
+        "powershell",
+        &LanguageConfig::new(
+            "powershell",
+            tree_sitter_powershell::LANGUAGE.into(),
+            Vec::new(),
+            tree_sitter_powershell::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        ),
+    );
+    registry.register(
+        "xml",
+        &LanguageConfig::new(
+            "xml",
+            tree_sitter_xml::LANGUAGE_XML.into(),
+            Vec::new(),
+            tree_sitter_xml::XML_HIGHLIGHT_QUERY,
             "",
             "",
         ),

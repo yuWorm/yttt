@@ -243,15 +243,28 @@ impl Editor {
         }));
     }
 
-    fn sync_scroll_viewport(&mut self, viewport_size: Size<Pixels>, cx: &mut Context<Self>) {
+    fn sync_scroll_viewport(
+        &mut self,
+        viewport_size: Size<Pixels>,
+        cx: &mut Context<Self>,
+    ) -> bool {
         match self.last_scroll_viewport_size {
             Some(previous) if Self::viewport_size_changed(previous, viewport_size) => {
+                const EPSILON: f32 = 0.5;
+                let width_changed =
+                    (f32::from(previous.width) - f32::from(viewport_size.width)).abs() > EPSILON;
                 self.last_scroll_viewport_size = Some(viewport_size);
+                if width_changed {
+                    self.row_stride_cache.clear();
+                    self.prev_render_window = None;
+                }
                 self.request_active_block_scroll_into_view(cx);
+                width_changed
             }
-            Some(_) => {}
+            Some(_) => false,
             None => {
                 self.last_scroll_viewport_size = Some(viewport_size);
+                false
             }
         }
     }
@@ -264,7 +277,7 @@ impl Render for Editor {
 
         let viewport_bounds = self.scroll_handle.bounds();
         let viewport_size = viewport_bounds.size;
-        self.sync_scroll_viewport(viewport_size, cx);
+        let viewport_width_changed = self.sync_scroll_viewport(viewport_size, cx);
 
         let theme = self.environment.theme.clone();
 
@@ -551,7 +564,7 @@ impl Render for Editor {
         // Rows mounted together last frame shared one scroll offset, so their
         // adjacent painted-top differences are scroll-free heights. Caching those,
         // not raw positions, is what keeps the window stable while scrolling.
-        if !structural_change {
+        if !structural_change && !viewport_width_changed {
             if let Some((prev_start, prev_end)) = self.prev_render_window {
                 let prev_end = prev_end.min(row_first_ids.len());
                 for row in prev_start..prev_end.saturating_sub(1) {
@@ -579,13 +592,27 @@ impl Render for Editor {
             self.row_stride_cache.retain(|id, _| live.contains(id));
         }
 
-        let render_window = Self::rendered_window(
-            &strides,
-            current_scroll_y,
-            viewport_height,
-            RENDER_OVERDRAW_PX,
-            focus_row,
-        );
+        // The scroll handle has no viewport bounds on the first paint. Windowing
+        // against that empty viewport mounts only the overdraw prefix and can
+        // leave the initial frame visibly truncated until another invalidation.
+        // Mount every row once so GPUI lays out the complete value and the next
+        // frame can populate accurate stride measurements before windowing.
+        let render_window = if self.prev_render_window.is_none() {
+            super::RenderWindow {
+                run_start: 0,
+                run_end: strides.len(),
+                top_h: 0.0,
+                bottom_h: 0.0,
+            }
+        } else {
+            Self::rendered_window(
+                &strides,
+                current_scroll_y,
+                viewport_height,
+                RENDER_OVERDRAW_PX,
+                focus_row,
+            )
+        };
         self.prev_render_window = Some((render_window.run_start, render_window.run_end));
 
         // The first mounted row re-applies its `mt`, so drop it from the top
@@ -594,6 +621,7 @@ impl Render for Editor {
             Some(gap) => (render_window.top_h - gap).max(0.0),
             None => render_window.top_h,
         };
+        let render_row_count = row_elements.len();
         let mut block_rows: Vec<AnyElement> =
             Vec::with_capacity(render_window.run_end - render_window.run_start + 2);
         if top_h > 0.5 {
@@ -643,6 +671,12 @@ impl Render for Editor {
                 + scroll_trigger_padding
                 + scroll_beyond_bottom))
             .children(block_rows);
+        let scroll_content =
+            if render_window.run_start == 0 && render_window.run_end == render_row_count {
+                scroll_content.debug_selector(|| "markdown-complete-render-window".to_string())
+            } else {
+                scroll_content
+            };
         let scroll_content = if self.view_mode == super::ViewMode::Rendered {
             scroll_content.on_mouse_down(
                 MouseButton::Right,
