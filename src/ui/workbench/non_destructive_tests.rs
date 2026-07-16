@@ -115,7 +115,11 @@ fn keybinding_recorder_renders_focuses_and_records(cx: &mut TestAppContext) {
         let root = root.read(app);
         assert_eq!(
             root.pending_keybinding_edit_keys(),
-            Some(vec!["cmd-l".to_string()])
+            Some(vec![if cfg!(target_os = "windows") {
+                "win-l".to_string()
+            } else {
+                "cmd-l".to_string()
+            }])
         );
         assert!(
             root.focus_handle
