@@ -9,6 +9,7 @@ use yttt::config::{
         language_setting_for_locale, load_or_create_settings, resolve_default_shell, save_settings,
     },
 };
+use yttt::ui::theme::UiStyleId;
 use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
 
 #[test]
@@ -315,6 +316,20 @@ fn settings_persist_editor_language_and_lsp_choices() {
 }
 
 #[test]
+fn settings_persist_selected_ui_style() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    let mut settings = AppSettings::default();
+    settings.theme.ui_style = UiStyleId::Rounded;
+
+    save_settings(&paths, &settings).unwrap();
+    let loaded = load_or_create_settings(&paths).unwrap();
+
+    assert_eq!(loaded.settings.theme.ui_style, UiStyleId::Rounded);
+    assert!(loaded.warnings.is_empty());
+}
+
+#[test]
 fn settings_persist_editor_and_project_panel_choices() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
@@ -347,7 +362,7 @@ fn settings_persist_editor_and_project_panel_choices() {
 }
 
 #[test]
-fn invalid_general_window_editor_and_project_panel_values_are_normalized() {
+fn invalid_general_window_theme_editor_and_project_panel_values_are_normalized() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
     std::fs::create_dir_all(paths.config_dir()).unwrap();
@@ -362,6 +377,9 @@ ui_line_height = 0.5
 [window]
 effect = "glass"
 opacity = 2.0
+
+[theme]
+ui_style = "pillowy"
 
 [terminal]
 font_size = 15.0
@@ -391,6 +409,7 @@ project_sidebar_width = 1.0
         WindowBackgroundEffect::Blurred
     );
     assert_eq!(loaded.settings.window.opacity, 0.72);
+    assert_eq!(loaded.settings.theme.ui_style, UiStyleId::Zed);
     assert_eq!(loaded.settings.terminal.font_size, 15.0);
     assert_eq!(loaded.settings.editor.font_family, "JetBrains Mono");
     assert_eq!(loaded.settings.editor.font_size, 14.0);
@@ -410,6 +429,7 @@ project_sidebar_width = 1.0
         },
         SettingsLoadWarning::InvalidWindowValue { field: "effect" },
         SettingsLoadWarning::InvalidWindowValue { field: "opacity" },
+        SettingsLoadWarning::InvalidThemeValue { field: "ui_style" },
         SettingsLoadWarning::InvalidEditorValue { field: "autosave" },
         SettingsLoadWarning::InvalidEditorValue { field: "font_size" },
         SettingsLoadWarning::InvalidEditorValue {

@@ -1,10 +1,10 @@
-use gpui::{App, ElementId, Pixels, Rgba, SharedString, prelude::*, px};
+use gpui::{App, ElementId, Pixels, Rgba, SharedString, prelude::*};
 use gpui_component::{
     Sizable as _,
     button::{Button, ButtonCustomVariant, ButtonVariants},
 };
 
-use crate::theme::WorkbenchTheme;
+use crate::{style::UiStyle, theme::WorkbenchTheme};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum YtttButtonVariant {
@@ -23,20 +23,29 @@ pub struct YtttButtonStyle {
     pub text: Rgba,
 }
 
-pub fn yttt_button_style(variant: YtttButtonVariant, theme: WorkbenchTheme) -> YtttButtonStyle {
+pub fn yttt_button_style(
+    variant: YtttButtonVariant,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> YtttButtonStyle {
+    let active_background = ui_style.active_background(theme);
+    let hover_background = ui_style.hover_background(theme);
     let (background, hover_background, border, text) = match variant {
-        YtttButtonVariant::Primary => {
-            (theme.active_surface, theme.border, theme.border, theme.text)
-        }
+        YtttButtonVariant::Primary => (
+            active_background,
+            hover_background,
+            theme.border,
+            theme.text,
+        ),
         YtttButtonVariant::Secondary => (
             theme.surface_elevated,
-            theme.hover_surface,
+            hover_background,
             theme.border,
             theme.text_muted,
         ),
         YtttButtonVariant::Ghost => (
             theme.app_background.blend(gpui::rgba(0x00000000)),
-            theme.hover_surface,
+            hover_background,
             gpui::rgba(0x00000000),
             theme.text_muted,
         ),
@@ -55,7 +64,7 @@ pub fn yttt_button_style(variant: YtttButtonVariant, theme: WorkbenchTheme) -> Y
     };
 
     YtttButtonStyle {
-        radius: px(6.0),
+        radius: ui_style.radius.control,
         background,
         hover_background,
         border,
@@ -66,15 +75,16 @@ pub fn yttt_button_style(variant: YtttButtonVariant, theme: WorkbenchTheme) -> Y
 pub fn yttt_button_variant(
     variant: YtttButtonVariant,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     cx: &App,
 ) -> ButtonCustomVariant {
-    let style = yttt_button_style(variant, theme);
+    let style = yttt_button_style(variant, theme, ui_style);
     ButtonCustomVariant::new(cx)
         .color(style.background.into())
         .foreground(style.text.into())
         .hover(style.hover_background.into())
         .active(style.background.into())
-        .shadow(false)
+        .shadow(ui_style.component.shadow)
 }
 
 pub fn yttt_button(
@@ -82,16 +92,19 @@ pub fn yttt_button(
     label: impl Into<SharedString>,
     variant: YtttButtonVariant,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     cx: &App,
 ) -> Button {
-    let style = yttt_button_style(variant, theme);
+    let style = yttt_button_style(variant, theme, ui_style);
     Button::new(id)
         .label(label)
         .xsmall()
         .compact()
+        .h(ui_style.controls.button_height)
+        .px(ui_style.controls.button_padding_x)
         .rounded(style.radius)
         .outline()
         .border_color(style.border)
-        .custom(yttt_button_variant(variant, theme, cx))
+        .custom(yttt_button_variant(variant, theme, ui_style, cx))
         .text_color(style.text)
 }

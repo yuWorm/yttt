@@ -9,12 +9,13 @@ pub fn workbench_palette_item<H>(
     state: SelectableState,
     enabled: bool,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     on_click: H,
 ) -> Stateful<Div>
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    let style = palette_row_style(state, enabled, theme);
+    let style = palette_row_style(state, enabled, theme, ui_style);
     let title = title.into();
     let subtitle = subtitle.into();
     let status = status.into();
@@ -25,7 +26,7 @@ where
         .flex()
         .items_center()
         .justify_between()
-        .gap_4()
+        .gap(ui_style.spacing.xl)
         .h(style.height)
         .rounded(style.radius)
         .border(style.border_width)
@@ -38,7 +39,7 @@ where
             div()
                 .flex()
                 .flex_col()
-                .gap_1()
+                .gap(ui_style.spacing.xs)
                 .overflow_hidden()
                 .child(
                     div()
@@ -60,12 +61,14 @@ where
             keybinding,
             style.status,
             theme,
+            ui_style,
         ))
 }
 
 pub fn workbench_keybinding_badge(
     keybinding: impl Into<String>,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
 ) -> AnyElement {
     let keybinding = keybinding.into();
     if let Some(keystroke) = parse_keybinding_for_display(&keybinding) {
@@ -76,12 +79,12 @@ pub fn workbench_keybinding_badge(
             .into_any_element()
     } else {
         div()
-            .rounded_sm()
-            .border_1()
+            .rounded(ui_style.radius.compact)
+            .border(ui_style.border.hairline)
             .border_color(theme.border)
             .bg(theme.surface_elevated)
-            .px_1()
-            .py_0p5()
+            .px(ui_style.spacing.xs)
+            .py(ui_style.spacing.xxs)
             .text_xs()
             .text_color(theme.text_muted)
             .child(keybinding)
@@ -94,13 +97,14 @@ fn palette_item_trailing(
     keybinding: Option<String>,
     status_color: gpui::Rgba,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
 ) -> Div {
     let mut trailing = div()
         .flex_none()
         .flex()
         .items_center()
         .justify_end()
-        .gap_2();
+        .gap(ui_style.spacing.md);
 
     if !status.is_empty() {
         trailing = trailing.child(
@@ -113,7 +117,7 @@ fn palette_item_trailing(
     }
 
     if let Some(keybinding) = keybinding {
-        trailing = trailing.child(workbench_keybinding_badge(keybinding, theme));
+        trailing = trailing.child(workbench_keybinding_badge(keybinding, theme, ui_style));
     }
 
     trailing

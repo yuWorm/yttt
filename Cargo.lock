@@ -9682,6 +9682,7 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "gpui-component",
+ "serde",
 ]
 
 [[package]]

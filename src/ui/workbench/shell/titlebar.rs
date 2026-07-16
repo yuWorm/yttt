@@ -1,9 +1,10 @@
-use gpui::{App, ClickEvent, IntoElement, Window, div, prelude::*, rgb};
+use gpui::{App, ClickEvent, IntoElement, Window, div, prelude::*};
 use gpui_component::{Icon, IconName, StyledExt, TitleBar, tooltip::Tooltip};
 
 use crate::ui::{
-    components::workbench_icon_button, primitives::icon_button::YtttIconButtonKind,
-    theme::WorkbenchTheme,
+    components::workbench_icon_button,
+    primitives::icon_button::YtttIconButtonKind,
+    theme::{UiStyle, WorkbenchTheme},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,6 +89,7 @@ pub fn workbench_titlebar<BranchH, DiffH, CommandH, SettingsH>(
     info: TitlebarInfo,
     performance: Option<TitlebarPerformanceInfo>,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     command_tooltip: &'static str,
     settings_tooltip: &'static str,
     on_branch_click: BranchH,
@@ -108,9 +110,9 @@ where
             div()
                 .flex()
                 .items_center()
-                .gap_2()
+                .gap(ui_style.spacing.md)
                 .size_full()
-                .px_3()
+                .px(ui_style.spacing.lg)
                 .text_sm()
                 .text_color(theme.text)
                 .child(div().font_semibold().child(info.project_name))
@@ -118,7 +120,7 @@ where
                     div()
                         .flex()
                         .items_center()
-                        .gap_2()
+                        .gap(ui_style.spacing.md)
                         .child(titlebar_separator(theme))
                         .child(titlebar_meta(path, theme))
                 }))
@@ -126,7 +128,7 @@ where
                     div()
                         .flex()
                         .items_center()
-                        .gap_2()
+                        .gap(ui_style.spacing.md)
                         .child(titlebar_separator(theme))
                         .child(
                             div()
@@ -134,12 +136,13 @@ where
                                 .debug_selector(|| "titlebar-git-branch".to_string())
                                 .cursor_pointer()
                                 .occlude()
-                                .rounded_sm()
-                                .px_1()
+                                .rounded(ui_style.radius.compact)
+                                .px(ui_style.spacing.xs)
                                 .text_xs()
                                 .text_color(theme.text_muted)
                                 .hover(move |this| {
-                                    this.bg(theme.hover_surface).text_color(theme.text)
+                                    this.bg(ui_style.hover_background(theme))
+                                        .text_color(theme.text)
                                 })
                                 .on_click(on_branch_click)
                                 .child(format!("⎇ {branch}")),
@@ -149,7 +152,7 @@ where
                     div()
                         .flex()
                         .items_center()
-                        .gap_2()
+                        .gap(ui_style.spacing.md)
                         .child(titlebar_separator(theme))
                         .child(
                             div()
@@ -157,21 +160,25 @@ where
                                 .debug_selector(|| "titlebar-git-changes".to_string())
                                 .cursor_pointer()
                                 .occlude()
-                                .rounded_sm()
-                                .border_1()
+                                .rounded(ui_style.radius.compact)
+                                .border(ui_style.border.hairline)
                                 .border_color(theme.border)
-                                .px_1()
+                                .px(ui_style.spacing.xs)
                                 .text_xs()
-                                .text_color(rgb(0xc8d3df))
+                                .text_color(theme.text_muted)
                                 .hover(move |this| {
-                                    this.bg(theme.hover_surface).border_color(theme.accent)
+                                    this.bg(ui_style.hover_background(theme))
+                                        .border_color(theme.accent)
                                 })
                                 .on_click(on_diff_click)
                                 .child(counters),
                         )
                 }))
                 .child(div().flex_1())
-                .children(performance.map(|metrics| titlebar_performance_metrics(metrics, theme)))
+                .children(
+                    performance
+                        .map(|metrics| titlebar_performance_metrics(metrics, theme, ui_style)),
+                )
                 .child(
                     div()
                         .flex()
@@ -184,6 +191,7 @@ where
                                 IconName::Search,
                                 YtttIconButtonKind::Toolbar,
                                 theme,
+                                ui_style,
                                 on_command_click,
                             )
                             .debug_selector(|| "titlebar-command-palette".to_string())
@@ -197,6 +205,7 @@ where
                                 IconName::Settings,
                                 YtttIconButtonKind::Toolbar,
                                 theme,
+                                ui_style,
                                 on_settings_click,
                             )
                             .debug_selector(|| "titlebar-settings".to_string())
@@ -211,88 +220,97 @@ where
 fn titlebar_performance_metrics(
     metrics: TitlebarPerformanceInfo,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
 ) -> impl IntoElement {
     div()
         .id("titlebar-performance-metrics")
         .debug_selector(|| "titlebar-performance-metrics".to_string())
         .flex()
         .items_center()
-        .gap_2()
+        .gap(ui_style.spacing.md)
         .h_full()
-        .px_2()
-        .mr_1()
-        .border_l_1()
+        .px(ui_style.spacing.md)
+        .mr(ui_style.spacing.xs)
+        .border_l(ui_style.border.hairline)
         .border_color(theme.border)
         .children(
             metrics
                 .application
-                .map(|metrics| titlebar_application_performance_metrics(metrics, theme)),
+                .map(|metrics| titlebar_application_performance_metrics(metrics, theme, ui_style)),
         )
         .children(
             metrics
                 .system
-                .map(|metrics| titlebar_system_performance_metrics(metrics, theme)),
+                .map(|metrics| titlebar_system_performance_metrics(metrics, theme, ui_style)),
         )
 }
 
 fn titlebar_application_performance_metrics(
     metrics: TitlebarApplicationPerformanceInfo,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
 ) -> impl IntoElement {
     div()
         .id("titlebar-application-performance-metrics")
         .debug_selector(|| "titlebar-application-performance-metrics".to_string())
         .flex()
         .items_center()
-        .gap_2()
+        .gap(ui_style.spacing.md)
         .child(titlebar_performance_metric(
             "titlebar-performance-projects",
             IconName::Folder,
             metrics.projects,
             theme,
+            ui_style,
         ))
         .child(titlebar_performance_metric(
             "titlebar-performance-terminals",
             IconName::SquareTerminal,
             metrics.terminals,
             theme,
+            ui_style,
         ))
         .child(titlebar_performance_metric(
             "titlebar-performance-tabs",
             IconName::GalleryVerticalEnd,
             metrics.tabs,
             theme,
+            ui_style,
         ))
         .child(titlebar_performance_metric(
             "titlebar-performance-editors",
             IconName::File,
             metrics.editors,
             theme,
+            ui_style,
         ))
         .child(titlebar_performance_metric(
             "titlebar-performance-cpu",
             IconName::Cpu,
             metrics.cpu,
             theme,
+            ui_style,
         ))
         .child(titlebar_performance_metric(
             "titlebar-performance-memory",
             IconName::MemoryStick,
             metrics.memory,
             theme,
+            ui_style,
         ))
 }
 
 fn titlebar_system_performance_metrics(
     metrics: TitlebarSystemPerformanceInfo,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
 ) -> impl IntoElement {
     div()
         .id("titlebar-system-performance-metrics")
         .debug_selector(|| "titlebar-system-performance-metrics".to_string())
         .flex()
         .items_center()
-        .gap_2()
+        .gap(ui_style.spacing.md)
         .child(
             Icon::new(IconName::Globe)
                 .size_3()
@@ -303,12 +321,14 @@ fn titlebar_system_performance_metrics(
             IconName::Cpu,
             metrics.cpu,
             theme,
+            ui_style,
         ))
         .child(titlebar_performance_metric(
             "titlebar-system-memory",
             IconName::MemoryStick,
             metrics.memory,
             theme,
+            ui_style,
         ))
 }
 
@@ -317,6 +337,7 @@ fn titlebar_performance_metric(
     icon: IconName,
     metric: TitlebarMetricInfo,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
 ) -> impl IntoElement {
     let tooltip = metric.tooltip;
     div()
@@ -324,7 +345,7 @@ fn titlebar_performance_metric(
         .debug_selector(move || id.to_string())
         .flex()
         .items_center()
-        .gap_1()
+        .gap(ui_style.spacing.xs)
         .whitespace_nowrap()
         .text_xs()
         .text_color(theme.text_muted)

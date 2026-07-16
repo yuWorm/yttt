@@ -3,7 +3,7 @@ use std::sync::Arc;
 use gpui::{
     AnyElement, AppContext as _, Context, Entity, EventEmitter, Focusable as _,
     InteractiveElement as _, IntoElement, KeystrokeEvent, MouseButton, ParentElement as _, Render,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div, px,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _,
@@ -17,7 +17,10 @@ use gpui_markdown_editor::{
 
 use crate::{
     config::settings::EditorSettings,
-    ui::i18n::{UiText, UiTextKey},
+    ui::{
+        i18n::{UiText, UiTextKey},
+        theme::current_ui_style,
+    },
 };
 
 use super::{
@@ -999,6 +1002,7 @@ impl Render for ProjectEditorDocument {
             .as_ref()
             .map(VimState::key_context)
             .unwrap_or_default();
+        let ui_style = current_ui_style(cx);
         let breadcrumb_hover = cx.theme().foreground;
         let mut breadcrumb_items = div()
             .id("editor-breadcrumb-items")
@@ -1007,7 +1011,7 @@ impl Render for ProjectEditorDocument {
             .min_w_0()
             .h_full()
             .items_center()
-            .gap_1()
+            .gap(ui_style.spacing.xs)
             .overflow_hidden()
             .text_color(cx.theme().muted_foreground)
             .child(self.breadcrumb_header.clone());
@@ -1039,8 +1043,8 @@ impl Render for ProjectEditorDocument {
                     .flex_none()
                     .items_center()
                     .justify_center()
-                    .size_7()
-                    .rounded(px(4.0))
+                    .size(ui_style.icon_buttons.toolbar_size)
+                    .rounded(ui_style.icon_buttons.toolbar_radius)
                     .text_color(cx.theme().muted_foreground)
                     .cursor_pointer()
                     .hover(move |style| style.bg(search_hover))
@@ -1054,12 +1058,12 @@ impl Render for ProjectEditorDocument {
                     .flex()
                     .flex_none()
                     .items_center()
-                    .gap_1();
+                    .gap(ui_style.spacing.xs);
                 if let Some(status) = self.vim_status() {
                     actions = actions.child(
                         div()
                             .debug_selector(|| "vim-mode-indicator".to_string())
-                            .px_2()
+                            .px(ui_style.spacing.md)
                             .text_color(cx.theme().accent_foreground)
                             .child(status),
                     );
@@ -1107,8 +1111,8 @@ impl Render for ProjectEditorDocument {
             .flex_none()
             .h_8()
             .items_center()
-            .gap_2()
-            .px_2()
+            .gap(ui_style.spacing.md)
+            .px(ui_style.spacing.md)
             .overflow_hidden()
             .bg(cx.theme().tokens.popover)
             .text_sm()

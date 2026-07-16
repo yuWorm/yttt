@@ -47,20 +47,22 @@ pub(super) fn onboarding_view(
     state: &OnboardingState,
     ui_text: &UiText,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     terminal_font_select: Option<&Entity<SettingsFontFamilySelectState>>,
     command_palette_keybinding: Option<String>,
 ) -> Div {
     let step = match state.step {
-        OnboardingStep::Language => language_step(cx, state, ui_text, theme),
+        OnboardingStep::Language => language_step(cx, state, ui_text, theme, ui_style),
         OnboardingStep::Font => terminal_font_step(
             cx,
             ui_text,
             theme,
+            ui_style,
             terminal_font_select.expect("terminal font select must exist on the font step"),
         ),
-        OnboardingStep::Layout => layout_step(cx, state, ui_text, theme),
-        OnboardingStep::Agent => agent_step(cx, state, ui_text, theme),
-        OnboardingStep::ZedImport => zed_import_step(cx, state, ui_text, theme),
+        OnboardingStep::Layout => layout_step(cx, state, ui_text, theme, ui_style),
+        OnboardingStep::Agent => agent_step(cx, state, ui_text, theme, ui_style),
+        OnboardingStep::ZedImport => zed_import_step(cx, state, ui_text, theme, ui_style),
     };
 
     div()
@@ -70,21 +72,21 @@ pub(super) fn onboarding_view(
         .min_h_0()
         .items_center()
         .justify_center()
-        .px_8()
-        .py_6()
+        .px(ui_style.spacing.xxxl)
+        .py(ui_style.spacing.xxl)
         .child(
             div()
                 .flex()
                 .w_full()
                 .max_w(px(720.0))
                 .flex_col()
-                .gap_5()
+                .gap(ui_style.spacing.xl + ui_style.spacing.xs)
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .items_center()
-                        .gap_2()
+                        .gap(ui_style.spacing.md)
                         .text_center()
                         .child(
                             div()
@@ -105,6 +107,7 @@ pub(super) fn onboarding_view(
                     cx,
                     ui_text,
                     theme,
+                    ui_style,
                     command_palette_keybinding,
                 )),
         )
@@ -115,8 +118,9 @@ fn language_step(
     state: &OnboardingState,
     ui_text: &UiText,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
 ) -> Div {
-    let mut language_picker = div().flex().w_full().gap_3();
+    let mut language_picker = div().flex().w_full().gap(ui_style.spacing.lg);
     for (index, language) in [LanguageSetting::English, LanguageSetting::Chinese]
         .into_iter()
         .enumerate()
@@ -136,15 +140,19 @@ fn language_step(
                 .items_center()
                 .justify_center()
                 .h(rems(5.5))
-                .rounded_lg()
-                .border(if selected { px(2.0) } else { px(1.0) })
+                .rounded(ui_style.radius.card)
+                .border(if selected {
+                    ui_style.border.emphasized
+                } else {
+                    ui_style.border.hairline
+                })
                 .border_color(if selected { theme.accent } else { theme.border })
                 .bg(if selected {
-                    theme.active_surface
+                    ui_style.active_background(theme)
                 } else {
                     theme.surface_elevated
                 })
-                .hover(move |this| this.bg(theme.hover_surface))
+                .hover(move |this| this.bg(ui_style.hover_background(theme)))
                 .on_click(cx.listener(move |this, _, _window, cx| {
                     if let Err(error) = this.select_onboarding_language(language) {
                         this.load_error = Some(error.to_string());
@@ -169,12 +177,12 @@ fn language_step(
         .debug_selector(|| "onboarding-language-step".to_string())
         .flex()
         .flex_col()
-        .gap_4()
+        .gap(ui_style.spacing.xl)
         .child(
             div()
                 .flex()
                 .flex_col()
-                .gap_1()
+                .gap(ui_style.spacing.xs)
                 .child(
                     div()
                         .text_sm()
@@ -197,6 +205,7 @@ fn language_step(
                     ui_text.get(UiTextKey::OnboardingNext),
                     YtttButtonVariant::Primary,
                     theme,
+                    ui_style,
                     cx,
                 )
                 .debug_selector(|| "onboarding-language-next".to_string())
@@ -212,9 +221,10 @@ fn terminal_font_step(
     cx: &mut Context<WorkbenchView>,
     ui_text: &UiText,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     font_select: &Entity<SettingsFontFamilySelectState>,
 ) -> Div {
-    let select_style = yttt_select_style(theme);
+    let select_style = yttt_select_style(theme, ui_style);
     let font_select = Select::new(font_select)
         .small()
         .menu_width(select_style.menu_width)
@@ -232,12 +242,12 @@ fn terminal_font_step(
         .debug_selector(|| "onboarding-terminal-font-step".to_string())
         .flex()
         .flex_col()
-        .gap_4()
+        .gap(ui_style.spacing.xl)
         .child(
             div()
                 .flex()
                 .flex_col()
-                .gap_1()
+                .gap(ui_style.spacing.xs)
                 .child(
                     div()
                         .text_sm()
@@ -256,12 +266,12 @@ fn terminal_font_step(
             div()
                 .flex()
                 .flex_col()
-                .gap_3()
-                .rounded_lg()
-                .border_1()
+                .gap(ui_style.spacing.lg)
+                .rounded(ui_style.radius.card)
+                .border(ui_style.border.hairline)
                 .border_color(theme.border)
                 .bg(theme.surface_elevated)
-                .p_4()
+                .p(ui_style.spacing.xl)
                 .child(
                     div()
                         .debug_selector(|| "onboarding-terminal-font-select".to_string())
@@ -272,12 +282,12 @@ fn terminal_font_step(
                 .child(
                     div()
                         .debug_selector(|| "onboarding-terminal-font-recommendation".to_string())
-                        .rounded_md()
-                        .border_1()
+                        .rounded(ui_style.radius.control)
+                        .border(ui_style.border.hairline)
                         .border_color(theme.warning)
                         .bg(theme.surface_elevated)
-                        .px_3()
-                        .py_2()
+                        .px(ui_style.spacing.lg)
+                        .py(ui_style.spacing.md)
                         .text_xs()
                         .text_color(theme.warning)
                         .child(ui_text.get(UiTextKey::OnboardingFontRecommendation)),
@@ -293,6 +303,7 @@ fn terminal_font_step(
                         ui_text.get(UiTextKey::OnboardingBack),
                         YtttButtonVariant::Secondary,
                         theme,
+                        ui_style,
                         cx,
                     )
                     .debug_selector(|| "onboarding-font-back".to_string())
@@ -307,6 +318,7 @@ fn terminal_font_step(
                         ui_text.get(UiTextKey::OnboardingNext),
                         YtttButtonVariant::Primary,
                         theme,
+                        ui_style,
                         cx,
                     )
                     .debug_selector(|| "onboarding-font-next".to_string())
@@ -323,8 +335,9 @@ fn layout_step(
     state: &OnboardingState,
     ui_text: &UiText,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
 ) -> Div {
-    let mut layout_picker = div().flex().w_full().gap_3();
+    let mut layout_picker = div().flex().w_full().gap(ui_style.spacing.lg);
     for (index, layout_kind) in DefaultLayoutKind::ALL.into_iter().enumerate() {
         let selected = state.selected_layout == layout_kind;
         let (title, description) = layout_text(layout_kind, ui_text);
@@ -337,17 +350,21 @@ fn layout_step(
                 .flex_1()
                 .min_w_0()
                 .flex_col()
-                .gap_3()
-                .rounded_lg()
-                .border(if selected { px(2.0) } else { px(1.0) })
+                .gap(ui_style.spacing.lg)
+                .rounded(ui_style.radius.card)
+                .border(if selected {
+                    ui_style.border.emphasized
+                } else {
+                    ui_style.border.hairline
+                })
                 .border_color(if selected { theme.accent } else { theme.border })
                 .bg(if selected {
-                    theme.active_surface
+                    ui_style.active_background(theme)
                 } else {
                     theme.surface_elevated
                 })
-                .p_4()
-                .hover(move |this| this.bg(theme.hover_surface))
+                .p(ui_style.spacing.xl)
+                .hover(move |this| this.bg(ui_style.hover_background(theme)))
                 .on_click(cx.listener(move |this, _, _window, cx| {
                     this.select_onboarding_layout(layout_kind);
                     cx.notify();
@@ -357,12 +374,13 @@ fn layout_step(
                     state.selected_agent,
                     ui_text,
                     theme,
+                    ui_style,
                 ))
                 .child(
                     div()
                         .flex()
                         .flex_col()
-                        .gap_1()
+                        .gap(ui_style.spacing.xs)
                         .child(
                             div()
                                 .text_sm()
@@ -383,7 +401,7 @@ fn layout_step(
     div()
         .flex()
         .flex_col()
-        .gap_3()
+        .gap(ui_style.spacing.lg)
         .child(
             div()
                 .text_xs()
@@ -402,6 +420,7 @@ fn layout_step(
                         ui_text.get(UiTextKey::OnboardingBack),
                         YtttButtonVariant::Secondary,
                         theme,
+                        ui_style,
                         cx,
                     )
                     .debug_selector(|| "onboarding-layout-back".to_string())
@@ -416,6 +435,7 @@ fn layout_step(
                         ui_text.get(UiTextKey::OnboardingNext),
                         YtttButtonVariant::Primary,
                         theme,
+                        ui_style,
                         cx,
                     )
                     .debug_selector(|| "onboarding-next".to_string())
@@ -432,8 +452,9 @@ fn agent_step(
     state: &OnboardingState,
     ui_text: &UiText,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
 ) -> Div {
-    let mut agent_picker = div().flex().w_full().gap_2();
+    let mut agent_picker = div().flex().w_full().gap(ui_style.spacing.md);
     for (index, agent) in BuiltinAgent::ALL.into_iter().enumerate() {
         let selected = state.selected_agent == agent;
         agent_picker = agent_picker.child(
@@ -447,17 +468,21 @@ fn agent_step(
                 .flex_col()
                 .items_center()
                 .justify_center()
-                .gap_2()
+                .gap(ui_style.spacing.md)
                 .h(rems(5.5))
-                .rounded_lg()
-                .border(if selected { px(2.0) } else { px(1.0) })
+                .rounded(ui_style.radius.card)
+                .border(if selected {
+                    ui_style.border.emphasized
+                } else {
+                    ui_style.border.hairline
+                })
                 .border_color(if selected { theme.accent } else { theme.border })
                 .bg(if selected {
-                    theme.active_surface
+                    ui_style.active_background(theme)
                 } else {
                     theme.surface_elevated
                 })
-                .hover(move |this| this.bg(theme.hover_surface))
+                .hover(move |this| this.bg(ui_style.hover_background(theme)))
                 .on_click(cx.listener(move |this, _, _window, cx| {
                     this.select_onboarding_agent(agent);
                     cx.notify();
@@ -486,12 +511,12 @@ fn agent_step(
     div()
         .flex()
         .flex_col()
-        .gap_4()
+        .gap(ui_style.spacing.xl)
         .child(
             div()
                 .flex()
                 .flex_col()
-                .gap_1()
+                .gap(ui_style.spacing.xs)
                 .child(
                     div()
                         .text_xs()
@@ -511,7 +536,7 @@ fn agent_step(
             div()
                 .flex()
                 .flex_col()
-                .gap_2()
+                .gap(ui_style.spacing.md)
                 .child(
                     div()
                         .text_xs()
@@ -524,6 +549,7 @@ fn agent_step(
                     state.selected_agent,
                     ui_text,
                     theme,
+                    ui_style,
                 )),
         )
         .child(
@@ -536,6 +562,7 @@ fn agent_step(
                         ui_text.get(UiTextKey::OnboardingBack),
                         YtttButtonVariant::Secondary,
                         theme,
+                        ui_style,
                         cx,
                     )
                     .debug_selector(|| "onboarding-back".to_string())
@@ -550,6 +577,7 @@ fn agent_step(
                         ui_text.get(UiTextKey::OnboardingNext),
                         YtttButtonVariant::Primary,
                         theme,
+                        ui_style,
                         cx,
                     )
                     .debug_selector(|| "onboarding-agent-next".to_string())
@@ -566,10 +594,11 @@ fn zed_import_step(
     state: &OnboardingState,
     ui_text: &UiText,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
 ) -> Div {
     let detection = &state.zed_detection;
     let has_themes = !detection.is_empty();
-    let mut actions = div().flex().gap_2();
+    let mut actions = div().flex().gap(ui_style.spacing.md);
     if has_themes {
         actions = actions
             .child(
@@ -578,6 +607,7 @@ fn zed_import_step(
                     ui_text.get(UiTextKey::OnboardingZedSkip),
                     YtttButtonVariant::Secondary,
                     theme,
+                    ui_style,
                     cx,
                 )
                 .debug_selector(|| "onboarding-zed-skip".to_string())
@@ -594,6 +624,7 @@ fn zed_import_step(
                     ui_text.get(UiTextKey::OnboardingZedImport),
                     YtttButtonVariant::Primary,
                     theme,
+                    ui_style,
                     cx,
                 )
                 .debug_selector(|| "onboarding-zed-import".to_string())
@@ -611,6 +642,7 @@ fn zed_import_step(
                 ui_text.get(UiTextKey::OnboardingContinue),
                 YtttButtonVariant::Primary,
                 theme,
+                ui_style,
                 cx,
             )
             .debug_selector(|| "onboarding-zed-continue".to_string())
@@ -627,12 +659,12 @@ fn zed_import_step(
         .debug_selector(|| "onboarding-zed-import-step".to_string())
         .flex()
         .flex_col()
-        .gap_4()
+        .gap(ui_style.spacing.xl)
         .child(
             div()
                 .flex()
                 .flex_col()
-                .gap_1()
+                .gap(ui_style.spacing.xs)
                 .child(
                     div()
                         .text_sm()
@@ -650,11 +682,11 @@ fn zed_import_step(
         .when(!has_themes, |this| {
             this.child(
                 div()
-                    .rounded_lg()
-                    .border_1()
+                    .rounded(ui_style.radius.card)
+                    .border(ui_style.border.hairline)
                     .border_color(theme.border)
                     .bg(theme.surface_elevated)
-                    .p_4()
+                    .p(ui_style.spacing.xl)
                     .text_sm()
                     .text_color(theme.text_muted)
                     .child(ui_text.get(UiTextKey::OnboardingZedNoThemes)),
@@ -666,6 +698,7 @@ fn zed_import_step(
                 &detection.extensions,
                 false,
                 theme,
+                ui_style,
             ))
         })
         .when(detection.icon_theme_count() > 0, |this| {
@@ -674,17 +707,18 @@ fn zed_import_step(
                 &detection.extensions,
                 true,
                 theme,
+                ui_style,
             ))
         })
         .when(!detection.warnings.is_empty(), |this| {
             this.child(
                 div()
-                    .rounded_md()
-                    .border_1()
+                    .rounded(ui_style.radius.control)
+                    .border(ui_style.border.hairline)
                     .border_color(theme.warning)
                     .bg(theme.surface_elevated)
-                    .px_3()
-                    .py_2()
+                    .px(ui_style.spacing.lg)
+                    .py(ui_style.spacing.md)
                     .text_xs()
                     .text_color(theme.warning)
                     .child(format!(
@@ -704,6 +738,7 @@ fn zed_import_step(
                         ui_text.get(UiTextKey::OnboardingBack),
                         YtttButtonVariant::Secondary,
                         theme,
+                        ui_style,
                         cx,
                     )
                     .debug_selector(|| "onboarding-zed-back".to_string())
@@ -721,8 +756,9 @@ fn detected_theme_panel(
     extensions: &[DetectedZedExtension],
     icon_themes: bool,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
 ) -> Div {
-    let mut rows = div().flex().flex_col().gap_1();
+    let mut rows = div().flex().flex_col().gap(ui_style.spacing.xs);
     let id_prefix = if icon_themes {
         "onboarding-zed-icon-theme"
     } else {
@@ -745,10 +781,10 @@ fn detected_theme_panel(
                     .flex()
                     .items_center()
                     .justify_between()
-                    .gap_3()
-                    .rounded_md()
-                    .px_3()
-                    .py_2()
+                    .gap(ui_style.spacing.lg)
+                    .rounded(ui_style.radius.control)
+                    .px(ui_style.spacing.lg)
+                    .py(ui_style.spacing.md)
                     .bg(theme.surface_elevated)
                     .child(
                         div()
@@ -772,7 +808,7 @@ fn detected_theme_panel(
     div()
         .flex()
         .flex_col()
-        .gap_2()
+        .gap(ui_style.spacing.md)
         .child(
             div()
                 .text_xs()
@@ -801,6 +837,7 @@ fn layout_preview(
     selected_agent: BuiltinAgent,
     ui_text: &UiText,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
 ) -> Div {
     match layout_kind {
         DefaultLayoutKind::SplitPane => div()
@@ -808,8 +845,8 @@ fn layout_preview(
             .h(rems(4.5))
             .w_full()
             .overflow_hidden()
-            .rounded_md()
-            .border_1()
+            .rounded(ui_style.radius.control)
+            .border(ui_style.border.hairline)
             .border_color(theme.border)
             .bg(theme.surface_elevated)
             .child(
@@ -818,7 +855,7 @@ fn layout_preview(
                     .flex_basis(relative(0.65))
                     .items_center()
                     .justify_center()
-                    .border_r_1()
+                    .border_r(ui_style.border.hairline)
                     .border_color(theme.border)
                     .text_xs()
                     .text_color(theme.text)
@@ -840,24 +877,24 @@ fn layout_preview(
             .w_full()
             .flex_col()
             .overflow_hidden()
-            .rounded_md()
-            .border_1()
+            .rounded(ui_style.radius.control)
+            .border(ui_style.border.hairline)
             .border_color(theme.border)
             .bg(theme.surface_elevated)
             .child(
                 div()
                     .flex()
                     .h(rems(1.625))
-                    .border_b_1()
+                    .border_b(ui_style.border.hairline)
                     .border_color(theme.border)
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .border_r_1()
+                            .border_r(ui_style.border.hairline)
                             .border_color(theme.border)
-                            .bg(theme.active_surface)
-                            .px_3()
+                            .bg(ui_style.active_background(theme))
+                            .px(ui_style.spacing.lg)
                             .text_xs()
                             .text_color(theme.text)
                             .child(ui_text.get(UiTextKey::OnboardingAgentPane)),
@@ -866,7 +903,7 @@ fn layout_preview(
                         div()
                             .flex()
                             .items_center()
-                            .px_3()
+                            .px(ui_style.spacing.lg)
                             .text_xs()
                             .text_color(theme.text_muted)
                             .child(ui_text.get(UiTextKey::OnboardingShellPane)),
@@ -889,18 +926,19 @@ fn command_palette_hint(
     cx: &mut Context<WorkbenchView>,
     ui_text: &UiText,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     command_palette_keybinding: Option<String>,
 ) -> Div {
     let mut hint = div()
         .flex()
         .items_center()
         .justify_center()
-        .gap_2()
+        .gap(ui_style.spacing.md)
         .text_xs()
         .text_color(theme.text_muted)
         .child(ui_text.get(UiTextKey::OnboardingCommandPaletteHint));
     if let Some(keybinding) = command_palette_keybinding {
-        hint = hint.child(workbench_keybinding_badge(keybinding, theme));
+        hint = hint.child(workbench_keybinding_badge(keybinding, theme, ui_style));
     }
     hint.child(
         yttt_button(
@@ -908,6 +946,7 @@ fn command_palette_hint(
             ui_text.get(UiTextKey::CommandPalette),
             YtttButtonVariant::Ghost,
             theme,
+            ui_style,
             cx,
         )
         .debug_selector(|| "onboarding-open-command-palette".to_string())

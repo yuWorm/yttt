@@ -6,7 +6,8 @@ pub(super) fn tab_rename_dialog(
     input: &Entity<InputState>,
     theme: WorkbenchTheme,
 ) -> Div {
-    let dialog = yttt_dialog_style(theme);
+    let ui_style = current_ui_style(cx);
+    let dialog = yttt_dialog_style(theme, ui_style);
     capture_overlay_input(
         div()
             .absolute()
@@ -17,30 +18,32 @@ pub(super) fn tab_rename_dialog(
             .flex()
             .items_start()
             .justify_center()
-            .pt_16()
+            .pt(ui_style.spacing.overlay_top)
             .bg(dialog.overlay)
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap_3()
+                    .gap(ui_style.spacing.lg)
                     .w(dialog.max_width)
                     .rounded(dialog.radius)
-                    .border_1()
+                    .border(dialog.border_width)
                     .border_color(dialog.border)
                     .bg(dialog.background)
+                    .when(dialog.shadow, |this| this.shadow_lg())
                     .p(dialog.padding)
                     .text_color(dialog.text)
                     .child(yttt_dialog_header(
                         "close-tab-rename-dialog",
                         ui_text.get(UiTextKey::RenameTabTitle),
                         theme,
+                        ui_style,
                         cx.listener(|this, _, _window, cx| {
                             this.cancel_tab_rename_dialog();
                             cx.notify();
                         }),
                     ))
-                    .child(yttt_dialog_input(input, theme))
+                    .child(yttt_dialog_input(input, theme, ui_style))
                     .child(
                         div()
                             .text_xs()
@@ -51,7 +54,7 @@ pub(super) fn tab_rename_dialog(
                         div()
                             .flex()
                             .justify_end()
-                            .gap_2()
+                            .gap(ui_style.spacing.md)
                             .child(yttt_dialog_button(
                                 cx,
                                 "cancel-tab-rename",
@@ -87,7 +90,8 @@ pub(super) fn keybinding_edit_dialog(
     error: Option<&str>,
     theme: WorkbenchTheme,
 ) -> Div {
-    let dialog = yttt_dialog_style(theme);
+    let ui_style = current_ui_style(cx);
+    let dialog = yttt_dialog_style(theme, ui_style);
     let recorded = if keybindings.is_empty() {
         div()
             .text_sm()
@@ -100,9 +104,13 @@ pub(super) fn keybinding_edit_dialog(
                 .flex_wrap()
                 .items_center()
                 .justify_center()
-                .gap_2(),
+                .gap(ui_style.spacing.md),
             |bindings, keybinding| {
-                bindings.child(workbench_keybinding_badge(keybinding.clone(), theme))
+                bindings.child(workbench_keybinding_badge(
+                    keybinding.clone(),
+                    theme,
+                    ui_style,
+                ))
             },
         )
     };
@@ -117,24 +125,26 @@ pub(super) fn keybinding_edit_dialog(
             .flex()
             .items_start()
             .justify_center()
-            .pt_16()
+            .pt(ui_style.spacing.overlay_top)
             .bg(dialog.overlay)
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap_3()
+                    .gap(ui_style.spacing.lg)
                     .w(dialog.max_width)
                     .rounded(dialog.radius)
-                    .border_1()
+                    .border(dialog.border_width)
                     .border_color(dialog.border)
                     .bg(dialog.background)
+                    .when(dialog.shadow, |this| this.shadow_lg())
                     .p(dialog.padding)
                     .text_color(dialog.text)
                     .child(yttt_dialog_header(
                         "close-keybinding-edit-dialog",
                         ui_text.get(UiTextKey::SettingsKeybindingDialogTitle),
                         theme,
+                        ui_style,
                         cx.listener(|this, _, _window, cx| {
                             this.cancel_keybinding_edit_dialog();
                             cx.notify();
@@ -154,12 +164,12 @@ pub(super) fn keybinding_edit_dialog(
                             .items_center()
                             .justify_center()
                             .min_h_16()
-                            .rounded_md()
-                            .border_1()
+                            .rounded(ui_style.radius.control)
+                            .border(ui_style.border.hairline)
                             .border_color(theme.focus_ring)
                             .bg(theme.surface_elevated)
-                            .px_4()
-                            .py_3()
+                            .px(ui_style.spacing.xl)
+                            .py(ui_style.spacing.lg)
                             .child(recorded),
                     )
                     .child(
@@ -175,7 +185,7 @@ pub(super) fn keybinding_edit_dialog(
                         div()
                             .flex()
                             .justify_end()
-                            .gap_2()
+                            .gap(ui_style.spacing.md)
                             .child(yttt_dialog_button(
                                 cx,
                                 "clear-keybinding-edit",
@@ -222,7 +232,8 @@ pub(super) fn zed_theme_import_dialog(
     config_paths: &AppConfigPaths,
     theme: WorkbenchTheme,
 ) -> Div {
-    let dialog = yttt_dialog_style(theme);
+    let ui_style = current_ui_style(cx);
+    let dialog = yttt_dialog_style(theme, ui_style);
     let ui_output_dir = config_paths.themes_dir();
     let icon_output_dir = config_paths.icon_themes_dir();
     let existing_count =
@@ -236,30 +247,26 @@ pub(super) fn zed_theme_import_dialog(
             .flex()
             .items_start()
             .justify_center()
-            .pt_16()
+            .pt(ui_style.spacing.overlay_top)
             .bg(dialog.overlay)
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap_3()
+                    .gap(ui_style.spacing.lg)
                     .w(dialog.max_width)
                     .max_h(px(640.0))
                     .rounded(dialog.radius)
-                    .border_1()
+                    .border(dialog.border_width)
                     .border_color(dialog.border)
                     .bg(dialog.background)
+                    .when(dialog.shadow, |this| this.shadow_lg())
                     .p(dialog.padding)
                     .text_color(dialog.text)
-                    .child(yttt_dialog_header(
-                        "close-zed-theme-import-dialog",
-                        ui_text.get(UiTextKey::SettingsImportZedThemes),
-                        theme,
-                        cx.listener(|this, _, _window, cx| {
-                            this.cancel_zed_theme_import_dialog();
-                            cx.notify();
-                        }),
-                    ))
+                    .child(yttt_dialog_header("close-zed-theme-import-dialog", ui_text.get(UiTextKey::SettingsImportZedThemes), theme, ui_style, cx.listener(|this, _, _window, cx| {
+                        this.cancel_zed_theme_import_dialog();
+                        cx.notify();
+                    })))
                     .child(
                         div()
                             .text_xs()
@@ -275,6 +282,7 @@ pub(super) fn zed_theme_import_dialog(
                             &icon_output_dir,
                             ui_text,
                             theme,
+                            ui_style,
                         ))
                     })
                     .when(detection.icon_theme_count() > 0, |this| {
@@ -286,17 +294,18 @@ pub(super) fn zed_theme_import_dialog(
                             &icon_output_dir,
                             ui_text,
                             theme,
+                            ui_style,
                         ))
                     })
                     .when(!detection.warnings.is_empty(), |this| {
                         this.child(
                             div()
-                                .rounded_md()
-                                .border_1()
+                                .rounded(ui_style.radius.control)
+                                .border(ui_style.border.hairline)
                                 .border_color(theme.warning)
                                 .bg(theme.surface_elevated)
-                                .px_3()
-                                .py_2()
+                                .px(ui_style.spacing.lg)
+                                .py(ui_style.spacing.md)
                                 .text_xs()
                                 .text_color(theme.warning)
                                 .child(format!(
@@ -311,13 +320,13 @@ pub(super) fn zed_theme_import_dialog(
                             div()
                                 .flex()
                                 .flex_col()
-                                .gap_2()
-                                .rounded_md()
-                                .border_1()
+                                .gap(ui_style.spacing.md)
+                                .rounded(ui_style.radius.control)
+                                .border(ui_style.border.hairline)
                                 .border_color(theme.border)
                                 .bg(theme.surface_elevated)
-                                .px_3()
-                                .py_2()
+                                .px(ui_style.spacing.lg)
+                                .py(ui_style.spacing.md)
                                 .child(
                                     div()
                                         .text_xs()
@@ -332,7 +341,7 @@ pub(super) fn zed_theme_import_dialog(
                                     div()
                                         .flex()
                                         .items_center()
-                                        .gap_4()
+                                        .gap(ui_style.spacing.xl)
                                         .child(
                                             div()
                                                 .debug_selector(|| {
@@ -400,7 +409,7 @@ pub(super) fn zed_theme_import_dialog(
                         div()
                             .flex()
                             .justify_end()
-                            .gap_2()
+                            .gap(ui_style.spacing.md)
                             .child(yttt_dialog_button(
                                 cx,
                                 "cancel-zed-theme-import",
@@ -483,13 +492,14 @@ fn zed_theme_import_panel(
     icon_output_dir: &Path,
     ui_text: &UiText,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
 ) -> Div {
     let id_prefix = if icon_themes {
         "zed-theme-import-icon-theme"
     } else {
         "zed-theme-import-ui-theme"
     };
-    let mut rows = div().flex().flex_col().gap_1();
+    let mut rows = div().flex().flex_col().gap(ui_style.spacing.xs);
     let mut index = 0usize;
     for extension in extensions {
         let names = if icon_themes {
@@ -514,10 +524,10 @@ fn zed_theme_import_panel(
                     .flex()
                     .items_center()
                     .justify_between()
-                    .gap_3()
-                    .rounded_md()
-                    .px_3()
-                    .py_2()
+                    .gap(ui_style.spacing.lg)
+                    .rounded(ui_style.radius.control)
+                    .px(ui_style.spacing.lg)
+                    .py(ui_style.spacing.md)
                     .bg(theme.surface_elevated)
                     .child(
                         div()
@@ -535,9 +545,9 @@ fn zed_theme_import_panel(
                                 .debug_selector(move || imported_selector.clone())
                                 .flex_none()
                                 .rounded_full()
-                                .bg(theme.active_surface)
-                                .px_2()
-                                .py_1()
+                                .bg(ui_style.active_background(theme))
+                                .px(ui_style.spacing.md)
+                                .py(ui_style.spacing.xs)
                                 .text_xs()
                                 .text_color(theme.text_muted)
                                 .child(ui_text.get(UiTextKey::SettingsImportZedThemesImported)),
@@ -559,7 +569,7 @@ fn zed_theme_import_panel(
     div()
         .flex()
         .flex_col()
-        .gap_2()
+        .gap(ui_style.spacing.md)
         .child(
             div()
                 .text_xs()
@@ -577,7 +587,8 @@ pub(super) fn file_conflict_dialog(
     path: String,
     missing: bool,
 ) -> Div {
-    let dialog = yttt_dialog_style(theme);
+    let ui_style = current_ui_style(cx);
+    let dialog = yttt_dialog_style(theme, ui_style);
     let title = ui_text.get(if missing {
         UiTextKey::FileDeletedOnDisk
     } else {
@@ -588,17 +599,22 @@ pub(super) fn file_conflict_dialog(
     } else {
         UiTextKey::FileOverwrite
     });
-    let mut actions = div().flex().justify_end().gap_2().child(yttt_dialog_button(
-        cx,
-        "cancel-file-conflict",
-        ui_text.get(UiTextKey::Cancel),
-        YtttButtonVariant::Secondary,
-        theme,
-        cx.listener(|this, _, _window, cx| {
-            this.cancel_pending_file_conflict(cx);
-            cx.notify();
-        }),
-    ));
+    let mut actions =
+        div()
+            .flex()
+            .justify_end()
+            .gap(ui_style.spacing.md)
+            .child(yttt_dialog_button(
+                cx,
+                "cancel-file-conflict",
+                ui_text.get(UiTextKey::Cancel),
+                YtttButtonVariant::Secondary,
+                theme,
+                cx.listener(|this, _, _window, cx| {
+                    this.cancel_pending_file_conflict(cx);
+                    cx.notify();
+                }),
+            ));
     if !missing {
         actions = actions.child(yttt_dialog_button(
             cx,
@@ -638,18 +654,20 @@ pub(super) fn file_conflict_dialog(
                 div()
                     .flex()
                     .flex_col()
-                    .gap_3()
+                    .gap(ui_style.spacing.lg)
                     .w(dialog.max_width)
                     .rounded(dialog.radius)
-                    .border_1()
+                    .border(dialog.border_width)
                     .border_color(dialog.border)
                     .bg(dialog.background)
+                    .when(dialog.shadow, |this| this.shadow_lg())
                     .p(dialog.padding)
                     .text_color(dialog.text)
                     .child(yttt_dialog_header(
                         "close-file-conflict-dialog",
                         title,
                         theme,
+                        ui_style,
                         cx.listener(|this, _, _window, cx| {
                             this.cancel_pending_file_conflict(cx);
                             cx.notify();
@@ -662,6 +680,7 @@ pub(super) fn file_conflict_dialog(
                             tone: ToastTone::Warning,
                         },
                         theme,
+                        ui_style,
                     ))
                     .child(actions),
             ),
@@ -677,7 +696,8 @@ pub(super) fn dirty_close_dialog(
     file_intent: bool,
     has_save_error: bool,
 ) -> Div {
-    let dialog = yttt_dialog_style(theme);
+    let ui_style = current_ui_style(cx);
+    let dialog = yttt_dialog_style(theme, ui_style);
     let save_label = ui_text.get(if file_intent {
         UiTextKey::FileSaveAction
     } else {
@@ -692,18 +712,20 @@ pub(super) fn dirty_close_dialog(
     let mut content = div()
         .flex()
         .flex_col()
-        .gap_3()
+        .gap(ui_style.spacing.lg)
         .w(dialog.max_width)
         .rounded(dialog.radius)
-        .border_1()
+        .border(dialog.border_width)
         .border_color(dialog.border)
         .bg(dialog.background)
+        .when(dialog.shadow, |this| this.shadow_lg())
         .p(dialog.padding)
         .text_color(dialog.text)
         .child(yttt_dialog_header(
             "close-dirty-file-dialog",
             title,
             theme,
+            ui_style,
             cx.listener(|this, _, _window, cx| {
                 this.cancel_pending_dirty_close();
                 cx.notify();
@@ -717,6 +739,7 @@ pub(super) fn dirty_close_dialog(
                 tone: ToastTone::Warning,
             },
             theme,
+            ui_style,
         ));
     }
     if has_save_error {
@@ -731,7 +754,7 @@ pub(super) fn dirty_close_dialog(
         div()
             .flex()
             .justify_end()
-            .gap_2()
+            .gap(ui_style.spacing.md)
             .child(yttt_dialog_button(
                 cx,
                 "cancel-dirty-close",
@@ -786,7 +809,8 @@ pub(super) fn close_project_dialog(
     ui_text: &UiText,
     theme: WorkbenchTheme,
 ) -> Div {
-    let dialog = yttt_dialog_style(theme);
+    let ui_style = current_ui_style(cx);
+    let dialog = yttt_dialog_style(theme, ui_style);
     capture_overlay_input(
         div()
             .absolute()
@@ -802,18 +826,20 @@ pub(super) fn close_project_dialog(
                 div()
                     .flex()
                     .flex_col()
-                    .gap_3()
+                    .gap(ui_style.spacing.lg)
                     .w(dialog.max_width)
                     .rounded(dialog.radius)
-                    .border_1()
+                    .border(dialog.border_width)
                     .border_color(dialog.border)
                     .bg(dialog.background)
+                    .when(dialog.shadow, |this| this.shadow_lg())
                     .p(dialog.padding)
                     .text_color(dialog.text)
                     .child(yttt_dialog_header(
                         "close-project-dialog",
                         ui_text.get(UiTextKey::CloseProjectTitle),
                         theme,
+                        ui_style,
                         cx.listener(|this, _, _window, cx| {
                             this.cancel_pending_project_close();
                             cx.notify();
@@ -826,6 +852,7 @@ pub(super) fn close_project_dialog(
                             tone: ToastTone::Warning,
                         },
                         theme,
+                        ui_style,
                     ))
                     .child(
                         div()
@@ -837,7 +864,7 @@ pub(super) fn close_project_dialog(
                         div()
                             .flex()
                             .justify_end()
-                            .gap_2()
+                            .gap(ui_style.spacing.md)
                             .child(yttt_dialog_button(
                                 cx,
                                 "cancel-close-project",
@@ -869,6 +896,7 @@ fn yttt_dialog_header<H>(
     id: &'static str,
     title: impl Into<SharedString>,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     on_close: H,
 ) -> Div
 where
@@ -878,7 +906,7 @@ where
         .flex()
         .items_center()
         .justify_between()
-        .gap_3()
+        .gap(ui_style.spacing.lg)
         .w_full()
         .child(
             div()
@@ -892,12 +920,13 @@ where
             IconName::Close,
             YtttIconButtonKind::OverlayClose,
             theme,
+            ui_style,
             on_close,
         ))
 }
 
-fn yttt_dialog_input(input: &Entity<InputState>, theme: WorkbenchTheme) -> Div {
-    let style = yttt_input_style(YtttInputKind::Dialog, theme);
+fn yttt_dialog_input(input: &Entity<InputState>, theme: WorkbenchTheme, ui_style: UiStyle) -> Div {
+    let style = yttt_input_style(YtttInputKind::Dialog, theme, ui_style);
     div()
         .flex()
         .items_center()
@@ -926,7 +955,8 @@ fn yttt_dialog_button<H>(
 where
     H: Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
 {
-    yttt_button(id, label, variant, theme, cx).on_click(on_click)
+    let ui_style = current_ui_style(cx);
+    yttt_button(id, label, variant, theme, ui_style, cx).on_click(on_click)
 }
 
 pub(super) fn empty_workspace(
@@ -935,10 +965,11 @@ pub(super) fn empty_workspace(
     theme: &WorkbenchTheme,
     can_restore_last_session: bool,
 ) -> Div {
+    let ui_style = current_ui_style(cx);
     div()
         .flex()
         .flex_col()
-        .gap_5()
+        .gap(ui_style.spacing.xxl)
         .flex_1()
         .w_full()
         .relative()
@@ -950,7 +981,7 @@ pub(super) fn empty_workspace(
             div()
                 .flex()
                 .flex_col()
-                .gap_2()
+                .gap(ui_style.spacing.md)
                 .items_center()
                 .text_center()
                 .child(
@@ -970,7 +1001,7 @@ pub(super) fn empty_workspace(
             div()
                 .flex()
                 .flex_wrap()
-                .gap_2()
+                .gap(ui_style.spacing.md)
                 .justify_center()
                 .child(
                     workbench_action_button(
@@ -978,6 +1009,7 @@ pub(super) fn empty_workspace(
                         ui_text.get(UiTextKey::OpenDirectory),
                         Some("secondary-o"),
                         ActionEmphasis::Primary,
+                        ui_style,
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.on_open_project(&OpenProject, window, cx);
@@ -989,6 +1021,7 @@ pub(super) fn empty_workspace(
                         ui_text.get(UiTextKey::OpenRecent),
                         Some("secondary-shift-o"),
                         ActionEmphasis::Secondary,
+                        ui_style,
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.on_open_project_palette(&OpenProjectPalette, window, cx);
@@ -1000,6 +1033,7 @@ pub(super) fn empty_workspace(
                         ui_text.get(UiTextKey::RestoreLastSession),
                         None,
                         ActionEmphasis::Secondary,
+                        ui_style,
                     )
                     .on_click(cx.listener(|this, _, _window, cx| {
                         this.restore_last_opened_projects();
@@ -1015,6 +1049,7 @@ pub(super) fn empty_workspace(
                         ui_text.get(UiTextKey::CommandPalette),
                         Some("secondary-p"),
                         ActionEmphasis::Secondary,
+                        ui_style,
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.on_open_command_palette(&OpenCommandPalette, window, cx);
@@ -1028,10 +1063,11 @@ pub(super) fn project_empty_terminal_state(
     ui_text: &UiText,
     theme: &WorkbenchTheme,
 ) -> Div {
+    let ui_style = current_ui_style(cx);
     div()
         .flex()
         .flex_col()
-        .gap_3()
+        .gap(ui_style.spacing.lg)
         .flex_1()
         .w_full()
         .justify_center()
@@ -1050,6 +1086,7 @@ pub(super) fn project_empty_terminal_state(
                 ui_text.get(UiTextKey::NewTab),
                 Some("secondary-t"),
                 ActionEmphasis::Primary,
+                ui_style,
             )
             .on_click(cx.listener(|this, _, _window, cx| {
                 let _ = this.run_command(CommandId::TabNew);

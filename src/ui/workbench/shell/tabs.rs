@@ -26,8 +26,8 @@ use crate::{
             tabs::yttt_tabbar_style,
         },
         terminal::status::{agent_status_label, tab_agent_status},
-        theme::WorkbenchTheme,
         theme::icons::{IconTheme, IconVisual, icon_for_visual},
+        theme::{UiStyle, WorkbenchTheme},
     },
 };
 
@@ -86,16 +86,17 @@ struct DraggedWorkbenchTab {
     id: WorkItemId,
     title: String,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
 }
 
 impl Render for DraggedWorkbenchTab {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .max_w(px(220.0))
-            .px_3()
-            .py_1()
-            .rounded(px(4.0))
-            .border_1()
+            .px(self.ui_style.spacing.lg)
+            .py(self.ui_style.spacing.xs)
+            .rounded(self.ui_style.radius.compact)
+            .border(self.ui_style.border.hairline)
             .border_color(self.theme.accent)
             .bg(self.theme.surface_elevated)
             .text_xs()
@@ -175,8 +176,8 @@ pub enum ProjectTabStatusTone {
     Dirty,
 }
 
-pub fn project_tabs_style(theme: WorkbenchTheme) -> ProjectTabsStyle {
-    let primitive = yttt_tabbar_style(theme);
+pub fn project_tabs_style(theme: WorkbenchTheme, ui_style: UiStyle) -> ProjectTabsStyle {
+    let primitive = yttt_tabbar_style(theme, ui_style);
     ProjectTabsStyle {
         height: primitive.height,
         item_height: primitive.item_height,
@@ -184,7 +185,7 @@ pub fn project_tabs_style(theme: WorkbenchTheme) -> ProjectTabsStyle {
         close_slot_size: primitive.close_slot_size,
         active_background: primitive.active_background,
         active_indicator: theme.accent,
-        active_indicator_height: px(2.0),
+        active_indicator_height: ui_style.border.emphasized,
         inactive_background: primitive.inactive_background,
         hover_background: primitive.hover_background,
         close_button_visibility: ProjectTabCloseButtonVisibility::Hover,
@@ -353,6 +354,7 @@ pub fn project_tabs<
 >(
     items: Vec<WorkbenchTabItem>,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     icon_theme: IconTheme,
     text: UiText,
     mut on_select_tab: SelectF,
@@ -375,7 +377,7 @@ where
     SplitHH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ToggleTreeH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    let style = project_tabs_style(theme);
+    let style = project_tabs_style(theme, ui_style);
     let ProjectTabsToolbar {
         project_tree_open,
         project_tree_tooltip,
@@ -408,6 +410,7 @@ where
             item,
             &icon_theme,
             theme,
+            ui_style,
             style,
             text,
             on_select_tab(select_tab_id),
@@ -423,11 +426,12 @@ where
         .justify_between()
         .h(style.height)
         .bg(theme.tabbar_background)
-        .border_b_1()
+        .border_b(style.border_width)
         .border_color(theme.border)
         .child(tab_row.flex_1())
         .child(tab_toolbar(
             theme,
+            ui_style,
             on_new_tab,
             on_split_vertical,
             on_split_horizontal,
@@ -446,6 +450,7 @@ fn project_tab<SelectH, ContextSelectH, CloseH, MoveH>(
     item: WorkbenchTabItem,
     icon_theme: &IconTheme,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     style: ProjectTabsStyle,
     text: UiText,
     on_select_tab: SelectH,
@@ -459,7 +464,7 @@ where
     CloseH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     MoveH: Fn(&WorkItemId, &mut Window, &mut App) + 'static,
 {
-    let row_style = yttt_row_style(YtttRowKind::Tab, item.state, true, theme);
+    let row_style = yttt_row_style(YtttRowKind::Tab, item.state, true, theme, ui_style);
     let group_name = format!("project-tab-{index}");
     let tooltip = item.tooltip.clone();
     let kind = item.kind;
@@ -489,8 +494,9 @@ where
         .relative()
         .flex()
         .items_center()
-        .gap_2()
+        .gap(ui_style.spacing.md)
         .h(row_style.height)
+        .rounded(row_style.radius)
         .min_w(px(128.0))
         .max_w(px(220.0))
         .border_r(row_style.border_width)
@@ -506,6 +512,7 @@ where
                 id: drag_id,
                 title: drag_title,
                 theme,
+                ui_style,
             },
             |drag, _, _, cx| {
                 cx.stop_propagation();
@@ -531,13 +538,20 @@ where
 
     tab = match kind {
         WorkbenchTabKind::Terminal => tab
-            .children(status_tone.map(|tone| tab_status_dot(tone, theme)))
-            .child(tab_close_button(index, group_name, theme, on_close_tab)),
+            .children(status_tone.map(|tone| tab_status_dot(tone, theme, ui_style)))
+            .child(tab_close_button(
+                index,
+                group_name,
+                theme,
+                ui_style,
+                on_close_tab,
+            )),
         WorkbenchTabKind::File => tab.child(file_tab_close_slot(
             index,
             group_name,
             dirty,
             theme,
+            ui_style,
             style.close_slot_size,
             on_close_tab,
         )),
@@ -582,7 +596,11 @@ where
     })
 }
 
-fn tab_status_dot(tone: ProjectTabStatusTone, theme: WorkbenchTheme) -> impl IntoElement {
+fn tab_status_dot(
+    tone: ProjectTabStatusTone,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> impl IntoElement {
     let tone = match tone {
         ProjectTabStatusTone::Lazy => YtttStatusTone::Neutral,
         ProjectTabStatusTone::Started => YtttStatusTone::Success,
@@ -591,7 +609,7 @@ fn tab_status_dot(tone: ProjectTabStatusTone, theme: WorkbenchTheme) -> impl Int
         ProjectTabStatusTone::AgentFailed => YtttStatusTone::Error,
         ProjectTabStatusTone::Dirty => YtttStatusTone::Warning,
     };
-    let style = yttt_status_dot_style(tone, theme);
+    let style = yttt_status_dot_style(tone, theme, ui_style);
 
     div()
         .flex_none()
@@ -605,6 +623,7 @@ fn tab_close_button<CloseH>(
     index: usize,
     group_name: String,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     on_close_tab: CloseH,
 ) -> Stateful<Div>
 where
@@ -615,6 +634,7 @@ where
         IconName::Close,
         YtttIconButtonKind::TabClose,
         theme,
+        ui_style,
         on_close_tab,
     )
     .debug_selector(move || format!("project-tab-close-{index}"))
@@ -627,13 +647,14 @@ fn file_tab_close_slot<CloseH>(
     group_name: String,
     dirty: bool,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     close_slot_size: Rems,
     on_close_tab: CloseH,
 ) -> impl IntoElement
 where
     CloseH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    let dirty_style = yttt_status_dot_style(YtttStatusTone::Warning, theme);
+    let dirty_style = yttt_status_dot_style(YtttStatusTone::Warning, theme, ui_style);
     div()
         .relative()
         .flex()
@@ -649,7 +670,7 @@ where
                 .group_hover(group_name.clone(), |this| this.invisible())
         }))
         .child(
-            tab_close_button(index, group_name, theme, on_close_tab)
+            tab_close_button(index, group_name, theme, ui_style, on_close_tab)
                 .absolute()
                 .top_0()
                 .left_0(),
@@ -658,6 +679,7 @@ where
 
 fn tab_toolbar<NewH, SplitVH, SplitHH, ToggleTreeH>(
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     on_new_tab: NewH,
     on_split_vertical: SplitVH,
     on_split_horizontal: SplitHH,
@@ -675,25 +697,28 @@ where
         .flex()
         .items_center()
         .h_full()
-        .border_l_1()
+        .border_l(ui_style.border.hairline)
         .border_color(theme.border)
         .bg(rgba(0x00000000))
         .child(tab_toolbar_button(
             "tab-new",
             IconName::Plus,
             theme,
+            ui_style,
             on_new_tab,
         ))
         .child(tab_toolbar_button(
             "pane-split-vertical",
             tab_toolbar_icon(crate::model::layout::SplitDirection::Vertical),
             theme,
+            ui_style,
             on_split_vertical,
         ))
         .child(tab_toolbar_button(
             "pane-split-horizontal",
             tab_toolbar_icon(crate::model::layout::SplitDirection::Horizontal),
             theme,
+            ui_style,
             on_split_horizontal,
         ))
         .child(
@@ -701,10 +726,12 @@ where
                 "project-tree-toggle",
                 project_tree_toggle_icon(project_tree_open),
                 theme,
+                ui_style,
                 on_toggle_project_tree,
             )
             .when(project_tree_open, |this| {
-                this.bg(theme.active_surface).text_color(theme.text)
+                this.bg(ui_style.active_background(theme))
+                    .text_color(theme.text)
             })
             .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx)),
         )
@@ -721,13 +748,21 @@ fn tab_toolbar_button<H>(
     id: &'static str,
     icon: IconName,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     on_click: H,
 ) -> Stateful<Div>
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    workbench_icon_button(id, icon, YtttIconButtonKind::Toolbar, theme, on_click)
-        .debug_selector(|| id.to_string())
+    workbench_icon_button(
+        id,
+        icon,
+        YtttIconButtonKind::Toolbar,
+        theme,
+        ui_style,
+        on_click,
+    )
+    .debug_selector(|| id.to_string())
 }
 
 fn tab_start_state_label(state: TabStartState) -> &'static str {

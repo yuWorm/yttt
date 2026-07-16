@@ -1,4 +1,4 @@
-use gpui::{Div, IntoElement, div, prelude::*, px, relative, rgb};
+use gpui::{Div, IntoElement, Rems, div, prelude::*, relative};
 
 use crate::{
     commands::CommandId,
@@ -7,6 +7,7 @@ use crate::{
         split_tree::ResizeDirection,
         workspace::Workspace,
     },
+    ui::theme::{UiStyle, WorkbenchTheme},
 };
 
 const SPLIT_RESIZE_DRAG_THRESHOLD_PX: f32 = 6.0;
@@ -49,22 +50,30 @@ pub fn split_child_basis(ratio: f32) -> SplitChildBasis {
     }
 }
 
-pub fn active_split_view(workspace: &Workspace) -> impl IntoElement {
+pub fn active_split_view(
+    workspace: &Workspace,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> impl IntoElement {
     let Some((project, layout)) = selected_tab_layout(workspace) else {
         return div();
     };
+    let mut render_pane =
+        |pane: &PaneConfig, tab_id: &str| render_mock_pane(pane, tab_id, theme, ui_style);
+    let mut render_handle = |direction| inert_split_resize_handle(direction, theme, ui_style);
 
     div()
         .flex()
         .flex_1()
-        .bg(rgb(0x0a0a0a))
-        .text_color(rgb(0xf5f5f5))
-        .p_2()
+        .bg(theme.app_background)
+        .text_color(theme.text)
+        .p(ui_style.spacing.md)
         .child(split_view_for_layout(
             layout,
             &project.selected_tab_id,
-            &mut render_mock_pane,
-            &mut inert_split_resize_handle,
+            ui_style.spacing.xs,
+            &mut render_pane,
+            &mut render_handle,
         ))
 }
 
@@ -84,6 +93,7 @@ fn selected_tab_layout(
 pub fn split_view_for_layout(
     layout: &LayoutNode,
     tab_id: &str,
+    gap: Rems,
     render_pane: &mut impl FnMut(&PaneConfig, &str) -> Div,
     render_handle: &mut impl FnMut(SplitDirection) -> Div,
 ) -> Div {
@@ -91,18 +101,18 @@ pub fn split_view_for_layout(
         LayoutNode::Pane(pane) => render_pane(pane, tab_id),
         LayoutNode::Split(split) => {
             let basis = split_child_basis(split.ratio);
-            let mut container = div().flex().flex_1().gap_1();
+            let mut container = div().flex().flex_1().gap(gap);
             if split.direction == SplitDirection::Vertical {
                 container = container.flex_col();
             }
             container
                 .child(split_child(
-                    split_view_for_layout(&split.left, tab_id, render_pane, render_handle),
+                    split_view_for_layout(&split.left, tab_id, gap, render_pane, render_handle),
                     basis.left,
                 ))
                 .child(render_handle(split.direction))
                 .child(split_child(
-                    split_view_for_layout(&split.right, tab_id, render_pane, render_handle),
+                    split_view_for_layout(&split.right, tab_id, gap, render_pane, render_handle),
                     basis.right,
                 ))
         }
@@ -168,28 +178,43 @@ pub fn pointer_resize_for_drag_delta(
     })
 }
 
-fn inert_split_resize_handle(direction: SplitDirection) -> Div {
-    let handle = div().flex_none().bg(rgb(0x1f1f1f));
+fn inert_split_resize_handle(
+    direction: SplitDirection,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Div {
+    let handle = div()
+        .flex_none()
+        .bg(theme.border_strong)
+        .rounded(ui_style.radius.compact);
     match direction {
-        SplitDirection::Horizontal => handle.w(px(9.0)).cursor_ew_resize(),
-        SplitDirection::Vertical => handle.h(px(9.0)).cursor_ns_resize(),
+        SplitDirection::Horizontal => handle.w(ui_style.spacing.lg).cursor_ew_resize(),
+        SplitDirection::Vertical => handle.h(ui_style.spacing.lg).cursor_ns_resize(),
     }
 }
 
-fn render_mock_pane(pane: &PaneConfig, tab_id: &str) -> Div {
+fn render_mock_pane(
+    pane: &PaneConfig,
+    tab_id: &str,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Div {
     div()
         .flex()
         .flex_col()
         .flex_1()
-        .gap_2()
-        .bg(rgb(0x111111))
-        .text_color(rgb(0xf5f5f5))
-        .p_3()
+        .gap(ui_style.spacing.md)
+        .rounded(ui_style.radius.card)
+        .border(ui_style.border.hairline)
+        .border_color(theme.border)
+        .bg(theme.surface)
+        .text_color(theme.text)
+        .p(ui_style.spacing.lg)
         .child(pane.title.clone())
         .child(
             div()
                 .text_xs()
-                .text_color(rgb(0xa3a3a3))
+                .text_color(theme.text_subtle)
                 .child(format!("{tab_id} · {}", pane.command)),
         )
 }

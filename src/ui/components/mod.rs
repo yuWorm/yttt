@@ -14,7 +14,7 @@ pub use settings::{workbench_settings_row, workbench_switch};
 use gpui::{
     AnyElement, App, ClickEvent, Div, ElementId, FontWeight, InteractiveElement as _, Keystroke,
     ParentElement as _, Pixels, SharedString, Stateful, StatefulInteractiveElement as _, Window,
-    div, prelude::*, px,
+    div, prelude::*,
 };
 use gpui_component::{
     Icon, IconName,
@@ -33,7 +33,7 @@ use crate::ui::{
         switch::yttt_switch_style,
     },
     settings::keybinding_display::parse_keybinding_for_display,
-    theme::WorkbenchTheme,
+    theme::{UiStyle, WorkbenchTheme},
 };
 pub use yttt_ui::SelectableState;
 

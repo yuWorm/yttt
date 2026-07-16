@@ -1,6 +1,6 @@
-use gpui::{Pixels, Rems, Rgba, px, rems};
+use gpui::{Pixels, Rems, Rgba, px};
 
-use crate::theme::WorkbenchTheme;
+use crate::{style::UiStyle, theme::WorkbenchTheme};
 
 pub const PROJECT_SIDEBAR_MIN_WIDTH: f32 = 160.0;
 pub const PROJECT_SIDEBAR_MAX_WIDTH: f32 = 420.0;
@@ -136,19 +136,19 @@ pub struct YtttSidebarStyle {
     pub hover_background: Rgba,
 }
 
-pub fn yttt_sidebar_style(theme: WorkbenchTheme) -> YtttSidebarStyle {
+pub fn yttt_sidebar_style(theme: WorkbenchTheme, ui_style: UiStyle) -> YtttSidebarStyle {
     YtttSidebarStyle {
         width: px(PROJECT_SIDEBAR_DEFAULT_WIDTH),
         default_width: px(PROJECT_SIDEBAR_DEFAULT_WIDTH),
         min_width: px(PROJECT_SIDEBAR_MIN_WIDTH),
         max_width: px(PROJECT_SIDEBAR_MAX_WIDTH),
         collapsed_width: px(PROJECT_SIDEBAR_COLLAPSED_WIDTH),
-        border_width: px(1.0),
+        border_width: ui_style.border.hairline,
         resize_hit_area_width: px(SIDEBAR_RESIZE_HIT_AREA_WIDTH),
-        item_height: rems(1.75),
-        item_padding_x: rems(0.5),
+        item_height: ui_style.rows.sidebar_height,
+        item_padding_x: ui_style.rows.sidebar_padding_x,
         background: theme.sidebar_background,
-        active_background: theme.active_surface,
-        hover_background: theme.hover_surface,
+        active_background: ui_style.active_background(theme),
+        hover_background: ui_style.hover_background(theme),
     }
 }

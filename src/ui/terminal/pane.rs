@@ -19,7 +19,10 @@ use crate::{
         agent::classify_agent,
         notification::{ExitNotificationInput, NotificationEvent, notification_for_exit},
     },
-    ui::{interaction::input_owner::TerminalInputGate, theme::WorkbenchTheme},
+    ui::{
+        interaction::input_owner::TerminalInputGate,
+        theme::{WorkbenchTheme, current_ui_style},
+    },
 };
 
 #[derive(Clone, Debug)]
@@ -554,6 +557,7 @@ impl Drop for TerminalPaneView {
 
 impl Render for TerminalPaneView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let ui_style = current_ui_style(cx);
         let body = if let Some(terminal) = &self.terminal {
             div().flex().flex_1().child(terminal.clone())
         } else {
@@ -576,7 +580,7 @@ impl Render for TerminalPaneView {
             div()
                 .flex()
                 .flex_col()
-                .gap_2()
+                .gap(ui_style.spacing.md)
                 .flex_1()
                 .items_center()
                 .justify_center()
@@ -588,14 +592,14 @@ impl Render for TerminalPaneView {
                         div()
                             .id(restart_id)
                             .cursor_pointer()
-                            .rounded_sm()
-                            .border_1()
+                            .rounded(ui_style.radius.action)
+                            .border(ui_style.border.hairline)
                             .border_color(self.theme.border)
                             .bg(self.theme.surface)
-                            .px_3()
-                            .py_1()
+                            .px(ui_style.spacing.lg)
+                            .py(ui_style.spacing.xs)
                             .text_color(self.theme.text)
-                            .hover(|button| button.bg(self.theme.hover_surface))
+                            .hover(|button| button.bg(ui_style.hover_background(self.theme)))
                             .on_click(cx.listener(|this, _, _window, cx| {
                                 this.start_terminal(cx);
                             }))

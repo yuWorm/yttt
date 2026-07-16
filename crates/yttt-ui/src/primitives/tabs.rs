@@ -1,7 +1,7 @@
 use super::icon_button::{YtttIconButtonKind, yttt_icon_button_style};
-use gpui::{Pixels, Rems, Rgba, px, rems, rgba};
+use gpui::{Pixels, Rems, Rgba, rgba};
 
-use crate::theme::WorkbenchTheme;
+use crate::{style::UiStyle, theme::WorkbenchTheme};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct YtttTabBarStyle {
@@ -14,14 +14,14 @@ pub struct YtttTabBarStyle {
     pub hover_background: Rgba,
 }
 
-pub fn yttt_tabbar_style(theme: WorkbenchTheme) -> YtttTabBarStyle {
+pub fn yttt_tabbar_style(theme: WorkbenchTheme, ui_style: UiStyle) -> YtttTabBarStyle {
     YtttTabBarStyle {
-        height: rems(2.0),
-        item_height: rems(2.0),
-        border_width: px(1.0),
-        close_slot_size: yttt_icon_button_style(YtttIconButtonKind::TabClose, theme).size,
-        active_background: theme.active_surface,
+        height: ui_style.rows.tab_height,
+        item_height: ui_style.rows.tab_height,
+        border_width: ui_style.rows.tab_border_width,
+        close_slot_size: yttt_icon_button_style(YtttIconButtonKind::TabClose, theme, ui_style).size,
+        active_background: ui_style.active_background(theme),
         inactive_background: rgba(0x00000000),
-        hover_background: theme.hover_surface,
+        hover_background: ui_style.hover_background(theme),
     }
 }

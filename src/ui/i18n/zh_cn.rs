@@ -331,6 +331,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsUiLineHeightDescription => "界面文字的行高倍数。",
         UiTextKey::SettingsUiTheme => "界面主题",
         UiTextKey::SettingsUiThemeDescription => "用于 YTTT 外壳、面板和控件的主题。",
+        UiTextKey::SettingsUiStyle => "界面风格",
+        UiTextKey::SettingsUiStyleDescription => {
+            "全局切换控件的形状、密度、边框、悬浮效果和层级阴影。"
+        }
         UiTextKey::SettingsIconTheme => "图标主题",
         UiTextKey::SettingsIconThemeDescription => {
             "使用已安装的兼容 Zed 图标主题显示文件、文件夹和编辑器图标。"

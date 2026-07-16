@@ -12,21 +12,34 @@ pub fn workbench_agent_notification(
     item: ToastItem,
     action_label: impl Into<SharedString>,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
 ) -> Notification {
-    workbench_notification(item, Some(action_label.into()), theme)
+    workbench_notification(item, Some(action_label.into()), theme, ui_style)
 }
 
-pub fn workbench_status_notification(item: ToastItem, theme: WorkbenchTheme) -> Notification {
-    workbench_notification(item, None, theme)
+pub fn workbench_status_notification(
+    item: ToastItem,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Notification {
+    workbench_notification(item, None, theme, ui_style)
 }
 
-pub fn workbench_error_notification(item: ToastItem, theme: WorkbenchTheme) -> Notification {
-    workbench_notification(item, None, theme).autohide(true)
+pub fn workbench_error_notification(
+    item: ToastItem,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Notification {
+    workbench_notification(item, None, theme, ui_style).autohide(true)
 }
 
-pub fn workbench_inline_notification(item: ToastItem, theme: WorkbenchTheme) -> Div {
+pub fn workbench_inline_notification(
+    item: ToastItem,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Div {
     let tone = notification_tone_for_toast(item.tone);
-    let style = yttt_notification_style(tone, theme);
+    let style = yttt_notification_style(tone, theme, ui_style);
     let icon = notification_icon(tone);
     let title = SharedString::from(item.title);
     let context = SharedString::from(item.context);
@@ -37,6 +50,7 @@ pub fn workbench_inline_notification(item: ToastItem, theme: WorkbenchTheme) -> 
         .border_color(style.border)
         .bg(style.background)
         .rounded(style.radius)
+        .when(style.shadow, |this| this.shadow_lg())
         .px(style.padding_x)
         .py(style.padding_y)
         .child(notification_content(
@@ -48,9 +62,10 @@ fn workbench_notification(
     item: ToastItem,
     action_label: Option<SharedString>,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
 ) -> Notification {
     let tone = notification_tone_for_toast(item.tone);
-    let style = yttt_notification_style(tone, theme);
+    let style = yttt_notification_style(tone, theme, ui_style);
     let icon = notification_icon(tone);
     let title = SharedString::from(item.title);
     let context = SharedString::from(item.context);
@@ -63,6 +78,7 @@ fn workbench_notification(
         .border_color(style.border)
         .bg(style.background)
         .rounded(style.radius)
+        .when(style.shadow, |this| this.shadow_lg())
         .px(style.padding_x)
         .py(style.padding_y)
         .content(move |_, _, _| {
@@ -121,10 +137,10 @@ fn notification_content(
             this.child(
                 div()
                     .flex_none()
-                    .rounded(px(5.0))
+                    .rounded(style.action_radius)
                     .bg(style.action_background)
-                    .px_1p5()
-                    .py_0p5()
+                    .px(style.action_padding_x)
+                    .py(style.action_padding_y)
                     .text_xs()
                     .text_color(style.action)
                     .child(action_label),

@@ -900,7 +900,9 @@ impl WorkbenchView {
             .to_string();
         let delete_label = self.ui_text.get(UiTextKey::ProjectFilesDelete).to_string();
         let cancel_label = self.ui_text.get(UiTextKey::Cancel).to_string();
-        let theme = self.theme_runtime.ui;
+        let appearance = self.theme_runtime();
+        let theme = appearance.ui;
+        let ui_style = appearance.style;
         let display_path = relative_path.display().to_string();
         let workbench = cx.weak_entity();
         window.open_alert_dialog(cx, move |alert, _, cx| {
@@ -915,7 +917,7 @@ impl WorkbenchView {
                     div()
                         .flex()
                         .flex_col()
-                        .gap_2()
+                        .gap(ui_style.spacing.md)
                         .child(display_path.clone())
                         .child(message.clone()),
                 )
@@ -927,6 +929,7 @@ impl WorkbenchView {
                                 cancel_label.clone(),
                                 YtttButtonVariant::Secondary,
                                 theme,
+                                ui_style,
                                 cx,
                             )
                             .debug_selector(|| "project-entry-delete-cancel".to_string())
@@ -940,6 +943,7 @@ impl WorkbenchView {
                                 delete_label.clone(),
                                 YtttButtonVariant::Danger,
                                 theme,
+                                ui_style,
                                 cx,
                             )
                             .debug_selector(|| "project-entry-delete-confirm".to_string())

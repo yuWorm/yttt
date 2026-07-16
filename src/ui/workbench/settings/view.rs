@@ -6,9 +6,10 @@ pub(in super::super) fn settings_overlay(
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
-    let theme = root.theme_runtime.ui;
-    let style = settings_panel_style();
-    let panel = yttt_panel_style(YtttPanelKind::Settings, theme);
+    let appearance = root.theme_runtime();
+    let theme = appearance.ui;
+    let style = settings_panel_style(appearance.style);
+    let panel = yttt_panel_style(YtttPanelKind::Settings, theme, appearance.style);
 
     capture_overlay_input(
         div()
@@ -17,7 +18,7 @@ pub(in super::super) fn settings_overlay(
             .flex()
             .items_center()
             .justify_center()
-            .bg(rgba(0x00000066))
+            .bg(panel.overlay)
             .child(
                 div()
                     .flex()
@@ -26,9 +27,10 @@ pub(in super::super) fn settings_overlay(
                     .max_w(panel.max_width)
                     .max_h(panel.max_height)
                     .rounded(panel.radius)
-                    .border_1()
+                    .border(panel.border_width)
                     .border_color(panel.border)
                     .bg(panel.background)
+                    .when(panel.shadow, |this| this.shadow_lg())
                     .text_color(theme.text)
                     .overflow_hidden()
                     .child(settings_sidebar(root, search_input, style, cx))
@@ -43,47 +45,51 @@ fn settings_sidebar(
     style: SettingsPanelStyle,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
-    let theme = root.theme_runtime.ui;
+    let theme = root.theme_runtime().ui;
+    let ui_style = style.ui_style;
     let groups = root
         .settings
         .settings_page
         .visible_groups(&root.ui_text)
         .into_iter()
-        .fold(div().flex().flex_col().gap_1(), |groups, group| {
-            let group_id = group.id.as_str().to_string();
-            let background = if group.selected {
-                theme.active_surface
-            } else {
-                rgba(0x00000000)
-            };
-            let text = if group.selected {
-                theme.text
-            } else {
-                theme.text_muted
-            };
+        .fold(
+            div().flex().flex_col().gap(ui_style.spacing.xs),
+            |groups, group| {
+                let group_id = group.id.as_str().to_string();
+                let background = if group.selected {
+                    ui_style.active_background(theme)
+                } else {
+                    rgba(0x00000000)
+                };
+                let text = if group.selected {
+                    theme.text
+                } else {
+                    theme.text_muted
+                };
 
-            groups.child(
-                div()
-                    .id(SharedString::from(format!(
-                        "settings-group-{}",
-                        group.id.as_str()
-                    )))
-                    .flex()
-                    .items_center()
-                    .h_8()
-                    .rounded_sm()
-                    .px_3()
-                    .bg(background)
-                    .text_sm()
-                    .text_color(text)
-                    .hover(move |this| this.bg(theme.hover_surface))
-                    .on_click(cx.listener(move |this, _, _window, cx| {
-                        let _ = this.select_settings_group(&group_id);
-                        cx.notify();
-                    }))
-                    .child(group.title),
-            )
-        });
+                groups.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "settings-group-{}",
+                            group.id.as_str()
+                        )))
+                        .flex()
+                        .items_center()
+                        .h(ui_style.controls.settings_height)
+                        .rounded(ui_style.radius.compact)
+                        .px(ui_style.spacing.lg)
+                        .bg(background)
+                        .text_sm()
+                        .text_color(text)
+                        .hover(move |this| this.bg(ui_style.hover_background(theme)))
+                        .on_click(cx.listener(move |this, _, _window, cx| {
+                            let _ = this.select_settings_group(&group_id);
+                            cx.notify();
+                        }))
+                        .child(group.title),
+                )
+            },
+        );
 
     div()
         .flex()
@@ -92,11 +98,11 @@ fn settings_sidebar(
         .h_full()
         .min_h_0()
         .flex_none()
-        .border_r_1()
+        .border_r(ui_style.border.hairline)
         .border_color(theme.border)
         .bg(theme.app_background)
-        .p_3()
-        .gap_3()
+        .p(ui_style.spacing.lg)
+        .gap(ui_style.spacing.lg)
         .child(
             div()
                 .id(SharedString::from("settings-search"))
@@ -104,7 +110,7 @@ fn settings_sidebar(
                 .items_center()
                 .h(style.search_height)
                 .flex_none()
-                .rounded_md()
+                .rounded(ui_style.radius.input)
                 .bg(theme.surface)
                 .overflow_hidden()
                 .child(
@@ -129,7 +135,7 @@ fn settings_content(
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
-    let theme = root.theme_runtime.ui;
+    let theme = root.theme_runtime().ui;
     let group = root.settings.settings_page.selected_group;
 
     div()
@@ -145,15 +151,15 @@ fn settings_content(
                 .flex()
                 .items_center()
                 .justify_between()
-                .border_b_1()
+                .border_b(style.ui_style.border.hairline)
                 .border_color(theme.border)
-                .px_6()
-                .py_4()
+                .px(style.ui_style.spacing.xxl)
+                .py(style.ui_style.spacing.xl)
                 .child(
                     div()
                         .flex()
                         .flex_col()
-                        .gap_1()
+                        .gap(style.ui_style.spacing.xs)
                         .child(
                             div()
                                 .text_lg()
@@ -172,6 +178,7 @@ fn settings_content(
                     IconName::Close,
                     YtttIconButtonKind::OverlayClose,
                     theme,
+                    style.ui_style,
                     cx.listener(|this, _, _window, cx| {
                         this.close_settings();
                         cx.notify();
@@ -181,7 +188,7 @@ fn settings_content(
         .child(
             div().flex_1().min_h_0().child(
                 settings_rows(root, group, style, window, cx)
-                    .px_6()
+                    .px(style.ui_style.spacing.xxl)
                     .overflow_y_scrollbar(),
             ),
         )
@@ -211,7 +218,7 @@ fn settings_general_rows(
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
-    let theme = root.theme_runtime.ui;
+    let theme = root.theme_runtime().ui;
     let text = root.ui_text;
     let language_select = root.settings_language_select(window, cx);
     let command_input = root.settings_new_tab_command_input(window, cx);
@@ -219,7 +226,7 @@ fn settings_general_rows(
     let command_add_control = div()
         .flex()
         .items_center()
-        .gap_2()
+        .gap(style.ui_style.spacing.md)
         .w(style.control_width)
         .child(
             div()
@@ -254,7 +261,7 @@ fn settings_general_rows(
             div()
                 .flex()
                 .flex_col()
-                .gap_2()
+                .gap(style.ui_style.spacing.md)
                 .w(style.control_width)
                 .child(command_add_control),
             |list, (index, command)| {
@@ -262,7 +269,7 @@ fn settings_general_rows(
                     div()
                         .flex()
                         .items_center()
-                        .gap_2()
+                        .gap(style.ui_style.spacing.md)
                         .child(
                             div()
                                 .flex_1()
@@ -302,6 +309,7 @@ fn settings_general_rows(
             settings_select_control(
                 language_select,
                 theme,
+                style.ui_style,
                 false,
                 text.get(UiTextKey::SettingsSelectLanguage),
             )
@@ -316,6 +324,7 @@ fn settings_general_rows(
                 "settings-notifications",
                 root.system_notifications_enabled,
                 theme,
+                style.ui_style,
                 cx.listener(|this, checked: &bool, _window, cx| {
                     let _ = this.set_system_notifications_enabled(*checked);
                     cx.notify();
@@ -333,6 +342,7 @@ fn settings_general_rows(
                     "settings-restore-last-session",
                     root.restore_last_session_enabled(),
                     theme,
+                    style.ui_style,
                     cx.listener(|this, checked: &bool, _window, cx| {
                         if let Err(error) = this.set_restore_last_session_enabled(*checked) {
                             this.load_error = Some(error.to_string());
@@ -355,6 +365,7 @@ fn settings_general_rows(
                     "settings-performance-metrics",
                     root.performance_metrics_enabled(),
                     theme,
+                    style.ui_style,
                     cx.listener(|this, checked: &bool, _window, cx| {
                         if let Err(error) = this.set_performance_metrics_enabled(*checked, cx) {
                             this.load_error = Some(error.to_string());
@@ -377,6 +388,7 @@ fn settings_general_rows(
                     "settings-system-performance-metrics",
                     root.system_performance_metrics_enabled(),
                     theme,
+                    style.ui_style,
                     cx.listener(|this, checked: &bool, _window, cx| {
                         if let Err(error) =
                             this.set_system_performance_metrics_enabled(*checked, cx)
@@ -401,6 +413,7 @@ fn settings_general_rows(
                     "settings-new-tab-command-picker",
                     root.new_tab_command_picker_enabled(),
                     theme,
+                    style.ui_style,
                     cx.listener(|this, checked: &bool, _window, cx| {
                         if let Err(error) = this.set_new_tab_command_picker_enabled(*checked) {
                             this.load_error = Some(error.to_string());
@@ -431,7 +444,7 @@ fn settings_appearance_rows(
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
-    let theme = root.theme_runtime.ui;
+    let theme = root.theme_runtime().ui;
     let text = root.ui_text;
     let window_effect_select = root.settings_window_effect_select(window, cx);
     let window_opacity_input =
@@ -442,6 +455,7 @@ fn settings_appearance_rows(
     let ui_line_height_input =
         root.settings_number_input(SettingsNumberField::UiLineHeight, window, cx);
     let ui_theme_select = root.settings_ui_theme_select(window, cx);
+    let ui_style_select = root.settings_ui_style_select(window, cx);
     let terminal_theme_select = root.settings_terminal_theme_select(window, cx);
     let icon_theme_select = root.settings_icon_theme_select(window, cx);
 
@@ -454,7 +468,8 @@ fn settings_appearance_rows(
                 theme,
                 text.get(UiTextKey::SettingsWindowEffect),
                 text.get(UiTextKey::SettingsWindowEffectDescription),
-                settings_select_control(window_effect_select, theme, false, "").into_any_element(),
+                settings_select_control(window_effect_select, theme, style.ui_style, false, "")
+                    .into_any_element(),
             )
             .debug_selector(|| "settings-window-effect-row".to_string()),
         )
@@ -477,6 +492,7 @@ fn settings_appearance_rows(
                 settings_select_control(
                     ui_font_select,
                     theme,
+                    style.ui_style,
                     true,
                     text.get(UiTextKey::SettingsSearchFont),
                 )
@@ -512,10 +528,19 @@ fn settings_appearance_rows(
             settings_select_control(
                 ui_theme_select,
                 theme,
+                style.ui_style,
                 true,
                 text.get(UiTextKey::SettingsSearchTheme),
             )
             .into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsUiStyle),
+            text.get(UiTextKey::SettingsUiStyleDescription),
+            settings_select_control(ui_style_select, theme, style.ui_style, false, "")
+                .into_any_element(),
         ))
         .child(setting_row(
             style,
@@ -525,6 +550,7 @@ fn settings_appearance_rows(
             settings_select_control(
                 icon_theme_select,
                 theme,
+                style.ui_style,
                 true,
                 text.get(UiTextKey::SettingsSearchTheme),
             )
@@ -538,6 +564,7 @@ fn settings_appearance_rows(
             settings_select_control(
                 terminal_theme_select,
                 theme,
+                style.ui_style,
                 true,
                 text.get(UiTextKey::SettingsSearchTheme),
             )
@@ -611,7 +638,7 @@ fn settings_language_rows(
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
-    let theme = root.theme_runtime.ui;
+    let theme = root.theme_runtime().ui;
     let text = root.ui_text;
     let default_language_select = root.settings_editor_language_select(window, cx);
     let supported_language_count = root.available_editor_language_names().len();
@@ -633,6 +660,7 @@ fn settings_language_rows(
                 "settings-editor-auto-detect-language",
                 root.editor_auto_detect_language(),
                 theme,
+                style.ui_style,
                 cx.listener(|this, checked: &bool, _window, cx| {
                     let _ = this.set_editor_auto_detect_language(*checked);
                     cx.notify();
@@ -648,6 +676,7 @@ fn settings_language_rows(
             settings_select_control(
                 default_language_select,
                 theme,
+                style.ui_style,
                 true,
                 text.get(UiTextKey::SettingsSearchCodeLanguage),
             )
@@ -658,7 +687,8 @@ fn settings_language_rows(
             theme,
             text.get(UiTextKey::SettingsSupportedLanguages),
             text.get(UiTextKey::SettingsSupportedLanguagesDescription),
-            settings_value(supported_language_count.to_string(), theme).into_any_element(),
+            settings_value(supported_language_count.to_string(), theme, style.ui_style)
+                .into_any_element(),
         ))
         .child(setting_row(
             style,
@@ -669,6 +699,7 @@ fn settings_language_rows(
                 "settings-editor-lsp-enabled",
                 root.editor_lsp_enabled(),
                 theme,
+                style.ui_style,
                 cx.listener(|this, checked: &bool, _window, cx| {
                     let _ = this.set_editor_lsp_enabled(*checked);
                     cx.notify();
@@ -681,7 +712,7 @@ fn settings_language_rows(
             theme,
             text.get(UiTextKey::SettingsLanguageServerCommand),
             text.get(UiTextKey::SettingsLanguageServerCommandDescription),
-            settings_value(lsp_command, theme).into_any_element(),
+            settings_value(lsp_command, theme, style.ui_style).into_any_element(),
         ))
 }
 
@@ -691,7 +722,7 @@ fn settings_editor_rows(
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
-    let theme = root.theme_runtime.ui;
+    let theme = root.theme_runtime().ui;
     let text = root.ui_text;
     let font_select = root.settings_editor_font_family_select(window, cx);
     let autosave_select = root.settings_editor_autosave_select(window, cx);
@@ -719,6 +750,7 @@ fn settings_editor_rows(
                 settings_select_control(
                     font_select,
                     theme,
+                    style.ui_style,
                     true,
                     text.get(UiTextKey::SettingsSearchFont),
                 )
@@ -766,6 +798,7 @@ fn settings_editor_rows(
                     "settings-editor-soft-wrap",
                     root.app_settings.editor.soft_wrap,
                     theme,
+                    style.ui_style,
                     cx.listener(|this, checked: &bool, window, cx| {
                         if let Err(error) = this.set_editor_soft_wrap(*checked, window, cx) {
                             this.load_error = Some(error.to_string());
@@ -787,6 +820,7 @@ fn settings_editor_rows(
                     "settings-editor-line-numbers",
                     root.app_settings.editor.line_numbers,
                     theme,
+                    style.ui_style,
                     cx.listener(|this, checked: &bool, window, cx| {
                         if let Err(error) = this.set_editor_line_numbers(*checked, window, cx) {
                             this.load_error = Some(error.to_string());
@@ -808,6 +842,7 @@ fn settings_editor_rows(
                     "settings-editor-vim-mode",
                     root.editor_vim_mode(),
                     theme,
+                    style.ui_style,
                     cx.listener(|this, checked: &bool, window, cx| {
                         if let Err(error) = this.set_editor_vim_mode(*checked, window, cx) {
                             this.load_error = Some(error.to_string());
@@ -828,6 +863,7 @@ fn settings_editor_rows(
                 settings_select_control(
                     autosave_select,
                     theme,
+                    style.ui_style,
                     false,
                     text.get(UiTextKey::SettingsEditorAutosave),
                 )
@@ -855,6 +891,7 @@ fn settings_editor_rows(
                     "settings-project-panel-default-open",
                     root.app_settings.project_panel.default_open,
                     theme,
+                    style.ui_style,
                     cx.listener(|this, checked: &bool, _window, cx| {
                         if let Err(error) = this.set_project_panel_default_open(*checked) {
                             this.load_error = Some(error.to_string());
@@ -876,6 +913,7 @@ fn settings_editor_rows(
                     "settings-project-panel-show-hidden",
                     root.app_settings.project_panel.show_hidden,
                     theme,
+                    style.ui_style,
                     cx.listener(|this, checked: &bool, _window, cx| {
                         if let Err(error) = this.set_project_panel_show_hidden(*checked) {
                             this.load_error = Some(error.to_string());
@@ -915,7 +953,7 @@ fn settings_terminal_rows(
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
-    let theme = root.theme_runtime.ui;
+    let theme = root.theme_runtime().ui;
     let text = root.ui_text;
     let shell_select = root.settings_shell_select(window, cx);
     let custom_shell_input = root.settings_custom_shell_input(window, cx);
@@ -930,7 +968,7 @@ fn settings_terminal_rows(
     let custom_shell_control = div()
         .flex()
         .items_center()
-        .gap_2()
+        .gap(style.ui_style.spacing.md)
         .w(style.control_width)
         .child(
             div()
@@ -965,6 +1003,7 @@ fn settings_terminal_rows(
             settings_select_control(
                 shell_select,
                 theme,
+                style.ui_style,
                 false,
                 text.get(UiTextKey::SettingsSelectShell),
             )
@@ -985,6 +1024,7 @@ fn settings_terminal_rows(
             settings_select_control(
                 font_select,
                 theme,
+                style.ui_style,
                 true,
                 text.get(UiTextKey::SettingsSearchFont),
             )
@@ -1028,6 +1068,7 @@ fn settings_terminal_rows(
                     "settings-show-scrollbar",
                     root.terminal_show_scrollbar(),
                     theme,
+                    style.ui_style,
                     cx.listener(|this, checked: &bool, _window, cx| {
                         if let Err(error) = this.set_terminal_show_scrollbar(*checked) {
                             this.load_error = Some(error.to_string());
@@ -1049,6 +1090,7 @@ fn settings_terminal_rows(
                 settings_select_control(
                     cursor_shape_select,
                     theme,
+                    style.ui_style,
                     false,
                     text.get(UiTextKey::SettingsTerminalCursorShape),
                 )
@@ -1066,6 +1108,7 @@ fn settings_terminal_rows(
                     "settings-terminal-cursor-blinking",
                     root.terminal_cursor_blinking(),
                     theme,
+                    style.ui_style,
                     cx.listener(|this, checked: &bool, _window, cx| {
                         if let Err(error) = this.set_terminal_cursor_blinking(*checked) {
                             this.load_error = Some(error.to_string());
@@ -1088,6 +1131,7 @@ fn settings_terminal_rows(
                     "settings-terminal-hide-mouse-when-typing",
                     root.terminal_hide_mouse_when_typing(),
                     theme,
+                    style.ui_style,
                     cx.listener(|this, checked: &bool, _window, cx| {
                         if let Err(error) = this.set_terminal_hide_mouse_when_typing(*checked) {
                             this.load_error = Some(error.to_string());
@@ -1110,6 +1154,7 @@ fn settings_terminal_rows(
                     "settings-terminal-copy-on-select",
                     root.terminal_copy_on_select(),
                     theme,
+                    style.ui_style,
                     cx.listener(|this, checked: &bool, _window, cx| {
                         if let Err(error) = this.set_terminal_copy_on_select(*checked) {
                             this.load_error = Some(error.to_string());
@@ -1131,6 +1176,7 @@ fn settings_terminal_rows(
                 settings_select_control(
                     osc52_policy_select,
                     theme,
+                    style.ui_style,
                     false,
                     text.get(UiTextKey::SettingsTerminalOsc52Policy),
                 )
@@ -1148,6 +1194,7 @@ fn settings_terminal_rows(
                     "settings-terminal-kitty-keyboard",
                     root.terminal_kitty_keyboard(),
                     theme,
+                    style.ui_style,
                     cx.listener(|this, checked: &bool, _window, cx| {
                         if let Err(error) = this.set_terminal_kitty_keyboard(*checked) {
                             this.load_error = Some(error.to_string());
@@ -1167,7 +1214,7 @@ fn settings_default_layout_rows(
     style: SettingsPanelStyle,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
-    let theme = root.theme_runtime.ui;
+    let theme = root.theme_runtime().ui;
     let text = root.ui_text;
     let path = root.default_layout_state.path().display().to_string();
 
@@ -1179,7 +1226,7 @@ fn settings_default_layout_rows(
             theme,
             text.get(UiTextKey::SettingsDefaultLayoutPath),
             text.get(UiTextKey::SettingsDefaultLayoutPathDescription),
-            settings_value(path, theme).into_any_element(),
+            settings_value(path, theme, style.ui_style).into_any_element(),
         ))
         .child(setting_row(
             style,
@@ -1233,7 +1280,7 @@ fn settings_keybinding_rows(
     style: SettingsPanelStyle,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
-    let theme = root.theme_runtime.ui;
+    let theme = root.theme_runtime().ui;
     let text = root.ui_text;
     let diagnostics = if root.settings.keybinding_warning_lines.is_empty() {
         text.get(UiTextKey::SettingsNoKeybindingConflicts)
@@ -1265,7 +1312,7 @@ fn settings_keybinding_rows(
             theme,
             text.get(UiTextKey::SettingsKeybindingDiagnostics),
             text.get(UiTextKey::SettingsKeybindingDiagnosticsDescription),
-            settings_value(diagnostics, theme).into_any_element(),
+            settings_value(diagnostics, theme, style.ui_style).into_any_element(),
         ));
 
     for row in root.visible_keybinding_rows() {
@@ -1284,16 +1331,16 @@ fn settings_keybinding_rows(
                 .flex()
                 .items_center()
                 .justify_between()
-                .gap_4()
+                .gap(style.ui_style.spacing.xl)
                 .min_h(style.row_min_height)
-                .border_b_1()
+                .border_b(style.ui_style.border.hairline)
                 .border_color(theme.border)
-                .py_3()
+                .py(style.ui_style.spacing.lg)
                 .child(
                     div()
                         .flex()
                         .flex_col()
-                        .gap_1()
+                        .gap(style.ui_style.spacing.xs)
                         .min_w_0()
                         .flex_1()
                         .child(
@@ -1315,12 +1362,13 @@ fn settings_keybinding_rows(
                         .flex()
                         .items_center()
                         .justify_end()
-                        .gap_1()
+                        .gap(style.ui_style.spacing.xs)
                         .flex_none()
                         .child(settings_keybinding_value(
                             keys,
                             text.get(UiTextKey::SettingsUnbound),
                             theme,
+                            style.ui_style,
                         ))
                         .child(settings_button(
                             format!("settings-keybinding-edit-{}", row.command_id),
@@ -1369,12 +1417,20 @@ fn setting_row(
     description: impl Into<String>,
     control: AnyElement,
 ) -> Div {
-    workbench_settings_row(style.control_width, theme, title, description, control)
+    workbench_settings_row(
+        style.control_width,
+        theme,
+        style.ui_style,
+        title,
+        description,
+        control,
+    )
 }
 
 fn settings_select_control<D>(
     select: Entity<SelectState<D>>,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     searchable: bool,
     search_placeholder: &'static str,
 ) -> Select<D>
@@ -1382,7 +1438,7 @@ where
     D: SearchableListDelegate + 'static,
     <D::Item as SearchableListItem>::Value: Clone + PartialEq,
 {
-    let select_style = yttt_select_style(theme);
+    let select_style = yttt_select_style(theme, ui_style);
     Select::new(&select)
         .small()
         .menu_width(select_style.menu_width)
@@ -1440,12 +1496,19 @@ fn settings_switch<H>(
     id: impl Into<String>,
     checked: bool,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     on_change: H,
 ) -> Div
 where
     H: Fn(&bool, &mut Window, &mut gpui::App) + 'static,
 {
-    workbench_switch(SharedString::from(id.into()), checked, theme, on_change)
+    workbench_switch(
+        SharedString::from(id.into()),
+        checked,
+        theme,
+        ui_style,
+        on_change,
+    )
 }
 
 pub(in super::super) fn settings_button<H>(
@@ -1464,25 +1527,27 @@ where
     } else {
         YtttButtonVariant::Secondary
     };
+    let ui_style = current_ui_style(cx);
     yttt_button(
         SharedString::from(id.into()),
         SharedString::from(label.into()),
         variant,
         theme,
+        ui_style,
         cx,
     )
     .on_click(on_click)
 }
 
-fn settings_value(value: impl Into<String>, theme: WorkbenchTheme) -> Div {
+fn settings_value(value: impl Into<String>, theme: WorkbenchTheme, ui_style: UiStyle) -> Div {
     div()
         .max_w_64()
-        .rounded_sm()
-        .border_1()
+        .rounded(ui_style.radius.compact)
+        .border(ui_style.border.hairline)
         .border_color(theme.border)
         .bg(theme.surface_elevated)
-        .px_3()
-        .py_1()
+        .px(ui_style.spacing.lg)
+        .py(ui_style.spacing.xs)
         .text_xs()
         .text_color(theme.text_muted)
         .child(value.into())
@@ -1492,14 +1557,20 @@ fn settings_keybinding_value(
     keybindings: Vec<String>,
     unbound_label: impl Into<String>,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
 ) -> Div {
     if keybindings.is_empty() {
-        return div().child(settings_value(unbound_label, theme));
+        return div().child(settings_value(unbound_label, theme, ui_style));
     }
 
-    let mut value = div().flex().items_center().justify_end().gap_1().max_w_96();
+    let mut value = div()
+        .flex()
+        .items_center()
+        .justify_end()
+        .gap(ui_style.spacing.xs)
+        .max_w_96();
     for keybinding in keybindings {
-        value = value.child(workbench_keybinding_badge(keybinding, theme));
+        value = value.child(workbench_keybinding_badge(keybinding, theme, ui_style));
     }
     value
 }

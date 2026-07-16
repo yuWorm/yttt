@@ -1,6 +1,6 @@
-use gpui::{Rems, Rgba, rems};
+use gpui::{Pixels, Rems, Rgba};
 
-use crate::theme::WorkbenchTheme;
+use crate::{style::UiStyle, theme::WorkbenchTheme};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct YtttSwitchStyle {
@@ -11,6 +11,8 @@ pub struct YtttSwitchStyle {
     pub track_padding: Rems,
     pub thumb_size: Rems,
     pub control_height: Rems,
+    pub outer_border_width: Pixels,
+    pub track_border_width: Pixels,
     pub active_background: Rgba,
     pub inactive_background: Rgba,
     pub active_border: Rgba,
@@ -19,17 +21,19 @@ pub struct YtttSwitchStyle {
     pub inactive_thumb: Rgba,
 }
 
-pub fn yttt_switch_style(theme: WorkbenchTheme) -> YtttSwitchStyle {
+pub fn yttt_switch_style(theme: WorkbenchTheme, ui_style: UiStyle) -> YtttSwitchStyle {
     YtttSwitchStyle {
-        width: rems(2.625),
-        height: rems(1.625),
-        track_width: rems(2.125),
-        track_height: rems(1.25),
-        track_padding: rems(0.125),
-        thumb_size: rems(0.875),
-        control_height: rems(2.0),
+        width: ui_style.switches.width,
+        height: ui_style.switches.height,
+        track_width: ui_style.switches.track_width,
+        track_height: ui_style.switches.track_height,
+        track_padding: ui_style.switches.track_padding,
+        thumb_size: ui_style.switches.thumb_size,
+        control_height: ui_style.switches.control_height,
+        outer_border_width: ui_style.border.emphasized,
+        track_border_width: ui_style.border.hairline,
         active_background: theme.accent,
-        inactive_background: theme.active_surface,
+        inactive_background: ui_style.active_background(theme),
         active_border: theme.focus_ring,
         inactive_border: theme.border_strong,
         active_thumb: theme.text,

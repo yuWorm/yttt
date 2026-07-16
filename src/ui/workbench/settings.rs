@@ -268,6 +268,10 @@ impl WorkbenchView {
         self.app_settings.theme.name = theme_name.to_string();
         self.save_app_settings_and_refresh_runtime()
     }
+    pub fn set_ui_style(&mut self, style: UiStyleId) -> Result<(), WorkbenchError> {
+        self.app_settings.theme.ui_style = style;
+        self.save_app_settings_and_refresh_runtime()
+    }
 
     pub fn set_terminal_theme_name(
         &mut self,
@@ -632,7 +636,8 @@ impl WorkbenchView {
     pub(super) fn refresh_theme_runtime_from_settings(&mut self) {
         match load_theme_store(&self.config_paths) {
             Ok(loaded) => {
-                self.theme_runtime = ThemeRuntime::resolve(&self.app_settings, &loaded.store);
+                let runtime = ThemeRuntime::resolve(&self.app_settings, &loaded.store);
+                self.appearance.replace(runtime);
             }
             Err(error) => {
                 self.load_error = Some(error.to_string());
@@ -657,8 +662,9 @@ impl WorkbenchView {
     }
 
     pub(super) fn sync_terminal_pane_configs(&mut self, cx: &mut Context<Self>) {
-        let terminal_config = self.theme_runtime.to_terminal_config();
-        let theme = self.theme_runtime.ui;
+        let runtime = self.appearance.runtime();
+        let terminal_config = runtime.to_terminal_config();
+        let theme = runtime.ui;
         for pane in self.terminal.terminal_panes.values() {
             pane.update(cx, |pane, cx| {
                 pane.update_terminal_appearance(terminal_config.clone(), theme, cx);
@@ -735,8 +741,25 @@ impl WorkbenchView {
 
     pub(super) fn sync_gpui_component_theme(&self, cx: &mut Context<Self>) {
         ComponentTheme::global_mut(cx).apply_config(&Rc::new(
-            self.theme_runtime.to_gpui_component_theme_config(),
+            self.appearance.runtime().to_gpui_component_theme_config(),
         ));
+    }
+
+    fn invalidate_appearance_caches(&mut self) {
+        if let Some(panel) = self.overlays.git_diff_panel.as_mut() {
+            panel.syntax_highlights = Arc::new(Vec::new());
+            panel.unified_view_rows = Arc::new(Vec::new());
+            panel.split_left_view_rows = Arc::new(Vec::new());
+            panel.split_right_view_rows = Arc::new(Vec::new());
+        }
+    }
+
+    pub(super) fn apply_appearance_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.invalidate_appearance_caches();
+        self.sync_gpui_component_theme(cx);
+        self.sync_terminal_pane_configs(cx);
+        self.sync_editor_document_appearances(window, cx);
+        cx.refresh_windows();
     }
 
     pub(super) fn save_keybindings_editor(&mut self) -> Result<(), WorkbenchError> {
@@ -1215,7 +1238,7 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) -> Entity<SettingsStringSelectState> {
         let items = self.available_theme_names();
-        let selected = self.theme_runtime.theme_name.clone();
+        let selected = self.theme_runtime().theme_name.clone();
 
         if let Some(select) = &self.settings.settings_ui_theme_select {
             select.clone()
@@ -1229,6 +1252,33 @@ impl WorkbenchView {
                 cx.subscribe_in(&select, window, Self::on_settings_ui_theme_select_event);
             self.settings.settings_ui_theme_select = Some(select.clone());
             self.settings.settings_ui_theme_select_subscription = Some(subscription);
+            select
+        }
+    }
+    pub(super) fn settings_ui_style_select(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SettingsStringSelectState> {
+        let items = UiStyleId::ALL
+            .into_iter()
+            .map(|style| style.display_name().to_string())
+            .collect::<Vec<_>>();
+        let selected = self.theme_runtime().style_id.display_name().to_string();
+
+        if let Some(select) = &self.settings.settings_ui_style_select {
+            select.update(cx, |select, cx| {
+                select.set_selected_value(&selected, window, cx);
+            });
+            select.clone()
+        } else {
+            let selected_index = selected_index_for_settings_option(&items, &selected);
+            let select = cx
+                .new(|cx| SelectState::new(SearchableVec::new(items), selected_index, window, cx));
+            let subscription =
+                cx.subscribe_in(&select, window, Self::on_settings_ui_style_select_event);
+            self.settings.settings_ui_style_select = Some(select.clone());
+            self.settings.settings_ui_style_select_subscription = Some(subscription);
             select
         }
     }
@@ -1580,9 +1630,7 @@ impl WorkbenchView {
         if let Err(error) = self.set_window_background_effect(effect, window) {
             self.load_error = Some(error.to_string());
         }
-        self.sync_gpui_component_theme(cx);
-        self.sync_terminal_pane_configs(cx);
-        cx.notify();
+        self.apply_appearance_change(window, cx);
     }
 
     pub(super) fn on_settings_ui_font_family_select_event(
@@ -1606,7 +1654,7 @@ impl WorkbenchView {
         &mut self,
         _select: &Entity<SettingsStringSelectState>,
         event: &SelectEvent<SearchableVec<String>>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let SelectEvent::Confirm(Some(value)) = event else {
@@ -1615,9 +1663,25 @@ impl WorkbenchView {
         if let Err(error) = self.set_ui_theme_name(value) {
             self.load_error = Some(error.to_string());
         }
-        self.sync_gpui_component_theme(cx);
-        self.sync_terminal_pane_configs(cx);
-        cx.notify();
+        self.apply_appearance_change(window, cx);
+    }
+    pub(super) fn on_settings_ui_style_select_event(
+        &mut self,
+        _select: &Entity<SettingsStringSelectState>,
+        event: &SelectEvent<SearchableVec<String>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(Some(value)) = event else {
+            return;
+        };
+        let Some(style) = UiStyleId::from_display_name(value) else {
+            return;
+        };
+        if let Err(error) = self.set_ui_style(style) {
+            self.load_error = Some(error.to_string());
+        }
+        self.apply_appearance_change(window, cx);
     }
 
     pub(super) fn on_settings_icon_theme_select_event(
@@ -1641,7 +1705,7 @@ impl WorkbenchView {
         &mut self,
         _select: &Entity<SettingsStringSelectState>,
         event: &SelectEvent<SearchableVec<String>>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let SelectEvent::Confirm(Some(value)) = event else {
@@ -1651,9 +1715,7 @@ impl WorkbenchView {
         if let Err(error) = self.set_terminal_theme_name(terminal_theme) {
             self.load_error = Some(error.to_string());
         }
-        self.sync_gpui_component_theme(cx);
-        self.sync_terminal_pane_configs(cx);
-        cx.notify();
+        self.apply_appearance_change(window, cx);
     }
 
     pub(super) fn on_settings_terminal_cursor_shape_select_event(
@@ -1716,7 +1778,7 @@ impl WorkbenchView {
         &mut self,
         _select: &Entity<SettingsFontFamilySelectState>,
         event: &SelectEvent<FontFamilyOptions>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let SelectEvent::Confirm(Some(value)) = event else {
@@ -1726,9 +1788,7 @@ impl WorkbenchView {
         if let Err(error) = self.set_terminal_font_family(&font_family) {
             self.load_error = Some(error.to_string());
         }
-        self.sync_gpui_component_theme(cx);
-        self.sync_terminal_pane_configs(cx);
-        cx.notify();
+        self.apply_appearance_change(window, cx);
     }
 
     pub(super) fn on_settings_editor_font_family_select_event(
@@ -1790,9 +1850,7 @@ impl WorkbenchView {
                 if let Err(error) = self.apply_settings_number_value(field, &value, window, cx) {
                     self.load_error = Some(error.to_string());
                 }
-                self.sync_gpui_component_theme(cx);
-                self.sync_terminal_pane_configs(cx);
-                cx.notify();
+                self.apply_appearance_change(window, cx);
             }
             InputEvent::Focus => {}
         }
@@ -1817,9 +1875,7 @@ impl WorkbenchView {
         if let Err(error) = self.apply_settings_number_value(field, &stepped, window, cx) {
             self.load_error = Some(error.to_string());
         }
-        self.sync_gpui_component_theme(cx);
-        self.sync_terminal_pane_configs(cx);
-        cx.notify();
+        self.apply_appearance_change(window, cx);
     }
 }
 

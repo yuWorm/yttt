@@ -31,6 +31,8 @@ pub(in super::super) struct SettingsControllerState {
     pub(in super::super) settings_window_effect_select_subscription: Option<Subscription>,
     pub(in super::super) settings_ui_theme_select: Option<Entity<SettingsStringSelectState>>,
     pub(in super::super) settings_ui_theme_select_subscription: Option<Subscription>,
+    pub(in super::super) settings_ui_style_select: Option<Entity<SettingsStringSelectState>>,
+    pub(in super::super) settings_ui_style_select_subscription: Option<Subscription>,
     pub(in super::super) settings_ui_font_family_select:
         Option<Entity<SettingsFontFamilySelectState>>,
     pub(in super::super) settings_ui_font_family_select_subscription: Option<Subscription>,
@@ -82,6 +84,8 @@ impl SettingsControllerState {
             settings_window_effect_select_subscription: None,
             settings_ui_theme_select: None,
             settings_ui_theme_select_subscription: None,
+            settings_ui_style_select: None,
+            settings_ui_style_select_subscription: None,
             settings_ui_font_family_select: None,
             settings_ui_font_family_select_subscription: None,
             settings_icon_theme_select: None,

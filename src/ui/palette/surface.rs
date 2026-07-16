@@ -1,4 +1,4 @@
-use gpui::{Pixels, Rems, Rgba, px, rems};
+use gpui::{Pixels, Rems, Rgba, px};
 
 use crate::{
     palette::PaletteKind,
@@ -6,7 +6,7 @@ use crate::{
         components::SelectableState,
         i18n::{UiText, UiTextKey},
         primitives::row::{YtttRowKind, yttt_row_style},
-        theme::WorkbenchTheme,
+        theme::{UiStyle, WorkbenchTheme},
     },
 };
 
@@ -50,15 +50,15 @@ pub struct PaletteFooterAction {
     pub key: &'static str,
 }
 
-pub fn palette_panel_style() -> PalettePanelStyle {
+pub fn palette_panel_style(ui_style: UiStyle) -> PalettePanelStyle {
     PalettePanelStyle {
         width: px(760.0),
         max_width: px(900.0),
         max_height: px(480.0),
         list_max_height: px(376.0),
-        row_height: rems(3.375),
-        footer_height: rems(2.75),
-        border_width: px(1.0),
+        row_height: ui_style.rows.palette_height,
+        footer_height: ui_style.controls.palette_footer_height,
+        border_width: ui_style.border.hairline,
         scrollable: true,
     }
 }
@@ -71,8 +71,9 @@ pub fn palette_row_style(
     state: SelectableState,
     enabled: bool,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
 ) -> PaletteRowStyle {
-    let row = yttt_row_style(YtttRowKind::Palette, state, enabled, theme);
+    let row = yttt_row_style(YtttRowKind::Palette, state, enabled, theme, ui_style);
     let tone = if !enabled {
         PaletteRowTone::Disabled
     } else {

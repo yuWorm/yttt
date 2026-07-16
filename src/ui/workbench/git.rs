@@ -552,9 +552,11 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Div> {
-        let theme = self.theme_runtime.ui;
-        let editor_theme = self.theme_runtime.editor;
-        let panel_background = git_diff_panel_background(theme);
+        let appearance = self.theme_runtime();
+        let ui_style = appearance.style;
+        let theme = appearance.ui;
+        let editor_theme = appearance.editor;
+        let panel_background = git_diff_panel_background(theme, ui_style);
         let editor_appearance = EditorAppearance::from(&self.app_settings.editor);
         let panel = self.overlays.git_diff_panel.as_mut()?;
         let focus_handle = panel
@@ -621,11 +623,14 @@ impl WorkbenchView {
             GitDiffPanelContent::Loading => git_diff_message(
                 self.ui_text.get(UiTextKey::GitDiffLoading),
                 theme.text_muted,
+                ui_style,
             ),
-            GitDiffPanelContent::Error(error) => git_diff_message(error, theme.danger),
-            GitDiffPanelContent::Ready(result) if result.files.is_empty() => {
-                git_diff_message(self.ui_text.get(UiTextKey::GitDiffClean), theme.text_muted)
-            }
+            GitDiffPanelContent::Error(error) => git_diff_message(error, theme.danger, ui_style),
+            GitDiffPanelContent::Ready(result) if result.files.is_empty() => git_diff_message(
+                self.ui_text.get(UiTextKey::GitDiffClean),
+                theme.text_muted,
+                ui_style,
+            ),
             GitDiffPanelContent::Ready(result) => div()
                 .flex()
                 .flex_1()
@@ -636,6 +641,7 @@ impl WorkbenchView {
                     selected_file,
                     &file_scroll_handle,
                     theme,
+                    ui_style,
                     cx,
                 ))
                 .child(git_diff_code_pane(
@@ -656,6 +662,7 @@ impl WorkbenchView {
                     left_source,
                     right_source,
                     theme,
+                    ui_style,
                     editor_theme,
                     editor_appearance,
                 ))
@@ -670,7 +677,7 @@ impl WorkbenchView {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(rgba(0x000000b3))
+                .bg(ui_style.panels.fullscreen_overlay)
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(
                     div()
@@ -681,26 +688,27 @@ impl WorkbenchView {
                         .w(relative(0.96))
                         .h(relative(0.90))
                         .min_h_0()
-                        .rounded_lg()
-                        .border_1()
+                        .rounded(ui_style.radius.surface)
+                        .border(ui_style.border.hairline)
                         .border_color(theme.border)
                         .bg(panel_background)
+                        .when(ui_style.panels.shadow, |this| this.shadow_lg())
                         .child(
                             div()
                                 .flex()
                                 .items_center()
                                 .justify_between()
-                                .gap_4()
-                                .px_5()
-                                .py_3()
-                                .border_b_1()
+                                .gap(ui_style.spacing.xl)
+                                .px(ui_style.spacing.xl + ui_style.spacing.xs)
+                                .py(ui_style.spacing.lg)
+                                .border_b(ui_style.border.hairline)
                                 .border_color(theme.border)
                                 .bg(theme.surface_elevated)
                                 .child(
                                     div()
                                         .flex()
                                         .items_center()
-                                        .gap_3()
+                                        .gap(ui_style.spacing.lg)
                                         .min_w_0()
                                         .child(
                                             div()
@@ -712,7 +720,7 @@ impl WorkbenchView {
                                             this.child(
                                                 div()
                                                     .h(rems(1.125))
-                                                    .border_l_1()
+                                                    .border_l(ui_style.border.hairline)
                                                     .border_color(theme.border),
                                             )
                                             .child(
@@ -746,13 +754,14 @@ impl WorkbenchView {
                                     div()
                                         .flex()
                                         .items_center()
-                                        .gap_2()
+                                        .gap(ui_style.spacing.md)
                                         .when(file_count > 0, |this| {
                                             this.child(git_diff_header_button(
                                                 "git-diff-copy",
                                                 self.ui_text.get(UiTextKey::GitDiffCopyHint),
                                                 false,
                                                 theme,
+                                                ui_style,
                                                 cx.listener(|this, _, _window, cx| {
                                                     if let Some(text) =
                                                         this.selected_git_diff_text()
@@ -763,31 +772,33 @@ impl WorkbenchView {
                                                     }
                                                 }),
                                             ))
-                                            .child(git_diff_separator(theme))
+                                            .child(git_diff_separator(theme, ui_style))
                                         })
                                         .child(git_diff_header_button(
                                             "git-diff-whitespace",
                                             self.ui_text.get(UiTextKey::GitDiffWhitespace),
                                             ignore_whitespace,
                                             theme,
+                                            ui_style,
                                             cx.listener(|this, _, _window, cx| {
                                                 if this.toggle_git_diff_whitespace() {
                                                     cx.notify();
                                                 }
                                             }),
                                         ))
-                                        .child(git_diff_separator(theme))
+                                        .child(git_diff_separator(theme, ui_style))
                                         .child(
                                             div()
                                                 .flex()
                                                 .items_center()
-                                                .rounded_md()
+                                                .rounded(ui_style.radius.control)
                                                 .bg(theme.app_background)
                                                 .child(git_diff_header_button(
                                                     "git-diff-unified",
                                                     self.ui_text.get(UiTextKey::GitDiffUnified),
                                                     view_mode == GitDiffViewMode::Unified,
                                                     theme,
+                                                    ui_style,
                                                     cx.listener(|this, _, _window, cx| {
                                                         if this.set_git_diff_view_mode(
                                                             GitDiffViewMode::Unified,
@@ -801,6 +812,7 @@ impl WorkbenchView {
                                                     self.ui_text.get(UiTextKey::GitDiffSplit),
                                                     view_mode == GitDiffViewMode::Split,
                                                     theme,
+                                                    ui_style,
                                                     cx.listener(|this, _, _window, cx| {
                                                         if this.set_git_diff_view_mode(
                                                             GitDiffViewMode::Split,
@@ -814,13 +826,14 @@ impl WorkbenchView {
                                             div()
                                                 .flex()
                                                 .items_center()
-                                                .rounded_md()
+                                                .rounded(ui_style.radius.control)
                                                 .bg(theme.app_background)
                                                 .child(git_diff_header_button(
                                                     "git-diff-unstaged",
                                                     self.ui_text.get(UiTextKey::GitDiffUnstaged),
                                                     mode == GitDiffMode::Unstaged,
                                                     theme,
+                                                    ui_style,
                                                     cx.listener(|this, _, _window, cx| {
                                                         if this.set_git_diff_mode(
                                                             GitDiffMode::Unstaged,
@@ -834,6 +847,7 @@ impl WorkbenchView {
                                                     self.ui_text.get(UiTextKey::GitDiffStaged),
                                                     mode == GitDiffMode::Staged,
                                                     theme,
+                                                    ui_style,
                                                     cx.listener(|this, _, _window, cx| {
                                                         if this
                                                             .set_git_diff_mode(GitDiffMode::Staged)
@@ -843,7 +857,7 @@ impl WorkbenchView {
                                                     }),
                                                 )),
                                         )
-                                        .child(git_diff_separator(theme))
+                                        .child(git_diff_separator(theme, ui_style))
                                         .child(
                                             div()
                                                 .id("git-diff-close")
@@ -851,12 +865,12 @@ impl WorkbenchView {
                                                 .flex()
                                                 .items_center()
                                                 .justify_center()
-                                                .size(rems(1.75))
-                                                .rounded_md()
+                                                .size(ui_style.icon_buttons.overlay_close_size)
+                                                .rounded(ui_style.icon_buttons.overlay_close_radius)
                                                 .cursor_pointer()
                                                 .text_color(theme.text_muted)
                                                 .hover(move |this| {
-                                                    this.bg(theme.hover_surface)
+                                                    this.bg(ui_style.hover_background(theme))
                                                         .text_color(theme.text)
                                                 })
                                                 .on_click(cx.listener(|this, _, _window, cx| {
@@ -868,7 +882,7 @@ impl WorkbenchView {
                                 ),
                         )
                         .child(body)
-                        .child(git_diff_footer(&self.ui_text, theme)),
+                        .child(git_diff_footer(&self.ui_text, theme, ui_style)),
                 ),
         )
     }
@@ -880,6 +894,7 @@ impl WorkbenchView {
         selected_file: usize,
         scroll_handle: &UniformListScrollHandle,
         theme: WorkbenchTheme,
+        ui_style: UiStyle,
         cx: &mut Context<Self>,
     ) -> Div {
         let row_count = rows.len();
@@ -892,16 +907,16 @@ impl WorkbenchView {
             .w(px(288.0))
             .h_full()
             .min_h_0()
-            .border_r_1()
+            .border_r(ui_style.border.hairline)
             .border_color(theme.border)
             .bg(theme.app_background)
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .h(rems(2.625))
-                    .px_4()
-                    .border_b_1()
+                    .h(ui_style.controls.palette_input_height)
+                    .px(ui_style.spacing.xl)
+                    .border_b(ui_style.border.hairline)
                     .border_color(theme.border)
                     .text_sm()
                     .text_color(theme.text_muted)
@@ -938,14 +953,15 @@ impl WorkbenchView {
                                                     })
                                                     .flex()
                                                     .items_center()
-                                                    .gap_2()
-                                                    .h(rems(2.375))
-                                                    .px_3()
+                                                    .gap(ui_style.spacing.md)
+                                                    .h(ui_style.rows.diff_sidebar_height)
+                                                    .rounded(ui_style.rows.diff_sidebar_radius)
+                                                    .px(ui_style.spacing.lg)
                                                     .cursor_pointer()
                                                     .text_xs()
                                                     .text_color(theme.text_muted)
                                                     .hover(move |this| {
-                                                        this.bg(theme.hover_surface)
+                                                        this.bg(ui_style.hover_background(theme))
                                                     })
                                                     .on_click(cx.listener(
                                                         move |this, _, _window, cx| {
@@ -987,18 +1003,19 @@ impl WorkbenchView {
                                                     .flex()
                                                     .items_center()
                                                     .justify_between()
-                                                    .gap_2()
-                                                    .h(rems(2.375))
-                                                    .px_3()
+                                                    .gap(ui_style.spacing.md)
+                                                    .h(ui_style.rows.diff_sidebar_height)
+                                                    .rounded(ui_style.rows.diff_sidebar_radius)
+                                                    .px(ui_style.spacing.lg)
                                                     .cursor_pointer()
                                                     .when(selected, |this| {
-                                                        this.bg(theme.active_surface)
+                                                        this.bg(ui_style.active_background(theme))
                                                     })
                                                     .hover(move |this| {
                                                         if selected {
                                                             this
                                                         } else {
-                                                            this.bg(theme.hover_surface)
+                                                            this.bg(ui_style.hover_background(theme))
                                                         }
                                                     })
                                                     .on_click(cx.listener(
@@ -1014,7 +1031,7 @@ impl WorkbenchView {
                                                         div()
                                                             .flex()
                                                             .items_center()
-                                                            .gap_2()
+                                                            .gap(ui_style.spacing.md)
                                                             .min_w_0()
                                                             .child(
                                                                 div()
@@ -1035,7 +1052,7 @@ impl WorkbenchView {
                                                         div()
                                                             .flex()
                                                             .items_center()
-                                                            .gap_1()
+                                                            .gap(ui_style.spacing.xs)
                                                             .flex_none()
                                                             .children((added > 0).then(|| {
                                                                 div()
@@ -1071,7 +1088,7 @@ impl WorkbenchView {
                         .w_full()
                         .flex_1()
                         .h_full()
-                        .py_2()
+                        .py(ui_style.spacing.md)
                         .track_scroll(&list_scroll_handle),
                     ),
             )
@@ -1437,6 +1454,7 @@ fn git_diff_code_pane(
     left_source: &'static str,
     right_source: &'static str,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     editor_theme: EditorTheme,
     editor_appearance: EditorAppearance,
 ) -> Div {
@@ -1456,8 +1474,8 @@ fn git_diff_code_pane(
         .flex()
         .items_center()
         .h(px(42.0 * editor_density_scale))
-        .px_5()
-        .border_b_1()
+        .px(ui_style.spacing.xl + ui_style.spacing.xs)
+        .border_b(ui_style.border.hairline)
         .border_color(theme.border)
         .bg(editor_theme.active_line)
         .text_size(px(editor_appearance.font_size))
@@ -1516,7 +1534,7 @@ fn git_diff_code_pane(
                             .flex()
                             .flex_none()
                             .h(px(34.0 * editor_density_scale))
-                            .border_b_1()
+                            .border_b(ui_style.border.hairline)
                             .border_color(theme.border)
                             .child(
                                 git_diff_source_header(
@@ -1524,17 +1542,25 @@ fn git_diff_code_pane(
                                     left_source,
                                     &editor_appearance,
                                     editor_theme,
+                                    ui_style,
                                 )
                                 .flex_basis(relative(0.5))
                                 .flex_shrink(1.0),
                             )
-                            .child(div().w(px(1.0)).h_full().flex_none().bg(theme.border))
+                            .child(
+                                div()
+                                    .w(ui_style.border.hairline)
+                                    .h_full()
+                                    .flex_none()
+                                    .bg(theme.border),
+                            )
                             .child(
                                 git_diff_source_header(
                                     "git-diff-split-right-header",
                                     right_source,
                                     &editor_appearance,
                                     editor_theme,
+                                    ui_style,
                                 )
                                 .flex_basis(relative(0.5))
                                 .flex_shrink(1.0),
@@ -1570,7 +1596,13 @@ fn git_diff_code_pane(
                                         "git-diff-split-left-row",
                                     )),
                             )
-                            .child(div().w(px(1.0)).h_full().flex_none().bg(theme.border))
+                            .child(
+                                div()
+                                    .w(ui_style.border.hairline)
+                                    .h_full()
+                                    .flex_none()
+                                    .bg(theme.border),
+                            )
                             .child(
                                 div()
                                     .debug_selector(|| "git-diff-split-right-pane".to_string())
@@ -1732,13 +1764,14 @@ fn git_diff_source_header(
     label: &'static str,
     appearance: &EditorAppearance,
     theme: EditorTheme,
+    ui_style: UiStyle,
 ) -> Div {
     div()
         .debug_selector(move || debug_selector.to_string())
         .flex()
         .items_center()
         .min_w_0()
-        .px_4()
+        .px(ui_style.spacing.xl)
         .bg(theme.active_line)
         .text_size(px(appearance.font_size))
         .line_height(relative(appearance.line_height))
@@ -1772,17 +1805,21 @@ fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
     color
 }
 
-fn git_diff_panel_background(theme: WorkbenchTheme) -> Rgba {
-    yttt_panel_style(YtttPanelKind::Editor, theme).background
+fn git_diff_panel_background(theme: WorkbenchTheme, ui_style: UiStyle) -> Rgba {
+    yttt_panel_style(YtttPanelKind::Editor, theme, ui_style).background
 }
 
-fn git_diff_message(message: impl Into<SharedString>, color: Rgba) -> AnyElement {
+fn git_diff_message(
+    message: impl Into<SharedString>,
+    color: Rgba,
+    ui_style: UiStyle,
+) -> AnyElement {
     div()
         .flex()
         .flex_1()
         .items_center()
         .justify_center()
-        .px_6()
+        .px(ui_style.spacing.xxl)
         .text_color(color)
         .child(message.into())
         .into_any_element()
@@ -1793,6 +1830,7 @@ fn git_diff_header_button<H>(
     label: &'static str,
     active: bool,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     on_click: H,
 ) -> Stateful<Div>
 where
@@ -1804,12 +1842,12 @@ where
         .flex()
         .items_center()
         .justify_center()
-        .h(rems(1.875))
-        .px_3()
-        .rounded_md()
+        .h(ui_style.controls.toolbar_height)
+        .px(ui_style.spacing.lg)
+        .rounded(ui_style.radius.control)
         .cursor_pointer()
         .bg(if active {
-            theme.active_surface
+            ui_style.active_background(theme)
         } else {
             rgba(0x00000000)
         })
@@ -1819,46 +1857,55 @@ where
             if active {
                 this
             } else {
-                this.bg(theme.hover_surface).text_color(theme.text)
+                this.bg(ui_style.hover_background(theme))
+                    .text_color(theme.text)
             }
         })
         .on_click(on_click)
         .child(label)
 }
 
-fn git_diff_separator(theme: WorkbenchTheme) -> Div {
-    div().w(px(1.0)).h(rems(1.375)).mx_1().bg(theme.border)
+fn git_diff_separator(theme: WorkbenchTheme, ui_style: UiStyle) -> Div {
+    div()
+        .w(ui_style.border.hairline)
+        .h(rems(1.375))
+        .mx(ui_style.spacing.xs)
+        .bg(theme.border)
 }
 
-fn git_diff_footer(text: &UiText, theme: WorkbenchTheme) -> Div {
+fn git_diff_footer(text: &UiText, theme: WorkbenchTheme, ui_style: UiStyle) -> Div {
     div()
         .flex()
         .items_center()
-        .gap_5()
-        .h(rems(2.875))
-        .px_4()
-        .border_t_1()
+        .gap(ui_style.spacing.xl + ui_style.spacing.xs)
+        .h(ui_style.controls.status_footer_height)
+        .px(ui_style.spacing.xl)
+        .border_t(ui_style.border.hairline)
         .border_color(theme.border)
         .bg(theme.surface_elevated)
         .child(git_diff_hint(
             "Esc",
             text.get(UiTextKey::GitDiffCloseHint),
             theme,
+            ui_style,
         ))
         .child(git_diff_hint(
             "Tab",
             text.get(UiTextKey::GitDiffStageHint),
             theme,
+            ui_style,
         ))
         .child(git_diff_hint(
             "S",
             text.get(UiTextKey::GitDiffSplitHint),
             theme,
+            ui_style,
         ))
         .child(git_diff_hint(
             "↑↓",
             text.get(UiTextKey::GitDiffNavigateHint),
             theme,
+            ui_style,
         ))
         .child(git_diff_hint(
             if cfg!(target_os = "macos") {
@@ -1868,20 +1915,21 @@ fn git_diff_footer(text: &UiText, theme: WorkbenchTheme) -> Div {
             },
             text.get(UiTextKey::GitDiffCopyHint),
             theme,
+            ui_style,
         ))
 }
 
-fn git_diff_hint(key: &str, action: &'static str, theme: WorkbenchTheme) -> Div {
+fn git_diff_hint(key: &str, action: &'static str, theme: WorkbenchTheme, ui_style: UiStyle) -> Div {
     div()
         .flex()
         .items_center()
-        .gap_1()
+        .gap(ui_style.spacing.xs)
         .child(
             div()
-                .px_2()
-                .py_1()
-                .rounded_sm()
-                .border_1()
+                .px(ui_style.spacing.md)
+                .py(ui_style.spacing.xs)
+                .rounded(ui_style.radius.compact)
+                .border(ui_style.border.hairline)
                 .border_color(theme.border)
                 .bg(theme.app_background)
                 .text_xs()
@@ -1914,7 +1962,10 @@ mod tests {
         let mut theme = WorkbenchTheme::one_dark();
         theme.surface.a = 0.04;
 
-        assert_eq!(git_diff_panel_background(theme), theme.surface.alpha(1.0));
+        assert_eq!(
+            git_diff_panel_background(theme, UiStyle::default()),
+            theme.surface.alpha(1.0)
+        );
     }
 
     #[test]

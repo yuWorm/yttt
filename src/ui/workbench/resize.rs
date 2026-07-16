@@ -7,7 +7,7 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let style = Self::visible_split_handle_style(direction);
-        let theme = self.theme_runtime.ui;
+        let theme = self.theme_runtime().ui;
         let mut handle = div()
             .id(match direction {
                 SplitDirection::Horizontal => "horizontal-split-resize-handle",
@@ -57,9 +57,9 @@ impl WorkbenchView {
             .active_sidebar_resize_drag
             .is_some_and(|drag| drag.side == side)
         {
-            self.theme_runtime.ui.split_line_active
+            self.theme_runtime().ui.split_line_active
         } else {
-            self.theme_runtime.ui.split_line
+            self.theme_runtime().ui.split_line
         };
         let handle = div()
             .id(id)

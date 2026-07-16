@@ -311,6 +311,8 @@ pub enum UiTextKey {
     SettingsUiLineHeightDescription,
     SettingsUiTheme,
     SettingsUiThemeDescription,
+    SettingsUiStyle,
+    SettingsUiStyleDescription,
     SettingsIconTheme,
     SettingsIconThemeDescription,
     SettingsTerminalTheme,

@@ -3,6 +3,7 @@ use super::*;
 pub fn workbench_settings_row(
     control_width: Pixels,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     title: impl Into<String>,
     description: impl Into<String>,
     control: AnyElement,
@@ -14,14 +15,17 @@ pub fn workbench_settings_row(
         SelectableState::Inactive,
         true,
         theme,
+        ui_style,
     );
 
     div()
         .flex()
         .items_center()
         .justify_between()
-        .gap_6()
+        .gap(ui_style.spacing.xxl)
         .min_h(row_style.height)
+        .rounded(row_style.radius)
+        .px(row_style.padding_x)
         .border_b(row_style.border_width)
         .border_color(row_style.border)
         .bg(row_style.background)
@@ -30,7 +34,7 @@ pub fn workbench_settings_row(
             div()
                 .flex()
                 .flex_col()
-                .gap_1()
+                .gap(ui_style.spacing.xs)
                 .min_w_0()
                 .flex_1()
                 .child(
@@ -62,12 +66,13 @@ pub fn workbench_switch<H>(
     id: impl Into<ElementId>,
     checked: bool,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     on_change: H,
 ) -> Div
 where
     H: Fn(&bool, &mut Window, &mut App) + 'static,
 {
-    let style = yttt_switch_style(theme);
+    let style = yttt_switch_style(theme, ui_style);
     let id = id.into();
     let next_checked = !checked;
     let track_background = if checked {
@@ -101,7 +106,7 @@ where
                 .w(style.width)
                 .h(style.height)
                 .rounded_full()
-                .border_2()
+                .border(style.outer_border_width)
                 .border_color(border)
                 .hover(move |this| this.border_color(style.active_border))
                 .on_click(move |_, window, cx| on_change(&next_checked, window, cx))
@@ -115,7 +120,7 @@ where
                         .h(style.track_height)
                         .px(style.track_padding)
                         .rounded_full()
-                        .border_1()
+                        .border(style.track_border_width)
                         .border_color(border)
                         .bg(track_background)
                         .child(

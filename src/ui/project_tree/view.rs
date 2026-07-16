@@ -24,7 +24,10 @@ use crate::{
             ProjectTreeCopy, ProjectTreeCut, ProjectTreeDelete, ProjectTreeNewDirectory,
             ProjectTreeNewFile, ProjectTreePaste, ProjectTreeRename,
         },
-        theme::icons::{IconTheme, icon_for_visual},
+        theme::{
+            current_ui_style,
+            icons::{IconTheme, icon_for_visual},
+        },
     },
 };
 
@@ -991,6 +994,7 @@ fn render_edit_row(
     icon_theme: &IconTheme,
     cx: &mut App,
 ) -> ListItem {
+    let ui_style = current_ui_style(cx);
     let Some(input) = input else {
         return ListItem::new(("project-tree-missing-edit-input", ix)).disabled(true);
     };
@@ -1023,7 +1027,7 @@ fn render_edit_row(
             div()
                 .flex()
                 .items_center()
-                .gap_1()
+                .gap(ui_style.spacing.xs)
                 .w_full()
                 .child(div().w(px(12.0)))
                 .child(icon_for_visual(icon, cx.theme().muted_foreground))
@@ -1031,7 +1035,8 @@ fn render_edit_row(
                     div()
                         .flex_1()
                         .min_w_0()
-                        .border_1()
+                        .rounded(ui_style.radius.compact)
+                        .border(ui_style.border.hairline)
                         .border_color(cx.theme().primary)
                         .child(Input::new(input).appearance(false).small()),
                 ),
@@ -1047,6 +1052,7 @@ fn render_component_row(
     view: gpui::WeakEntity<ProjectTreeView>,
     cx: &mut App,
 ) -> ListItem {
+    let ui_style = current_ui_style(cx);
     let Some(row) = row else {
         return ListItem::new(("project-tree-missing-row", ix)).disabled(true);
     };
@@ -1097,7 +1103,7 @@ fn render_component_row(
             div()
                 .flex()
                 .items_center()
-                .gap_1()
+                .gap(ui_style.spacing.xs)
                 .w_full()
                 .child(div().w(px(12.0)).children(is_directory.then(|| {
                     icon_for_visual(
@@ -1114,10 +1120,13 @@ fn render_component_row(
                         .text_color(label_color)
                         .child(row.label),
                 )
-                .children(
-                    status_color
-                        .map(|color| div().flex_none().size(px(6.0)).rounded_full().bg(color)),
-                )
+                .children(status_color.map(|color| {
+                    div()
+                        .flex_none()
+                        .size(ui_style.status_dot_size)
+                        .rounded_full()
+                        .bg(color)
+                }))
                 .children(hint.map(|hint| {
                     div()
                         .max_w(px(120.0))

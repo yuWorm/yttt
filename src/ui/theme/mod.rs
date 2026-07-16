@@ -3,12 +3,15 @@ mod markdown;
 mod one_dark;
 pub mod zed;
 
-use gpui::{Edges, Rgba, px};
+use std::{cell::RefCell, rc::Rc};
+
+use gpui::{App, Edges, Global, Rgba, px};
 use gpui_component::{
     ThemeConfig, ThemeConfigColors, ThemeMode,
     highlighter::{HighlightThemeStyle, SyntaxColors, ThemeStyle},
 };
 use yttt_terminal::{ColorPalette, TerminalConfig};
+pub use yttt_ui::style::{UiStyle, UiStyleId};
 pub use yttt_ui::theme::WorkbenchTheme;
 
 use crate::config::{
@@ -99,12 +102,46 @@ impl WindowMaterialTheme {
     }
 }
 
+#[derive(Clone)]
+pub struct AppearanceState {
+    runtime: Rc<RefCell<Rc<ThemeRuntime>>>,
+}
+
+impl AppearanceState {
+    pub fn new(runtime: ThemeRuntime) -> Self {
+        Self {
+            runtime: Rc::new(RefCell::new(Rc::new(runtime))),
+        }
+    }
+
+    pub fn runtime(&self) -> Rc<ThemeRuntime> {
+        self.runtime.borrow().clone()
+    }
+
+    pub fn replace(&self, mut runtime: ThemeRuntime) -> Rc<ThemeRuntime> {
+        runtime.generation = self.runtime.borrow().generation.saturating_add(1);
+        let runtime = Rc::new(runtime);
+        *self.runtime.borrow_mut() = runtime.clone();
+        runtime
+    }
+}
+
+impl Global for AppearanceState {}
+pub fn current_ui_style(cx: &App) -> UiStyle {
+    cx.try_global::<AppearanceState>()
+        .map(|appearance| appearance.runtime().style)
+        .unwrap_or_default()
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ThemeRuntime {
+    pub generation: u64,
     pub theme_name: String,
     pub mode: ThemeMode,
     pub window_material: WindowMaterialTheme,
     pub ui: WorkbenchTheme,
+    pub style_id: UiStyleId,
+    pub style: UiStyle,
     pub editor: EditorTheme,
     pub terminal: TerminalTheme,
     pub terminal_settings: TerminalSettings,
@@ -186,11 +223,15 @@ impl ThemeRuntime {
         let window_material = WindowMaterialTheme::resolve(&settings.window);
         apply_window_material(&mut ui, &mut editor, &mut terminal, window_material);
 
+        let style_id = settings.theme.ui_style;
         Self {
+            generation: 0,
             theme_name: selected.name,
             mode: selected.mode,
             window_material,
             ui,
+            style_id,
+            style: UiStyle::resolve(style_id),
             editor,
             terminal,
             terminal_settings: settings.terminal.clone(),
@@ -199,6 +240,8 @@ impl ThemeRuntime {
 
     pub fn to_gpui_component_theme_config(&self) -> ThemeConfig {
         let theme = self.ui;
+        let hover = self.style.hover_background(theme);
+        let active = self.style.active_background(theme);
         let transparent = theme.app_background.alpha(0.0);
         let elevated = theme.surface_elevated.alpha(1.0);
         let mut colors = ThemeConfigColors::default();
@@ -208,66 +251,66 @@ impl ThemeRuntime {
         colors.input = Some(color_hex(theme.border).into());
         colors.ring = Some(color_hex(theme.focus_ring).into());
         colors.accordion = Some(color_hex(transparent).into());
-        colors.accordion_hover = Some(color_hex(theme.hover_surface).into());
+        colors.accordion_hover = Some(color_hex(hover).into());
         colors.button = Some(color_hex(theme.surface).into());
         colors.button_foreground = Some(color_hex(theme.text).into());
-        colors.button_hover = Some(color_hex(theme.hover_surface).into());
-        colors.button_active = Some(color_hex(theme.active_surface).into());
-        colors.button_primary = Some(color_hex(theme.active_surface).into());
+        colors.button_hover = Some(color_hex(hover).into());
+        colors.button_active = Some(color_hex(active).into());
+        colors.button_primary = Some(color_hex(active).into());
         colors.button_primary_foreground = Some(color_hex(theme.text).into());
-        colors.button_primary_hover = Some(color_hex(theme.active_surface).into());
-        colors.button_primary_active = Some(color_hex(theme.active_surface).into());
+        colors.button_primary_hover = Some(color_hex(active).into());
+        colors.button_primary_active = Some(color_hex(active).into());
         colors.button_secondary = Some(color_hex(theme.surface_elevated).into());
         colors.button_secondary_foreground = Some(color_hex(theme.text_muted).into());
-        colors.button_secondary_hover = Some(color_hex(theme.hover_surface).into());
-        colors.button_secondary_active = Some(color_hex(theme.active_surface).into());
+        colors.button_secondary_hover = Some(color_hex(hover).into());
+        colors.button_secondary_active = Some(color_hex(active).into());
         colors.muted = Some(color_hex(theme.surface_elevated).into());
         colors.muted_foreground = Some(color_hex(theme.text_subtle).into());
         colors.overlay = Some(color_hex(self.window_material.scrim).into());
-        colors.primary = Some(color_hex(theme.active_surface).into());
+        colors.primary = Some(color_hex(active).into());
         colors.primary_foreground = Some(color_hex(theme.text).into());
-        colors.primary_hover = Some(color_hex(theme.active_surface).into());
-        colors.primary_active = Some(color_hex(theme.active_surface).into());
+        colors.primary_hover = Some(color_hex(active).into());
+        colors.primary_active = Some(color_hex(active).into());
         colors.secondary = Some(color_hex(theme.surface_elevated).into());
         colors.secondary_foreground = Some(color_hex(theme.text_muted).into());
-        colors.secondary_hover = Some(color_hex(theme.hover_surface).into());
-        colors.secondary_active = Some(color_hex(theme.active_surface).into());
+        colors.secondary_hover = Some(color_hex(hover).into());
+        colors.secondary_active = Some(color_hex(active).into());
         colors.switch = Some(color_hex(theme.surface_elevated).into());
         colors.switch_thumb = Some(color_hex(theme.text).into());
-        colors.accent = Some(color_hex(theme.hover_surface).into());
+        colors.accent = Some(color_hex(hover).into());
         colors.accent_foreground = Some(color_hex(theme.text).into());
         colors.caret = Some(color_hex(theme.accent).into());
         colors.list = Some(color_hex(transparent).into());
-        colors.list_active = Some(color_hex(theme.active_surface).into());
-        colors.list_active_border = Some(color_hex(theme.active_surface).into());
+        colors.list_active = Some(color_hex(active).into());
+        colors.list_active_border = Some(color_hex(active).into());
         colors.list_even = Some(color_hex(transparent).into());
         colors.list_head = Some(color_hex(theme.surface).into());
-        colors.list_hover = Some(color_hex(theme.hover_surface).into());
+        colors.list_hover = Some(color_hex(hover).into());
         colors.popover = Some(color_hex(elevated).into());
         colors.popover_foreground = Some(color_hex(theme.text).into());
         colors.scrollbar = Some(color_hex(transparent).into());
-        colors.scrollbar_thumb = Some(color_hex(theme.hover_surface).into());
-        colors.scrollbar_thumb_hover = Some(color_hex(theme.active_surface).into());
+        colors.scrollbar_thumb = Some(color_hex(hover).into());
+        colors.scrollbar_thumb_hover = Some(color_hex(active).into());
         colors.selection = Some(color_hex(theme.selection).into());
         colors.sidebar = Some(color_hex(transparent).into());
-        colors.sidebar_accent = Some(color_hex(theme.hover_surface).into());
+        colors.sidebar_accent = Some(color_hex(hover).into());
         colors.sidebar_accent_foreground = Some(color_hex(theme.text).into());
         colors.sidebar_border = Some(color_hex(theme.border).into());
         colors.sidebar_foreground = Some(color_hex(theme.text_muted).into());
-        colors.sidebar_primary = Some(color_hex(theme.active_surface).into());
+        colors.sidebar_primary = Some(color_hex(active).into());
         colors.sidebar_primary_foreground = Some(color_hex(theme.text).into());
         colors.tab = Some(color_hex(transparent).into());
-        colors.tab_active = Some(color_hex(theme.active_surface).into());
+        colors.tab_active = Some(color_hex(active).into());
         colors.tab_active_foreground = Some(color_hex(theme.text).into());
         colors.tab_bar = Some(color_hex(transparent).into());
         colors.tab_bar_segmented = Some(color_hex(theme.surface).into());
         colors.tab_foreground = Some(color_hex(theme.text_muted).into());
         colors.table = Some(color_hex(transparent).into());
-        colors.table_active = Some(color_hex(theme.active_surface).into());
-        colors.table_active_border = Some(color_hex(theme.active_surface).into());
+        colors.table_active = Some(color_hex(active).into());
+        colors.table_active_border = Some(color_hex(active).into());
         colors.table_even = Some(color_hex(transparent).into());
         colors.table_head = Some(color_hex(theme.surface).into());
-        colors.table_hover = Some(color_hex(theme.hover_surface).into());
+        colors.table_hover = Some(color_hex(hover).into());
         colors.success = Some(color_hex(theme.success).into());
         colors.success_foreground = Some(color_hex(theme.text).into());
         colors.warning = Some(color_hex(theme.warning).into());
@@ -281,9 +324,9 @@ impl ThemeRuntime {
         let mut config = ThemeConfig::default();
         config.name = self.theme_name.clone().into();
         config.mode = self.mode;
-        config.radius = Some(6);
-        config.radius_lg = Some(8);
-        config.shadow = Some(false);
+        config.radius = Some(self.style.component.radius);
+        config.radius_lg = Some(self.style.component.radius_lg);
+        config.shadow = Some(self.style.component.shadow);
         config.colors = colors;
         config.highlight = Some(self.editor.to_highlight_theme_style());
         config
@@ -574,6 +617,37 @@ mod tests {
         assert_eq!(
             syntax.style("string.special").and_then(|style| style.color),
             Some(editor.syntax.constant.into())
+        );
+    }
+    #[test]
+    fn replacing_appearance_updates_shared_runtime_and_generation() {
+        let state = AppearanceState::new(ThemeRuntime::default());
+        let mut next = ThemeRuntime::default();
+        next.style_id = UiStyleId::Rounded;
+        next.style = UiStyle::resolve(UiStyleId::Rounded);
+
+        let replaced = state.replace(next);
+
+        assert_eq!(replaced.generation, 1);
+        assert_eq!(state.runtime().style_id, UiStyleId::Rounded);
+        assert_eq!(state.runtime().style, UiStyle::resolve(UiStyleId::Rounded));
+    }
+
+    #[test]
+    fn component_theme_uses_profile_interaction_colors() {
+        let mut runtime = ThemeRuntime::default();
+        runtime.style_id = UiStyleId::Rounded;
+        runtime.style = UiStyle::resolve(UiStyleId::Rounded);
+
+        let colors = runtime.to_gpui_component_theme_config().colors;
+
+        assert_eq!(
+            colors.button_hover,
+            Some(color_hex(runtime.style.hover_background(runtime.ui)).into())
+        );
+        assert_eq!(
+            colors.button_active,
+            Some(color_hex(runtime.style.active_background(runtime.ui)).into())
         );
     }
 }

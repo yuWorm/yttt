@@ -13,7 +13,7 @@ impl WorkbenchView {
         let Some((project_id, project_path, project_title, tab_id, tab_title, layout)) =
             self.selected_tab_layout_clone()
         else {
-            return project_empty_terminal_state(cx, &self.ui_text, &self.theme_runtime.ui);
+            return project_empty_terminal_state(cx, &self.ui_text, &self.theme_runtime().ui);
         };
 
         let focused_pane_id = self.selected_focused_pane_id().map(ToOwned::to_owned);
@@ -29,7 +29,7 @@ impl WorkbenchView {
         div()
             .flex()
             .flex_1()
-            .text_color(self.theme_runtime.ui.text)
+            .text_color(self.theme_runtime().ui.text)
             .child(self.terminal_split_view_for_layout(&layout, &tree_input, window, cx))
     }
 
@@ -65,7 +65,7 @@ impl WorkbenchView {
             .flex_col()
             .flex_1()
             .min_h_0()
-            .bg(self.theme_runtime.editor.background)
+            .bg(self.theme_runtime().editor.background)
             .child(div().flex_1().min_h_0().children(document))
     }
 
@@ -159,7 +159,9 @@ impl WorkbenchView {
         let root_load_state = session.file_tree().directory_load_state(Path::new(""));
         let root_is_empty = session.file_tree().visible_rows().is_empty();
         let has_root_snapshot = session.file_tree().has_snapshot(Path::new(""));
-        let theme = self.theme_runtime.ui;
+        let appearance = self.theme_runtime();
+        let theme = appearance.ui;
+        let ui_style = appearance.style;
         let tree_is_editing = tree.read(cx).is_editing();
         let new_entry_tree = tree.clone();
         let workbench_for_new_entry = cx.weak_entity();
@@ -179,7 +181,7 @@ impl WorkbenchView {
                     .flex_1()
                     .items_center()
                     .justify_center()
-                    .px_4()
+                    .px(ui_style.spacing.xl)
                     .text_sm()
                     .text_color(theme.text_subtle)
                     .child(self.ui_text.get(UiTextKey::ProjectFilesLoading))
@@ -193,8 +195,8 @@ impl WorkbenchView {
                     .flex_1()
                     .items_center()
                     .justify_center()
-                    .gap_3()
-                    .px_4()
+                    .gap(ui_style.spacing.lg)
+                    .px(ui_style.spacing.xl)
                     .text_center()
                     .text_sm()
                     .text_color(theme.text_muted)
@@ -205,6 +207,7 @@ impl WorkbenchView {
                             self.ui_text.get(UiTextKey::ProjectFilesRetry),
                             YtttButtonVariant::Secondary,
                             theme,
+                            ui_style,
                             cx,
                         )
                         .on_click(cx.listener(
@@ -221,7 +224,7 @@ impl WorkbenchView {
                 .flex_1()
                 .items_center()
                 .justify_center()
-                .px_4()
+                .px(ui_style.spacing.xl)
                 .text_sm()
                 .text_color(theme.text_subtle)
                 .child(self.ui_text.get(UiTextKey::ProjectFilesEmptyDirectory)),
@@ -253,9 +256,9 @@ impl WorkbenchView {
                         .justify_between()
                         .h_10()
                         .flex_none()
-                        .border_b_1()
+                        .border_b(ui_style.border.hairline)
                         .border_color(theme.border)
-                        .px_3()
+                        .px(ui_style.spacing.lg)
                         .child(
                             div()
                                 .flex()
@@ -280,12 +283,14 @@ impl WorkbenchView {
                             div()
                                 .flex()
                                 .items_center()
-                                .gap_1()
+                                .gap(ui_style.spacing.xs)
                                 .child(
                                     Button::new("project-file-panel-new")
                                         .ghost()
                                         .xsmall()
                                         .icon(IconName::Plus)
+                                        .h(ui_style.icon_buttons.toolbar_size)
+                                        .rounded(ui_style.icon_buttons.toolbar_radius)
                                         .dropdown_menu(move |menu, _, _| {
                                             let new_file_tree = new_entry_tree.clone();
                                             let new_directory_tree = new_entry_tree.clone();
@@ -339,6 +344,7 @@ impl WorkbenchView {
                                         self.ui_text.get(UiTextKey::ProjectFilesRefresh),
                                         YtttButtonVariant::Ghost,
                                         theme,
+                                        ui_style,
                                         cx,
                                     )
                                     .on_click(cx.listener(
@@ -497,8 +503,8 @@ impl WorkbenchView {
         let project_id = context.project_id.clone();
         let tab_id = context.tab_id.clone();
         let pane_id = context.pane.id.clone();
-        let terminal_config = self.theme_runtime.to_terminal_config();
-        let theme = self.theme_runtime.ui;
+        let terminal_config = self.theme_runtime().to_terminal_config();
+        let theme = self.theme_runtime().ui;
         let start_processes = self.terminal.start_processes;
         let pane_view = cx.new(|cx| {
             if start_processes {
@@ -553,8 +559,10 @@ impl WorkbenchView {
             self.terminal.pending_terminal_focus_pane_id = None;
         }
 
+        let appearance = self.theme_runtime();
+        let ui_style = appearance.style;
         let border_color = if input.is_focused {
-            self.theme_runtime.ui.focused_pane_border
+            appearance.ui.focused_pane_border
         } else {
             rgba(0x00000000)
         };
@@ -563,7 +571,7 @@ impl WorkbenchView {
             .flex()
             .flex_1()
             .relative()
-            .border_1()
+            .border(ui_style.border.hairline)
             .border_color(border_color);
         wrapper.interactivity().on_mouse_down(
             MouseButton::Left,
@@ -624,9 +632,19 @@ impl WorkbenchView {
                 let root = cx.entity();
                 let event = event.clone();
                 let action_label = self.ui_text.get(UiTextKey::OpenNotificationTarget);
-                let theme = self.theme_runtime.ui;
+                let appearance = self.theme_runtime();
+                let theme = appearance.ui;
+                let ui_style = appearance.style;
                 self.handle_terminal_notification(event.clone());
-                push_component_notification(root, event, action_label, theme, _window, cx);
+                push_component_notification(
+                    root,
+                    event,
+                    action_label,
+                    theme,
+                    ui_style,
+                    _window,
+                    cx,
+                );
                 cx.notify();
             }
             TerminalPaneEvent::Started(event) => {

@@ -1,6 +1,6 @@
-use gpui::{Pixels, Rgba, px};
+use gpui::{Pixels, Rgba};
 
-use crate::theme::WorkbenchTheme;
+use crate::{style::UiStyle, theme::WorkbenchTheme};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum YtttStatusTone {
@@ -17,7 +17,11 @@ pub struct YtttStatusDotStyle {
     pub color: Rgba,
 }
 
-pub fn yttt_status_dot_style(tone: YtttStatusTone, theme: WorkbenchTheme) -> YtttStatusDotStyle {
+pub fn yttt_status_dot_style(
+    tone: YtttStatusTone,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> YtttStatusDotStyle {
     let color = match tone {
         YtttStatusTone::Neutral => theme.text_subtle,
         YtttStatusTone::Running => theme.accent,
@@ -27,7 +31,7 @@ pub fn yttt_status_dot_style(tone: YtttStatusTone, theme: WorkbenchTheme) -> Ytt
     };
 
     YtttStatusDotStyle {
-        size: px(6.0),
+        size: ui_style.status_dot_size,
         color,
     }
 }

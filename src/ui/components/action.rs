@@ -5,8 +5,14 @@ pub fn workbench_action_button(
     label: impl Into<SharedString>,
     shortcut: Option<&'static str>,
     emphasis: ActionEmphasis,
+    ui_style: UiStyle,
 ) -> Button {
-    let button = Button::new(id).label(label).compact().rounded(px(6.0));
+    let button = Button::new(id)
+        .label(label)
+        .compact()
+        .h(ui_style.controls.button_height)
+        .px(ui_style.controls.button_padding_x)
+        .rounded(ui_style.radius.control);
     let button = if let Some(shortcut) = shortcut {
         button.child(Kbd::new(shortcut_keystroke(shortcut)))
     } else {
@@ -24,12 +30,13 @@ pub fn workbench_icon_button<H>(
     icon: IconName,
     kind: YtttIconButtonKind,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     on_click: H,
 ) -> Stateful<Div>
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    let style = yttt_icon_button_style(kind, theme);
+    let style = yttt_icon_button_style(kind, theme, ui_style);
 
     div()
         .id(id)

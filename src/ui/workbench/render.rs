@@ -2,6 +2,8 @@ use super::*;
 
 impl Render for WorkbenchView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let appearance = self.appearance.runtime();
+        self.app_settings.theme.ui_style = appearance.style_id;
         window.set_rem_size(px(self.app_settings.general.ui_font_size));
         self.sync_error_notification(window, cx);
         self.ensure_active_project_file_watcher(window, cx);
@@ -30,7 +32,8 @@ impl Render for WorkbenchView {
                 cx,
                 onboarding,
                 &self.ui_text,
-                self.theme_runtime.ui,
+                appearance.ui,
+                appearance.style,
                 onboarding_terminal_font_select.as_ref(),
                 command_palette_keybinding,
             )
@@ -38,7 +41,7 @@ impl Render for WorkbenchView {
             empty_workspace(
                 cx,
                 &self.ui_text,
-                &self.theme_runtime.ui,
+                &appearance.ui,
                 self.has_last_opened_projects(),
             )
         } else {
@@ -54,11 +57,12 @@ impl Render for WorkbenchView {
                 .flex_1()
                 .relative()
                 .bg(gpui::transparent_black())
-                .text_color(self.theme_runtime.ui.text)
+                .text_color(appearance.ui.text)
                 .child({
                     let sidebar = project_sidebar(
                         &self.workspace,
-                        self.theme_runtime.ui,
+                        appearance.ui,
+                        appearance.style,
                         self.ui_text,
                         focus_handle.clone(),
                         self.app_settings.project_panel.project_sidebar_width,
@@ -97,7 +101,8 @@ impl Render for WorkbenchView {
                         .min_w_0()
                         .child(project_tabs(
                             tab_items,
-                            self.theme_runtime.ui,
+                            appearance.ui,
+                            appearance.style,
                             self.icon_theme.clone(),
                             self.ui_text,
                             |work_item| {
@@ -179,13 +184,14 @@ impl Render for WorkbenchView {
             .flex_col()
             .size_full()
             .relative()
-            .bg(self.theme_runtime.ui.app_background)
-            .text_color(self.theme_runtime.ui.text)
+            .bg(appearance.ui.app_background)
+            .text_color(appearance.ui.text)
             .line_height(relative(self.app_settings.general.ui_line_height))
             .child(workbench_titlebar(
                 self.visible_titlebar_info(),
                 self.visible_titlebar_performance(),
-                self.theme_runtime.ui,
+                appearance.ui,
+                appearance.style,
                 self.ui_text.get(UiTextKey::CommandPaletteOpenTitle),
                 self.ui_text.get(UiTextKey::CommandSettingsOpenTitle),
                 cx.listener(|this, _, _window, cx| {
@@ -219,7 +225,8 @@ impl Render for WorkbenchView {
                     &self.ui_text,
                     &query_input,
                     &self.palette.scroll_handle,
-                    self.theme_runtime.ui,
+                    appearance.ui,
+                    appearance.style,
                     |selected_index| {
                         cx.listener(move |this, _, window, cx| {
                             if let Some(active_palette) = &mut this.palette.active_palette {
@@ -247,7 +254,7 @@ impl Render for WorkbenchView {
                 &dialog.detection,
                 dialog.conflict_policy,
                 &self.config_paths,
-                self.theme_runtime.ui,
+                appearance.ui,
             ));
         }
         if self.overlays.layout_toml_editor.is_some() {
@@ -260,12 +267,7 @@ impl Render for WorkbenchView {
         }
         if self.overlays.pending_tab_rename.is_some() {
             if let Some(input) = self.tab_rename_input(window, cx) {
-                root = root.child(tab_rename_dialog(
-                    cx,
-                    &self.ui_text,
-                    &input,
-                    self.theme_runtime.ui,
-                ));
+                root = root.child(tab_rename_dialog(cx, &self.ui_text, &input, appearance.ui));
             }
         }
         if self.overlays.pending_keybinding_edit.is_some() {
@@ -280,7 +282,7 @@ impl Render for WorkbenchView {
                     edit.command,
                     &edit.keys,
                     edit.error.as_deref(),
-                    self.theme_runtime.ui,
+                    appearance.ui,
                 ));
             }
         }
@@ -296,7 +298,7 @@ impl Render for WorkbenchView {
             root = root.child(dirty_close_dialog(
                 cx,
                 &self.ui_text,
-                self.theme_runtime.ui,
+                appearance.ui,
                 title,
                 details,
                 file_intent,
@@ -304,17 +306,13 @@ impl Render for WorkbenchView {
             ));
         }
         if self.overlays.pending_close_project_id.is_some() {
-            root = root.child(close_project_dialog(
-                cx,
-                &self.ui_text,
-                self.theme_runtime.ui,
-            ));
+            root = root.child(close_project_dialog(cx, &self.ui_text, appearance.ui));
         }
         if let Some(conflict) = self.documents.pending_file_conflict.as_ref() {
             root = root.child(file_conflict_dialog(
                 cx,
                 &self.ui_text,
-                self.theme_runtime.ui,
+                appearance.ui,
                 conflict.document_id.canonical_path.display().to_string(),
                 matches!(conflict.current_disk, CurrentDiskState::Missing),
             ));
@@ -405,8 +403,8 @@ pub(super) fn split_child(child: Div, basis: f32) -> Div {
         .child(child)
 }
 
-fn layout_editor_panel_background(theme: WorkbenchTheme) -> Rgba {
-    yttt_panel_style(YtttPanelKind::Editor, theme).background
+fn layout_editor_panel_background(theme: WorkbenchTheme, ui_style: UiStyle) -> Rgba {
+    yttt_panel_style(YtttPanelKind::Editor, theme, ui_style).background
 }
 
 fn layout_toml_editor_overlay(
@@ -414,9 +412,11 @@ fn layout_toml_editor_overlay(
     input: &Entity<InputState>,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
-    let theme = root.theme_runtime.ui;
-    let editor_theme = root.theme_runtime.editor;
-    let panel_background = layout_editor_panel_background(theme);
+    let appearance = root.theme_runtime();
+    let ui_style = appearance.style;
+    let theme = appearance.ui;
+    let editor_theme = appearance.editor;
+    let panel_background = layout_editor_panel_background(theme, ui_style);
     let Some(session) = root.overlays.layout_toml_editor.as_ref() else {
         return div();
     };
@@ -433,7 +433,7 @@ fn layout_toml_editor_overlay(
             .flex()
             .items_center()
             .justify_center()
-            .bg(rgba(0x00000099))
+            .bg(ui_style.panels.editor_overlay)
             .child(
                 div()
                     .flex()
@@ -442,10 +442,11 @@ fn layout_toml_editor_overlay(
                     .max_w(px(1040.))
                     .h(px(680.))
                     .max_h(relative(0.86))
-                    .rounded_md()
-                    .border_1()
+                    .rounded(ui_style.radius.surface)
+                    .border(ui_style.border.hairline)
                     .border_color(theme.border_strong)
                     .bg(panel_background)
+                    .when(ui_style.panels.shadow, |this| this.shadow_lg())
                     .text_color(theme.text)
                     .overflow_hidden()
                     .child(
@@ -453,15 +454,15 @@ fn layout_toml_editor_overlay(
                             .flex()
                             .items_center()
                             .justify_between()
-                            .border_b_1()
+                            .border_b(ui_style.border.hairline)
                             .border_color(theme.border)
-                            .px_5()
-                            .py_4()
+                            .px(ui_style.spacing.xl + ui_style.spacing.xs)
+                            .py(ui_style.spacing.xl)
                             .child(
                                 div()
                                     .flex()
                                     .flex_col()
-                                    .gap_1()
+                                    .gap(ui_style.spacing.xs)
                                     .min_w_0()
                                     .child(
                                         div()
@@ -495,13 +496,13 @@ fn layout_toml_editor_overlay(
                             .flex_col()
                             .flex_1()
                             .min_h_0()
-                            .p_4()
-                            .gap_3()
+                            .p(ui_style.spacing.xl)
+                            .gap(ui_style.spacing.lg)
                             .child(
                                 div()
                                     .flex_1()
                                     .min_h_0()
-                                    .rounded_sm()
+                                    .rounded(ui_style.radius.compact)
                                     .bg(editor_theme.background)
                                     .overflow_hidden()
                                     .child(
@@ -511,12 +512,12 @@ fn layout_toml_editor_overlay(
                             .when_some(error, |this, error| {
                                 this.child(
                                     div()
-                                        .rounded_sm()
-                                        .border_1()
+                                        .rounded(ui_style.radius.compact)
+                                        .border(ui_style.border.hairline)
                                         .border_color(theme.danger)
                                         .bg(theme.surface_elevated)
-                                        .px_3()
-                                        .py_2()
+                                        .px(ui_style.spacing.lg)
+                                        .py(ui_style.spacing.md)
                                         .text_xs()
                                         .text_color(theme.danger)
                                         .child(error),
@@ -528,11 +529,11 @@ fn layout_toml_editor_overlay(
                             .flex()
                             .items_center()
                             .justify_end()
-                            .gap_2()
-                            .border_t_1()
+                            .gap(ui_style.spacing.md)
+                            .border_t(ui_style.border.hairline)
                             .border_color(theme.border)
-                            .px_5()
-                            .py_3()
+                            .px(ui_style.spacing.xl + ui_style.spacing.xs)
+                            .py(ui_style.spacing.lg)
                             .child(settings_button(
                                 "layout-toml-editor-cancel",
                                 root.ui_text.get(UiTextKey::Cancel),
@@ -565,18 +566,21 @@ pub(super) fn push_component_notification(
     event: NotificationEvent,
     action_label: &'static str,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) {
     let item = toast_item_for_event(&event);
     let focus_event = event.clone();
     window.push_notification(
-        workbench_agent_notification(item, action_label, theme).on_click(move |_, _window, cx| {
-            root.update(cx, |root, cx| {
-                let _ = root.focus_notification_target(&focus_event);
-                cx.notify();
-            });
-        }),
+        workbench_agent_notification(item, action_label, theme, ui_style).on_click(
+            move |_, _window, cx| {
+                root.update(cx, |root, cx| {
+                    let _ = root.focus_notification_target(&focus_event);
+                    cx.notify();
+                });
+            },
+        ),
         cx,
     );
 }
@@ -591,7 +595,7 @@ mod tests {
         theme.surface.a = 0.04;
 
         assert_eq!(
-            layout_editor_panel_background(theme),
+            layout_editor_panel_background(theme, UiStyle::default()),
             theme.surface.alpha(1.0)
         );
     }

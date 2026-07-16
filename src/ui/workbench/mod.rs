@@ -219,7 +219,8 @@ use crate::{
             TerminalPaneStartedEvent, TerminalPaneView,
         },
         theme::{
-            EditorTheme, ThemeRuntime, WorkbenchTheme,
+            AppearanceState, EditorTheme, ThemeRuntime, UiStyle, UiStyleId, WorkbenchTheme,
+            current_ui_style,
             icons::{
                 IconTheme, available_icon_theme_names as load_icon_theme_names, load_icon_theme,
             },
@@ -277,7 +278,7 @@ pub struct WorkbenchView {
     system_notifications_enabled: bool,
     ui_text: UiText,
     app_settings: AppSettings,
-    theme_runtime: ThemeRuntime,
+    appearance: AppearanceState,
     icon_theme: IconTheme,
     active_project_file_watcher: Option<ActiveProjectFileWatcher>,
     project_file_watching_enabled: bool,
@@ -597,7 +598,7 @@ impl WorkbenchView {
             system_notifications_enabled,
             ui_text,
             app_settings,
-            theme_runtime,
+            appearance: AppearanceState::new(theme_runtime),
             icon_theme,
         }
     }
@@ -888,13 +889,19 @@ impl WorkbenchView {
         Ok(())
     }
 
-    pub fn theme_runtime(&self) -> &ThemeRuntime {
-        &self.theme_runtime
+    pub fn theme_runtime(&self) -> Rc<ThemeRuntime> {
+        self.appearance.runtime()
+    }
+
+    pub fn with_appearance_state(mut self, appearance: AppearanceState) -> Self {
+        self.appearance = appearance;
+        self
     }
 
     fn markdown_document_config(&self) -> MarkdownDocumentConfig {
+        let runtime = self.appearance.runtime();
         MarkdownDocumentConfig::new(
-            Arc::new(self.theme_runtime.to_markdown_editor_theme(
+            Arc::new(runtime.to_markdown_editor_theme(
                 self.app_settings.editor.font_size,
                 self.app_settings.editor.line_height,
             )),
@@ -1920,7 +1927,9 @@ impl WorkbenchView {
             context: message.clone(),
             tone: ToastTone::Error,
         };
-        let theme = self.theme_runtime.ui;
+        let appearance = self.theme_runtime();
+        let theme = appearance.ui;
+        let ui_style = appearance.style;
         cx.defer_in(window, move |this, window, cx| {
             if this.load_error.as_deref() != Some(message.as_str()) {
                 return;
@@ -1928,7 +1937,7 @@ impl WorkbenchView {
 
             let expected_message = message.clone();
             window.push_notification(
-                workbench_error_notification(item, theme)
+                workbench_error_notification(item, theme, ui_style)
                     .id::<WorkbenchErrorNotification>()
                     .on_close(move |_, cx| {
                         root.update(cx, |root, cx| {
@@ -1953,9 +1962,11 @@ impl WorkbenchView {
     }
 
     fn flush_pending_status_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let theme = self.theme_runtime.ui;
+        let appearance = self.theme_runtime();
+        let theme = appearance.ui;
+        let ui_style = appearance.style;
         for item in self.pending_status_notifications.drain(..) {
-            window.push_notification(workbench_status_notification(item, theme), cx);
+            window.push_notification(workbench_status_notification(item, theme, ui_style), cx);
         }
     }
 

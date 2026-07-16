@@ -11,7 +11,7 @@ use crate::ui::palette::picker::{
     PalettePickerDelegate, PickerDelegate, PickerItem, PickerOverlayRow, PickerState,
     picker_overlay,
 };
-use crate::ui::theme::WorkbenchTheme;
+use crate::ui::theme::{UiStyle, WorkbenchTheme};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PaletteRow {
@@ -67,6 +67,7 @@ pub fn palette_overlay<H, F>(
     query_input: &Entity<InputState>,
     scroll_handle: &ScrollHandle,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     on_confirm_item: F,
 ) -> impl IntoElement
 where
@@ -99,6 +100,7 @@ where
         query_input,
         scroll_handle,
         theme,
+        ui_style,
         on_confirm_item,
     )
 }

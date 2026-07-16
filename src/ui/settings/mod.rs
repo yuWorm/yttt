@@ -2,9 +2,10 @@ pub mod font_options;
 pub mod keybinding_display;
 pub mod keybindings;
 
-use gpui::{Pixels, Rems, px, rems};
+use gpui::{Pixels, Rems, px};
 
 use crate::ui::i18n::{UiText, UiTextKey};
+use crate::ui::theme::UiStyle;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SettingsPanelStyle {
@@ -20,22 +21,24 @@ pub struct SettingsPanelStyle {
     pub search_height: Rems,
     pub select_menu_width: Pixels,
     pub border_width: Pixels,
+    pub ui_style: UiStyle,
 }
 
-pub fn settings_panel_style() -> SettingsPanelStyle {
+pub fn settings_panel_style(ui_style: UiStyle) -> SettingsPanelStyle {
     SettingsPanelStyle {
         width: px(900.0),
         height: px(560.0),
         max_width: px(940.0),
         max_height: px(600.0),
         sidebar_width: px(240.0),
-        row_min_height: rems(4.5),
+        row_min_height: ui_style.rows.settings_height,
         control_width: px(220.0),
         compact_control_width: px(128.0),
-        control_height: rems(2.0),
-        search_height: rems(2.25),
+        control_height: ui_style.controls.settings_height,
+        search_height: ui_style.controls.search_height,
         select_menu_width: px(280.0),
-        border_width: px(1.0),
+        border_width: ui_style.border.hairline,
+        ui_style,
     }
 }
 

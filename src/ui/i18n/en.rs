@@ -383,6 +383,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsUiThemeDescription => {
             "Theme used for YTTT chrome, panels, and controls."
         }
+        UiTextKey::SettingsUiStyle => "UI style",
+        UiTextKey::SettingsUiStyleDescription => {
+            "Global shape, density, borders, hover treatment, and elevation."
+        }
         UiTextKey::SettingsIconTheme => "Icon theme",
         UiTextKey::SettingsIconThemeDescription => {
             "File, folder, and editor icons from installed Zed-compatible themes."

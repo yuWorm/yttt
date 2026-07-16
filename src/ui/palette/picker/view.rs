@@ -16,8 +16,11 @@ use crate::ui::{
         PaletteFooterAction, palette_footer_actions, palette_panel_style,
         palette_scroll_anchor_index,
     },
-    primitives::panel::{YtttPanelKind, yttt_panel_style},
-    theme::WorkbenchTheme,
+    primitives::{
+        input::{YtttInputKind, yttt_input_style},
+        panel::{YtttPanelKind, yttt_panel_style},
+    },
+    theme::{UiStyle, WorkbenchTheme},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,13 +35,14 @@ pub fn picker_overlay<H, F>(
     query_input: &Entity<InputState>,
     scroll_handle: &ScrollHandle,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     on_confirm_item: F,
 ) -> impl IntoElement
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     F: FnMut(usize) -> H,
 {
-    let panel = yttt_panel_style(YtttPanelKind::Palette, theme);
+    let panel = yttt_panel_style(YtttPanelKind::Palette, theme, ui_style);
 
     capture_overlay_input(
         div().absolute().inset_0().child(
@@ -48,7 +52,7 @@ where
                 .flex()
                 .items_start()
                 .justify_center()
-                .pt_16()
+                .pt(ui_style.spacing.overlay_top)
                 .child(
                     div()
                         .flex()
@@ -57,39 +61,50 @@ where
                         .max_w(panel.max_width)
                         .max_h(panel.max_height)
                         .rounded(panel.radius)
-                        .border_1()
+                        .border(panel.border_width)
                         .border_color(panel.border)
                         .bg(panel.background)
+                        .when(panel.shadow, |this| this.shadow_lg())
                         .text_color(theme.text)
                         .overflow_hidden()
-                        .child(picker_header(query_input, theme))
+                        .child(picker_header(query_input, theme, ui_style))
                         .child(picker_items(
                             rows,
                             ui_text,
                             scroll_handle,
                             theme,
+                            ui_style,
                             on_confirm_item,
                         ))
-                        .child(picker_footer(ui_text, theme)),
+                        .child(picker_footer(ui_text, theme, ui_style)),
                 ),
         ),
     )
 }
 
-fn picker_header(query_input: &Entity<InputState>, theme: WorkbenchTheme) -> Div {
+fn picker_header(
+    query_input: &Entity<InputState>,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Div {
+    let input_style = yttt_input_style(YtttInputKind::Palette, theme, ui_style);
     div()
         .flex()
         .items_center()
-        .border_b_1()
+        .border_b(ui_style.border.hairline)
         .border_color(theme.border)
-        .px_3()
-        .py_2()
+        .px(ui_style.spacing.lg)
+        .py(ui_style.spacing.md)
         .child(
             Input::new(query_input)
                 .prefix(IconName::Search)
                 .cleanable(true)
                 .appearance(true)
-                .bg(theme.surface_elevated),
+                .h(input_style.height)
+                .rounded(input_style.radius)
+                .border_color(input_style.border)
+                .bg(input_style.background)
+                .text_color(input_style.text),
         )
 }
 
@@ -98,19 +113,20 @@ fn picker_items<H, F>(
     ui_text: &UiText,
     scroll_handle: &ScrollHandle,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     mut on_confirm_item: F,
 ) -> AnyElement
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     F: FnMut(usize) -> H,
 {
-    let panel_style = palette_panel_style();
+    let panel_style = palette_panel_style(ui_style);
 
     if rows.is_empty() {
         return div()
             .id("palette-empty")
             .min_h(panel_style.row_height)
-            .p_4()
+            .p(ui_style.spacing.xl)
             .text_sm()
             .text_color(theme.text_subtle)
             .child(ui_text.get(UiTextKey::NoResults))
@@ -133,12 +149,20 @@ where
                 .debug_selector(|| "palette-list".to_string())
                 .flex()
                 .flex_col()
-                .gap_1()
-                .p_2()
+                .gap(ui_style.spacing.xs)
+                .p(ui_style.spacing.md)
                 .max_h(panel_style.list_max_height)
                 .overflow_y_scroll()
                 .track_scroll(scroll_handle),
-            |list, (index, row)| list.child(picker_item(row, index, theme, on_confirm_item(index))),
+            |list, (index, row)| {
+                list.child(picker_item(
+                    row,
+                    index,
+                    theme,
+                    ui_style,
+                    on_confirm_item(index),
+                ))
+            },
         )
         .into_any_element()
 }
@@ -147,6 +171,7 @@ fn picker_item<H>(
     row: PickerOverlayRow,
     index: usize,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     on_click: H,
 ) -> impl IntoElement
 where
@@ -166,43 +191,48 @@ where
         row.state,
         row.item.enabled,
         theme,
+        ui_style,
         on_click,
     )
 }
 
-fn picker_footer(ui_text: &UiText, theme: WorkbenchTheme) -> Div {
-    let style = palette_panel_style();
+fn picker_footer(ui_text: &UiText, theme: WorkbenchTheme, ui_style: UiStyle) -> Div {
+    let style = palette_panel_style(ui_style);
 
     div()
         .flex()
         .items_center()
         .justify_end()
-        .gap_4()
+        .gap(ui_style.spacing.xl)
         .h(style.footer_height)
-        .border_t_1()
+        .border_t(style.border_width)
         .border_color(theme.border)
-        .px_3()
+        .px(ui_style.spacing.lg)
         .text_xs()
         .text_color(theme.text_muted)
         .children(
             palette_footer_actions(ui_text)
                 .into_iter()
-                .map(|action| picker_footer_action(action, theme)),
+                .map(|action| picker_footer_action(action, theme, ui_style)),
         )
 }
 
-fn picker_footer_action(action: PaletteFooterAction, theme: WorkbenchTheme) -> Div {
+fn picker_footer_action(
+    action: PaletteFooterAction,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Div {
     div()
         .flex()
         .items_center()
-        .gap_2()
+        .gap(ui_style.spacing.md)
         .child(div().child(action.label))
         .child(
             div()
-                .rounded_sm()
-                .border_1()
+                .rounded(ui_style.radius.compact)
+                .border(ui_style.border.hairline)
                 .border_color(theme.border)
-                .px_1()
+                .px(ui_style.spacing.xs)
                 .text_color(theme.text_subtle)
                 .child(action.key),
         )

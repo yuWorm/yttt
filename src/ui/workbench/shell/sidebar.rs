@@ -26,7 +26,7 @@ use crate::ui::{
             yttt_sidebar_style,
         },
     },
-    theme::WorkbenchTheme,
+    theme::{UiStyle, WorkbenchTheme},
 };
 
 const PROJECT_CONTEXT_COMMANDS: &[CommandId] = &[
@@ -69,8 +69,8 @@ pub struct ProjectSidebarStyle {
     pub hover_background: Rgba,
 }
 
-pub fn project_sidebar_style(theme: WorkbenchTheme) -> ProjectSidebarStyle {
-    let primitive = yttt_sidebar_style(theme);
+pub fn project_sidebar_style(theme: WorkbenchTheme, ui_style: UiStyle) -> ProjectSidebarStyle {
+    let primitive = yttt_sidebar_style(theme, ui_style);
     ProjectSidebarStyle {
         width: primitive.width,
         default_width: primitive.default_width,
@@ -130,6 +130,7 @@ pub fn visible_project_items(workspace: &Workspace) -> Vec<ProjectSidebarItem> {
 pub fn project_sidebar<SelectH, SelectF, ContextH, ContextF, ToggleH>(
     workspace: &Workspace,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     text: UiText,
     action_context: FocusHandle,
     expanded_width: f32,
@@ -145,7 +146,7 @@ where
     ContextF: FnMut(String) -> ContextH,
     ToggleH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    let style = project_sidebar_style(theme);
+    let style = project_sidebar_style(theme, ui_style);
     let width = if collapsed {
         style.collapsed_width
     } else {
@@ -165,11 +166,16 @@ where
         .w(width)
         .bg(style.background)
         .when(collapsed, |this| {
-            this.border_r_1().border_color(theme.border)
+            this.border_r(style.border_width).border_color(theme.border)
         })
-        .px_2()
-        .py_3()
-        .child(project_sidebar_header(collapsed, theme, on_toggle_sidebar));
+        .px(ui_style.spacing.md)
+        .py(ui_style.spacing.lg)
+        .child(project_sidebar_header(
+            collapsed,
+            theme,
+            ui_style,
+            on_toggle_sidebar,
+        ));
 
     for (index, item) in visible_project_items(workspace).into_iter().enumerate() {
         let suffix = match item.agent_status.as_deref() {
@@ -184,6 +190,7 @@ where
             suffix,
             collapsed,
             theme,
+            ui_style,
             text,
             action_context.clone(),
             on_click,
@@ -197,6 +204,7 @@ where
 fn project_sidebar_header<H>(
     collapsed: bool,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     on_toggle_sidebar: H,
 ) -> impl IntoElement
 where
@@ -211,12 +219,12 @@ where
         .flex()
         .items_center()
         .justify_between()
-        .pb_3()
+        .pb(ui_style.spacing.lg)
         .text_xs()
         .text_color(theme.text_subtle);
 
     if !collapsed {
-        header = header.child(div().px_1().child("Projects"));
+        header = header.child(div().px(ui_style.spacing.xs).child("Projects"));
     }
 
     header.child(workbench_icon_button(
@@ -224,6 +232,7 @@ where
         icon,
         YtttIconButtonKind::SidebarHeader,
         theme,
+        ui_style,
         on_toggle_sidebar,
     ))
 }
@@ -234,6 +243,7 @@ fn project_sidebar_item<H, C>(
     suffix: String,
     collapsed: bool,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
     text: UiText,
     action_context: FocusHandle,
     on_select_project: H,
@@ -243,18 +253,20 @@ where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     C: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 {
-    let row_style = yttt_row_style(YtttRowKind::Sidebar, item.state, true, theme);
+    let row_style = yttt_row_style(YtttRowKind::Sidebar, item.state, true, theme, ui_style);
 
     div()
         .id(("project-sidebar-item", index))
         .flex()
         .items_center()
         .justify_between()
-        .gap_2()
+        .gap(ui_style.spacing.md)
         .h(row_style.height)
         .w_full()
         .rounded(row_style.radius)
         .px(row_style.padding_x)
+        .border(row_style.border_width)
+        .border_color(row_style.border)
         .bg(row_style.background)
         .hover(move |this| this.bg(row_style.hover_background))
         .on_click(on_select_project)
@@ -263,7 +275,7 @@ where
             div()
                 .flex()
                 .items_center()
-                .gap_2()
+                .gap(ui_style.spacing.md)
                 .overflow_hidden()
                 .when(collapsed, |this| this.w_full().justify_center())
                 .children(collapsed.then(|| {

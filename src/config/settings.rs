@@ -6,6 +6,8 @@ use std::{
 use crate::config::paths::AppConfigPaths;
 use crate::ui::theme::DEFAULT_THEME_NAME;
 
+use yttt_ui::style::UiStyleId;
+
 use yttt_terminal::{
     TerminalCursorShape, TerminalHintConfig, TerminalOsc52Policy, is_valid_hint_alphabet,
 };
@@ -156,6 +158,7 @@ impl Default for WindowSettings {
 #[serde(default)]
 pub struct ThemeSettings {
     pub name: String,
+    pub ui_style: UiStyleId,
     pub terminal: Option<String>,
     pub icon_theme: Option<String>,
 }
@@ -163,6 +166,7 @@ pub struct ThemeSettings {
 impl Default for ThemeSettings {
     fn default() -> Self {
         Self {
+            ui_style: UiStyleId::default(),
             name: DEFAULT_THEME_NAME.to_string(),
             terminal: None,
             icon_theme: None,
@@ -334,6 +338,7 @@ pub enum SettingsLoadWarning {
     InvalidToml { path: PathBuf, message: String },
     InvalidGeneralValue { field: &'static str },
     InvalidWindowValue { field: &'static str },
+    InvalidThemeValue { field: &'static str },
     InvalidTerminalValue { field: &'static str },
     InvalidEditorValue { field: &'static str },
     InvalidProjectPanelValue { field: &'static str },
@@ -416,6 +421,7 @@ fn parse_settings_source(
 
     normalize_general_settings(&mut value, warnings);
     normalize_window_settings(&mut value, warnings);
+    normalize_theme_settings(&mut value, warnings);
     normalize_editor_settings(&mut value, warnings);
 
     match value.try_into::<AppSettings>() {
@@ -466,6 +472,25 @@ fn normalize_window_settings(value: &mut toml::Value, warnings: &mut Vec<Setting
         toml::Value::String("blurred".to_string()),
     );
     warnings.push(SettingsLoadWarning::InvalidWindowValue { field: "effect" });
+}
+
+fn normalize_theme_settings(value: &mut toml::Value, warnings: &mut Vec<SettingsLoadWarning>) {
+    let Some(theme) = value.get_mut("theme").and_then(toml::Value::as_table_mut) else {
+        return;
+    };
+    let Some(ui_style) = theme.get("ui_style") else {
+        return;
+    };
+
+    if matches!(ui_style.as_str(), Some("zed" | "rounded")) {
+        return;
+    }
+
+    theme.insert(
+        "ui_style".to_string(),
+        toml::Value::String(UiStyleId::default().as_str().to_string()),
+    );
+    warnings.push(SettingsLoadWarning::InvalidThemeValue { field: "ui_style" });
 }
 
 fn normalize_editor_settings(value: &mut toml::Value, warnings: &mut Vec<SettingsLoadWarning>) {

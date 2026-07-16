@@ -1,6 +1,6 @@
-use gpui::{Pixels, Rems, Rgba, px, rems, rgba};
+use gpui::{Pixels, Rems, Rgba, rgba};
 
-use crate::{SelectableState, theme::WorkbenchTheme};
+use crate::{SelectableState, style::UiStyle, theme::WorkbenchTheme};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum YtttRowKind {
@@ -30,12 +30,37 @@ pub fn yttt_row_style(
     state: SelectableState,
     enabled: bool,
     theme: WorkbenchTheme,
+    ui_style: UiStyle,
 ) -> YtttRowStyle {
     let (height, padding_x, padding_y, radius, border_width) = match kind {
-        YtttRowKind::Palette => (rems(3.375), rems(0.75), rems(0.0), px(6.0), px(1.0)),
-        YtttRowKind::Settings => (rems(4.5), rems(0.0), rems(0.75), px(0.0), px(1.0)),
-        YtttRowKind::Sidebar => (rems(1.75), rems(0.5), rems(0.0), px(6.0), px(0.0)),
-        YtttRowKind::Tab => (rems(2.0), rems(0.5), rems(0.0), px(0.0), px(1.0)),
+        YtttRowKind::Palette => (
+            ui_style.rows.palette_height,
+            ui_style.rows.palette_padding_x,
+            ui_style.spacing.xxs,
+            ui_style.rows.palette_radius,
+            ui_style.rows.palette_border_width,
+        ),
+        YtttRowKind::Settings => (
+            ui_style.rows.settings_height,
+            ui_style.spacing.xxs,
+            ui_style.rows.settings_padding_y,
+            ui_style.rows.settings_radius,
+            ui_style.rows.settings_border_width,
+        ),
+        YtttRowKind::Sidebar => (
+            ui_style.rows.sidebar_height,
+            ui_style.rows.sidebar_padding_x,
+            ui_style.spacing.xxs,
+            ui_style.rows.sidebar_radius,
+            ui_style.rows.sidebar_border_width,
+        ),
+        YtttRowKind::Tab => (
+            ui_style.rows.tab_height,
+            ui_style.rows.tab_padding_x,
+            ui_style.spacing.xxs,
+            ui_style.rows.tab_radius,
+            ui_style.rows.tab_border_width,
+        ),
     };
     let transparent = rgba(0x00000000);
 
@@ -83,8 +108,8 @@ pub fn yttt_row_style(
             padding_y,
             radius,
             border_width,
-            background: theme.active_surface,
-            hover_background: theme.active_surface,
+            background: ui_style.active_background(theme),
+            hover_background: ui_style.active_background(theme),
             border: theme.border,
             title: theme.text,
             subtitle: theme.text_muted,
@@ -96,9 +121,9 @@ pub fn yttt_row_style(
             padding_y,
             radius,
             border_width,
-            background: theme.active_surface,
-            hover_background: theme.active_surface,
-            border: theme.active_surface,
+            background: ui_style.active_background(theme),
+            hover_background: ui_style.active_background(theme),
+            border: ui_style.active_background(theme),
             title: theme.text,
             subtitle: theme.text_muted,
             status: theme.text_muted,
@@ -110,7 +135,7 @@ pub fn yttt_row_style(
             radius,
             border_width,
             background: transparent,
-            hover_background: theme.hover_surface,
+            hover_background: ui_style.hover_background(theme),
             border: transparent,
             title: theme.text_muted,
             subtitle: theme.text_subtle,
@@ -123,7 +148,7 @@ pub fn yttt_row_style(
             radius,
             border_width,
             background: transparent,
-            hover_background: theme.hover_surface,
+            hover_background: ui_style.hover_background(theme),
             border: theme.border,
             title: theme.text_muted,
             subtitle: theme.text_subtle,
@@ -136,7 +161,7 @@ pub fn yttt_row_style(
             radius,
             border_width,
             background: theme.surface_elevated,
-            hover_background: theme.hover_surface,
+            hover_background: ui_style.hover_background(theme),
             border: theme.surface_elevated,
             title: theme.text_muted,
             subtitle: theme.text_subtle,

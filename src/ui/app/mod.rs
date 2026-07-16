@@ -21,7 +21,7 @@ use crate::{
             FORCE_ONBOARDING_ENV, StartupMode, force_onboarding_from_env, startup_mode_from_fixture,
         },
         interaction::actions::{app_startup_keybindings, ui_action_for_command},
-        theme::ThemeRuntime,
+        theme::{AppearanceState, ThemeRuntime},
         workbench::WorkbenchView,
     },
 };
@@ -42,25 +42,30 @@ pub fn run() {
             crate::ui::editor::init_vim_mode(cx);
             let config_paths = AppConfigPaths::for_app();
             let (app_settings, theme_runtime) = load_app_runtime(&config_paths);
-            Theme::global_mut(cx)
-                .apply_config(&Rc::new(theme_runtime.to_gpui_component_theme_config()));
+            let appearance = AppearanceState::new(theme_runtime);
+            Theme::global_mut(cx).apply_config(&Rc::new(
+                appearance.runtime().to_gpui_component_theme_config(),
+            ));
+            cx.set_global(appearance.clone());
             cx.bind_keys(app_startup_keybindings());
 
             let bounds = Bounds::centered(None, size(px(960.0), px(640.0)), cx);
             cx.open_window(
                 workbench_window_options(bounds, app_settings.window.effect),
-                |window, cx| {
+                move |window, cx| {
+                    let appearance = appearance.clone();
                     let view = cx.new(|_| {
                         let force_onboarding = force_onboarding_from_env(
                             std::env::var(FORCE_ONBOARDING_ENV).ok().as_deref(),
                         );
-                        match startup_mode_from_fixture(
+                        let view = match startup_mode_from_fixture(
                             std::env::var("YTTT_DEV_FIXTURE").ok().as_deref(),
                         ) {
                             StartupMode::DevFixture => WorkbenchView::dev_fixture(),
                             StartupMode::AgentExitFixture => WorkbenchView::agent_exit_fixture(),
                             StartupMode::Normal => WorkbenchView::from_startup(force_onboarding),
-                        }
+                        };
+                        view.with_appearance_state(appearance)
                     });
                     view.update(cx, |view, cx| view.sync_performance_monitoring(cx));
                     register_workbench_keybinding_interceptor(cx, &view);

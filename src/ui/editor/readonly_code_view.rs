@@ -6,7 +6,7 @@ use gpui::{
     prelude::*, px, relative, rgba, uniform_list,
 };
 
-use crate::ui::theme::EditorTheme;
+use crate::ui::theme::{EditorTheme, UiStyle, current_ui_style};
 
 use super::EditorAppearance;
 
@@ -167,7 +167,8 @@ impl ReadonlyCodeView {
 }
 
 impl RenderOnce for ReadonlyCodeView {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let ui_style = current_ui_style(cx);
         let row_count = self.row_count;
         let rows = self.rows.clone();
         let lazy_rows = self.lazy_rows.clone();
@@ -204,6 +205,7 @@ impl RenderOnce for ReadonlyCodeView {
                                     &appearance,
                                     theme,
                                     border,
+                                    ui_style,
                                 ));
                             }
                             let row = lazy_rows.as_ref()?.as_ref()(index)?;
@@ -215,6 +217,7 @@ impl RenderOnce for ReadonlyCodeView {
                                 &appearance,
                                 theme,
                                 border,
+                                ui_style,
                             ))
                         })
                         .collect()
@@ -274,6 +277,7 @@ fn render_readonly_code_row(
     appearance: &EditorAppearance,
     theme: EditorTheme,
     border: Rgba,
+    ui_style: UiStyle,
 ) -> Stateful<Div> {
     let row_height =
         px((appearance.font_size * appearance.line_height).max(appearance.font_size + 2.0));
@@ -288,7 +292,9 @@ fn render_readonly_code_row(
         .min_w_full()
         .bg(row.background)
         .when(row.kind == ReadonlyCodeRowKind::Hunk, |this| {
-            this.px_5().border_y_1().border_color(border)
+            this.px(ui_style.spacing.xl + ui_style.spacing.xs)
+                .border_y(ui_style.border.hairline)
+                .border_color(border)
         });
 
     if row.kind != ReadonlyCodeRowKind::Hunk {
