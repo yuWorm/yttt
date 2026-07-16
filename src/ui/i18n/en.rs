@@ -61,6 +61,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::ProjectFilesRetry => "Retry",
         UiTextKey::ProjectFilesNewFile => "New File",
         UiTextKey::ProjectFilesNewDirectory => "New Folder",
+        UiTextKey::ProjectFilesCreateProjectLayout => "Create Project Layout",
+        UiTextKey::ProjectFilesProjectLayoutReady => "Project layout is ready",
         UiTextKey::ProjectFilesRename => "Rename",
         UiTextKey::ProjectFilesDelete => "Delete",
         UiTextKey::ProjectFilesCopy => "Copy",

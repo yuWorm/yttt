@@ -49,6 +49,8 @@ pub enum UiTextKey {
     ProjectFilesRetry,
     ProjectFilesNewFile,
     ProjectFilesNewDirectory,
+    ProjectFilesCreateProjectLayout,
+    ProjectFilesProjectLayoutReady,
     ProjectFilesRename,
     ProjectFilesDelete,
     ProjectFilesCopy,

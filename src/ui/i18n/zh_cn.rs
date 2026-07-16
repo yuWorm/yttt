@@ -59,6 +59,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::ProjectFilesRetry => "重试",
         UiTextKey::ProjectFilesNewFile => "新建文件",
         UiTextKey::ProjectFilesNewDirectory => "新建文件夹",
+        UiTextKey::ProjectFilesCreateProjectLayout => "创建项目布局",
+        UiTextKey::ProjectFilesProjectLayoutReady => "项目布局已就绪",
         UiTextKey::ProjectFilesRename => "重命名",
         UiTextKey::ProjectFilesDelete => "删除",
         UiTextKey::ProjectFilesCopy => "复制",

@@ -102,8 +102,8 @@ use crate::{
         },
         layout_loader::{
             LayoutSource, PersonalLayout, ProjectOpenError, RecentProjectsConfig,
-            export_project_layout, load_recent_projects, open_project_config,
-            parse_personal_layout, reset_local_override, save_local_layout,
+            create_project_layout_scaffold, export_project_layout, load_recent_projects,
+            open_project_config, parse_personal_layout, reset_local_override, save_local_layout,
         },
         paths::{AppConfigPaths, display_path},
         settings::{

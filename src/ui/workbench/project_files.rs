@@ -399,6 +399,10 @@ impl WorkbenchView {
                 .ui_text
                 .get(UiTextKey::ProjectFilesNewDirectory)
                 .to_string(),
+            create_project_layout: self
+                .ui_text
+                .get(UiTextKey::ProjectFilesCreateProjectLayout)
+                .to_string(),
             rename: self.ui_text.get(UiTextKey::ProjectFilesRename).to_string(),
             delete: self.ui_text.get(UiTextKey::ProjectFilesDelete).to_string(),
             copy: self.ui_text.get(UiTextKey::ProjectFilesCopy).to_string(),
@@ -541,6 +545,9 @@ impl WorkbenchView {
                     window,
                     cx,
                 );
+            }
+            ProjectTreeViewEvent::CreateProjectLayout => {
+                self.spawn_project_layout_scaffold(project_id.clone(), window, cx);
             }
             ProjectTreeViewEvent::RenameEntry { path, new_name } => {
                 self.spawn_project_entry_rename(
@@ -755,6 +762,49 @@ impl WorkbenchView {
                     }
                     Err(error) => {
                         root.load_error = Some(root.localized_project_entry_error(&error));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn spawn_project_layout_scaffold(
+        &mut self,
+        project_id: ProjectId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((project_path, layout)) = self
+            .workspace
+            .project(&project_id)
+            .map(|project| (project.path.clone(), project.layout.clone()))
+        else {
+            return;
+        };
+        let config_paths = self.config_paths.clone();
+        let io_task = cx.background_spawn(async move {
+            create_project_layout_scaffold(&config_paths, &project_path, &layout)
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = io_task.await;
+            let _ = this.update_in(cx, |root, window, cx| {
+                match result {
+                    Ok(scaffold) => {
+                        root.load_error = None;
+                        root.refresh_project_tree(project_id.clone(), window, cx);
+                        root.queue_status_notification(
+                            root.ui_text.get(UiTextKey::ProjectFilesProjectLayoutReady),
+                            format!(
+                                "{} · {}",
+                                scaffold.layout_file.display(),
+                                scaffold.guide_file.display()
+                            ),
+                        );
+                    }
+                    Err(error) => {
+                        root.load_error = Some(error.to_string());
                     }
                 }
                 cx.notify();

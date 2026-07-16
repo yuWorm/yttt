@@ -5,9 +5,10 @@ use yttt::config::{
     default_layout::{DefaultLayoutState, DefaultLayoutTemplate, LayoutLoadWarning},
     layout_loader::{
         LayoutNodeOverride, LayoutOverride, LayoutSource, MergeWarning, PaneOverride,
-        PersonalLayout, ProjectOpenError, TabOverride, export_project_layout, load_recent_projects,
-        merge_layouts, open_project_config, parse_personal_layout, reset_local_override,
-        save_local_layout, serialize_personal_patch, serialize_personal_replace,
+        PersonalLayout, ProjectOpenError, TabOverride, create_project_layout_scaffold,
+        export_project_layout, load_recent_projects, merge_layouts, open_project_config,
+        parse_personal_layout, reset_local_override, save_local_layout, serialize_personal_patch,
+        serialize_personal_replace,
     },
     paths::AppConfigPaths,
 };
@@ -1122,6 +1123,49 @@ fn export_project_config_writes_project_layout_toml() {
 
     assert_eq!(path, project_dir.join(".yttt/layout.toml"));
     assert_eq!(saved, layout);
+}
+
+#[test]
+fn project_layout_scaffold_creates_layout_and_ai_guide() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("scaffold-project");
+    fs::create_dir(&project_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let layout = sample_layout();
+
+    let scaffold = create_project_layout_scaffold(&paths, &project_dir, &layout).unwrap();
+    let saved: ProjectLayout =
+        toml::from_str(&fs::read_to_string(&scaffold.layout_file).unwrap()).unwrap();
+    let guide = fs::read_to_string(&scaffold.guide_file).unwrap();
+
+    assert_eq!(scaffold.layout_file, project_dir.join(".yttt/layout.toml"));
+    assert_eq!(scaffold.guide_file, project_dir.join(".yttt/README.md"));
+    assert!(scaffold.created_layout_file);
+    assert!(scaffold.created_guide_file);
+    assert_eq!(saved, layout);
+    assert!(guide.contains("AI agents should edit `.yttt/layout.toml`"));
+    assert!(guide.contains("Pane IDs must be unique within each tab"));
+    assert!(guide.contains("Do not add `version` or `mode`"));
+}
+
+#[test]
+fn project_layout_scaffold_preserves_existing_files() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("existing-scaffold");
+    let project_config_dir = project_dir.join(".yttt");
+    fs::create_dir_all(&project_config_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let layout_file = project_config_dir.join("layout.toml");
+    let guide_file = project_config_dir.join("README.md");
+    fs::write(&layout_file, "existing layout").unwrap();
+    fs::write(&guide_file, "existing guide").unwrap();
+
+    let scaffold = create_project_layout_scaffold(&paths, &project_dir, &sample_layout()).unwrap();
+
+    assert!(!scaffold.created_layout_file);
+    assert!(!scaffold.created_guide_file);
+    assert_eq!(fs::read_to_string(layout_file).unwrap(), "existing layout");
+    assert_eq!(fs::read_to_string(guide_file).unwrap(), "existing guide");
 }
 
 #[test]

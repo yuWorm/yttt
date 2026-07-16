@@ -1,5 +1,6 @@
 use std::{
-    fs, io,
+    fs::{self, OpenOptions},
+    io::{self, Write as _},
     path::{Path, PathBuf},
 };
 
@@ -18,6 +19,66 @@ use crate::{
 pub use crate::config::personal_layout::PersonalLayout;
 
 const PROJECT_DIR_VARIABLE: &str = "<ProjectDir>";
+const PROJECT_LAYOUT_GUIDE_FILE_NAME: &str = "README.md";
+const PROJECT_LAYOUT_GUIDE: &str = r#"# yttt Project Layout
+
+This directory contains the shareable terminal layout for this project.
+AI agents should edit `.yttt/layout.toml` when asked to create or update the project layout.
+Do not add `version` or `mode`; those fields belong only to personal app-local layouts.
+
+## Schema
+
+- `[project]`
+  - `name`: project display name.
+  - `default_tab`: optional tab ID to select when the project opens.
+- `[[tabs]]`
+  - `id`: stable, unique tab ID.
+  - `title`: visible tab title.
+  - `cwd`: optional working directory, relative to the project root or prefixed with `<ProjectDir>`.
+  - `layout`: one pane or a recursive split.
+- Pane node (`type = "pane"`)
+  - Required: `id`, `title`, `command`.
+  - Optional: `args`, `execution_mode`, `exit_behavior`, `kind`, `notify_on_exit`, `detector`.
+- Split node (`type = "split"`)
+  - Required: `direction`, `ratio`, `left`, `right`.
+  - `direction`: `horizontal` or `vertical`.
+  - `ratio`: number from `0.05` through `0.95`.
+  - `left` and `right`: pane or split nodes.
+
+Pane IDs must be unique within each tab. `default_tab` must match an existing tab ID.
+Use `execution_mode = "shell"` for shell syntax and interactive shells. Use
+`execution_mode = "command"` with `args` when argument boundaries must be preserved.
+`exit_behavior` accepts `close`, `auto_restart`, or `manual_restart`. `kind` accepts
+`shell` or `agent`.
+
+## Example
+
+```toml
+[project]
+name = "Example"
+default_tab = "dev"
+
+[[tabs]]
+id = "dev"
+title = "Development"
+cwd = "<ProjectDir>"
+
+[tabs.layout]
+type = "split"
+direction = "horizontal"
+ratio = 0.6
+left = { type = "pane", id = "server", title = "Server", command = "npm", args = ["run", "dev"], execution_mode = "command", exit_behavior = "auto_restart" }
+right = { type = "pane", id = "shell", title = "Shell", command = "", execution_mode = "shell", exit_behavior = "manual_restart" }
+```
+
+## AI checklist
+
+1. Inspect the repository's real scripts and tools before choosing commands.
+2. Preserve stable tab and pane IDs when updating an existing layout.
+3. Keep commands portable; prefer project-relative `cwd` values.
+4. Produce valid TOML and keep split ratios within the supported range.
+5. Do not invent services or commands that are not present in the repository.
+"#;
 
 #[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize, PartialEq)]
 pub struct LayoutOverride {
@@ -151,6 +212,11 @@ pub enum ProjectOpenError {
     },
     #[error("failed to write project layout at {path}: {source}")]
     WriteProjectLayout {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("failed to write project layout guide at {path}: {source}")]
+    WriteProjectLayoutGuide {
         path: PathBuf,
         source: std::io::Error,
     },
@@ -326,6 +392,85 @@ impl LocalLayoutFileSystem for StdLocalLayoutFileSystem {
     fn remove_file(&self, path: &Path) -> io::Result<()> {
         fs::remove_file(path)
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectLayoutScaffold {
+    pub layout_file: PathBuf,
+    pub guide_file: PathBuf,
+    pub created_layout_file: bool,
+    pub created_guide_file: bool,
+}
+
+pub fn create_project_layout_scaffold(
+    paths: &AppConfigPaths,
+    project_path: &Path,
+    layout: &ProjectLayout,
+) -> Result<ProjectLayoutScaffold, ProjectOpenError> {
+    let layout_file = paths.project_layout_file(project_path);
+    let project_config_dir = layout_file
+        .parent()
+        .expect("project layout path must have a parent");
+    fs::create_dir_all(project_config_dir).map_err(|source| {
+        ProjectOpenError::CreateConfigDirectory {
+            path: project_config_dir.to_path_buf(),
+            source,
+        }
+    })?;
+
+    let layout_source = toml::to_string_pretty(layout).map_err(|source| {
+        ProjectOpenError::SerializeProjectLayout {
+            path: layout_file.clone(),
+            source,
+        }
+    })?;
+    let created_layout_file =
+        write_new_file(&layout_file, layout_source.as_bytes()).map_err(|source| {
+            ProjectOpenError::WriteProjectLayout {
+                path: layout_file.clone(),
+                source,
+            }
+        })?;
+
+    let guide_file = project_config_dir.join(PROJECT_LAYOUT_GUIDE_FILE_NAME);
+    let created_guide_file =
+        write_new_file(&guide_file, PROJECT_LAYOUT_GUIDE.as_bytes()).map_err(|source| {
+            ProjectOpenError::WriteProjectLayoutGuide {
+                path: guide_file.clone(),
+                source,
+            }
+        })?;
+
+    Ok(ProjectLayoutScaffold {
+        layout_file,
+        guide_file,
+        created_layout_file,
+        created_guide_file,
+    })
+}
+
+fn write_new_file(path: &Path, contents: &[u8]) -> io::Result<bool> {
+    let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            return if path.is_file() {
+                Ok(false)
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "path exists and is not a regular file",
+                ))
+            };
+        }
+        Err(error) => return Err(error),
+    };
+
+    if let Err(error) = file.write_all(contents) {
+        drop(file);
+        let _ = fs::remove_file(path);
+        return Err(error);
+    }
+    Ok(true)
 }
 
 pub fn export_project_layout(

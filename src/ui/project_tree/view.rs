@@ -35,6 +35,7 @@ pub enum ProjectTreeViewEvent {
     SelectPath(PathBuf),
     ToggleDirectory { path: PathBuf, expanded: bool },
     OpenFile(PathBuf),
+    CreateProjectLayout,
     CreateEntry { parent: PathBuf, input: String },
     RenameEntry { path: PathBuf, new_name: String },
     RequestDelete(PathBuf),
@@ -66,6 +67,7 @@ impl Default for ProjectTreeRenderText {
 pub struct ProjectTreeInteractionText {
     pub new_file: String,
     pub new_directory: String,
+    pub create_project_layout: String,
     pub rename: String,
     pub delete: String,
     pub copy: String,
@@ -81,6 +83,7 @@ impl Default for ProjectTreeInteractionText {
         Self {
             new_file: "New File".to_string(),
             new_directory: "New Folder".to_string(),
+            create_project_layout: "Create Project Layout".to_string(),
             rename: "Rename".to_string(),
             delete: "Delete".to_string(),
             copy: "Copy".to_string(),
@@ -428,6 +431,10 @@ impl ProjectTreeView {
 
     pub fn request_refresh(&mut self, cx: &mut Context<Self>) {
         cx.emit(ProjectTreeViewEvent::Refresh);
+    }
+
+    fn request_project_layout_scaffold(&mut self, cx: &mut Context<Self>) {
+        cx.emit(ProjectTreeViewEvent::CreateProjectLayout);
     }
 
     pub fn begin_create_selected(
@@ -788,6 +795,7 @@ impl Render for ProjectTreeView {
             let new_file_row = row.clone();
             let new_directory_view = menu_view.clone();
             let new_directory_row = row.clone();
+            let project_layout_view = menu_view.clone();
             let hidden_view = menu_view.clone();
             let rename_view = menu_view.clone();
             let rename_row = row.clone();
@@ -812,6 +820,13 @@ impl Render for ProjectTreeView {
                     let row = new_directory_row.clone();
                     let _ = new_directory_view.update(cx, |view, view_cx| {
                         view.begin_create(Some(row), true, window, view_cx);
+                    });
+                }),
+            )
+            .item(
+                PopupMenuItem::new(text.create_project_layout.clone()).on_click(move |_, _, cx| {
+                    let _ = project_layout_view.update(cx, |view, view_cx| {
+                        view.request_project_layout_scaffold(view_cx);
                     });
                 }),
             )
@@ -1298,7 +1313,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn hidden_files_toggle_emits_global_setting_value(cx: &mut gpui::TestAppContext) {
+    fn tree_settings_and_project_layout_requests_emit_events(cx: &mut gpui::TestAppContext) {
         cx.update(gpui_component::init);
         let snapshot =
             ProjectTreeRenderSnapshot::from_tree(&ProjectFileTree::new("/project"), None);
@@ -1324,6 +1339,7 @@ mod tests {
             view.toggle_show_hidden(view_cx);
             view.set_show_hidden(true, view_cx);
             view.toggle_show_hidden(view_cx);
+            view.request_project_layout_scaffold(view_cx);
         });
 
         assert_eq!(
@@ -1331,6 +1347,7 @@ mod tests {
             [
                 ProjectTreeViewEvent::SetShowHidden(true),
                 ProjectTreeViewEvent::SetShowHidden(false),
+                ProjectTreeViewEvent::CreateProjectLayout,
             ]
         );
         drop(subscription);
