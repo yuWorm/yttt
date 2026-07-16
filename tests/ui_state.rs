@@ -13,6 +13,7 @@ use yttt::{
     config::{
         default_layout::{BuiltinAgent, DefaultLayoutKind, DefaultLayoutTemplate},
         keybindings::default_keybindings,
+        layout_loader::{RecentProjectConfig, RecentProjectsConfig},
         paths::AppConfigPaths,
         settings::{
             AppSettings, EditorAutosave, LanguageSetting, WindowBackgroundEffect,
@@ -237,8 +238,100 @@ fn root_view_empty_workspace_exposes_visible_actions() {
 
     assert_eq!(
         root.visible_empty_workspace_actions(),
-        vec!["Open Directory", "Open Recent", "Command Palette"]
+        vec![
+            "Open Directory",
+            "Open Recent",
+            "Restore Last Session",
+            "Command Palette"
+        ]
     );
+}
+
+#[gpui::test]
+fn empty_workspace_always_renders_restore_button(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut settings = load_or_create_settings(&paths).unwrap().settings;
+    settings.general.onboarding_completed = true;
+    save_settings(&paths, &settings).unwrap();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths(paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    cx.refresh().unwrap();
+
+    cx.read(|app| assert!(!root.read(app).has_last_opened_projects()));
+    assert!(
+        cx.debug_bounds("empty-restore-last-session").is_some(),
+        "empty workspace must always render the restore button"
+    );
+}
+
+#[test]
+fn legacy_recent_project_is_available_for_manual_restore() {
+    let temp = tempdir().unwrap();
+    let project = temp.path().join("legacy-project");
+    fs::create_dir(&project).unwrap();
+    let project = project.canonicalize().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    fs::create_dir_all(paths.config_dir()).unwrap();
+    fs::write(
+        paths.recent_projects_file(),
+        toml::to_string_pretty(&RecentProjectsConfig {
+            projects: vec![RecentProjectConfig {
+                title: "legacy-project".to_string(),
+                path: project.clone(),
+            }],
+            ..Default::default()
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    let mut settings = AppSettings::default();
+    settings.general.onboarding_completed = true;
+    save_settings(&paths, &settings).unwrap();
+
+    let mut root = WorkbenchView::with_config_paths(paths);
+    assert!(root.workspace().opened_projects().is_empty());
+    assert!(root.has_last_opened_projects());
+    assert_eq!(root.restore_last_opened_projects(), 1);
+    assert_eq!(root.workspace().opened_projects()[0].path, project);
+}
+
+#[test]
+fn closing_last_project_preserves_manual_restore_without_startup_reopen() {
+    let temp = tempdir().unwrap();
+    let project = temp.path().join("closed-project");
+    fs::create_dir(&project).unwrap();
+    let project = project.canonicalize().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut settings = AppSettings::default();
+    settings.general.onboarding_completed = true;
+    save_settings(&paths, &settings).unwrap();
+
+    let mut root = WorkbenchView::with_config_paths(paths.clone());
+    root.open_project_path(&project).unwrap();
+    root.run_command(CommandId::ProjectClose).unwrap();
+    if root.has_pending_project_close() {
+        root.confirm_pending_project_close().unwrap();
+    }
+    assert!(root.workspace().opened_projects().is_empty());
+    assert!(root.has_last_opened_projects());
+    root.set_restore_last_session_enabled(true).unwrap();
+    drop(root);
+
+    let mut restarted = WorkbenchView::with_config_paths(paths);
+    assert!(
+        restarted.workspace().opened_projects().is_empty(),
+        "startup restore must not reopen a project that was explicitly closed"
+    );
+    assert_eq!(restarted.restore_last_opened_projects(), 1);
+    assert_eq!(restarted.workspace().opened_projects()[0].path, project);
 }
 
 #[test]

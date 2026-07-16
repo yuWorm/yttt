@@ -994,21 +994,21 @@ pub(super) fn empty_workspace(
                         this.on_open_project_palette(&OpenProjectPalette, window, cx);
                     })),
                 )
-                .when(can_restore_last_session, |actions| {
-                    actions.child(
-                        workbench_action_button(
-                            "empty-restore-last-session",
-                            ui_text.get(UiTextKey::RestoreLastSession),
-                            None,
-                            ActionEmphasis::Secondary,
-                        )
-                        .on_click(cx.listener(|this, _, _window, cx| {
-                            this.restore_last_opened_projects();
-                            cx.notify();
-                        }))
-                        .debug_selector(|| "empty-restore-last-session".to_string()),
+                .child(
+                    workbench_action_button(
+                        "empty-restore-last-session",
+                        ui_text.get(UiTextKey::RestoreLastSession),
+                        None,
+                        ActionEmphasis::Secondary,
                     )
-                })
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.restore_last_opened_projects();
+                        cx.notify();
+                    }))
+                    .disabled(!can_restore_last_session)
+                    .tab_stop(can_restore_last_session)
+                    .debug_selector(|| "empty-restore-last-session".to_string()),
+                )
                 .child(
                     workbench_action_button(
                         "empty-command-palette",

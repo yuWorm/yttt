@@ -176,6 +176,8 @@ pub struct RecentProjectsConfig {
     pub projects: Vec<RecentProjectConfig>,
     #[serde(default)]
     pub last_opened_projects: Vec<PathBuf>,
+    #[serde(default)]
+    pub last_restorable_projects: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
@@ -837,6 +839,9 @@ pub fn save_last_opened_projects(
     recent_projects: &mut RecentProjectsConfig,
     project_paths: Vec<PathBuf>,
 ) -> Result<(), ProjectOpenError> {
+    if !project_paths.is_empty() {
+        recent_projects.last_restorable_projects = project_paths.clone();
+    }
     recent_projects.last_opened_projects = project_paths;
     write_recent_projects(paths, recent_projects)
 }

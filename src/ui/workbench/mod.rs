@@ -410,7 +410,7 @@ impl WorkbenchView {
         let mut root =
             Self::with_workspace_and_config_paths(Workspace::new(), config_paths, force_onboarding);
         if root.restore_last_session_enabled() {
-            root.restore_last_opened_projects();
+            root.restore_projects_open_at_last_exit();
         }
         root
     }
@@ -427,10 +427,37 @@ impl WorkbenchView {
     }
     pub fn has_last_opened_projects(&self) -> bool {
         !self.recent_projects_config.last_opened_projects.is_empty()
+            || !self
+                .recent_projects_config
+                .last_restorable_projects
+                .is_empty()
+            || !self.recent_projects_config.projects.is_empty()
     }
 
     pub fn restore_last_opened_projects(&mut self) -> usize {
-        let project_paths = self.recent_projects_config.last_opened_projects.clone();
+        let project_paths = if !self.recent_projects_config.last_opened_projects.is_empty() {
+            self.recent_projects_config.last_opened_projects.clone()
+        } else if !self
+            .recent_projects_config
+            .last_restorable_projects
+            .is_empty()
+        {
+            self.recent_projects_config.last_restorable_projects.clone()
+        } else {
+            self.recent_projects_config
+                .projects
+                .first()
+                .map(|project| vec![project.path.clone()])
+                .unwrap_or_default()
+        };
+        self.restore_project_paths(project_paths)
+    }
+
+    fn restore_projects_open_at_last_exit(&mut self) -> usize {
+        self.restore_project_paths(self.recent_projects_config.last_opened_projects.clone())
+    }
+
+    fn restore_project_paths(&mut self, project_paths: Vec<PathBuf>) -> usize {
         let mut restored = 0;
         let mut messages = self.load_error.take().into_iter().collect::<Vec<_>>();
         for project_path in project_paths {
@@ -1411,9 +1438,7 @@ impl WorkbenchView {
             .iter()
             .map(|key| self.ui_text.get(*key))
             .collect::<Vec<_>>();
-        if self.has_last_opened_projects() {
-            actions.insert(2, self.ui_text.get(UiTextKey::RestoreLastSession));
-        }
+        actions.insert(2, self.ui_text.get(UiTextKey::RestoreLastSession));
         actions
     }
 
