@@ -363,10 +363,16 @@ fn root_view_sidebar_release_persists_defaults_without_rewriting_other_sessions(
 #[gpui::test]
 fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut settings = AppSettings::default();
+    settings.general.onboarding_completed = true;
+    save_settings(&paths, &settings).unwrap();
+    let view_paths = paths.clone();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::dev_fixture());
+        let root = cx.new(|_| WorkbenchView::with_config_paths(view_paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
