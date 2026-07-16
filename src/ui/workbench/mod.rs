@@ -674,7 +674,6 @@ impl WorkbenchView {
             self.queue_focus_change_autosave(document_id);
         }
         self.workspace.select_project(project_id)?;
-        self.refresh_selected_project_git_status();
         if let Some(active) = self.active_work_item() {
             self.apply_active_work_item(&active)?;
         }
@@ -1938,7 +1937,6 @@ impl WorkbenchView {
                     self.app_settings.project_panel.default_open,
                     self.app_settings.project_panel.width,
                 );
-                self.refresh_project_git_status(&project_id, &opened_path);
                 self.queue_selected_terminal_focus();
                 self.project
                     .layout_source_messages
@@ -2516,11 +2514,6 @@ impl WorkbenchView {
         self.ui_text.get(key).to_string()
     }
 
-    fn refresh_project_git_status(&mut self, project_id: &ProjectId, project_path: &Path) {
-        let status = read_project_git_status(project_path);
-        self.apply_project_git_status(project_id, status);
-    }
-
     fn apply_project_git_status(
         &mut self,
         project_id: &ProjectId,
@@ -2533,21 +2526,6 @@ impl WorkbenchView {
         } else {
             self.project.project_git_statuses.remove(project_id);
         }
-    }
-
-    fn refresh_selected_project_git_status(&mut self) {
-        let Some(project_id) = self.workspace.selected_project_id().cloned() else {
-            return;
-        };
-        let Some(project_path) = self
-            .workspace
-            .project(&project_id)
-            .map(|project| project.path.clone())
-        else {
-            return;
-        };
-
-        self.refresh_project_git_status(&project_id, &project_path);
     }
 
     fn current_input_owner_registration(&self) -> InputOwnerRegistration {

@@ -4,6 +4,22 @@ use std::{
     process::{Command, Stdio},
 };
 
+#[cfg(windows)]
+fn git_command() -> Command {
+    use std::os::windows::process::CommandExt as _;
+
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let mut command = Command::new("git");
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
+
+#[cfg(not(windows))]
+fn git_command() -> Command {
+    Command::new("git")
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GitFileStatus {
     Added,
@@ -238,7 +254,7 @@ pub fn switch_project_git_branch(project_path: &Path, branch: &GitBranch) -> Res
     if !is_safe_git_ref_name(&branch.name) {
         return Err(format!("Invalid Git branch name: {}", branch.name));
     }
-    let mut command = Command::new("git");
+    let mut command = git_command();
     command.arg("switch");
     if branch.kind == GitBranchKind::Remote {
         command.arg("--track");
@@ -281,7 +297,7 @@ fn read_project_git_diff_output(
     mode: GitDiffMode,
     ignore_whitespace: bool,
 ) -> Result<String, String> {
-    let mut command = Command::new("git");
+    let mut command = git_command();
     command.arg("diff");
     if mode == GitDiffMode::Staged {
         command.arg("--cached");
@@ -308,7 +324,7 @@ fn read_project_git_diff_output(
         .map_err(|_| "Git diff output was not valid UTF-8".to_string())?;
     if mode == GitDiffMode::Unstaged {
         for path in read_untracked_paths(project_path)? {
-            let mut command = Command::new("git");
+            let mut command = git_command();
             command.args(["diff", "--no-index", "--no-ext-diff", "--no-color"]);
             if ignore_whitespace {
                 command.arg("-w");
@@ -340,7 +356,7 @@ fn read_project_git_diff_output(
 }
 
 pub fn read_project_git_status(project_path: &Path) -> Option<ProjectGitStatus> {
-    let output = Command::new("git")
+    let output = git_command()
         .args(["status", "--porcelain=v1", "-b", "--ignored=matching"])
         .env("GIT_OPTIONAL_LOCKS", "0")
         .current_dir(project_path)
@@ -634,7 +650,7 @@ fn read_git_branch_group(
     reference: &str,
     kind: GitBranchKind,
 ) -> Result<Vec<GitBranch>, String> {
-    let output = Command::new("git")
+    let output = git_command()
         .args([
             "for-each-ref",
             "--format=%(refname:short)\t%(HEAD)",
@@ -697,7 +713,7 @@ fn is_safe_git_ref_name(name: &str) -> bool {
 }
 
 fn read_untracked_paths(project_path: &Path) -> Result<Vec<PathBuf>, String> {
-    let output = Command::new("git")
+    let output = git_command()
         .args(["ls-files", "--others", "--exclude-standard", "-z", "--"])
         .current_dir(project_path)
         .stdin(Stdio::null())
