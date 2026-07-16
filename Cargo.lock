@@ -9579,7 +9579,7 @@ dependencies = [
 
 [[package]]
 name = "yttt"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "cocoa 0.26.0",
