@@ -732,6 +732,7 @@ impl WorkbenchView {
         else {
             return;
         };
+        let refresh_parent = parent.clone();
         let io_task = cx
             .background_spawn(async move { create_project_entry(&project_root, &parent, &input) });
         cx.spawn_in(window, async move |this, cx| {
@@ -750,7 +751,12 @@ impl WorkbenchView {
                                 .select(Some(created.relative_path.clone()));
                         }
                         root.load_error = None;
-                        root.refresh_project_tree(project_id.clone(), window, cx);
+                        root.refresh_project_tree_after_mutation(
+                            project_id.clone(),
+                            BTreeSet::from([refresh_parent.clone()]),
+                            window,
+                            cx,
+                        );
                         if !created.kind.is_directory() {
                             root.spawn_project_file_open(
                                 project_id.clone(),
@@ -828,6 +834,10 @@ impl WorkbenchView {
         else {
             return;
         };
+        let refresh_parent = relative_path
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf();
         let moved_relative_path = relative_path.clone();
         let io_task = cx.background_spawn(async move {
             rename_project_entry(&project_root, &relative_path, &new_name)
@@ -856,7 +866,12 @@ impl WorkbenchView {
                                 .select(Some(renamed.relative_path.clone()));
                         }
                         root.load_error = None;
-                        root.refresh_project_tree(project_id.clone(), window, cx);
+                        root.refresh_project_tree_after_mutation(
+                            project_id.clone(),
+                            BTreeSet::from([refresh_parent.clone()]),
+                            window,
+                            cx,
+                        );
                     }
                     Err(error) => {
                         root.load_error = Some(root.localized_project_entry_error(&error));
@@ -958,6 +973,10 @@ impl WorkbenchView {
         else {
             return;
         };
+        let refresh_parent = relative_path
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf();
         let io_task =
             cx.background_spawn(async move { delete_project_entry(&project_root, &relative_path) });
         cx.spawn_in(window, async move |this, cx| {
@@ -974,7 +993,12 @@ impl WorkbenchView {
                             session.file_tree_mut().select(None);
                         }
                         root.load_error = None;
-                        root.refresh_project_tree(project_id.clone(), window, cx);
+                        root.refresh_project_tree_after_mutation(
+                            project_id.clone(),
+                            BTreeSet::from([refresh_parent.clone()]),
+                            window,
+                            cx,
+                        );
                     }
                     Err(error) => {
                         root.load_error = Some(root.localized_project_entry_error(&error));
@@ -1013,6 +1037,12 @@ impl WorkbenchView {
         };
         let source_relative_path = clipboard.relative_path.clone();
         let mode = clipboard.mode;
+        let destination_refresh_directory = destination_directory.clone();
+        let source_refresh_directory = clipboard
+            .relative_path
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf();
         let io_task = cx.background_spawn(async move {
             paste_project_entry(
                 &source_root,
@@ -1056,13 +1086,27 @@ impl WorkbenchView {
                         if clipboard.source_project_id != destination_project_id
                             && mode == ProjectEntryPasteMode::Cut
                         {
-                            root.refresh_project_tree(
+                            root.refresh_project_tree_after_mutation(
                                 clipboard.source_project_id.clone(),
+                                BTreeSet::from([source_refresh_directory.clone()]),
                                 window,
                                 cx,
                             );
                         }
-                        root.refresh_project_tree(destination_project_id.clone(), window, cx);
+                        let mut destination_refresh_directories =
+                            BTreeSet::from([destination_refresh_directory.clone()]);
+                        if clipboard.source_project_id == destination_project_id
+                            && mode == ProjectEntryPasteMode::Cut
+                        {
+                            destination_refresh_directories
+                                .insert(source_refresh_directory.clone());
+                        }
+                        root.refresh_project_tree_after_mutation(
+                            destination_project_id.clone(),
+                            destination_refresh_directories,
+                            window,
+                            cx,
+                        );
                     }
                     Err(error) => {
                         root.load_error = Some(root.localized_project_entry_error(&error));
@@ -1109,6 +1153,19 @@ impl WorkbenchView {
             })
             .detach();
         }
+    }
+
+    fn refresh_project_tree_after_mutation(
+        &mut self,
+        project_id: ProjectId,
+        directories: BTreeSet<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for request in self.refresh_project_tree_directory_states(&project_id, &directories) {
+            self.spawn_project_directory_scan(project_id.clone(), request, window, cx);
+        }
+        self.check_project_documents_for_external_changes(&project_id, window, cx);
     }
 
     pub(super) fn queue_project_tree_refresh(&mut self, project_id: ProjectId) -> bool {
