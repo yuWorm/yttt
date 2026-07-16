@@ -1809,7 +1809,7 @@ where
         .rounded_md()
         .cursor_pointer()
         .bg(if active {
-            theme.accent
+            theme.active_surface
         } else {
             rgba(0x00000000)
         })
