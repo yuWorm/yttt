@@ -74,6 +74,10 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test --locked --target "${{ matrix.target }}" -p yttt --lib
 
+      - name: Test Windows titlebar actions
+        if: runner.os == 'Windows'
+        run: cargo test --locked --target "${{ matrix.target }}" -p yttt --test ui_state titlebar_action_buttons_open_command_picker_and_settings
+
       - name: Verify Windows executable resources
         if: runner.os == 'Windows'
         shell: pwsh

@@ -133,6 +133,7 @@ where
                                 .id("titlebar-git-branch")
                                 .debug_selector(|| "titlebar-git-branch".to_string())
                                 .cursor_pointer()
+                                .occlude()
                                 .rounded_sm()
                                 .px_1()
                                 .text_xs()
@@ -155,6 +156,7 @@ where
                                 .id("titlebar-git-changes")
                                 .debug_selector(|| "titlebar-git-changes".to_string())
                                 .cursor_pointer()
+                                .occlude()
                                 .rounded_sm()
                                 .border_1()
                                 .border_color(theme.border)
@@ -175,6 +177,7 @@ where
                         .flex()
                         .items_center()
                         .h_full()
+                        .occlude()
                         .child(
                             workbench_icon_button(
                                 "titlebar-command-palette",
