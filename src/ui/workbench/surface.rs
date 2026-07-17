@@ -88,9 +88,10 @@ impl WorkbenchView {
                     .iter()
                     .map(|document_id| FileTabSnapshot {
                         id: document_id.clone(),
-                        relative_path: document_id
-                            .canonical_path
-                            .strip_prefix(&project.path)
+                        relative_path: project
+                            .location
+                            .local_path()
+                            .and_then(|root| document_id.canonical_path.strip_prefix(root).ok())
                             .unwrap_or(&document_id.canonical_path)
                             .to_path_buf(),
                         dirty: self
@@ -416,9 +417,13 @@ impl WorkbenchView {
             .iter()
             .find(|tab| tab.id == project.selected_tab_id)?;
 
+        let project_path = match &project.location {
+            ProjectLocation::Local { path } => path.clone(),
+            ProjectLocation::Ssh { root, .. } => PathBuf::from(root.as_str()),
+        };
         Some((
             selected_project_id.as_str().to_string(),
-            tab.cwd.clone().unwrap_or_else(|| project.path.clone()),
+            tab.cwd.clone().unwrap_or(project_path),
             project.layout.project.name.clone(),
             project.selected_tab_id.clone(),
             tab.title.clone(),
@@ -430,6 +435,10 @@ impl WorkbenchView {
         let mut contexts = Vec::new();
         let shell = self.resolved_terminal_shell();
         for project in self.workspace.opened_projects() {
+            let project_path = match &project.location {
+                ProjectLocation::Local { path } => path.clone(),
+                ProjectLocation::Ssh { root, .. } => PathBuf::from(root.as_str()),
+            };
             for tab in &project.layout.tabs {
                 if !tab.startup.is_eager()
                     || !self.layout_has_uninitialized_terminal_pane(
@@ -442,7 +451,7 @@ impl WorkbenchView {
                 }
                 collect_terminal_pane_contexts(
                     project.id.as_str(),
-                    &project.path,
+                    &project_path,
                     &project.layout.project.name,
                     &tab.id,
                     &tab.title,
@@ -491,10 +500,21 @@ impl WorkbenchView {
 
     fn ensure_terminal_pane(
         &mut self,
-        context: TerminalPaneContext,
+        mut context: TerminalPaneContext,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<TerminalPaneView> {
+        let project_id = ProjectId::new(&context.project_id);
+        context.ssh =
+            self.workspace
+                .project(&project_id)
+                .and_then(|project| match &project.location {
+                    ProjectLocation::Ssh { connection_id, .. } => Some(SshTerminalContext {
+                        connection_id: connection_id.clone(),
+                        transport: self.ssh.transport.clone(),
+                    }),
+                    ProjectLocation::Local { .. } => None,
+                });
         let key = terminal_pane_key(&context.project_id, &context.tab_id, &context.pane.id);
         if let Some(pane_view) = self.terminal.terminal_panes.get(&key) {
             return pane_view.clone();
@@ -544,6 +564,7 @@ impl WorkbenchView {
             shell: self.resolved_terminal_shell(),
             is_focused: input.is_focused,
             terminal_input_gate: self.terminal.terminal_input_gate.clone(),
+            ssh: None,
         };
         let pane_view = self.ensure_terminal_pane(context, window, cx);
 

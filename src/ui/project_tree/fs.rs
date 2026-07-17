@@ -50,6 +50,8 @@ pub enum ProjectTreeFsError {
         #[source]
         source: std::io::Error,
     },
+    #[error("remote project tree error at {path}: {message}")]
+    Remote { path: PathBuf, message: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,6 +87,10 @@ pub enum ProjectEntryFsError {
         #[source]
         source: io::Error,
     },
+    #[error("project entry operation is not supported: {operation}")]
+    UnsupportedOperation { operation: &'static str },
+    #[error("remote project entry error at {path}: {message}")]
+    Remote { path: PathBuf, message: String },
 }
 
 pub fn create_project_entry(

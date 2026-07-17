@@ -1,10 +1,8 @@
-use std::path::PathBuf;
-
 use gpui::{Entity, ScrollHandle, Subscription};
 use gpui_component::input::InputState;
 
 use crate::{
-    model::ids::ProjectId,
+    model::{ids::ProjectId, project::ProjectLocation},
     palette::{ActivePalette, RecentProject},
     runtime::git_status::GitBranch,
 };
@@ -22,8 +20,9 @@ pub(in super::super) struct PaletteControllerState {
     pub(in super::super) git_branch_loading: bool,
     pub(in super::super) git_branch_switching: bool,
     pub(in super::super) git_branch_error: Option<String>,
-    pub(in super::super) pending_git_branch_load: Option<(ProjectId, PathBuf, u64)>,
-    pub(in super::super) pending_git_branch_switch: Option<(ProjectId, PathBuf, GitBranch, u64)>,
+    pub(in super::super) pending_git_branch_load: Option<(ProjectId, ProjectLocation, u64)>,
+    pub(in super::super) pending_git_branch_switch:
+        Option<(ProjectId, ProjectLocation, GitBranch, u64)>,
 }
 
 impl PaletteControllerState {

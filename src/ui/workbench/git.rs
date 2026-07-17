@@ -43,7 +43,7 @@ pub(super) enum GitDiffPanelContent {
 #[derive(Clone, Debug)]
 pub(super) struct GitDiffPanel {
     pub(super) project_id: ProjectId,
-    pub(super) project_path: PathBuf,
+    pub(super) project_location: ProjectLocation,
     pub(super) mode: GitDiffMode,
     pub(super) view_mode: GitDiffViewMode,
     pub(super) ignore_whitespace: bool,
@@ -72,7 +72,7 @@ impl WorkbenchView {
     }
 
     pub fn open_git_branch_switcher(&mut self) -> Result<(), WorkbenchError> {
-        let (project_id, project_path) = self.selected_project_git_target()?;
+        let (project_id, project_location) = self.selected_project_git_target()?;
         self.overlays.git_diff_panel = None;
         self.open_palette(PaletteKind::GitBranch);
         self.palette.git_branch_generation = self.palette.git_branch_generation.wrapping_add(1);
@@ -83,18 +83,18 @@ impl WorkbenchView {
         self.palette.git_branch_switching = false;
         self.palette.git_branch_error = None;
         self.palette.pending_git_branch_switch = None;
-        self.palette.pending_git_branch_load = Some((project_id, project_path, generation));
+        self.palette.pending_git_branch_load = Some((project_id, project_location, generation));
         Ok(())
     }
 
     pub fn open_git_diff_panel(&mut self) -> Result<(), WorkbenchError> {
-        let (project_id, project_path) = self.selected_project_git_target()?;
+        let (project_id, project_location) = self.selected_project_git_target()?;
         self.close_palette();
         self.overlays.git_diff_generation = self.overlays.git_diff_generation.wrapping_add(1);
         let generation = self.overlays.git_diff_generation;
         self.overlays.git_diff_panel = Some(GitDiffPanel {
             project_id: project_id.clone(),
-            project_path: project_path.clone(),
+            project_location: project_location.clone(),
             mode: GitDiffMode::Unstaged,
             view_mode: GitDiffViewMode::Unified,
             ignore_whitespace: false,
@@ -116,7 +116,7 @@ impl WorkbenchView {
             unified_content_width: 900.0,
             split_content_width: 700.0,
         });
-        self.overlays.pending_git_diff_load = Some((project_id, project_path, generation));
+        self.overlays.pending_git_diff_load = Some((project_id, project_location, generation));
         self.sync_input_owner_state();
         Ok(())
     }
@@ -297,7 +297,7 @@ impl WorkbenchView {
         panel.file_scroll_handle = UniformListScrollHandle::new();
         self.overlays.pending_git_diff_load = Some((
             panel.project_id.clone(),
-            panel.project_path.clone(),
+            panel.project_location.clone(),
             generation,
         ));
     }
@@ -391,10 +391,10 @@ impl WorkbenchView {
         let Some(project_id) = self.palette.git_branch_project_id.clone() else {
             return false;
         };
-        let Some(project_path) = self
+        let Some(project_location) = self
             .workspace
             .project(&project_id)
-            .map(|project| project.path.clone())
+            .map(|project| project.location.clone())
         else {
             return false;
         };
@@ -402,7 +402,7 @@ impl WorkbenchView {
         self.palette.git_branch_error = None;
         self.palette.pending_git_branch_switch = Some((
             project_id,
-            project_path,
+            project_location,
             branch,
             self.palette.git_branch_generation,
         ));
@@ -414,18 +414,25 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some((project_id, project_path, generation)) =
+        if let Some((project_id, project_location, generation)) =
             self.palette.pending_git_branch_load.take()
         {
-            let task = cx.background_spawn({
-                let project_path = project_path.clone();
-                async move { read_project_git_branches(&project_path) }
+            let services = self.project.services.get(&project_id).cloned();
+            let task = cx.background_spawn(async move {
+                let services =
+                    services.ok_or_else(|| "Project services are unavailable".to_string())?;
+                read_project_git_branches_with(&services)
             });
             cx.spawn_in(window, async move |this, cx| {
                 let result = task.await;
                 let _ = this.update_in(cx, |root, _window, cx| {
                     if root.palette.git_branch_generation != generation
                         || root.palette.git_branch_project_id.as_ref() != Some(&project_id)
+                        || root
+                            .workspace
+                            .project(&project_id)
+                            .map(|project| &project.location)
+                            != Some(&project_location)
                     {
                         return;
                     }
@@ -446,18 +453,25 @@ impl WorkbenchView {
             .detach();
         }
 
-        if let Some((project_id, project_path, branch, generation)) =
+        if let Some((project_id, project_location, branch, generation)) =
             self.palette.pending_git_branch_switch.take()
         {
-            let task = cx.background_spawn({
-                let project_path = project_path.clone();
-                let branch = branch.clone();
-                async move { switch_project_git_branch(&project_path, &branch) }
+            let services = self.project.services.get(&project_id).cloned();
+            let task = cx.background_spawn(async move {
+                let services =
+                    services.ok_or_else(|| "Project services are unavailable".to_string())?;
+                switch_project_git_branch_with(&services, &branch)
             });
             cx.spawn_in(window, async move |this, cx| {
                 let result = task.await;
                 let _ = this.update_in(cx, |root, window, cx| {
-                    if root.palette.git_branch_generation != generation {
+                    if root.palette.git_branch_generation != generation
+                        || root
+                            .workspace
+                            .project(&project_id)
+                            .map(|project| &project.location)
+                            != Some(&project_location)
+                    {
                         return;
                     }
                     root.palette.git_branch_switching = false;
@@ -486,7 +500,7 @@ impl WorkbenchView {
             .detach();
         }
 
-        if let Some((project_id, project_path, generation)) =
+        if let Some((project_id, project_location, generation)) =
             self.overlays.pending_git_diff_load.take()
         {
             let Some((mode, ignore_whitespace, collapsed_folders)) = self
@@ -494,7 +508,7 @@ impl WorkbenchView {
                 .git_diff_panel
                 .as_ref()
                 .filter(|panel| {
-                    panel.project_id == project_id && panel.project_path == project_path
+                    panel.project_id == project_id && panel.project_location == project_location
                 })
                 .map(|panel| {
                     (
@@ -506,16 +520,14 @@ impl WorkbenchView {
             else {
                 return;
             };
-            let task = cx.background_spawn({
-                let project_path = project_path.clone();
-                async move {
-                    read_project_git_diff_result(&project_path, mode, ignore_whitespace).map(
-                        |diff| {
-                            let sidebar_rows = git_diff_sidebar_rows(&diff, &collapsed_folders);
-                            (diff, sidebar_rows)
-                        },
-                    )
-                }
+            let services = self.project.services.get(&project_id).cloned();
+            let task = cx.background_spawn(async move {
+                let services =
+                    services.ok_or_else(|| "Project services are unavailable".to_string())?;
+                read_project_git_diff_result_with(&services, mode, ignore_whitespace).map(|diff| {
+                    let sidebar_rows = git_diff_sidebar_rows(&diff, &collapsed_folders);
+                    (diff, sidebar_rows)
+                })
             });
             cx.spawn_in(window, async move |this, cx| {
                 let result = task.await;
@@ -526,7 +538,8 @@ impl WorkbenchView {
                     let Some(panel) = root.overlays.git_diff_panel.as_mut() else {
                         return;
                     };
-                    if panel.project_id != project_id || panel.project_path != project_path {
+                    if panel.project_id != project_id || panel.project_location != project_location
+                    {
                         return;
                     }
                     match result {
@@ -1094,18 +1107,19 @@ impl WorkbenchView {
             )
     }
 
-    fn selected_project_git_target(&self) -> Result<(ProjectId, PathBuf), WorkbenchError> {
+    fn selected_project_git_target(&self) -> Result<(ProjectId, ProjectLocation), WorkbenchError> {
         let project_id = self
             .workspace
             .selected_project_id()
             .cloned()
             .ok_or(WorkspaceError::NoSelectedProject)?;
-        let project_path = self
+        let project_location = self
             .workspace
             .project(&project_id)
-            .map(|project| project.path.clone())
-            .ok_or_else(|| WorkspaceError::ProjectNotFound(project_id.as_str().to_string()))?;
-        Ok((project_id, project_path))
+            .ok_or_else(|| WorkspaceError::ProjectNotFound(project_id.as_str().to_string()))?
+            .location
+            .clone();
+        Ok((project_id, project_location))
     }
 }
 

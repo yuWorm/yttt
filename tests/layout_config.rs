@@ -655,7 +655,11 @@ fn config_global_default_uses_template_without_creating_personal_file() {
         LayoutSource::GlobalDefault(paths.default_layout_file())
     );
     assert!(opened.warnings.is_empty());
-    assert!(!paths.local_layout_file(&opened.path).exists());
+    assert!(
+        !paths
+            .local_layout_file(opened.descriptor.location.local_path().unwrap())
+            .exists()
+    );
 }
 
 #[test]
@@ -677,7 +681,9 @@ fn config_global_default_project_config_does_not_read_broken_global_file() {
     assert_eq!(opened.layout, sample_layout());
     assert_eq!(
         opened.layout_source,
-        LayoutSource::ProjectConfig(paths.project_layout_file(&opened.path))
+        LayoutSource::ProjectConfig(
+            paths.project_layout_file(opened.descriptor.location.local_path().unwrap()),
+        )
     );
     assert!(opened.warnings.is_empty());
 }
@@ -701,7 +707,9 @@ fn config_project_layout_without_name_uses_project_directory_name() {
     assert_eq!(opened.layout.project.default_tab.as_deref(), Some("shell"));
     assert_eq!(
         opened.layout_source,
-        LayoutSource::ProjectConfig(paths.project_layout_file(&opened.path))
+        LayoutSource::ProjectConfig(
+            paths.project_layout_file(opened.descriptor.location.local_path().unwrap()),
+        )
     );
     assert!(opened.warnings.is_empty());
 }
@@ -794,7 +802,7 @@ fn personal_layout_precedence_applies_patch_to_project_config() {
     assert_eq!(
         opened.layout_source,
         LayoutSource::ProjectConfigWithPersonalPatch {
-            project: paths.project_layout_file(&opened.path),
+            project: paths.project_layout_file(opened.descriptor.location.local_path().unwrap()),
             local,
         }
     );
@@ -957,7 +965,9 @@ fn config_project_layout_reports_project_config_source() {
 
     assert_eq!(
         opened.layout_source,
-        LayoutSource::ProjectConfig(paths.project_layout_file(&opened.path))
+        LayoutSource::ProjectConfig(
+            paths.project_layout_file(opened.descriptor.location.local_path().unwrap()),
+        )
     );
 }
 
@@ -1013,7 +1023,7 @@ fn config_project_layout_merges_app_local_override() {
     assert_eq!(
         opened.layout_source,
         LayoutSource::ProjectConfigWithPersonalPatch {
-            project: paths.project_layout_file(&opened.path),
+            project: paths.project_layout_file(opened.descriptor.location.local_path().unwrap()),
             local: local_layout_file,
         }
     );
@@ -1040,7 +1050,9 @@ fn config_invalid_app_local_override_is_ignored_when_project_config_exists() {
     assert_eq!(opened.layout.project.name, "yttt");
     assert_eq!(
         opened.layout_source,
-        LayoutSource::ProjectConfig(paths.project_layout_file(&opened.path))
+        LayoutSource::ProjectConfig(
+            paths.project_layout_file(opened.descriptor.location.local_path().unwrap()),
+        )
     );
     assert!(matches!(
         opened.warnings.as_slice(),
@@ -1119,7 +1131,10 @@ fn config_recent_projects_are_stored_in_app_config() {
 
     assert_eq!(recent.projects.len(), 1);
     assert_eq!(recent.projects[0].title, "recent-project");
-    assert_eq!(recent.projects[0].path, project_dir.canonicalize().unwrap());
+    assert_eq!(
+        recent.projects[0].location.local_path(),
+        Some(&project_dir.canonicalize().unwrap())
+    );
     assert!(paths.recent_projects_file().exists());
 }
 

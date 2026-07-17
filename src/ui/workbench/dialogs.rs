@@ -892,7 +892,7 @@ pub(super) fn close_project_dialog(
     )
 }
 
-fn yttt_dialog_header<H>(
+pub(super) fn yttt_dialog_header<H>(
     id: &'static str,
     title: impl Into<SharedString>,
     theme: WorkbenchTheme,
@@ -925,7 +925,11 @@ where
         ))
 }
 
-fn yttt_dialog_input(input: &Entity<InputState>, theme: WorkbenchTheme, ui_style: UiStyle) -> Div {
+pub(super) fn yttt_dialog_input(
+    input: &Entity<InputState>,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Div {
     let style = yttt_input_style(YtttInputKind::Dialog, theme, ui_style);
     div()
         .flex()
@@ -944,7 +948,7 @@ fn yttt_dialog_input(input: &Entity<InputState>, theme: WorkbenchTheme, ui_style
         )
 }
 
-fn yttt_dialog_button<H>(
+pub(super) fn yttt_dialog_button<H>(
     cx: &mut Context<WorkbenchView>,
     id: &'static str,
     label: &'static str,
@@ -1013,6 +1017,18 @@ pub(super) fn empty_workspace(
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.on_open_project(&OpenProject, window, cx);
+                    })),
+                )
+                .child(
+                    workbench_action_button(
+                        "empty-open-ssh-project",
+                        ui_text.get(UiTextKey::SshOpenRemoteProject),
+                        None,
+                        ActionEmphasis::Secondary,
+                        ui_style,
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.on_open_ssh_project(&OpenSshProject, window, cx);
                     })),
                 )
                 .child(

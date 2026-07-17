@@ -47,6 +47,14 @@ impl AppConfigPaths {
         self.config_dir.join("recent-projects.toml")
     }
 
+    pub fn ssh_connections_file(&self) -> PathBuf {
+        self.config_dir.join("ssh-connections.toml")
+    }
+
+    pub fn ssh_host_keys_file(&self) -> PathBuf {
+        self.config_dir.join("ssh-host-keys.toml")
+    }
+
     pub fn keybindings_file(&self) -> PathBuf {
         self.config_dir.join("keybindings.toml")
     }

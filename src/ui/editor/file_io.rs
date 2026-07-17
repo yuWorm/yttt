@@ -65,6 +65,8 @@ pub enum ProjectFileIoError {
         #[source]
         source: std::io::Error,
     },
+    #[error("remote project file error at {path}: {message}")]
+    Remote { path: PathBuf, message: String },
 }
 
 pub fn read_project_file(

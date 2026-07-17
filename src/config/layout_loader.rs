@@ -10,9 +10,13 @@ use crate::{
         paths::{AppConfigPaths, canonicalize_path},
         personal_layout::{self, PersonalLayoutFileError},
     },
-    model::layout::{
-        LayoutError, LayoutNode, PaneConfig, PaneKind, ProcessExitBehavior, ProjectConfig,
-        ProjectLayout, TabConfig, TabStartup, TerminalExecutionMode,
+    model::{
+        ids::{ConnectionId, ProjectId},
+        layout::{
+            LayoutError, LayoutNode, PaneConfig, PaneKind, ProcessExitBehavior, ProjectConfig,
+            ProjectLayout, TabConfig, TabStartup, TerminalExecutionMode,
+        },
+        project::{ProjectDescriptor, ProjectLocation, RemotePathBuf},
     },
 };
 
@@ -163,27 +167,129 @@ pub struct LoadedProjectLayout {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectOpenConfig {
-    pub path: PathBuf,
+    pub descriptor: ProjectDescriptor,
     pub layout: ProjectLayout,
     pub layout_source: LayoutSource,
     pub warnings: Vec<LayoutLoadWarning>,
     pub recent_projects: RecentProjectsConfig,
 }
 
-#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub struct RecentProjectsConfig {
+    #[serde(default = "recent_projects_version")]
+    pub version: u32,
     #[serde(default)]
     pub projects: Vec<RecentProjectConfig>,
     #[serde(default)]
-    pub last_opened_projects: Vec<PathBuf>,
+    pub last_opened_projects: Vec<ProjectReferenceConfig>,
     #[serde(default)]
-    pub last_restorable_projects: Vec<PathBuf>,
+    pub last_restorable_projects: Vec<ProjectReferenceConfig>,
 }
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+impl Default for RecentProjectsConfig {
+    fn default() -> Self {
+        Self {
+            version: recent_projects_version(),
+            projects: Vec::new(),
+            last_opened_projects: Vec::new(),
+            last_restorable_projects: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize, PartialEq, Eq)]
+pub struct ProjectReferenceConfig {
+    pub id: ProjectId,
+    #[serde(flatten)]
+    pub location: ProjectLocation,
+}
+
+impl ProjectReferenceConfig {
+    pub fn new(id: ProjectId, location: ProjectLocation) -> Self {
+        Self { id, location }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ProjectReferenceConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Representation {
+            Current {
+                id: ProjectId,
+                #[serde(flatten)]
+                location: ProjectLocation,
+            },
+            Legacy(PathBuf),
+        }
+
+        match Representation::deserialize(deserializer)? {
+            Representation::Current { id, location } => Ok(Self { id, location }),
+            Representation::Legacy(path) => {
+                let location = ProjectLocation::local(path);
+                let id = ProjectId::from_legacy_location(&location.display_path());
+                Ok(Self { id, location })
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize, PartialEq, Eq)]
 pub struct RecentProjectConfig {
+    pub id: ProjectId,
     pub title: String,
-    pub path: PathBuf,
+    #[serde(flatten)]
+    pub location: ProjectLocation,
+}
+
+impl<'de> serde::Deserialize<'de> for RecentProjectConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Representation {
+            Current {
+                id: ProjectId,
+                title: String,
+                #[serde(flatten)]
+                location: ProjectLocation,
+            },
+            Legacy {
+                title: String,
+                path: PathBuf,
+            },
+        }
+
+        match Representation::deserialize(deserializer)? {
+            Representation::Current {
+                id,
+                title,
+                location,
+            } => Ok(Self {
+                id,
+                title,
+                location,
+            }),
+            Representation::Legacy { title, path } => {
+                let location = ProjectLocation::local(path);
+                let id = ProjectId::from_legacy_location(&location.display_path());
+                Ok(Self {
+                    id,
+                    title,
+                    location,
+                })
+            }
+        }
+    }
+}
+
+fn recent_projects_version() -> u32 {
+    1
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -321,13 +427,39 @@ pub fn open_project_config(
 
     let mut loaded = load_project_layout(paths, &project_path, default_state)?;
     resolve_layout_variables(&mut loaded.layout, &project_path);
-    let recent_projects = record_recent_project(paths, &project_path, &loaded.layout.project.name)?;
+    let location = ProjectLocation::local(project_path);
+    let (project_id, recent_projects) =
+        record_recent_project(paths, &location, &loaded.layout.project.name)?;
 
     Ok(ProjectOpenConfig {
-        path: project_path,
+        descriptor: ProjectDescriptor::new(project_id, location),
         layout: loaded.layout,
         layout_source: loaded.source,
         warnings: loaded.warnings,
+        recent_projects,
+    })
+}
+pub fn open_ssh_project_config(
+    paths: &AppConfigPaths,
+    connection_id: ConnectionId,
+    root: RemotePathBuf,
+    title: &str,
+    default_state: &mut DefaultLayoutState,
+) -> Result<ProjectOpenConfig, ProjectOpenError> {
+    let _ = default_state.reload();
+    let mut layout = default_state.template().materialize(title);
+    resolve_layout_variables(&mut layout, Path::new(root.as_str()));
+    let location = ProjectLocation::Ssh {
+        connection_id,
+        root,
+    };
+    let (project_id, recent_projects) =
+        record_recent_project(paths, &location, &layout.project.name)?;
+    Ok(ProjectOpenConfig {
+        descriptor: ProjectDescriptor::new(project_id, location),
+        layout,
+        layout_source: LayoutSource::GlobalDefault(paths.default_layout_file()),
+        warnings: default_state.warnings().to_vec(),
         recent_projects,
     })
 }
@@ -815,35 +947,71 @@ fn write_project_layout(path: &Path, layout: &ProjectLayout) -> Result<(), Proje
 
 fn record_recent_project(
     paths: &AppConfigPaths,
-    project_path: &Path,
+    location: &ProjectLocation,
     title: &str,
-) -> Result<RecentProjectsConfig, ProjectOpenError> {
+) -> Result<(ProjectId, RecentProjectsConfig), ProjectOpenError> {
     let mut recent_projects = load_recent_projects(paths)?;
+    let project_id = recent_projects
+        .projects
+        .iter()
+        .find(|project| &project.location == location)
+        .map(|project| project.id.clone())
+        .unwrap_or_else(ProjectId::random);
     recent_projects
         .projects
-        .retain(|project| project.path != project_path);
+        .retain(|project| &project.location != location);
     recent_projects.projects.insert(
         0,
         RecentProjectConfig {
+            id: project_id.clone(),
             title: title.to_string(),
-            path: project_path.to_path_buf(),
+            location: location.clone(),
         },
     );
     recent_projects.projects.truncate(20);
     write_recent_projects(paths, &recent_projects)?;
-    Ok(recent_projects)
+    Ok((project_id, recent_projects))
 }
 
 pub fn save_last_opened_projects(
     paths: &AppConfigPaths,
     recent_projects: &mut RecentProjectsConfig,
-    project_paths: Vec<PathBuf>,
+    projects: Vec<ProjectReferenceConfig>,
 ) -> Result<(), ProjectOpenError> {
-    if !project_paths.is_empty() {
-        recent_projects.last_restorable_projects = project_paths.clone();
+    if !projects.is_empty() {
+        recent_projects.last_restorable_projects = projects.clone();
     }
-    recent_projects.last_opened_projects = project_paths;
+    recent_projects.last_opened_projects = projects;
     write_recent_projects(paths, recent_projects)
+}
+
+pub fn remove_recent_projects_for_ssh_connection(
+    paths: &AppConfigPaths,
+    recent_projects: &mut RecentProjectsConfig,
+    connection_id: &ConnectionId,
+) -> Result<(), ProjectOpenError> {
+    let belongs_to_connection = |location: &ProjectLocation| {
+        matches!(
+            location,
+            ProjectLocation::Ssh {
+                connection_id: project_connection_id,
+                ..
+            } if project_connection_id == connection_id
+        )
+    };
+    let mut updated = recent_projects.clone();
+    updated
+        .projects
+        .retain(|project| !belongs_to_connection(&project.location));
+    updated
+        .last_opened_projects
+        .retain(|project| !belongs_to_connection(&project.location));
+    updated
+        .last_restorable_projects
+        .retain(|project| !belongs_to_connection(&project.location));
+    write_recent_projects(paths, &updated)?;
+    *recent_projects = updated;
+    Ok(())
 }
 
 fn write_recent_projects(
@@ -864,7 +1032,24 @@ fn write_recent_projects(
             source,
         }
     })?;
-    fs::write(&path, source)
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("recent-projects.toml");
+    let temp_path = path.with_file_name(format!(".{file_name}.tmp"));
+    fs::write(&temp_path, source).map_err(|source| ProjectOpenError::WriteRecentProjects {
+        path: temp_path.clone(),
+        source,
+    })?;
+    OpenOptions::new()
+        .write(true)
+        .open(&temp_path)
+        .and_then(|file| file.sync_all())
+        .map_err(|source| ProjectOpenError::WriteRecentProjects {
+            path: temp_path.clone(),
+            source,
+        })?;
+    fs::rename(&temp_path, &path)
         .map_err(|source| ProjectOpenError::WriteRecentProjects { path, source })
 }
 
@@ -892,6 +1077,79 @@ mod tests {
             self.files.borrow_mut().remove(path);
             Ok(())
         }
+    }
+
+    #[test]
+    fn removing_ssh_connection_prunes_all_recent_project_references() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+        let removed_connection = ConnectionId::new("removed");
+        let retained_connection = ConnectionId::new("retained");
+        let removed_location = ProjectLocation::Ssh {
+            connection_id: removed_connection.clone(),
+            root: RemotePathBuf::new("/srv/removed").unwrap(),
+        };
+        let retained_location = ProjectLocation::Ssh {
+            connection_id: retained_connection,
+            root: RemotePathBuf::new("/srv/retained").unwrap(),
+        };
+        let local_location = ProjectLocation::local("/tmp/local");
+        let mut recent = RecentProjectsConfig {
+            projects: vec![
+                RecentProjectConfig {
+                    id: ProjectId::random(),
+                    title: "removed".to_string(),
+                    location: removed_location.clone(),
+                },
+                RecentProjectConfig {
+                    id: ProjectId::random(),
+                    title: "retained".to_string(),
+                    location: retained_location.clone(),
+                },
+                RecentProjectConfig {
+                    id: ProjectId::random(),
+                    title: "local".to_string(),
+                    location: local_location.clone(),
+                },
+            ],
+            last_opened_projects: vec![
+                ProjectReferenceConfig::new(ProjectId::random(), removed_location.clone()),
+                ProjectReferenceConfig::new(ProjectId::random(), retained_location.clone()),
+            ],
+            last_restorable_projects: vec![
+                ProjectReferenceConfig::new(ProjectId::random(), removed_location),
+                ProjectReferenceConfig::new(ProjectId::random(), local_location.clone()),
+            ],
+            ..RecentProjectsConfig::default()
+        };
+
+        remove_recent_projects_for_ssh_connection(&paths, &mut recent, &removed_connection)
+            .unwrap();
+
+        let persisted = load_recent_projects(&paths).unwrap();
+        assert_eq!(recent, persisted);
+        assert_eq!(
+            recent
+                .projects
+                .iter()
+                .map(|project| project.location.clone())
+                .collect::<Vec<_>>(),
+            vec![retained_location.clone(), local_location.clone()]
+        );
+        assert_eq!(
+            recent.last_opened_projects,
+            vec![ProjectReferenceConfig::new(
+                recent.last_opened_projects[0].id.clone(),
+                retained_location,
+            )]
+        );
+        assert_eq!(
+            recent.last_restorable_projects,
+            vec![ProjectReferenceConfig::new(
+                recent.last_restorable_projects[0].id.clone(),
+                local_location,
+            )]
+        );
     }
 
     #[test]

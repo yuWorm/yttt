@@ -11,7 +11,6 @@ use super::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectFileLoadRequest {
     pub document_id: DocumentId,
-    pub project_root: PathBuf,
     pub relative_path: PathBuf,
     pub generation: u64,
 }

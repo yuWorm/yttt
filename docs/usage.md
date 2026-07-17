@@ -59,6 +59,50 @@ Directories load lazily. Refresh invalidates stale scans and reloads the root pl
 expanded directories. Git status decorates paths when available. Hidden entries are governed
 by `project_panel.show_hidden`.
 
+### SSH projects
+
+Run **Open SSH Project** from the command palette, the empty-workbench action, or the project
+sidebar menu. This opens a dedicated picker instead of the SSH settings page:
+
+1. Select a saved connection, or choose **New connection**.
+2. Enter the host, port, user, optional starting root, and authentication details.
+3. Accept or reject an unknown server fingerprint.
+4. Browse remote directories over SFTP and open the current directory.
+
+Authentication modes:
+
+- **Auto**: try SSH agent, then the configured private key, then a previously saved password.
+- **Agent**: authenticate only with identities from the SSH agent.
+- **Private key**: load the configured key file and optional masked passphrase. The passphrase is
+  used only for the current attempt and is not persisted.
+- **Password**: use the password exactly as entered; **Remember password** writes it to the
+  operating-system credential store, never to `ssh-connections.toml`.
+
+Connecting verifies the server key against OpenSSH `known_hosts`. A new key opens a blocking
+Trust/Reject dialog with an option to save it; a changed known key is rejected. The directory
+browser starts at the saved root or the remote home directory and lists only directories. The
+opened directory becomes the hard SFTP boundary: canonicalized reads and saves cannot escape it,
+and symlinked directories are listed but not traversed. Use **SSH connections** in Settings only
+when managing saved endpoints outside the open flow.
+
+Recent SSH projects are marked **Remote/SSH**. Selecting one automatically reconnects its saved
+connection, validates the remote root over SFTP, and opens it; connection or root failures remain
+in the picker with retry and credential-edit actions.
+
+Remote terminal panes request a PTY on the same authenticated SSH transport. The project tree,
+editor reads, and conflict-checked temporary-file saves share its SFTP subsystem. Disconnecting
+closes those sessions. Reconnecting refreshes expanded tree directories. Restored remote projects
+remain visible while disconnected, but terminal and file operations require reconnecting the saved
+connection.
+
+Git status decorations, branch switching, and the diff panel execute `git` inside the configured
+remote root over non-PTY SSH command channels. Status refreshes after opening or reconnecting,
+manual tree refreshes, remote saves, and tree mutations.
+
+SSH-backed projects use the global default layout; project-local and personal layout files are
+local-project features. Recursive filesystem watching is local-only. Remote open documents and Git
+status are rechecked during tree refreshes rather than watched continuously.
+
 ### Code navigation, folding, and search
 
 The editor resolves its language from the explicit editor setting, file name, or file
@@ -101,11 +145,12 @@ Discard and Continue, or Cancel. A save failure leaves the file, project, or win
 
 - Only regular UTF-8 text files are opened.
 - The maximum file size is 10 MiB.
-- Canonical paths must remain inside the project root.
+- Canonical paths must remain inside the local or configured remote project root.
 - Symlinked directories are shown but not traversed.
-- The active project is watched recursively. Create, modify, and remove events refresh expanded
-  tree directories, open-document disk state, and Git status after a short debounce.
-- The tree does not create, rename, move, duplicate, or delete filesystem entries.
+- Local active projects are watched recursively. Create, modify, and remove events refresh
+  expanded tree directories, open-document disk state, and Git status after a short debounce.
+- Create, rename, and delete work in local and SSH trees. Copy/move paste works only between local
+  projects; operations involving an SSH project are rejected.
 
 ## Settings TOML
 

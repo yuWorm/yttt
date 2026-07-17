@@ -37,6 +37,12 @@ fn git(project_path: &Path, args: &[&str]) {
     );
 }
 
+fn local_project(path: PathBuf) -> ProjectDescriptor {
+    let location = ProjectLocation::local(path);
+    let id = ProjectId::from_legacy_location(&location.display_path());
+    ProjectDescriptor::new(id, location)
+}
+
 fn runtime_snapshot(root: &WorkbenchView) -> RuntimeSnapshot {
     let project_id = root.workspace.selected_project_id().unwrap();
     RuntimeSnapshot {
@@ -48,6 +54,202 @@ fn runtime_snapshot(root: &WorkbenchView) -> RuntimeSnapshot {
             .map(|(key, pane)| (key.clone(), pane.entity_id()))
             .collect(),
     }
+}
+
+#[gpui::test]
+fn remote_project_open_preserves_ssh_location_and_terminal_root(cx: &mut TestAppContext) {
+    use crate::{
+        config::ssh::{SshConnectionConfig, SshConnectionsConfig, save_ssh_connections},
+        model::{ids::ConnectionId, project::RemotePathBuf},
+    };
+
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let connection_id = ConnectionId::new("remote-dev");
+    let mut connection = SshConnectionConfig::new("Remote Dev", "dev.example.com", 22, "alice");
+    connection.id = connection_id.clone();
+    save_ssh_connections(
+        &config_paths,
+        &SshConnectionsConfig {
+            connections: vec![connection],
+            ..SshConnectionsConfig::default()
+        },
+    )
+    .unwrap();
+    let remote_root = RemotePathBuf::new("/srv/remote-app").unwrap();
+    let expected_root = PathBuf::from(remote_root.as_str());
+
+    let (root, cx) = cx.add_window_view(|_, _| WorkbenchView::with_config_paths(config_paths));
+    cx.update(|_, app| {
+        root.update(app, |root, _cx| {
+            root.open_ssh_project_location(connection_id.clone(), remote_root.clone(), false)
+                .unwrap();
+        });
+    });
+
+    cx.update(|_, app| {
+        let root = root.read(app);
+        let project_id = root.workspace.selected_project_id().unwrap();
+        let project = root.workspace.project(project_id).unwrap();
+        assert_eq!(
+            project.location,
+            ProjectLocation::Ssh {
+                connection_id,
+                root: remote_root,
+            }
+        );
+        assert!(root.project.services.contains_key(project_id));
+        let (_, terminal_root, _, _, _, _) = root.selected_tab_layout_clone().unwrap();
+        assert_eq!(terminal_root, expected_root);
+    });
+}
+
+#[gpui::test]
+fn open_ssh_project_starts_in_connection_picker_without_configuration(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let (root, cx) = cx.add_window_view(|_, _| WorkbenchView::with_config_paths(config_paths));
+
+    cx.update(|_, app| {
+        root.update(app, |root, _cx| {
+            root.open_ssh_project_picker();
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|_, app| {
+        let root = root.read(app);
+        assert!(root.ssh.project_picker.open);
+        assert_eq!(
+            root.ssh.project_picker.view,
+            SshProjectPickerView::Connections
+        );
+        assert!(root.ssh.connections.connections.is_empty());
+        assert!(!root.ssh.manager_open);
+        assert!(root.ssh.form.is_none());
+    });
+}
+
+#[gpui::test]
+fn ssh_project_password_connection_without_a_saved_secret_opens_a_focused_prompt(
+    cx: &mut TestAppContext,
+) {
+    use crate::config::ssh::{
+        SshAuthPreference, SshConnectionConfig, SshConnectionsConfig, save_ssh_connections,
+    };
+    use crate::model::ids::ConnectionId;
+
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let connection_id = ConnectionId::new("password-prompt");
+    let mut connection = SshConnectionConfig::new("Password Host", "host.example.com", 22, "alice");
+    connection.id = connection_id.clone();
+    connection.auth = SshAuthPreference::Password;
+    save_ssh_connections(
+        &config_paths,
+        &SshConnectionsConfig {
+            connections: vec![connection],
+            ..SshConnectionsConfig::default()
+        },
+    )
+    .unwrap();
+
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths(config_paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        ComponentRoot::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update_in(cx, |root, _window, cx| {
+        root.open_ssh_project_picker();
+        root.select_ssh_project_connection(connection_id.clone(), cx);
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        let root = root.read(app);
+        assert_eq!(root.ssh.project_picker.view, SshProjectPickerView::Password);
+        assert!(root.ssh.project_picker.remember_password);
+        let input = root
+            .ssh
+            .project_picker
+            .password_input
+            .as_ref()
+            .expect("password prompt must create its input");
+        assert!(input.read(app).focus_handle(app).is_focused(window));
+    });
+}
+
+#[gpui::test]
+fn ssh_project_directory_rows_show_icons_align_left_and_scroll(cx: &mut TestAppContext) {
+    use crate::model::project::RemotePathBuf;
+
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let (root, cx) = cx.add_window_view(|_, _| WorkbenchView::with_config_paths(config_paths));
+
+    root.update_in(cx, |root, _window, cx| {
+        root.open_ssh_project_picker();
+        root.ssh.project_picker.view = SshProjectPickerView::Browsing;
+        root.ssh.project_picker.current_path = Some(RemotePathBuf::new("/").unwrap());
+        root.ssh.project_picker.directories = (0..24)
+            .map(|index| SshProjectDirectory {
+                name: format!("directory-{index:02}"),
+                path: RemotePathBuf::new(format!("/directory-{index:02}")).unwrap(),
+            })
+            .collect();
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    let list = cx
+        .debug_bounds("ssh-project-directory-list")
+        .expect("directory list must render");
+    let row = cx
+        .debug_bounds("ssh-project-directory-content-/directory-00")
+        .expect("directory row content must render");
+    let icon = cx
+        .debug_bounds("ssh-project-directory-icon-/directory-00")
+        .expect("directory row must render an icon");
+    assert!(
+        icon.size.width > px(0.0) && icon.size.height > px(0.0),
+        "directory icon must occupy visible space: icon={icon:?}"
+    );
+    assert!(
+        icon.origin.x >= row.origin.x
+            && icon.origin.x + icon.size.width <= row.origin.x + row.size.width,
+        "directory icon must remain inside the row: icon={icon:?}, row={row:?}"
+    );
+    assert!(
+        row.origin.x <= list.origin.x + px(24.0),
+        "directory content must start at the list's left edge: row={row:?}, list={list:?}"
+    );
+    assert!(
+        row.size.width >= list.size.width - px(48.0),
+        "directory content must fill the row instead of centering: row={row:?}, list={list:?}"
+    );
+    for _ in 0..4 {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: row.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-120.0))),
+            ..Default::default()
+        });
+    }
+    cx.run_until_parked();
+    let row_after_scroll = cx
+        .debug_bounds("ssh-project-directory-content-/directory-00")
+        .expect("directory row must remain rendered after scrolling");
+    assert!(
+        row_after_scroll.origin.y < row.origin.y - px(1.0),
+        "directory list must move rows in response to wheel input: before={row:?}, after={row_after_scroll:?}"
+    );
 }
 
 fn assert_runtime_unchanged(root: &WorkbenchView, expected: &RuntimeSnapshot) {
@@ -65,7 +267,7 @@ fn active_terminal_content_receives_default_focus(cx: &mut TestAppContext) {
     let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut workspace = Workspace::new();
     workspace
-        .open_project(project_path, dev_fixture_layout())
+        .open_project(local_project(project_path), dev_fixture_layout())
         .unwrap();
 
     let (root, cx) = cx.add_window_view(|_, _| {
@@ -109,7 +311,9 @@ fn eager_tab_starts_terminal_before_selection(cx: &mut TestAppContext) {
         .unwrap()
         .startup = TabStartup::Eager;
     let mut workspace = Workspace::new();
-    let project_id = workspace.open_project(project_path, layout).unwrap();
+    let project_id = workspace
+        .open_project(local_project(project_path), layout)
+        .unwrap();
     let eager_pane_key = terminal_pane_key(project_id.as_str(), "agent", "codex");
 
     let (root, cx) = cx.add_window_view(|_, _| {
@@ -181,7 +385,7 @@ fn window_reactivation_restores_previously_focused_terminal_pane(cx: &mut TestAp
     let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut workspace = Workspace::new();
     workspace
-        .open_project(project_path, dev_fixture_layout())
+        .open_project(local_project(project_path), dev_fixture_layout())
         .unwrap();
     workspace.focus_pane("shell").unwrap();
 
@@ -241,7 +445,7 @@ fn agent_exit_notification_does_not_reenter_workbench_entity(cx: &mut TestAppCon
     let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(project_path, agent_exit_fixture_layout())
+        .open_project(local_project(project_path), agent_exit_fixture_layout())
         .unwrap();
     let notification = NotificationEvent {
         kind: NotificationKind::AgentCompleted,
@@ -294,7 +498,7 @@ fn titlebar_renders_branch_and_changes_actions(cx: &mut TestAppContext) {
     let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(project_path, dev_fixture_layout())
+        .open_project(local_project(project_path), dev_fixture_layout())
         .unwrap();
 
     let (_root, cx) = cx.add_window_view(|_, _| {
@@ -325,10 +529,13 @@ fn active_project_file_watcher_refreshes_tree_and_git_status(cx: &mut TestAppCon
     let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(project_path.clone(), dev_fixture_layout())
+        .open_project(local_project(project_path.clone()), dev_fixture_layout())
         .unwrap();
     let other_project_id = workspace
-        .open_project(other_project_path.clone(), dev_fixture_layout())
+        .open_project(
+            local_project(other_project_path.clone()),
+            dev_fixture_layout(),
+        )
         .unwrap();
     workspace.select_project(&project_id).unwrap();
 
@@ -480,7 +687,7 @@ fn git_diff_panel_renders_controls_and_handles_shortcuts(cx: &mut TestAppContext
     let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut workspace = Workspace::new();
     workspace
-        .open_project(project_path, dev_fixture_layout())
+        .open_project(local_project(project_path), dev_fixture_layout())
         .unwrap();
     let (root, cx) = cx.add_window_view(|_, _| {
         let mut root =
@@ -678,7 +885,7 @@ fn git_diff_panel_virtualizes_many_files_and_large_file_rows(cx: &mut TestAppCon
     let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut workspace = Workspace::new();
     workspace
-        .open_project(project_path, dev_fixture_layout())
+        .open_project(local_project(project_path), dev_fixture_layout())
         .unwrap();
     let (root, cx) = cx.add_window_view(|_, _| {
         WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
@@ -758,7 +965,7 @@ fn git_diff_split_panes_share_vertical_scroll_but_keep_horizontal_scroll_indepen
     let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut workspace = Workspace::new();
     workspace
-        .open_project(project_path, dev_fixture_layout())
+        .open_project(local_project(project_path), dev_fixture_layout())
         .unwrap();
     let (root, cx) = cx.add_window_view(|_, _| {
         WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
@@ -841,7 +1048,7 @@ fn layout_default_does_not_drop_terminal_entities(cx: &mut TestAppContext) {
     let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut workspace = Workspace::new();
     workspace
-        .open_project(project_path, dev_fixture_layout())
+        .open_project(local_project(project_path), dev_fixture_layout())
         .unwrap();
 
     let (root, cx) = cx.add_window_view(|_, _| {
@@ -888,7 +1095,7 @@ fn project_entry_delete_alert_renders_and_executes_confirmation(cx: &mut TestApp
     let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut workspace = Workspace::new();
     workspace
-        .open_project(project_path, dev_fixture_layout())
+        .open_project(local_project(project_path), dev_fixture_layout())
         .unwrap();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();

@@ -460,16 +460,15 @@ impl WorkbenchView {
         self.spawn_project_file_save_request(request, force, continuation, window, cx);
     }
 
-    pub(super) fn project_file_root(
+    pub(super) fn project_file_services(
         &self,
         document_id: &crate::ui::editor::DocumentId,
-    ) -> Option<PathBuf> {
-        Some(
-            self.workspace
-                .project(&document_id.project_id)?
-                .path
-                .clone(),
-        )
+    ) -> Option<(ProjectServices, PathBuf)> {
+        let services = self.project.services.get(&document_id.project_id)?.clone();
+        let relative_path = services
+            .relative_path_for_document(&document_id.canonical_path)
+            .ok()?;
+        Some((services, relative_path))
     }
 
     pub(super) fn spawn_project_file_save_request(
@@ -480,7 +479,8 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(project_root) = self.project_file_root(&request.document_id) else {
+        let Some((services, relative_path)) = self.project_file_services(&request.document_id)
+        else {
             let message = self
                 .ui_text
                 .get(UiTextKey::ProjectFileOutsideProject)
@@ -500,15 +500,8 @@ impl WorkbenchView {
         };
         let text = request.text.clone();
         let expected_fingerprint = request.expected_fingerprint.clone();
-        let canonical_path = request.document_id.canonical_path.clone();
         let io_task = cx.background_spawn(async move {
-            let relative_path = project_relative_path(&project_root, &canonical_path)?;
-            let mode = if force {
-                SaveMode::Force
-            } else {
-                SaveMode::Check(&expected_fingerprint)
-            };
-            save_project_file(&project_root, &relative_path, &text, mode)
+            services.save_file(&relative_path, &text, Some(&expected_fingerprint), force)
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = io_task.await;
@@ -573,6 +566,13 @@ impl WorkbenchView {
                     self.ui_text.get(UiTextKey::ProjectFiles),
                 );
                 self.load_error = None;
+                if self
+                    .workspace
+                    .project(&request.document_id.project_id)
+                    .is_some_and(|project| matches!(&project.location, ProjectLocation::Ssh { .. }))
+                {
+                    self.refresh_project_git_status(request.document_id.project_id.clone(), cx);
+                }
                 self.complete_save_continuation(continuation, &request.document_id, window, cx);
                 self.flush_pending_status_notifications(window, cx);
                 self.run_follow_up_autosave(&request.document_id, window, cx);
@@ -660,17 +660,13 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(project_root) = self.project_file_root(&document_id) else {
+        let Some((services, relative_path)) = self.project_file_services(&document_id) else {
             if let Some(conflict) = restore_conflict_on_error {
                 self.documents.pending_file_conflict = Some(conflict);
             }
             return;
         };
-        let canonical_path = document_id.canonical_path.clone();
-        let io_task = cx.background_spawn(async move {
-            let relative_path = project_relative_path(&project_root, &canonical_path)?;
-            read_project_file(&project_root, &relative_path)
-        });
+        let io_task = cx.background_spawn(async move { services.read_file(&relative_path) });
         cx.spawn_in(window, async move |this, cx| {
             let result = io_task.await;
             let _ = this.update_in(cx, |root, window, cx| {
@@ -757,14 +753,10 @@ impl WorkbenchView {
         if !save_is_idle {
             return;
         }
-        let Some(project_root) = self.project_file_root(&document_id) else {
+        let Some((services, relative_path)) = self.project_file_services(&document_id) else {
             return;
         };
-        let canonical_path = document_id.canonical_path.clone();
-        let io_task = cx.background_spawn(async move {
-            let relative_path = project_relative_path(&project_root, &canonical_path)?;
-            read_project_file(&project_root, &relative_path)
-        });
+        let io_task = cx.background_spawn(async move { services.read_file(&relative_path) });
         cx.spawn_in(window, async move |this, cx| {
             let result = io_task.await;
             let _ = this.update_in(cx, |root, window, cx| {

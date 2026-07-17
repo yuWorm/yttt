@@ -12,8 +12,12 @@ use yttt::config::{
     },
     paths::AppConfigPaths,
 };
-use yttt::model::layout::LayoutNode;
-use yttt::model::workspace::{TabStartState, Workspace};
+use yttt::model::{
+    ids::ProjectId,
+    layout::LayoutNode,
+    project::{ProjectDescriptor, ProjectLocation},
+    workspace::{TabStartState, Workspace},
+};
 use yttt::ui::i18n::{Locale, UiText};
 use yttt::ui::interaction::actions::{
     app_startup_keybindings, default_ui_keybinding_specs, runtime_command_for_keystroke,
@@ -26,6 +30,14 @@ use yttt::ui::settings::keybinding_display::{
 };
 use yttt::ui::settings::keybindings::{KeybindingEditError, KeybindingsEditorState};
 use yttt::ui::workbench::shell::split_view::visible_pane_titles;
+
+fn local_project(path: PathBuf) -> ProjectDescriptor {
+    let location = ProjectLocation::local(path);
+    ProjectDescriptor::new(
+        ProjectId::from_legacy_location(&location.display_path()),
+        location,
+    )
+}
 
 #[test]
 fn default_registry_contains_core_commands() {
@@ -938,7 +950,7 @@ fn pane_resize_commands_adjust_current_split_ratio() {
 fn workspace_with_sample_project() -> Workspace {
     let mut workspace = Workspace::new();
     workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
     workspace
 }

@@ -19,6 +19,7 @@ actions!(
         OpenCommandPalette,
         CreateProject,
         OpenProject,
+        OpenSshProject,
         ProjectClose,
         OpenProjectPalette,
         OpenOpenedProjectPalette,
@@ -329,6 +330,7 @@ pub fn ui_action_for_command(command: CommandId) -> Option<Box<dyn Action>> {
     let action: Box<dyn Action> = match command {
         CommandId::ProjectCreate => Box::new(CreateProject),
         CommandId::ProjectOpen => Box::new(OpenProject),
+        CommandId::ProjectOpenSsh => Box::new(OpenSshProject),
         CommandId::ProjectOpenRecent => return None,
         CommandId::ProjectClose => Box::new(ProjectClose),
         CommandId::ProjectPalette => Box::new(OpenProjectPalette),

@@ -232,7 +232,7 @@ impl Render for WorkbenchView {
                             if let Some(active_palette) = &mut this.palette.active_palette {
                                 active_palette.selected_index = selected_index;
                             }
-                            let _ = this.confirm_palette_selection();
+                            let _ = this.confirm_palette_selection_with_context(cx);
                             this.handle_pending_create_project_request(cx);
                             this.handle_pending_open_project_request(cx);
                             this.flush_pending_status_notifications(window, cx);
@@ -246,6 +246,12 @@ impl Render for WorkbenchView {
             if let Some(search_input) = self.settings_search_input(window, cx) {
                 root = root.child(settings_overlay(self, &search_input, window, cx));
             }
+        }
+        if self.ssh.project_picker.open {
+            root = root.child(ssh_project_picker_overlay(self, window, cx));
+        }
+        if self.ssh.manager_open {
+            root = root.child(ssh_connections_overlay(self, window, cx));
         }
         if let Some(dialog) = self.settings.zed_theme_import_dialog.clone() {
             root = root.child(zed_theme_import_dialog(
@@ -317,6 +323,9 @@ impl Render for WorkbenchView {
                 matches!(conflict.current_disk, CurrentDiskState::Missing),
             ));
         }
+        if !self.ssh.pending_host_keys.is_empty() {
+            root = root.child(ssh_host_key_overlay(self, cx));
+        }
         if let Some(notification_layer) = ComponentRoot::render_notification_layer(window, cx) {
             root = root.child(notification_layer);
         }
@@ -342,6 +351,7 @@ impl Render for WorkbenchView {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_resize_mouse_up))
             .on_action(cx.listener(Self::on_create_project))
             .on_action(cx.listener(Self::on_open_project))
+            .on_action(cx.listener(Self::on_open_ssh_project))
             .on_action(cx.listener(Self::on_open_command_palette))
             .on_action(cx.listener(Self::on_open_project_palette))
             .on_action(cx.listener(Self::on_opened_project_palette))

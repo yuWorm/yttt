@@ -685,6 +685,7 @@ fn project_sidebar_context_exposes_project_commands() {
         project_context_commands(),
         &[
             CommandId::ProjectCreate,
+            CommandId::ProjectOpenSsh,
             CommandId::LayoutProjectEdit,
             CommandId::LayoutSaveCurrent,
             CommandId::LayoutExportProjectConfig,

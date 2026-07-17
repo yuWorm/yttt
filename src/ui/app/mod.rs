@@ -68,6 +68,7 @@ pub fn run() {
                         view.with_appearance_state(appearance)
                     });
                     view.update(cx, |view, cx| view.sync_performance_monitoring(cx));
+                    view.update(cx, |view, cx| view.start_ssh_event_listener(cx));
                     register_workbench_keybinding_interceptor(cx, &view);
                     register_workbench_focus_restore(window, cx, &view);
                     register_workbench_close_guard(window, cx, &view);

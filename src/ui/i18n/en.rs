@@ -115,6 +115,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::PaletteClose => "Close",
         UiTextKey::PaletteStatusOpen => "open",
         UiTextKey::PaletteStatusRecent => "recent",
+        UiTextKey::PaletteStatusRemoteRecent => "SSH · recent",
         UiTextKey::PaletteStatusPaneSingular => "pane",
         UiTextKey::PaletteStatusPanePlural => "panes",
         UiTextKey::PaletteStatusActive => "active",
@@ -137,6 +138,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandProjectCreateDescription => "Create and open a new project directory",
         UiTextKey::CommandProjectOpenTitle => "Open Project",
         UiTextKey::CommandProjectOpenDescription => "Choose a project directory",
+        UiTextKey::CommandProjectOpenSshTitle => "Open SSH Project",
+        UiTextKey::CommandProjectOpenSshDescription => "Connect to and open a remote project",
         UiTextKey::CommandProjectOpenRecentTitle => "Open Recent Project",
         UiTextKey::CommandProjectOpenRecentDescription => "Choose a recent project",
         UiTextKey::CommandProjectCloseTitle => "Close Project",
@@ -293,6 +296,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
             "Fix the save error or discard the changes to continue."
         }
         UiTextKey::Cancel => "Cancel",
+        UiTextKey::Retry => "Retry",
         UiTextKey::CloseProjectAction => "Close Project",
         UiTextKey::RenameTabTitle => "Rename tab",
         UiTextKey::RenameTabAction => "Rename",
@@ -586,5 +590,76 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::StatusLayoutFile => "Layout file",
         UiTextKey::StatusSettingsFile => "Settings file",
         UiTextKey::StatusThemesDirectory => "Themes directory",
+        UiTextKey::SshConnections => "SSH connections",
+        UiTextKey::SshConnectionsDescription => {
+            "Manage SSH endpoints, credentials, and remote project roots."
+        }
+        UiTextKey::SshNoConnections => "No SSH connections configured.",
+        UiTextKey::SshNewConnection => "New connection",
+        UiTextKey::SshEditConnection => "Edit connection",
+        UiTextKey::SshConnectionName => "Name",
+        UiTextKey::SshCommand => "SSH command",
+        UiTextKey::SshCommandPlaceholder => "ssh -p 22 -i ~/.ssh/id_ed25519 user@example.com",
+        UiTextKey::SshCommandParse => "Apply command",
+        UiTextKey::SshHost => "Host",
+        UiTextKey::SshPort => "Port",
+        UiTextKey::SshUser => "User",
+        UiTextKey::SshRemoteRoot => "Remote root",
+        UiTextKey::SshAuthentication => "Authentication",
+        UiTextKey::SshIdentityFile => "Identity file",
+        UiTextKey::SshKeyPassphrase => "Key passphrase",
+        UiTextKey::SshPassword => "Password",
+        UiTextKey::SshPasswordPromptTitle => "SSH password required",
+        UiTextKey::SshPasswordPromptDescription => {
+            "Enter the login password for this endpoint, then choose whether to save it."
+        }
+        UiTextKey::SshPasswordRequired => "Enter a password to continue.",
+        UiTextKey::SshPasswordRejected => {
+            "The server rejected the password. Check it and try again."
+        }
+        UiTextKey::SshPasswordUnavailable => "The saved password is unavailable. Enter it again.",
+        UiTextKey::SshRememberPassword => "Save password in the system credential store",
+        UiTextKey::SshAuthAuto => "Auto",
+        UiTextKey::SshAuthAgent => "SSH agent",
+        UiTextKey::SshAuthPassword => "Password",
+        UiTextKey::SshAuthPrivateKey => "Private key",
+        UiTextKey::SshConnect => "Connect",
+        UiTextKey::SshDisconnect => "Disconnect",
+        UiTextKey::SshDeleteConnection => "Delete connection",
+        UiTextKey::SshHostKeyTitle => "Verify SSH host key",
+        UiTextKey::SshHostKeyDescription => {
+            "Confirm the server fingerprint before sending credentials."
+        }
+        UiTextKey::SshHostKeyChangedTitle => "SSH host key changed",
+        UiTextKey::SshHostKeyChangedDescription => {
+            "The saved key no longer matches this server. Verify the new fingerprint before replacing it."
+        }
+        UiTextKey::SshHostKeySavedFingerprint => "Saved fingerprint",
+        UiTextKey::SshHostKeyReceivedFingerprint => "Received fingerprint",
+        UiTextKey::SshHostKeyReject => "Reject",
+        UiTextKey::SshHostKeyTrustOnce => "Trust once",
+        UiTextKey::SshHostKeyTrustAndSave => "Trust and save",
+        UiTextKey::SshHostKeyReplace => "Replace saved key",
+        UiTextKey::SshConnectionSaved => "SSH connection saved",
+        UiTextKey::SshConnectionDeleteInUse => {
+            "Close this connection's remote projects before deleting it."
+        }
+        UiTextKey::SshOpenRemoteProject => "Open remote project",
+        UiTextKey::SshProjectRecent => "Recent remote projects",
+        UiTextKey::SshProjectPath => "Remote path",
+        UiTextKey::SshProjectGo => "Go",
+        UiTextKey::SshProjectOpenCurrentFolder => "Open Current Folder",
+        UiTextKey::SshProjectLoadingDirectory => "Loading remote directories…",
+        UiTextKey::SshProjectEmptyDirectory => "This directory has no subdirectories.",
+        UiTextKey::SshProjectConnectionMissing => "The saved SSH connection no longer exists.",
+        UiTextKey::SshProjectConnectionFailed => "Could not connect to the SSH host.",
+        UiTextKey::SshRuntimeUnavailable => "SSH runtime is unavailable.",
+        UiTextKey::SshDisconnected => "Disconnected",
+        UiTextKey::SshConnecting => "Connecting…",
+        UiTextKey::SshVerifyingHostKey => "Verifying host key…",
+        UiTextKey::SshAuthenticating => "Authenticating…",
+        UiTextKey::SshConnected => "Connected",
+        UiTextKey::SshReconnecting => "Reconnecting…",
+        UiTextKey::SshFailed => "Failed",
     }
 }

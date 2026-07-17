@@ -1,10 +1,22 @@
 use std::path::PathBuf;
 
-use yttt::model::layout::TabStartup;
-use yttt::model::workspace::{
-    AgentStatus, CloseProjectDecision, CloseProjectError, ClosedProject, PaneExitCloseOutcome,
-    PaneProcessState, TabStartState, Workspace,
+use yttt::model::{
+    ids::ProjectId,
+    layout::TabStartup,
+    project::{ProjectDescriptor, ProjectLocation},
+    workspace::{
+        AgentStatus, CloseProjectDecision, CloseProjectError, ClosedProject, PaneExitCloseOutcome,
+        PaneProcessState, TabStartState, Workspace,
+    },
 };
+
+fn local_project(path: PathBuf) -> ProjectDescriptor {
+    let location = ProjectLocation::local(path);
+    ProjectDescriptor::new(
+        ProjectId::from_legacy_location(&location.display_path()),
+        location,
+    )
+}
 
 #[test]
 fn new_workspace_starts_empty() {
@@ -20,11 +32,14 @@ fn opening_project_adds_it_to_sidebar_state_and_selects_it() {
     let path = PathBuf::from("/tmp/yttt");
 
     let project_id = workspace
-        .open_project(path.clone(), sample_layout())
+        .open_project(local_project(path.clone()), sample_layout())
         .unwrap();
 
     assert_eq!(workspace.opened_projects().len(), 1);
-    assert_eq!(workspace.opened_projects()[0].path, path);
+    assert_eq!(
+        workspace.opened_projects()[0].location.local_path(),
+        Some(&path)
+    );
     assert_eq!(workspace.selected_project_id(), Some(&project_id));
 }
 
@@ -32,10 +47,10 @@ fn opening_project_adds_it_to_sidebar_state_and_selects_it() {
 fn switching_projects_preserves_both_projects() {
     let mut workspace = Workspace::new();
     let first = workspace
-        .open_project(PathBuf::from("/tmp/one"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/one")), sample_layout())
         .unwrap();
     let second = workspace
-        .open_project(PathBuf::from("/tmp/two"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/two")), sample_layout())
         .unwrap();
 
     workspace.select_project(&first).unwrap();
@@ -49,7 +64,7 @@ fn switching_projects_preserves_both_projects() {
 fn opening_project_marks_only_default_tab_started() {
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
     let project = workspace.project(&project_id).unwrap();
 
@@ -70,7 +85,7 @@ fn opening_project_marks_eager_tabs_started_before_selection() {
     layout.tabs[1].startup = TabStartup::Eager;
 
     let project_id = workspace
-        .open_project(PathBuf::from("/tmp/yttt-eager"), layout)
+        .open_project(local_project(PathBuf::from("/tmp/yttt-eager")), layout)
         .unwrap();
     let project = workspace.project(&project_id).unwrap();
 
@@ -85,7 +100,7 @@ fn opening_project_marks_eager_tabs_started_before_selection() {
 fn closing_project_with_running_panes_is_blocked() {
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
 
     workspace
@@ -101,7 +116,7 @@ fn closing_project_with_running_panes_is_blocked() {
 fn closing_project_with_no_running_panes_succeeds() {
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
 
     let decision = workspace.request_close_project(&project_id).unwrap();
@@ -119,7 +134,7 @@ fn closing_project_with_no_running_panes_succeeds() {
 fn closing_project_with_running_panes_returns_confirmation_requirement() {
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
     workspace
         .mark_pane_running(&project_id, "dev", "server")
@@ -141,7 +156,7 @@ fn closing_project_with_running_panes_returns_confirmation_requirement() {
 fn confirmed_close_removes_project_with_running_panes() {
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
     workspace
         .mark_pane_running(&project_id, "dev", "server")
@@ -158,7 +173,7 @@ fn confirmed_close_removes_project_with_running_panes() {
 fn recording_agent_status_marks_pane_exited_with_result() {
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
 
     workspace
@@ -181,7 +196,7 @@ fn recording_agent_status_marks_pane_exited_with_result() {
 fn close_selected_tab_selects_adjacent_tab() {
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
     workspace.select_tab("agent").unwrap();
 
@@ -198,7 +213,10 @@ fn close_selected_tab_selects_adjacent_tab() {
 fn close_selected_tab_rejects_last_tab() {
     let mut workspace = Workspace::new();
     workspace
-        .open_project(PathBuf::from("/tmp/single"), single_tab_layout())
+        .open_project(
+            local_project(PathBuf::from("/tmp/single")),
+            single_tab_layout(),
+        )
         .unwrap();
 
     let err = workspace.close_selected_tab().unwrap_err();
@@ -213,7 +231,7 @@ fn close_selected_tab_rejects_last_tab() {
 fn bulk_tab_close_can_leave_a_project_without_terminal_tabs() {
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
 
     let closed = workspace
@@ -232,7 +250,7 @@ fn bulk_tab_close_can_leave_a_project_without_terminal_tabs() {
 fn process_exit_closes_exact_pane_without_changing_project_selection() {
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
 
     let outcome = workspace
@@ -270,7 +288,7 @@ fn process_exit_closes_exact_pane_without_changing_project_selection() {
 fn process_exit_closes_single_pane_tab() {
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
     workspace.select_tab("agent").unwrap();
 
@@ -289,7 +307,10 @@ fn process_exit_closes_single_pane_tab() {
 fn process_exit_keeps_project_open_when_last_tab_closes() {
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(PathBuf::from("/tmp/single"), single_tab_layout())
+        .open_project(
+            local_project(PathBuf::from("/tmp/single")),
+            single_tab_layout(),
+        )
         .unwrap();
 
     let outcome = workspace
@@ -308,7 +329,7 @@ fn process_exit_keeps_project_open_when_last_tab_closes() {
 fn rename_selected_tab_changes_title_without_changing_id() {
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
 
     workspace.rename_selected_tab("Main Dev").unwrap();
@@ -323,7 +344,7 @@ fn rename_selected_tab_changes_title_without_changing_id() {
 fn rename_focused_pane_changes_title_without_changing_id() {
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
 
     workspace.rename_focused_pane("Server").unwrap();

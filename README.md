@@ -6,10 +6,11 @@ project-owned `yttt-terminal` crate based on `alacritty_terminal`.
 The product direction is project-first and terminal-first, with lightweight project-file
 editing built into the same workbench:
 
-- Open a local project directory.
+- Open a local directory or an SSH-backed remote project.
 - Work in unified terminal and file tabs.
 - Browse project files from a lazy tree on the right.
 - Edit and save UTF-8 text files without leaving the terminal workflow.
+- Reuse one verified SSH connection for remote terminal PTYs and SFTP file operations.
 - Split panes inside a tab.
 - Save personal layouts locally.
 - Export shareable project layouts explicitly.
@@ -47,6 +48,29 @@ remain visible while only the body hides. Open in-file search with the **Find** 
   line must remain visible.
 - Open Find with the **Find** toolbar control, `⌘F` on macOS, and `Ctrl+F` elsewhere; confirm
   next and previous navigate highlighted matches.
+
+## SSH Projects
+
+Use **Open SSH Project** from the command palette, empty-workbench action, or project sidebar
+menu. The picker lists saved connections and provides **New connection** for quick setup; a first
+connection needs only its endpoint, authentication, and optional starting root. SSH agent,
+private-key (including a non-persisted passphrase), and password authentication are supported.
+Unknown host keys require an explicit trust decision. yttt stores remembered host keys in its own
+`ssh-host-keys.toml` and never reads or updates OpenSSH's `~/.ssh/known_hosts`. When a saved key
+changes, the confirmation shows both fingerprints and only replaces the saved key after explicit
+approval. Remembered passwords use the operating-system credential store; `ssh-connections.toml`
+contains only endpoint and credential-binding metadata.
+If a saved password is missing or rejected, the project picker asks for it again and lets you
+choose whether to replace the saved credential before retrying.
+The separate **SSH connections** settings page remains available for managing saved endpoints.
+
+After authentication, the picker opens an SFTP directory browser. Opening the current directory
+creates a normal workbench project whose terminal panes run on SSH and whose lazy file tree and
+editor use SFTP over the same connection. Remote reads, conflict-checked temporary-file saves,
+create, rename, and delete operations enforce the selected remote root. Git status, branch
+switching, and diffs run inside that root over non-PTY SSH command channels. Reconnecting refreshes
+expanded tree directories and Git status. Recent SSH projects are marked **Remote/SSH** and
+reconnect, validate their saved root, and open directly when selected.
 
 ## Run
 
@@ -116,6 +140,18 @@ Global default layout:
 <app-config>/default-layout.toml
 ```
 
+SSH connections:
+
+```text
+<app-config>/ssh-connections.toml
+```
+
+SSH host keys:
+
+```text
+<app-config>/ssh-host-keys.toml
+```
+
 Personal project layout:
 
 ```text
@@ -141,6 +177,8 @@ with a visible warning.
 - Sessions and running processes are not restored after app restart.
 - Project editing accepts UTF-8 text files up to 10 MiB; binary and invalid UTF-8 files are
   rejected.
-- Continuous filesystem watching is limited to the active project; inactive projects refresh
-  when selected.
-- The project tree does not create, rename, move, or delete files and directories.
+- Continuous filesystem watching is local-only; remote documents are checked when their tree is
+  refreshed.
+- Copy/move paste operations involving an SSH project are not supported. Create, rename, and
+  delete are supported for local and SSH project trees.
+- SSH terminal and command startup currently requires a POSIX-compatible remote login shell.

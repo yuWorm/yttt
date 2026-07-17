@@ -436,6 +436,27 @@ fn settings_general_rows(
             )
             .debug_selector(|| "settings-new-tab-commands-row".to_string()),
         )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SshConnections),
+                text.get(UiTextKey::SshConnectionsDescription),
+                settings_button(
+                    "settings-open-ssh-connections",
+                    text.get(UiTextKey::SettingsOpen),
+                    false,
+                    theme,
+                    cx,
+                    cx.listener(|this, _, _window, cx| {
+                        this.open_ssh_connection_manager();
+                        cx.notify();
+                    }),
+                )
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-ssh-connections-row".to_string()),
+        )
 }
 
 fn settings_appearance_rows(

@@ -1,0 +1,19 @@
+[package]
+name = "yttt-ssh"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-channel = "2.5"
+keyring = "4.1.5"
+russh = "0.62.2"
+serde = { version = "1", features = ["derive"] }
+russh-sftp = "2.3"
+thiserror = "2"
+toml = "0.9"
+tokio = { version = "1", features = ["io-util", "net", "rt", "sync", "time"] }
+yttt-core = { path = "../yttt-core" }
+zeroize = "1"
+
+[dev-dependencies]
+tempfile = "3"

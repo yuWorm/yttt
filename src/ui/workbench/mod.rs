@@ -37,6 +37,8 @@ mod render;
 mod resize;
 mod settings;
 pub mod shell;
+mod ssh_connections;
+mod ssh_project_picker;
 mod state;
 mod surface;
 use dialogs::*;
@@ -45,17 +47,25 @@ use helpers::*;
 use onboarding::*;
 use render::{push_component_notification, split_child};
 use settings::{settings_button, settings_overlay};
+use ssh_connections::{ssh_connections_overlay, ssh_host_key_overlay};
+use ssh_project_picker::ssh_project_picker_overlay;
 use state::{
     documents::DocumentLifecycleState,
     overlays::OverlayControllerState,
     palette::PaletteControllerState,
     project::{ProjectControllerState, ProjectTreeClipboard},
     settings::{SettingsControllerState, ZedThemeImportDialogState},
+    ssh::{
+        SshConnectionForm, SshConnectionFormInputs, SshConnectionFormMode, SshConnectionListAction,
+        SshConnectionListDelegate, SshConnectionListEntry, SshConnectionListSection,
+        SshConnectionListTone, SshControllerState, SshProjectConnectContinuation,
+        SshProjectDirectory, SshProjectPickerView,
+    },
     terminal::TerminalControllerState,
 };
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs,
     ops::Range,
     path::{Path, PathBuf},
@@ -101,12 +111,13 @@ use crate::{
             KeybindingLoadWarning, KeybindingsLoadError, ensure_keybindings_file, load_keybindings,
         },
         layout_loader::{
-            LayoutSource, PersonalLayout, ProjectOpenError, RecentProjectsConfig,
-            create_project_layout_scaffold, export_project_layout, load_recent_projects,
-            open_project_config, parse_personal_layout, reset_local_override,
+            LayoutSource, PersonalLayout, ProjectOpenError, ProjectReferenceConfig,
+            RecentProjectsConfig, create_project_layout_scaffold, export_project_layout,
+            load_recent_projects, open_project_config, open_ssh_project_config,
+            parse_personal_layout, remove_recent_projects_for_ssh_connection, reset_local_override,
             save_last_opened_projects, save_local_layout,
         },
-        paths::{AppConfigPaths, display_path},
+        paths::AppConfigPaths,
         settings::{
             AppSettings, DEFAULT_UI_FONT_SIZE, DEFAULT_UI_LINE_HEIGHT, DEFAULT_WINDOW_OPACITY,
             EditorAutosave, LanguageSetting, MAX_UI_FONT_SIZE, MAX_UI_LINE_HEIGHT,
@@ -120,6 +131,7 @@ use crate::{
     model::{
         ids::ProjectId,
         layout::{LayoutNode, PaneConfig, ProcessExitBehavior, ProjectLayout, SplitDirection},
+        project::{ProjectDescriptor, ProjectLocation},
         workspace::{
             AgentStatus, CloseProjectDecision, CloseProjectError, PaneExitCloseOutcome, Workspace,
             WorkspaceError,
@@ -136,12 +148,13 @@ use crate::{
     runtime::{
         git_status::{
             GitDiffLine, GitDiffLineKind, GitDiffMode, GitDiffResult, GitFileChangeKind,
-            GitFileDiff, read_project_git_branches, read_project_git_diff_result,
-            read_project_git_status, switch_project_git_branch,
+            GitFileDiff, read_project_git_branches_with, read_project_git_diff_result_with,
+            read_project_git_status, read_project_git_status_with, switch_project_git_branch_with,
         },
         notification::{
             NoopSystemNotifier, NotificationEvent, NotificationKind, maybe_notify_system,
         },
+        project::ProjectServices,
     },
     ui::{
         app::{platform, startup::startup_project_paths},
@@ -157,9 +170,8 @@ use crate::{
             EditorLanguageId, LoadedProjectFile, MarkdownDocumentConfig, ProjectEditorDocument,
             ProjectEditorDocumentEvent, ProjectEditorModel, ProjectEditorRuntime,
             ProjectEditorSaveState, ProjectFileIoError, ProjectFileLoadRequest, ReadonlyCodeRow,
-            ReadonlyCodeView, SaveMode, SaveProjectFileOutcome, SaveRequest, WorkItemId,
-            code_editor_input_state, project_relative_path, read_project_file, save_project_file,
-            styled_code_editor_input,
+            ReadonlyCodeView, SaveProjectFileOutcome, SaveRequest, WorkItemId,
+            code_editor_input_state, styled_code_editor_input,
         },
         i18n::{Locale, UiText, UiTextKey},
         interaction::actions::{
@@ -167,14 +179,14 @@ use crate::{
             LayoutDefaultReload, LayoutDefaultReset, LayoutExportProjectConfig, LayoutOpenFile,
             LayoutProjectEdit, LayoutResetLocalOverride, LayoutSaveCurrent, OpenCommandPalette,
             OpenOpenedProjectPalette, OpenPanePalette, OpenProject, OpenProjectPalette,
-            OpenTabPalette, PaletteCancel, PaletteConfirm, PaletteSelectNext, PaletteSelectPrev,
-            PaneClose, PaneFocusDown, PaneFocusLeft, PaneFocusRight, PaneFocusUp, PaneRename,
-            PaneResizeDown, PaneResizeLeft, PaneResizeRight, PaneResizeUp, PaneSplitHorizontal,
-            PaneSplitVertical, ProjectClose, ProjectPanelRefresh, ProjectPanelToggle,
-            SettingsKeybindings, SettingsNotifications, SettingsOpen, TabClose, TabCloseAfter,
-            TabCloseAll, TabCloseAllFiles, TabCloseAllTerminals, TabCloseBefore, TabNew, TabNext,
-            TabPrev, TabRename, UiKeybindingSpec, WORKSPACE_CONTEXT, runtime_command_for_keystroke,
-            ui_keybinding_specs_from_config,
+            OpenSshProject, OpenTabPalette, PaletteCancel, PaletteConfirm, PaletteSelectNext,
+            PaletteSelectPrev, PaneClose, PaneFocusDown, PaneFocusLeft, PaneFocusRight,
+            PaneFocusUp, PaneRename, PaneResizeDown, PaneResizeLeft, PaneResizeRight, PaneResizeUp,
+            PaneSplitHorizontal, PaneSplitVertical, ProjectClose, ProjectPanelRefresh,
+            ProjectPanelToggle, SettingsKeybindings, SettingsNotifications, SettingsOpen, TabClose,
+            TabCloseAfter, TabCloseAll, TabCloseAllFiles, TabCloseAllTerminals, TabCloseBefore,
+            TabNew, TabNext, TabPrev, TabRename, UiKeybindingSpec, WORKSPACE_CONTEXT,
+            runtime_command_for_keystroke, ui_keybinding_specs_from_config,
         },
         interaction::input_owner::{
             InputOwnerKind, InputOwnerRegistration, InputScopeId, TerminalInputGate,
@@ -201,8 +213,7 @@ use crate::{
             DirectoryLoadRequest, DirectorySnapshot, ProjectEntryFsError, ProjectEntryPasteMode,
             ProjectTreeFsError, ProjectTreeInteractionText, ProjectTreeLoadState,
             ProjectTreeRenderSnapshot, ProjectTreeRenderText, ProjectTreeView,
-            ProjectTreeViewEvent, create_project_entry, delete_project_entry, paste_project_entry,
-            rename_project_entry, scan_project_directory,
+            ProjectTreeViewEvent,
         },
         settings::font_options::{
             FontFamilyOptions, font_family_option_for_setting, font_family_options_from_system,
@@ -215,7 +226,7 @@ use crate::{
         settings::keybindings::{KeybindingEditError, KeybindingRow, KeybindingsEditorState},
         settings::{SettingsGroupId, SettingsPanelStyle, settings_panel_style},
         terminal::pane::{
-            TerminalPaneContext, TerminalPaneEvent, TerminalPaneExitedEvent,
+            SshTerminalContext, TerminalPaneContext, TerminalPaneEvent, TerminalPaneExitedEvent,
             TerminalPaneStartedEvent, TerminalPaneView,
         },
         theme::{
@@ -258,6 +269,7 @@ pub struct WorkbenchView {
     load_error: Option<String>,
     presented_error_notification: Option<String>,
     project: ProjectControllerState,
+    ssh: SshControllerState,
     settings: SettingsControllerState,
     performance: performance::PerformanceMonitorState,
     last_opened_layout_file: Option<PathBuf>,
@@ -292,8 +304,9 @@ struct ActiveProjectFileWatcher {
     _task: Task<()>,
 }
 
-const EMPTY_WORKSPACE_ACTIONS: [UiTextKey; 3] = [
+const EMPTY_WORKSPACE_ACTIONS: [UiTextKey; 4] = [
     UiTextKey::OpenDirectory,
+    UiTextKey::SshOpenRemoteProject,
     UiTextKey::OpenRecent,
     UiTextKey::CommandPalette,
 ];
@@ -436,7 +449,7 @@ impl WorkbenchView {
     }
 
     pub fn restore_last_opened_projects(&mut self) -> usize {
-        let project_paths = if !self.recent_projects_config.last_opened_projects.is_empty() {
+        let projects = if !self.recent_projects_config.last_opened_projects.is_empty() {
             self.recent_projects_config.last_opened_projects.clone()
         } else if !self
             .recent_projects_config
@@ -448,21 +461,33 @@ impl WorkbenchView {
             self.recent_projects_config
                 .projects
                 .first()
-                .map(|project| vec![project.path.clone()])
+                .map(|project| {
+                    vec![ProjectReferenceConfig::new(
+                        project.id.clone(),
+                        project.location.clone(),
+                    )]
+                })
                 .unwrap_or_default()
         };
-        self.restore_project_paths(project_paths)
+        self.restore_projects(projects)
     }
 
     fn restore_projects_open_at_last_exit(&mut self) -> usize {
-        self.restore_project_paths(self.recent_projects_config.last_opened_projects.clone())
+        self.restore_projects(self.recent_projects_config.last_opened_projects.clone())
     }
 
-    fn restore_project_paths(&mut self, project_paths: Vec<PathBuf>) -> usize {
+    fn restore_projects(&mut self, projects: Vec<ProjectReferenceConfig>) -> usize {
         let mut restored = 0;
         let mut messages = self.load_error.take().into_iter().collect::<Vec<_>>();
-        for project_path in project_paths {
-            if self.open_project_path(project_path).is_ok() {
+        for project in projects {
+            let result = match project.location {
+                ProjectLocation::Local { path } => self.open_project_path(path),
+                ProjectLocation::Ssh {
+                    connection_id,
+                    root,
+                } => self.open_ssh_project_location(connection_id, root, false),
+            };
+            if result.is_ok() {
                 restored += 1;
             }
             if let Some(message) = self.load_error.take() {
@@ -474,16 +499,18 @@ impl WorkbenchView {
     }
 
     fn persist_opened_project_paths(&mut self) -> Option<String> {
-        let project_paths = self
+        let projects = self
             .workspace
             .opened_projects()
             .iter()
-            .map(|project| project.path.clone())
+            .map(|project| {
+                ProjectReferenceConfig::new(project.id.clone(), project.location.clone())
+            })
             .collect();
         save_last_opened_projects(
             &self.config_paths,
             &mut self.recent_projects_config,
-            project_paths,
+            projects,
         )
         .err()
         .map(|error| error.to_string())
@@ -497,6 +524,7 @@ impl WorkbenchView {
         let default_layout_state = DefaultLayoutState::load_or_create(&config_paths);
         let command_registry = default_registry();
         let recent_projects_config = load_recent_projects(&config_paths).unwrap_or_default();
+        let (ssh, ssh_load_error) = SshControllerState::new(&config_paths);
         let recent_projects = recent_projects_for_palette(&recent_projects_config);
         let keybindings_editor = load_keybindings_editor_state(&config_paths, &command_registry);
         let (mut app_settings, settings_warning_lines) = load_app_settings_messages(&config_paths);
@@ -541,25 +569,33 @@ impl WorkbenchView {
             load_error,
             layout_load_warning_message(default_layout_state.warnings()),
         );
+        let load_error = combine_load_messages(load_error, ssh_load_error);
         let system_notifications_enabled = app_settings.notifications.system;
         let onboarding = ((force_onboarding || !app_settings.general.onboarding_completed)
             && workspace.opened_projects().is_empty())
         .then(|| {
             OnboardingState::new(detect_installed_zed_themes(), app_settings.general.language)
         });
+        let mut project_services = HashMap::new();
         let mut project_editor_runtime = ProjectEditorRuntime::default();
         for project in workspace.opened_projects() {
             let selected_terminal_id = project
                 .layout
                 .tab(&project.selected_tab_id)
                 .map(|_| project.selected_tab_id.clone());
-            project_editor_runtime.open_project(
-                project.id.clone(),
-                project.path.clone(),
-                selected_terminal_id,
-                app_settings.project_panel.default_open,
-                app_settings.project_panel.width,
-            );
+            if let Some(project_path) = project.location.local_path() {
+                project_editor_runtime.open_project(
+                    project.id.clone(),
+                    project_path.clone(),
+                    selected_terminal_id,
+                    app_settings.project_panel.default_open,
+                    app_settings.project_panel.width,
+                );
+                project_services.insert(
+                    project.id.clone(),
+                    ProjectServices::local(project_path.clone()),
+                );
+            }
         }
 
         Self {
@@ -573,9 +609,11 @@ impl WorkbenchView {
             load_error,
             presented_error_notification: None,
             project: ProjectControllerState {
+                services: project_services,
                 project_editor_runtime,
                 ..Default::default()
             },
+            ssh,
             active_project_file_watcher: None,
             project_file_watching_enabled: true,
             settings: SettingsControllerState::new(keybinding_warning_lines, keybindings_editor),
@@ -1470,7 +1508,7 @@ impl WorkbenchView {
 
         TitlebarInfo {
             project_name: project.layout.project.name.clone(),
-            compact_path: Some(compact_path_for_titlebar(&display_path(&project.path))),
+            compact_path: Some(compact_path_for_titlebar(&project.location.display_path())),
             git_branch: git_status.and_then(|status| status.branch.clone()),
             git_counters: git_status.and_then(|status| status.summary.compact_counters()),
         }
@@ -1639,6 +1677,10 @@ impl WorkbenchView {
             }
             CommandId::ProjectOpen => {
                 self.request_open_project();
+                Ok(())
+            }
+            CommandId::ProjectOpenSsh => {
+                self.open_ssh_project_picker();
                 Ok(())
             }
             CommandId::ProjectOpenRecent => {
@@ -2004,8 +2046,19 @@ impl WorkbenchView {
                 } else {
                     layout_load_warning_message(&opened.warnings)
                 };
-                let opened_path = opened.path.clone();
-                let project_id = self.workspace.open_project(opened.path, opened.layout)?;
+                let opened_path = opened
+                    .descriptor
+                    .location
+                    .local_path()
+                    .cloned()
+                    .ok_or(WorkbenchError::UnsupportedRemoteProject)?;
+                let project_id = self
+                    .workspace
+                    .open_project(opened.descriptor, opened.layout)?;
+                self.project.services.insert(
+                    project_id.clone(),
+                    ProjectServices::local(opened_path.clone()),
+                );
                 let selected_terminal_id =
                     self.workspace.project(&project_id).and_then(|project| {
                         project
@@ -2015,7 +2068,7 @@ impl WorkbenchView {
                     });
                 self.project.project_editor_runtime.open_project(
                     project_id.clone(),
-                    opened_path.clone(),
+                    opened_path,
                     selected_terminal_id,
                     self.app_settings.project_panel.default_open,
                     self.app_settings.project_panel.width,
@@ -2040,8 +2093,15 @@ impl WorkbenchView {
 
     pub fn dev_fixture() -> Self {
         let mut workspace = Workspace::new();
+        let path = PathBuf::from("/tmp/yttt");
         workspace
-            .open_project(PathBuf::from("/tmp/yttt"), dev_fixture_layout())
+            .open_project(
+                ProjectDescriptor::new(
+                    ProjectId::from_legacy_location(&path.display().to_string()),
+                    ProjectLocation::local(path),
+                ),
+                dev_fixture_layout(),
+            )
             .expect("dev fixture layout should be valid");
         let mut root = Self::with_workspace(workspace);
         root.project_file_watching_enabled = false;
@@ -2050,9 +2110,13 @@ impl WorkbenchView {
 
     pub fn agent_exit_fixture() -> Self {
         let mut workspace = Workspace::new();
+        let path = PathBuf::from("/tmp/yttt-agent-exit");
         workspace
             .open_project(
-                PathBuf::from("/tmp/yttt-agent-exit"),
+                ProjectDescriptor::new(
+                    ProjectId::from_legacy_location(&path.display().to_string()),
+                    ProjectLocation::local(path),
+                ),
                 agent_exit_fixture_layout(),
             )
             .expect("agent exit fixture layout should be valid");
@@ -2143,6 +2207,7 @@ impl WorkbenchView {
     fn cleanup_closed_project(&mut self, project_id: &ProjectId) {
         self.project.layout_source_messages.remove(project_id);
         self.project.project_git_statuses.remove(project_id);
+        self.project.services.remove(project_id);
         self.project
             .pending_project_tree_loads
             .retain(|(pending_project_id, _)| pending_project_id != project_id);
@@ -2345,7 +2410,12 @@ impl WorkbenchView {
             .project(project_id)
             .ok_or_else(|| WorkspaceError::ProjectNotFound(project_id.as_str().to_string()))?;
 
-        Ok((project.path.clone(), project.layout.clone()))
+        let path = project
+            .location
+            .local_path()
+            .cloned()
+            .ok_or(WorkbenchError::UnsupportedRemoteProject)?;
+        Ok((path, project.layout.clone()))
     }
 
     fn set_layout_toml_editor_error(&mut self, source: &'static str, error: String) {
@@ -2617,7 +2687,12 @@ impl WorkbenchView {
     }
 
     fn current_input_owner_registration(&self) -> InputOwnerRegistration {
-        if self.overlays.pending_keybinding_edit.is_some() {
+        if !self.ssh.pending_host_keys.is_empty() {
+            InputOwnerRegistration::blocking(
+                InputOwnerKind::Dialog,
+                InputScopeId::new("dialog.ssh_host_key"),
+            )
+        } else if self.overlays.pending_keybinding_edit.is_some() {
             InputOwnerRegistration::blocking(
                 InputOwnerKind::KeybindingRecorder,
                 InputScopeId::new("recorder.keybinding"),
@@ -2659,6 +2734,16 @@ impl WorkbenchView {
             InputOwnerRegistration::blocking(
                 InputOwnerKind::Dialog,
                 InputScopeId::new("dialog.zed_theme_import"),
+            )
+        } else if self.ssh.project_picker.open {
+            InputOwnerRegistration::blocking(
+                InputOwnerKind::Dialog,
+                InputScopeId::new("dialog.ssh_project_picker"),
+            )
+        } else if self.ssh.manager_open {
+            InputOwnerRegistration::blocking(
+                InputOwnerKind::Dialog,
+                InputScopeId::new("dialog.ssh_connections"),
             )
         } else if self.settings.settings_page.is_open {
             InputOwnerRegistration::blocking(
@@ -2791,6 +2876,10 @@ pub enum WorkbenchError {
     LayoutTomlEditor(String),
     #[error("{0}")]
     SystemIntegration(String),
+    #[error("{0}")]
+    RemoteProject(String),
+    #[error("remote projects are not available in this operation")]
+    UnsupportedRemoteProject,
 }
 
 impl From<ProjectOpenError> for WorkbenchError {

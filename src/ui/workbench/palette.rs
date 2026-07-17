@@ -50,6 +50,20 @@ impl WorkbenchView {
     }
 
     pub fn confirm_palette_selection(&mut self) -> Result<(), WorkbenchError> {
+        self.confirm_palette_selection_inner(None)
+    }
+
+    pub fn confirm_palette_selection_with_context(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Result<(), WorkbenchError> {
+        self.confirm_palette_selection_inner(Some(cx))
+    }
+
+    fn confirm_palette_selection_inner(
+        &mut self,
+        mut cx: Option<&mut Context<Self>>,
+    ) -> Result<(), WorkbenchError> {
         let Some(active_palette) = self.palette.active_palette.clone() else {
             return Ok(());
         };
@@ -88,8 +102,32 @@ impl WorkbenchView {
                     .map(|project| project.id.clone());
                 if let Some(project_id) = project_id {
                     self.select_project(&project_id)?;
-                } else if item.command == CommandId::ProjectOpenRecent {
-                    self.open_project_path(PathBuf::from(&item.id))?;
+                } else if item.command == CommandId::ProjectOpenRecent
+                    && let Some(location) = self
+                        .palette
+                        .recent_projects
+                        .iter()
+                        .find(|project| project.id.as_str() == item.id)
+                        .map(|project| project.location.clone())
+                {
+                    match location {
+                        ProjectLocation::Local { path } => {
+                            self.open_project_path(path)?;
+                        }
+                        ProjectLocation::Ssh {
+                            connection_id,
+                            root,
+                        } => {
+                            let cx = cx.as_deref_mut().ok_or_else(|| {
+                                WorkbenchError::RemoteProject(
+                                    "Opening a recent SSH project requires an application context."
+                                        .to_string(),
+                                )
+                            })?;
+                            self.open_recent_ssh_project(connection_id, root, cx);
+                            return Ok(());
+                        }
+                    }
                 }
             }
             PaletteKind::Tab => {
@@ -203,9 +241,10 @@ impl WorkbenchView {
             .session(project_id)
         {
             snapshots.extend(session.file_ids().iter().cloned().map(|document_id| {
-                let relative_path = document_id
-                    .canonical_path
-                    .strip_prefix(&project.path)
+                let relative_path = project
+                    .location
+                    .local_path()
+                    .and_then(|root| document_id.canonical_path.strip_prefix(root).ok())
                     .unwrap_or(&document_id.canonical_path)
                     .to_path_buf();
                 let status = (active.as_ref() == Some(&WorkItemId::File(document_id.clone())))
@@ -336,7 +375,7 @@ impl WorkbenchView {
                 }
             }
             InputEvent::PressEnter { .. } => {
-                let _ = self.confirm_palette_selection();
+                let _ = self.confirm_palette_selection_with_context(cx);
                 self.handle_pending_create_project_request(cx);
                 self.handle_pending_open_project_request(cx);
                 self.flush_pending_status_notifications(window, cx);

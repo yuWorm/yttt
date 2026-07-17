@@ -4,4 +4,6 @@ pub mod layout_loader;
 pub mod paths;
 pub mod personal_layout;
 pub mod settings;
+pub mod ssh;
+pub mod ssh_command;
 pub mod theme;

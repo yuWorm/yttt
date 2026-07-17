@@ -99,7 +99,11 @@ impl WorkbenchView {
             .workspace
             .project(&project_id)
             .ok_or_else(|| WorkspaceError::ProjectNotFound(project_id.as_str().to_string()))?;
-        let project_path = project.path.clone();
+        let project_path = project
+            .location
+            .local_path()
+            .cloned()
+            .ok_or(WorkbenchError::UnsupportedRemoteProject)?;
         let effective_layout = project.layout.clone();
         let project_file = self.config_paths.project_layout_file(&project_path);
         let personal_file = self.config_paths.local_layout_file(&project_path);

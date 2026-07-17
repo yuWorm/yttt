@@ -70,12 +70,23 @@ impl WorkbenchView {
         cx.notify();
     }
 
+    pub(super) fn on_open_ssh_project(
+        &mut self,
+        _: &OpenSshProject,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_ssh_project_picker();
+        cx.notify();
+    }
+
     pub(super) fn prompt_for_new_project_directory(&mut self, cx: &mut Context<Self>) {
         let parent_directory = self
             .workspace
             .selected_project_id()
             .and_then(|project_id| self.workspace.project(project_id))
-            .and_then(|project| project.path.parent())
+            .and_then(|project| project.location.local_path())
+            .and_then(|path| path.parent())
             .map(Path::to_path_buf)
             .unwrap_or_else(default_new_project_parent_directory);
         let picked_path = cx.prompt_for_new_path(&parent_directory, None);
@@ -229,7 +240,7 @@ impl WorkbenchView {
         }
 
         if self.palette.active_palette.is_some() {
-            let _ = self.confirm_palette_selection();
+            let _ = self.confirm_palette_selection_with_context(cx);
             self.handle_pending_create_project_request(cx);
             self.handle_pending_open_project_request(cx);
             self.flush_pending_status_notifications(window, cx);
@@ -245,6 +256,24 @@ impl WorkbenchView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.ssh.pending_host_keys.is_empty() {
+            self.answer_ssh_host_key(false, false);
+            cx.notify();
+            return;
+        }
+
+        if self.ssh.project_picker.open {
+            self.close_ssh_project_picker(cx);
+            cx.notify();
+            return;
+        }
+
+        if self.ssh.manager_open {
+            self.close_ssh_connection_manager();
+            cx.notify();
+            return;
+        }
+
         if self.zed_theme_import_dialog_is_open() {
             self.cancel_zed_theme_import_dialog();
             cx.notify();

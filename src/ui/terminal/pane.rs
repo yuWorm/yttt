@@ -1,5 +1,5 @@
 use std::{
-    io::{self, Read},
+    io::{self, Read, Write},
     path::PathBuf,
     sync::{atomic::Ordering, mpsc},
     time::Duration,
@@ -7,6 +7,11 @@ use std::{
 
 use gpui::{
     Context, Entity, EventEmitter, IntoElement, Render, SharedString, Window, div, prelude::*,
+};
+use yttt_core::model::{ids::ConnectionId, project::RemotePathBuf};
+use yttt_ssh::{
+    RemoteTerminalExecution, RemoteTerminalRequest, RemoteTerminalResizeHandle,
+    RemoteTerminalSession, TransportService,
 };
 use yttt_terminal::{
     ExitReason, PortablePtySession, ProcessStatus, PtyIoOperation, TerminalConfig,
@@ -25,6 +30,77 @@ use crate::{
     },
 };
 
+#[derive(Clone)]
+pub struct SshTerminalContext {
+    pub connection_id: ConnectionId,
+    pub transport: Option<TransportService>,
+}
+
+impl std::fmt::Debug for SshTerminalContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SshTerminalContext")
+            .field("connection_id", &self.connection_id)
+            .field("transport_available", &self.transport.is_some())
+            .finish()
+    }
+}
+
+enum TerminalPaneSession {
+    Local(PortablePtySession),
+    Ssh(RemoteTerminalSession),
+}
+
+struct TerminalPaneIo {
+    writer: Box<dyn Write + Send>,
+    reader: Box<dyn Read + Send>,
+}
+
+enum TerminalPaneResizeHandle {
+    Local(yttt_terminal::PortablePtyResizeHandle),
+    Ssh(RemoteTerminalResizeHandle),
+}
+
+impl TerminalPaneSession {
+    fn take_io(&mut self) -> Option<TerminalPaneIo> {
+        match self {
+            Self::Local(session) => session.take_io().map(|io| TerminalPaneIo {
+                writer: io.writer,
+                reader: io.reader,
+            }),
+            Self::Ssh(session) => session.take_io().map(|io| TerminalPaneIo {
+                writer: Box::new(io.writer),
+                reader: Box::new(io.reader),
+            }),
+        }
+    }
+
+    fn resize_handle(&self) -> TerminalPaneResizeHandle {
+        match self {
+            Self::Local(session) => TerminalPaneResizeHandle::Local(session.resize_handle()),
+            Self::Ssh(session) => TerminalPaneResizeHandle::Ssh(session.resize_handle()),
+        }
+    }
+
+    fn finish(self, reason: ExitReason) -> anyhow::Result<ProcessStatus> {
+        match self {
+            Self::Local(session) => session.finish(reason),
+            Self::Ssh(session) => Ok(ProcessStatus::Exited {
+                code: session.finish(reason != ExitReason::Completed),
+            }),
+        }
+    }
+}
+
+impl TerminalPaneResizeHandle {
+    fn resize(&self, cols: usize, rows: usize) -> Result<(), String> {
+        match self {
+            Self::Local(handle) => handle.resize(cols, rows).map_err(|error| error.to_string()),
+            Self::Ssh(handle) => handle.resize(cols, rows),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TerminalPaneContext {
     pub project_id: String,
@@ -36,6 +112,7 @@ pub struct TerminalPaneContext {
     pub shell: String,
     pub is_focused: bool,
     pub terminal_input_gate: TerminalInputGate,
+    pub ssh: Option<SshTerminalContext>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -126,10 +203,11 @@ pub struct TerminalPaneView {
     exit_behavior: ProcessExitBehavior,
     shell: String,
     notify_on_exit: bool,
+    ssh: Option<SshTerminalContext>,
     terminal: Option<Entity<TerminalView>>,
     terminal_config: TerminalConfig,
     theme: WorkbenchTheme,
-    session: Option<PortablePtySession>,
+    session: Option<TerminalPaneSession>,
     lifecycle: PaneLifecycle,
     terminal_error: Option<String>,
     exit_emitted: bool,
@@ -209,6 +287,7 @@ impl TerminalPaneView {
             shell,
             is_focused: _,
             terminal_input_gate,
+            ssh,
         } = context;
         let mut view = Self {
             project_id,
@@ -226,6 +305,7 @@ impl TerminalPaneView {
             shell,
             kind: pane.kind,
             notify_on_exit: pane.notify_on_exit,
+            ssh,
             terminal: None,
             terminal_config,
             theme,
@@ -294,6 +374,41 @@ impl TerminalPaneView {
         request.cwd(self.project_path.clone())
     }
 
+    fn spawn_session(&self) -> anyhow::Result<TerminalPaneSession> {
+        let Some(ssh) = &self.ssh else {
+            return spawn_portable_pty_session(self.spawn_request())
+                .map(TerminalPaneSession::Local);
+        };
+        let transport = ssh
+            .transport
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("SSH runtime is unavailable"))?;
+        let cwd = self
+            .project_path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("remote terminal path is not valid UTF-8"))?;
+        let cwd = RemotePathBuf::new(cwd.to_string())?;
+        let execution = match self.execution_mode {
+            TerminalExecutionMode::Shell => RemoteTerminalExecution::Shell {
+                command: self.command.clone(),
+            },
+            TerminalExecutionMode::Command => RemoteTerminalExecution::Command {
+                program: self.command.clone(),
+                args: self.args.clone(),
+            },
+        };
+        transport
+            .terminal_session(RemoteTerminalRequest {
+                connection_id: ssh.connection_id.clone(),
+                cwd,
+                execution,
+                cols: 80,
+                rows: 24,
+            })
+            .map(TerminalPaneSession::Ssh)
+            .map_err(Into::into)
+    }
+
     fn start_terminal(&mut self, cx: &mut Context<Self>) -> bool {
         self.set_runtime_title(self.default_title.clone(), cx);
         self.terminal = None;
@@ -309,7 +424,7 @@ impl TerminalPaneView {
         self.exit_emitted = false;
         self.generation = self.generation.wrapping_add(1);
 
-        let mut session = match spawn_portable_pty_session(self.spawn_request()) {
+        let mut session = match self.spawn_session() {
             Ok(session) => session,
             Err(error) => {
                 self.set_spawn_failure(error.to_string(), cx);
@@ -337,9 +452,7 @@ impl TerminalPaneView {
             TerminalView::new(io.writer, io.reader, initial_config, cx)
                 .with_key_handler(move |_event| !terminal_input_allowed.load(Ordering::SeqCst))
                 .with_resize_callback(move |cols, rows| {
-                    resize_handle
-                        .resize(cols as usize, rows as usize)
-                        .map_err(|error| error.to_string())
+                    resize_handle.resize(cols as usize, rows as usize)
                 })
                 .with_title_callback(move |cx, title| {
                     let _ = title_parent.update(cx, |pane, cx| {

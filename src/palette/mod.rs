@@ -5,6 +5,7 @@ use crate::{
     model::{
         ids::ProjectId,
         layout::LayoutNode,
+        project::ProjectLocation,
         workspace::{AgentStatus, OpenedProject, PaneProcessState, TabStartState, Workspace},
     },
     ui::{
@@ -42,8 +43,9 @@ pub struct PaletteItem {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecentProject {
+    pub id: ProjectId,
     pub title: String,
-    pub path: PathBuf,
+    pub location: ProjectLocation,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -272,7 +274,7 @@ pub fn opened_project_palette_items_with_text(
         .map(|project| PaletteItem {
             id: project.id.as_str().to_string(),
             title: project.layout.project.name.clone(),
-            subtitle: Some(project.path.display().to_string()),
+            subtitle: Some(project.location.display_path()),
             status: Some(open_project_status(project, ui_text)),
             keybinding: None,
             command: CommandId::ProjectOpenedPalette,
@@ -300,13 +302,20 @@ pub fn recent_project_palette_items_with_text(
             workspace
                 .opened_projects()
                 .iter()
-                .all(|opened| opened.path.as_path() != recent.path.as_path())
+                .all(|opened| opened.id != recent.id)
         })
         .map(|project| PaletteItem {
-            id: project.path.display().to_string(),
+            id: project.id.as_str().to_string(),
             title: project.title.clone(),
-            subtitle: Some(project.path.display().to_string()),
-            status: Some(ui_text.get(UiTextKey::PaletteStatusRecent).to_string()),
+            subtitle: Some(project.location.display_path()),
+            status: Some(
+                ui_text
+                    .get(match project.location {
+                        ProjectLocation::Ssh { .. } => UiTextKey::PaletteStatusRemoteRecent,
+                        ProjectLocation::Local { .. } => UiTextKey::PaletteStatusRecent,
+                    })
+                    .to_string(),
+            ),
             keybinding: None,
             command: CommandId::ProjectOpenRecent,
             enabled: true,
@@ -467,6 +476,7 @@ fn command_title_key(command_id: CommandId) -> UiTextKey {
     match command_id {
         CommandId::ProjectCreate => UiTextKey::CommandProjectCreateTitle,
         CommandId::ProjectOpen => UiTextKey::CommandProjectOpenTitle,
+        CommandId::ProjectOpenSsh => UiTextKey::CommandProjectOpenSshTitle,
         CommandId::ProjectOpenRecent => UiTextKey::CommandProjectOpenRecentTitle,
         CommandId::ProjectClose => UiTextKey::CommandProjectCloseTitle,
         CommandId::ProjectPalette => UiTextKey::CommandProjectPaletteTitle,
@@ -514,6 +524,7 @@ fn command_description_key(command_id: CommandId) -> UiTextKey {
     match command_id {
         CommandId::ProjectCreate => UiTextKey::CommandProjectCreateDescription,
         CommandId::ProjectOpen => UiTextKey::CommandProjectOpenDescription,
+        CommandId::ProjectOpenSsh => UiTextKey::CommandProjectOpenSshDescription,
         CommandId::ProjectOpenRecent => UiTextKey::CommandProjectOpenRecentDescription,
         CommandId::ProjectClose => UiTextKey::CommandProjectCloseDescription,
         CommandId::ProjectPalette => UiTextKey::CommandProjectPaletteDescription,

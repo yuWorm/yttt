@@ -57,6 +57,7 @@ pub(super) fn collect_terminal_pane_contexts(
             shell: shell.to_string(),
             is_focused: focused_pane_id == Some(pane.id.as_str()),
             terminal_input_gate: terminal_input_gate.clone(),
+            ssh: None,
         }),
         LayoutNode::Split(split) => {
             collect_terminal_pane_contexts(
@@ -92,8 +93,9 @@ pub(super) fn recent_projects_for_palette(config: &RecentProjectsConfig) -> Vec<
         .projects
         .iter()
         .map(|project| RecentProject {
+            id: project.id.clone(),
             title: project.title.clone(),
-            path: project.path.clone(),
+            location: project.location.clone(),
         })
         .collect()
 }

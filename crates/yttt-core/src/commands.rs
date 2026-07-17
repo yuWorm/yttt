@@ -25,6 +25,7 @@ pub struct CommandContext {
 pub enum CommandId {
     ProjectCreate,
     ProjectOpen,
+    ProjectOpenSsh,
     ProjectOpenRecent,
     ProjectClose,
     ProjectPalette,
@@ -71,6 +72,7 @@ impl CommandId {
     pub const ALL: &'static [Self] = &[
         Self::ProjectCreate,
         Self::ProjectOpen,
+        Self::ProjectOpenSsh,
         Self::ProjectOpenRecent,
         Self::ProjectClose,
         Self::ProjectPalette,
@@ -117,6 +119,7 @@ impl CommandId {
         match self {
             Self::ProjectCreate => "project.create",
             Self::ProjectOpen => "project.open",
+            Self::ProjectOpenSsh => "project.open_ssh",
             Self::ProjectOpenRecent => "project.open_recent",
             Self::ProjectClose => "project.close",
             Self::ProjectPalette => "project.palette",
@@ -173,6 +176,9 @@ impl CommandId {
                 presentation("Create Project", "Create and open a new project directory")
             }
             Self::ProjectOpen => presentation("Open Project", "Choose a project directory"),
+            Self::ProjectOpenSsh => {
+                presentation("Open SSH Project", "Connect to and open a remote project")
+            }
             Self::ProjectOpenRecent => {
                 presentation("Open Recent Project", "Choose a recent project")
             }
@@ -301,6 +307,7 @@ impl CommandId {
             Self::CommandPaletteOpen
             | Self::ProjectCreate
             | Self::ProjectOpen
+            | Self::ProjectOpenSsh
             | Self::ProjectOpenRecent
             | Self::ProjectPalette
             | Self::SettingsOpen

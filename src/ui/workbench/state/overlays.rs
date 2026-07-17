@@ -1,10 +1,8 @@
-use std::path::PathBuf;
-
 use gpui::{Entity, Subscription};
 use gpui_component::input::InputState;
 
 use crate::{
-    model::ids::ProjectId,
+    model::{ids::ProjectId, project::ProjectLocation},
     ui::{
         interaction::input_owner::InputOwnerStack, workbench::layout_editor::LayoutEditorSession,
     },
@@ -28,5 +26,5 @@ pub(in super::super) struct OverlayControllerState {
     pub(in super::super) layout_toml_input_needs_focus: bool,
     pub(in super::super) git_diff_panel: Option<GitDiffPanel>,
     pub(in super::super) git_diff_generation: u64,
-    pub(in super::super) pending_git_diff_load: Option<(ProjectId, PathBuf, u64)>,
+    pub(in super::super) pending_git_diff_load: Option<(ProjectId, ProjectLocation, u64)>,
 }

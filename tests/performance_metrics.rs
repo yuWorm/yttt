@@ -4,9 +4,21 @@ use gpui::AppContext as _;
 use tempfile::tempdir;
 use yttt::{
     config::{paths::AppConfigPaths, settings::load_or_create_settings},
-    model::workspace::Workspace,
+    model::{
+        ids::ProjectId,
+        project::{ProjectDescriptor, ProjectLocation},
+        workspace::Workspace,
+    },
     ui::workbench::WorkbenchView,
 };
+
+fn local_project(path: PathBuf) -> ProjectDescriptor {
+    let location = ProjectLocation::local(path);
+    ProjectDescriptor::new(
+        ProjectId::from_legacy_location(&location.display_path()),
+        location,
+    )
+}
 
 #[gpui::test]
 fn performance_metrics_render_sample_and_toggle_from_settings(cx: &mut gpui::TestAppContext) {
@@ -203,7 +215,7 @@ layout = { type = "pane", id = "codex", title = "Codex", command = "codex", kind
     )
     .unwrap();
     workspace
-        .open_project(PathBuf::from("/tmp/yttt"), layout)
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), layout)
         .unwrap();
     workspace
 }

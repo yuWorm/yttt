@@ -1,11 +1,10 @@
-use std::path::PathBuf;
-
 use crate::model::{
-    ids::ProjectId,
+    ids::{ProjectId, ProjectInstanceId},
     layout::{
         LayoutNode, PaneConfig, PaneKind, ProcessExitBehavior, ProjectLayout, SplitConfig,
         SplitDirection, TabConfig, TabStartup, TerminalExecutionMode,
     },
+    project::{ProjectDescriptor, ProjectLocation},
     split_tree::{FocusDirection, ResizeDirection},
 };
 
@@ -36,18 +35,27 @@ impl Workspace {
 
     pub fn open_project(
         &mut self,
-        path: PathBuf,
+        descriptor: ProjectDescriptor,
         layout: ProjectLayout,
     ) -> Result<ProjectId, WorkspaceError> {
         layout.validate().map_err(WorkspaceError::InvalidLayout)?;
 
-        let id = ProjectId::new(path.to_string_lossy().into_owned());
+        let ProjectDescriptor {
+            id,
+            instance_id,
+            location,
+        } = descriptor;
+        if self.project(&id).is_some() {
+            self.selected_project_id = Some(id.clone());
+            return Ok(id);
+        }
         let selected_tab_id = default_tab_id(&layout).unwrap_or_default();
         let tab_states = tab_states_for_layout(&layout, &selected_tab_id);
 
         self.opened_projects.push(OpenedProject {
             id: id.clone(),
-            path,
+            instance_id,
+            location,
             layout,
             selected_tab_id,
             tab_states,
@@ -749,7 +757,8 @@ impl Workspace {
 #[derive(Clone, Debug, PartialEq)]
 pub struct OpenedProject {
     pub id: ProjectId,
-    pub path: PathBuf,
+    pub instance_id: ProjectInstanceId,
+    pub location: ProjectLocation,
     pub layout: ProjectLayout,
     pub selected_tab_id: String,
     pub tab_states: Vec<TabState>,

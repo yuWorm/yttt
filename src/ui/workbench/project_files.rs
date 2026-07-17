@@ -182,9 +182,12 @@ impl WorkbenchView {
         }
         let Some((project_id, project_path)) =
             self.workspace.selected_project_id().and_then(|project_id| {
-                self.workspace
-                    .project(project_id)
-                    .map(|project| (project_id.clone(), project.path.clone()))
+                self.workspace.project(project_id).and_then(|project| {
+                    project
+                        .location
+                        .local_path()
+                        .map(|path| (project_id.clone(), path.clone()))
+                })
             })
         else {
             self.active_project_file_watcher = None;
@@ -606,29 +609,36 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(source_root) = self
-            .workspace
-            .project(source_project_id)
-            .map(|project| project.path.clone())
+        let Some(source_services) = self.project.services.get(source_project_id).cloned() else {
+            return;
+        };
+        let Some(destination_services) = self.project.services.get(destination_project_id).cloned()
         else {
             return;
         };
-        let Some(destination_root) = self
-            .workspace
-            .project(destination_project_id)
-            .map(|project| project.path.clone())
-        else {
-            return;
+        let source_base = if let Some(source_root) = source_services.local_root() {
+            let Ok(canonical_source_root) = fs::canonicalize(source_root) else {
+                return;
+            };
+            canonical_source_root.join(source_relative_path)
+        } else {
+            let Some(path) = source_services.document_path(source_relative_path) else {
+                return;
+            };
+            path
         };
-        let Ok(canonical_source_root) = fs::canonicalize(source_root) else {
-            return;
+        let destination_base = if let Some(destination_root) = destination_services.local_root() {
+            let Ok(path) = fs::canonicalize(destination_root.join(destination_relative_path))
+            else {
+                return;
+            };
+            path
+        } else {
+            let Some(path) = destination_services.document_path(destination_relative_path) else {
+                return;
+            };
+            path
         };
-        let Ok(canonical_destination_base) =
-            fs::canonicalize(destination_root.join(destination_relative_path))
-        else {
-            return;
-        };
-        let source_base = canonical_source_root.join(source_relative_path);
         let migrations = self
             .project
             .project_editor_runtime
@@ -638,7 +648,7 @@ impl WorkbenchView {
                 let destination_relative = destination_relative_path.join(suffix);
                 let new_document_id = crate::ui::editor::DocumentId {
                     project_id: destination_project_id.clone(),
-                    canonical_path: canonical_destination_base.join(suffix),
+                    canonical_path: destination_base.join(suffix),
                 };
                 Some((
                     document_id.clone(),
@@ -725,16 +735,11 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(project_root) = self
-            .workspace
-            .project(&project_id)
-            .map(|project| project.path.clone())
-        else {
+        let Some(services) = self.project.services.get(&project_id).cloned() else {
             return;
         };
         let refresh_parent = parent.clone();
-        let io_task = cx
-            .background_spawn(async move { create_project_entry(&project_root, &parent, &input) });
+        let io_task = cx.background_spawn(async move { services.create_entry(&parent, &input) });
         cx.spawn_in(window, async move |this, cx| {
             let result = io_task.await;
             let _ = this.update_in(cx, |root, window, cx| {
@@ -782,10 +787,13 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((project_path, layout)) = self
-            .workspace
-            .project(&project_id)
-            .map(|project| (project.path.clone(), project.layout.clone()))
+        let Some((project_path, layout)) =
+            self.workspace.project(&project_id).and_then(|project| {
+                project
+                    .location
+                    .local_path()
+                    .map(|path| (path.clone(), project.layout.clone()))
+            })
         else {
             return;
         };
@@ -827,11 +835,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(project_root) = self
-            .workspace
-            .project(&project_id)
-            .map(|project| project.path.clone())
-        else {
+        let Some(services) = self.project.services.get(&project_id).cloned() else {
             return;
         };
         let refresh_parent = relative_path
@@ -839,9 +843,8 @@ impl WorkbenchView {
             .unwrap_or_else(|| Path::new(""))
             .to_path_buf();
         let moved_relative_path = relative_path.clone();
-        let io_task = cx.background_spawn(async move {
-            rename_project_entry(&project_root, &relative_path, &new_name)
-        });
+        let io_task =
+            cx.background_spawn(async move { services.rename_entry(&relative_path, &new_name) });
         cx.spawn_in(window, async move |this, cx| {
             let result = io_task.await;
             let _ = this.update_in(cx, |root, window, cx| {
@@ -970,19 +973,14 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(project_root) = self
-            .workspace
-            .project(&project_id)
-            .map(|project| project.path.clone())
-        else {
+        let Some(services) = self.project.services.get(&project_id).cloned() else {
             return;
         };
         let refresh_parent = relative_path
             .parent()
             .unwrap_or_else(|| Path::new(""))
             .to_path_buf();
-        let io_task =
-            cx.background_spawn(async move { delete_project_entry(&project_root, &relative_path) });
+        let io_task = cx.background_spawn(async move { services.delete_entry(&relative_path) });
         cx.spawn_in(window, async move |this, cx| {
             let result = io_task.await;
             let _ = this.update_in(cx, |root, window, cx| {
@@ -1024,18 +1022,17 @@ impl WorkbenchView {
         let Some(clipboard) = self.project.project_tree_clipboard.clone() else {
             return;
         };
-        let Some(source_root) = self
-            .workspace
-            .project(&clipboard.source_project_id)
-            .map(|project| project.path.clone())
+        let Some(source_services) = self
+            .project
+            .services
+            .get(&clipboard.source_project_id)
+            .cloned()
         else {
             self.project.project_tree_clipboard = None;
             return;
         };
-        let Some(destination_root) = self
-            .workspace
-            .project(&destination_project_id)
-            .map(|project| project.path.clone())
+        let Some(destination_services) =
+            self.project.services.get(&destination_project_id).cloned()
         else {
             return;
         };
@@ -1048,10 +1045,9 @@ impl WorkbenchView {
             .unwrap_or_else(|| Path::new(""))
             .to_path_buf();
         let io_task = cx.background_spawn(async move {
-            paste_project_entry(
-                &source_root,
+            source_services.paste_entry(
                 &source_relative_path,
-                &destination_root,
+                &destination_services,
                 &destination_directory,
                 mode,
             )
@@ -1128,35 +1124,43 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let project_path = self
-            .workspace
-            .project(&project_id)
-            .map(|project| project.path.clone());
         for request in self.refresh_expanded_project_tree_states(&project_id) {
             self.spawn_project_directory_scan(project_id.clone(), request, window, cx);
         }
         self.check_project_documents_for_external_changes(&project_id, window, cx);
-        if let Some(project_path) = project_path {
-            let status_project_path = project_path.clone();
-            let task =
-                cx.background_spawn(async move { read_project_git_status(&status_project_path) });
-            cx.spawn_in(window, async move |this, cx| {
-                let status = task.await;
-                let _ = this.update_in(cx, |root, _window, cx| {
-                    if root
-                        .workspace
-                        .project(&project_id)
-                        .map(|project| &project.path)
-                        != Some(&project_path)
-                    {
-                        return;
-                    }
-                    root.apply_project_git_status(&project_id, status);
-                    cx.notify();
-                });
-            })
-            .detach();
-        }
+        self.refresh_project_git_status(project_id, cx);
+    }
+
+    pub(super) fn refresh_project_git_status(
+        &mut self,
+        project_id: ProjectId,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((project_location, services)) = self
+            .workspace
+            .project(&project_id)
+            .map(|project| project.location.clone())
+            .zip(self.project.services.get(&project_id).cloned())
+        else {
+            return;
+        };
+        let task = cx.background_spawn(async move { read_project_git_status_with(&services) });
+        cx.spawn(async move |this, cx| {
+            let status = task.await;
+            let _ = this.update(cx, |root, cx| {
+                if root
+                    .workspace
+                    .project(&project_id)
+                    .map(|project| &project.location)
+                    != Some(&project_location)
+                {
+                    return;
+                }
+                root.apply_project_git_status(&project_id, status);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn refresh_project_tree_after_mutation(
@@ -1170,6 +1174,7 @@ impl WorkbenchView {
             self.spawn_project_directory_scan(project_id.clone(), request, window, cx);
         }
         self.check_project_documents_for_external_changes(&project_id, window, cx);
+        self.refresh_project_git_status(project_id, cx);
     }
 
     pub(super) fn queue_project_tree_refresh(&mut self, project_id: ProjectId) -> bool {
@@ -1227,11 +1232,7 @@ impl WorkbenchView {
         {
             return;
         }
-        let Some(project_root) = self
-            .workspace
-            .project(&project_id)
-            .map(|project| project.path.clone())
-        else {
+        let Some(services) = self.project.services.get(&project_id).cloned() else {
             return;
         };
         let relative_directory = request.relative_directory.clone();
@@ -1239,7 +1240,7 @@ impl WorkbenchView {
         let show_hidden = self.app_settings.project_panel.show_hidden;
         let scan_relative_directory = relative_directory.clone();
         let io_task = cx.background_spawn(async move {
-            scan_project_directory(&project_root, &scan_relative_directory, show_hidden)
+            services.scan_directory(&scan_relative_directory, show_hidden)
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = io_task.await;
@@ -1292,9 +1293,9 @@ impl WorkbenchView {
             ProjectFileIoError::InvalidUtf8 { .. } => {
                 self.ui_text.get(UiTextKey::ProjectFileInvalidEncoding)
             }
-            ProjectFileIoError::NotAFile { .. } | ProjectFileIoError::Io { .. } => {
-                self.ui_text.get(UiTextKey::StatusErrorContext)
-            }
+            ProjectFileIoError::NotAFile { .. }
+            | ProjectFileIoError::Io { .. }
+            | ProjectFileIoError::Remote { .. } => self.ui_text.get(UiTextKey::StatusErrorContext),
         };
         format!("{summary}: {error}")
     }
@@ -1304,14 +1305,18 @@ impl WorkbenchView {
         project_id: &ProjectId,
         relative_path: &Path,
     ) -> Option<ProjectFileLoadRequest> {
-        let project_root = self.workspace.project(project_id)?.path.clone();
+        let document_path = self
+            .project
+            .services
+            .get(project_id)?
+            .document_path(relative_path)?;
         self.project
             .project_editor_runtime
             .workspace()
             .session(project_id)?;
         let document_id = crate::ui::editor::DocumentId {
             project_id: project_id.clone(),
-            canonical_path: project_root.join(relative_path),
+            canonical_path: document_path,
         };
         let generation = self
             .project
@@ -1319,7 +1324,6 @@ impl WorkbenchView {
             .begin_file_load(document_id.clone())?;
         Some(ProjectFileLoadRequest {
             document_id,
-            project_root,
             relative_path: relative_path.to_path_buf(),
             generation,
         })
@@ -1354,13 +1358,15 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let requested_document_id =
-            self.workspace
-                .project(&project_id)
-                .map(|project| crate::ui::editor::DocumentId {
-                    project_id: project_id.clone(),
-                    canonical_path: project.path.join(&relative_path),
-                });
+        let requested_document_id = self
+            .project
+            .services
+            .get(&project_id)
+            .and_then(|services| services.document_path(&relative_path))
+            .map(|canonical_path| crate::ui::editor::DocumentId {
+                project_id: project_id.clone(),
+                canonical_path,
+            });
         if let Some(document_id) = requested_document_id
             && (self
                 .project
@@ -1381,10 +1387,12 @@ impl WorkbenchView {
         let Some(request) = self.begin_project_file_open(&project_id, &relative_path) else {
             return;
         };
-        let project_root = request.project_root.clone();
+        let Some(services) = self.project.services.get(&project_id).cloned() else {
+            self.cancel_project_file_open(&request);
+            return;
+        };
         let read_relative_path = request.relative_path.clone();
-        let io_task = cx
-            .background_spawn(async move { read_project_file(&project_root, &read_relative_path) });
+        let io_task = cx.background_spawn(async move { services.read_file(&read_relative_path) });
         cx.spawn_in(window, async move |this, cx| {
             let result = io_task.await;
             let _ = this.update_in(cx, |root, window, cx| {

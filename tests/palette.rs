@@ -4,6 +4,7 @@ use yttt::{
     commands::{ActiveSurface, CommandContext, CommandId, default_registry},
     model::{
         ids::ProjectId,
+        project::{ProjectDescriptor, ProjectLocation},
         workspace::{AgentStatus, Workspace},
     },
     palette::{
@@ -19,6 +20,23 @@ use yttt::{
         palette::visible_palette_rows,
     },
 };
+
+fn local_project(path: PathBuf) -> ProjectDescriptor {
+    let location = ProjectLocation::local(path);
+    ProjectDescriptor::new(
+        ProjectId::from_legacy_location(&location.display_path()),
+        location,
+    )
+}
+
+fn recent_project(title: &str, path: PathBuf) -> RecentProject {
+    let project = local_project(path);
+    RecentProject {
+        id: project.id,
+        title: title.to_string(),
+        location: project.location,
+    }
+}
 
 #[test]
 fn new_tab_command_palette_preserves_commands_and_ignores_blank_entries() {
@@ -182,12 +200,9 @@ fn layout_project_palette_commands_are_disabled_without_project() {
 fn project_palette_contains_opened_and_recent_projects() {
     let mut workspace = Workspace::new();
     workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
-    let recent = vec![RecentProject {
-        title: "zed".to_string(),
-        path: PathBuf::from("/tmp/zed"),
-    }];
+    let recent = vec![recent_project("zed", PathBuf::from("/tmp/zed"))];
 
     let items = project_palette_items(&workspace, &recent);
 
@@ -207,7 +222,7 @@ fn project_palette_contains_opened_and_recent_projects() {
 fn opened_project_palette_contains_only_opened_projects() {
     let mut workspace = Workspace::new();
     workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
 
     let items = opened_project_palette_items(&workspace);
@@ -222,17 +237,11 @@ fn opened_project_palette_contains_only_opened_projects() {
 fn recent_project_palette_excludes_opened_projects() {
     let mut workspace = Workspace::new();
     workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
     let recent = vec![
-        RecentProject {
-            title: "yttt".to_string(),
-            path: PathBuf::from("/tmp/yttt"),
-        },
-        RecentProject {
-            title: "zed".to_string(),
-            path: PathBuf::from("/tmp/zed"),
-        },
+        recent_project("yttt", PathBuf::from("/tmp/yttt")),
+        recent_project("zed", PathBuf::from("/tmp/zed")),
     ];
 
     let items = recent_project_palette_items(&workspace, &recent);
@@ -247,7 +256,7 @@ fn recent_project_palette_excludes_opened_projects() {
 fn project_palette_shows_open_project_agent_status() {
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
     workspace
         .record_agent_status(&project_id, "agent", "codex", AgentStatus::Failed)
@@ -264,7 +273,7 @@ fn project_palette_shows_open_project_agent_status() {
 fn tab_palette_contains_current_project_tabs() {
     let mut workspace = Workspace::new();
     workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
 
     let items = tab_palette_items(&workspace).unwrap();
@@ -309,7 +318,7 @@ fn unified_tab_palette_prefixes_ids_and_shows_file_relative_paths() {
 
     let mut workspace = Workspace::new();
     workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
     let legacy_items = tab_palette_items(&workspace).unwrap();
     assert!(legacy_items.iter().any(|item| item.id == "dev"));
@@ -324,7 +333,7 @@ fn unified_tab_palette_prefixes_ids_and_shows_file_relative_paths() {
 fn tab_palette_shows_agent_status() {
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
     workspace.select_tab("agent").unwrap();
     workspace
@@ -341,7 +350,7 @@ fn tab_palette_shows_agent_status() {
 fn pane_palette_contains_current_tab_panes() {
     let mut workspace = Workspace::new();
     workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
 
     let items = pane_palette_items(&workspace).unwrap();
@@ -362,7 +371,7 @@ fn pane_palette_contains_current_tab_panes() {
 fn pane_palette_marks_agent_panes() {
     let mut workspace = Workspace::new();
     workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
     workspace.select_tab("agent").unwrap();
 
@@ -377,7 +386,7 @@ fn pane_palette_marks_agent_panes() {
 fn pane_palette_shows_agent_exit_result() {
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
     workspace.select_tab("agent").unwrap();
     workspace

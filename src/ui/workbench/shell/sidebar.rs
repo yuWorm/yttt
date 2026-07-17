@@ -8,7 +8,6 @@ use gpui_component::{
 };
 
 use crate::commands::CommandId;
-use crate::config::paths::display_path;
 use crate::model::workspace::Workspace;
 use crate::ui::components::{SelectableState, workbench_icon_button};
 use crate::ui::i18n::{UiText, UiTextKey};
@@ -31,6 +30,7 @@ use crate::ui::{
 
 const PROJECT_CONTEXT_COMMANDS: &[CommandId] = &[
     CommandId::ProjectCreate,
+    CommandId::ProjectOpenSsh,
     CommandId::LayoutProjectEdit,
     CommandId::LayoutSaveCurrent,
     CommandId::LayoutExportProjectConfig,
@@ -103,7 +103,7 @@ pub fn visible_project_items(workspace: &Workspace) -> Vec<ProjectSidebarItem> {
         .iter()
         .map(|project| {
             let configured_name = &project.layout.project.name;
-            let path = display_path(&project.path);
+            let path = project.location.display_path();
             let title = if configured_name.contains(['/', '\\']) {
                 compact_path(&path)
             } else {

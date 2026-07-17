@@ -1,0 +1,17 @@
+# Changelog
+
+## Unreleased
+
+### Added
+
+- Added saved SSH connection management with SSH agent, private-key, and password authentication.
+- Added explicit host-key verification backed by yttt's own `ssh-host-keys.toml` store; OpenSSH `known_hosts` files are never modified.
+- Added an SFTP project picker, lazy remote file tree, conflict-checked remote editing, remote terminal panes, and remote Git status, branch, and diff operations.
+- Added operating-system credential-store integration for remembered SSH passwords and endpoint-bound credential metadata.
+
+### Changed
+
+- Missing or rejected SSH passwords now open a focused retry prompt with an explicit save-password choice.
+- Remote directory picker rows now use the active icon theme, fill the available width, and keep directory names left-aligned.
+- Long remote directory lists now use a bounded scroll viewport while short lists remain content-sized.
+- Reconnecting an SSH project refreshes expanded remote directories and Git status.

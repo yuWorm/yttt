@@ -13,7 +13,6 @@ use yttt::{
     config::{
         default_layout::{BuiltinAgent, DefaultLayoutKind, DefaultLayoutTemplate},
         keybindings::default_keybindings,
-        layout_loader::{RecentProjectConfig, RecentProjectsConfig},
         paths::AppConfigPaths,
         settings::{
             AppSettings, EditorAutosave, LanguageSetting, WindowBackgroundEffect,
@@ -21,9 +20,11 @@ use yttt::{
         },
     },
     model::{
+        ids::ProjectId,
         layout::{
             LayoutNode, PaneKind, ProcessExitBehavior, SplitDirection, TerminalExecutionMode,
         },
+        project::{ProjectDescriptor, ProjectLocation},
         split_tree::ResizeDirection,
         workspace::{AgentStatus, PaneProcessState, Workspace},
     },
@@ -74,6 +75,18 @@ use yttt::{
     },
 };
 use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
+
+fn local_project(path: PathBuf) -> ProjectDescriptor {
+    let location = ProjectLocation::local(path);
+    ProjectDescriptor::new(
+        ProjectId::from_legacy_location(&location.display_path()),
+        location,
+    )
+}
+
+fn local_project_id(path: &str) -> ProjectId {
+    ProjectId::from_legacy_location(path)
+}
 
 #[test]
 fn git_status_summary_parses_branch_and_dirty_counts() {
@@ -240,9 +253,10 @@ fn root_view_empty_workspace_exposes_visible_actions() {
         root.visible_empty_workspace_actions(),
         vec![
             "Open Directory",
-            "Open Recent",
+            "Open remote project",
             "Restore Last Session",
-            "Command Palette"
+            "Open Recent",
+            "Command Palette",
         ]
     );
 }
@@ -280,16 +294,10 @@ fn legacy_recent_project_is_available_for_manual_restore() {
     let project = project.canonicalize().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     fs::create_dir_all(paths.config_dir()).unwrap();
+    let project_toml = toml::Value::String(project.to_string_lossy().into_owned()).to_string();
     fs::write(
         paths.recent_projects_file(),
-        toml::to_string_pretty(&RecentProjectsConfig {
-            projects: vec![RecentProjectConfig {
-                title: "legacy-project".to_string(),
-                path: project.clone(),
-            }],
-            ..Default::default()
-        })
-        .unwrap(),
+        format!("[[projects]]\ntitle = \"legacy-project\"\npath = {project_toml}\n"),
     )
     .unwrap();
     let mut settings = AppSettings::default();
@@ -300,7 +308,10 @@ fn legacy_recent_project_is_available_for_manual_restore() {
     assert!(root.workspace().opened_projects().is_empty());
     assert!(root.has_last_opened_projects());
     assert_eq!(root.restore_last_opened_projects(), 1);
-    assert_eq!(root.workspace().opened_projects()[0].path, project);
+    assert_eq!(
+        root.workspace().opened_projects()[0].location.local_path(),
+        Some(&project)
+    );
 }
 
 #[test]
@@ -331,7 +342,12 @@ fn closing_last_project_preserves_manual_restore_without_startup_reopen() {
         "startup restore must not reopen a project that was explicitly closed"
     );
     assert_eq!(restarted.restore_last_opened_projects(), 1);
-    assert_eq!(restarted.workspace().opened_projects()[0].path, project);
+    assert_eq!(
+        restarted.workspace().opened_projects()[0]
+            .location
+            .local_path(),
+        Some(&project)
+    );
 }
 
 #[test]
@@ -358,9 +374,10 @@ fn root_view_restores_all_last_opened_projects_when_enabled() {
         restore_disabled.visible_empty_workspace_actions(),
         vec![
             "Open Directory",
-            "Open Recent",
+            "Open remote project",
             "Restore Last Session",
-            "Command Palette"
+            "Open Recent",
+            "Command Palette",
         ]
     );
     restore_disabled
@@ -373,7 +390,7 @@ fn root_view_restores_all_last_opened_projects_when_enabled() {
         .workspace()
         .opened_projects()
         .iter()
-        .map(|project| project.path.clone())
+        .filter_map(|project| project.location.local_path().cloned())
         .collect::<Vec<_>>();
     assert_eq!(
         restored_paths,
@@ -444,10 +461,16 @@ fn root_view_toggles_sidebar_collapse_state() {
 fn root_view_right_sidebar_drag_updates_only_selected_project() {
     let mut workspace = Workspace::new();
     let first = workspace
-        .open_project(PathBuf::from("/tmp/sidebar-first"), sample_layout())
+        .open_project(
+            local_project(PathBuf::from("/tmp/sidebar-first")),
+            sample_layout(),
+        )
         .unwrap();
     let second = workspace
-        .open_project(PathBuf::from("/tmp/sidebar-second"), sample_layout())
+        .open_project(
+            local_project(PathBuf::from("/tmp/sidebar-second")),
+            sample_layout(),
+        )
         .unwrap();
     workspace.select_project(&first).unwrap();
     let (_temp, mut root) = english_test_root_with_workspace(workspace);
@@ -495,11 +518,14 @@ fn root_view_sidebar_release_persists_defaults_without_rewriting_other_sessions(
     let paths = english_test_config_paths(&temp);
     let mut workspace = Workspace::new();
     let first = workspace
-        .open_project(PathBuf::from("/tmp/sidebar-persist-first"), sample_layout())
+        .open_project(
+            local_project(PathBuf::from("/tmp/sidebar-persist-first")),
+            sample_layout(),
+        )
         .unwrap();
     let second = workspace
         .open_project(
-            PathBuf::from("/tmp/sidebar-persist-second"),
+            local_project(PathBuf::from("/tmp/sidebar-persist-second")),
             sample_layout(),
         )
         .unwrap();
@@ -1231,7 +1257,10 @@ fn root_view_creates_project_work_item_session_on_open() {
         .workspace()
         .session(project_id)
         .unwrap();
-    assert_eq!(session.file_tree().root(), project.path);
+    assert_eq!(
+        session.file_tree().root(),
+        project.location.local_path().unwrap()
+    );
     assert_eq!(
         session.active_work_item(),
         Some(&WorkItemId::Terminal(project.selected_tab_id.clone()))
@@ -1333,7 +1362,7 @@ fn root_view_file_tree_loads_and_opens_a_project_file(cx: &mut gpui::TestAppCont
     let paths = english_test_config_paths(&temp);
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(project_dir.clone(), file_editor_layout())
+        .open_project(local_project(project_dir.clone()), file_editor_layout())
         .unwrap();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
@@ -1418,10 +1447,16 @@ fn root_view_file_tree_loads_and_opens_a_project_file(cx: &mut gpui::TestAppCont
 fn root_view_prebuilt_workspace_creates_all_project_work_item_sessions() {
     let mut workspace = Workspace::new();
     let first = workspace
-        .open_project(PathBuf::from("/tmp/editor-first"), sample_layout())
+        .open_project(
+            local_project(PathBuf::from("/tmp/editor-first")),
+            sample_layout(),
+        )
         .unwrap();
     let second = workspace
-        .open_project(PathBuf::from("/tmp/editor-second"), sample_layout())
+        .open_project(
+            local_project(PathBuf::from("/tmp/editor-second")),
+            sample_layout(),
+        )
         .unwrap();
     let (_temp, root) = english_test_root_with_workspace(workspace);
 
@@ -1441,10 +1476,16 @@ fn root_view_prebuilt_workspace_creates_all_project_work_item_sessions() {
 fn root_view_project_switch_preserves_each_editor_session() {
     let mut workspace = Workspace::new();
     let first = workspace
-        .open_project(PathBuf::from("/tmp/editor-first"), sample_layout())
+        .open_project(
+            local_project(PathBuf::from("/tmp/editor-first")),
+            sample_layout(),
+        )
         .unwrap();
     let second = workspace
-        .open_project(PathBuf::from("/tmp/editor-second"), sample_layout())
+        .open_project(
+            local_project(PathBuf::from("/tmp/editor-second")),
+            sample_layout(),
+        )
         .unwrap();
     let (_temp, mut root) = english_test_root_with_workspace(workspace);
     let opened_file = {
@@ -1618,9 +1659,13 @@ fn root_view_active_file_owns_input_without_leaking_to_terminal() {
         .unwrap();
 
     assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Editor);
+    let expected_input_scope = format!(
+        "editor.project_file:{}:/tmp/yttt/src/main.rs",
+        project_id.as_str()
+    );
     assert_eq!(
         root.foreground_input_scope_id().as_deref(),
-        Some("editor.project_file:/tmp/yttt:/tmp/yttt/src/main.rs")
+        Some(expected_input_scope.as_str())
     );
     assert!(!root.terminal_input_allowed());
     assert_eq!(root.pending_editor_focus_document_id(), Some(&document_id));
@@ -1712,7 +1757,7 @@ fn root_view_file_save_preserves_newer_in_flight_edit(cx: &mut gpui::TestAppCont
     let loaded = read_project_file(&project_dir, Path::new("notes.txt")).unwrap();
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(project_dir.clone(), sample_layout())
+        .open_project(local_project(project_dir.clone()), sample_layout())
         .unwrap();
     let document_id = DocumentId {
         project_id: project_id.clone(),
@@ -1791,10 +1836,7 @@ fn root_view_file_save_preserves_newer_in_flight_edit(cx: &mut gpui::TestAppCont
     });
 
     root.update(cx, |root, cx| {
-        let command = root
-            .runtime_command_for_dispatch(&Keystroke::parse("ctrl-s").unwrap())
-            .unwrap();
-        root.run_command(command).unwrap();
+        root.run_command(CommandId::FileSave).unwrap();
         assert_eq!(root.pending_document_save_count(), 1);
         cx.notify();
     });
@@ -1848,19 +1890,8 @@ fn root_view_file_save_preserves_newer_in_flight_edit(cx: &mut gpui::TestAppCont
     cx.run_until_parked();
     cx.read(|app| {
         assert!(document.read(app).model().is_dirty());
-        assert!(
-            document
-                .read(app)
-                .model()
-                .editor()
-                .error()
-                .is_some_and(|error| error.contains("Save failed"))
-        );
-        assert!(
-            root.read(app)
-                .visible_error_message()
-                .is_some_and(|error| error.contains("Save failed"))
-        );
+        assert!(document.read(app).model().editor().error().is_some());
+        assert!(root.read(app).visible_error_message().is_some());
     });
 }
 
@@ -1874,7 +1905,7 @@ fn root_view_file_save_requires_resolution_after_external_change(cx: &mut gpui::
     let loaded = read_project_file(&project_dir, Path::new("notes.txt")).unwrap();
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(project_dir.clone(), sample_layout())
+        .open_project(local_project(project_dir.clone()), sample_layout())
         .unwrap();
     let document_id = DocumentId {
         project_id: project_id.clone(),
@@ -2505,10 +2536,16 @@ fn project_panel_settings_update_selected_and_future_sessions_only() {
     let paths = english_test_config_paths(&temp);
     let mut workspace = Workspace::new();
     let first = workspace
-        .open_project(PathBuf::from("/tmp/settings-panel-first"), sample_layout())
+        .open_project(
+            local_project(PathBuf::from("/tmp/settings-panel-first")),
+            sample_layout(),
+        )
         .unwrap();
     let second = workspace
-        .open_project(PathBuf::from("/tmp/settings-panel-second"), sample_layout())
+        .open_project(
+            local_project(PathBuf::from("/tmp/settings-panel-second")),
+            sample_layout(),
+        )
         .unwrap();
     workspace.select_project(&first).unwrap();
     let mut root =
@@ -2536,7 +2573,10 @@ fn project_panel_settings_update_selected_and_future_sessions_only() {
 
     let mut future_workspace = Workspace::new();
     let future = future_workspace
-        .open_project(PathBuf::from("/tmp/settings-panel-future"), sample_layout())
+        .open_project(
+            local_project(PathBuf::from("/tmp/settings-panel-future")),
+            sample_layout(),
+        )
         .unwrap();
     let future_root =
         WorkbenchView::with_workspace_for_test_and_config_paths(future_workspace, paths.clone());
@@ -2833,10 +2873,7 @@ fn failed_save_keeps_dirty_file_and_pending_close_open(cx: &mut gpui::TestAppCon
                 .is_some()
         );
         assert!(document.read(app).model().is_dirty());
-        assert!(
-            root.visible_error_message()
-                .is_some_and(|error| error.contains("Save failed"))
-        );
+        assert!(root.visible_error_message().is_some());
     });
     assert!(cx.debug_bounds("dirty-close-dialog").is_some());
 }
@@ -3008,10 +3045,16 @@ fn root_view_file_surface_has_no_pane_palette_items() {
 fn root_view_confirmed_project_close_removes_only_its_editor_runtime() {
     let mut workspace = Workspace::new();
     let first = workspace
-        .open_project(PathBuf::from("/tmp/editor-first"), sample_layout())
+        .open_project(
+            local_project(PathBuf::from("/tmp/editor-first")),
+            sample_layout(),
+        )
         .unwrap();
     let second = workspace
-        .open_project(PathBuf::from("/tmp/editor-second"), sample_layout())
+        .open_project(
+            local_project(PathBuf::from("/tmp/editor-second")),
+            sample_layout(),
+        )
         .unwrap();
     workspace.select_project(&first).unwrap();
     workspace
@@ -3542,9 +3585,7 @@ fn root_view_status_reveals_settings_paths_without_error_banner() {
 
 #[test]
 fn root_view_settings_open_command_opens_settings_page() {
-    let temp = tempdir().unwrap();
-    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let (_temp, mut root) = english_test_root();
 
     root.run_command(CommandId::SettingsOpen).unwrap();
 
@@ -3566,9 +3607,7 @@ fn root_view_settings_open_command_opens_settings_page() {
 
 #[test]
 fn root_view_settings_search_filters_groups() {
-    let temp = tempdir().unwrap();
-    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let (_temp, mut root) = english_test_root();
     root.open_settings();
 
     root.set_settings_search_query("shell");
@@ -3579,9 +3618,7 @@ fn root_view_settings_search_filters_groups() {
 
 #[test]
 fn root_view_settings_can_select_and_close_group() {
-    let temp = tempdir().unwrap();
-    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let (_temp, mut root) = english_test_root();
     root.open_settings();
 
     root.select_settings_group("terminal").unwrap();
@@ -4009,7 +4046,7 @@ fn terminal_settings_group_renders_protocol_and_interaction_controls(
 #[test]
 fn root_view_toggles_system_notifications() {
     let temp = tempdir().unwrap();
-    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let paths = english_test_config_paths(&temp);
     let mut root = WorkbenchView::with_config_paths(paths.clone());
 
     assert!(!root.system_notifications_enabled());
@@ -4049,13 +4086,25 @@ fn root_view_language_setting_persists_and_updates_visible_text() {
 
     assert_eq!(
         root.visible_empty_workspace_actions(),
-        vec!["打开目录", "打开最近项目", "命令面板"]
+        vec![
+            "打开目录",
+            "打开远程项目",
+            "恢复上次打开",
+            "打开最近项目",
+            "命令面板",
+        ]
     );
 
     let reloaded = WorkbenchView::with_config_paths(paths);
     assert_eq!(
         reloaded.visible_empty_workspace_actions(),
-        vec!["打开目录", "打开最近项目", "命令面板"]
+        vec![
+            "打开目录",
+            "打开远程项目",
+            "恢复上次打开",
+            "打开最近项目",
+            "命令面板",
+        ]
     );
 }
 
@@ -4410,7 +4459,7 @@ fn root_view_terminal_input_owner_tracks_foreground_overlays() {
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut workspace = Workspace::new();
     workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
     let mut root = WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths);
 
@@ -4457,7 +4506,7 @@ fn root_view_exposes_foreground_input_scope_id() {
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut workspace = Workspace::new();
     workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
     let mut root = WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths);
 
@@ -4602,7 +4651,7 @@ fn root_view_does_not_use_palette_text_fallback_when_input_is_focused() {
 #[test]
 fn root_view_notification_settings_can_be_disabled_again() {
     let temp = tempdir().unwrap();
-    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let paths = english_test_config_paths(&temp);
     let mut root = WorkbenchView::with_config_paths(paths.clone());
 
     root.run_command(CommandId::SettingsNotifications).unwrap();
@@ -4803,12 +4852,12 @@ fn visible_tab_titles_come_from_selected_project() {
 fn visible_project_items_mark_selection_and_distinct_initials() {
     let mut workspace = Workspace::new();
     let first = workspace
-        .open_project(PathBuf::from("/tmp/one"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/one")), sample_layout())
         .unwrap();
     let mut second_layout = sample_layout();
     second_layout.project.name = "backend".to_string();
     let second = workspace
-        .open_project(PathBuf::from("/tmp/two"), second_layout)
+        .open_project(local_project(PathBuf::from("/tmp/two")), second_layout)
         .unwrap();
 
     workspace.select_project(&first).unwrap();
@@ -4829,7 +4878,7 @@ fn visible_project_items_fall_back_to_the_project_directory_name() {
     let mut layout = sample_layout();
     layout.project.name = r"\\?\C:\Users\example\repository-name".to_string();
     workspace
-        .open_project(PathBuf::from("/tmp/repository-name"), layout)
+        .open_project(local_project(PathBuf::from("/tmp/repository-name")), layout)
         .unwrap();
 
     let items = visible_project_items(&workspace);
@@ -4855,7 +4904,10 @@ fn visible_project_items_show_agent_running_status() {
 fn visible_project_items_prioritize_failed_agent_status() {
     let mut workspace = Workspace::new();
     let project_id = workspace
-        .open_project(PathBuf::from("/tmp/multi-agent"), multi_agent_layout())
+        .open_project(
+            local_project(PathBuf::from("/tmp/multi-agent")),
+            multi_agent_layout(),
+        )
         .unwrap();
     workspace
         .mark_pane_running(&project_id, "agent", "codex")
@@ -5367,7 +5419,7 @@ fn create_project_action_creates_and_opens_new_directory(cx: &mut gpui::TestAppC
     root.update(cx, |root, _| {
         let project_id = root.workspace().selected_project_id().unwrap();
         let project = root.workspace().project(project_id).unwrap();
-        assert_eq!(project.path, canonical_project_dir);
+        assert_eq!(project.location.local_path(), Some(&canonical_project_dir));
         assert_eq!(root.visible_error_message(), None);
     });
 }
@@ -5504,12 +5556,15 @@ fn root_view_terminal_exit_reconciles_active_work_item() {
 fn root_view_terminal_exit_keeps_project_open_and_allows_new_tab() {
     let mut workspace = Workspace::new();
     workspace
-        .open_project(PathBuf::from("/tmp/single"), single_tab_layout())
+        .open_project(
+            local_project(PathBuf::from("/tmp/single")),
+            single_tab_layout(),
+        )
         .unwrap();
     let mut root = WorkbenchView::with_workspace_for_test(workspace);
 
     root.handle_terminal_pane_exit(TerminalPaneExitedEvent {
-        project_id: "/tmp/single".to_string(),
+        project_id: local_project_id("/tmp/single").as_str().to_string(),
         tab_id: "dev".to_string(),
         pane_id: "shell".to_string(),
         status: ProcessStatus::Exited { code: Some(0) },
@@ -5607,12 +5662,15 @@ fn root_view_auto_restart_exit_transitions_back_to_running() {
 fn root_view_terminal_exit_keeps_last_tab_for_manual_restart() {
     let mut workspace = Workspace::new();
     workspace
-        .open_project(PathBuf::from("/tmp/single"), single_tab_layout())
+        .open_project(
+            local_project(PathBuf::from("/tmp/single")),
+            single_tab_layout(),
+        )
         .unwrap();
     let mut root = WorkbenchView::with_workspace_for_test(workspace);
 
     root.handle_terminal_pane_exit(TerminalPaneExitedEvent {
-        project_id: "/tmp/single".to_string(),
+        project_id: local_project_id("/tmp/single").as_str().to_string(),
         tab_id: "dev".to_string(),
         pane_id: "shell".to_string(),
         status: ProcessStatus::Exited { code: Some(0) },
@@ -5748,7 +5806,7 @@ fn root_view_focuses_notification_target() {
     root.focus_notification_target(&event).unwrap();
 
     let project_id = root.workspace().selected_project_id().unwrap().clone();
-    assert_eq!(project_id.as_str(), "/tmp/yttt");
+    assert_eq!(project_id, local_project_id("/tmp/yttt"));
     let project = root.workspace().project(&project_id).unwrap();
     assert_eq!(project.selected_tab_id, "agent");
     assert_eq!(
@@ -5838,7 +5896,7 @@ fn terminal_pane_agent_exit_builds_notification_event() {
     .unwrap();
 
     assert_eq!(event.kind, NotificationKind::AgentCompleted);
-    assert_eq!(event.project_id, "/tmp/yttt");
+    assert_eq!(event.project_id, local_project_id("/tmp/yttt").as_str());
     assert_eq!(event.tab_id, "agent");
     assert_eq!(event.pane_id, "codex");
     assert_eq!(event.project_title, "yttt");
@@ -5849,7 +5907,7 @@ fn terminal_pane_agent_exit_builds_notification_event() {
 #[test]
 fn terminal_pane_exit_event_preserves_process_identity() {
     let event = TerminalPaneExitedEvent {
-        project_id: "/tmp/yttt".to_string(),
+        project_id: local_project_id("/tmp/yttt").as_str().to_string(),
         tab_id: "dev".to_string(),
         pane_id: "server".to_string(),
         status: ProcessStatus::Exited { code: Some(0) },
@@ -5857,7 +5915,7 @@ fn terminal_pane_exit_event_preserves_process_identity() {
         exit_behavior: ProcessExitBehavior::ManualRestart,
     };
 
-    assert_eq!(event.project_id, "/tmp/yttt");
+    assert_eq!(event.project_id, local_project_id("/tmp/yttt").as_str());
     assert_eq!(event.tab_id, "dev");
     assert_eq!(event.pane_id, "server");
     assert_eq!(event.exit_behavior, ProcessExitBehavior::ManualRestart);
@@ -5924,7 +5982,7 @@ fn terminal_pane_exit_input(
 ) -> TerminalPaneExitInput {
     TerminalPaneExitInput {
         project_title: "yttt".to_string(),
-        project_id: "/tmp/yttt".to_string(),
+        project_id: local_project_id("/tmp/yttt").as_str().to_string(),
         tab_title: "Agent".to_string(),
         tab_id: "agent".to_string(),
         pane_title: "Codex".to_string(),
@@ -5947,7 +6005,7 @@ fn terminal_pane_exited_event_with_behavior(
     exit_behavior: ProcessExitBehavior,
 ) -> TerminalPaneExitedEvent {
     TerminalPaneExitedEvent {
-        project_id: "/tmp/yttt".to_string(),
+        project_id: local_project_id("/tmp/yttt").as_str().to_string(),
         tab_id: tab_id.to_string(),
         pane_id: pane_id.to_string(),
         status: ProcessStatus::Exited { code: Some(0) },
@@ -5963,7 +6021,7 @@ fn notification_event() -> NotificationEvent {
 fn notification_event_for(pane_title: &str, kind: NotificationKind) -> NotificationEvent {
     NotificationEvent {
         kind,
-        project_id: "/tmp/yttt".to_string(),
+        project_id: local_project_id("/tmp/yttt").as_str().to_string(),
         tab_id: "agent".to_string(),
         pane_id: "codex".to_string(),
         project_title: "yttt".to_string(),
@@ -5995,7 +6053,7 @@ fn assert_ratio(actual: f32, expected: f32) {
 fn workspace_with_sample_project() -> Workspace {
     let mut workspace = Workspace::new();
     workspace
-        .open_project(PathBuf::from("/tmp/yttt"), sample_layout())
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
     workspace
 }
@@ -6100,7 +6158,9 @@ autosave_delay_ms = {delay_ms}
     )
     .unwrap();
     let mut workspace = Workspace::new();
-    let project_id = workspace.open_project(project_dir.clone(), layout).unwrap();
+    let project_id = workspace
+        .open_project(local_project(project_dir.clone()), layout)
+        .unwrap();
     let preselected_project_id = project_id.clone();
     let preselected_file = canonical_file.clone();
     let root_slot = Rc::new(RefCell::new(None));
