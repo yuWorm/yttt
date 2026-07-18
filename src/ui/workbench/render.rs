@@ -19,7 +19,7 @@ impl Render for WorkbenchView {
         let focus_handle = self.workbench_focus_handle(cx);
         let default_active_content_focus_requested = self.onboarding.is_none()
             && !focus_handle.contains_focused(window, cx)
-            && self.queue_default_active_work_item_focus();
+            && self.queue_default_active_work_item_focus(cx);
 
         let onboarding_terminal_font_select = self
             .onboarding

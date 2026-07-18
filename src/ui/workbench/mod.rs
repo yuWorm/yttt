@@ -2513,7 +2513,7 @@ impl WorkbenchView {
     }
 
     fn on_window_activation_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if window.is_window_active() && self.queue_default_active_work_item_focus() {
+        if window.is_window_active() && self.queue_default_active_work_item_focus(cx) {
             window.blur();
             cx.notify();
         }
@@ -2602,7 +2602,17 @@ impl WorkbenchView {
         }
     }
 
-    fn queue_default_active_work_item_focus(&mut self) -> bool {
+    fn selected_project_tree_is_editing(&self, cx: &App) -> bool {
+        self.workspace
+            .selected_project_id()
+            .and_then(|project_id| self.project.project_editor_runtime.tree(project_id))
+            .is_some_and(|tree| tree.read(cx).is_editing())
+    }
+
+    fn queue_default_active_work_item_focus(&mut self, cx: &App) -> bool {
+        if self.selected_project_tree_is_editing(cx) {
+            return false;
+        }
         let Some(item) = self.active_work_item() else {
             return false;
         };

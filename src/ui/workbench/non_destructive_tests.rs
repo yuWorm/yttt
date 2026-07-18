@@ -437,6 +437,59 @@ fn window_reactivation_restores_previously_focused_terminal_pane(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn project_tree_edit_blocks_active_file_focus_restore(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(local_project(project_path.clone()), dev_fixture_layout())
+        .unwrap();
+    let view_project_id = project_id.clone();
+    let active_file = project_path.join("README.md");
+
+    let (root, mut cx) = cx.add_window_view(move |_, _| {
+        let mut root =
+            WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths);
+        let session = root
+            .project
+            .project_editor_runtime
+            .workspace_mut()
+            .session_mut(&view_project_id)
+            .expect("the project editor session must exist");
+        session.set_project_panel_visible(false);
+        session.open_file(active_file);
+        root.sync_input_owner_state();
+        root
+    });
+    let tree = cx.update(|window, app| {
+        root.update(app, |root, cx| {
+            root.ensure_project_tree_view(&project_id, window, cx)
+                .expect("the project tree must exist")
+        })
+    });
+    cx.update(|window, app| {
+        tree.update(app, |tree, cx| {
+            tree.begin_create_selected(false, window, cx);
+        });
+    });
+
+    cx.update(|_window, app| {
+        root.update(app, |root, cx| {
+            root.project.pending_editor_focus_document_id = None;
+            assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Editor);
+            assert!(
+                !root.queue_default_active_work_item_focus(cx),
+                "an inline project-tree input must suppress active editor focus restoration"
+            );
+            assert!(root.project.pending_editor_focus_document_id.is_none());
+        });
+    });
+}
+
+#[gpui::test]
 fn agent_exit_notification_does_not_reenter_workbench_entity(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();

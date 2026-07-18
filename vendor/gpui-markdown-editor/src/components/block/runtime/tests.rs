@@ -2086,6 +2086,54 @@ async fn ime_replace_and_mark_text_replaces_right_to_left_selection_in_table_cel
 }
 
 #[gpui::test]
+async fn ime_commit_replaces_marked_text_when_macos_supplies_relative_range(
+    cx: &mut TestAppContext,
+) {
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| {
+        let mut block = Block::with_record(
+            cx,
+            BlockRecord::new(
+                BlockKind::Paragraph,
+                InlineTextTree::plain("prefix ".to_string()),
+            ),
+        );
+        block.set_source_raw_mode();
+        block
+    });
+
+    block.update(cx, |block, _cx| {
+        let cursor = block.visible_len();
+        block.selected_range = cursor..cursor;
+    });
+
+    cx.update(|window, cx| {
+        block.update(cx, |block, block_cx| {
+            <Block as EntityInputHandler>::replace_and_mark_text_in_range(
+                block,
+                None,
+                "sikao",
+                Some(5..5),
+                window,
+                block_cx,
+            );
+            <Block as EntityInputHandler>::replace_text_in_range(
+                block,
+                Some(0..5),
+                "思考",
+                window,
+                block_cx,
+            );
+        });
+    });
+
+    block.read_with(cx, |block, _cx| {
+        assert_eq!(block.display_text(), "prefix 思考");
+        assert_eq!(block.marked_range, None);
+    });
+}
+
+#[gpui::test]
 async fn ime_commit_inside_inline_code_preserves_code_style(cx: &mut TestAppContext) {
     let cx = cx.add_empty_window();
     let block = cx.new(|cx| {

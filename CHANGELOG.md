@@ -16,3 +16,8 @@
 - Remote directory picker rows now use the active icon theme, fill the available width, and keep directory names left-aligned.
 - Long remote directory lists now use a bounded scroll viewport while short lists remain content-sized.
 - Reconnecting an SSH project refreshes expanded remote directories and Git status.
+
+### Fixed
+
+- Fixed Markdown IME composition handling so macOS Chinese input commits replace the active marked text instead of unrelated document text.
+- Fixed active Markdown documents reclaiming focus from project-file create and rename inputs.
