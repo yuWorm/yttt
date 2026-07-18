@@ -251,6 +251,20 @@ impl Editor {
         cx.notify();
     }
 
+    /// Requests keyboard focus without changing the selection or interrupting
+    /// an active IME composition.
+    pub fn focus(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.focused_edit_target(window, cx).is_some() {
+            return;
+        }
+        self.pending_focus = self
+            .active_entity_id
+            .or_else(|| self.first_focusable_entity_id(cx));
+        if self.pending_focus.is_some() {
+            cx.notify();
+        }
+    }
+
     pub fn set_source_selection(&mut self, selection: SourceSelection, cx: &mut Context<Self>) {
         let snapshot = UndoSelectionSnapshot {
             range: selection.range.clone(),

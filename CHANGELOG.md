@@ -20,5 +20,5 @@
 
 ### Fixed
 
-- Fixed Markdown IME composition updates and commits to honor GPUI document-space replacement ranges, preventing raw pinyin updates from accumulating beside committed Chinese candidates.
+- Fixed Markdown IME composition updates to preserve marked text across host focus requests and honor GPUI document-space replacement ranges, preventing raw pinyin from accumulating beside committed Chinese candidates.
 - Fixed active Markdown documents reclaiming focus from project-file create and rename inputs.

@@ -671,9 +671,8 @@ impl ProjectEditorDocument {
                 input.update(cx, |input, input_cx| input.focus(window, input_cx));
             }
             ProjectEditorSurface::Markdown { editor, .. } => {
-                let selection = editor.read(cx).source_selection(cx);
                 editor.update(cx, |editor, editor_cx| {
-                    editor.set_source_selection(selection, editor_cx);
+                    editor.focus(window, editor_cx);
                 });
                 cx.emit(ProjectEditorDocumentEvent::Focused);
             }

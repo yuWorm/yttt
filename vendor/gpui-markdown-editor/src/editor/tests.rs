@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gpui::{AppContext, TestAppContext};
+use gpui::{AppContext, EntityInputHandler, TestAppContext};
 
 use super::Editor;
 use crate::{
@@ -128,4 +128,58 @@ async fn set_theme_changes_only_presentation_state(cx: &mut TestAppContext) {
                 .all(|visible| { Arc::ptr_eq(&visible.entity.read(cx).environment.theme, &theme) })
         );
     });
+}
+
+#[gpui::test]
+async fn repeated_host_focus_requests_preserve_active_ime_composition(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let editor = cx.new(|cx| Editor::new("prefix ", MarkdownEditorOptions::default(), cx));
+    let block = editor.read_with(cx, |editor, _| {
+        editor
+            .document
+            .first_root()
+            .expect("paragraph block")
+            .clone()
+    });
+
+    block.update(cx, |block, _| {
+        let cursor = block.visible_len();
+        block.selected_range = cursor..cursor;
+    });
+
+    cx.update(|window, cx| {
+        block.read(cx).focus_handle.clone().focus(window, cx);
+    });
+
+    for composition in ["n", "ni", "ni h", "ni ha", "ni hao"] {
+        cx.update(|window, cx| {
+            block.update(cx, |block, block_cx| {
+                <crate::components::Block as EntityInputHandler>::replace_and_mark_text_in_range(
+                    block,
+                    None,
+                    composition,
+                    Some(composition.len()..composition.len()),
+                    window,
+                    block_cx,
+                );
+            });
+
+            editor.update(cx, |editor, editor_cx| {
+                editor.focus(window, editor_cx);
+            });
+        });
+    }
+
+    cx.update(|window, cx| {
+        block.update(cx, |block, block_cx| {
+            <crate::components::Block as EntityInputHandler>::replace_text_in_range(
+                block, None, "你好", window, block_cx,
+            );
+        });
+    });
+
+    assert_eq!(
+        editor.read_with(cx, |editor, cx| editor.markdown(cx)),
+        "prefix 你好"
+    );
 }
