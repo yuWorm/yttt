@@ -6,7 +6,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use gpui::{AppContext as _, Keystroke, Subscription};
+use gpui::{AppContext as _, Keystroke, Subscription, px, size};
 use tempfile::tempdir;
 use yttt::{
     commands::CommandId,
@@ -263,7 +263,7 @@ fn root_view_empty_workspace_exposes_visible_actions() {
 }
 
 #[gpui::test]
-fn empty_workspace_always_renders_restore_button(cx: &mut gpui::TestAppContext) {
+fn empty_workspace_renders_responsive_action_dashboard(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
@@ -278,12 +278,66 @@ fn empty_workspace_always_renders_restore_button(cx: &mut gpui::TestAppContext) 
         gpui_component::Root::new(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
+
+    cx.simulate_resize(size(px(960.0), px(640.0)));
+    cx.refresh().unwrap();
+    cx.read(|app| assert!(!root.read(app).has_last_opened_projects()));
+
+    let small_actions = [
+        "empty-open-directory",
+        "empty-open-ssh-project",
+        "empty-open-recent",
+        "empty-restore-last-session",
+        "empty-command-palette",
+    ]
+    .map(|selector| {
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("missing empty workspace action {selector}"))
+    });
+    assert!(
+        small_actions
+            .windows(2)
+            .all(|pair| pair[0].origin.y < pair[1].origin.y),
+        "empty workspace actions must be stacked vertically: {small_actions:?}"
+    );
+    assert!(
+        small_actions.windows(2).all(|pair| {
+            pair[0].origin.x == pair[1].origin.x && pair[0].size.width == pair[1].size.width
+        }),
+        "empty workspace actions must share one aligned column: {small_actions:?}"
+    );
+    let small_group = cx
+        .debug_bounds("empty-workspace-actions")
+        .expect("missing empty workspace action group");
+    let small_logo = cx
+        .debug_bounds("empty-workspace-logo")
+        .expect("missing empty workspace logo");
+
+    cx.simulate_resize(size(px(1600.0), px(900.0)));
     cx.refresh().unwrap();
 
-    cx.read(|app| assert!(!root.read(app).has_last_opened_projects()));
+    let large_group = cx
+        .debug_bounds("empty-workspace-actions")
+        .expect("missing resized empty workspace action group");
+    let large_logo = cx
+        .debug_bounds("empty-workspace-logo")
+        .expect("missing resized empty workspace logo");
+    let large_first_action = cx
+        .debug_bounds("empty-open-directory")
+        .expect("missing resized empty workspace action");
+
     assert!(
-        cx.debug_bounds("empty-restore-last-session").is_some(),
-        "empty workspace must always render the restore button"
+        large_group.size.width > small_group.size.width,
+        "action group must grow with the window: small={small_group:?}, large={large_group:?}"
+    );
+    assert!(
+        large_logo.size.width > small_logo.size.width,
+        "logo must grow with the window: small={small_logo:?}, large={large_logo:?}"
+    );
+    assert!(
+        large_first_action.size.height > small_actions[0].size.height,
+        "action rows must grow with the window: small={:?}, large={large_first_action:?}",
+        small_actions[0]
     );
 }
 

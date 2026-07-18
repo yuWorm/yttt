@@ -11,6 +11,7 @@ use crate::config::paths::AppConfigPaths;
 
 pub const REQUIRED_COMPONENT_ICON_ASSET_PATHS: &[&str] = &["icons/search.svg"];
 pub(crate) const EXTERNAL_ICON_ASSET_PREFIX: &str = "yttt-icon://";
+pub const BUILTIN_APP_ICON_ASSET_PATH: &str = "app-icon/yttt.png";
 pub const BUILTIN_FILE_ICON_ASSET_PATHS: &[&str] = &[
     "icons/file-csharp.svg",
     "icons/file-powershell.svg",
@@ -18,8 +19,11 @@ pub const BUILTIN_FILE_ICON_ASSET_PATHS: &[&str] = &[
     "icons/file-xml.svg",
 ];
 
-fn builtin_file_icon_asset(path: &str) -> Option<&'static [u8]> {
+fn builtin_asset(path: &str) -> Option<&'static [u8]> {
     match path {
+        BUILTIN_APP_ICON_ASSET_PATH => {
+            Some(include_bytes!("../../../assets/app-icon/png/256.png").as_slice())
+        }
         "icons/file-csharp.svg" => {
             Some(include_bytes!("../../../assets/icons/file-csharp.svg").as_slice())
         }
@@ -61,7 +65,7 @@ impl AssetSource for YtttAssets {
             return Ok(Some(Cow::Owned(fs::read(resolved)?)));
         }
 
-        if let Some(asset) = builtin_file_icon_asset(path) {
+        if let Some(asset) = builtin_asset(path) {
             return Ok(Some(Cow::Borrowed(asset)));
         }
 
@@ -76,6 +80,9 @@ impl AssetSource for YtttAssets {
                 .filter(|asset_path| asset_path.starts_with(path))
                 .map(|asset_path| (*asset_path).into()),
         );
+        if BUILTIN_APP_ICON_ASSET_PATH.starts_with(path) {
+            assets.push(BUILTIN_APP_ICON_ASSET_PATH.into());
+        }
         Ok(assets)
     }
 }
