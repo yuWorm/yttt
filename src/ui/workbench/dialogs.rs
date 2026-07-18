@@ -1,4 +1,6 @@
 use super::*;
+use gpui::{ImageSource, Resource, img};
+use gpui_component::{Icon, kbd::Kbd};
 
 pub(super) fn tab_rename_dialog(
     cx: &mut Context<WorkbenchView>,
@@ -963,113 +965,275 @@ where
     yttt_button(id, label, variant, theme, ui_style, cx).on_click(on_click)
 }
 
+#[derive(Clone, Copy)]
+struct EmptyWorkspaceScale {
+    layout: f32,
+    text: f32,
+}
+
+impl EmptyWorkspaceScale {
+    fn for_window(window: &Window) -> Self {
+        let viewport = window.viewport_size();
+        let layout = (f32::from(viewport.width) / 1100.0)
+            .min(f32::from(viewport.height) / 600.0)
+            .clamp(1.0, 1.35);
+
+        Self {
+            layout,
+            text: 1.0 + (layout - 1.0) * 0.6,
+        }
+    }
+
+    fn pixels(self, value: f32) -> Pixels {
+        px(value * self.layout)
+    }
+
+    fn text_pixels(self, value: f32) -> Pixels {
+        px(value * self.text)
+    }
+
+    fn spacing(self, value: gpui::Rems) -> gpui::Rems {
+        rems(value.0 * self.layout)
+    }
+
+    fn text_rems(self, value: f32) -> gpui::Rems {
+        rems(value * self.text)
+    }
+}
+
+fn empty_workspace_action(
+    id: &'static str,
+    icon: IconName,
+    label: &'static str,
+    shortcut: Option<&'static str>,
+    featured: bool,
+    theme: &WorkbenchTheme,
+    ui_style: UiStyle,
+    scale: EmptyWorkspaceScale,
+) -> Button {
+    let content = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .w_full()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(scale.spacing(ui_style.spacing.md))
+                .child(
+                    Icon::new(icon)
+                        .size(scale.spacing(rems(1.0)))
+                        .text_color(if featured {
+                            theme.accent
+                        } else {
+                            theme.text_muted
+                        }),
+                )
+                .child(
+                    div()
+                        .text_size(scale.text_rems(0.875))
+                        .text_color(theme.text)
+                        .when(featured, |this| this.font_weight(FontWeight::SEMIBOLD))
+                        .child(label),
+                ),
+        )
+        .children(shortcut.map(|shortcut| {
+            Kbd::new(
+                Keystroke::parse(shortcut)
+                    .expect("empty workspace shortcut should be a valid GPUI keystroke"),
+            )
+            .text_size(scale.text_rems(0.75))
+        }));
+
+    Button::new(id)
+        .ghost()
+        .w_full()
+        .h(scale.spacing(rems(2.5)))
+        .px(scale.spacing(ui_style.spacing.lg))
+        .rounded(ui_style.radius.action)
+        .child(content)
+        .debug_selector(move || id.to_string())
+        .when(featured, |this| this.outline())
+}
+
 pub(super) fn empty_workspace(
+    window: &Window,
     cx: &mut Context<WorkbenchView>,
     ui_text: &UiText,
     theme: &WorkbenchTheme,
     can_restore_last_session: bool,
 ) -> Div {
     let ui_style = current_ui_style(cx);
+    let scale = EmptyWorkspaceScale::for_window(window);
+    let logo = div()
+        .id("empty-workspace-logo")
+        .debug_selector(|| "empty-workspace-logo".to_string())
+        .size(scale.pixels(88.0))
+        .child(
+            img(ImageSource::Resource(Resource::Embedded(
+                crate::ui::app::assets::BUILTIN_APP_ICON_ASSET_PATH.into(),
+            )))
+            .size_full(),
+        );
+
     div()
         .flex()
         .flex_col()
-        .gap(ui_style.spacing.xxl)
         .flex_1()
         .w_full()
         .relative()
         .justify_center()
         .items_center()
+        .px(scale.spacing(ui_style.spacing.xxl))
+        .py(scale.spacing(ui_style.spacing.xxl))
         .text_color(theme.text)
-        .child(div().text_xl().child(ui_text.get(UiTextKey::AppName)))
         .child(
             div()
                 .flex()
                 .flex_col()
-                .gap(ui_style.spacing.md)
                 .items_center()
-                .text_center()
+                .w_full()
+                .max_w(scale.pixels(400.0))
+                .gap(scale.spacing(ui_style.spacing.xxl))
                 .child(
                     div()
-                        .text_sm()
-                        .text_color(theme.text_muted)
-                        .child(ui_text.get(UiTextKey::EmptySubtitle)),
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(scale.spacing(ui_style.spacing.md))
+                        .text_center()
+                        .child(logo)
+                        .child(
+                            div()
+                                .font_family("monospace")
+                                .text_size(scale.text_pixels(26.0))
+                                .line_height(relative(1.0))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(ui_text.get(UiTextKey::AppName)),
+                        )
+                        .child(
+                            div()
+                                .text_size(scale.text_rems(0.875))
+                                .text_color(theme.text_muted)
+                                .child(ui_text.get(UiTextKey::EmptySubtitle)),
+                        ),
                 )
                 .child(
                     div()
-                        .text_xs()
-                        .text_color(theme.text_subtle)
-                        .child(ui_text.get(UiTextKey::EmptySidebarNote)),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_wrap()
-                .gap(ui_style.spacing.md)
-                .justify_center()
-                .child(
-                    workbench_action_button(
-                        "empty-open-directory",
-                        ui_text.get(UiTextKey::OpenDirectory),
-                        Some("secondary-o"),
-                        ActionEmphasis::Primary,
-                        ui_style,
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.on_open_project(&OpenProject, window, cx);
-                    })),
+                        .id("empty-workspace-actions")
+                        .debug_selector(|| "empty-workspace-actions".to_string())
+                        .flex()
+                        .flex_col()
+                        .gap(scale.spacing(ui_style.spacing.xs))
+                        .w_full()
+                        .rounded(ui_style.radius.card)
+                        .border(ui_style.border.hairline)
+                        .border_color(theme.border)
+                        .bg(theme.surface_elevated)
+                        .p(scale.spacing(ui_style.spacing.sm))
+                        .child(
+                            empty_workspace_action(
+                                "empty-open-directory",
+                                IconName::FolderOpen,
+                                ui_text.get(UiTextKey::OpenDirectory),
+                                Some("secondary-o"),
+                                true,
+                                theme,
+                                ui_style,
+                                scale,
+                            )
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.on_open_project(&OpenProject, window, cx);
+                                },
+                            )),
+                        )
+                        .child(
+                            empty_workspace_action(
+                                "empty-open-ssh-project",
+                                IconName::Globe,
+                                ui_text.get(UiTextKey::SshOpenRemoteProject),
+                                None,
+                                false,
+                                theme,
+                                ui_style,
+                                scale,
+                            )
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.on_open_ssh_project(&OpenSshProject, window, cx);
+                                },
+                            )),
+                        )
+                        .child(
+                            empty_workspace_action(
+                                "empty-open-recent",
+                                IconName::FolderClosed,
+                                ui_text.get(UiTextKey::OpenRecent),
+                                Some("secondary-shift-o"),
+                                false,
+                                theme,
+                                ui_style,
+                                scale,
+                            )
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.on_open_project_palette(&OpenProjectPalette, window, cx);
+                                },
+                            )),
+                        )
+                        .child(
+                            empty_workspace_action(
+                                "empty-restore-last-session",
+                                IconName::GalleryVerticalEnd,
+                                ui_text.get(UiTextKey::RestoreLastSession),
+                                None,
+                                false,
+                                theme,
+                                ui_style,
+                                scale,
+                            )
+                            .on_click(cx.listener(|this, _, _window, cx| {
+                                this.restore_last_opened_projects();
+                                cx.notify();
+                            }))
+                            .disabled(!can_restore_last_session)
+                            .tab_stop(can_restore_last_session),
+                        )
+                        .child(
+                            empty_workspace_action(
+                                "empty-command-palette",
+                                IconName::SquareTerminal,
+                                ui_text.get(UiTextKey::CommandPalette),
+                                Some("secondary-p"),
+                                false,
+                                theme,
+                                ui_style,
+                                scale,
+                            )
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.on_open_command_palette(&OpenCommandPalette, window, cx);
+                                },
+                            )),
+                        ),
                 )
                 .child(
-                    workbench_action_button(
-                        "empty-open-ssh-project",
-                        ui_text.get(UiTextKey::SshOpenRemoteProject),
-                        None,
-                        ActionEmphasis::Secondary,
-                        ui_style,
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.on_open_ssh_project(&OpenSshProject, window, cx);
-                    })),
-                )
-                .child(
-                    workbench_action_button(
-                        "empty-open-recent",
-                        ui_text.get(UiTextKey::OpenRecent),
-                        Some("secondary-shift-o"),
-                        ActionEmphasis::Secondary,
-                        ui_style,
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.on_open_project_palette(&OpenProjectPalette, window, cx);
-                    })),
-                )
-                .child(
-                    workbench_action_button(
-                        "empty-restore-last-session",
-                        ui_text.get(UiTextKey::RestoreLastSession),
-                        None,
-                        ActionEmphasis::Secondary,
-                        ui_style,
-                    )
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.restore_last_opened_projects();
-                        cx.notify();
-                    }))
-                    .disabled(!can_restore_last_session)
-                    .tab_stop(can_restore_last_session)
-                    .debug_selector(|| "empty-restore-last-session".to_string()),
-                )
-                .child(
-                    workbench_action_button(
-                        "empty-command-palette",
-                        ui_text.get(UiTextKey::CommandPalette),
-                        Some("secondary-p"),
-                        ActionEmphasis::Secondary,
-                        ui_style,
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.on_open_command_palette(&OpenCommandPalette, window, cx);
-                    })),
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(scale.spacing(ui_style.spacing.md))
+                        .w_full()
+                        .child(div().h(ui_style.border.hairline).w_full().bg(theme.border))
+                        .child(
+                            div()
+                                .text_size(scale.text_rems(0.75))
+                                .text_center()
+                                .text_color(theme.text_subtle)
+                                .child(ui_text.get(UiTextKey::EmptySidebarNote)),
+                        ),
                 ),
         )
 }

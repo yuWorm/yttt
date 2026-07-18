@@ -40,6 +40,7 @@ impl Render for WorkbenchView {
             )
         } else if self.workspace.opened_projects().is_empty() {
             empty_workspace(
+                window,
                 cx,
                 &self.ui_text,
                 &appearance.ui,

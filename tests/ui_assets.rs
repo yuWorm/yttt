@@ -31,3 +31,17 @@ fn app_assets_include_builtin_file_icons() {
         assert!(asset.is_some(), "missing built-in file icon asset: {path}");
     }
 }
+
+#[test]
+fn app_assets_include_dashboard_icon() {
+    let temp = tempdir().unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path());
+    let assets = yttt::ui::app::assets::app_assets(&config_paths);
+    let path = yttt::ui::app::assets::BUILTIN_APP_ICON_ASSET_PATH;
+
+    let asset = assets
+        .load(path)
+        .unwrap_or_else(|err| panic!("load {path}: {err}"));
+
+    assert!(asset.is_some(), "missing dashboard icon asset: {path}");
+}
