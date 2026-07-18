@@ -57,6 +57,7 @@ fn build_text_runs(
     display_text: &SharedString,
     base_run: &TextRun,
     underline_thickness: Pixels,
+    marked_background: Hsla,
     link_color: Hsla,
     code_bg: Hsla,
     show_inline_code_backgrounds: bool,
@@ -141,6 +142,9 @@ fn build_text_runs(
         {
             background_color = Some(html_css_color_to_hsla(color, run_color));
         }
+        if is_marked {
+            background_color = Some(marked_background);
+        }
 
         runs.push(TextRun {
             len: end - start,
@@ -220,7 +224,9 @@ fn build_code_text_runs(
             len: end - start,
             font: base_run.font.clone(),
             color: run_color,
-            background_color: base_run.background_color,
+            background_color: is_marked
+                .then_some(colors.selection)
+                .or(base_run.background_color),
             underline: is_marked.then_some(UnderlineStyle {
                 color: Some(run_color),
                 thickness: underline_thickness,
@@ -709,6 +715,7 @@ impl Element for CodeLanguageInputElement {
                 },
                 TextRun {
                     len: marked_range.end - marked_range.start,
+                    background_color: Some(theme.colors.selection),
                     underline: Some(UnderlineStyle {
                         color: Some(run_color),
                         thickness: px(theme.dimensions.underline_thickness),
@@ -932,6 +939,7 @@ impl Element for BlockTextElement {
                     &display_text,
                     &run,
                     px(theme.dimensions.underline_thickness),
+                    theme.colors.selection,
                     theme.colors.text_link,
                     theme.colors.code_bg,
                     show_inline_code_backgrounds,
@@ -1535,6 +1543,7 @@ mod tests {
                 &display_text,
                 &base_run,
                 px(1.0),
+                Hsla::from(rgba(0x1c3651ff)),
                 Hsla::from(rgba(0x0066ccff)),
                 Hsla::from(rgba(0x111111ff)),
                 true,
@@ -1548,6 +1557,55 @@ mod tests {
                 marked_run.background_color,
                 Some(Hsla::from(rgba(0xffff00ff)))
             );
+        });
+    }
+
+    #[gpui::test]
+    async fn text_runs_highlight_active_ime_composition(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let block = cx.new(|cx| {
+            Block::with_record(
+                cx,
+                BlockRecord::new(
+                    BlockKind::Paragraph,
+                    InlineTextTree::from_markdown("prefix **ni** suffix"),
+                ),
+            )
+        });
+        block.update(cx, |block, _| {
+            block.marked_range = Some("prefix ".len().."prefix ni".len());
+        });
+
+        block.read_with(cx, |block, _cx| {
+            let display_text: SharedString = block.display_text().to_string().into();
+            let base_run = TextRun {
+                len: display_text.len(),
+                font: font(".SystemUIFont"),
+                color: Hsla::from(rgba(0xffffffff)),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            let marked_background = Hsla::from(rgba(0x1c3651ff));
+            let runs = super::build_text_runs(
+                block,
+                &display_text,
+                &base_run,
+                px(1.0),
+                marked_background,
+                Hsla::from(rgba(0x0066ccff)),
+                Hsla::from(rgba(0x111111ff)),
+                true,
+            );
+            let marked_run = runs
+                .iter()
+                .find(|run| run.background_color == Some(marked_background))
+                .expect("marked text should use the composition highlight");
+
+            assert_eq!(block.display_text(), "prefix ni suffix");
+            assert_eq!(marked_run.len, "ni".len());
+            assert_eq!(marked_run.font.weight, gpui::FontWeight::BOLD);
+            assert!(marked_run.underline.is_some());
         });
     }
 
