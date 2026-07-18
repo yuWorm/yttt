@@ -11,7 +11,7 @@ use yttt::ui::components::{
     workbench_agent_notification, workbench_error_notification, workbench_icon_button,
     workbench_switch,
 };
-use yttt::ui::editor::{DocumentId, WorkItemId};
+use yttt::ui::editor::{DocumentId, TabGroupId, WorkItemId};
 use yttt::ui::i18n::{Locale, UiText};
 use yttt::ui::interaction::overlay::{
     KeyboardCapture, overlay_input_capture_policy, popover_overlay_event_policy,
@@ -46,10 +46,11 @@ use yttt::ui::theme::icons::IconTheme;
 use yttt::ui::theme::{UiStyle, UiStyleId, WorkbenchTheme};
 use yttt::ui::workbench::shell::sidebar::{project_context_commands, project_sidebar_style};
 use yttt::ui::workbench::shell::tabs::{
-    ProjectTabCloseButtonVisibility, ProjectTabLeadingIcon, ProjectTabStatusIndicator,
-    ProjectTabStatusTone, ProjectTabToolbarPlacement, ProjectTabsToolbar, WorkbenchTabCloseScope,
-    WorkbenchTabItem, WorkbenchTabKind, project_tabs, project_tabs_style, project_tree_toggle_icon,
-    project_tree_toggle_tooltip, tab_close_targets, tab_toolbar_icon,
+    DraggedWorkbenchTab, ProjectTabCloseButtonVisibility, ProjectTabLeadingIcon,
+    ProjectTabStatusIndicator, ProjectTabStatusTone, ProjectTabToolbarPlacement,
+    ProjectTabsToolbar, WorkbenchTabCloseScope, WorkbenchTabItem, WorkbenchTabKind, project_tabs,
+    project_tabs_style, project_tree_toggle_icon, project_tree_toggle_tooltip, tab_close_targets,
+    tab_toolbar_icon,
 };
 use yttt::ui::workbench::shell::titlebar::{TitlebarInfo, compact_path_for_titlebar};
 use yttt::{
@@ -307,6 +308,8 @@ impl gpui::Render for EmptyProjectTabs {
         _cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
         project_tabs(
+            ProjectId::new("test-project"),
+            TabGroupId::new(1),
             Vec::new(),
             WorkbenchTheme::one_dark(),
             UiStyle::default(),
@@ -316,6 +319,7 @@ impl gpui::Render for EmptyProjectTabs {
             |_| |_, _, _| {},
             |_| |_, _, _| {},
             |_| |_, _, _| {},
+            true,
             ProjectTabsToolbar::new(
                 false,
                 project_tree_toggle_tooltip(false),
@@ -374,6 +378,8 @@ impl gpui::Render for TerminalAndFileTabs {
         ];
 
         project_tabs(
+            ProjectId::new("test-project"),
+            TabGroupId::new(1),
             items,
             WorkbenchTheme::one_dark(),
             UiStyle::default(),
@@ -383,6 +389,7 @@ impl gpui::Render for TerminalAndFileTabs {
             |_| |_, _, _| {},
             |_| |_, _, _| {},
             |_| |_, _, _| {},
+            true,
             ProjectTabsToolbar::new(
                 false,
                 project_tree_toggle_tooltip(false),
@@ -400,8 +407,8 @@ fn file_close_button_uses_terminal_trailing_position(cx: &mut gpui::TestAppConte
     cx.update(gpui_component::init);
     let (_view, cx) = cx.add_window_view(|_, _| TerminalAndFileTabs);
 
-    let terminal_tab = cx.debug_bounds("project-tab-0").unwrap();
-    let file_tab = cx.debug_bounds("project-tab-1").unwrap();
+    let terminal_tab = cx.debug_bounds("project-tab-1-0").unwrap();
+    let file_tab = cx.debug_bounds("project-tab-1-1").unwrap();
     let terminal_close = cx.debug_bounds("project-tab-close-0").unwrap();
     let file_close = cx.debug_bounds("project-tab-close-1").unwrap();
     let terminal_trailing_inset = terminal_tab.origin.x + terminal_tab.size.width
@@ -453,6 +460,8 @@ impl gpui::Render for ReorderableTabs {
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
         project_tabs(
+            ProjectId::new("test-project"),
+            TabGroupId::new(1),
             self.items.clone(),
             WorkbenchTheme::one_dark(),
             UiStyle::default(),
@@ -467,8 +476,9 @@ impl gpui::Render for ReorderableTabs {
             },
             |_| |_, _, _| {},
             |target_index| {
-                cx.listener(move |this, dragged: &WorkItemId, _window, cx| {
-                    let Some(from_index) = this.items.iter().position(|item| &item.id == dragged)
+                cx.listener(move |this, dragged: &DraggedWorkbenchTab, _window, cx| {
+                    let Some(from_index) =
+                        this.items.iter().position(|item| &item.id == dragged.id())
                     else {
                         return;
                     };
@@ -480,6 +490,7 @@ impl gpui::Render for ReorderableTabs {
                     cx.notify();
                 })
             },
+            true,
             ProjectTabsToolbar::new(
                 false,
                 project_tree_toggle_tooltip(false),
@@ -496,8 +507,8 @@ impl gpui::Render for ReorderableTabs {
 fn dragging_a_tab_reorders_the_rendered_tab_model(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let (view, cx) = cx.add_window_view(|_, _| ReorderableTabs::new());
-    let first = cx.debug_bounds("project-tab-0").unwrap();
-    let third = cx.debug_bounds("project-tab-2").unwrap();
+    let first = cx.debug_bounds("project-tab-1-0").unwrap();
+    let third = cx.debug_bounds("project-tab-1-2").unwrap();
 
     cx.simulate_mouse_down(
         first.center(),
@@ -536,7 +547,7 @@ fn dragging_a_tab_reorders_the_rendered_tab_model(cx: &mut gpui::TestAppContext)
 fn right_clicking_a_tab_selects_the_context_menu_target(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let (view, cx) = cx.add_window_view(|_, _| ReorderableTabs::new());
-    let first = cx.debug_bounds("project-tab-0").unwrap();
+    let first = cx.debug_bounds("project-tab-1-0").unwrap();
 
     cx.simulate_mouse_move(first.center(), None, gpui::Modifiers::none());
     cx.simulate_mouse_down(

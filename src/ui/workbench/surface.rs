@@ -3,50 +3,39 @@ use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use super::*;
 
 impl WorkbenchView {
-    pub(super) fn active_terminal_split_view(
+    fn work_item_view(
         &mut self,
+        group_id: TabGroupId,
+        item: Option<&WorkItemId>,
+        group_active: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        self.prune_terminal_panes();
-
-        let Some((project_id, project_path, project_title, tab_id, tab_title, layout)) =
-            self.selected_tab_layout_clone()
-        else {
-            return project_empty_terminal_state(cx, &self.ui_text, &self.theme_runtime().ui);
-        };
-
-        let focused_pane_id = self.selected_focused_pane_id().map(ToOwned::to_owned);
-        let tree_input = RenderTerminalTreeInput {
-            project_id: &project_id,
-            project_path: &project_path,
-            project_title: &project_title,
-            tab_id: &tab_id,
-            tab_title: &tab_title,
-            focused_pane_id: focused_pane_id.as_deref(),
-        };
-
-        div()
-            .flex()
-            .flex_1()
-            .text_color(self.theme_runtime().ui.text)
-            .child(self.terminal_split_view_for_layout(&layout, &tree_input, window, cx))
+        match item {
+            Some(WorkItemId::File(document_id)) => {
+                self.file_work_item_view(document_id, group_active, window, cx)
+            }
+            Some(WorkItemId::Terminal(tab_id)) => {
+                self.terminal_work_item_view(group_id, tab_id, group_active, window, cx)
+            }
+            None => div().flex().flex_1(),
+        }
     }
 
-    pub(super) fn active_work_item_view(
+    fn file_work_item_view(
         &mut self,
+        document_id: &crate::ui::editor::DocumentId,
+        group_active: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        let Some(WorkItemId::File(document_id)) = self.active_work_item() else {
-            return self.active_terminal_split_view(window, cx);
-        };
         let document = self
             .project
             .project_editor_runtime
-            .document(&document_id)
+            .document(document_id)
             .cloned();
-        if self.project.pending_editor_focus_document_id.as_ref() == Some(&document_id)
+        if group_active
+            && self.project.pending_editor_focus_document_id.as_ref() == Some(document_id)
             && self.foreground_input_owner_kind() == InputOwnerKind::Editor
             && let Some(document) = &document
         {
@@ -67,6 +56,37 @@ impl WorkbenchView {
             .min_h_0()
             .bg(self.theme_runtime().editor.background)
             .child(div().flex_1().min_h_0().children(document))
+    }
+
+    fn terminal_work_item_view(
+        &mut self,
+        group_id: TabGroupId,
+        tab_id: &str,
+        group_active: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let Some((project_id, project_path, project_title, tab_title, layout, focused_pane_id)) =
+            self.terminal_tab_layout_clone(tab_id)
+        else {
+            return project_empty_terminal_state(cx, &self.ui_text, &self.theme_runtime().ui);
+        };
+        let tree_input = RenderTerminalTreeInput {
+            group_id,
+            group_active,
+            project_id: &project_id,
+            project_path: &project_path,
+            project_title: &project_title,
+            tab_id,
+            tab_title: &tab_title,
+            focused_pane_id: focused_pane_id.as_deref(),
+        };
+
+        div()
+            .flex()
+            .flex_1()
+            .text_color(self.theme_runtime().ui.text)
+            .child(self.terminal_split_view_for_layout(&layout, &tree_input, window, cx))
     }
 
     pub(super) fn workbench_tab_items(&self, cx: &Context<Self>) -> Vec<WorkbenchTabItem> {
@@ -124,6 +144,270 @@ impl WorkbenchView {
             });
         }
         items
+    }
+
+    pub(super) fn reconcile_selected_work_area(&mut self) {
+        let Some((project_id, terminal_ids)) = self.selected_project_work_item_ids() else {
+            return;
+        };
+        if let Some(session) = self
+            .project
+            .project_editor_runtime
+            .workspace_mut()
+            .session_mut(&project_id)
+        {
+            session.reconcile_work_area(&terminal_ids);
+        }
+    }
+
+    pub(super) fn selected_work_area_snapshot(
+        &self,
+    ) -> Option<(ProjectId, WorkAreaNode, TabGroupId)> {
+        let project_id = self.workspace.selected_project_id()?.clone();
+        let session = self
+            .project
+            .project_editor_runtime
+            .workspace()
+            .session(&project_id)?;
+        Some((
+            project_id,
+            session.work_area().clone(),
+            session.active_group_id(),
+        ))
+    }
+
+    pub(super) fn work_area_view(
+        &mut self,
+        project_id: &ProjectId,
+        node: &WorkAreaNode,
+        active_group_id: TabGroupId,
+        all_tab_items: &[WorkbenchTabItem],
+        project_panel_visible: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        match node {
+            WorkAreaNode::Group(group) => self.work_area_group_view(
+                project_id,
+                group,
+                active_group_id,
+                all_tab_items,
+                project_panel_visible,
+                window,
+                cx,
+            ),
+            WorkAreaNode::Split {
+                id,
+                axis,
+                ratio,
+                first,
+                second,
+            } => {
+                let basis = split_child_basis(*ratio);
+                let mut container = div().flex().flex_1().min_w_0().min_h_0();
+                if *axis == WorkAreaSplitAxis::Column {
+                    container = container.flex_col();
+                }
+                let first = self.work_area_view(
+                    project_id,
+                    first,
+                    active_group_id,
+                    all_tab_items,
+                    project_panel_visible,
+                    window,
+                    cx,
+                );
+                let second = self.work_area_view(
+                    project_id,
+                    second,
+                    active_group_id,
+                    all_tab_items,
+                    project_panel_visible,
+                    window,
+                    cx,
+                );
+                container
+                    .child(split_child(first, basis.left))
+                    .child(self.work_area_resize_handle(*id, *axis, cx))
+                    .child(split_child(second, basis.right))
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn work_area_group_view(
+        &mut self,
+        project_id: &ProjectId,
+        group: &TabGroup,
+        active_group_id: TabGroupId,
+        all_tab_items: &[WorkbenchTabItem],
+        project_panel_visible: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let group_id = group.id();
+        let group_active = group_id == active_group_id;
+        let mut tab_items = Vec::with_capacity(group.items().len());
+        for item_id in group.items() {
+            if let Some(mut item) = all_tab_items
+                .iter()
+                .find(|item| &item.id == item_id)
+                .cloned()
+            {
+                item.state = if group.active_item() == Some(item_id) {
+                    crate::ui::components::SelectableState::Active
+                } else {
+                    crate::ui::components::SelectableState::Inactive
+                };
+                tab_items.push(item);
+            }
+        }
+
+        let appearance = self.theme_runtime();
+        let drop_group_name =
+            SharedString::from(format!("work-area-drop-group-{}", group_id.raw()));
+        let target_project_id = project_id.clone();
+        let preview_edge = self
+            .work_area_drop_target
+            .as_ref()
+            .filter(|target| target.project_id == *project_id && target.group_id == group_id)
+            .and_then(|target| target.edge);
+        let mut drop_target = div()
+            .debug_selector(move || format!("work-area-drop-preview-{}", group_id.raw()))
+            .invisible()
+            .absolute()
+            .bg(appearance.ui.selection)
+            .border(appearance.style.border.emphasized)
+            .border_color(appearance.ui.accent)
+            .group_drag_over::<DraggedWorkbenchTab>(drop_group_name.clone(), |style| {
+                style.visible()
+            })
+            .can_drop(move |dragged, _, _| {
+                dragged
+                    .downcast_ref::<DraggedWorkbenchTab>()
+                    .is_some_and(|drag| drag.project_id == target_project_id)
+            })
+            .on_drop(
+                cx.listener(move |this, dragged: &DraggedWorkbenchTab, _window, cx| {
+                    let _ = this.drop_work_item_on_group(dragged, group_id);
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            );
+        drop_target = match preview_edge {
+            None => drop_target.inset_0(),
+            Some(WorkAreaDropEdge::Top) => drop_target.top_0().left_0().right_0().h(relative(0.5)),
+            Some(WorkAreaDropEdge::Bottom) => {
+                drop_target.bottom_0().left_0().right_0().h(relative(0.5))
+            }
+            Some(WorkAreaDropEdge::Left) => {
+                drop_target.top_0().bottom_0().left_0().w(relative(0.5))
+            }
+            Some(WorkAreaDropEdge::Right) => {
+                drop_target.top_0().bottom_0().right_0().w(relative(0.5))
+            }
+        };
+
+        let active_item = group.active_item().cloned();
+        let content = div()
+            .debug_selector(move || format!("work-area-group-content-{}", group_id.raw()))
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .relative()
+            .overflow_hidden()
+            .group(drop_group_name)
+            .child(self.work_item_view(group_id, active_item.as_ref(), group_active, window, cx))
+            .child(drop_target);
+
+        let mut group_view = div()
+            .debug_selector(move || format!("work-area-group-{}", group_id.raw()))
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .on_drag_move::<DraggedWorkbenchTab>(cx.listener(
+                move |this, event: &DragMoveEvent<DraggedWorkbenchTab>, _window, cx| {
+                    this.update_work_area_drop_target(group_id, event, cx);
+                },
+            ))
+            .border(appearance.style.border.hairline)
+            .border_color(if group_active {
+                appearance.ui.accent
+            } else {
+                appearance.ui.border
+            })
+            .child(project_tabs(
+                project_id.clone(),
+                group_id,
+                tab_items,
+                appearance.ui,
+                appearance.style,
+                self.icon_theme.clone(),
+                self.ui_text,
+                |work_item| {
+                    cx.listener(move |this, event: &ClickEvent, _window, cx| {
+                        let _ =
+                            this.handle_work_item_tab_click(work_item.clone(), event.click_count());
+                        cx.notify();
+                    })
+                },
+                |work_item| {
+                    cx.listener(move |this, _event: &MouseDownEvent, _window, cx| {
+                        let _ = this.handle_work_item_tab_click(work_item.clone(), 1);
+                        cx.notify();
+                    })
+                },
+                |work_item| {
+                    cx.listener(move |this, _event: &ClickEvent, _window, cx| {
+                        cx.stop_propagation();
+                        let _ = this.close_work_item_tab(work_item.clone());
+                        cx.notify();
+                    })
+                },
+                |target_index| {
+                    cx.listener(move |this, dragged: &DraggedWorkbenchTab, _window, cx| {
+                        let _ = this.move_dragged_work_item_tab(dragged, group_id, target_index);
+                        cx.stop_propagation();
+                        cx.notify();
+                    })
+                },
+                group_active,
+                ProjectTabsToolbar::new(
+                    project_panel_visible,
+                    self.ui_text.get(if project_panel_visible {
+                        UiTextKey::ProjectFilesHide
+                    } else {
+                        UiTextKey::ProjectFilesShow
+                    }),
+                    cx.listener(|this, _, _window, cx| {
+                        let _ = this.new_tab_from_toolbar();
+                        cx.notify();
+                    }),
+                    cx.listener(|this, _, _window, cx| {
+                        let _ = this.run_command(CommandId::PaneSplitVertical);
+                        cx.notify();
+                    }),
+                    cx.listener(|this, _, _window, cx| {
+                        let _ = this.run_command(CommandId::PaneSplitHorizontal);
+                        cx.notify();
+                    }),
+                    cx.listener(|this, _, _window, cx| {
+                        let _ = this.run_command(CommandId::ProjectPanelToggle);
+                        cx.notify();
+                    }),
+                ),
+            ))
+            .child(content);
+        group_view
+            .interactivity()
+            .capture_any_mouse_down(cx.listener(move |this, _, _window, cx| {
+                let _ = this.activate_work_area_group(group_id);
+                cx.notify();
+            }));
+        group_view
     }
 
     pub fn selected_project_panel_visible(&self) -> bool {
@@ -376,13 +660,15 @@ impl WorkbenchView {
         match layout {
             LayoutNode::Pane(pane) => self.render_terminal_pane(
                 RenderTerminalPaneInput {
+                    group_id: tree_input.group_id,
                     project_id: tree_input.project_id,
                     project_path: tree_input.project_path,
                     project_title: tree_input.project_title,
                     pane,
                     tab_id: tree_input.tab_id,
                     tab_title: tree_input.tab_title,
-                    is_focused: tree_input.focused_pane_id == Some(pane.id.as_str()),
+                    is_focused: tree_input.group_active
+                        && tree_input.focused_pane_id == Some(pane.id.as_str()),
                 },
                 window,
                 cx,
@@ -428,6 +714,30 @@ impl WorkbenchView {
             project.selected_tab_id.clone(),
             tab.title.clone(),
             tab.layout.clone(),
+        ))
+    }
+
+    fn terminal_tab_layout_clone(
+        &self,
+        tab_id: &str,
+    ) -> Option<(String, PathBuf, String, String, LayoutNode, Option<String>)> {
+        let selected_project_id = self.workspace.selected_project_id()?;
+        let project = self.workspace.project(selected_project_id)?;
+        let tab = project.layout.tabs.iter().find(|tab| tab.id == tab_id)?;
+        let project_path = match &project.location {
+            ProjectLocation::Local { path } => path.clone(),
+            ProjectLocation::Ssh { root, .. } => PathBuf::from(root.as_str()),
+        };
+        let focused_pane_id = project
+            .tab_state(tab_id)
+            .and_then(|state| state.focused_pane_id.clone());
+        Some((
+            selected_project_id.as_str().to_string(),
+            tab.cwd.clone().unwrap_or(project_path),
+            project.layout.project.name.clone(),
+            tab.title.clone(),
+            tab.layout.clone(),
+            focused_pane_id,
         ))
     }
 
@@ -569,15 +879,20 @@ impl WorkbenchView {
         let pane_view = self.ensure_terminal_pane(context, window, cx);
 
         let pane_id = input.pane.id.clone();
-        if self
-            .terminal
-            .pending_terminal_focus_pane_id
-            .as_deref()
-            .is_some_and(|pending| pending == pane_id)
+        let pending_focus_matches =
+            self.terminal
+                .pending_terminal_focus
+                .as_ref()
+                .is_some_and(|target| {
+                    target.project_id.as_str() == input.project_id
+                        && target.tab_id == input.tab_id
+                        && target.pane_id == pane_id
+                });
+        if pending_focus_matches
             && self.should_auto_focus_workspace()
             && pane_view.update(cx, |pane, cx| pane.focus_terminal(window, cx))
         {
-            self.terminal.pending_terminal_focus_pane_id = None;
+            self.terminal.pending_terminal_focus = None;
         }
 
         let appearance = self.theme_runtime();
@@ -594,6 +909,10 @@ impl WorkbenchView {
             .relative()
             .border(ui_style.border.hairline)
             .border_color(border_color);
+        let group_id = input.group_id;
+        let project_id = ProjectId::new(input.project_id);
+        let tab_id = input.tab_id.to_string();
+        let focused_pane_id = pane_id.clone();
         wrapper.interactivity().on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _, _window, cx| {
@@ -601,20 +920,42 @@ impl WorkbenchView {
                     cx.stop_propagation();
                     return;
                 }
-                let _ = this.focus_visible_terminal_pane(&pane_id);
+                let _ = this.focus_work_area_terminal_pane(
+                    group_id,
+                    &project_id,
+                    &tab_id,
+                    &focused_pane_id,
+                );
                 cx.notify();
             }),
         );
         wrapper = wrapper.child(pane_view);
         if !terminal_input_allowed {
+            let project_id = ProjectId::new(input.project_id);
+            let tab_id = input.tab_id.to_string();
             wrapper = wrapper.child(
                 div()
                     .absolute()
                     .inset_0()
                     .bg(rgba(0x00000000))
-                    .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
-                        cx.stop_propagation();
-                    }),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event, _window, cx| {
+                            if matches!(
+                                this.foreground_input_owner_kind(),
+                                InputOwnerKind::Workspace | InputOwnerKind::Editor
+                            ) {
+                                let _ = this.focus_work_area_terminal_pane(
+                                    group_id,
+                                    &project_id,
+                                    &tab_id,
+                                    &pane_id,
+                                );
+                                cx.notify();
+                            }
+                            cx.stop_propagation();
+                        }),
+                    ),
             );
         }
         wrapper

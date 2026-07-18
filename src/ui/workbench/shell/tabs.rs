@@ -9,11 +9,14 @@ use gpui_component::{
     tooltip::Tooltip,
 };
 
-use crate::ui::editor::{DocumentId, WorkItemId};
 use crate::{
-    model::workspace::{TabStartState, Workspace},
+    model::{
+        ids::ProjectId,
+        workspace::{TabStartState, Workspace},
+    },
     ui::{
         components::{SelectableState, workbench_icon_button},
+        editor::{DocumentId, TabGroupId, WorkItemId},
         i18n::{UiText, UiTextKey},
         interaction::actions::{
             TabClose, TabCloseAfter, TabCloseAll, TabCloseAllFiles, TabCloseAllTerminals,
@@ -82,11 +85,27 @@ pub fn tab_close_targets(
 }
 
 #[derive(Clone)]
-struct DraggedWorkbenchTab {
-    id: WorkItemId,
+pub struct DraggedWorkbenchTab {
+    pub(in crate::ui::workbench) project_id: ProjectId,
+    pub(in crate::ui::workbench) source_group_id: TabGroupId,
+    pub(in crate::ui::workbench) id: WorkItemId,
     title: String,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
+}
+
+impl DraggedWorkbenchTab {
+    pub fn project_id(&self) -> &ProjectId {
+        &self.project_id
+    }
+
+    pub fn source_group_id(&self) -> TabGroupId {
+        self.source_group_id
+    }
+
+    pub fn id(&self) -> &WorkItemId {
+        &self.id
+    }
 }
 
 impl Render for DraggedWorkbenchTab {
@@ -352,6 +371,8 @@ pub fn project_tabs<
     SplitHH,
     ToggleTreeH,
 >(
+    project_id: ProjectId,
+    tab_group_id: TabGroupId,
     items: Vec<WorkbenchTabItem>,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
@@ -361,6 +382,7 @@ pub fn project_tabs<
     mut on_context_select_tab: ContextSelectF,
     mut on_close_tab: CloseF,
     mut on_move_tab: MoveF,
+    show_toolbar: bool,
     toolbar: ProjectTabsToolbar<NewH, SplitVH, SplitHH, ToggleTreeH>,
 ) -> impl IntoElement
 where
@@ -370,7 +392,7 @@ where
     ContextSelectF: FnMut(WorkItemId) -> ContextSelectH,
     CloseH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     CloseF: FnMut(WorkItemId) -> CloseH,
-    MoveH: Fn(&WorkItemId, &mut Window, &mut App) + 'static,
+    MoveH: Fn(&DraggedWorkbenchTab, &mut Window, &mut App) + 'static,
     MoveF: FnMut(usize) -> MoveH,
     NewH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     SplitVH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -392,8 +414,9 @@ where
         .iter()
         .any(|item| item.kind == WorkbenchTabKind::Terminal);
 
+    let tab_row_id = SharedString::from(format!("project-tab-row-{}", tab_group_id.raw()));
     let mut tab_row = div()
-        .id("project-tab-row")
+        .id(tab_row_id)
         .flex()
         .items_center()
         .h_full()
@@ -403,6 +426,8 @@ where
         let context_tab_id = item.id.clone();
         let close_tab_id = item.id.clone();
         tab_row = tab_row.child(project_tab(
+            project_id.clone(),
+            tab_group_id,
             index,
             tab_count,
             has_files,
@@ -429,20 +454,24 @@ where
         .border_b(style.border_width)
         .border_color(theme.border)
         .child(tab_row.flex_1())
-        .child(tab_toolbar(
-            theme,
-            ui_style,
-            on_new_tab,
-            on_split_vertical,
-            on_split_horizontal,
-            project_tree_open,
-            project_tree_tooltip,
-            on_toggle_project_tree,
-        ))
+        .when(show_toolbar, |this| {
+            this.child(tab_toolbar(
+                theme,
+                ui_style,
+                on_new_tab,
+                on_split_vertical,
+                on_split_horizontal,
+                project_tree_open,
+                project_tree_tooltip,
+                on_toggle_project_tree,
+            ))
+        })
         .into_any_element()
 }
 
 fn project_tab<SelectH, ContextSelectH, CloseH, MoveH>(
+    project_id: ProjectId,
+    tab_group_id: TabGroupId,
     index: usize,
     tab_count: usize,
     has_files: bool,
@@ -462,15 +491,16 @@ where
     SelectH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ContextSelectH: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
     CloseH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    MoveH: Fn(&WorkItemId, &mut Window, &mut App) + 'static,
+    MoveH: Fn(&DraggedWorkbenchTab, &mut Window, &mut App) + 'static,
 {
     let row_style = yttt_row_style(YtttRowKind::Tab, item.state, true, theme, ui_style);
-    let group_name = format!("project-tab-{index}");
+    let group_name = format!("project-tab-{}-{index}", tab_group_id.raw());
     let tooltip = item.tooltip.clone();
     let kind = item.kind;
     let active = item.state == SelectableState::Active;
     let drag_id = item.id.clone();
     let drag_title = item.title.clone();
+    let element_id = SharedString::from(group_name.clone());
     let icon = match kind {
         WorkbenchTabKind::Terminal => Icon::new(IconName::SquareTerminal)
             .size_3()
@@ -488,8 +518,8 @@ where
     let status_tone = item.status_tone;
 
     let mut tab = div()
-        .id(("project-tab", index))
-        .debug_selector(move || format!("project-tab-{index}"))
+        .id(element_id)
+        .debug_selector(move || format!("project-tab-{}-{index}", tab_group_id.raw()))
         .group(group_name.clone())
         .relative()
         .flex()
@@ -509,6 +539,8 @@ where
         .on_mouse_down(MouseButton::Right, on_context_select_tab)
         .on_drag(
             DraggedWorkbenchTab {
+                project_id,
+                source_group_id: tab_group_id,
                 id: drag_id,
                 title: drag_title,
                 theme,
@@ -523,7 +555,8 @@ where
             this.border_color(theme.accent).bg(theme.selection)
         })
         .on_drop(move |drag: &DraggedWorkbenchTab, window, cx| {
-            on_move_tab(&drag.id, window, cx);
+            cx.stop_propagation();
+            on_move_tab(drag, window, cx);
         })
         .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
         .child(icon)

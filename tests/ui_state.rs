@@ -36,7 +36,8 @@ use yttt::{
     ui::editor::{
         CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, DiskFingerprint, DocumentId,
         EditorAppearance, EditorDiagnosticSeverity, EditorLanguageId, ProjectEditorDocument,
-        ProjectEditorModel, VimMode, WorkItemId, read_project_file,
+        ProjectEditorModel, VimMode, WorkAreaNode, WorkAreaSplitAxis, WorkItemId,
+        read_project_file,
     },
     ui::i18n::{Locale, UiText},
     ui::notifications::{ToastTone, toast_item_for_event, visible_toast_items},
@@ -3806,6 +3807,127 @@ fn enabled_new_tab_toolbar_click_runs_the_selected_configured_command(
         };
         assert_eq!(pane.command, "nvim .");
         assert_eq!(pane.execution_mode, TerminalExecutionMode::Shell);
+    });
+}
+
+#[gpui::test]
+fn dragging_tab_to_group_edge_splits_and_resizes_work_area(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let workspace = workspace_with_sample_project();
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root =
+            cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    cx.refresh().unwrap();
+
+    let agent_tab = cx
+        .debug_bounds("project-tab-1-1")
+        .expect("initial group should render the agent tab");
+    let group_content = cx
+        .debug_bounds("work-area-group-content-1")
+        .expect("initial group should render a drop target");
+    let right_edge = gpui::Point::new(
+        group_content.right() - gpui::px(2.0),
+        group_content.center().y,
+    );
+    cx.simulate_mouse_down(
+        agent_tab.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::none(),
+    );
+    cx.simulate_mouse_move(right_edge, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_move(right_edge, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    assert!(
+        cx.debug_bounds("work-area-drop-preview-1").is_some(),
+        "dragging over the edge should render a drop preview"
+    );
+    cx.simulate_mouse_up(right_edge, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    cx.read(|app| {
+        let root = root.read(app);
+        let session = root
+            .project_editor_runtime()
+            .workspace()
+            .session(&project_id)
+            .unwrap();
+        let WorkAreaNode::Split {
+            axis,
+            ratio,
+            first,
+            second,
+            ..
+        } = session.work_area()
+        else {
+            panic!(
+                "edge drop should split the outer work area: {:?}",
+                session.work_area()
+            );
+        };
+        assert_eq!(*axis, WorkAreaSplitAxis::Row);
+        assert_ratio(*ratio, 0.5);
+        let WorkAreaNode::Group(first) = first.as_ref() else {
+            panic!("left child should remain a group");
+        };
+        let WorkAreaNode::Group(second) = second.as_ref() else {
+            panic!("right child should be the new group");
+        };
+        assert_eq!(first.items(), &[WorkItemId::Terminal("dev".to_string())]);
+        assert_eq!(second.items(), &[WorkItemId::Terminal("agent".to_string())]);
+        assert_eq!(session.active_group_id(), second.id());
+        assert_eq!(
+            session.active_work_item(),
+            Some(&WorkItemId::Terminal("agent".to_string()))
+        );
+    });
+    assert!(
+        cx.debug_bounds("work-area-group-2").is_some(),
+        "new group should render after the drop"
+    );
+
+    let divider = cx
+        .debug_bounds("work-area-split-resize-1")
+        .expect("split should render a stable resize handle");
+    let divider_center = divider.center();
+    cx.simulate_mouse_down(
+        divider_center,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::none(),
+    );
+    cx.simulate_mouse_move(
+        gpui::Point::new(divider_center.x + gpui::px(120.0), divider_center.y),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::none(),
+    );
+    cx.simulate_mouse_up(
+        gpui::Point::new(divider_center.x + gpui::px(120.0), divider_center.y),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::none(),
+    );
+    cx.run_until_parked();
+
+    cx.read(|app| {
+        let root = root.read(app);
+        let session = root
+            .project_editor_runtime()
+            .workspace()
+            .session(&project_id)
+            .unwrap();
+        let WorkAreaNode::Split { ratio, .. } = session.work_area() else {
+            panic!("resizing must preserve the split");
+        };
+        assert_ratio(*ratio, 0.7);
     });
 }
 

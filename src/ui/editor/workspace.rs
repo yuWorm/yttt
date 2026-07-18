@@ -2,6 +2,10 @@ use std::{collections::HashMap, path::PathBuf};
 
 use crate::{model::ids::ProjectId, ui::project_tree::ProjectFileTree};
 
+use super::work_area::{
+    TabGroupId, WorkAreaDropPlacement, WorkAreaNode, WorkAreaSplitId, WorkAreaState,
+};
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DocumentId {
     pub project_id: ProjectId,
@@ -18,9 +22,8 @@ pub enum WorkItemId {
 pub struct ProjectWorkItemSession {
     project_id: ProjectId,
     file_ids: Vec<DocumentId>,
-    active_work_item: Option<WorkItemId>,
+    work_area: WorkAreaState,
     activation_history: Vec<WorkItemId>,
-    work_item_order: Option<Vec<WorkItemId>>,
     file_tree: ProjectFileTree,
     project_panel_visible: bool,
     project_panel_width: f32,
@@ -39,9 +42,8 @@ impl ProjectWorkItemSession {
         Self {
             project_id,
             file_ids: Vec::new(),
-            active_work_item,
+            work_area: WorkAreaState::new(active_work_item),
             activation_history,
-            work_item_order: None,
             file_tree: ProjectFileTree::new(root),
             project_panel_visible,
             project_panel_width,
@@ -57,7 +59,23 @@ impl ProjectWorkItemSession {
     }
 
     pub fn active_work_item(&self) -> Option<&WorkItemId> {
-        self.active_work_item.as_ref()
+        self.work_area.active_item()
+    }
+
+    pub fn active_group_id(&self) -> TabGroupId {
+        self.work_area.active_group_id()
+    }
+
+    pub fn active_group_items(&self) -> &[WorkItemId] {
+        self.work_area.active_group_items()
+    }
+
+    pub fn group_items_containing(&self, item: &WorkItemId) -> Option<&[WorkItemId]> {
+        self.work_area.group_items_containing(item)
+    }
+
+    pub fn work_area(&self) -> &WorkAreaNode {
+        self.work_area.root()
     }
 
     pub fn activation_history(&self) -> &[WorkItemId] {
@@ -72,36 +90,14 @@ impl ProjectWorkItemSession {
         let item = WorkItemId::File(id.clone());
         if !self.file_ids.contains(&id) {
             self.file_ids.push(id.clone());
-            if let Some(order) = &mut self.work_item_order {
-                order.push(item.clone());
-            }
+            self.work_area.append_item_to_active_group(item.clone());
         }
         self.activate(item);
         id
     }
 
     pub fn ordered_items(&self, terminal_ids: &[String]) -> Vec<WorkItemId> {
-        let available = terminal_ids
-            .iter()
-            .cloned()
-            .map(WorkItemId::Terminal)
-            .chain(self.file_ids.iter().cloned().map(WorkItemId::File))
-            .collect::<Vec<_>>();
-        let Some(custom_order) = &self.work_item_order else {
-            return available;
-        };
-
-        let mut ordered = custom_order
-            .iter()
-            .filter(|item| available.contains(item))
-            .cloned()
-            .collect::<Vec<_>>();
-        for item in available {
-            if !ordered.contains(&item) {
-                ordered.push(item);
-            }
-        }
-        ordered
+        self.work_area.ordered_items(terminal_ids, &self.file_ids)
     }
 
     pub fn move_work_item(
@@ -110,28 +106,71 @@ impl ProjectWorkItemSession {
         to_index: usize,
         terminal_ids: &[String],
     ) -> bool {
-        let mut ordered = self.ordered_items(terminal_ids);
-        let Some(from_index) = ordered.iter().position(|candidate| candidate == item) else {
+        self.reconcile_work_area(terminal_ids);
+        let Some(source_group) = self.work_area.group_id_containing(item) else {
             return false;
         };
-        if from_index == to_index {
-            return false;
-        }
+        self.work_area.move_item(
+            item,
+            source_group,
+            source_group,
+            WorkAreaDropPlacement::TabIndex(to_index),
+        )
+    }
 
-        let moved = ordered.remove(from_index);
-        ordered.insert(to_index.min(ordered.len()), moved);
-        self.work_item_order = Some(ordered);
-        true
+    pub fn move_work_item_to_group(
+        &mut self,
+        item: &WorkItemId,
+        source_group: TabGroupId,
+        target_group: TabGroupId,
+        to_index: usize,
+        terminal_ids: &[String],
+    ) -> bool {
+        self.reconcile_work_area(terminal_ids);
+        let changed = self.work_area.move_item(
+            item,
+            source_group,
+            target_group,
+            WorkAreaDropPlacement::TabIndex(to_index),
+        );
+        if changed {
+            self.record_active_item();
+        }
+        changed
+    }
+
+    pub fn drop_work_item(
+        &mut self,
+        item: &WorkItemId,
+        source_group: TabGroupId,
+        target_group: TabGroupId,
+        placement: WorkAreaDropPlacement,
+        terminal_ids: &[String],
+    ) -> bool {
+        self.reconcile_work_area(terminal_ids);
+        let changed = self
+            .work_area
+            .move_item(item, source_group, target_group, placement);
+        if changed {
+            self.record_active_item();
+        }
+        changed
+    }
+
+    pub fn resize_work_area_split(&mut self, split_id: WorkAreaSplitId, delta: f32) -> Option<f32> {
+        self.work_area.resize_split(split_id, delta)
     }
 
     pub fn reconcile_work_item_order(&mut self, terminal_ids: &[String]) {
-        let file_ids = &self.file_ids;
-        if let Some(order) = &mut self.work_item_order {
-            order.retain(|item| match item {
-                WorkItemId::Terminal(id) => terminal_ids.contains(id),
-                WorkItemId::File(id) => file_ids.contains(id),
-            });
-        }
+        self.reconcile_work_area(terminal_ids);
+    }
+
+    pub fn reconcile_work_area(&mut self, terminal_ids: &[String]) {
+        self.work_area.reconcile(terminal_ids, &self.file_ids);
+        let available = self.ordered_items(terminal_ids);
+        self.activation_history
+            .retain(|item| available.contains(item));
+        self.record_active_item();
     }
 
     pub fn select_work_item(&mut self, item: WorkItemId, terminal_ids: &[String]) -> bool {
@@ -142,8 +181,14 @@ impl ProjectWorkItemSession {
         if !exists {
             return false;
         }
-        self.activate(item);
-        true
+        self.reconcile_work_area(terminal_ids);
+        self.activate(item)
+    }
+
+    pub fn activate_group(&mut self, group_id: TabGroupId) -> Option<WorkItemId> {
+        let active = self.work_area.activate_group(group_id)?;
+        self.record_active_item();
+        Some(active)
     }
 
     pub fn select_next(&mut self, terminal_ids: &[String]) -> Option<WorkItemId> {
@@ -160,28 +205,15 @@ impl ProjectWorkItemSession {
         terminal_ids: &[String],
     ) -> Option<WorkItemId> {
         let closing = WorkItemId::File(document_id.clone());
-        let before = self.ordered_items(terminal_ids);
-        let position = before.iter().position(|item| item == &closing)?;
-        let was_active = self.active_work_item.as_ref() == Some(&closing);
-
+        if !self.file_ids.contains(document_id) {
+            return self.active_work_item().cloned();
+        }
+        self.reconcile_work_area(terminal_ids);
         self.file_ids.retain(|id| id != document_id);
         self.activation_history.retain(|item| item != &closing);
-        if let Some(order) = &mut self.work_item_order {
-            order.retain(|item| item != &closing);
-        }
-        if was_active {
-            let after = self.ordered_items(terminal_ids);
-            let next = after
-                .get(position)
-                .cloned()
-                .or_else(|| after.last().cloned());
-            self.active_work_item = None;
-            if let Some(next) = next {
-                self.activate(next);
-            }
-        }
-
-        self.active_work_item.clone()
+        self.work_area.remove_item(&closing);
+        self.record_active_item();
+        self.active_work_item().cloned()
     }
 
     fn relocate_file_within_session(&mut self, old: &DocumentId, new: DocumentId) -> bool {
@@ -197,19 +229,10 @@ impl ProjectWorkItemSession {
         self.file_ids[index] = new.clone();
         let old_item = WorkItemId::File(old.clone());
         let new_item = WorkItemId::File(new);
-        if self.active_work_item.as_ref() == Some(&old_item) {
-            self.active_work_item = Some(new_item.clone());
-        }
+        self.work_area.replace_item(&old_item, &new_item);
         for item in &mut self.activation_history {
             if item == &old_item {
                 *item = new_item.clone();
-            }
-        }
-        if let Some(order) = &mut self.work_item_order {
-            for item in order {
-                if item == &old_item {
-                    *item = new_item.clone();
-                }
             }
         }
         true
@@ -245,14 +268,13 @@ impl ProjectWorkItemSession {
     }
 
     fn select_relative(&mut self, terminal_ids: &[String], offset: isize) -> Option<WorkItemId> {
-        let items = self.ordered_items(terminal_ids);
+        self.reconcile_work_area(terminal_ids);
+        let items = self.active_group_items().to_vec();
         if items.is_empty() {
-            self.active_work_item = None;
             return None;
         }
         let index = match self
-            .active_work_item
-            .as_ref()
+            .active_work_item()
             .and_then(|active| items.iter().position(|item| item == active))
         {
             Some(index) => (index as isize + offset).rem_euclid(items.len() as isize) as usize,
@@ -264,10 +286,22 @@ impl ProjectWorkItemSession {
         Some(next)
     }
 
-    fn activate(&mut self, item: WorkItemId) {
+    fn activate(&mut self, item: WorkItemId) -> bool {
+        if !self.work_area.activate_item(&item) {
+            return false;
+        }
         self.activation_history.retain(|existing| existing != &item);
-        self.activation_history.push(item.clone());
-        self.active_work_item = Some(item);
+        self.activation_history.push(item);
+        true
+    }
+
+    fn record_active_item(&mut self) {
+        let Some(active) = self.active_work_item().cloned() else {
+            return;
+        };
+        self.activation_history
+            .retain(|existing| existing != &active);
+        self.activation_history.push(active);
     }
 }
 
@@ -342,13 +376,16 @@ impl ProjectEditorWorkspaceState {
             let old_item = WorkItemId::File(old.clone());
             source.file_ids.retain(|id| id != old);
             source.activation_history.retain(|item| item != &old_item);
-            if source.active_work_item.as_ref() == Some(&old_item) {
-                source.active_work_item = source.activation_history.last().cloned();
-            }
+            source.work_area.remove_item(&old_item);
+            source.record_active_item();
         }
         if let Some(destination) = self.sessions.get_mut(&new.project_id) {
-            destination.file_ids.push(new.clone());
-            destination.activate(WorkItemId::File(new));
+            let new_item = WorkItemId::File(new.clone());
+            destination.file_ids.push(new);
+            destination
+                .work_area
+                .append_item_to_active_group(new_item.clone());
+            destination.activate(new_item);
         }
         true
     }

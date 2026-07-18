@@ -8,6 +8,7 @@
 - Added explicit host-key verification backed by yttt's own `ssh-host-keys.toml` store; OpenSSH `known_hosts` files are never modified.
 - Added an SFTP project picker, lazy remote file tree, conflict-checked remote editing, remote terminal panes, and remote Git status, branch, and diff operations.
 - Added operating-system credential-store integration for remembered SSH passwords and endpoint-bound credential metadata.
+- Added drag-to-edge work-area splitting for terminal and file tabs, with independent tab groups and resizable dividers.
 
 ### Changed
 

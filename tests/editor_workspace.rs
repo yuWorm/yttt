@@ -2,7 +2,10 @@ use std::path::{Path, PathBuf};
 
 use yttt::{
     model::ids::ProjectId,
-    ui::editor::{ProjectEditorWorkspaceState, ProjectWorkItemSession, WorkItemId},
+    ui::editor::{
+        ProjectEditorWorkspaceState, ProjectWorkItemSession, WorkAreaDropEdge,
+        WorkAreaDropPlacement, WorkAreaNode, WorkAreaSplitAxis, WorkItemId,
+    },
 };
 
 #[test]
@@ -260,4 +263,75 @@ fn relocating_file_between_projects_moves_session_ownership() {
     let destination = workspace.session(&destination_project_id).unwrap();
     assert_eq!(destination.file_ids(), &[new.clone()]);
     assert_eq!(destination.active_work_item(), Some(&WorkItemId::File(new)));
+}
+
+#[test]
+fn splitting_a_file_tab_preserves_identity_and_collapses_when_closed() {
+    let project_id = ProjectId::new("project-a");
+    let mut session = ProjectWorkItemSession::new(
+        project_id,
+        "/project-a",
+        Some("dev".to_string()),
+        true,
+        280.0,
+    );
+    let terminals = vec!["dev".to_string(), "logs".to_string()];
+    session.reconcile_work_area(&terminals);
+    let file = session.open_file("/project-a/src/main.rs");
+    let source_group = session.active_group_id();
+
+    assert!(session.drop_work_item(
+        &WorkItemId::File(file.clone()),
+        source_group,
+        source_group,
+        WorkAreaDropPlacement::Edge(WorkAreaDropEdge::Right),
+        &terminals,
+    ));
+
+    let WorkAreaNode::Split {
+        axis,
+        ratio,
+        first,
+        second,
+        ..
+    } = session.work_area()
+    else {
+        panic!("edge drop should create a work-area split");
+    };
+    assert_eq!(*axis, WorkAreaSplitAxis::Row);
+    assert!((*ratio - 0.5).abs() < f32::EPSILON);
+    let WorkAreaNode::Group(first) = first.as_ref() else {
+        panic!("source should remain a tab group");
+    };
+    let WorkAreaNode::Group(second) = second.as_ref() else {
+        panic!("dropped file should create a tab group");
+    };
+    assert_eq!(
+        first.items(),
+        &[
+            WorkItemId::Terminal("dev".to_string()),
+            WorkItemId::Terminal("logs".to_string()),
+        ]
+    );
+    assert_eq!(second.items(), &[WorkItemId::File(file.clone())]);
+    assert_eq!(session.active_group_id(), second.id());
+    assert_eq!(
+        session.active_work_item(),
+        Some(&WorkItemId::File(file.clone()))
+    );
+
+    assert_eq!(
+        session.close_file(&file, &terminals),
+        Some(WorkItemId::Terminal("logs".to_string()))
+    );
+    let WorkAreaNode::Group(group) = session.work_area() else {
+        panic!("closing the only tab in a group should collapse its split");
+    };
+    assert_eq!(
+        group.items(),
+        &[
+            WorkItemId::Terminal("dev".to_string()),
+            WorkItemId::Terminal("logs".to_string()),
+        ]
+    );
 }

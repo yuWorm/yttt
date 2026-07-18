@@ -8,6 +8,7 @@ mod runtime;
 mod state;
 mod view;
 mod vim;
+mod work_area;
 mod workspace;
 
 pub use breadcrumbs::{EditorSymbol, EditorSymbolKind, breadcrumbs_at, document_symbols};
@@ -33,4 +34,8 @@ pub use state::{
 };
 pub use view::{code_editor_input_state, styled_code_editor_input};
 pub use vim::{VimMode, init as init_vim_mode};
+pub use work_area::{
+    TabGroup, TabGroupId, WorkAreaDropEdge, WorkAreaDropPlacement, WorkAreaNode, WorkAreaSplitAxis,
+    WorkAreaSplitId,
+};
 pub use workspace::{DocumentId, ProjectEditorWorkspaceState, ProjectWorkItemSession, WorkItemId};

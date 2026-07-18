@@ -712,6 +712,10 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if event.keystroke.key == "escape" && self.work_area_drop_target.take().is_some() {
+            cx.notify();
+        }
+
         if self.overlays.pending_keybinding_edit.is_some() {
             let recorded = self.record_keybinding_edit_keystroke(&event.keystroke);
             cx.stop_propagation();

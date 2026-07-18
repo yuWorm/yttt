@@ -1,7 +1,7 @@
 use gpui::{
-    AnyElement, App, ClickEvent, ClipboardItem, Context, Div, Entity, FocusHandle, Focusable as _,
-    FontWeight, HighlightStyle, InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
+    AnyElement, App, ClickEvent, ClipboardItem, Context, Div, DragMoveEvent, Entity, FocusHandle,
+    Focusable as _, FontWeight, HighlightStyle, InteractiveElement as _, IntoElement, KeyDownEvent,
+    Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
     PathPromptOptions, Pixels, Point, Render, Rgba, ScrollHandle, SharedString, Stateful,
     Subscription, Task, UniformListScrollHandle, Window, div, prelude::*, px, relative, rems, rgba,
 };
@@ -41,6 +41,7 @@ mod ssh_connections;
 mod ssh_project_picker;
 mod state;
 mod surface;
+mod work_area;
 use dialogs::*;
 use git::*;
 use helpers::*;
@@ -61,7 +62,7 @@ use state::{
         SshConnectionListTone, SshControllerState, SshProjectConnectContinuation,
         SshProjectDirectory, SshProjectPickerView,
     },
-    terminal::TerminalControllerState,
+    terminal::{TerminalControllerState, TerminalPaneTarget},
 };
 
 use std::{
@@ -170,8 +171,9 @@ use crate::{
             EditorLanguageId, LoadedProjectFile, MarkdownDocumentConfig, ProjectEditorDocument,
             ProjectEditorDocumentEvent, ProjectEditorModel, ProjectEditorRuntime,
             ProjectEditorSaveState, ProjectFileIoError, ProjectFileLoadRequest, ReadonlyCodeRow,
-            ReadonlyCodeView, SaveProjectFileOutcome, SaveRequest, WorkItemId,
-            code_editor_input_state, styled_code_editor_input,
+            ReadonlyCodeView, SaveProjectFileOutcome, SaveRequest, TabGroup, TabGroupId,
+            WorkAreaDropEdge, WorkAreaDropPlacement, WorkAreaNode, WorkAreaSplitAxis,
+            WorkAreaSplitId, WorkItemId, code_editor_input_state, styled_code_editor_input,
         },
         i18n::{Locale, UiText, UiTextKey},
         interaction::actions::{
@@ -248,8 +250,8 @@ use crate::{
         workbench::shell::sidebar::project_sidebar,
         workbench::shell::split_view::{pointer_resize_for_drag_delta, split_child_basis},
         workbench::shell::tabs::{
-            FileTabSnapshot, ProjectTabsToolbar, WorkbenchTabCloseScope, WorkbenchTabItem,
-            project_tabs, tab_close_targets, visible_tab_items,
+            DraggedWorkbenchTab, FileTabSnapshot, ProjectTabsToolbar, WorkbenchTabCloseScope,
+            WorkbenchTabItem, project_tabs, tab_close_targets, visible_tab_items,
             visible_work_item_tabs as merge_work_item_tabs,
         },
         workbench::shell::titlebar::{TitlebarInfo, compact_path_for_titlebar, workbench_titlebar},
@@ -285,6 +287,8 @@ pub struct WorkbenchView {
     sidebar_collapsed: bool,
     active_sidebar_resize_drag: Option<ActiveSidebarResizeDrag>,
     active_split_resize_drag: Option<ActiveSplitResizeDrag>,
+    active_work_area_resize_drag: Option<ActiveWorkAreaResizeDrag>,
+    work_area_drop_target: Option<WorkAreaDropTarget>,
     toast_queue: ToastQueue,
     system_notifier: NoopSystemNotifier,
     system_notifications_enabled: bool,
@@ -325,6 +329,7 @@ fn palette_input_scope_id(kind: PaletteKind) -> &'static str {
 }
 
 struct RenderTerminalPaneInput<'a> {
+    group_id: TabGroupId,
     project_id: &'a str,
     project_path: &'a Path,
     project_title: &'a str,
@@ -335,6 +340,8 @@ struct RenderTerminalPaneInput<'a> {
 }
 
 struct RenderTerminalTreeInput<'a> {
+    group_id: TabGroupId,
+    group_active: bool,
     project_id: &'a str,
     project_path: &'a Path,
     project_title: &'a str,
@@ -347,6 +354,20 @@ struct RenderTerminalTreeInput<'a> {
 struct ActiveSplitResizeDrag {
     direction: SplitDirection,
     last_position: Point<Pixels>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ActiveWorkAreaResizeDrag {
+    split_id: WorkAreaSplitId,
+    axis: WorkAreaSplitAxis,
+    last_position: Point<Pixels>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorkAreaDropTarget {
+    project_id: ProjectId,
+    group_id: TabGroupId,
+    edge: Option<WorkAreaDropEdge>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -631,6 +652,8 @@ impl WorkbenchView {
             sidebar_collapsed: false,
             active_sidebar_resize_drag: None,
             active_split_resize_drag: None,
+            active_work_area_resize_drag: None,
+            work_area_drop_target: None,
             toast_queue: ToastQueue::default(),
             system_notifier: NoopSystemNotifier,
             system_notifications_enabled,
@@ -1187,10 +1210,17 @@ impl WorkbenchView {
             return Ok(());
         }
         let ordered = self
-            .workbench_tab_items(cx)
-            .into_iter()
-            .map(|item| item.id)
-            .collect::<Vec<_>>();
+            .workspace
+            .selected_project_id()
+            .and_then(|project_id| {
+                self.project
+                    .project_editor_runtime
+                    .workspace()
+                    .session(project_id)
+            })
+            .and_then(|session| session.group_items_containing(anchor))
+            .map(ToOwned::to_owned)
+            .unwrap_or_default();
         let targets = tab_close_targets(&ordered, anchor, scope);
         let terminal_ids = targets
             .iter()
@@ -1340,13 +1370,26 @@ impl WorkbenchView {
         if !self.should_auto_focus_workspace() {
             return false;
         }
-
-        if self.terminal.pending_terminal_focus_pane_id.as_deref() == Some(pane_id) {
-            self.terminal.pending_terminal_focus_pane_id = None;
-            true
-        } else {
-            false
+        let selected = self.workspace.selected_project_id().and_then(|project_id| {
+            self.workspace
+                .project(project_id)
+                .map(|project| (project_id, project.selected_tab_id.as_str()))
+        });
+        let matches = self
+            .terminal
+            .pending_terminal_focus
+            .as_ref()
+            .is_some_and(|target| {
+                selected.is_some_and(|(project_id, tab_id)| {
+                    &target.project_id == project_id
+                        && target.tab_id == tab_id
+                        && target.pane_id == pane_id
+                })
+            });
+        if matches {
+            self.terminal.pending_terminal_focus = None;
         }
+        matches
     }
 
     pub fn should_use_palette_text_fallback(&self, input_is_focused: bool) -> bool {
@@ -1581,9 +1624,19 @@ impl WorkbenchView {
         self.terminal.terminal_panes.remove(&key);
         self.terminal.terminal_pane_subscriptions.remove(&key);
 
-        if self.terminal.pending_terminal_focus_pane_id.as_deref() == Some(event.pane_id.as_str()) {
-            self.terminal.pending_terminal_focus_pane_id = None;
+        if self
+            .terminal
+            .pending_terminal_focus
+            .as_ref()
+            .is_some_and(|target| {
+                target.project_id == project_id
+                    && target.tab_id == event.tab_id
+                    && target.pane_id == event.pane_id
+            })
+        {
+            self.terminal.pending_terminal_focus = None;
         }
+        self.reconcile_project_work_area(&project_id);
         self.reconcile_active_terminal_with_workspace()?;
         self.load_error = None;
 
@@ -1597,7 +1650,10 @@ impl WorkbenchView {
     }
 
     pub fn pending_terminal_focus_pane_id(&self) -> Option<&str> {
-        self.terminal.pending_terminal_focus_pane_id.as_deref()
+        self.terminal
+            .pending_terminal_focus
+            .as_ref()
+            .map(|target| target.pane_id.as_str())
     }
 
     pub fn pending_editor_focus_document_id(&self) -> Option<&crate::ui::editor::DocumentId> {
@@ -2299,22 +2355,24 @@ impl WorkbenchView {
             WorkItemId::Terminal(tab_id) => {
                 self.workspace.select_tab(&tab_id)?;
                 dispatch_workspace_command(&mut self.workspace, CommandId::TabClose)?;
-                if let Some((project_id, terminal_ids)) = self.selected_project_work_item_ids()
-                    && let Some(session) = self
-                        .project
+                let next = if let Some((project_id, terminal_ids)) =
+                    self.selected_project_work_item_ids()
+                {
+                    self.project
                         .project_editor_runtime
                         .workspace_mut()
                         .session_mut(&project_id)
-                {
-                    session.reconcile_work_item_order(&terminal_ids);
-                }
-                let selected_tab_id = self
-                    .workspace
-                    .selected_project_id()
-                    .and_then(|project_id| self.workspace.project(project_id))
-                    .map(|project| project.selected_tab_id.clone());
-                if let Some(selected_tab_id) = selected_tab_id {
-                    self.select_work_item(WorkItemId::Terminal(selected_tab_id))?;
+                        .and_then(|session| {
+                            session.reconcile_work_area(&terminal_ids);
+                            session.active_work_item().cloned()
+                        })
+                } else {
+                    None
+                };
+                if let Some(next) = next {
+                    self.apply_active_work_item(&next)?;
+                } else {
+                    self.sync_input_owner_state();
                 }
                 Ok(())
             }
@@ -2510,7 +2568,32 @@ impl WorkbenchView {
     }
 
     fn queue_terminal_focus(&mut self, pane_id: &str) {
-        self.terminal.pending_terminal_focus_pane_id = Some(pane_id.to_string());
+        let Some(project_id) = self.workspace.selected_project_id().cloned() else {
+            self.terminal.pending_terminal_focus = None;
+            return;
+        };
+        let Some(tab_id) = self
+            .workspace
+            .project(&project_id)
+            .map(|project| project.selected_tab_id.clone())
+        else {
+            self.terminal.pending_terminal_focus = None;
+            return;
+        };
+        self.queue_terminal_focus_target(project_id, tab_id, pane_id.to_string());
+    }
+
+    fn queue_terminal_focus_target(
+        &mut self,
+        project_id: ProjectId,
+        tab_id: String,
+        pane_id: String,
+    ) {
+        self.terminal.pending_terminal_focus = Some(TerminalPaneTarget {
+            project_id,
+            tab_id,
+            pane_id,
+        });
     }
 
     fn queue_selected_terminal_focus(&mut self) {
@@ -2542,14 +2625,14 @@ impl WorkbenchView {
                     .and_then(|project| project.tab_state(tab_id))
                     .and_then(|tab| tab.focused_pane_id.clone());
                 let Some(pane_id) = pane_id else {
-                    self.terminal.pending_terminal_focus_pane_id = None;
+                    self.terminal.pending_terminal_focus = None;
                     return false;
                 };
                 self.queue_terminal_focus(&pane_id);
                 true
             }
             WorkItemId::File(document_id) => {
-                self.terminal.pending_terminal_focus_pane_id = None;
+                self.terminal.pending_terminal_focus = None;
                 self.project.pending_editor_focus_document_id = Some(document_id.clone());
                 true
             }
@@ -2610,40 +2693,19 @@ impl WorkbenchView {
         let Some((project_id, terminal_ids)) = self.selected_project_work_item_ids() else {
             return Ok(());
         };
-        if let Some(session) = self
+        let next = self
             .project
             .project_editor_runtime
             .workspace_mut()
             .session_mut(&project_id)
-        {
-            session.reconcile_work_item_order(&terminal_ids);
-        }
-        let selected_terminal = self.workspace.project(&project_id).and_then(|project| {
-            terminal_ids
-                .contains(&project.selected_tab_id)
-                .then(|| WorkItemId::Terminal(project.selected_tab_id.clone()))
-        });
-        let next = if let Some(selected_terminal) = selected_terminal {
-            self.project
-                .project_editor_runtime
-                .workspace_mut()
-                .session_mut(&project_id)
-                .and_then(|session| {
-                    session
-                        .select_work_item(selected_terminal.clone(), &terminal_ids)
-                        .then_some(selected_terminal)
-                })
-        } else {
-            self.project
-                .project_editor_runtime
-                .workspace_mut()
-                .session_mut(&project_id)
-                .and_then(|session| session.select_next(&terminal_ids))
-        };
+            .and_then(|session| {
+                session.reconcile_work_area(&terminal_ids);
+                session.active_work_item().cloned()
+            });
         if let Some(next) = next {
             self.apply_active_work_item(&next)?;
         } else {
-            self.terminal.pending_terminal_focus_pane_id = None;
+            self.terminal.pending_terminal_focus = None;
             self.project.pending_editor_focus_document_id = None;
             self.sync_input_owner_state();
         }

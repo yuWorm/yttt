@@ -290,7 +290,7 @@ fn active_terminal_content_receives_default_focus(cx: &mut TestAppContext) {
             "focus must land on the active tab content, not the workbench fallback"
         );
         assert!(
-            root.terminal.pending_terminal_focus_pane_id.is_none(),
+            root.terminal.pending_terminal_focus.is_none(),
             "render must consume the active terminal focus request"
         );
     });

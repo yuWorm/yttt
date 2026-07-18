@@ -14,6 +14,7 @@ impl Render for WorkbenchView {
         self.flush_pending_file_close_requests(window, cx);
         self.flush_pending_project_close_requests(cx);
         self.sync_input_owner_state();
+        self.prune_terminal_panes();
         self.ensure_eager_terminal_panes(window, cx);
         let focus_handle = self.workbench_focus_handle(cx);
         let default_active_content_focus_requested = self.onboarding.is_none()
@@ -45,9 +46,23 @@ impl Render for WorkbenchView {
                 self.has_last_opened_projects(),
             )
         } else {
+            self.reconcile_selected_work_area();
             let tab_items = self.workbench_tab_items(cx);
             let project_panel_visible = self.selected_project_panel_visible();
-            let split_view = self.active_work_item_view(window, cx);
+            let work_area_snapshot = self.selected_work_area_snapshot();
+            let work_area = if let Some((project_id, node, active_group_id)) = work_area_snapshot {
+                self.work_area_view(
+                    &project_id,
+                    &node,
+                    active_group_id,
+                    &tab_items,
+                    project_panel_visible,
+                    window,
+                    cx,
+                )
+            } else {
+                div().flex().flex_1()
+            };
             let project_file_panel = project_panel_visible
                 .then(|| self.project_file_panel(window, cx))
                 .flatten();
@@ -99,66 +114,8 @@ impl Render for WorkbenchView {
                         .flex_col()
                         .flex_1()
                         .min_w_0()
-                        .child(project_tabs(
-                            tab_items,
-                            appearance.ui,
-                            appearance.style,
-                            self.icon_theme.clone(),
-                            self.ui_text,
-                            |work_item| {
-                                cx.listener(move |this, event: &ClickEvent, _window, cx| {
-                                    let _ = this.handle_work_item_tab_click(
-                                        work_item.clone(),
-                                        event.click_count(),
-                                    );
-                                    cx.notify();
-                                })
-                            },
-                            |work_item| {
-                                cx.listener(move |this, _event: &MouseDownEvent, _window, cx| {
-                                    let _ = this.handle_work_item_tab_click(work_item.clone(), 1);
-                                    cx.notify();
-                                })
-                            },
-                            |work_item| {
-                                cx.listener(move |this, _event: &ClickEvent, _window, cx| {
-                                    cx.stop_propagation();
-                                    let _ = this.close_work_item_tab(work_item.clone());
-                                    cx.notify();
-                                })
-                            },
-                            |target_index| {
-                                cx.listener(move |this, dragged: &WorkItemId, _window, cx| {
-                                    let _ = this.move_work_item_tab(dragged, target_index);
-                                    cx.notify();
-                                })
-                            },
-                            ProjectTabsToolbar::new(
-                                project_panel_visible,
-                                self.ui_text.get(if project_panel_visible {
-                                    UiTextKey::ProjectFilesHide
-                                } else {
-                                    UiTextKey::ProjectFilesShow
-                                }),
-                                cx.listener(|this, _, _window, cx| {
-                                    let _ = this.new_tab_from_toolbar();
-                                    cx.notify();
-                                }),
-                                cx.listener(|this, _, _window, cx| {
-                                    let _ = this.run_command(CommandId::PaneSplitVertical);
-                                    cx.notify();
-                                }),
-                                cx.listener(|this, _, _window, cx| {
-                                    let _ = this.run_command(CommandId::PaneSplitHorizontal);
-                                    cx.notify();
-                                }),
-                                cx.listener(|this, _, _window, cx| {
-                                    let _ = this.run_command(CommandId::ProjectPanelToggle);
-                                    cx.notify();
-                                }),
-                            ),
-                        ))
-                        .child(split_view),
+                        .min_h_0()
+                        .child(work_area),
                 );
             if let Some(project_file_panel) = project_file_panel {
                 workbench.child(project_file_panel)
@@ -168,9 +125,7 @@ impl Render for WorkbenchView {
         };
         let default_active_content_focus_scheduled = default_active_content_focus_requested
             && match self.active_work_item() {
-                Some(WorkItemId::Terminal(_)) => {
-                    self.terminal.pending_terminal_focus_pane_id.is_none()
-                }
+                Some(WorkItemId::Terminal(_)) => self.terminal.pending_terminal_focus.is_none(),
                 Some(WorkItemId::File(document_id)) => self
                     .project
                     .pending_editor_focus_document_id
