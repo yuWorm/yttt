@@ -2086,7 +2086,7 @@ async fn ime_replace_and_mark_text_replaces_right_to_left_selection_in_table_cel
 }
 
 #[gpui::test]
-async fn ime_commit_replaces_marked_text_when_macos_supplies_relative_range(
+async fn ime_composition_replaces_document_ranges_without_leaving_raw_updates(
     cx: &mut TestAppContext,
 ) {
     let cx = cx.add_empty_window();
@@ -2095,7 +2095,7 @@ async fn ime_commit_replaces_marked_text_when_macos_supplies_relative_range(
             cx,
             BlockRecord::new(
                 BlockKind::Paragraph,
-                InlineTextTree::plain("prefix ".to_string()),
+                InlineTextTree::plain("7. ".to_string()),
             ),
         );
         block.set_source_raw_mode();
@@ -2112,15 +2112,31 @@ async fn ime_commit_replaces_marked_text_when_macos_supplies_relative_range(
             <Block as EntityInputHandler>::replace_and_mark_text_in_range(
                 block,
                 None,
-                "sikao",
-                Some(5..5),
+                "s",
+                Some(1..1),
+                window,
+                block_cx,
+            );
+            <Block as EntityInputHandler>::replace_and_mark_text_in_range(
+                block,
+                Some(3..4),
+                "sh",
+                Some(2..2),
+                window,
+                block_cx,
+            );
+            <Block as EntityInputHandler>::replace_and_mark_text_in_range(
+                block,
+                Some(3..5),
+                "shi",
+                Some(3..3),
                 window,
                 block_cx,
             );
             <Block as EntityInputHandler>::replace_text_in_range(
                 block,
-                Some(0..5),
-                "思考",
+                Some(3..6),
+                "是",
                 window,
                 block_cx,
             );
@@ -2128,7 +2144,7 @@ async fn ime_commit_replaces_marked_text_when_macos_supplies_relative_range(
     });
 
     block.read_with(cx, |block, _cx| {
-        assert_eq!(block.display_text(), "prefix 思考");
+        assert_eq!(block.display_text(), "7. 是");
         assert_eq!(block.marked_range, None);
     });
 }

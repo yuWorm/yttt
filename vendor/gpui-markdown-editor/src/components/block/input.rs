@@ -13,42 +13,6 @@ use super::Block;
 use super::element;
 use crate::components::{BlockEvent, UndoCaptureKind};
 
-// macOS reports a commit replacement range relative to the active marked text.
-// Committing must replace the whole composition, not that range as a document offset.
-fn ime_commit_range(
-    text: &str,
-    range_utf16: Option<&Range<usize>>,
-    marked_range: Option<&Range<usize>>,
-    selected_range: &Range<usize>,
-) -> Range<usize> {
-    if let Some(marked_range) = marked_range {
-        return marked_range.clone();
-    }
-    range_utf16
-        .map(|range| Block::utf16_range_to_utf8_in(text, range))
-        .unwrap_or_else(|| selected_range.clone())
-}
-
-// While composing, macOS replacement ranges are relative to the marked text.
-// Outside a composition the same range is an absolute UTF-16 document range.
-fn ime_composition_range(
-    text: &str,
-    range_utf16: Option<&Range<usize>>,
-    marked_range: Option<&Range<usize>>,
-    selected_range: &Range<usize>,
-) -> Range<usize> {
-    match (marked_range, range_utf16) {
-        (Some(marked_range), Some(relative_range_utf16)) => {
-            let relative_range =
-                Block::utf16_range_to_utf8_in(&text[marked_range.clone()], relative_range_utf16);
-            marked_range.start + relative_range.start..marked_range.start + relative_range.end
-        }
-        (Some(marked_range), None) => marked_range.clone(),
-        (None, Some(range_utf16)) => Block::utf16_range_to_utf8_in(text, range_utf16),
-        (None, None) => selected_range.clone(),
-    }
-}
-
 impl EntityInputHandler for Block {
     fn text_for_range(
         &mut self,
@@ -121,12 +85,11 @@ impl EntityInputHandler for Block {
         cx: &mut Context<Self>,
     ) {
         if self.code_language_focus_handle.is_focused(_window) {
-            let visible_range = ime_commit_range(
-                self.code_language_text(),
-                range_utf16.as_ref(),
-                self.code_language_marked_range.as_ref(),
-                &self.code_language_selected_range,
-            );
+            let visible_range = range_utf16
+                .as_ref()
+                .map(|range| self.code_language_range_from_utf16(range))
+                .or(self.code_language_marked_range.clone())
+                .unwrap_or(self.code_language_selected_range.clone());
             self.replace_code_language_text_in_range(visible_range, new_text, None, false, cx);
             return;
         }
@@ -142,12 +105,11 @@ impl EntityInputHandler for Block {
         }
 
         self.prepare_undo_capture(UndoCaptureKind::CoalescibleText, cx);
-        let visible_range = ime_commit_range(
-            self.display_text(),
-            range_utf16.as_ref(),
-            self.marked_range.as_ref(),
-            &self.selected_range,
-        );
+        let visible_range = range_utf16
+            .as_ref()
+            .map(|range| self.range_from_utf16(range))
+            .or(self.marked_range.clone())
+            .unwrap_or(self.selected_range.clone());
         self.replace_text_in_visible_range(visible_range, new_text, None, false, cx);
     }
 
@@ -160,12 +122,11 @@ impl EntityInputHandler for Block {
         cx: &mut Context<Self>,
     ) {
         if self.code_language_focus_handle.is_focused(_window) {
-            let visible_range = ime_composition_range(
-                self.code_language_text(),
-                range_utf16.as_ref(),
-                self.code_language_marked_range.as_ref(),
-                &self.code_language_selected_range,
-            );
+            let visible_range = range_utf16
+                .as_ref()
+                .map(|range| self.code_language_range_from_utf16(range))
+                .or(self.code_language_marked_range.clone())
+                .unwrap_or(self.code_language_selected_range.clone());
             let sanitized_new_text = new_text.replace("\r\n", " ").replace(['\r', '\n'], " ");
             let selected_range_relative = new_selected_range_utf16
                 .as_ref()
@@ -197,12 +158,11 @@ impl EntityInputHandler for Block {
         }
 
         self.prepare_undo_capture(UndoCaptureKind::CoalescibleText, cx);
-        let visible_range = ime_composition_range(
-            self.display_text(),
-            range_utf16.as_ref(),
-            self.marked_range.as_ref(),
-            &self.selected_range,
-        );
+        let visible_range = range_utf16
+            .as_ref()
+            .map(|range| self.range_from_utf16(range))
+            .or(self.marked_range.clone())
+            .unwrap_or(self.selected_range.clone());
         let selected_range_relative = new_selected_range_utf16
             .as_ref()
             .map(|range_utf16| Self::utf16_range_to_utf8_in(new_text, range_utf16))

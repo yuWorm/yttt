@@ -19,5 +19,5 @@
 
 ### Fixed
 
-- Fixed Markdown IME composition handling so macOS Chinese input commits replace the active marked text instead of unrelated document text.
+- Fixed Markdown IME composition updates and commits to honor GPUI document-space replacement ranges, preventing raw pinyin updates from accumulating beside committed Chinese candidates.
 - Fixed active Markdown documents reclaiming focus from project-file create and rename inputs.
