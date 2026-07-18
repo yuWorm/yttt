@@ -8,6 +8,7 @@ impl Render for WorkbenchView {
         self.sync_error_notification(window, cx);
         self.ensure_active_project_file_watcher(window, cx);
         self.flush_pending_git_operations(window, cx);
+        self.flush_pending_file_finder_operations(window, cx);
         self.flush_pending_project_tree_loads(window, cx);
         self.flush_pending_document_saves(window, cx);
         self.flush_pending_focus_change_autosaves(window, cx);
@@ -171,31 +172,53 @@ impl Render for WorkbenchView {
         if !self.app_settings.general.ui_font_family.is_empty() {
             root = root.font_family(self.app_settings.general.ui_font_family.clone());
         }
-
         if let Some(active_palette) = self.palette.active_palette.clone() {
             let items = self.palette_items(active_palette.kind);
             if let Some(query_input) = self.palette_query_input(window, cx) {
-                root = root.child(palette_overlay(
-                    &active_palette,
-                    &items,
-                    &self.ui_text,
-                    &query_input,
-                    &self.palette.scroll_handle,
-                    appearance.ui,
-                    appearance.style,
-                    |selected_index| {
-                        cx.listener(move |this, _, window, cx| {
-                            if let Some(active_palette) = &mut this.palette.active_palette {
-                                active_palette.selected_index = selected_index;
-                            }
-                            let _ = this.confirm_palette_selection_with_context(cx);
-                            this.handle_pending_create_project_request(cx);
-                            this.handle_pending_open_project_request(cx);
-                            this.flush_pending_status_notifications(window, cx);
-                            cx.notify();
-                        })
-                    },
-                ));
+                if active_palette.kind == PaletteKind::File {
+                    let preview = self.file_finder_preview_element();
+                    root = root.child(file_finder_palette_overlay(
+                        &active_palette,
+                        &items,
+                        &self.ui_text,
+                        &query_input,
+                        &self.palette.scroll_handle,
+                        preview,
+                        appearance.ui,
+                        appearance.style,
+                        |selected_index| {
+                            cx.listener(move |this, _, window, cx| {
+                                if let Some(active_palette) = &mut this.palette.active_palette {
+                                    active_palette.selected_index = selected_index;
+                                }
+                                let _ = this.confirm_palette_selection_with_context(window, cx);
+                                cx.notify();
+                            })
+                        },
+                    ));
+                } else {
+                    root = root.child(palette_overlay(
+                        &active_palette,
+                        &items,
+                        &self.ui_text,
+                        &query_input,
+                        &self.palette.scroll_handle,
+                        appearance.ui,
+                        appearance.style,
+                        |selected_index| {
+                            cx.listener(move |this, _, window, cx| {
+                                if let Some(active_palette) = &mut this.palette.active_palette {
+                                    active_palette.selected_index = selected_index;
+                                }
+                                let _ = this.confirm_palette_selection_with_context(window, cx);
+                                this.handle_pending_create_project_request(cx);
+                                this.handle_pending_open_project_request(cx);
+                                this.flush_pending_status_notifications(window, cx);
+                                cx.notify();
+                            })
+                        },
+                    ));
+                }
             }
         }
         if self.settings.settings_page.is_open {
@@ -309,6 +332,7 @@ impl Render for WorkbenchView {
             .on_action(cx.listener(Self::on_open_project))
             .on_action(cx.listener(Self::on_open_ssh_project))
             .on_action(cx.listener(Self::on_open_command_palette))
+            .on_action(cx.listener(Self::on_open_file_finder))
             .on_action(cx.listener(Self::on_open_project_palette))
             .on_action(cx.listener(Self::on_opened_project_palette))
             .on_action(cx.listener(Self::on_project_panel_toggle))

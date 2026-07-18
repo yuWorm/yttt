@@ -6,10 +6,21 @@ impl WorkbenchView {
     }
 
     pub fn open_palette(&mut self, kind: PaletteKind) {
+        let was_file_finder = self
+            .palette
+            .active_palette
+            .as_ref()
+            .is_some_and(|palette| palette.kind == PaletteKind::File);
+        if was_file_finder && kind != PaletteKind::File {
+            self.cancel_file_finder_tasks();
+        }
         self.palette.active_palette = Some(ActivePalette::new(kind));
         self.reset_palette_input();
         self.palette.scroll_handle = ScrollHandle::new();
         self.palette.input_needs_focus = true;
+        if kind == PaletteKind::File {
+            self.prepare_file_finder();
+        }
         self.sync_input_owner_state();
     }
 
@@ -23,6 +34,14 @@ impl WorkbenchView {
     }
 
     pub fn close_palette(&mut self) {
+        if self
+            .palette
+            .active_palette
+            .as_ref()
+            .is_some_and(|palette| palette.kind == PaletteKind::File)
+        {
+            self.cancel_file_finder_tasks();
+        }
         self.palette.active_palette = None;
         self.reset_palette_input();
         self.sync_input_owner_state();
@@ -50,18 +69,20 @@ impl WorkbenchView {
     }
 
     pub fn confirm_palette_selection(&mut self) -> Result<(), WorkbenchError> {
-        self.confirm_palette_selection_inner(None)
+        self.confirm_palette_selection_inner(None, None)
     }
 
     pub fn confirm_palette_selection_with_context(
         &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), WorkbenchError> {
-        self.confirm_palette_selection_inner(Some(cx))
+        self.confirm_palette_selection_inner(Some(window), Some(cx))
     }
 
     fn confirm_palette_selection_inner(
         &mut self,
+        mut window: Option<&mut Window>,
         mut cx: Option<&mut Context<Self>>,
     ) -> Result<(), WorkbenchError> {
         let Some(active_palette) = self.palette.active_palette.clone() else {
@@ -92,6 +113,19 @@ impl WorkbenchView {
             PaletteKind::NewTabCommand => {
                 let tab_id = self.workspace.create_shell_tab_with_command(item.id)?;
                 self.select_work_item(WorkItemId::Terminal(tab_id))?;
+            }
+            PaletteKind::File => {
+                let Some(window) = window.as_deref_mut() else {
+                    return Ok(());
+                };
+                let Some(cx) = cx.as_deref_mut() else {
+                    return Ok(());
+                };
+                let Ok(candidate_index) = item.id.parse::<usize>() else {
+                    return Ok(());
+                };
+                self.open_file_search_candidate(candidate_index, window, cx);
+                return Ok(());
             }
             PaletteKind::Project | PaletteKind::OpenedProject | PaletteKind::RecentProject => {
                 let project_id = self
@@ -180,6 +214,7 @@ impl WorkbenchView {
             PaletteKind::NewTabCommand => {
                 new_tab_command_palette_items(&self.app_settings.general.new_tab_commands)
             }
+            PaletteKind::File => self.file_finder_palette_items(),
             PaletteKind::Project => project_palette_items_with_text(
                 &self.workspace,
                 &self.palette.recent_projects,
@@ -370,12 +405,25 @@ impl WorkbenchView {
         match event {
             InputEvent::Change => {
                 let query = input.read(cx).value().to_string();
-                if self.sync_palette_query_from_input_value(query) {
+                let is_file_finder = self
+                    .palette
+                    .active_palette
+                    .as_ref()
+                    .is_some_and(|palette| palette.kind == PaletteKind::File);
+                let query_changed = self
+                    .palette
+                    .active_palette
+                    .as_ref()
+                    .is_some_and(|palette| palette.query != query);
+                if self.sync_palette_query_from_input_value(query.clone()) {
+                    if is_file_finder && query_changed {
+                        self.spawn_file_candidate_match(query, window, cx);
+                    }
                     cx.notify();
                 }
             }
             InputEvent::PressEnter { .. } => {
-                let _ = self.confirm_palette_selection_with_context(cx);
+                let _ = self.confirm_palette_selection_with_context(window, cx);
                 self.handle_pending_create_project_request(cx);
                 self.handle_pending_open_project_request(cx);
                 self.flush_pending_status_notifications(window, cx);

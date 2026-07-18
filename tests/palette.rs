@@ -419,6 +419,18 @@ fn active_palette_filters_items_case_insensitively() {
 }
 
 #[test]
+fn file_palette_keeps_background_ranked_items_for_non_contiguous_queries() {
+    let palette = ActivePalette {
+        kind: PaletteKind::File,
+        query: "smn".to_string(),
+        selected_index: 0,
+    };
+    let items = sample_palette_items();
+
+    assert_eq!(palette.filtered_items(&items).len(), items.len());
+}
+
+#[test]
 fn active_palette_moves_selection_within_filtered_items() {
     let mut palette = ActivePalette::new(PaletteKind::Pane);
     let items = sample_palette_items();

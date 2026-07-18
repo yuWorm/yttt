@@ -6,7 +6,7 @@ use std::{
 
 use crate::{commands::CommandRegistry, config::paths::AppConfigPaths};
 
-pub const KEYBINDINGS_SCHEMA_VERSION: u32 = 2;
+pub const KEYBINDINGS_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub struct Keybinding {
@@ -214,6 +214,7 @@ fn migrate_keybindings_config(
     let uses_legacy_defaults = match config.schema_version {
         0 => config.bindings == legacy_v0_default_bindings(),
         1 => config.bindings == legacy_v1_default_bindings(),
+        2 => config.bindings == legacy_v2_default_bindings(),
         _ => false,
     };
     if uses_legacy_defaults {
@@ -237,8 +238,23 @@ fn legacy_v0_default_bindings() -> Vec<Keybinding> {
 }
 
 fn legacy_v1_default_bindings() -> Vec<Keybinding> {
-    let mut bindings = default_keybindings().bindings;
+    let mut bindings = legacy_v2_default_bindings();
     bindings.retain(|binding| binding.command != "project.opened_palette");
+    bindings
+}
+
+fn legacy_v2_default_bindings() -> Vec<Keybinding> {
+    let mut bindings = default_keybindings().bindings;
+    bindings.retain(|binding| binding.command != "file.find");
+    for binding in &mut bindings {
+        match (binding.keys.as_str(), binding.command.as_str()) {
+            ("cmd-shift-p", "command_palette.open") => binding.keys = "cmd-p".to_string(),
+            ("ctrl-shift-p", "command_palette.open") => binding.keys = "ctrl-p".to_string(),
+            ("cmd-alt-p", "project.opened_palette") => binding.keys = "cmd-shift-p".to_string(),
+            ("ctrl-alt-p", "project.opened_palette") => binding.keys = "ctrl-shift-p".to_string(),
+            _ => {}
+        }
+    }
     bindings
 }
 
@@ -263,8 +279,10 @@ pub fn default_keybindings() -> KeybindingsConfig {
         bindings: vec![
             binding("cmd-o", "project.open"),
             binding("ctrl-o", "project.open"),
-            binding("cmd-p", "command_palette.open"),
-            binding("ctrl-p", "command_palette.open"),
+            binding("cmd-p", "file.find"),
+            binding("ctrl-p", "file.find"),
+            binding("cmd-shift-p", "command_palette.open"),
+            binding("ctrl-shift-p", "command_palette.open"),
             binding("cmd-,", "settings.open"),
             binding("ctrl-,", "settings.open"),
             binding("cmd-s", "file.save"),
@@ -273,8 +291,8 @@ pub fn default_keybindings() -> KeybindingsConfig {
             binding("ctrl-shift-e", "project_panel.toggle"),
             binding("cmd-shift-o", "project.palette"),
             binding("ctrl-shift-o", "project.palette"),
-            binding("cmd-shift-p", "project.opened_palette"),
-            binding("ctrl-shift-p", "project.opened_palette"),
+            binding("cmd-alt-p", "project.opened_palette"),
+            binding("ctrl-alt-p", "project.opened_palette"),
             binding("cmd-j", "tab.palette"),
             binding("ctrl-j", "tab.palette"),
             binding("cmd-k", "pane.palette"),

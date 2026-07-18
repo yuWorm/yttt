@@ -67,7 +67,7 @@ use yttt::{
         },
     },
     ui::{
-        interaction::actions::{CreateProject, TabCloseAllTerminals},
+        interaction::actions::{CreateProject, OpenFileFinder, TabCloseAllTerminals},
         interaction::input_owner::{
             InputOwnerKind, InputOwnerRegistration, InputOwnerStack, InputOwnerToken, InputScopeId,
             TerminalInputGate, TerminalInputPolicy,
@@ -1825,9 +1825,16 @@ fn root_view_file_save_preserves_newer_in_flight_edit(cx: &mut gpui::TestAppCont
     legacy_keybindings.bindings.retain(|binding| {
         !matches!(
             binding.command.as_str(),
-            "file.save" | "project_panel.toggle"
+            "file.find" | "file.save" | "project_panel.toggle" | "project.opened_palette"
         )
     });
+    for binding in &mut legacy_keybindings.bindings {
+        match (binding.keys.as_str(), binding.command.as_str()) {
+            ("cmd-shift-p", "command_palette.open") => binding.keys = "cmd-p".to_string(),
+            ("ctrl-shift-p", "command_palette.open") => binding.keys = "ctrl-p".to_string(),
+            _ => {}
+        }
+    }
     fs::write(
         paths.keybindings_file(),
         toml::to_string_pretty(&legacy_keybindings).unwrap(),
@@ -4373,14 +4380,81 @@ fn root_view_command_palette_items_show_current_platform_keybindings() {
         .unwrap();
 
     if cfg!(target_os = "macos") {
-        assert_eq!(command_palette.keybinding.as_deref(), Some("cmd-p"));
+        assert_eq!(command_palette.keybinding.as_deref(), Some("cmd-shift-p"));
         assert_eq!(tab_new.keybinding.as_deref(), Some("cmd-t"));
     } else {
-        assert_eq!(command_palette.keybinding.as_deref(), Some("ctrl-p"));
+        assert_eq!(command_palette.keybinding.as_deref(), Some("ctrl-shift-p"));
         assert_eq!(tab_new.keybinding.as_deref(), Some("ctrl-t"));
     }
 }
 
+#[test]
+fn root_view_file_find_command_opens_file_palette() {
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
+
+    root.run_command(CommandId::FileFind).unwrap();
+
+    assert!(matches!(
+        root.active_palette().map(|palette| palette.kind),
+        Some(PaletteKind::File)
+    ));
+}
+
+#[gpui::test]
+fn file_finder_action_indexes_gitignored_workspace_and_renders_results(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("search-project");
+    fs::create_dir_all(project_dir.join("src")).unwrap();
+    fs::create_dir_all(project_dir.join("target")).unwrap();
+    fs::write(project_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+    fs::write(project_dir.join("target/generated.rs"), "ignored\n").unwrap();
+    fs::write(project_dir.join(".gitignore"), "target/\n").unwrap();
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(local_project(project_dir), sample_layout())
+        .unwrap();
+    let paths = english_test_config_paths(&temp);
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root =
+            cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    cx.refresh().unwrap();
+
+    root.update_in(cx, |_root, window, cx| {
+        window.dispatch_action(Box::new(OpenFileFinder), cx);
+    });
+    for _ in 0..3 {
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+    }
+
+    root.update(cx, |root, _| {
+        assert!(matches!(
+            root.active_palette().map(|palette| palette.kind),
+            Some(PaletteKind::File)
+        ));
+        let items = root.active_palette_items();
+        assert!(
+            items.iter().any(|item| {
+                item.title == "main.rs" && item.subtitle.as_deref() == Some("src/main.rs")
+            }),
+            "unexpected file finder results: {items:?}"
+        );
+        assert!(
+            items
+                .iter()
+                .all(|item| { item.subtitle.as_deref() != Some("target/generated.rs") })
+        );
+    });
+}
 #[test]
 fn root_view_command_palette_can_request_create_project() {
     let (_temp, mut root) = english_test_root();

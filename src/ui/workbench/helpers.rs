@@ -24,7 +24,8 @@ pub(super) fn collect_terminal_pane_keys(
 pub(super) fn opens_palette_command(command_id: CommandId) -> bool {
     matches!(
         command_id,
-        CommandId::CommandPaletteOpen
+        CommandId::FileFind
+            | CommandId::CommandPaletteOpen
             | CommandId::ProjectOpenRecent
             | CommandId::ProjectPalette
             | CommandId::ProjectOpenedPalette

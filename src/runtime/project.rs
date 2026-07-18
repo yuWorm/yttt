@@ -1,10 +1,15 @@
 use std::{
-    ffi::OsString,
+    ffi::{OsStr, OsString},
+    fs,
     path::{Component, Path, PathBuf},
     sync::Arc,
     time::{Duration, UNIX_EPOCH},
 };
 
+use ignore::{
+    Match, WalkBuilder,
+    gitignore::{Gitignore, GitignoreBuilder},
+};
 use yttt_core::model::project::{RemotePathError, RemoteRelativePathBuf};
 use yttt_ssh::{
     RemoteDirectorySnapshot, RemoteEntryKind, RemoteEntryMutation, RemoteFileState,
@@ -117,6 +122,17 @@ impl ProjectServices {
                     .map(remote_directory_snapshot)
                     .map_err(|error| map_tree_error(relative_directory, error))
             }
+        }
+    }
+
+    pub fn searchable_files(&self, show_hidden: bool) -> Result<Vec<PathBuf>, String> {
+        if let Some(paths) = searchable_git_files(self, show_hidden) {
+            return Ok(paths);
+        }
+
+        match self.backend.as_ref() {
+            ProjectBackend::Local(local) => searchable_local_files(&local.root, show_hidden),
+            ProjectBackend::Ssh(_) => searchable_remote_files(self, show_hidden),
         }
     }
 
@@ -313,6 +329,154 @@ impl ProjectGitExecutor for ProjectServices {
             ProjectBackend::Local(_) | ProjectBackend::Ssh(_) => "/dev/null",
         }
     }
+}
+
+fn searchable_git_files(services: &ProjectServices, show_hidden: bool) -> Option<Vec<PathBuf>> {
+    let args = [
+        OsString::from("ls-files"),
+        OsString::from("--cached"),
+        OsString::from("--others"),
+        OsString::from("--exclude-standard"),
+        OsString::from("-z"),
+        OsString::from("--"),
+    ];
+    let output = services.execute_git(&args, false).ok()?;
+    if !output.success {
+        return None;
+    }
+
+    let mut paths = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8(path.to_vec()).map(PathBuf::from))
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    paths.retain(|path| show_hidden || !path_has_hidden_component(path));
+    sort_searchable_paths(&mut paths);
+    Some(paths)
+}
+
+fn searchable_local_files(root: &Path, show_hidden: bool) -> Result<Vec<PathBuf>, String> {
+    let mut builder = WalkBuilder::new(root);
+    builder
+        .follow_links(false)
+        .hidden(!show_hidden)
+        .require_git(false)
+        .filter_entry(|entry| entry.file_name() != OsStr::new(".git"));
+
+    let mut paths = Vec::new();
+    for entry in builder.build() {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let Some(file_type) = entry.file_type() else {
+            continue;
+        };
+        let is_file = file_type.is_file()
+            || (file_type.is_symlink()
+                && fs::metadata(entry.path())
+                    .map(|metadata| metadata.is_file())
+                    .unwrap_or(false));
+        if !is_file {
+            continue;
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(root)
+            .map_err(|_| {
+                format!(
+                    "file search path escaped project root: {}",
+                    entry.path().display()
+                )
+            })?
+            .to_path_buf();
+        paths.push(relative);
+    }
+    sort_searchable_paths(&mut paths);
+    Ok(paths)
+}
+
+fn searchable_remote_files(
+    services: &ProjectServices,
+    show_hidden: bool,
+) -> Result<Vec<PathBuf>, String> {
+    let mut paths = Vec::new();
+    let mut pending = vec![(PathBuf::new(), Vec::<Gitignore>::new())];
+
+    while let Some((directory, mut matchers)) = pending.pop() {
+        let snapshot = services
+            .scan_directory(&directory, true)
+            .map_err(|error| error.to_string())?;
+        let ignore_path = directory.join(".gitignore");
+        if snapshot.entries.iter().any(|entry| {
+            entry.name == OsStr::new(".gitignore")
+                && matches!(
+                    entry.kind,
+                    ProjectTreeEntryKind::File | ProjectTreeEntryKind::SymlinkFile
+                )
+        }) {
+            let loaded = services
+                .read_file(&ignore_path)
+                .map_err(|error| error.to_string())?;
+            let mut builder = GitignoreBuilder::new(&directory);
+            for line in loaded.text.lines() {
+                builder
+                    .add_line(Some(ignore_path.clone()), line)
+                    .map_err(|error| error.to_string())?;
+            }
+            matchers.push(builder.build().map_err(|error| error.to_string())?);
+        }
+
+        for entry in snapshot.entries {
+            if entry.name == OsStr::new(".git") {
+                continue;
+            }
+            let is_directory = entry.kind.is_directory();
+            if (!show_hidden && path_has_hidden_component(&entry.relative_path))
+                || path_is_ignored(&matchers, &entry.relative_path, is_directory)
+            {
+                continue;
+            }
+            match entry.kind {
+                ProjectTreeEntryKind::Directory => {
+                    pending.push((entry.relative_path, matchers.clone()));
+                }
+                ProjectTreeEntryKind::File | ProjectTreeEntryKind::SymlinkFile => {
+                    paths.push(entry.relative_path);
+                }
+                ProjectTreeEntryKind::SymlinkDirectory => {}
+            }
+        }
+    }
+
+    sort_searchable_paths(&mut paths);
+    Ok(paths)
+}
+
+fn path_is_ignored(matchers: &[Gitignore], path: &Path, is_directory: bool) -> bool {
+    for matcher in matchers.iter().rev() {
+        match matcher.matched(path, is_directory) {
+            Match::Ignore(_) => return true,
+            Match::Whitelist(_) => return false,
+            Match::None => {}
+        }
+    }
+    false
+}
+
+fn path_has_hidden_component(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(component, Component::Normal(name) if name.to_string_lossy().starts_with('.'))
+    })
+}
+
+fn sort_searchable_paths(paths: &mut Vec<PathBuf>) {
+    paths.sort_by(|left, right| {
+        left.to_string_lossy()
+            .to_lowercase()
+            .cmp(&right.to_string_lossy().to_lowercase())
+            .then_with(|| left.cmp(right))
+    });
+    paths.dedup();
 }
 
 fn remote_relative(path: &Path) -> Result<RemoteRelativePathBuf, String> {
@@ -545,6 +709,41 @@ mod tests {
             "src/main.rs"
         );
         assert!(remote_relative(Path::new("../secret")).is_err());
+    }
+
+    #[test]
+    fn searchable_files_respect_gitignore_and_hidden_setting() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(temp.path().join("src")).unwrap();
+        fs::create_dir_all(temp.path().join("target")).unwrap();
+        fs::create_dir_all(temp.path().join(".config")).unwrap();
+        fs::write(
+            temp.path().join(".gitignore"),
+            "target/\n*.log\n!keep.log\n",
+        )
+        .unwrap();
+        fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(temp.path().join("target/output.bin"), "ignored").unwrap();
+        fs::write(temp.path().join("debug.log"), "ignored").unwrap();
+        fs::write(temp.path().join("keep.log"), "included").unwrap();
+        fs::write(
+            temp.path().join(".config/settings.toml"),
+            "theme = 'dark'\n",
+        )
+        .unwrap();
+        let services = ProjectServices::local(temp.path());
+
+        let visible = services.searchable_files(false).unwrap();
+        assert_eq!(
+            visible,
+            vec![PathBuf::from("keep.log"), PathBuf::from("src/main.rs")]
+        );
+
+        let with_hidden = services.searchable_files(true).unwrap();
+        assert!(with_hidden.contains(&PathBuf::from(".config/settings.toml")));
+        assert!(with_hidden.contains(&PathBuf::from(".gitignore")));
+        assert!(!with_hidden.contains(&PathBuf::from("target/output.bin")));
+        assert!(!with_hidden.contains(&PathBuf::from("debug.log")));
     }
 
     #[test]

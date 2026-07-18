@@ -1,6 +1,6 @@
 use gpui::{
     AnyElement, App, ClickEvent, Div, Entity, InteractiveElement as _, IntoElement, ScrollHandle,
-    StatefulInteractiveElement as _, Window, div, prelude::*,
+    StatefulInteractiveElement as _, Window, div, prelude::*, px, relative,
 };
 use gpui_component::{
     IconName,
@@ -76,6 +76,88 @@ where
                             ui_style,
                             on_confirm_item,
                         ))
+                        .child(picker_footer(ui_text, theme, ui_style)),
+                ),
+        ),
+    )
+}
+
+pub fn picker_overlay_with_preview<H, F>(
+    rows: Vec<PickerOverlayRow>,
+    ui_text: &UiText,
+    query_input: &Entity<InputState>,
+    scroll_handle: &ScrollHandle,
+    preview: AnyElement,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+    on_confirm_item: F,
+) -> impl IntoElement
+where
+    H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    F: FnMut(usize) -> H,
+{
+    let panel = yttt_panel_style(YtttPanelKind::Palette, theme, ui_style);
+
+    capture_overlay_input(
+        div().absolute().inset_0().child(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_start()
+                .justify_center()
+                .pt(ui_style.spacing.overlay_top)
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .w(relative(0.88))
+                        .max_w(px(1_420.))
+                        .h(relative(0.78))
+                        .max_h(panel.max_height)
+                        .rounded(panel.radius)
+                        .border(panel.border_width)
+                        .border_color(panel.border)
+                        .bg(panel.background)
+                        .when(panel.shadow, |this| this.shadow_lg())
+                        .text_color(theme.text)
+                        .overflow_hidden()
+                        .child(picker_header(query_input, theme, ui_style))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_1()
+                                .min_h_0()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .w(relative(0.42))
+                                        .min_w(px(340.))
+                                        .min_h_0()
+                                        .overflow_hidden()
+                                        .child(picker_items(
+                                            rows,
+                                            ui_text,
+                                            scroll_handle,
+                                            theme,
+                                            ui_style,
+                                            on_confirm_item,
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .min_h_0()
+                                        .border_l(ui_style.border.hairline)
+                                        .border_color(theme.border)
+                                        .overflow_hidden()
+                                        .child(preview),
+                                ),
+                        )
                         .child(picker_footer(ui_text, theme, ui_style)),
                 ),
         ),

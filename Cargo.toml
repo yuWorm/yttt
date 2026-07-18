@@ -16,9 +16,11 @@ gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac10
 gpui-component = { path = "vendor/gpui-component/crates/ui", features = ["tree-sitter-languages"] }
 gpui-component-assets = { path = "vendor/gpui-component/crates/assets" }
 gpui-markdown-editor = { path = "vendor/gpui-markdown-editor" }
+ignore = "0.4"
 yttt-ssh = { path = "crates/yttt-ssh" }
 zeroize = "1"
 notify = "7.0.0"
+nucleo-matcher = "0.3.1"
 tree-sitter = "0.26"
 tree-sitter-bash = "0.23.3"
 tree-sitter-c = "0.24.1"

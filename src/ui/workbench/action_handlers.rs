@@ -11,6 +11,15 @@ impl WorkbenchView {
         cx.notify();
     }
 
+    pub(super) fn on_open_file_finder(
+        &mut self,
+        _: &OpenFileFinder,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::FileFind, cx);
+    }
+
     pub(super) fn on_open_project_palette(
         &mut self,
         _: &OpenProjectPalette,
@@ -194,10 +203,18 @@ impl WorkbenchView {
     pub(super) fn on_palette_select_next(
         &mut self,
         _: &PaletteSelectNext,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.select_next_palette_item() {
+            if self
+                .palette
+                .active_palette
+                .as_ref()
+                .is_some_and(|palette| palette.kind == PaletteKind::File)
+            {
+                self.spawn_file_preview(window, cx);
+            }
             cx.notify();
         } else {
             cx.propagate();
@@ -207,10 +224,18 @@ impl WorkbenchView {
     pub(super) fn on_palette_select_prev(
         &mut self,
         _: &PaletteSelectPrev,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.select_prev_palette_item() {
+            if self
+                .palette
+                .active_palette
+                .as_ref()
+                .is_some_and(|palette| palette.kind == PaletteKind::File)
+            {
+                self.spawn_file_preview(window, cx);
+            }
             cx.notify();
         } else {
             cx.propagate();
@@ -240,7 +265,7 @@ impl WorkbenchView {
         }
 
         if self.palette.active_palette.is_some() {
-            let _ = self.confirm_palette_selection_with_context(cx);
+            let _ = self.confirm_palette_selection_with_context(window, cx);
             self.handle_pending_create_project_request(cx);
             self.handle_pending_open_project_request(cx);
             self.flush_pending_status_notifications(window, cx);

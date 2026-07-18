@@ -21,6 +21,7 @@ use crate::{
 pub enum PaletteKind {
     Command,
     NewTabCommand,
+    File,
     Project,
     OpenedProject,
     RecentProject,
@@ -106,6 +107,9 @@ impl ActivePalette {
     }
 
     pub fn filtered_items<'a>(&self, items: &'a [PaletteItem]) -> Vec<&'a PaletteItem> {
+        if self.kind == PaletteKind::File {
+            return items.iter().collect();
+        }
         let query = self.query.trim().to_lowercase();
         if query.is_empty() {
             return items.iter().collect();
@@ -485,6 +489,7 @@ fn command_title_key(command_id: CommandId) -> UiTextKey {
         CommandId::ProjectPanelRefresh => UiTextKey::CommandProjectPanelRefreshTitle,
         CommandId::GitBranchSwitch => UiTextKey::CommandGitBranchSwitchTitle,
         CommandId::GitDiffOpen => UiTextKey::CommandGitDiffOpenTitle,
+        CommandId::FileFind => UiTextKey::CommandFileFindTitle,
         CommandId::FileSave => UiTextKey::CommandFileSaveTitle,
         CommandId::TabNew => UiTextKey::CommandTabNewTitle,
         CommandId::TabClose => UiTextKey::CommandTabCloseTitle,
@@ -533,6 +538,7 @@ fn command_description_key(command_id: CommandId) -> UiTextKey {
         CommandId::ProjectPanelRefresh => UiTextKey::CommandProjectPanelRefreshDescription,
         CommandId::GitBranchSwitch => UiTextKey::CommandGitBranchSwitchDescription,
         CommandId::GitDiffOpen => UiTextKey::CommandGitDiffOpenDescription,
+        CommandId::FileFind => UiTextKey::CommandFileFindDescription,
         CommandId::FileSave => UiTextKey::CommandFileSaveDescription,
         CommandId::TabNew => UiTextKey::CommandTabNewDescription,
         CommandId::TabClose => UiTextKey::CommandTabCloseDescription,

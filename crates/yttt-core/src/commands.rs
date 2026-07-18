@@ -34,6 +34,7 @@ pub enum CommandId {
     ProjectPanelRefresh,
     GitBranchSwitch,
     GitDiffOpen,
+    FileFind,
     FileSave,
     TabNew,
     TabClose,
@@ -79,6 +80,7 @@ impl CommandId {
         Self::ProjectOpenedPalette,
         Self::ProjectPanelToggle,
         Self::ProjectPanelRefresh,
+        Self::FileFind,
         Self::FileSave,
         Self::GitBranchSwitch,
         Self::GitDiffOpen,
@@ -128,6 +130,7 @@ impl CommandId {
             Self::ProjectPanelRefresh => "project_panel.refresh",
             Self::GitBranchSwitch => "git.branch.switch",
             Self::GitDiffOpen => "git.diff.open",
+            Self::FileFind => "file.find",
             Self::FileSave => "file.save",
             Self::TabNew => "tab.new",
             Self::TabClose => "tab.close",
@@ -203,6 +206,7 @@ impl CommandId {
                 "Show Git Changes",
                 "Open the selected project's working tree diff",
             ),
+            Self::FileFind => presentation("Find Files", "Fuzzy-search files in opened projects"),
             Self::FileSave => presentation("Save File", "Save the active project file"),
             Self::TabNew => presentation("New Tab", "Create a shell tab in the selected project"),
             Self::TabClose => presentation("Close Tab", "Close the selected tab"),
@@ -327,7 +331,8 @@ impl CommandId {
             | Self::LayoutSaveCurrent
             | Self::LayoutExportProjectConfig
             | Self::LayoutResetLocalOverride
-            | Self::LayoutOpenFile => require_project(context),
+            | Self::LayoutOpenFile
+            | Self::FileFind => require_project(context),
             Self::FileSave => {
                 if !context.has_selected_project {
                     disabled("Open a project first")

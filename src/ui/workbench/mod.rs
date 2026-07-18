@@ -23,6 +23,7 @@ use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
 mod action_handlers;
 mod dialogs;
 mod document_lifecycle;
+mod file_finder;
 mod git;
 mod helpers;
 pub mod layout_editor;
@@ -147,6 +148,10 @@ use crate::{
         tab_palette_items_with_text, unified_tab_palette_items,
     },
     runtime::{
+        file_search::{
+            FileSearchCandidate, FileSearchCollection, FileSearchProject,
+            collect_file_search_candidates, match_file_search_candidates,
+        },
         git_status::{
             GitDiffLine, GitDiffLineKind, GitDiffMode, GitDiffResult, GitFileChangeKind,
             GitFileDiff, read_project_git_branches_with, read_project_git_diff_result_with,
@@ -180,15 +185,16 @@ use crate::{
             CreateProject, FileSave, GitBranchSwitch, GitDiffOpen, LayoutDefaultEdit,
             LayoutDefaultReload, LayoutDefaultReset, LayoutExportProjectConfig, LayoutOpenFile,
             LayoutProjectEdit, LayoutResetLocalOverride, LayoutSaveCurrent, OpenCommandPalette,
-            OpenOpenedProjectPalette, OpenPanePalette, OpenProject, OpenProjectPalette,
-            OpenSshProject, OpenTabPalette, PaletteCancel, PaletteConfirm, PaletteSelectNext,
-            PaletteSelectPrev, PaneClose, PaneFocusDown, PaneFocusLeft, PaneFocusRight,
-            PaneFocusUp, PaneRename, PaneResizeDown, PaneResizeLeft, PaneResizeRight, PaneResizeUp,
-            PaneSplitHorizontal, PaneSplitVertical, ProjectClose, ProjectPanelRefresh,
-            ProjectPanelToggle, SettingsKeybindings, SettingsNotifications, SettingsOpen, TabClose,
-            TabCloseAfter, TabCloseAll, TabCloseAllFiles, TabCloseAllTerminals, TabCloseBefore,
-            TabNew, TabNext, TabPrev, TabRename, UiKeybindingSpec, WORKSPACE_CONTEXT,
-            runtime_command_for_keystroke, ui_keybinding_specs_from_config,
+            OpenFileFinder, OpenOpenedProjectPalette, OpenPanePalette, OpenProject,
+            OpenProjectPalette, OpenSshProject, OpenTabPalette, PaletteCancel, PaletteConfirm,
+            PaletteSelectNext, PaletteSelectPrev, PaneClose, PaneFocusDown, PaneFocusLeft,
+            PaneFocusRight, PaneFocusUp, PaneRename, PaneResizeDown, PaneResizeLeft,
+            PaneResizeRight, PaneResizeUp, PaneSplitHorizontal, PaneSplitVertical, ProjectClose,
+            ProjectPanelRefresh, ProjectPanelToggle, SettingsKeybindings, SettingsNotifications,
+            SettingsOpen, TabClose, TabCloseAfter, TabCloseAll, TabCloseAllFiles,
+            TabCloseAllTerminals, TabCloseBefore, TabNew, TabNext, TabPrev, TabRename,
+            UiKeybindingSpec, WORKSPACE_CONTEXT, runtime_command_for_keystroke,
+            ui_keybinding_specs_from_config,
         },
         interaction::input_owner::{
             InputOwnerKind, InputOwnerRegistration, InputScopeId, TerminalInputGate,
@@ -196,8 +202,8 @@ use crate::{
         interaction::key_dispatch::workspace_command_for_keystroke,
         interaction::overlay::capture_overlay_input,
         notifications::{ToastItem, ToastQueue, ToastTone, toast_item_for_event},
-        palette::palette_overlay,
         palette::surface::palette_input_placeholder,
+        palette::{file_finder_palette_overlay, palette_overlay},
         primitives::{
             button::{YtttButtonVariant, yttt_button},
             dialog::yttt_dialog_style,
@@ -319,6 +325,7 @@ fn palette_input_scope_id(kind: PaletteKind) -> &'static str {
     match kind {
         PaletteKind::Command => "palette.command",
         PaletteKind::NewTabCommand => "palette.new_tab_command",
+        PaletteKind::File => "palette.file",
         PaletteKind::Project => "palette.project",
         PaletteKind::OpenedProject => "palette.opened_project",
         PaletteKind::RecentProject => "palette.recent_project",
@@ -1775,6 +1782,10 @@ impl WorkbenchView {
             }
             CommandId::GitBranchSwitch => self.open_git_branch_switcher(),
             CommandId::GitDiffOpen => self.open_git_diff_panel(),
+            CommandId::FileFind => {
+                self.open_palette(PaletteKind::File);
+                Ok(())
+            }
             CommandId::FileSave => {
                 if let Some(WorkItemId::File(document_id)) = self.active_work_item()
                     && !self.documents.pending_document_saves.contains(&document_id)

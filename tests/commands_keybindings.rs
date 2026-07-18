@@ -56,6 +56,7 @@ fn file_and_project_panel_commands_are_registered() {
     let registry = default_registry();
 
     for (command, id) in [
+        (CommandId::FileFind, "file.find"),
         (CommandId::FileSave, "file.save"),
         (CommandId::ProjectPanelToggle, "project_panel.toggle"),
         (CommandId::ProjectPanelRefresh, "project_panel.refresh"),
@@ -65,10 +66,18 @@ fn file_and_project_panel_commands_are_registered() {
     }
 
     let config = default_keybindings();
+    assert_has_config_binding(&config, "cmd-p", "file.find");
+    assert_has_config_binding(&config, "ctrl-p", "file.find");
+    assert_has_config_binding(&config, "cmd-shift-p", "command_palette.open");
+    assert_has_config_binding(&config, "ctrl-shift-p", "command_palette.open");
     assert_has_config_binding(&config, "cmd-s", "file.save");
     assert_has_config_binding(&config, "ctrl-s", "file.save");
     assert_has_config_binding(&config, "cmd-shift-e", "project_panel.toggle");
     assert_has_config_binding(&config, "ctrl-shift-e", "project_panel.toggle");
+    assert_has_ui_binding("cmd-p", "file.find");
+    assert_has_ui_binding("ctrl-p", "file.find");
+    assert_has_ui_binding("cmd-shift-p", "command_palette.open");
+    assert_has_ui_binding("ctrl-shift-p", "command_palette.open");
     assert_has_ui_binding("cmd-s", "file.save");
     assert_has_ui_binding("ctrl-s", "file.save");
     assert_has_ui_binding("cmd-shift-e", "project_panel.toggle");
@@ -310,12 +319,13 @@ fn detects_duplicate_keybindings() {
 fn default_keybindings_include_palette_shortcuts() {
     let config = default_keybindings();
 
-    assert_has_config_binding(&config, "cmd-p", "command_palette.open");
+    assert_has_config_binding(&config, "cmd-p", "file.find");
+    assert_has_config_binding(&config, "cmd-shift-p", "command_palette.open");
     assert_has_config_binding(&config, "ctrl-k", "pane.palette");
-    assert_has_config_binding(&config, "cmd-shift-p", "project.opened_palette");
-    assert_has_config_binding(&config, "ctrl-shift-p", "project.opened_palette");
-    assert_has_ui_binding("cmd-shift-p", "project.opened_palette");
-    assert_has_ui_binding("ctrl-shift-p", "project.opened_palette");
+    assert_has_config_binding(&config, "cmd-alt-p", "project.opened_palette");
+    assert_has_config_binding(&config, "ctrl-alt-p", "project.opened_palette");
+    assert_has_ui_binding("cmd-alt-p", "project.opened_palette");
+    assert_has_ui_binding("ctrl-alt-p", "project.opened_palette");
 }
 
 #[test]
@@ -539,7 +549,7 @@ fn legacy_default_keybindings_are_upgraded_with_editor_shortcuts() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     std::fs::create_dir_all(paths.config_dir()).unwrap();
-    let mut legacy = default_keybindings();
+    let mut legacy = legacy_v2_default_keybindings();
     legacy.schema_version = 0;
     legacy.bindings.retain(|binding| {
         !matches!(
@@ -567,7 +577,7 @@ fn legacy_default_keybindings_are_upgraded_with_editor_shortcuts() {
 fn schema_one_default_keybindings_add_opened_project_shortcuts() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut legacy = default_keybindings();
+    let mut legacy = legacy_v2_default_keybindings();
     legacy.schema_version = 1;
     legacy
         .bindings
@@ -577,11 +587,27 @@ fn schema_one_default_keybindings_add_opened_project_shortcuts() {
     let loaded = load_keybindings(&paths, &default_registry()).unwrap();
 
     assert_eq!(loaded.config.schema_version, KEYBINDINGS_SCHEMA_VERSION);
-    assert_has_config_binding(&loaded.config, "cmd-shift-p", "project.opened_palette");
-    assert_has_config_binding(&loaded.config, "ctrl-shift-p", "project.opened_palette");
+    assert_has_config_binding(&loaded.config, "cmd-alt-p", "project.opened_palette");
+    assert_has_config_binding(&loaded.config, "ctrl-alt-p", "project.opened_palette");
     let persisted: KeybindingsConfig =
         toml::from_str(&std::fs::read_to_string(paths.keybindings_file()).unwrap()).unwrap();
     assert_eq!(persisted, loaded.config);
+}
+
+#[test]
+fn schema_two_default_keybindings_adopt_file_finder_shortcuts() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let legacy = legacy_v2_default_keybindings();
+    save_keybindings(&paths, &legacy).unwrap();
+
+    let loaded = load_keybindings(&paths, &default_registry()).unwrap();
+
+    assert_eq!(loaded.config.schema_version, KEYBINDINGS_SCHEMA_VERSION);
+    assert_has_config_binding(&loaded.config, "cmd-p", "file.find");
+    assert_has_config_binding(&loaded.config, "ctrl-p", "file.find");
+    assert_has_config_binding(&loaded.config, "cmd-shift-p", "command_palette.open");
+    assert_has_config_binding(&loaded.config, "ctrl-shift-p", "command_palette.open");
 }
 
 #[test]
@@ -672,12 +698,12 @@ fn keybindings_editor_lists_commands_with_current_keys() {
         .unwrap();
 
     assert_eq!(row.title, "Open Command Palette");
-    assert!(row.keys.contains(&"cmd-p".to_string()));
-    assert!(row.keys.contains(&"ctrl-p".to_string()));
+    assert!(row.keys.contains(&"cmd-shift-p".to_string()));
+    assert!(row.keys.contains(&"ctrl-shift-p".to_string()));
     if cfg!(target_os = "macos") {
-        assert_eq!(row.display_keys(), vec!["cmd-p".to_string()]);
+        assert_eq!(row.display_keys(), vec!["cmd-shift-p".to_string()]);
     } else {
-        assert_eq!(row.display_keys(), vec!["ctrl-p".to_string()]);
+        assert_eq!(row.display_keys(), vec!["ctrl-shift-p".to_string()]);
     }
 }
 
@@ -975,6 +1001,24 @@ fn assert_ratio(actual: f32, expected: f32) {
         (actual - expected).abs() < 0.001,
         "expected ratio {expected}, got {actual}"
     );
+}
+
+fn legacy_v2_default_keybindings() -> KeybindingsConfig {
+    let mut legacy = default_keybindings();
+    legacy.schema_version = 2;
+    legacy
+        .bindings
+        .retain(|binding| binding.command != "file.find");
+    for binding in &mut legacy.bindings {
+        match (binding.keys.as_str(), binding.command.as_str()) {
+            ("cmd-shift-p", "command_palette.open") => binding.keys = "cmd-p".to_string(),
+            ("ctrl-shift-p", "command_palette.open") => binding.keys = "ctrl-p".to_string(),
+            ("cmd-alt-p", "project.opened_palette") => binding.keys = "cmd-shift-p".to_string(),
+            ("ctrl-alt-p", "project.opened_palette") => binding.keys = "ctrl-shift-p".to_string(),
+            _ => {}
+        }
+    }
+    legacy
 }
 
 fn assert_has_config_binding(config: &KeybindingsConfig, keys: &str, command: &str) {

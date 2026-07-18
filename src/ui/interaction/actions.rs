@@ -17,6 +17,7 @@ actions!(
     yttt,
     [
         OpenCommandPalette,
+        OpenFileFinder,
         CreateProject,
         OpenProject,
         OpenSshProject,
@@ -94,10 +95,18 @@ const DEFAULT_UI_KEYBINDING_SPECS: &[UiKeybindingSpec] = &[
     },
     UiKeybindingSpec {
         keys: Cow::Borrowed("cmd-p"),
-        command: CommandId::CommandPaletteOpen,
+        command: CommandId::FileFind,
     },
     UiKeybindingSpec {
         keys: Cow::Borrowed("ctrl-p"),
+        command: CommandId::FileFind,
+    },
+    UiKeybindingSpec {
+        keys: Cow::Borrowed("cmd-shift-p"),
+        command: CommandId::CommandPaletteOpen,
+    },
+    UiKeybindingSpec {
+        keys: Cow::Borrowed("ctrl-shift-p"),
         command: CommandId::CommandPaletteOpen,
     },
     UiKeybindingSpec {
@@ -133,11 +142,11 @@ const DEFAULT_UI_KEYBINDING_SPECS: &[UiKeybindingSpec] = &[
         command: CommandId::ProjectPalette,
     },
     UiKeybindingSpec {
-        keys: Cow::Borrowed("cmd-shift-p"),
+        keys: Cow::Borrowed("cmd-alt-p"),
         command: CommandId::ProjectOpenedPalette,
     },
     UiKeybindingSpec {
-        keys: Cow::Borrowed("ctrl-shift-p"),
+        keys: Cow::Borrowed("ctrl-alt-p"),
         command: CommandId::ProjectOpenedPalette,
     },
     UiKeybindingSpec {
@@ -339,6 +348,7 @@ pub fn ui_action_for_command(command: CommandId) -> Option<Box<dyn Action>> {
         CommandId::ProjectPanelRefresh => Box::new(ProjectPanelRefresh),
         CommandId::GitBranchSwitch => Box::new(GitBranchSwitch),
         CommandId::GitDiffOpen => Box::new(GitDiffOpen),
+        CommandId::FileFind => Box::new(OpenFileFinder),
         CommandId::FileSave => Box::new(FileSave),
         CommandId::TabNew => Box::new(TabNew),
         CommandId::TabClose => Box::new(TabClose),
