@@ -56,7 +56,7 @@ pub fn yttt_notification_style(
         action_padding_x: ui_style.notifications.action_padding_x,
         action_padding_y: ui_style.notifications.action_padding_y,
         shadow: ui_style.component.shadow,
-        background: theme.surface,
+        background: theme.surface.alpha(1.0),
         border: theme.border,
         title: theme.text,
         context: theme.text_subtle,

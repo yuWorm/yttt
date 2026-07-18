@@ -22,3 +22,4 @@
 
 - Fixed Markdown IME composition updates to preserve marked text across host focus requests and honor GPUI document-space replacement ranges, preventing raw pinyin from accumulating beside committed Chinese candidates.
 - Fixed active Markdown documents reclaiming focus from project-file create and rename inputs.
+- Fixed notification popups to remain opaque when translucent window effects are enabled, matching the existing opaque dialog, panel, menu, and popover surfaces.

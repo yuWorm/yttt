@@ -1388,6 +1388,17 @@ fn yttt_notification_style_matches_zed_like_status_toast_density() {
 }
 
 #[test]
+fn yttt_notification_surface_is_opaque_for_translucent_window_themes() {
+    let mut theme = WorkbenchTheme::one_dark();
+    theme.surface.a = 0.04;
+
+    let notification =
+        yttt_notification_style(YtttNotificationTone::Success, theme, UiStyle::default());
+
+    assert_eq!(notification.background, theme.surface.alpha(1.0));
+}
+
+#[test]
 fn yttt_notification_error_style_uses_danger_tone() {
     let theme = WorkbenchTheme::one_dark();
     let notification =
