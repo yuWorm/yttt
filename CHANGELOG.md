@@ -22,5 +22,6 @@
 ### Fixed
 
 - Fixed Markdown IME composition updates to preserve and visibly highlight marked text across host focus requests while honoring GPUI document-space replacement ranges, preventing raw pinyin from accumulating beside committed Chinese candidates.
+- Fixed file-finder previews to detect the selected file's language and apply syntax colors.
 - Fixed active Markdown documents reclaiming focus from project-file create and rename inputs.
 - Fixed notification popups to remain opaque when translucent window effects are enabled, matching the existing opaque dialog, panel, menu, and popover surfaces.

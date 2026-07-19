@@ -151,9 +151,18 @@ impl WorkbenchView {
         self.palette.file_preview_horizontal_scroll = ScrollHandle::new();
         let preview_path = candidate.relative_path.clone();
         let executor = cx.background_executor().clone();
+        let highlight_theme = cx.theme().highlight_theme.clone();
+        let editor_theme = self.theme_runtime().editor;
         let task = cx.background_spawn(async move {
             executor.timer(FILE_PREVIEW_DEBOUNCE).await;
-            services.read_file(&preview_path)
+            services.read_file(&preview_path).map(|file| {
+                highlighted_file_preview_rows(
+                    &file.relative_path,
+                    &file.text,
+                    &highlight_theme,
+                    editor_theme,
+                )
+            })
         });
 
         cx.spawn_in(window, async move |this, cx| {
@@ -170,26 +179,8 @@ impl WorkbenchView {
                 }
                 root.palette.file_preview_loading = false;
                 match result {
-                    Ok(file) => {
-                        let editor_theme = root.theme_runtime().editor;
-                        let highlights = Arc::new(Vec::new());
-                        root.palette.file_preview_rows = Arc::new(
-                            file.text
-                                .lines()
-                                .take(FILE_PREVIEW_MAX_LINES)
-                                .enumerate()
-                                .map(|(index, line)| {
-                                    ReadonlyCodeRow::code(
-                                        [Some(index + 1), None],
-                                        "",
-                                        line.to_string(),
-                                        highlights.clone(),
-                                        editor_theme.background,
-                                        rgba(0x00000000),
-                                    )
-                                })
-                                .collect(),
-                        );
+                    Ok(rows) => {
+                        root.palette.file_preview_rows = Arc::new(rows);
                         root.palette.file_preview_error = None;
                     }
                     Err(error) => {
@@ -375,6 +366,77 @@ impl WorkbenchView {
         self.palette.file_preview_path = None;
         self.palette.file_preview_rows = Arc::new(Vec::new());
         self.palette.file_preview_error = None;
+    }
+}
+
+fn highlighted_file_preview_rows(
+    path: &Path,
+    text: &str,
+    theme: &gpui_component::highlighter::HighlightTheme,
+    editor_theme: EditorTheme,
+) -> Vec<ReadonlyCodeRow> {
+    let mut source = String::new();
+    let mut lines = Vec::new();
+    for line in text.lines().take(FILE_PREVIEW_MAX_LINES) {
+        let start = source.len();
+        source.push_str(line);
+        let end = source.len();
+        source.push('\n');
+        lines.push((line.to_string(), start..end));
+    }
+
+    let resolution = EditorLanguageCatalog::builtin().resolve_for_path(path, Some(&source));
+    let rope = Rope::from(source.as_str());
+    let mut highlighter = SyntaxHighlighter::new(&resolution.highlighter_name);
+    highlighter.update(None, &rope, None);
+
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(index, (line, range))| {
+            let line_start = range.start;
+            let line_end = range.end;
+            let highlights = highlighter
+                .styles(&(line_start..line_end), theme)
+                .into_iter()
+                .filter_map(|(style_range, style)| {
+                    let start = style_range.start.max(line_start) - line_start;
+                    let end = style_range.end.min(line_end).saturating_sub(line_start);
+                    (start < end).then_some((start..end, style))
+                })
+                .collect();
+            ReadonlyCodeRow::code(
+                [Some(index + 1), None],
+                "",
+                line,
+                Arc::new(highlights),
+                editor_theme.background,
+                rgba(0x00000000),
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rust_file_preview_rows_include_syntax_colors() {
+        let theme = gpui_component::highlighter::HighlightTheme::default_dark();
+        let rows = highlighted_file_preview_rows(
+            Path::new("src/main.rs"),
+            "fn main() {\n    let answer = 42;\n}\n",
+            theme.as_ref(),
+            ThemeRuntime::default().editor,
+        );
+
+        assert!(
+            rows.iter()
+                .flat_map(|row| row.highlights.iter())
+                .any(|(_, style)| style.color.is_some()),
+            "Rust file previews must include syntax colors"
+        );
     }
 }
 
