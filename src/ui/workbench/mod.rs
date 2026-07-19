@@ -224,7 +224,8 @@ use crate::{
             ProjectTreeViewEvent,
         },
         settings::font_options::{
-            FontFamilyOptions, font_family_option_for_setting, font_family_options_from_system,
+            FontFamilyOptions, detect_installed_monospace_nerd_font,
+            font_family_option_for_setting, font_family_options_from_system,
             font_family_setting_from_option, terminal_font_family_option_for_setting,
             terminal_font_family_options_from_system, terminal_font_family_setting_from_option,
         },

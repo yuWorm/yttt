@@ -1,5 +1,8 @@
 use super::*;
 
+const MONOSPACE_NERD_FONT_RECOMMENDATION_URL: &str = "https://font.subf.dev/zh-cn/";
+const MONOSPACE_FONT_WIDTH_TOLERANCE: f32 = 0.01;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum OnboardingStep {
     #[default]
@@ -17,6 +20,7 @@ pub(super) struct OnboardingState {
     pub selected_layout: DefaultLayoutKind,
     pub selected_agent: BuiltinAgent,
     pub zed_detection: ZedThemeDetection,
+    pub monospace_nerd_font_detected: Option<bool>,
     pub zed_import_completed: bool,
 }
 
@@ -31,6 +35,7 @@ impl OnboardingState {
             selected_layout: DefaultLayoutKind::default(),
             selected_agent: BuiltinAgent::default(),
             zed_detection,
+            monospace_nerd_font_detected: None,
             zed_import_completed: false,
         }
     }
@@ -58,6 +63,7 @@ pub(super) fn onboarding_view(
             ui_text,
             theme,
             ui_style,
+            state.monospace_nerd_font_detected.unwrap_or(false),
             terminal_font_select.expect("terminal font select must exist on the font step"),
         ),
         OnboardingStep::Layout => layout_step(cx, state, ui_text, theme, ui_style),
@@ -217,11 +223,51 @@ fn language_step(
         )
 }
 
+pub(super) fn font_family_has_fixed_ascii_width(window: &mut Window, font_family: &str) -> bool {
+    let font = gpui::Font {
+        family: font_family.to_string().into(),
+        features: gpui::FontFeatures::disable_ligatures(),
+        fallbacks: None,
+        weight: FontWeight::NORMAL,
+        style: gpui::FontStyle::Normal,
+    };
+    let mut expected_width: Option<Pixels> = None;
+
+    for text in ["i", "W", "0", " "] {
+        let run = gpui::TextRun {
+            len: text.len(),
+            font: font.clone(),
+            color: gpui::black(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let width = window
+            .text_system()
+            .shape_line(text.into(), px(16.0), &[run], None)
+            .width;
+        if width <= px(0.0) {
+            return false;
+        }
+
+        if let Some(expected_width) = expected_width {
+            if (width.as_f32() - expected_width.as_f32()).abs() > MONOSPACE_FONT_WIDTH_TOLERANCE {
+                return false;
+            }
+        } else {
+            expected_width = Some(width);
+        }
+    }
+
+    true
+}
+
 fn terminal_font_step(
     cx: &mut Context<WorkbenchView>,
     ui_text: &UiText,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
+    monospace_nerd_font_detected: bool,
     font_select: &Entity<SettingsFontFamilySelectState>,
 ) -> Div {
     let select_style = yttt_select_style(theme, ui_style);
@@ -279,19 +325,39 @@ fn terminal_font_step(
                         .h(select_style.height)
                         .child(font_select),
                 )
-                .child(
-                    div()
-                        .debug_selector(|| "onboarding-terminal-font-recommendation".to_string())
-                        .rounded(ui_style.radius.control)
-                        .border(ui_style.border.hairline)
-                        .border_color(theme.warning)
-                        .bg(theme.surface_elevated)
-                        .px(ui_style.spacing.lg)
-                        .py(ui_style.spacing.md)
-                        .text_xs()
-                        .text_color(theme.warning)
-                        .child(ui_text.get(UiTextKey::OnboardingFontRecommendation)),
-                ),
+                .when(!monospace_nerd_font_detected, |this| {
+                    this.child(
+                        div()
+                            .debug_selector(|| {
+                                "onboarding-terminal-font-recommendation".to_string()
+                            })
+                            .flex()
+                            .flex_col()
+                            .gap(ui_style.spacing.xs)
+                            .rounded(ui_style.radius.control)
+                            .border(ui_style.border.hairline)
+                            .border_color(theme.warning)
+                            .bg(theme.surface_elevated)
+                            .px(ui_style.spacing.lg)
+                            .py(ui_style.spacing.md)
+                            .text_xs()
+                            .text_color(theme.warning)
+                            .child(ui_text.get(UiTextKey::OnboardingFontRecommendation))
+                            .child(
+                                div()
+                                    .id("onboarding-terminal-font-recommendation-link")
+                                    .debug_selector(|| {
+                                        "onboarding-terminal-font-recommendation-link".to_string()
+                                    })
+                                    .cursor_pointer()
+                                    .text_color(theme.accent)
+                                    .on_click(cx.listener(|_, _, _window, cx| {
+                                        cx.open_url(MONOSPACE_NERD_FONT_RECOMMENDATION_URL);
+                                    }))
+                                    .child(MONOSPACE_NERD_FONT_RECOMMENDATION_URL),
+                            ),
+                    )
+                }),
         )
         .child(
             div()

@@ -1140,6 +1140,14 @@ fn first_run_onboarding_selects_font_then_layout_before_agent(cx: &mut gpui::Tes
         cx.debug_bounds("onboarding-terminal-font-recommendation")
             .is_some()
     );
+    let font_recommendation_link = cx
+        .debug_bounds("onboarding-terminal-font-recommendation-link")
+        .expect("missing Nerd Font detection should show the recommended install URL");
+    cx.simulate_click(font_recommendation_link.center(), gpui::Modifiers::none());
+    assert_eq!(
+        cx.opened_url().as_deref(),
+        Some("https://font.subf.dev/zh-cn/")
+    );
     assert!(cx.debug_bounds("onboarding-layout-split").is_none());
     let font_select = cx.debug_bounds("onboarding-terminal-font-select").unwrap();
     cx.simulate_click(font_select.center(), gpui::Modifiers::none());

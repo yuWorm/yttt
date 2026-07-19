@@ -6,6 +6,35 @@ use gpui_component::{
 
 pub const SYSTEM_FONT_FAMILY_LABEL: &str = "System default";
 
+pub fn detect_installed_monospace_nerd_font(
+    system_fonts: impl IntoIterator<Item = impl AsRef<str>>,
+    mut is_monospace: impl FnMut(&str) -> bool,
+) -> bool {
+    system_fonts.into_iter().any(|font_family| {
+        let font_family = font_family.as_ref().trim();
+        is_nerd_font_family_name(font_family) && is_monospace(font_family)
+    })
+}
+
+fn is_nerd_font_family_name(font_family: &str) -> bool {
+    let mut previous_token = None;
+    for token in font_family
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+    {
+        if token.eq_ignore_ascii_case("nf")
+            || token.eq_ignore_ascii_case("nfm")
+            || token.eq_ignore_ascii_case("nerdfont")
+            || (previous_token.is_some_and(|previous: &str| previous.eq_ignore_ascii_case("nerd"))
+                && token.eq_ignore_ascii_case("font"))
+        {
+            return true;
+        }
+        previous_token = Some(token);
+    }
+    false
+}
+
 #[derive(Debug)]
 pub(crate) struct FontFamilyOptions {
     items: Vec<SharedString>,

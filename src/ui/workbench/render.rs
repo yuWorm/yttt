@@ -22,6 +22,20 @@ impl Render for WorkbenchView {
             && !focus_handle.contains_focused(window, cx)
             && self.queue_default_active_work_item_focus(cx);
 
+        let onboarding_needs_font_detection = self.onboarding.as_ref().is_some_and(|state| {
+            state.step == OnboardingStep::Font && state.monospace_nerd_font_detected.is_none()
+        });
+        if onboarding_needs_font_detection {
+            let system_fonts = cx.text_system().all_font_names();
+            let detected = detect_installed_monospace_nerd_font(&system_fonts, |font_family| {
+                font_family_has_fixed_ascii_width(window, font_family)
+            });
+            self.onboarding
+                .as_mut()
+                .expect("onboarding must exist while detecting terminal fonts")
+                .monospace_nerd_font_detected = Some(detected);
+        }
+
         let onboarding_terminal_font_select = self
             .onboarding
             .as_ref()

@@ -16,7 +16,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
             "为所有终端选择一个已安装的字体，之后也可以在设置中修改。"
         }
         UiTextKey::OnboardingFontRecommendation => {
-            "建议使用等宽 Nerd Font。它包含终端常用的图标和符号，可避免许多系统默认字体出现方框或乱码。"
+            "未检测到已安装的等宽 Nerd Font。Alacritty 对非等宽字体支持较差，建议安装 Maple Mono NF："
         }
         UiTextKey::OnboardingAgentHeading => "选择编程 Agent",
         UiTextKey::OnboardingAgentSubtitle => "所选 Agent 将用于刚才选择的默认布局。",

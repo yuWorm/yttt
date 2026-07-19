@@ -36,9 +36,10 @@ use yttt::ui::primitives::{
     tabs::yttt_tabbar_style,
 };
 use yttt::ui::settings::font_options::{
-    SYSTEM_FONT_FAMILY_LABEL, font_family_option_for_setting, font_family_options_from_system,
-    font_family_setting_from_option, terminal_font_family_option_for_setting,
-    terminal_font_family_options_from_system, terminal_font_family_setting_from_option,
+    SYSTEM_FONT_FAMILY_LABEL, detect_installed_monospace_nerd_font, font_family_option_for_setting,
+    font_family_options_from_system, font_family_setting_from_option,
+    terminal_font_family_option_for_setting, terminal_font_family_options_from_system,
+    terminal_font_family_setting_from_option,
 };
 use yttt::ui::settings::{SettingsGroupId, settings_panel_style, settings_rows_for_group};
 use yttt::ui::terminal::pane::TerminalPaneView;
@@ -1120,6 +1121,26 @@ fn font_options_do_not_inject_hardcoded_recommendations() {
     assert!(!options.iter().any(|font| font == "monospace"));
     assert!(!options.iter().any(|font| font == "SF Mono"));
     assert!(!options.iter().any(|font| font == "Menlo"));
+}
+
+#[test]
+fn nerd_font_detection_requires_both_a_nerd_name_and_fixed_width() {
+    assert!(detect_installed_monospace_nerd_font(
+        ["Fira Code", "Maple Mono NF CN"],
+        |font_family| font_family == "Maple Mono NF CN",
+    ));
+    assert!(detect_installed_monospace_nerd_font(
+        ["FiraCode Nerd Font"],
+        |_| true,
+    ));
+    assert!(detect_installed_monospace_nerd_font(
+        ["JetBrainsMono NFM"],
+        |_| true,
+    ));
+    assert!(!detect_installed_monospace_nerd_font(
+        ["JetBrains Mono", "Example Nerd Font Propo"],
+        |font_family| font_family == "JetBrains Mono",
+    ));
 }
 
 #[test]
