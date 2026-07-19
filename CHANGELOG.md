@@ -26,3 +26,4 @@
 - Fixed file-finder previews to detect the selected file's language and apply syntax colors.
 - Fixed active Markdown documents reclaiming focus from project-file create and rename inputs.
 - Fixed notification popups to remain opaque when translucent window effects are enabled, matching the existing opaque dialog, panel, menu, and popover surfaces.
+- Fixed Windows builds and SSH agent authentication by using the OpenSSH named pipe with a Pageant fallback.

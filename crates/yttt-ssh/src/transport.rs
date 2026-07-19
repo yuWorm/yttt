@@ -996,9 +996,22 @@ async fn authenticate_with_agent(
     session: &mut client::Handle<HostKeyHandler>,
     user: &str,
 ) -> Result<bool, TransportError> {
+    #[cfg(unix)]
     let mut agent = AgentClient::connect_env()
         .await
         .map_err(|source| TransportError::Agent(source.to_string()))?;
+    #[cfg(windows)]
+    let mut agent = match AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent").await {
+        Ok(agent) => agent.dynamic(),
+        Err(named_pipe_error) => AgentClient::connect_pageant()
+            .await
+            .map(|agent| agent.dynamic())
+            .map_err(|pageant_error| {
+                TransportError::Agent(format!(
+                    "OpenSSH agent: {named_pipe_error}; Pageant: {pageant_error}"
+                ))
+            })?,
+    };
     let identities = agent
         .request_identities()
         .await
