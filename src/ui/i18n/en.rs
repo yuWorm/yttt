@@ -18,6 +18,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::OnboardingFontRecommendation => {
             "No installed monospaced Nerd Font was detected. Alacritty renders proportional fonts poorly. We recommend installing Maple Mono NF:"
         }
+        UiTextKey::OnboardingFontDetectedRecommendation => {
+            "We found and recommend the best installed monospaced Nerd Font for your terminal:"
+        }
         UiTextKey::OnboardingAgentHeading => "Choose a coding agent",
         UiTextKey::OnboardingAgentSubtitle => "This agent will be used in the layout you selected.",
         UiTextKey::OnboardingLayoutHeading => "Choose a default layout",

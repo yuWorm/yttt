@@ -36,8 +36,8 @@ use yttt::ui::primitives::{
     tabs::yttt_tabbar_style,
 };
 use yttt::ui::settings::font_options::{
-    SYSTEM_FONT_FAMILY_LABEL, detect_installed_monospace_nerd_font, font_family_option_for_setting,
-    font_family_options_from_system, font_family_setting_from_option,
+    SYSTEM_FONT_FAMILY_LABEL, font_family_option_for_setting, font_family_options_from_system,
+    font_family_setting_from_option, recommend_installed_monospace_nerd_font,
     terminal_font_family_option_for_setting, terminal_font_family_options_from_system,
     terminal_font_family_setting_from_option,
 };
@@ -1124,23 +1124,50 @@ fn font_options_do_not_inject_hardcoded_recommendations() {
 }
 
 #[test]
-fn nerd_font_detection_requires_both_a_nerd_name_and_fixed_width() {
-    assert!(detect_installed_monospace_nerd_font(
-        ["Fira Code", "Maple Mono NF CN"],
-        |font_family| font_family == "Maple Mono NF CN",
-    ));
-    assert!(detect_installed_monospace_nerd_font(
-        ["FiraCode Nerd Font"],
-        |_| true,
-    ));
-    assert!(detect_installed_monospace_nerd_font(
-        ["JetBrainsMono NFM"],
-        |_| true,
-    ));
-    assert!(!detect_installed_monospace_nerd_font(
-        ["JetBrains Mono", "Example Nerd Font Propo"],
-        |font_family| font_family == "JetBrains Mono",
-    ));
+fn nerd_font_recommendation_requires_both_a_nerd_name_and_fixed_width() {
+    assert_eq!(
+        recommend_installed_monospace_nerd_font(["Fira Code", "Maple Mono NF CN"], |font_family| {
+            font_family == "Maple Mono NF CN"
+        },),
+        Some("Maple Mono NF CN".to_string())
+    );
+    assert_eq!(
+        recommend_installed_monospace_nerd_font(["FiraCode Nerd Font"], |_| true),
+        Some("FiraCode Nerd Font".to_string())
+    );
+    assert_eq!(
+        recommend_installed_monospace_nerd_font(["JetBrainsMono NFM"], |_| true),
+        Some("JetBrainsMono NFM".to_string())
+    );
+    assert_eq!(
+        recommend_installed_monospace_nerd_font(
+            ["JetBrains Mono", "Example Nerd Font Propo"],
+            |font_family| font_family == "JetBrains Mono",
+        ),
+        None
+    );
+}
+
+#[test]
+fn nerd_font_recommendation_prefers_maple_mono_then_explicit_mono_families() {
+    assert_eq!(
+        recommend_installed_monospace_nerd_font(
+            [
+                "FiraCode Nerd Font",
+                "CaskaydiaCove Nerd Font Mono",
+                "Maple Mono NF CN",
+            ],
+            |_| true,
+        ),
+        Some("Maple Mono NF CN".to_string())
+    );
+    assert_eq!(
+        recommend_installed_monospace_nerd_font(
+            ["FiraCode Nerd Font", "CaskaydiaCove Nerd Font Mono"],
+            |_| true,
+        ),
+        Some("CaskaydiaCove Nerd Font Mono".to_string())
+    );
 }
 
 #[test]

@@ -6,14 +6,27 @@ use gpui_component::{
 
 pub const SYSTEM_FONT_FAMILY_LABEL: &str = "System default";
 
-pub fn detect_installed_monospace_nerd_font(
+pub fn recommend_installed_monospace_nerd_font(
     system_fonts: impl IntoIterator<Item = impl AsRef<str>>,
     mut is_monospace: impl FnMut(&str) -> bool,
-) -> bool {
-    system_fonts.into_iter().any(|font_family| {
+) -> Option<String> {
+    let mut recommendation = None;
+    let mut recommendation_priority = 0;
+
+    for font_family in system_fonts {
         let font_family = font_family.as_ref().trim();
-        is_nerd_font_family_name(font_family) && is_monospace(font_family)
-    })
+        if !is_nerd_font_family_name(font_family) || !is_monospace(font_family) {
+            continue;
+        }
+
+        let priority = nerd_font_recommendation_priority(font_family);
+        if recommendation.is_none() || priority > recommendation_priority {
+            recommendation = Some(font_family.to_string());
+            recommendation_priority = priority;
+        }
+    }
+
+    recommendation
 }
 
 fn is_nerd_font_family_name(font_family: &str) -> bool {
@@ -33,6 +46,17 @@ fn is_nerd_font_family_name(font_family: &str) -> bool {
         previous_token = Some(token);
     }
     false
+}
+
+fn nerd_font_recommendation_priority(font_family: &str) -> u8 {
+    let normalized = font_family.to_ascii_lowercase();
+    if normalized.contains("maple mono") {
+        3
+    } else if normalized.contains("mono") {
+        2
+    } else {
+        1
+    }
 }
 
 #[derive(Debug)]

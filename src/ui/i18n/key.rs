@@ -8,6 +8,7 @@ pub enum UiTextKey {
     OnboardingFontHeading,
     OnboardingFontSubtitle,
     OnboardingFontRecommendation,
+    OnboardingFontDetectedRecommendation,
     OnboardingAgentHeading,
     OnboardingAgentSubtitle,
     OnboardingLayoutHeading,

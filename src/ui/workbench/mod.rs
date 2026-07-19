@@ -224,10 +224,10 @@ use crate::{
             ProjectTreeViewEvent,
         },
         settings::font_options::{
-            FontFamilyOptions, detect_installed_monospace_nerd_font,
-            font_family_option_for_setting, font_family_options_from_system,
-            font_family_setting_from_option, terminal_font_family_option_for_setting,
-            terminal_font_family_options_from_system, terminal_font_family_setting_from_option,
+            FontFamilyOptions, font_family_option_for_setting, font_family_options_from_system,
+            font_family_setting_from_option, recommend_installed_monospace_nerd_font,
+            terminal_font_family_option_for_setting, terminal_font_family_options_from_system,
+            terminal_font_family_setting_from_option,
         },
         settings::keybinding_display::{
             primary_display_keybinding_for_current_platform, recorded_keybinding,

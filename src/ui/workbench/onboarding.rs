@@ -13,6 +13,14 @@ pub(super) enum OnboardingStep {
     ZedImport,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) enum OnboardingFontDetection {
+    #[default]
+    Pending,
+    Missing,
+    Recommended(String),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct OnboardingState {
     pub step: OnboardingStep,
@@ -20,7 +28,7 @@ pub(super) struct OnboardingState {
     pub selected_layout: DefaultLayoutKind,
     pub selected_agent: BuiltinAgent,
     pub zed_detection: ZedThemeDetection,
-    pub monospace_nerd_font_detected: Option<bool>,
+    pub font_detection: OnboardingFontDetection,
     pub zed_import_completed: bool,
 }
 
@@ -35,7 +43,7 @@ impl OnboardingState {
             selected_layout: DefaultLayoutKind::default(),
             selected_agent: BuiltinAgent::default(),
             zed_detection,
-            monospace_nerd_font_detected: None,
+            font_detection: OnboardingFontDetection::Pending,
             zed_import_completed: false,
         }
     }
@@ -63,7 +71,7 @@ pub(super) fn onboarding_view(
             ui_text,
             theme,
             ui_style,
-            state.monospace_nerd_font_detected.unwrap_or(false),
+            &state.font_detection,
             terminal_font_select.expect("terminal font select must exist on the font step"),
         ),
         OnboardingStep::Layout => layout_step(cx, state, ui_text, theme, ui_style),
@@ -267,7 +275,7 @@ fn terminal_font_step(
     ui_text: &UiText,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
-    monospace_nerd_font_detected: bool,
+    font_detection: &OnboardingFontDetection,
     font_select: &Entity<SettingsFontFamilySelectState>,
 ) -> Div {
     let select_style = yttt_select_style(theme, ui_style);
@@ -283,6 +291,53 @@ fn terminal_font_step(
         .bg(select_style.background)
         .border_color(select_style.border)
         .text_color(select_style.text);
+    let recommendation = match font_detection {
+        OnboardingFontDetection::Recommended(font_family) => div()
+            .debug_selector(|| "onboarding-terminal-font-recommendation".to_string())
+            .flex()
+            .flex_col()
+            .gap(ui_style.spacing.xs)
+            .rounded(ui_style.radius.control)
+            .border(ui_style.border.hairline)
+            .border_color(theme.success)
+            .bg(theme.surface_elevated)
+            .px(ui_style.spacing.lg)
+            .py(ui_style.spacing.md)
+            .text_xs()
+            .text_color(theme.success)
+            .child(ui_text.get(UiTextKey::OnboardingFontDetectedRecommendation))
+            .child(
+                div()
+                    .debug_selector(|| "onboarding-terminal-font-recommendation-name".to_string())
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(font_family.clone()),
+            ),
+        OnboardingFontDetection::Pending | OnboardingFontDetection::Missing => div()
+            .debug_selector(|| "onboarding-terminal-font-recommendation".to_string())
+            .flex()
+            .flex_col()
+            .gap(ui_style.spacing.xs)
+            .rounded(ui_style.radius.control)
+            .border(ui_style.border.hairline)
+            .border_color(theme.warning)
+            .bg(theme.surface_elevated)
+            .px(ui_style.spacing.lg)
+            .py(ui_style.spacing.md)
+            .text_xs()
+            .text_color(theme.warning)
+            .child(ui_text.get(UiTextKey::OnboardingFontRecommendation))
+            .child(
+                div()
+                    .id("onboarding-terminal-font-recommendation-link")
+                    .debug_selector(|| "onboarding-terminal-font-recommendation-link".to_string())
+                    .cursor_pointer()
+                    .text_color(theme.accent)
+                    .on_click(cx.listener(|_, _, _window, cx| {
+                        cx.open_url(MONOSPACE_NERD_FONT_RECOMMENDATION_URL);
+                    }))
+                    .child(MONOSPACE_NERD_FONT_RECOMMENDATION_URL),
+            ),
+    };
 
     div()
         .debug_selector(|| "onboarding-terminal-font-step".to_string())
@@ -325,39 +380,7 @@ fn terminal_font_step(
                         .h(select_style.height)
                         .child(font_select),
                 )
-                .when(!monospace_nerd_font_detected, |this| {
-                    this.child(
-                        div()
-                            .debug_selector(|| {
-                                "onboarding-terminal-font-recommendation".to_string()
-                            })
-                            .flex()
-                            .flex_col()
-                            .gap(ui_style.spacing.xs)
-                            .rounded(ui_style.radius.control)
-                            .border(ui_style.border.hairline)
-                            .border_color(theme.warning)
-                            .bg(theme.surface_elevated)
-                            .px(ui_style.spacing.lg)
-                            .py(ui_style.spacing.md)
-                            .text_xs()
-                            .text_color(theme.warning)
-                            .child(ui_text.get(UiTextKey::OnboardingFontRecommendation))
-                            .child(
-                                div()
-                                    .id("onboarding-terminal-font-recommendation-link")
-                                    .debug_selector(|| {
-                                        "onboarding-terminal-font-recommendation-link".to_string()
-                                    })
-                                    .cursor_pointer()
-                                    .text_color(theme.accent)
-                                    .on_click(cx.listener(|_, _, _window, cx| {
-                                        cx.open_url(MONOSPACE_NERD_FONT_RECOMMENDATION_URL);
-                                    }))
-                                    .child(MONOSPACE_NERD_FONT_RECOMMENDATION_URL),
-                            ),
-                    )
-                }),
+                .child(recommendation),
         )
         .child(
             div()
@@ -1020,4 +1043,62 @@ fn command_palette_hint(
             this.on_open_command_palette(&OpenCommandPalette, window, cx);
         })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
+    use gpui::AppContext as _;
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[gpui::test]
+    fn detected_font_still_shows_the_recommended_family(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let temp = tempdir().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+        let root_slot = Rc::new(RefCell::new(None));
+        let root_slot_for_window = root_slot.clone();
+        let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+            let root = cx.new(|_| WorkbenchView::with_config_paths(paths));
+            *root_slot_for_window.borrow_mut() = Some(root.clone());
+            gpui_component::Root::new(root, window, cx)
+        });
+        let root = root_slot.borrow_mut().take().unwrap();
+
+        root.update(cx, |root, cx| {
+            let onboarding = root.onboarding.as_mut().expect("onboarding must be active");
+            onboarding.step = OnboardingStep::Font;
+            onboarding.font_detection =
+                OnboardingFontDetection::Recommended("Maple Mono NF CN".to_string());
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        assert!(
+            cx.debug_bounds("onboarding-terminal-font-recommendation")
+                .is_some()
+        );
+        assert!(
+            cx.debug_bounds("onboarding-terminal-font-recommendation-name")
+                .is_some()
+        );
+        assert!(
+            cx.debug_bounds("onboarding-terminal-font-recommendation-link")
+                .is_none()
+        );
+        cx.read(|app| {
+            assert_eq!(
+                root.read(app)
+                    .onboarding
+                    .as_ref()
+                    .map(|state| &state.font_detection),
+                Some(&OnboardingFontDetection::Recommended(
+                    "Maple Mono NF CN".to_string()
+                ))
+            );
+        });
+    }
 }

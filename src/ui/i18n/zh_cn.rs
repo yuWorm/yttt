@@ -18,6 +18,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::OnboardingFontRecommendation => {
             "未检测到已安装的等宽 Nerd Font。Alacritty 对非等宽字体支持较差，建议安装 Maple Mono NF："
         }
+        UiTextKey::OnboardingFontDetectedRecommendation => {
+            "已从系统字体中为你推荐了最适合终端的等宽 Nerd Font："
+        }
         UiTextKey::OnboardingAgentHeading => "选择编程 Agent",
         UiTextKey::OnboardingAgentSubtitle => "所选 Agent 将用于刚才选择的默认布局。",
         UiTextKey::OnboardingLayoutHeading => "选择默认布局",

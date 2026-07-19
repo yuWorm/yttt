@@ -18,7 +18,7 @@
 - Long remote directory lists now use a bounded scroll viewport while short lists remain content-sized.
 - Reconnecting an SSH project refreshes expanded remote directories and Git status.
 - Redesigned the empty workspace as a responsive centered dashboard with app branding, stacked actions, icons, and aligned shortcut hints.
-- First-run terminal font selection now detects installed fixed-width Nerd Fonts and shows a Maple Mono NF installation link only when none are available.
+- First-run terminal font selection now recommends the best installed fixed-width Nerd Font, or shows a Maple Mono NF installation link when none are available.
 
 ### Fixed
 
