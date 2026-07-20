@@ -136,6 +136,14 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 UiTextKey::SettingsSystemNotificationsDescription,
             ),
             row(
+                UiTextKey::SettingsUpdates,
+                UiTextKey::SettingsUpdatesDescription,
+            ),
+            row(
+                UiTextKey::SettingsAutoCheckUpdates,
+                UiTextKey::SettingsAutoCheckUpdatesDescription,
+            ),
+            row(
                 UiTextKey::SettingsRestoreLastSession,
                 UiTextKey::SettingsRestoreLastSessionDescription,
             ),

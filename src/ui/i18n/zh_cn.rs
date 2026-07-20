@@ -301,6 +301,19 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSelectLanguage => "选择语言",
         UiTextKey::SettingsSystemNotifications => "系统通知",
         UiTextKey::SettingsSystemNotificationsDescription => "Agent 终端任务完成或失败时通知。",
+        UiTextKey::SettingsUpdates => "版本更新",
+        UiTextKey::SettingsUpdatesDescription => "查看当前版本并检查可用的新版本。",
+        UiTextKey::SettingsAutoCheckUpdates => "自动检查更新",
+        UiTextKey::SettingsAutoCheckUpdatesDescription => {
+            "应用启动后每天最多检查一次，不阻塞应用启动。"
+        }
+        UiTextKey::SettingsCheckForUpdates => "检查更新",
+        UiTextKey::SettingsCheckingForUpdates => "正在检查...",
+        UiTextKey::SettingsUpdateAvailable => "发现新版本",
+        UiTextKey::SettingsUpdateAvailableDescription => "新版本已可下载。",
+        UiTextKey::SettingsUpToDate => "YTTT 已是最新版本",
+        UiTextKey::SettingsUpdateCheckFailed => "无法检查更新",
+        UiTextKey::SettingsDownloadUpdate => "下载更新",
         UiTextKey::SettingsRestoreLastSession => "启动时恢复项目",
         UiTextKey::SettingsRestoreLastSessionDescription => {
             "启动 YTTT 时，重新打开上次退出时仍保持打开的所有项目。"

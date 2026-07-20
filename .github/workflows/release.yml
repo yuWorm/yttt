@@ -168,6 +168,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check out release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.metadata.outputs.ref }}
+
       - name: Download release packages
         uses: actions/download-artifact@v8
         with:
@@ -175,9 +180,21 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Generate release metadata
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          python3 scripts/release_metadata.py \
+            --version "$VERSION" \
+            --tag "$RELEASE_TAG" \
+            --repository "$GITHUB_REPOSITORY" \
+            --dist dist \
+            --notes-output release-notes.md \
+            --manifest-output dist/update.json
+
       - name: Generate checksums
         working-directory: dist
-        run: sha256sum * > SHA256SUMS
+        run: sha256sum yttt-* update.json > SHA256SUMS
 
       - name: Create or update GitHub release
         env:
@@ -186,10 +203,16 @@ jobs:
         run: |
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --latest \
+              --title "$RELEASE_TAG" \
+              --notes-file release-notes.md
           else
             gh release create "$RELEASE_TAG" dist/* \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
-              --generate-notes \
-              --title "$RELEASE_TAG"
+              --latest \
+              --title "$RELEASE_TAG" \
+              --notes-file release-notes.md
           fi

@@ -63,6 +63,10 @@ impl AppConfigPaths {
         self.config_dir.join("settings.toml")
     }
 
+    pub fn update_state_file(&self) -> PathBuf {
+        self.config_dir.join("update-state.toml")
+    }
+
     pub fn themes_dir(&self) -> PathBuf {
         self.config_dir.join("themes")
     }

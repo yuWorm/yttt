@@ -6,6 +6,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use gpui::http_client::{AsyncBody, FakeHttpClient, Response};
 use gpui::{AppContext as _, Keystroke, Subscription, px, size};
 use tempfile::tempdir;
 use yttt::{
@@ -32,6 +33,7 @@ use yttt::{
     runtime::git_status::{GitFileStatus, GitStatusSummary, parse_git_status_porcelain},
     runtime::notification::{NotificationEvent, NotificationKind},
     runtime::terminal::{ExitReason, ProcessStatus},
+    runtime::update::UPDATE_MANIFEST_URL,
     ui::components::SelectableState,
     ui::editor::{
         CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, DiskFingerprint, DocumentId,
@@ -56,7 +58,6 @@ use yttt::{
             DetectedZedExtension, ZedThemeDetection, ZedThemeImportConflictPolicy,
             zed_icon_theme_output_path, zed_ui_theme_output_path,
         },
-        workbench::WorkbenchView,
         workbench::shell::split_view::{
             pointer_resize_for_drag_delta, resize_command_for_drag_delta, root_split_child_basis,
             visible_pane_titles,
@@ -65,6 +66,7 @@ use yttt::{
             FileTabSnapshot, WorkbenchTabCloseScope, WorkbenchTabKind, visible_tab_items,
             visible_tab_titles, visible_work_item_tabs,
         },
+        workbench::{UpdateStatus, WorkbenchView},
     },
     ui::{
         interaction::actions::{CreateProject, OpenFileFinder, TabCloseAllTerminals},
@@ -3809,6 +3811,109 @@ fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppCon
             .general
             .restore_last_session
     );
+}
+
+#[gpui::test]
+fn update_settings_check_and_persist_auto_check(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let manifest = r#"{
+        "schema": 1,
+        "version": "99.0.0",
+        "releaseUrl": "https://github.com/yuWorm/yttt/releases/tag/v99.0.0",
+        "notes": "A test update.",
+        "assets": {
+            "macos-aarch64": {
+                "url": "https://github.com/yuWorm/yttt/releases/download/v99.0.0/yttt.dmg",
+                "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "windows-x86_64": {
+                "url": "https://github.com/yuWorm/yttt/releases/download/v99.0.0/yttt.exe",
+                "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "linux-x86_64": {
+                "url": "https://github.com/yuWorm/yttt/releases/download/v99.0.0/yttt.tar.gz",
+                "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+            }
+        }
+    }"#
+    .to_string();
+    cx.update(|cx| {
+        cx.set_http_client(FakeHttpClient::create(move |request| {
+            let manifest = manifest.clone();
+            async move {
+                assert_eq!(request.uri().to_string(), UPDATE_MANIFEST_URL);
+                Ok(Response::builder()
+                    .status(200)
+                    .body(AsyncBody::from(manifest.into_bytes()))
+                    .unwrap())
+            }
+        }));
+    });
+
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut settings = load_or_create_settings(&paths).unwrap().settings;
+    settings.general.onboarding_completed = true;
+    save_settings(&paths, &settings).unwrap();
+    let view_paths = paths.clone();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths(view_paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.open_settings();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+
+    let scroll_origin = cx
+        .debug_bounds("settings-restore-last-session-row")
+        .expect("general settings should render a visible row")
+        .center();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: scroll_origin,
+        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-1600.0))),
+        ..Default::default()
+    });
+    cx.refresh().unwrap();
+
+    assert!(cx.debug_bounds("settings-updates-row").is_some());
+    let auto_check = cx
+        .debug_bounds("settings-auto-check-updates")
+        .expect("update settings should expose an automatic check switch");
+    cx.simulate_click(auto_check.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.read(|app| assert!(!root.read(app).auto_check_updates_enabled()));
+    assert!(
+        !load_or_create_settings(&paths)
+            .unwrap()
+            .settings
+            .general
+            .auto_check_updates
+    );
+
+    let check = cx
+        .debug_bounds("settings-check-for-updates")
+        .expect("update settings should expose a manual check button");
+    cx.simulate_click(check.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    cx.read(|app| {
+        let status = root.read(app).update_status().clone();
+        assert!(
+            matches!(
+                &status,
+                UpdateStatus::Available(update) if update.version.to_string() == "99.0.0"
+            ),
+            "unexpected update status: {status:?}"
+        );
+    });
+    assert!(cx.debug_bounds("settings-download-update").is_some());
 }
 
 #[gpui::test]

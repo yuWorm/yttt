@@ -42,6 +42,7 @@ mod ssh_connections;
 mod ssh_project_picker;
 mod state;
 mod surface;
+mod update;
 mod work_area;
 use dialogs::*;
 use git::*;
@@ -51,6 +52,7 @@ use render::{push_component_notification, split_child};
 use settings::{settings_button, settings_overlay};
 use ssh_connections::{ssh_connections_overlay, ssh_host_key_overlay};
 use ssh_project_picker::ssh_project_picker_overlay;
+pub use state::update::UpdateStatus;
 use state::{
     documents::DocumentLifecycleState,
     overlays::OverlayControllerState,
@@ -64,6 +66,7 @@ use state::{
         SshProjectDirectory, SshProjectPickerView,
     },
     terminal::{TerminalControllerState, TerminalPaneTarget},
+    update::UpdateControllerState,
 };
 
 use std::{
@@ -280,6 +283,7 @@ pub struct WorkbenchView {
     project: ProjectControllerState,
     ssh: SshControllerState,
     settings: SettingsControllerState,
+    update: UpdateControllerState,
     performance: performance::PerformanceMonitorState,
     last_opened_layout_file: Option<PathBuf>,
     last_opened_keybindings_file: Option<PathBuf>,
@@ -646,6 +650,7 @@ impl WorkbenchView {
             active_project_file_watcher: None,
             project_file_watching_enabled: true,
             settings: SettingsControllerState::new(keybinding_warning_lines, keybindings_editor),
+            update: UpdateControllerState::default(),
             performance: performance::PerformanceMonitorState::default(),
             last_opened_layout_file: None,
             last_opened_keybindings_file: None,

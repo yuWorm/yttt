@@ -2,13 +2,14 @@ pub mod assets;
 pub mod platform;
 pub mod startup;
 
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 use gpui::{
     App, AppContext, Bounds, Entity, Pixels, QuitMode, Styled, Window, WindowBackgroundAppearance,
     WindowBounds, WindowOptions, px, size, transparent_black,
 };
 use gpui_component::{Root as ComponentRoot, Theme, TitleBar};
+use reqwest_client::ReqwestClient;
 
 use crate::{
     config::{
@@ -28,7 +29,10 @@ use crate::{
 
 pub fn run() {
     let config_paths = AppConfigPaths::for_app();
+    let http_client = ReqwestClient::user_agent(concat!("yttt/", env!("CARGO_PKG_VERSION")))
+        .expect("failed to initialize HTTP client");
     gpui_platform::application()
+        .with_http_client(Arc::new(http_client))
         .with_assets(assets::app_assets(&config_paths))
         .with_quit_mode(QuitMode::LastWindowClosed)
         .run(|cx: &mut App| {
@@ -54,13 +58,15 @@ pub fn run() {
                 workbench_window_options(bounds, app_settings.window.effect),
                 move |window, cx| {
                     let appearance = appearance.clone();
+                    let startup_mode = startup_mode_from_fixture(
+                        std::env::var("YTTT_DEV_FIXTURE").ok().as_deref(),
+                    );
+                    let should_check_for_updates = startup_mode == StartupMode::Normal;
                     let view = cx.new(|_| {
                         let force_onboarding = force_onboarding_from_env(
                             std::env::var(FORCE_ONBOARDING_ENV).ok().as_deref(),
                         );
-                        let view = match startup_mode_from_fixture(
-                            std::env::var("YTTT_DEV_FIXTURE").ok().as_deref(),
-                        ) {
+                        let view = match startup_mode {
                             StartupMode::DevFixture => WorkbenchView::dev_fixture(),
                             StartupMode::AgentExitFixture => WorkbenchView::agent_exit_fixture(),
                             StartupMode::Normal => WorkbenchView::from_startup(force_onboarding),
@@ -69,6 +75,9 @@ pub fn run() {
                     });
                     view.update(cx, |view, cx| view.sync_performance_monitoring(cx));
                     view.update(cx, |view, cx| view.start_ssh_event_listener(cx));
+                    if should_check_for_updates {
+                        view.update(cx, |view, cx| view.start_update_check(window, cx));
+                    }
                     register_workbench_keybinding_interceptor(cx, &view);
                     register_workbench_focus_restore(window, cx, &view);
                     register_workbench_close_guard(window, cx, &view);

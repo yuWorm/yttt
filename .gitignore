@@ -8,3 +8,4 @@ docs/zed-screenshots
 /.agents
 /skills-lock.json
 /tmp
+__pycache__/

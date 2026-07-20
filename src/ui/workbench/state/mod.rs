@@ -5,3 +5,4 @@ pub(super) mod project;
 pub(super) mod settings;
 pub(super) mod ssh;
 pub(super) mod terminal;
+pub(super) mod update;

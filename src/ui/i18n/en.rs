@@ -343,6 +343,21 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSystemNotificationsDescription => {
             "Notify when agent terminal tasks complete or fail."
         }
+        UiTextKey::SettingsUpdates => "Updates",
+        UiTextKey::SettingsUpdatesDescription => {
+            "View the installed version and check for available releases."
+        }
+        UiTextKey::SettingsAutoCheckUpdates => "Automatically check for updates",
+        UiTextKey::SettingsAutoCheckUpdatesDescription => {
+            "Check once per day after startup without blocking the application."
+        }
+        UiTextKey::SettingsCheckForUpdates => "Check for updates",
+        UiTextKey::SettingsCheckingForUpdates => "Checking...",
+        UiTextKey::SettingsUpdateAvailable => "Update available",
+        UiTextKey::SettingsUpdateAvailableDescription => "A newer version is ready to download.",
+        UiTextKey::SettingsUpToDate => "YTTT is up to date",
+        UiTextKey::SettingsUpdateCheckFailed => "Unable to check for updates",
+        UiTextKey::SettingsDownloadUpdate => "Download update",
         UiTextKey::SettingsRestoreLastSession => "Restore projects on startup",
         UiTextKey::SettingsRestoreLastSessionDescription => {
             "Open every project that was still open when YTTT last exited."

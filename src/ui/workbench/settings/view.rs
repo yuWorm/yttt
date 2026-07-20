@@ -297,6 +297,65 @@ fn settings_general_rows(
                 )
             },
         );
+    let update_status = root.update_status().clone();
+    let update_checking = matches!(update_status, UpdateStatus::Checking);
+    let update_status_label = match &update_status {
+        UpdateStatus::Idle => format!("v{}", root.current_app_version()),
+        UpdateStatus::Checking => text.get(UiTextKey::SettingsCheckingForUpdates).to_string(),
+        UpdateStatus::UpToDate => format!(
+            "v{} · {}",
+            root.current_app_version(),
+            text.get(UiTextKey::SettingsUpToDate)
+        ),
+        UpdateStatus::Available(update) => {
+            format!("v{} → v{}", root.current_app_version(), update.version)
+        }
+        UpdateStatus::Failed(_) => format!(
+            "v{} · {}",
+            root.current_app_version(),
+            text.get(UiTextKey::SettingsUpdateCheckFailed)
+        ),
+    };
+    let update_download_url = root.available_update_url().map(str::to_string);
+    let update_control = div()
+        .flex()
+        .items_center()
+        .justify_end()
+        .gap(style.ui_style.spacing.md)
+        .w(style.control_width)
+        .child(settings_value(update_status_label, theme, style.ui_style))
+        .child(
+            settings_button(
+                "settings-check-for-updates",
+                if update_checking {
+                    text.get(UiTextKey::SettingsCheckingForUpdates)
+                } else {
+                    text.get(UiTextKey::SettingsCheckForUpdates)
+                },
+                false,
+                theme,
+                cx,
+                cx.listener(|this, _, window, cx| {
+                    this.check_for_updates(window, cx);
+                }),
+            )
+            .loading(update_checking)
+            .disabled(update_checking)
+            .debug_selector(|| "settings-check-for-updates".to_string()),
+        )
+        .when_some(update_download_url, |this, url| {
+            this.child(
+                settings_button(
+                    "settings-download-update",
+                    text.get(UiTextKey::SettingsDownloadUpdate),
+                    true,
+                    theme,
+                    cx,
+                    move |_, _, cx| cx.open_url(&url),
+                )
+                .debug_selector(|| "settings-download-update".to_string()),
+            )
+        });
 
     div()
         .flex()
@@ -456,6 +515,41 @@ fn settings_general_rows(
                 .into_any_element(),
             )
             .debug_selector(|| "settings-ssh-connections-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsUpdates),
+                text.get(UiTextKey::SettingsUpdatesDescription),
+                update_control.into_any_element(),
+            )
+            .debug_selector(|| "settings-updates-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsAutoCheckUpdates),
+                text.get(UiTextKey::SettingsAutoCheckUpdatesDescription),
+                settings_switch(
+                    "settings-auto-check-updates",
+                    root.auto_check_updates_enabled(),
+                    theme,
+                    style.ui_style,
+                    cx.listener(|this, checked: &bool, window, cx| {
+                        if let Err(error) = this.set_auto_check_updates_enabled(*checked) {
+                            this.load_error = Some(error.to_string());
+                        } else if *checked {
+                            this.start_update_check(window, cx);
+                        }
+                        cx.notify();
+                    }),
+                )
+                .debug_selector(|| "settings-auto-check-updates".to_string())
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-auto-check-updates-row".to_string()),
         )
 }
 
