@@ -10979,7 +10979,7 @@ dependencies = [
 
 [[package]]
 name = "yttt"
-version = "1.0.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "cocoa 0.26.0",
@@ -11038,7 +11038,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-core"
-version = "1.0.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -11047,7 +11047,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-ssh"
-version = "1.0.0"
+version = "0.2.0"
 dependencies = [
  "async-channel 2.5.0",
  "keyring",
@@ -11064,7 +11064,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-terminal"
-version = "1.0.0"
+version = "0.2.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -11084,7 +11084,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-ui"
-version = "1.0.0"
+version = "0.2.0"
 dependencies = [
  "gpui",
  "gpui-component",

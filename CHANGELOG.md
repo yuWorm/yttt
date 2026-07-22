@@ -1,6 +1,8 @@
 # Changelog
 
-## 1.0.0 - 2026-07-18
+## Unreleased
+
+## 0.2.0 - 2026-07-18
 
 ### Added
 
@@ -10,6 +12,8 @@
 - Added operating-system credential-store integration for remembered SSH passwords and endpoint-bound credential metadata.
 - Added drag-to-edge work-area splitting for terminal and file tabs, with independent tab groups and resizable dividers.
 - Added a project-wide file finder with Git-ignore-aware local and SSH indexing, fuzzy path ranking, file previews, and `cmd-p`/`ctrl-p` shortcuts.
+- Added non-blocking application update checks with daily caching, manual checks, localized settings, and platform-specific release downloads.
+- Added release preparation and metadata tooling that generates changelog-backed GitHub Release notes, checksums, and the client update manifest.
 
 ### Changed
 
