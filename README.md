@@ -81,7 +81,8 @@ bar shows the current Vim mode and pending multi-key sequence. In the focused **
 Enter/`o`, `a/A`, `r/d`, `y/x/p`, `z`, `H/R`, `/`, and `q` provide configurable
 neo-tree-style navigation and file operations. `Ctrl-W h/j/k/l` traverses the Projects list,
 work-area panes and groups, and the right project tree. See [Usage](docs/usage.md#keybindings) for
-config paths and command IDs.
+config paths and command IDs. In Global Vim Terminal mode, `Escape` and `Ctrl-[` remain process
+input; use `Ctrl-\ Ctrl-N` to return to Normal mode.
 
 ## SSH Projects
 

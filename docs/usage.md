@@ -226,6 +226,10 @@ project trees, settings, panes, tabs, palettes, and dialogs. The full-width stat
 active mode, surface, and pending key sequence. The unnamed editor register is shared across
 documents and mirrored to the system clipboard.
 
+On a terminal surface, `i/a/I/A` enter Terminal mode and restore direct process input. `Escape`
+and `Ctrl-[` are sent to the terminal process for shells and TUI applications; use
+`Ctrl-\ Ctrl-N` to return to yttt Normal mode.
+
 `Ctrl-W h/j/k/l` moves directionally across the left **Projects** list, work-area panes and groups,
 and the right project tree. When Projects owns Global Vim focus, `j/k` and `gg/G` select opened
 projects while keeping focus in the list.

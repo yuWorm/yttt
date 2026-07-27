@@ -3981,7 +3981,25 @@ fn global_vim_keymap_spans_terminal_tabs_and_settings(cx: &mut gpui::TestAppCont
         assert_eq!(status.mode, WorkbenchVimMode::Terminal);
         assert_eq!(status.surface, VimSurface::Terminal);
     });
-    cx.simulate_keystrokes("ctrl-[");
+    for keys in ["escape", "ctrl-["] {
+        cx.read(|app| {
+            assert!(
+                root.read(app)
+                    .terminal_should_receive_keystroke(&Keystroke::parse(keys).unwrap()),
+                "{keys} must remain terminal process input"
+            );
+        });
+        cx.simulate_keystrokes(keys);
+        cx.run_until_parked();
+        cx.read(|app| {
+            assert_eq!(
+                root.read(app).vim_status().map(|status| status.mode),
+                Some(WorkbenchVimMode::Terminal),
+                "{keys} must not leave terminal mode"
+            );
+        });
+    }
+    cx.simulate_keystrokes("ctrl-\\ ctrl-n");
     cx.run_until_parked();
     cx.read(|app| {
         assert_eq!(
