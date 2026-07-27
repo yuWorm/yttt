@@ -189,7 +189,6 @@ line_height = 1.4
 tab_size = 4
 soft_wrap = false
 line_numbers = true
-vim_mode = false
 autosave = "off"
 autosave_delay_ms = 1000
 auto_detect_language = true
@@ -199,6 +198,9 @@ default_language = "plain_text"
 enabled = false
 command = ""
 
+[vim]
+mode = "disabled"
+
 [project_panel]
 default_open = true
 show_hidden = false
@@ -207,18 +209,30 @@ project_sidebar_width = 216.0
 ```
 
 Editor font family, font size, line height, soft wrap, and line numbers update all open files
-without replacing their text or saved baseline. `vim_mode` enables modal keybindings immediately
-for open project code editors; mode state is kept per document. `tab_size` applies to files opened
+without replacing their text or saved baseline. `vim.mode` accepts `"global"`, `"editor"`, or
+`"disabled"`. Global mode uses one window-level Vim state across project editors, terminals,
+project trees, settings, panes, tabs, and palettes; Editor mode limits Vim to project editors.
+Each editor still keeps its own cursor and selection state. `tab_size` applies to files opened
 after the change; reopen an existing file to apply it. Changing autosave to `off` cancels pending
 delayed saves. `default_open` affects new project sessions. Editing `width` updates the selected
-project and the default for future projects, while other open projects retain their own
-widths. Valid width ranges are 200–520 px for the right tree and 160–420 px for the left
-sidebar.
+project and the default for future projects, while other open projects retain their own widths.
+Valid width ranges are 200–520 px for the right tree and 160–420 px for the left sidebar.
 
-Vim mode supports Normal, Insert, Visual, and Visual Line modes; counts; `h/j/k/l`, word,
-line, document, and `gj`/`gk` display-line motions; `i/a/I/A/o/O`; `d/c/y` with motions or
+The editor surface supports Normal, Insert, Visual, and Visual Line modes; counts; `h/j/k/l`,
+word, line, document, and `gj`/`gk` display-line motions; `i/a/I/A/o/O`; `d/c/y` with motions or
 doubled linewise operators; `x/s/r/p/P/u/Ctrl-R`; and `/`, `n`, and `N` search navigation.
-The unnamed register is shared across documents and mirrored to the system clipboard.
+Global mode additionally maps modal navigation and actions onto the opened-project list, terminals,
+project trees, settings, panes, tabs, palettes, and dialogs. The full-width status bar shows the
+active mode, surface, and pending key sequence. The unnamed editor register is shared across
+documents and mirrored to the system clipboard.
+
+`Ctrl-W h/j/k/l` moves directionally across the left **Projects** list, work-area panes and groups,
+and the right project tree. When Projects owns Global Vim focus, `j/k` and `gg/G` select opened
+projects while keeping focus in the list.
+
+When the project tree owns Global Vim focus, its current row is the operation target: `j/k` move
+it, `h` collapses or selects the parent, and `l` expands, descends, or opens a file. Tree operations
+use that keyboard-selected row immediately rather than waiting for the project model to refresh.
 
 `terminal.shell = "auto"` selects the first detected shell for the current platform. Detection
 covers `SHELL` and common macOS/Linux shells, plus `COMSPEC`, PowerShell, `cmd.exe`, and shells
@@ -428,6 +442,54 @@ settings.keybindings
 
 Keybinding conflicts are reported on startup and through the visible keybinding warning
 state.
+
+The file stores sparse overrides over the built-in defaults. It reloads automatically after a
+successful in-app save or external edit. A minimal configuration is:
+
+```toml
+schema_version = 6
+leader = "space"
+
+[[bindings]]
+keys = "<leader> f"
+command = "file.find"
+context = "Workspace"
+
+[[bindings]]
+keys = "<leader> p"
+command = "command_palette.open"
+context = "Workspace"
+```
+
+`<leader>` expands to the top-level `leader` key. Multi-key sequences separate keystrokes with
+spaces. Set `unbind = true` on an entry to remove its exact default assignment; user overrides
+do not replace unrelated defaults. Contexts are GPUI predicate strings, and the settings editor
+reports invalid commands, invalid sequences, and conflicting assignments before saving.
+
+Directional focus is exposed through the configurable `pane.focus_left`, `pane.focus_right`,
+`pane.focus_up`, and `pane.focus_down` actions. Despite their compatibility-preserving IDs, they
+move across terminal panes, work-area groups, editors, and the project tree.
+
+Global Vim project-tree defaults follow the core neo-tree workflow:
+
+```text
+j / k       next / previous visible entry
+h / l       collapse-or-parent / expand-or-open
+gg / G      first / last visible entry
+Enter / o   open a file or toggle a directory
+a / A       create file / directory
+r / d       rename / delete
+y / x / p   copy / cut / paste
+z           collapse all directories
+H / R       toggle hidden files / refresh
+/           open the project file finder
+q           hide the project tree
+```
+
+Each operation above has its own `project_tree.*` or existing command action and can be rebound or
+unbound in Settings. Space remains the configurable Vim leader instead of shadowing it with
+neo-tree's default toggle mapping; `project_tree.vim.toggle` is available for users who prefer that
+assignment.
 
 Important default commands:
 

@@ -7,6 +7,8 @@ impl Render for WorkbenchView {
         window.set_rem_size(px(self.app_settings.general.ui_font_size));
         self.sync_error_notification(window, cx);
         self.ensure_active_project_file_watcher(window, cx);
+        self.ensure_keybindings_watcher(window, cx);
+        self.flush_pending_keybindings_reload(cx);
         self.flush_pending_git_operations(window, cx);
         self.flush_pending_file_finder_operations(window, cx);
         self.flush_pending_project_tree_loads(window, cx);
@@ -17,6 +19,8 @@ impl Render for WorkbenchView {
         self.sync_input_owner_state();
         self.prune_terminal_panes();
         self.ensure_eager_terminal_panes(window, cx);
+        self.ensure_vim_key_feedback_observers(window, cx);
+        self.sync_vim_controller(window, cx);
         let focus_handle = self.workbench_focus_handle(cx);
         let default_active_content_focus_requested = self.onboarding.is_none()
             && !focus_handle.contains_focused(window, cx)
@@ -67,6 +71,14 @@ impl Render for WorkbenchView {
             )
         } else {
             self.reconcile_selected_work_area();
+            let projects_focus_requested =
+                self.pending_projects_focus && self.should_auto_focus_workspace();
+            if projects_focus_requested {
+                focus_handle.focus(window, cx);
+                self.pending_projects_focus = false;
+            }
+            let projects_has_keyboard_focus = self.projects_focus_active
+                && (projects_focus_requested || focus_handle.is_focused(window));
             let tab_items = self.workbench_tab_items(cx);
             let project_panel_visible = self.selected_project_panel_visible();
             let work_area_snapshot = self.selected_work_area_snapshot();
@@ -100,8 +112,14 @@ impl Render for WorkbenchView {
                         appearance.style,
                         self.ui_text,
                         focus_handle.clone(),
+                        projects_has_keyboard_focus,
                         self.app_settings.project_panel.project_sidebar_width,
                         self.sidebar_collapsed,
+                        cx.listener(|this, _: &MouseDownEvent, _window, cx| {
+                            if this.queue_projects_focus() {
+                                cx.notify();
+                            }
+                        }),
                         cx.listener(|this, _, _window, cx| {
                             this.toggle_sidebar();
                             cx.notify();
@@ -154,6 +172,7 @@ impl Render for WorkbenchView {
                 None => false,
             };
 
+        let vim_status = self.vim.current_status();
         let mut root = div()
             .flex()
             .flex_col()
@@ -186,7 +205,10 @@ impl Render for WorkbenchView {
                     cx.notify();
                 }),
             ))
-            .child(body);
+            .child(body)
+            .when_some(vim_status, |root, status| {
+                root.child(vim_status_bar(status, appearance.ui, appearance.style))
+            });
         if !self.app_settings.general.ui_font_family.is_empty() {
             root = root.font_family(self.app_settings.general.ui_font_family.clone());
         }
@@ -282,7 +304,7 @@ impl Render for WorkbenchView {
                 root = root.child(keybinding_edit_dialog(
                     cx,
                     &self.ui_text,
-                    edit.command,
+                    edit.action,
                     &edit.keys,
                     edit.error.as_deref(),
                     appearance.ui,
@@ -341,8 +363,20 @@ impl Render for WorkbenchView {
             focus_handle.focus(window, cx);
         }
 
+        let mut key_context = self.vim.current_key_context();
+        let input_owner = self.foreground_input_owner_kind();
+        if matches!(
+            input_owner,
+            InputOwnerKind::Workspace | InputOwnerKind::Editor
+        ) {
+            key_context.add(WORKSPACE_CONTEXT);
+        }
+        if input_owner == InputOwnerKind::Palette {
+            key_context.add(PALETTE_CONTEXT);
+        }
+
         root.track_focus(&focus_handle)
-            .key_context(WORKSPACE_CONTEXT)
+            .key_context(key_context)
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_move(cx.listener(Self::on_resize_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_resize_mouse_up))
@@ -353,8 +387,14 @@ impl Render for WorkbenchView {
             .on_action(cx.listener(Self::on_open_file_finder))
             .on_action(cx.listener(Self::on_open_project_palette))
             .on_action(cx.listener(Self::on_opened_project_palette))
+            .on_action(cx.listener(Self::on_recent_project_palette))
             .on_action(cx.listener(Self::on_project_panel_toggle))
             .on_action(cx.listener(Self::on_project_panel_refresh))
+            .on_action(cx.listener(Self::on_focus_projects))
+            .on_action(cx.listener(Self::on_projects_select_previous))
+            .on_action(cx.listener(Self::on_projects_select_next))
+            .on_action(cx.listener(Self::on_projects_select_first))
+            .on_action(cx.listener(Self::on_projects_select_last))
             .on_action(cx.listener(Self::on_open_tab_palette))
             .on_action(cx.listener(Self::on_open_pane_palette))
             .on_action(cx.listener(Self::on_palette_select_next))
@@ -374,6 +414,13 @@ impl Render for WorkbenchView {
             .on_action(cx.listener(Self::on_tab_prev))
             .on_action(cx.listener(Self::on_file_save))
             .on_action(cx.listener(Self::on_git_branch_switch))
+            .on_action(cx.listener(Self::on_git_diff_close))
+            .on_action(cx.listener(Self::on_git_diff_toggle_stage_mode))
+            .on_action(cx.listener(Self::on_git_diff_toggle_view_mode))
+            .on_action(cx.listener(Self::on_git_diff_toggle_whitespace))
+            .on_action(cx.listener(Self::on_git_diff_select_previous_file))
+            .on_action(cx.listener(Self::on_git_diff_select_next_file))
+            .on_action(cx.listener(Self::on_git_diff_copy_selected))
             .on_action(cx.listener(Self::on_git_diff_open))
             .on_action(cx.listener(Self::on_pane_split_vertical))
             .on_action(cx.listener(Self::on_pane_split_horizontal))
@@ -398,6 +445,13 @@ impl Render for WorkbenchView {
             .on_action(cx.listener(Self::on_settings_open))
             .on_action(cx.listener(Self::on_settings_keybindings))
             .on_action(cx.listener(Self::on_settings_notifications))
+            .on_action(cx.listener(Self::on_settings_vim_previous_group))
+            .on_action(cx.listener(Self::on_settings_vim_next_group))
+            .on_action(cx.listener(Self::on_settings_vim_first_group))
+            .on_action(cx.listener(Self::on_settings_vim_last_group))
+            .on_action(cx.listener(Self::on_vim_enter_normal))
+            .on_action(cx.listener(Self::on_vim_enter_insert))
+            .on_action(cx.listener(Self::on_vim_enter_terminal))
     }
 }
 
@@ -409,6 +463,60 @@ pub(super) fn split_child(child: Div, basis: f32) -> Div {
         .flex_shrink(1.0)
         .overflow_hidden()
         .child(child)
+}
+
+fn vim_status_bar(
+    status: crate::ui::vim::VimStatus,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Div {
+    let mode_color = match status.mode {
+        WorkbenchVimMode::Normal => theme.accent,
+        WorkbenchVimMode::Insert => theme.success,
+        WorkbenchVimMode::Visual | WorkbenchVimMode::VisualLine => theme.warning,
+        WorkbenchVimMode::Terminal => theme.danger,
+    };
+    let key_feedback = (!status.key_feedback.is_empty()).then(|| status.key_feedback.join(" "));
+    let detail = status
+        .detail
+        .filter(|detail| !detail.eq_ignore_ascii_case(status.mode.label()));
+    div()
+        .debug_selector(|| "vim-status-bar".to_string())
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(ui_style.spacing.md)
+        .h(ui_style.controls.status_footer_height)
+        .px(ui_style.spacing.lg)
+        .border_t(ui_style.border.hairline)
+        .border_color(theme.border)
+        .bg(theme.tabbar_background)
+        .text_xs()
+        .text_color(theme.text_muted)
+        .child(
+            div()
+                .debug_selector(|| "vim-status-mode".to_string())
+                .rounded(ui_style.radius.compact)
+                .px(ui_style.spacing.md)
+                .bg(mode_color.alpha(0.2))
+                .text_color(mode_color)
+                .child(status.mode.label()),
+        )
+        .child(status.surface.label())
+        .when_some(detail, |bar, detail| {
+            bar.child(div().text_color(theme.text).child(detail))
+        })
+        .when_some(key_feedback, |bar, keys| {
+            bar.child(div().flex_1()).child(
+                div()
+                    .debug_selector(|| "vim-status-keys".to_string())
+                    .rounded(ui_style.radius.compact)
+                    .px(ui_style.spacing.md)
+                    .bg(theme.surface_elevated)
+                    .text_color(theme.text)
+                    .child(keys),
+            )
+        })
 }
 
 fn layout_editor_panel_background(theme: WorkbenchTheme, ui_style: UiStyle) -> Rgba {

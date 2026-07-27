@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use super::atomic_write;
 use crate::config::paths::AppConfigPaths;
 use crate::ui::theme::DEFAULT_THEME_NAME;
 
@@ -21,6 +22,7 @@ pub struct AppSettings {
     pub notifications: NotificationSettings,
     pub terminal: TerminalSettings,
     pub editor: EditorSettings,
+    pub vim: VimSettings,
     pub project_panel: ProjectPanelSettings,
 }
 
@@ -33,6 +35,7 @@ impl Default for AppSettings {
             notifications: NotificationSettings::default(),
             terminal: TerminalSettings::default(),
             editor: EditorSettings::default(),
+            vim: VimSettings::default(),
             project_panel: ProjectPanelSettings::default(),
         }
     }
@@ -108,6 +111,29 @@ impl Default for GeneralSettings {
                 "nvim".to_string(),
                 "codex".to_string(),
             ],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VimModeSetting {
+    Global,
+    Editor,
+    #[default]
+    Disabled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct VimSettings {
+    pub mode: VimModeSetting,
+}
+
+impl Default for VimSettings {
+    fn default() -> Self {
+        Self {
+            mode: VimModeSetting::Disabled,
         }
     }
 }
@@ -266,7 +292,6 @@ pub struct EditorSettings {
     pub tab_size: usize,
     pub soft_wrap: bool,
     pub line_numbers: bool,
-    pub vim_mode: bool,
     pub autosave: EditorAutosave,
     pub autosave_delay_ms: u64,
     pub auto_detect_language: bool,
@@ -283,7 +308,6 @@ impl Default for EditorSettings {
             tab_size: 4,
             soft_wrap: false,
             line_numbers: true,
-            vim_mode: false,
             autosave: EditorAutosave::Off,
             autosave_delay_ms: 1000,
             auto_detect_language: true,
@@ -343,6 +367,7 @@ pub enum SettingsLoadWarning {
     InvalidThemeValue { field: &'static str },
     InvalidTerminalValue { field: &'static str },
     InvalidEditorValue { field: &'static str },
+    InvalidVimValue { field: &'static str },
     InvalidProjectPanelValue { field: &'static str },
 }
 
@@ -367,6 +392,12 @@ pub enum SettingsLoadError {
     WriteDefaults {
         path: PathBuf,
         source: std::io::Error,
+    },
+    #[error("failed to persist migrated settings at {path}: {source}")]
+    PersistMigration {
+        path: PathBuf,
+        #[source]
+        source: SettingsSaveError,
     },
 }
 
@@ -399,8 +430,14 @@ pub fn load_or_create_settings(
     })?;
 
     let mut warnings = Vec::new();
-    let settings = parse_settings_source(&source, &path, &mut warnings);
+    let (settings, migrated) = parse_settings_source(&source, &path, &mut warnings);
     let settings = validate_settings(settings, &mut warnings);
+    if migrated {
+        save_settings(paths, &settings).map_err(|source| SettingsLoadError::PersistMigration {
+            path: path.clone(),
+            source,
+        })?;
+    }
 
     Ok(LoadedSettings { settings, warnings })
 }
@@ -409,7 +446,7 @@ fn parse_settings_source(
     source: &str,
     path: &Path,
     warnings: &mut Vec<SettingsLoadWarning>,
-) -> AppSettings {
+) -> (AppSettings, bool) {
     let mut value = match toml::from_str::<toml::Value>(source) {
         Ok(value) => value,
         Err(error) => {
@@ -417,25 +454,108 @@ fn parse_settings_source(
                 path: path.to_path_buf(),
                 message: error.to_string(),
             });
-            return AppSettings::default();
+            return (AppSettings::default(), false);
         }
     };
 
+    let migrated = normalize_vim_settings(&mut value, warnings);
     normalize_general_settings(&mut value, warnings);
     normalize_window_settings(&mut value, warnings);
     normalize_theme_settings(&mut value, warnings);
     normalize_editor_settings(&mut value, warnings);
 
     match value.try_into::<AppSettings>() {
-        Ok(settings) => settings,
+        Ok(settings) => (settings, migrated),
         Err(error) => {
             warnings.push(SettingsLoadWarning::InvalidToml {
                 path: path.to_path_buf(),
                 message: error.to_string(),
             });
-            AppSettings::default()
+            (AppSettings::default(), false)
         }
     }
+}
+
+fn normalize_vim_settings(
+    value: &mut toml::Value,
+    warnings: &mut Vec<SettingsLoadWarning>,
+) -> bool {
+    let configured_mode = value
+        .get("vim")
+        .and_then(|vim| vim.get("mode"))
+        .and_then(toml::Value::as_str)
+        .map(str::to_owned);
+    let configured_mode_is_valid = matches!(
+        configured_mode.as_deref(),
+        Some("global" | "editor" | "disabled")
+    );
+    let legacy_workspace = value
+        .get("general")
+        .and_then(|general| general.get("workspace_vim_navigation"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false);
+    let legacy_settings = value
+        .get("general")
+        .and_then(|general| general.get("settings_vim_navigation"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false);
+    let legacy_editor = value
+        .get("editor")
+        .and_then(|editor| editor.get("vim_mode"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false);
+    let legacy_terminal = value
+        .get("terminal")
+        .and_then(|terminal| terminal.get("start_in_vim_mode"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false);
+    let migrated_mode = if legacy_workspace || legacy_settings || legacy_terminal {
+        "global"
+    } else if legacy_editor {
+        "editor"
+    } else {
+        "disabled"
+    };
+
+    let Some(root) = value.as_table_mut() else {
+        return false;
+    };
+    let mut changed = false;
+    for (section, fields) in [
+        (
+            "general",
+            &["workspace_vim_navigation", "settings_vim_navigation"][..],
+        ),
+        ("editor", &["vim_mode"][..]),
+        ("terminal", &["start_in_vim_mode"][..]),
+    ] {
+        if let Some(table) = root.get_mut(section).and_then(toml::Value::as_table_mut) {
+            for field in fields {
+                changed |= table.remove(*field).is_some();
+            }
+        }
+    }
+
+    if !configured_mode_is_valid {
+        if configured_mode.is_some() {
+            warnings.push(SettingsLoadWarning::InvalidVimValue { field: "mode" });
+        }
+        let vim = root
+            .entry("vim")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        if !vim.is_table() {
+            *vim = toml::Value::Table(toml::Table::new());
+        }
+        vim.as_table_mut()
+            .expect("Vim settings were normalized to a table")
+            .insert(
+                "mode".to_string(),
+                toml::Value::String(migrated_mode.to_string()),
+            );
+        changed = true;
+    }
+
+    changed
 }
 
 fn normalize_general_settings(value: &mut toml::Value, warnings: &mut Vec<SettingsLoadWarning>) {
@@ -534,7 +654,7 @@ pub fn save_settings(
             path: path.clone(),
             source,
         })?;
-    fs::write(&path, source).map_err(|source| SettingsSaveError::Write {
+    atomic_write(&path, source.as_bytes()).map_err(|source| SettingsSaveError::Write {
         path: path.clone(),
         source,
     })?;
@@ -708,7 +828,7 @@ fn ensure_settings_file(paths: &AppConfigPaths) -> Result<PathBuf, SettingsLoadE
             source,
         }
     })?;
-    fs::write(&path, source).map_err(|source| SettingsLoadError::WriteDefaults {
+    atomic_write(&path, source.as_bytes()).map_err(|source| SettingsLoadError::WriteDefaults {
         path: path.clone(),
         source,
     })?;

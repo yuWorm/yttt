@@ -319,6 +319,25 @@ fn splitting_a_file_tab_preserves_identity_and_collapses_when_closed() {
         session.active_work_item(),
         Some(&WorkItemId::File(file.clone()))
     );
+    let first_group_id = first.id();
+    let second_group_id = second.id();
+    assert_eq!(
+        session.adjacent_group_id(WorkAreaDropEdge::Left),
+        Some(first_group_id)
+    );
+    assert_eq!(session.adjacent_group_id(WorkAreaDropEdge::Right), None);
+    assert_eq!(
+        session.activate_group(first_group_id),
+        Some(WorkItemId::Terminal("logs".to_string()))
+    );
+    assert_eq!(
+        session.adjacent_group_id(WorkAreaDropEdge::Right),
+        Some(second_group_id)
+    );
+    assert_eq!(
+        session.activate_group(second_group_id),
+        Some(WorkItemId::File(file.clone()))
+    );
 
     assert_eq!(
         session.close_file(&file, &terminals),
@@ -333,5 +352,66 @@ fn splitting_a_file_tab_preserves_identity_and_collapses_when_closed() {
             WorkItemId::Terminal("dev".to_string()),
             WorkItemId::Terminal("logs".to_string()),
         ]
+    );
+}
+
+#[test]
+fn nested_work_area_navigation_keeps_orthogonal_alignment() {
+    let project_id = ProjectId::new("project-a");
+    let mut session =
+        ProjectWorkItemSession::new(project_id, "/project-a", Some("a".to_string()), true, 280.0);
+    let terminals = ["a", "b", "c", "d"]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    session.reconcile_work_area(&terminals);
+    let top_left = session.active_group_id();
+
+    assert!(session.drop_work_item(
+        &WorkItemId::Terminal("c".to_string()),
+        top_left,
+        top_left,
+        WorkAreaDropPlacement::Edge(WorkAreaDropEdge::Bottom),
+        &terminals,
+    ));
+    let bottom_left = session.active_group_id();
+    assert!(session.drop_work_item(
+        &WorkItemId::Terminal("d".to_string()),
+        top_left,
+        bottom_left,
+        WorkAreaDropPlacement::Edge(WorkAreaDropEdge::Right),
+        &terminals,
+    ));
+    let bottom_right = session.active_group_id();
+    assert!(session.drop_work_item(
+        &WorkItemId::Terminal("b".to_string()),
+        top_left,
+        top_left,
+        WorkAreaDropPlacement::Edge(WorkAreaDropEdge::Right),
+        &terminals,
+    ));
+    let top_right = session.active_group_id();
+
+    assert_eq!(
+        session.adjacent_group_id(WorkAreaDropEdge::Bottom),
+        Some(bottom_right)
+    );
+    session.activate_group(bottom_right);
+    assert_eq!(
+        session.adjacent_group_id(WorkAreaDropEdge::Top),
+        Some(top_right)
+    );
+    assert_eq!(
+        session.adjacent_group_id(WorkAreaDropEdge::Left),
+        Some(bottom_left)
+    );
+    session.activate_group(top_left);
+    assert_eq!(
+        session.adjacent_group_id(WorkAreaDropEdge::Bottom),
+        Some(bottom_left)
+    );
+    assert_eq!(
+        session.adjacent_group_id(WorkAreaDropEdge::Right),
+        Some(top_right)
     );
 }

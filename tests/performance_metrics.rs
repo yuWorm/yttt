@@ -78,6 +78,18 @@ fn performance_metrics_render_sample_and_toggle_from_settings(cx: &mut gpui::Tes
         assert_eq!(application.memory.value, "—");
     });
 
+    let settings_scroll_origin = cx
+        .debug_bounds("settings-restore-last-session-row")
+        .expect("general settings rows should be visible")
+        .center();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: settings_scroll_origin,
+        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-240.0))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
     let system_toggle = cx
         .debug_bounds("settings-system-performance-metrics")
         .expect("general settings should expose the system performance switch");

@@ -636,7 +636,9 @@ fn project_tree_view_emits_file_and_directory_events(cx: &mut gpui::TestAppConte
     assert_eq!(
         events.borrow().as_slice(),
         [
+            ProjectTreeViewEvent::SelectPath(Path::new("README.md").to_path_buf()),
             ProjectTreeViewEvent::OpenFile(Path::new("README.md").to_path_buf()),
+            ProjectTreeViewEvent::SelectPath(Path::new("src").to_path_buf()),
             ProjectTreeViewEvent::ToggleDirectory {
                 path: Path::new("src").to_path_buf(),
                 expanded: true,

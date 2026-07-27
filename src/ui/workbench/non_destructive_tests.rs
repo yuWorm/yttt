@@ -721,7 +721,10 @@ fn active_project_file_watcher_refreshes_tree_and_git_status(cx: &mut TestAppCon
 
 #[gpui::test]
 fn git_diff_panel_renders_controls_and_handles_shortcuts(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.bind_keys(crate::ui::interaction::actions::app_startup_keybindings());
+    });
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir(&project_path).unwrap();
@@ -906,7 +909,10 @@ fn git_diff_panel_renders_controls_and_handles_shortcuts(cx: &mut TestAppContext
 
 #[gpui::test]
 fn git_diff_panel_virtualizes_many_files_and_large_file_rows(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.bind_keys(crate::ui::interaction::actions::app_startup_keybindings());
+    });
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     let bulk_path = project_path.join("bulk");

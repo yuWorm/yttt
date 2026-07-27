@@ -506,6 +506,15 @@ impl ProjectEditorDocument {
         }
     }
 
+    pub fn is_focused(&self, window: &Window, cx: &gpui::App) -> bool {
+        match &self.surface {
+            ProjectEditorSurface::Code { input, .. } => {
+                input.read(cx).focus_handle(cx).is_focused(window)
+            }
+            ProjectEditorSurface::Markdown { editor, .. } => editor.read(cx).is_focused(window, cx),
+        }
+    }
+
     pub fn relocate(
         &mut self,
         document_id: DocumentId,

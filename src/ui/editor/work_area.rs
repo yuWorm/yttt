@@ -115,6 +115,82 @@ pub enum WorkAreaNode {
     },
 }
 
+#[derive(Clone, Copy, Debug)]
+struct WorkAreaRect {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+impl WorkAreaRect {
+    const ROOT: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        width: 1.0,
+        height: 1.0,
+    };
+
+    fn split(self, axis: WorkAreaSplitAxis, ratio: f32) -> (Self, Self) {
+        match axis {
+            WorkAreaSplitAxis::Row => {
+                let first_width = self.width * ratio;
+                (
+                    Self {
+                        width: first_width,
+                        ..self
+                    },
+                    Self {
+                        x: self.x + first_width,
+                        width: self.width - first_width,
+                        ..self
+                    },
+                )
+            }
+            WorkAreaSplitAxis::Column => {
+                let first_height = self.height * ratio;
+                (
+                    Self {
+                        height: first_height,
+                        ..self
+                    },
+                    Self {
+                        y: self.y + first_height,
+                        height: self.height - first_height,
+                        ..self
+                    },
+                )
+            }
+        }
+    }
+
+    fn directional_score(self, candidate: Self, edge: WorkAreaDropEdge) -> Option<(f32, f32)> {
+        let center_x = self.x + self.width / 2.0;
+        let center_y = self.y + self.height / 2.0;
+        let candidate_center_x = candidate.x + candidate.width / 2.0;
+        let candidate_center_y = candidate.y + candidate.height / 2.0;
+        match edge {
+            WorkAreaDropEdge::Left if candidate_center_x < center_x => Some((
+                (self.x - (candidate.x + candidate.width)).max(0.0),
+                (candidate_center_y - center_y).abs(),
+            )),
+            WorkAreaDropEdge::Right if candidate_center_x > center_x => Some((
+                (candidate.x - (self.x + self.width)).max(0.0),
+                (candidate_center_y - center_y).abs(),
+            )),
+            WorkAreaDropEdge::Top if candidate_center_y < center_y => Some((
+                (self.y - (candidate.y + candidate.height)).max(0.0),
+                (candidate_center_x - center_x).abs(),
+            )),
+            WorkAreaDropEdge::Bottom if candidate_center_y > center_y => Some((
+                (candidate.y - (self.y + self.height)).max(0.0),
+                (candidate_center_x - center_x).abs(),
+            )),
+            _ => None,
+        }
+    }
+}
+
 impl WorkAreaNode {
     fn placeholder() -> Self {
         Self::Group(TabGroup::empty(PLACEHOLDER_GROUP_ID))
@@ -142,6 +218,67 @@ impl WorkAreaNode {
                 }
             }
         }
+    }
+
+    fn group_rect(&self, target: TabGroupId, rect: WorkAreaRect) -> Option<WorkAreaRect> {
+        match self {
+            Self::Group(group) => (group.id == target).then_some(rect),
+            Self::Split {
+                axis,
+                ratio,
+                first,
+                second,
+                ..
+            } => {
+                let (first_rect, second_rect) = rect.split(*axis, *ratio);
+                first
+                    .group_rect(target, first_rect)
+                    .or_else(|| second.group_rect(target, second_rect))
+            }
+        }
+    }
+
+    fn visit_group_rects(
+        &self,
+        rect: WorkAreaRect,
+        visitor: &mut impl FnMut(TabGroupId, WorkAreaRect),
+    ) {
+        match self {
+            Self::Group(group) => visitor(group.id, rect),
+            Self::Split {
+                axis,
+                ratio,
+                first,
+                second,
+                ..
+            } => {
+                let (first_rect, second_rect) = rect.split(*axis, *ratio);
+                first.visit_group_rects(first_rect, visitor);
+                second.visit_group_rects(second_rect, visitor);
+            }
+        }
+    }
+
+    fn adjacent_group_id(&self, target: TabGroupId, edge: WorkAreaDropEdge) -> Option<TabGroupId> {
+        let target_rect = self.group_rect(target, WorkAreaRect::ROOT)?;
+        let mut best = None::<(TabGroupId, f32, f32)>;
+        self.visit_group_rects(WorkAreaRect::ROOT, &mut |group_id, rect| {
+            if group_id == target {
+                return;
+            }
+            let Some((distance, alignment)) = target_rect.directional_score(rect, edge) else {
+                return;
+            };
+            let replace = best.is_none_or(|(_, best_distance, best_alignment)| {
+                distance.total_cmp(&best_distance).is_lt()
+                    || (distance.total_cmp(&best_distance).is_eq()
+                        && alignment.total_cmp(&best_alignment).is_lt())
+            });
+            if replace {
+                best = Some((group_id, distance, alignment));
+            }
+        });
+        best.map(|(group_id, _, _)| group_id)
     }
 
     fn group_containing(&self, item: &WorkItemId) -> Option<TabGroupId> {
@@ -347,6 +484,10 @@ impl WorkAreaState {
             .find_group(self.active_group_id)
             .map(TabGroup::items)
             .unwrap_or_default()
+    }
+
+    pub(crate) fn adjacent_group_id(&self, edge: WorkAreaDropEdge) -> Option<TabGroupId> {
+        self.root.adjacent_group_id(self.active_group_id, edge)
     }
 
     pub(crate) fn group_items_containing(&self, item: &WorkItemId) -> Option<&[WorkItemId]> {

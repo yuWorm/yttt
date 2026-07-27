@@ -117,7 +117,7 @@ impl CommandId {
         Self::SettingsNotifications,
     ];
 
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::ProjectCreate => "project.create",
             Self::ProjectOpen => "project.open",
@@ -225,14 +225,22 @@ impl CommandId {
                 "Split the focused pane into left and right panes",
             ),
             Self::PaneClose => presentation("Close Pane", "Close the focused pane"),
-            Self::PaneFocusLeft => {
-                presentation("Focus Pane Left", "Move focus to the pane on the left")
-            }
-            Self::PaneFocusRight => {
-                presentation("Focus Pane Right", "Move focus to the pane on the right")
-            }
-            Self::PaneFocusUp => presentation("Focus Pane Up", "Move focus to the pane above"),
-            Self::PaneFocusDown => presentation("Focus Pane Down", "Move focus to the pane below"),
+            Self::PaneFocusLeft => presentation(
+                "Focus Region Left",
+                "Move focus to the pane, work area, or project tree on the left",
+            ),
+            Self::PaneFocusRight => presentation(
+                "Focus Region Right",
+                "Move focus to the pane, work area, or project tree on the right",
+            ),
+            Self::PaneFocusUp => presentation(
+                "Focus Region Up",
+                "Move focus to the pane or work area above",
+            ),
+            Self::PaneFocusDown => presentation(
+                "Focus Region Down",
+                "Move focus to the pane or work area below",
+            ),
             Self::PaneResizeLeft => presentation(
                 "Resize Pane Left",
                 "Resize the focused split toward the left",
@@ -363,14 +371,25 @@ impl CommandId {
                     enabled()
                 }
             }
+            Self::PaneFocusLeft
+            | Self::PaneFocusRight
+            | Self::PaneFocusUp
+            | Self::PaneFocusDown => {
+                if !context.has_selected_project {
+                    disabled("Open a project first")
+                } else if matches!(
+                    context.active_surface,
+                    ActiveSurface::Terminal | ActiveSurface::File
+                ) {
+                    enabled()
+                } else {
+                    disabled("Open a terminal or file first")
+                }
+            }
             Self::TabRename
             | Self::PaneSplitHorizontal
             | Self::PaneSplitVertical
             | Self::PaneClose
-            | Self::PaneFocusLeft
-            | Self::PaneFocusRight
-            | Self::PaneFocusUp
-            | Self::PaneFocusDown
             | Self::PaneResizeLeft
             | Self::PaneResizeRight
             | Self::PaneResizeUp
@@ -436,6 +455,7 @@ pub struct CommandAvailability {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommandRegistry {
     commands: Vec<Command>,
+    bindable_action_ids: Vec<&'static str>,
 }
 
 impl CommandRegistry {
@@ -443,10 +463,17 @@ impl CommandRegistry {
         self.commands.iter().any(|command| command.id == command_id)
     }
 
-    pub fn contains_str(&self, command_id: &str) -> bool {
+    pub fn contains_str(&self, action_id: &str) -> bool {
         self.commands
             .iter()
-            .any(|command| command.id.as_str() == command_id)
+            .any(|command| command.id.as_str() == action_id)
+            || self.bindable_action_ids.contains(&action_id)
+    }
+
+    pub fn register_bindable_action(&mut self, action_id: &'static str) {
+        if !self.contains_str(action_id) {
+            self.bindable_action_ids.push(action_id);
+        }
     }
 
     pub fn commands(&self) -> &[Command] {
@@ -464,6 +491,7 @@ pub fn default_registry() -> CommandRegistry {
                 title: id.as_str(),
             })
             .collect(),
+        bindable_action_ids: Vec::new(),
     }
 }
 

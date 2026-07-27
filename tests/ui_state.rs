@@ -13,10 +13,13 @@ use yttt::{
     commands::CommandId,
     config::{
         default_layout::{BuiltinAgent, DefaultLayoutKind, DefaultLayoutTemplate},
-        keybindings::default_keybindings,
+        keybindings::{
+            KEYBINDINGS_SCHEMA_VERSION, Keybinding, KeybindingsConfig, default_keybindings,
+            save_keybindings,
+        },
         paths::AppConfigPaths,
         settings::{
-            AppSettings, EditorAutosave, LanguageSetting, WindowBackgroundEffect,
+            AppSettings, EditorAutosave, LanguageSetting, VimModeSetting, WindowBackgroundEffect,
             load_or_create_settings, save_settings,
         },
     },
@@ -38,8 +41,8 @@ use yttt::{
     ui::editor::{
         CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, DiskFingerprint, DocumentId,
         EditorAppearance, EditorDiagnosticSeverity, EditorLanguageId, ProjectEditorDocument,
-        ProjectEditorModel, VimMode, WorkAreaNode, WorkAreaSplitAxis, WorkItemId,
-        read_project_file,
+        ProjectEditorModel, VimMode, WorkAreaDropEdge, WorkAreaDropPlacement, WorkAreaNode,
+        WorkAreaSplitAxis, WorkItemId, read_project_file,
     },
     ui::i18n::{Locale, UiText},
     ui::notifications::{ToastTone, toast_item_for_event, visible_toast_items},
@@ -51,6 +54,7 @@ use yttt::{
         TerminalSpawnFailure, notification_for_terminal_pane_exit, pane_lifecycle_label,
         spawn_failure_lines,
     },
+    ui::vim::{VimSurface, WorkbenchVimMode},
     ui::workbench::shell::sidebar::visible_project_items,
     ui::{
         app::{register_workbench_close_guard, register_workbench_keybinding_interceptor},
@@ -69,7 +73,11 @@ use yttt::{
         workbench::{UpdateStatus, WorkbenchView},
     },
     ui::{
-        interaction::actions::{CreateProject, OpenFileFinder, TabCloseAllTerminals},
+        interaction::actions::{
+            BindableActionId, CreateProject, FocusProjects, OpenFileFinder, SettingsVimFirstGroup,
+            SettingsVimLastGroup, SettingsVimNextGroup, SettingsVimPreviousGroup,
+            TabCloseAllTerminals, bindable_registry, load_app_keybindings,
+        },
         interaction::input_owner::{
             InputOwnerKind, InputOwnerRegistration, InputOwnerStack, InputOwnerToken, InputScopeId,
             TerminalInputGate, TerminalInputPolicy,
@@ -89,6 +97,20 @@ fn local_project(path: PathBuf) -> ProjectDescriptor {
 
 fn local_project_id(path: &str) -> ProjectId {
     ProjectId::from_legacy_location(path)
+}
+
+fn focus_workbench_key_context(root: &gpui::Entity<WorkbenchView>, cx: &mut gpui::TestAppContext) {
+    root.update(cx, |root, cx| {
+        root.open_keybinding_edit_dialog(CommandId::TabPalette)
+            .unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    root.update(cx, |root, cx| {
+        root.cancel_keybinding_edit_dialog();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
 }
 
 #[test]
@@ -169,7 +191,7 @@ fn git_status_parser_propagates_ignored_directory_status_without_marking_tree_di
 
 #[test]
 fn visible_work_item_tabs_merge_terminal_and_file_items() {
-    let workspace = WorkbenchView::dev_fixture().workspace().clone();
+    let workspace = WorkbenchView::dev_fixture_for_test().workspace().clone();
     let terminal_items = visible_tab_items(&workspace);
     let project_id = workspace.selected_project_id().unwrap().clone();
     let first_file = DocumentId {
@@ -233,7 +255,7 @@ fn root_view_titlebar_info_describes_empty_workspace() {
 
 #[test]
 fn root_view_titlebar_info_describes_selected_project() {
-    let root = WorkbenchView::dev_fixture();
+    let root = WorkbenchView::dev_fixture_for_test();
 
     let info = root.visible_titlebar_info();
 
@@ -275,7 +297,7 @@ fn empty_workspace_renders_responsive_action_dashboard(cx: &mut gpui::TestAppCon
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::with_config_paths(paths));
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -361,7 +383,7 @@ fn legacy_recent_project_is_available_for_manual_restore() {
     settings.general.onboarding_completed = true;
     save_settings(&paths, &settings).unwrap();
 
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
     assert!(root.workspace().opened_projects().is_empty());
     assert!(root.has_last_opened_projects());
     assert_eq!(root.restore_last_opened_projects(), 1);
@@ -382,7 +404,7 @@ fn closing_last_project_preserves_manual_restore_without_startup_reopen() {
     settings.general.onboarding_completed = true;
     save_settings(&paths, &settings).unwrap();
 
-    let mut root = WorkbenchView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
     root.open_project_path(&project).unwrap();
     root.run_command(CommandId::ProjectClose).unwrap();
     if root.has_pending_project_close() {
@@ -393,7 +415,7 @@ fn closing_last_project_preserves_manual_restore_without_startup_reopen() {
     root.set_restore_last_session_enabled(true).unwrap();
     drop(root);
 
-    let mut restarted = WorkbenchView::with_config_paths(paths);
+    let mut restarted = WorkbenchView::with_config_paths_for_test(paths);
     assert!(
         restarted.workspace().opened_projects().is_empty(),
         "startup restore must not reopen a project that was explicitly closed"
@@ -419,12 +441,12 @@ fn root_view_restores_all_last_opened_projects_when_enabled() {
     settings.general.onboarding_completed = true;
     save_settings(&paths, &settings).unwrap();
 
-    let mut initial = WorkbenchView::with_config_paths(paths.clone());
+    let mut initial = WorkbenchView::with_config_paths_for_test(paths.clone());
     initial.open_project_path(&first_project).unwrap();
     initial.open_project_path(&second_project).unwrap();
     drop(initial);
 
-    let mut restore_disabled = WorkbenchView::with_config_paths(paths.clone());
+    let mut restore_disabled = WorkbenchView::with_config_paths_for_test(paths.clone());
     assert!(restore_disabled.workspace().opened_projects().is_empty());
     assert!(restore_disabled.has_last_opened_projects());
     assert_eq!(
@@ -442,7 +464,7 @@ fn root_view_restores_all_last_opened_projects_when_enabled() {
         .unwrap();
     drop(restore_disabled);
 
-    let restored = WorkbenchView::with_config_paths(paths);
+    let restored = WorkbenchView::with_config_paths_for_test(paths);
     let restored_paths = restored
         .workspace()
         .opened_projects()
@@ -471,7 +493,7 @@ fn empty_workspace_restore_button_opens_last_session(cx: &mut gpui::TestAppConte
     settings.general.onboarding_completed = true;
     save_settings(&paths, &settings).unwrap();
 
-    let mut initial = WorkbenchView::with_config_paths(paths.clone());
+    let mut initial = WorkbenchView::with_config_paths_for_test(paths.clone());
     initial.open_project_path(&first_project).unwrap();
     initial.open_project_path(&second_project).unwrap();
     drop(initial);
@@ -479,7 +501,7 @@ fn empty_workspace_restore_button_opens_last_session(cx: &mut gpui::TestAppConte
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::with_config_paths(paths));
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -498,14 +520,14 @@ fn empty_workspace_restore_button_opens_last_session(cx: &mut gpui::TestAppConte
 }
 #[test]
 fn root_view_dev_fixture_contains_sample_project() {
-    let root = WorkbenchView::dev_fixture();
+    let root = WorkbenchView::dev_fixture_for_test();
 
     assert_eq!(root.workspace().opened_projects().len(), 1);
 }
 
 #[test]
 fn root_view_toggles_sidebar_collapse_state() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     assert!(!root.sidebar_is_collapsed());
 
@@ -636,7 +658,7 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::with_config_paths(view_paths));
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -679,7 +701,7 @@ fn root_view_renders_sidebar_resize_handles_only_for_visible_expanded_panels(
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::dev_fixture());
+        let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -719,7 +741,7 @@ fn project_sidebar_context_menu_can_create_project(cx: &mut gpui::TestAppContext
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::dev_fixture());
+        let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -753,7 +775,7 @@ fn root_view_error_notification_auto_dismisses(cx: &mut gpui::TestAppContext) {
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::dev_fixture());
+        let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -924,7 +946,7 @@ fn root_view_double_clicking_tab_opens_rename_dialog() {
 
 #[test]
 fn root_view_confirming_tab_rename_uses_entered_title() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.handle_project_tab_click("dev", 2).unwrap();
     root.confirm_tab_rename_dialog("Runtime").unwrap();
@@ -935,7 +957,7 @@ fn root_view_confirming_tab_rename_uses_entered_title() {
 
 #[test]
 fn root_view_canceling_tab_rename_keeps_title() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.handle_project_tab_click("dev", 2).unwrap();
     root.cancel_tab_rename_dialog();
@@ -955,7 +977,7 @@ fn root_view_agent_exit_fixture_contains_sample_project() {
 fn first_run_onboarding_persists_separate_tabs_and_does_not_repeat() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
 
     assert_eq!(
         root.onboarding_layout_kind(),
@@ -995,7 +1017,7 @@ fn first_run_onboarding_persists_separate_tabs_and_does_not_repeat() {
     assert_eq!(agent.kind, PaneKind::Agent);
     assert!(matches!(&template.tabs[1].layout, LayoutNode::Pane(shell) if shell.id == "shell"));
 
-    let restarted = WorkbenchView::with_config_paths(paths);
+    let restarted = WorkbenchView::with_config_paths_for_test(paths);
     assert_eq!(restarted.onboarding_agent(), None);
 }
 
@@ -1003,7 +1025,7 @@ fn first_run_onboarding_persists_separate_tabs_and_does_not_repeat() {
 fn first_run_onboarding_persists_split_view() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
 
     root.advance_onboarding();
     root.advance_onboarding();
@@ -1031,7 +1053,7 @@ fn force_onboarding_overrides_the_persisted_completion_marker() {
     settings.general.onboarding_completed = true;
     save_settings(&paths, &settings).unwrap();
 
-    let normal = WorkbenchView::with_config_paths(paths.clone());
+    let normal = WorkbenchView::with_config_paths_for_test(paths.clone());
     assert_eq!(normal.onboarding_layout_kind(), None);
 
     let forced = WorkbenchView::with_config_paths_and_force_onboarding(paths.clone(), true);
@@ -1069,7 +1091,7 @@ fn first_run_onboarding_selects_font_then_layout_before_agent(cx: &mut gpui::Tes
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::with_config_paths(view_paths));
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -1285,7 +1307,7 @@ fn root_view_open_project_path_records_visible_load_error() {
     fs::create_dir_all(&project_config_dir).unwrap();
     fs::write(project_config_dir.join("layout.toml"), "[project\n").unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
 
     let err = root.open_project_path(&project_dir).unwrap_err();
 
@@ -1311,7 +1333,7 @@ fn root_view_creates_project_work_item_session_on_open() {
     settings.project_panel.default_open = false;
     settings.project_panel.width = 336.0;
     save_settings(&paths, &settings).unwrap();
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
 
     root.open_project_path(&project_dir).unwrap();
 
@@ -1591,7 +1613,7 @@ fn root_view_project_switch_preserves_each_editor_session() {
 
 #[test]
 fn root_view_tab_navigation_crosses_terminal_and_file_work_items() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
     let project_id = root.workspace().selected_project_id().unwrap().clone();
     let document_id = root
         .project_editor_runtime_mut()
@@ -1635,7 +1657,7 @@ fn root_view_tab_navigation_crosses_terminal_and_file_work_items() {
 
 #[test]
 fn root_view_tab_close_dispatches_to_the_active_file_work_item() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
     let project_id = root.workspace().selected_project_id().unwrap().clone();
     let document_id = root
         .project_editor_runtime_mut()
@@ -1802,7 +1824,7 @@ fn root_view_renders_active_file_document_and_consumes_focus(cx: &mut gpui::Test
     let root = root_slot.borrow_mut().take().unwrap();
 
     assert!(cx.debug_bounds("active-file-editor").is_some());
-    assert!(cx.debug_bounds("project-tab-2").is_some());
+    assert!(cx.debug_bounds("project-tab-1-2").is_some());
     cx.read(|app| {
         assert_eq!(
             root.read(app).active_work_item(),
@@ -2428,7 +2450,8 @@ fn editor_display_settings_update_open_documents_without_replacing_state(
         root.set_editor_line_height(1.65, window, cx).unwrap();
         root.set_editor_soft_wrap(true, window, cx).unwrap();
         root.set_editor_line_numbers(false, window, cx).unwrap();
-        root.set_editor_vim_mode(true, window, cx).unwrap();
+        root.set_vim_mode_setting(VimModeSetting::Editor, window, cx)
+            .unwrap();
     });
 
     cx.read(|app| {
@@ -2458,7 +2481,7 @@ fn editor_display_settings_update_open_documents_without_replacing_state(
     assert_eq!(loaded.settings.editor.line_height, 1.65);
     assert!(loaded.settings.editor.soft_wrap);
     assert!(!loaded.settings.editor.line_numbers);
-    assert!(loaded.settings.editor.vim_mode);
+    assert_eq!(loaded.settings.vim.mode, VimModeSetting::Editor);
 }
 
 #[gpui::test]
@@ -3175,7 +3198,7 @@ fn root_view_layout_commands_write_current_project_files() {
     )
     .unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
     root.open_project_path(&project_dir).unwrap();
 
     root.run_command(CommandId::LayoutSaveCurrent).unwrap();
@@ -3192,7 +3215,7 @@ fn root_view_exposes_global_default_layout_source() {
     let project_dir = temp.path().join("source-message-project");
     fs::create_dir(&project_dir).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
 
     root.open_project_path(&project_dir).unwrap();
 
@@ -3220,7 +3243,7 @@ fn root_view_project_open_surfaces_personal_layout_warning() {
         "version = 1\nmode = \"patch\"\nunknown = true\nlayout = {}",
     )
     .unwrap();
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
 
     root.open_project_path(&project_dir).unwrap();
 
@@ -3238,7 +3261,7 @@ fn root_view_layout_open_file_falls_back_to_app_local_layout() {
     fs::create_dir(&project_dir).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let expected_layout_file = paths.local_layout_file(&project_dir.canonicalize().unwrap());
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
     root.open_project_path(&project_dir).unwrap();
     root.run_command(CommandId::LayoutSaveCurrent).unwrap();
 
@@ -3261,7 +3284,7 @@ fn root_view_layout_default_editor_opens_without_project() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let expected_layout_file = paths.default_layout_file();
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
 
     root.run_command(CommandId::LayoutDefaultEdit).unwrap();
 
@@ -3295,7 +3318,7 @@ fn layout_editor_popup_uses_chinese_text_and_error_prefixes() {
     settings.general.language = LanguageSetting::Chinese;
     settings.general.onboarding_completed = true;
     save_settings(&paths, &settings).unwrap();
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
 
     root.run_command(CommandId::LayoutDefaultEdit).unwrap();
 
@@ -3343,7 +3366,7 @@ line_numbers = false
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::with_config_paths(paths));
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -3405,7 +3428,7 @@ line_numbers = false
 fn root_view_persists_editor_language_settings() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
 
     assert!(root.editor_auto_detect_language());
     assert_eq!(root.editor_default_language(), "plain_text");
@@ -3428,7 +3451,7 @@ fn root_view_layout_default_editor_saves_valid_toml() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let layout_file = paths.default_layout_file();
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
     root.run_command(CommandId::LayoutDefaultEdit).unwrap();
 
     let updated = root
@@ -3450,7 +3473,7 @@ fn root_view_layout_default_editor_saves_valid_toml() {
 fn root_view_layout_default_editor_keeps_invalid_toml_open() {
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
     root.run_command(CommandId::LayoutDefaultEdit).unwrap();
 
     root.set_layout_toml_editor_value("[project\n");
@@ -3468,7 +3491,7 @@ fn root_view_layout_default_editor_keeps_invalid_toml_open() {
 fn root_view_layout_default_editor_records_parse_diagnostic() {
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
     root.run_command(CommandId::LayoutDefaultEdit).unwrap();
 
     root.set_layout_toml_editor_value("[project\n");
@@ -3489,7 +3512,7 @@ fn root_view_layout_default_editor_records_parse_diagnostic() {
 fn root_view_layout_default_editor_clears_diagnostics_after_valid_save() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
     root.run_command(CommandId::LayoutDefaultEdit).unwrap();
 
     let valid = root.layout_toml_editor_value().unwrap().to_string();
@@ -3517,7 +3540,7 @@ fn root_view_layout_project_editor_selects_project_and_personal_formats() {
         toml::to_string_pretty(&sample_layout()).unwrap(),
     )
     .unwrap();
-    let mut root = WorkbenchView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
     root.open_project_path(&shared_project).unwrap();
     root.run_command(CommandId::LayoutProjectEdit).unwrap();
     assert_eq!(root.layout_editor_target_kind(), Some("project_config"));
@@ -3562,7 +3585,7 @@ fn root_view_layout_project_editor_creates_personal_replace_for_inherited_projec
     fs::create_dir(&project_dir).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let expected = paths.local_layout_file(&project_dir.canonicalize().unwrap());
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
     root.open_project_path(&project_dir).unwrap();
 
     root.run_command(CommandId::LayoutProjectEdit).unwrap();
@@ -3584,7 +3607,7 @@ fn root_view_layout_project_editor_creates_personal_replace_for_inherited_projec
 fn root_view_layout_project_commands_without_project_show_localized_reason() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
     root.set_language(LanguageSetting::Chinese).unwrap();
 
     root.run_command(CommandId::LayoutProjectEdit).unwrap();
@@ -3623,7 +3646,7 @@ fn root_view_project_close_command_requires_confirmation_for_running_project() {
 fn root_view_settings_keybindings_reveals_keybindings_file_path() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
 
     root.run_command(CommandId::SettingsKeybindings).unwrap();
 
@@ -3644,7 +3667,7 @@ fn root_view_settings_keybindings_reveals_keybindings_file_path() {
 fn root_view_status_reveals_settings_paths_without_error_banner() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
 
     root.show_settings_file_path_status();
     root.show_themes_directory_status();
@@ -3698,6 +3721,574 @@ fn root_view_settings_can_select_and_close_group() {
 
     assert!(!root.settings_is_open());
     assert_eq!(root.selected_settings_group_title(), Some("Terminal"));
+}
+
+#[gpui::test]
+fn settings_vim_actions_navigate_groups_only_when_enabled(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let view_paths = paths.clone();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.open_settings();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+
+    root.update_in(cx, |_root, window, cx| {
+        window.dispatch_action(Box::new(SettingsVimNextGroup), cx);
+    });
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).selected_settings_group_title(),
+            Some("General")
+        )
+    });
+
+    root.update_in(cx, |root, window, cx| {
+        root.set_vim_mode_setting(VimModeSetting::Global, window, cx)
+            .unwrap();
+    });
+    for (action, expected) in [
+        (
+            Box::new(SettingsVimNextGroup) as Box<dyn gpui::Action>,
+            "Appearance",
+        ),
+        (Box::new(SettingsVimLastGroup), "Keybindings"),
+        (Box::new(SettingsVimPreviousGroup), "Default Layout"),
+        (Box::new(SettingsVimFirstGroup), "General"),
+    ] {
+        root.update_in(cx, |_root, window, cx| {
+            window.dispatch_action(action, cx);
+        });
+        cx.read(|app| {
+            assert_eq!(
+                root.read(app).selected_settings_group_title(),
+                Some(expected)
+            )
+        });
+    }
+}
+
+#[gpui::test]
+fn global_vim_keymap_spans_terminal_tabs_and_settings(cx: &mut gpui::TestAppContext) {
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut settings = load_or_create_settings(&paths).unwrap().settings;
+    settings.general.onboarding_completed = true;
+    settings.vim.mode = VimModeSetting::Global;
+    save_settings(&paths, &settings).unwrap();
+    let app_bindings = load_app_keybindings(&paths, &bindable_registry());
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.bind_keys(app_bindings);
+        yttt_terminal::init(cx);
+    });
+
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(
+            local_project(temp.path().join("vim-keymaps-project")),
+            sample_layout(),
+        )
+        .unwrap();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root =
+            cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
+        register_workbench_keybinding_interceptor(cx, &root);
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    cx.refresh().unwrap();
+    focus_workbench_key_context(&root, cx);
+
+    cx.simulate_keystrokes("ctrl-[");
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        let status = root.read(app).vim_status().expect("Global Vim status");
+        assert_eq!(status.mode, WorkbenchVimMode::Normal);
+        assert_eq!(status.surface, VimSurface::Terminal);
+    });
+    assert!(cx.debug_bounds("vim-status-bar").is_some());
+    assert!(cx.debug_bounds("vim-status-mode").is_some());
+
+    cx.simulate_keystrokes("space p");
+    cx.run_until_parked();
+    cx.read(|app| {
+        let root = root.read(app);
+        let palette = root.active_palette().expect("command palette");
+        assert_eq!(palette.kind, PaletteKind::Command);
+        assert_eq!(palette.selected_index, 0);
+        let status = root.vim_status().expect("palette Vim status");
+        assert_eq!(status.mode, WorkbenchVimMode::Normal);
+        assert_eq!(status.surface, VimSurface::Palette);
+        assert_eq!(status.key_feedback.len(), 2);
+        assert_eq!(status.key_feedback.last().map(String::as_str), Some("p"));
+    });
+    cx.simulate_input("界");
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app)
+                .active_palette()
+                .map(|palette| palette.query.as_str()),
+            Some("")
+        );
+    });
+    cx.simulate_keystrokes("j");
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app)
+                .active_palette()
+                .map(|palette| palette.selected_index),
+            Some(1)
+        );
+        let status = root
+            .read(app)
+            .vim_status()
+            .expect("palette Vim key feedback");
+        assert_eq!(status.key_feedback.last().map(String::as_str), Some("j"));
+    });
+    cx.refresh().unwrap();
+    assert!(cx.debug_bounds("vim-status-keys").is_some());
+    cx.background_executor
+        .advance_clock(Duration::from_millis(1_300));
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        assert!(
+            root.read(app)
+                .vim_status()
+                .expect("palette Vim status after feedback timeout")
+                .key_feedback
+                .is_empty()
+        );
+    });
+    assert!(cx.debug_bounds("vim-status-keys").is_none());
+    cx.simulate_keystrokes("i");
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).vim_status().map(|status| status.mode),
+            Some(WorkbenchVimMode::Insert)
+        );
+    });
+    cx.simulate_input("界");
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app)
+                .active_palette()
+                .map(|palette| palette.query.as_str()),
+            Some("界")
+        );
+    });
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.read(|app| {
+        let root = root.read(app);
+        assert!(root.active_palette().is_some());
+        assert_eq!(
+            root.vim_status().map(|status| status.mode),
+            Some(WorkbenchVimMode::Normal)
+        );
+    });
+    cx.simulate_input("好");
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app)
+                .active_palette()
+                .map(|palette| palette.query.as_str()),
+            Some("界")
+        );
+    });
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.read(|app| assert!(root.read(app).active_palette().is_none()));
+    root.update(cx, |root, cx| {
+        root.focus_visible_terminal_pane("server").unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    cx.simulate_keystrokes("ctrl-[");
+    cx.simulate_keystrokes("ctrl-w");
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app)
+                .workspace()
+                .project(&project_id)
+                .unwrap()
+                .tab_state("dev")
+                .unwrap()
+                .focused_pane_id
+                .as_deref(),
+            Some("server"),
+            "Ctrl-W must remain a prefix in terminal Normal mode",
+        );
+    });
+    cx.simulate_keystrokes("l");
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app)
+                .workspace()
+                .project(&project_id)
+                .unwrap()
+                .tab_state("dev")
+                .unwrap()
+                .focused_pane_id
+                .as_deref(),
+            Some("shell")
+        );
+    });
+    cx.simulate_keystrokes("ctrl-w ctrl-h");
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app)
+                .workspace()
+                .project(&project_id)
+                .unwrap()
+                .tab_state("dev")
+                .unwrap()
+                .focused_pane_id
+                .as_deref(),
+            Some("server")
+        );
+    });
+
+    cx.simulate_keystrokes("i");
+    cx.run_until_parked();
+    cx.read(|app| {
+        let status = root.read(app).vim_status().expect("terminal Vim status");
+        assert_eq!(status.mode, WorkbenchVimMode::Terminal);
+        assert_eq!(status.surface, VimSurface::Terminal);
+    });
+    cx.simulate_keystrokes("ctrl-[");
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).vim_status().map(|status| status.mode),
+            Some(WorkbenchVimMode::Normal)
+        );
+    });
+
+    cx.simulate_keystrokes("g t");
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app)
+                .workspace()
+                .project(&project_id)
+                .unwrap()
+                .selected_tab_id,
+            "agent"
+        );
+    });
+
+    root.update(cx, |root, cx| {
+        root.open_settings();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    focus_workbench_key_context(&root, cx);
+    cx.simulate_keystrokes("j");
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).selected_settings_group_title(),
+            Some("Appearance")
+        );
+    });
+    cx.simulate_keystrokes("g t");
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app)
+                .workspace()
+                .project(&project_id)
+                .unwrap()
+                .selected_tab_id,
+            "dev",
+            "Global Vim tab navigation must remain active from settings",
+        );
+    });
+    let pane_id = cx
+        .read(|app| {
+            root.read(app)
+                .workspace()
+                .project(&project_id)
+                .unwrap()
+                .tab_state("dev")
+                .unwrap()
+                .focused_pane_id
+                .clone()
+        })
+        .expect("selected terminal pane");
+    root.update(cx, |root, cx| {
+        root.close_settings();
+        root.focus_visible_terminal_pane(&pane_id).unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    let active_work_item = cx.read(|app| root.read(app).active_work_item());
+    root.update_in(cx, |_root, window, cx| {
+        window.dispatch_action(Box::new(yttt_terminal::StartSearch), cx);
+    });
+    root.update(cx, |_root, cx| cx.notify());
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        let status = root
+            .read(app)
+            .vim_status()
+            .expect("terminal search Vim status");
+        assert_eq!(status.mode, WorkbenchVimMode::Insert);
+        assert_eq!(status.surface, VimSurface::Terminal);
+    });
+    cx.simulate_keystrokes("g t");
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(root.read(app).active_work_item(), active_work_item);
+        assert!(root.read(app).active_palette().is_none());
+        assert_eq!(
+            root.read(app).vim_status().map(|status| status.mode),
+            Some(WorkbenchVimMode::Insert)
+        );
+    });
+}
+
+#[gpui::test]
+fn modal_keybinding_recorder_owns_workspace_and_vim_keystrokes(cx: &mut gpui::TestAppContext) {
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut settings = load_or_create_settings(&paths).unwrap().settings;
+    settings.general.onboarding_completed = true;
+    settings.vim.mode = VimModeSetting::Global;
+    save_settings(&paths, &settings).unwrap();
+    let app_bindings = load_app_keybindings(&paths, &bindable_registry());
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.bind_keys(app_bindings);
+    });
+
+    let view_paths = paths.clone();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
+        register_workbench_keybinding_interceptor(cx, &root);
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.open_settings();
+        root.open_keybinding_edit_dialog(CommandId::TabPalette)
+            .unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).foreground_input_owner_kind(),
+            InputOwnerKind::KeybindingRecorder
+        );
+    });
+
+    cx.simulate_keystrokes("j cmd-o");
+    cx.run_until_parked();
+
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app)
+                .pending_keybinding_edit_keys()
+                .expect("keybinding recorder should remain open"),
+            vec!["j cmd-o".to_string()]
+        );
+    });
+    assert!(!cx.did_prompt_for_new_path());
+}
+
+#[gpui::test]
+fn external_keybindings_edits_reload_without_restart(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut settings = load_or_create_settings(&paths).unwrap().settings;
+    settings.general.onboarding_completed = true;
+    save_settings(&paths, &settings).unwrap();
+    let view_paths = paths.clone();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        assert!(!root.read(app).visible_keybinding_rows().iter().any(|row| {
+            row.command == BindableActionId::Command(CommandId::TabPalette)
+                && row.keys.contains(&"cmd-l".to_string())
+        }));
+    });
+
+    save_keybindings(
+        &paths,
+        &KeybindingsConfig {
+            schema_version: KEYBINDINGS_SCHEMA_VERSION,
+            leader: "space".to_string(),
+            bindings: vec![Keybinding {
+                keys: "cmd-l".to_string(),
+                command: CommandId::TabPalette.as_str().to_string(),
+                context: Some("Workspace".to_string()),
+                unbind: false,
+            }],
+        },
+    )
+    .unwrap();
+
+    let mut reloaded = false;
+    for _ in 0..20 {
+        std::thread::sleep(Duration::from_millis(25));
+        cx.background_executor
+            .advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        reloaded = cx.read(|app| {
+            root.read(app).visible_keybinding_rows().iter().any(|row| {
+                row.command == BindableActionId::Command(CommandId::TabPalette)
+                    && row.keys.contains(&"cmd-l".to_string())
+            })
+        });
+        if reloaded {
+            break;
+        }
+    }
+    assert!(reloaded, "external keybindings edit was not reloaded");
+
+    cx.simulate_keystrokes("cmd-l");
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).active_palette().map(|palette| palette.kind),
+            Some(PaletteKind::Tab)
+        );
+    });
+
+    root.update(cx, |root, cx| {
+        root.close_palette();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.read(|app| assert!(root.read(app).visible_error_message().is_none()));
+
+    std::fs::write(paths.keybindings_file(), "schema_version = [").unwrap();
+    let mut invalid_source_detected = false;
+    for _ in 0..20 {
+        std::thread::sleep(Duration::from_millis(25));
+        cx.background_executor
+            .advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        invalid_source_detected = cx.read(|app| root.read(app).visible_error_message().is_some());
+        if invalid_source_detected {
+            break;
+        }
+    }
+    assert!(
+        invalid_source_detected,
+        "invalid external keybindings edit was not surfaced"
+    );
+    let invalid_source = std::fs::read(paths.keybindings_file()).unwrap();
+
+    cx.simulate_keystrokes("cmd-l");
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).active_palette().map(|palette| palette.kind),
+            Some(PaletteKind::Tab)
+        );
+    });
+    root.update(cx, |root, cx| {
+        root.close_palette();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+
+    let error = root
+        .update(cx, |root, _cx| {
+            root.set_keybinding_command_keys(CommandId::TabPalette, vec!["cmd-k".to_string()])
+        })
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("refusing to overwrite invalid keybindings file")
+    );
+    assert_eq!(
+        std::fs::read(paths.keybindings_file()).unwrap(),
+        invalid_source
+    );
+
+    save_keybindings(
+        &paths,
+        &KeybindingsConfig {
+            schema_version: KEYBINDINGS_SCHEMA_VERSION,
+            leader: "space".to_string(),
+            bindings: vec![Keybinding {
+                keys: "cmd-l".to_string(),
+                command: CommandId::TabPalette.as_str().to_string(),
+                context: Some("Workspace".to_string()),
+                unbind: false,
+            }],
+        },
+    )
+    .unwrap();
+    let mut recovered = false;
+    for _ in 0..20 {
+        std::thread::sleep(Duration::from_millis(25));
+        cx.background_executor
+            .advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        recovered = cx.read(|app| root.read(app).visible_error_message().is_none());
+        if recovered {
+            break;
+        }
+    }
+    assert!(
+        recovered,
+        "valid external keybindings edit should clear the prior error"
+    );
+    root.update(cx, |root, _cx| {
+        root.set_keybinding_command_keys(
+            CommandId::TabPalette,
+            vec!["cmd-alt-shift-l".to_string()],
+        )
+        .unwrap();
+    });
 }
 
 #[test]
@@ -3758,7 +4349,7 @@ fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppCon
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::with_config_paths(view_paths));
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -3772,11 +4363,18 @@ fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppCon
         cx.debug_bounds("settings-restore-last-session-row")
             .is_some()
     );
+    assert!(cx.debug_bounds("settings-vim-mode-row").is_some());
     let restore_toggle = cx
         .debug_bounds("settings-restore-last-session")
         .expect("restore-last-session setting should expose a switch");
     cx.simulate_click(restore_toggle.center(), gpui::Modifiers::none());
     cx.run_until_parked();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: restore_toggle.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-320.0))),
+        ..Default::default()
+    });
+    cx.refresh().unwrap();
 
     let picker_row = cx
         .debug_bounds("settings-new-tab-command-picker-row")
@@ -3859,7 +4457,7 @@ fn update_settings_check_and_persist_auto_check(cx: &mut gpui::TestAppContext) {
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::with_config_paths(view_paths));
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -4106,12 +4704,52 @@ fn dragging_tab_to_group_edge_splits_and_resizes_work_area(cx: &mut gpui::TestAp
 }
 
 #[gpui::test]
+fn keybindings_settings_explains_vim_leader_and_sequence_recording(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.open_settings();
+        root.select_settings_group("keybindings").unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+
+    assert!(
+        cx.debug_bounds("settings-vim-quick-start-row").is_some(),
+        "Keybindings settings should explain how to use each Vim mode"
+    );
+    assert!(
+        cx.debug_bounds("settings-vim-leader-row").is_some(),
+        "Keybindings settings should expose the current Vim leader"
+    );
+    cx.read(|app| assert_eq!(root.read(app).keybinding_leader(), "space"));
+
+    root.update(cx, |root, cx| {
+        root.open_keybinding_edit_dialog(CommandId::TabPalette)
+            .unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    assert!(
+        cx.debug_bounds("add-keybinding-alternative").is_some(),
+        "The recorder should distinguish sequences from alternative bindings"
+    );
+}
+
+#[gpui::test]
 fn appearance_settings_group_renders_window_and_theme_controls(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::dev_fixture());
+        let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -4181,7 +4819,7 @@ fn zed_theme_import_opens_review_dialog_before_writing(cx: &mut gpui::TestAppCon
     let root_slot_for_window = root_slot.clone();
     let view_paths = paths.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::with_config_paths(view_paths));
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -4259,7 +4897,7 @@ fn editor_settings_group_renders_all_effective_controls(cx: &mut gpui::TestAppCo
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::dev_fixture());
+        let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -4278,7 +4916,6 @@ fn editor_settings_group_renders_all_effective_controls(cx: &mut gpui::TestAppCo
         "settings-editor-tab-size-row",
         "settings-editor-soft-wrap-row",
         "settings-editor-line-numbers-row",
-        "settings-editor-vim-mode-row",
         "settings-editor-autosave-row",
         "settings-editor-autosave-delay-row",
         "settings-project-panel-default-open-row",
@@ -4314,7 +4951,7 @@ fn terminal_settings_group_renders_protocol_and_interaction_controls(
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::dev_fixture());
+        let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -4343,7 +4980,7 @@ fn terminal_settings_group_renders_protocol_and_interaction_controls(
 fn root_view_toggles_system_notifications() {
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    let mut root = WorkbenchView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
 
     assert!(!root.system_notifications_enabled());
     assert_eq!(
@@ -4364,7 +5001,7 @@ fn root_view_toggles_system_notifications() {
         vec!["System notifications: enabled".to_string()]
     );
 
-    let reloaded = WorkbenchView::with_config_paths(paths);
+    let reloaded = WorkbenchView::with_config_paths_for_test(paths);
     assert!(reloaded.system_notifications_enabled());
     assert_eq!(
         reloaded.visible_notification_settings_message(),
@@ -4376,7 +5013,7 @@ fn root_view_toggles_system_notifications() {
 fn root_view_language_setting_persists_and_updates_visible_text() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
 
     root.set_language(LanguageSetting::Chinese).unwrap();
 
@@ -4391,7 +5028,7 @@ fn root_view_language_setting_persists_and_updates_visible_text() {
         ]
     );
 
-    let reloaded = WorkbenchView::with_config_paths(paths);
+    let reloaded = WorkbenchView::with_config_paths_for_test(paths);
     assert_eq!(
         reloaded.visible_empty_workspace_actions(),
         vec![
@@ -4408,7 +5045,7 @@ fn root_view_language_setting_persists_and_updates_visible_text() {
 fn root_view_status_notifications_use_selected_language() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
 
     root.set_language(LanguageSetting::Chinese).unwrap();
     root.run_command(CommandId::SettingsNotifications).unwrap();
@@ -4424,7 +5061,7 @@ fn root_view_status_notifications_use_selected_language() {
 fn root_view_language_setting_updates_settings_labels() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
     root.open_settings();
 
     root.set_language(LanguageSetting::Chinese).unwrap();
@@ -4453,7 +5090,7 @@ fn root_view_language_setting_updates_settings_labels() {
 fn root_view_language_setting_updates_command_palette_labels() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
 
     root.set_language(LanguageSetting::Chinese).unwrap();
     root.open_palette(PaletteKind::Command);
@@ -4596,7 +5233,7 @@ fn root_view_command_palette_can_request_open_project() {
 
 #[test]
 fn root_view_closes_requested_tab_by_id() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.close_project_tab("agent").unwrap();
 
@@ -4607,7 +5244,7 @@ fn root_view_closes_requested_tab_by_id() {
 fn root_view_custom_terminal_shell_setting_persists() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
 
     assert!(root.add_custom_terminal_shell("/opt/tools/fish").unwrap());
 
@@ -4623,7 +5260,7 @@ fn root_view_custom_terminal_shell_setting_persists() {
 fn root_view_ui_font_settings_persist_and_family_can_reset() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
 
     root.set_ui_font_family("  Menlo  ").unwrap();
     root.set_ui_font_size(20.0).unwrap();
@@ -4653,7 +5290,7 @@ fn window_background_settings_persist_from_live_window(cx: &mut gpui::TestAppCon
     let root_slot_for_window = root_slot.clone();
     let paths_for_window = paths.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::with_config_paths(paths_for_window));
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths_for_window));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -4681,7 +5318,7 @@ fn ui_font_size_updates_window_scale(cx: &mut gpui::TestAppContext) {
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::with_config_paths(paths));
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -4702,7 +5339,7 @@ fn ui_font_size_updates_window_scale(cx: &mut gpui::TestAppContext) {
 fn root_view_icon_theme_setting_persists_and_can_reset() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
 
     root.set_icon_theme_name(Some("Fixture dark")).unwrap();
     assert_eq!(
@@ -4732,7 +5369,7 @@ fn root_view_terminal_shell_setting_changes_new_shell_tabs() {
     let project_dir = temp.path().join("shell-settings-project");
     fs::create_dir(&project_dir).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
     root.open_project_path(&project_dir).unwrap();
 
     root.set_terminal_shell("/bin/bash").unwrap();
@@ -4758,7 +5395,7 @@ fn root_view_terminal_shell_setting_changes_new_shell_tabs() {
 fn root_view_terminal_display_settings_persist() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
 
     root.set_terminal_font_family("JetBrains Mono").unwrap();
     root.set_terminal_font_size(14.5).unwrap();
@@ -4789,7 +5426,7 @@ fn root_view_terminal_display_settings_persist() {
     assert_eq!(runtime.osc52_policy, TerminalOsc52Policy::ReadWrite);
     assert!(runtime.kitty_keyboard);
 
-    let reloaded = WorkbenchView::with_config_paths(paths);
+    let reloaded = WorkbenchView::with_config_paths_for_test(paths);
     let terminal = &reloaded.theme_runtime().terminal_settings;
     assert_eq!(terminal.font_family, "JetBrains Mono");
     assert_eq!(terminal.font_size, 14.5);
@@ -4900,7 +5537,7 @@ fn root_view_exposes_foreground_input_scope_id() {
 
 #[test]
 fn root_view_workspace_keybindings_are_blocked_by_foreground_owner() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
     let project_id = root.workspace().selected_project_id().unwrap().clone();
     let initial_tab_count = root
         .workspace()
@@ -4929,7 +5566,7 @@ fn root_view_workspace_keybindings_are_blocked_by_foreground_owner() {
 
 #[test]
 fn root_view_layout_editor_blocks_project_file_save_binding() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
     root.open_layout_toml_editor().unwrap();
 
     assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Dialog);
@@ -4977,7 +5614,7 @@ fn key_dispatch_allows_workspace_command_when_terminal_does_not_need_key() {
 
 #[test]
 fn root_view_dialog_owner_blocks_terminal_input() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.handle_project_tab_click("dev", 2).unwrap();
 
@@ -4987,7 +5624,7 @@ fn root_view_dialog_owner_blocks_terminal_input() {
 
 #[test]
 fn root_view_does_not_consume_terminal_focus_while_overlay_is_open() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.focus_visible_terminal_pane("shell").unwrap();
     assert_eq!(root.pending_terminal_focus_pane_id(), Some("shell"));
@@ -5015,7 +5652,7 @@ fn root_view_does_not_use_palette_text_fallback_when_input_is_focused() {
 fn root_view_notification_settings_can_be_disabled_again() {
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    let mut root = WorkbenchView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
 
     root.run_command(CommandId::SettingsNotifications).unwrap();
     root.run_command(CommandId::SettingsNotifications).unwrap();
@@ -5034,7 +5671,7 @@ fn root_view_notification_settings_can_be_disabled_again() {
         ]
     );
 
-    let reloaded = WorkbenchView::with_config_paths(paths);
+    let reloaded = WorkbenchView::with_config_paths_for_test(paths);
     assert!(!reloaded.system_notifications_enabled());
 }
 
@@ -5065,7 +5702,7 @@ fn root_view_exposes_keybinding_warning_lines() {
     )
     .unwrap();
 
-    let root = WorkbenchView::with_config_paths(paths);
+    let root = WorkbenchView::with_config_paths_for_test(paths);
 
     assert_eq!(
         root.visible_keybinding_warning_lines(),
@@ -5077,7 +5714,7 @@ fn root_view_exposes_keybinding_warning_lines() {
 fn root_view_keybindings_editor_updates_and_persists_command_keys() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
 
     root.set_keybinding_command_keys(CommandId::TabPalette, vec!["cmd-l".to_string()])
         .unwrap();
@@ -5089,7 +5726,7 @@ fn root_view_keybindings_editor_updates_and_persists_command_keys() {
         .unwrap();
     assert_eq!(row.keys, vec!["cmd-l".to_string()]);
 
-    let reloaded = WorkbenchView::with_config_paths(paths);
+    let reloaded = WorkbenchView::with_config_paths_for_test(paths);
     let row = reloaded
         .visible_keybinding_rows()
         .into_iter()
@@ -5102,7 +5739,7 @@ fn root_view_keybindings_editor_updates_and_persists_command_keys() {
 fn create_project_command_is_configurable_in_keybinding_settings() {
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    let mut root = WorkbenchView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
 
     let initial = root
         .visible_keybinding_rows()
@@ -5119,7 +5756,7 @@ fn create_project_command_is_configurable_in_keybinding_settings() {
         Some(CommandId::ProjectCreate)
     );
 
-    let reloaded = WorkbenchView::with_config_paths(paths);
+    let reloaded = WorkbenchView::with_config_paths_for_test(paths);
     let persisted = reloaded
         .visible_keybinding_rows()
         .into_iter()
@@ -5132,7 +5769,7 @@ fn create_project_command_is_configurable_in_keybinding_settings() {
 fn root_view_runtime_keybindings_follow_edited_settings() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
 
     root.set_keybinding_command_keys(CommandId::TabPalette, vec!["cmd-l".to_string()])
         .unwrap();
@@ -5151,7 +5788,7 @@ fn root_view_runtime_keybindings_follow_edited_settings() {
 fn root_view_keybindings_editor_rejects_conflicts() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths);
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
 
     let error = root
         .set_keybinding_command_keys(CommandId::TabPalette, vec!["cmd-p".to_string()])
@@ -5164,14 +5801,18 @@ fn root_view_keybindings_editor_rejects_conflicts() {
 fn root_view_keybinding_edit_dialog_updates_command_keys() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths(paths.clone());
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
 
     root.open_keybinding_edit_dialog(CommandId::TabPalette)
         .unwrap();
 
     assert_eq!(
         root.pending_keybinding_edit_keys(),
-        Some(vec!["cmd-j".to_string(), "ctrl-j".to_string()])
+        Some(vec![
+            "cmd-j".to_string(),
+            "ctrl-j".to_string(),
+            "space b".to_string(),
+        ])
     );
     assert_eq!(
         root.foreground_input_owner_kind(),
@@ -5179,6 +5820,7 @@ fn root_view_keybinding_edit_dialog_updates_command_keys() {
     );
 
     assert!(root.record_keybinding_edit_keystroke(&Keystroke::parse("cmd-l").unwrap()));
+    root.begin_keybinding_edit_alternative();
     assert!(root.record_keybinding_edit_keystroke(&Keystroke::parse("ctrl-l").unwrap()));
     root.confirm_keybinding_edit_dialog().unwrap();
 
@@ -5192,7 +5834,7 @@ fn root_view_keybinding_edit_dialog_updates_command_keys() {
         vec!["cmd-l".to_string(), "ctrl-l".to_string()]
     );
 
-    let reloaded = WorkbenchView::with_config_paths(paths);
+    let reloaded = WorkbenchView::with_config_paths_for_test(paths);
     assert_eq!(
         reloaded
             .visible_keybinding_rows()
@@ -5372,7 +6014,7 @@ fn split_pointer_drag_delta_maps_to_continuous_resize() {
 
 #[test]
 fn root_view_pointer_drag_resize_changes_split_ratio_visibly() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
     let before = root_split_child_basis(root.workspace()).unwrap();
 
     let resized_ratio = root
@@ -5389,7 +6031,7 @@ fn root_view_pointer_drag_resize_changes_split_ratio_visibly() {
 
 #[test]
 fn root_view_terminal_pane_contexts_include_project_path() {
-    let root = WorkbenchView::dev_fixture();
+    let root = WorkbenchView::dev_fixture_for_test();
 
     let contexts = root.visible_terminal_pane_contexts();
 
@@ -5403,7 +6045,7 @@ fn root_view_terminal_pane_contexts_include_project_path() {
 
 #[test]
 fn root_view_terminal_pane_contexts_use_tab_cwd() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
     let project_id = root.workspace().selected_project_id().unwrap().clone();
     let mut layout = root
         .workspace()
@@ -5433,7 +6075,7 @@ fn root_view_terminal_pane_contexts_use_tab_cwd() {
 
 #[test]
 fn root_view_tab_palette_scopes_to_current_project_tabs() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.open_palette(PaletteKind::Tab);
 
@@ -5442,7 +6084,7 @@ fn root_view_tab_palette_scopes_to_current_project_tabs() {
 
 #[test]
 fn root_view_pane_palette_scopes_to_current_tab_panes() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.open_palette(PaletteKind::Pane);
 
@@ -5451,7 +6093,7 @@ fn root_view_pane_palette_scopes_to_current_tab_panes() {
 
 #[test]
 fn root_view_syncs_palette_query_from_input_value() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
     root.open_palette(PaletteKind::Tab);
     root.set_palette_query("agent");
 
@@ -5462,7 +6104,7 @@ fn root_view_syncs_palette_query_from_input_value() {
 
 #[test]
 fn root_view_ignores_palette_input_value_without_active_palette() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     assert!(!root.sync_palette_query_from_input_value("dev"));
 }
@@ -5518,7 +6160,7 @@ fn palette_empty_label_uses_localized_text() {
 
 #[test]
 fn root_view_confirming_tab_palette_selection_switches_tabs() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.open_palette(PaletteKind::Tab);
     root.set_palette_query("agent");
@@ -5531,7 +6173,7 @@ fn root_view_confirming_tab_palette_selection_switches_tabs() {
 
 #[test]
 fn root_view_confirming_tab_palette_selection_queues_terminal_focus() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.open_palette(PaletteKind::Tab);
     root.set_palette_query("agent");
@@ -5542,7 +6184,7 @@ fn root_view_confirming_tab_palette_selection_queues_terminal_focus() {
 
 #[test]
 fn root_view_confirming_pane_palette_selection_focuses_pane() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.open_palette(PaletteKind::Pane);
     root.set_palette_query("shell");
@@ -5556,7 +6198,7 @@ fn root_view_confirming_pane_palette_selection_focuses_pane() {
 
 #[test]
 fn root_view_confirming_pane_palette_selection_queues_terminal_focus() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.open_palette(PaletteKind::Pane);
     root.set_palette_query("shell");
@@ -5596,7 +6238,7 @@ fn root_view_command_palette_can_open_project_palette() {
 
 #[test]
 fn root_view_project_commands_open_separate_project_palettes() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
     root.focus_visible_terminal_pane("shell").unwrap();
 
     let command = root
@@ -5626,7 +6268,7 @@ fn root_view_project_commands_open_separate_project_palettes() {
 
 #[test]
 fn root_view_focus_visible_terminal_pane_updates_focused_pane() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.focus_visible_terminal_pane("shell").unwrap();
 
@@ -5638,7 +6280,7 @@ fn root_view_focus_visible_terminal_pane_updates_focused_pane() {
 
 #[test]
 fn root_view_marks_focused_terminal_pane_context() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.focus_visible_terminal_pane("shell").unwrap();
     let contexts = root.visible_terminal_pane_contexts();
@@ -5652,7 +6294,7 @@ fn root_view_marks_focused_terminal_pane_context() {
 
 #[test]
 fn root_view_focus_visible_terminal_pane_queues_terminal_focus() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.focus_visible_terminal_pane("shell").unwrap();
 
@@ -5662,7 +6304,7 @@ fn root_view_focus_visible_terminal_pane_queues_terminal_focus() {
 #[cfg(target_os = "macos")]
 #[test]
 fn root_view_leaves_terminal_control_keybindings_for_focused_terminal() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
     let project_id = root.workspace().selected_project_id().unwrap().clone();
     let initial_tab_count = root
         .workspace()
@@ -5692,7 +6334,7 @@ fn root_view_leaves_terminal_control_keybindings_for_focused_terminal() {
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn root_view_reserves_control_keybindings_when_terminal_is_focused() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
     root.focus_visible_terminal_pane("shell").unwrap();
 
     assert_eq!(
@@ -5703,7 +6345,7 @@ fn root_view_reserves_control_keybindings_when_terminal_is_focused() {
 
 #[test]
 fn root_view_routes_terminal_special_keys_to_focused_terminal() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.focus_visible_terminal_pane("shell").unwrap();
 
@@ -5717,7 +6359,7 @@ fn root_view_routes_terminal_special_keys_to_focused_terminal() {
 
 #[test]
 fn root_view_keeps_platform_shortcuts_available_when_terminal_is_focused() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
     let project_id = root.workspace().selected_project_id().unwrap().clone();
     let initial_tab_count = root
         .workspace()
@@ -5757,7 +6399,9 @@ fn create_project_action_creates_and_opens_new_directory(cx: &mut gpui::TestAppC
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::with_config_paths(paths));
+        let root = cx.new(|_| {
+            WorkbenchView::with_workspace_for_test_and_config_paths(Workspace::new(), paths)
+        });
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -5793,7 +6437,7 @@ fn focused_terminal_platform_open_shortcut_prompts_immediately(cx: &mut gpui::Te
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::dev_fixture());
+        let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
         register_workbench_keybinding_interceptor(cx, &root);
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
@@ -5826,6 +6470,384 @@ fn focused_terminal_platform_open_shortcut_prompts_immediately(cx: &mut gpui::Te
 }
 
 #[gpui::test]
+fn global_vim_navigation_and_leader_work_while_editor_is_focused(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        yttt::ui::editor::init_vim_mode(cx);
+        cx.bind_keys(yttt::ui::interaction::actions::app_startup_keybindings());
+    });
+    let (_temp, _project_dir, root, document, cx) = project_file_terminal_fixture(cx, "off", 50);
+    root.update_in(cx, |root, window, cx| {
+        root.set_vim_mode_setting(VimModeSetting::Global, window, cx)
+            .unwrap();
+        let project_id = root.workspace().selected_project_id().unwrap().clone();
+        let terminal_ids = root
+            .workspace()
+            .project(&project_id)
+            .unwrap()
+            .layout
+            .tabs
+            .iter()
+            .map(|tab| tab.id.clone())
+            .collect::<Vec<_>>();
+        let document_id = document.read(cx).model().document_id().clone();
+        let session = root
+            .project_editor_runtime_mut()
+            .workspace_mut()
+            .session_mut(&project_id)
+            .unwrap();
+        assert!(session.select_work_item(WorkItemId::Terminal("dev".to_string()), &terminal_ids));
+        let source_group = session.active_group_id();
+        assert!(session.drop_work_item(
+            &WorkItemId::File(document_id),
+            source_group,
+            source_group,
+            WorkAreaDropPlacement::Edge(WorkAreaDropEdge::Right),
+            &terminal_ids,
+        ));
+    });
+    document.update_in(cx, |document, window, document_cx| {
+        document.focus(window, document_cx);
+    });
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).foreground_input_owner_kind(),
+            InputOwnerKind::Editor
+        );
+    });
+
+    cx.simulate_keystrokes("space p");
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).active_palette().map(|palette| palette.kind),
+            Some(PaletteKind::Command)
+        );
+    });
+    root.update(cx, |root, cx| {
+        root.close_palette();
+        cx.notify();
+    });
+    document.update_in(cx, |document, window, document_cx| {
+        document.focus(window, document_cx);
+    });
+    cx.refresh().unwrap();
+
+    cx.simulate_keystrokes("ctrl-w h");
+    cx.run_until_parked();
+    cx.read(|app| {
+        let root = root.read(app);
+        assert_eq!(
+            root.active_work_item(),
+            Some(WorkItemId::Terminal("dev".to_string()))
+        );
+        assert_eq!(
+            root.foreground_input_owner_kind(),
+            InputOwnerKind::Workspace
+        );
+    });
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        let root = root.read(app);
+        let status = root.vim_status().expect("terminal Vim status");
+        assert_eq!(status.mode, WorkbenchVimMode::Normal);
+    });
+
+    cx.simulate_keystrokes("ctrl-w l");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-w ctrl-l");
+    cx.run_until_parked();
+    cx.read(|app| {
+        let root = root.read(app);
+        assert_eq!(
+            root.active_work_item(),
+            Some(WorkItemId::File(
+                document.read(app).model().document_id().clone()
+            ))
+        );
+        assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Editor);
+    });
+    document.update_in(cx, |document, window, document_cx| {
+        document.focus(window, document_cx);
+        window.dispatch_action(Box::new(gpui_component::input::Search), document_cx);
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    let active_work_item = cx.read(|app| root.read(app).active_work_item());
+    cx.read(|app| {
+        let document = document.read(app);
+        let input = document.code_input().expect("code editor input");
+        assert!(input.read(app).search_panel_is_open(app));
+        let root = root.read(app);
+        let status = root.vim_status().expect("editor search Vim status");
+        assert_eq!(status.mode, WorkbenchVimMode::Insert);
+        assert_eq!(status.surface, VimSurface::Editor);
+    });
+    cx.simulate_keystrokes("g t");
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert!(root.read(app).active_palette().is_none());
+        assert_eq!(root.read(app).active_work_item(), active_work_item);
+        let document = document.read(app);
+        let input = document.code_input().expect("code editor input");
+        assert!(input.read(app).search_panel_is_open(app));
+    });
+}
+
+#[gpui::test]
+fn ctrl_w_moves_focus_between_terminal_and_project_tree(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        yttt::ui::editor::init_vim_mode(cx);
+        cx.bind_keys(yttt::ui::interaction::actions::app_startup_keybindings());
+    });
+    let (_temp, _project_dir, root, _document, cx) = project_file_terminal_fixture(cx, "off", 50);
+    root.update_in(cx, |root, window, cx| {
+        root.set_vim_mode_setting(VimModeSetting::Global, window, cx)
+            .unwrap();
+        root.select_work_item(WorkItemId::Terminal("dev".to_string()))
+            .unwrap();
+        root.focus_visible_terminal_pane("shell").unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    assert!(
+        cx.debug_bounds("terminal-pane-focus-indicator-shell")
+            .is_some(),
+        "the focused terminal pane must have a restrained focus indicator"
+    );
+    assert!(
+        cx.debug_bounds("project-file-panel-focus-indicator")
+            .is_none()
+    );
+
+    cx.simulate_keystrokes("ctrl-[");
+    cx.simulate_keystrokes("ctrl-w l");
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.update(|window, cx| {
+        let root = root.read(cx);
+        let project_id = root.workspace().selected_project_id().unwrap();
+        let tree = root
+            .project_editor_runtime()
+            .tree(project_id)
+            .expect("project tree");
+        assert!(tree.read(cx).is_focused(window, cx));
+    });
+    assert!(
+        cx.debug_bounds("project-file-panel-focus-indicator")
+            .is_some(),
+        "Ctrl-W L must show the project-tree focus indicator in the first rendered frame"
+    );
+    assert!(
+        cx.debug_bounds("project-tree-focused-row-indicator")
+            .is_some(),
+        "focusing the project tree must expose its current row"
+    );
+    assert!(
+        cx.debug_bounds("terminal-pane-focus-indicator-shell")
+            .is_none(),
+        "the terminal focus indicator must disappear in the same rendered frame"
+    );
+
+    cx.simulate_keystrokes("ctrl-w h");
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).vim_status().map(|status| status.surface),
+            Some(VimSurface::Terminal)
+        );
+    });
+    assert!(
+        cx.debug_bounds("project-file-panel-focus-indicator")
+            .is_none()
+    );
+    assert!(
+        cx.debug_bounds("terminal-pane-focus-indicator-shell")
+            .is_some(),
+        "Ctrl-W H from the project tree must restore the terminal focus indicator"
+    );
+}
+
+#[gpui::test]
+fn ctrl_w_crosses_the_projects_list_at_the_left_workspace_edge(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        yttt::ui::editor::init_vim_mode(cx);
+        cx.bind_keys(yttt::ui::interaction::actions::app_startup_keybindings());
+    });
+    let (_temp, _project_dir, root, _document, cx) = project_file_terminal_fixture(cx, "off", 50);
+    root.update_in(cx, |root, window, cx| {
+        root.set_vim_mode_setting(VimModeSetting::Global, window, cx)
+            .unwrap();
+        root.select_work_item(WorkItemId::Terminal("dev".to_string()))
+            .unwrap();
+        root.focus_visible_terminal_pane("server").unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    cx.simulate_keystrokes("ctrl-[");
+    cx.simulate_keystrokes("ctrl-w h");
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).vim_status().map(|status| status.surface),
+            Some(VimSurface::Projects)
+        );
+    });
+    assert!(
+        cx.debug_bounds("project-sidebar-focus-indicator").is_some(),
+        "Ctrl-W H from the leftmost work-area pane must focus Projects"
+    );
+    assert!(
+        cx.debug_bounds("terminal-pane-focus-indicator-server")
+            .is_none()
+    );
+
+    cx.simulate_keystrokes("ctrl-w l");
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).vim_status().map(|status| status.surface),
+            Some(VimSurface::Terminal)
+        );
+    });
+    assert!(cx.debug_bounds("project-sidebar-focus-indicator").is_none());
+    assert!(
+        cx.debug_bounds("terminal-pane-focus-indicator-server")
+            .is_some(),
+        "Ctrl-W L from Projects must restore the selected work-area focus"
+    );
+}
+
+#[gpui::test]
+fn projects_vim_navigation_selects_opened_projects(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        yttt::ui::editor::init_vim_mode(cx);
+        cx.bind_keys(yttt::ui::interaction::actions::app_startup_keybindings());
+    });
+    let (temp, _project_dir, root, _document, cx) = project_file_terminal_fixture(cx, "off", 50);
+    let second_project = temp.path().join("second-project");
+    fs::create_dir_all(&second_project).unwrap();
+    let (first_project_id, second_project_id) = root.update_in(cx, |root, window, cx| {
+        root.set_vim_mode_setting(VimModeSetting::Global, window, cx)
+            .unwrap();
+        let first_project_id = root.workspace().selected_project_id().unwrap().clone();
+        root.open_project_path(&second_project).unwrap();
+        let second_project_id = root.workspace().selected_project_id().unwrap().clone();
+        cx.notify();
+        (first_project_id, second_project_id)
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    root.update_in(cx, |_root, window, cx| {
+        window.dispatch_action(Box::new(FocusProjects), cx);
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        let root = root.read(app);
+        assert_eq!(
+            root.vim_status().map(|status| status.surface),
+            Some(VimSurface::Projects)
+        );
+        assert_eq!(
+            root.workspace().selected_project_id(),
+            Some(&second_project_id)
+        );
+    });
+    assert!(cx.debug_bounds("project-sidebar-focus-indicator").is_some());
+
+    cx.simulate_keystrokes("k");
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).workspace().selected_project_id(),
+            Some(&first_project_id)
+        );
+    });
+
+    cx.simulate_keystrokes("j");
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).workspace().selected_project_id(),
+            Some(&second_project_id)
+        );
+    });
+
+    cx.simulate_keystrokes("g g");
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).workspace().selected_project_id(),
+            Some(&first_project_id)
+        );
+    });
+
+    cx.simulate_keystrokes("shift-g");
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).workspace().selected_project_id(),
+            Some(&second_project_id)
+        );
+    });
+}
+
+#[gpui::test]
+fn global_vim_survives_editor_relocation_between_code_and_markdown(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        yttt::ui::editor::init_vim_mode(cx);
+    });
+    let (_temp, project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
+    root.update_in(cx, |root, window, cx| {
+        root.set_vim_mode_setting(VimModeSetting::Global, window, cx)
+            .unwrap();
+    });
+    let code_document_id = cx.read(|app| document.read(app).model().document_id().clone());
+    cx.read(|app| {
+        assert_eq!(document.read(app).vim_mode(), Some(VimMode::Normal));
+    });
+
+    let markdown_document_id = DocumentId {
+        project_id: code_document_id.project_id.clone(),
+        canonical_path: project_dir.join("README.md"),
+    };
+    document.update_in(cx, |document, window, cx| {
+        document.relocate(markdown_document_id, "README.md", window, cx);
+    });
+    cx.read(|app| {
+        let document = document.read(app);
+        assert!(document.is_markdown());
+        assert_eq!(document.vim_mode(), None);
+    });
+
+    document.update_in(cx, |document, window, cx| {
+        document.relocate(code_document_id, "src/main.rs", window, cx);
+    });
+    cx.read(|app| {
+        let document = document.read(app);
+        assert!(!document.is_markdown());
+        assert_eq!(document.vim_mode(), Some(VimMode::Normal));
+    });
+}
+
+#[gpui::test]
 fn focused_editor_global_settings_shortcut_opens_settings(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let (_temp, _project_dir, root, document, cx) = project_file_autosave_fixture(cx, "off", 50);
@@ -5841,6 +6863,36 @@ fn focused_editor_global_settings_shortcut_opens_settings(cx: &mut gpui::TestApp
         );
         assert!(!root.read(app).settings_is_open());
     });
+    let tab_count = cx.read(|app| {
+        let root = root.read(app);
+        let project_id = root.workspace().selected_project_id().unwrap();
+        root.workspace()
+            .project(project_id)
+            .unwrap()
+            .layout
+            .tabs
+            .len()
+    });
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-t"
+    } else {
+        "ctrl-t"
+    });
+    cx.run_until_parked();
+    cx.read(|app| {
+        let root = root.read(app);
+        let project_id = root.workspace().selected_project_id().unwrap();
+        assert_eq!(
+            root.workspace()
+                .project(project_id)
+                .unwrap()
+                .layout
+                .tabs
+                .len(),
+            tab_count,
+            "file editors must reject terminal tab creation"
+        );
+    });
 
     cx.simulate_keystrokes("cmd-,");
     cx.run_until_parked();
@@ -5855,7 +6907,7 @@ fn focused_editor_global_settings_shortcut_opens_settings(cx: &mut gpui::TestApp
 
 #[test]
 fn root_view_pane_focus_command_queues_target_terminal_focus() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.run_command(CommandId::PaneFocusRight).unwrap();
 
@@ -5864,7 +6916,7 @@ fn root_view_pane_focus_command_queues_target_terminal_focus() {
 
 #[test]
 fn root_view_split_command_queues_new_terminal_focus() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.run_command(CommandId::PaneSplitVertical).unwrap();
 
@@ -5873,7 +6925,7 @@ fn root_view_split_command_queues_new_terminal_focus() {
 
 #[test]
 fn root_view_terminal_exit_closes_exact_split_pane() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.handle_terminal_pane_exit(terminal_pane_exited_event("dev", "server"))
         .unwrap();
@@ -5888,7 +6940,7 @@ fn root_view_terminal_exit_closes_exact_split_pane() {
 
 #[test]
 fn root_view_terminal_exit_closes_single_pane_tab() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
     root.workspace_mut().select_tab("agent").unwrap();
 
     root.handle_terminal_pane_exit(terminal_pane_exited_event("agent", "codex"))
@@ -5957,7 +7009,7 @@ fn root_view_terminal_exit_keeps_project_open_and_allows_new_tab() {
 
 #[test]
 fn root_view_terminal_exit_keeps_split_pane_for_manual_restart() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     let outcome = root
         .handle_terminal_pane_exit(terminal_pane_exited_event_with_behavior(
@@ -5989,7 +7041,7 @@ fn root_view_terminal_exit_keeps_split_pane_for_manual_restart() {
 
 #[test]
 fn root_view_auto_restart_exit_transitions_back_to_running() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
     root.workspace_mut().select_tab("agent").unwrap();
 
     root.handle_terminal_pane_exit(terminal_pane_exited_event_with_behavior(
@@ -6055,7 +7107,7 @@ fn root_view_terminal_exit_keeps_last_tab_for_manual_restart() {
 
 #[test]
 fn root_view_focus_notification_target_queues_terminal_focus() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
     let event = notification_event();
 
     root.focus_notification_target(&event).unwrap();
@@ -6065,7 +7117,7 @@ fn root_view_focus_notification_target_queues_terminal_focus() {
 
 #[test]
 fn root_view_focus_notification_target_leaves_active_file_for_terminal() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
     let project_id = root.workspace().selected_project_id().unwrap().clone();
     let document_id = root
         .project_editor_runtime_mut()
@@ -6091,37 +7143,6 @@ fn root_view_focus_notification_target_leaves_active_file_for_terminal() {
 }
 
 #[test]
-fn workspace_arrow_keydown_fallback_maps_to_pane_commands() {
-    assert_eq!(
-        WorkbenchView::workspace_arrow_keydown_command("right", true, false, true, false),
-        Some(CommandId::PaneFocusRight)
-    );
-    assert_eq!(
-        WorkbenchView::workspace_arrow_keydown_command("left", false, true, true, false),
-        Some(CommandId::PaneFocusLeft)
-    );
-    assert_eq!(
-        WorkbenchView::workspace_arrow_keydown_command("down", true, false, true, true),
-        Some(CommandId::PaneResizeDown)
-    );
-    assert_eq!(
-        WorkbenchView::workspace_arrow_keydown_command("right", true, false, false, false),
-        None
-    );
-    assert_eq!(
-        WorkbenchView::workspace_arrow_keydown_command_for_owner(
-            InputOwnerKind::Editor,
-            "right",
-            true,
-            false,
-            true,
-            false,
-        ),
-        None
-    );
-}
-
-#[test]
 fn root_view_enqueues_agent_toast_notifications() {
     let mut root = WorkbenchView::new();
 
@@ -6132,7 +7153,7 @@ fn root_view_enqueues_agent_toast_notifications() {
 
 #[test]
 fn root_view_records_agent_status_from_notification() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.handle_terminal_notification(notification_event());
 
@@ -6163,7 +7184,7 @@ fn root_view_formats_failed_agent_toast_notifications() {
 
 #[test]
 fn root_view_focuses_notification_target() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
     let event = notification_event();
 
     root.focus_notification_target(&event).unwrap();
@@ -6424,7 +7445,7 @@ fn workspace_with_sample_project() -> Workspace {
 fn english_test_root() -> (tempfile::TempDir, WorkbenchView) {
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    (temp, WorkbenchView::with_config_paths(paths))
+    (temp, WorkbenchView::with_config_paths_for_test(paths))
 }
 
 fn english_test_root_with_workspace(workspace: Workspace) -> (tempfile::TempDir, WorkbenchView) {
@@ -6651,7 +7672,7 @@ fn multi_agent_layout() -> yttt::model::layout::ProjectLayout {
 
 #[test]
 fn git_commands_are_registered_in_action_and_keybinding_panels() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
     root.open_palette(PaletteKind::Command);
     let command_ids = root
         .active_palette_items()
@@ -6666,13 +7687,13 @@ fn git_commands_are_registered_in_action_and_keybinding_panels() {
         .into_iter()
         .map(|row| row.command)
         .collect::<Vec<_>>();
-    assert!(keybinding_commands.contains(&CommandId::GitBranchSwitch));
-    assert!(keybinding_commands.contains(&CommandId::GitDiffOpen));
+    assert!(keybinding_commands.contains(&BindableActionId::Command(CommandId::GitBranchSwitch)));
+    assert!(keybinding_commands.contains(&BindableActionId::Command(CommandId::GitDiffOpen)));
 }
 
 #[test]
 fn git_commands_open_branch_selector_and_diff_panel() {
-    let mut root = WorkbenchView::dev_fixture();
+    let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.run_command(CommandId::GitBranchSwitch).unwrap();
     assert_eq!(

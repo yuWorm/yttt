@@ -146,6 +146,10 @@ pub mod terminal;
 pub(crate) mod test_support;
 pub mod view;
 
+pub fn rebind_keybindings(cx: &mut gpui::App) {
+    view::init(cx);
+}
+
 // Re-export main types for convenience
 pub use colors::{ColorPalette, ColorPaletteBuilder};
 pub use event::{
@@ -169,7 +173,12 @@ pub use pty::{
 pub use render::TerminalRenderer;
 pub use terminal::TerminalState;
 pub use view::{
-    BellCallback, DEFAULT_TERMINAL_URL_REGEX, ExitCallback, IoErrorCallback, KeyHandler,
-    ResizeCallback, TerminalConfig, TerminalCursorShape, TerminalHintAction, TerminalHintConfig,
-    TerminalOsc52Policy, TerminalView, TitleCallback, init, is_valid_hint_alphabet,
+    BellCallback, CancelSearch, Copy, DEFAULT_TERMINAL_URL_REGEX, ExitCallback, IoErrorCallback,
+    KeyHandler, Paste, ResizeCallback, SearchHistoryNext, SearchHistoryPrevious, SearchNext,
+    SearchPrevious, SendBacktab, SendTab, StartHintMode, StartSearch, TERMINAL_HINT_KEY_CONTEXT,
+    TERMINAL_KEY_CONTEXT, TERMINAL_SEARCH_KEY_CONTEXT, TERMINAL_VI_KEY_CONTEXT, TerminalConfig,
+    TerminalCursorShape, TerminalHintAction, TerminalHintConfig, TerminalOsc52Policy,
+    TerminalViCopySelection, TerminalViExit, TerminalViMotion, TerminalViMotionAction,
+    TerminalViToggleSelection, TerminalView, TitleCallback, ToggleViMode, init,
+    is_valid_hint_alphabet,
 };

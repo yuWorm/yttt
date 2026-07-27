@@ -370,6 +370,10 @@ impl TreeState {
         }
     }
 
+    pub fn focus_handle(&self) -> &FocusHandle {
+        &self.focus_handle
+    }
+
     pub fn focus(&mut self, window: &mut Window, cx: &mut App) {
         self.focus_handle.focus(window, cx);
     }

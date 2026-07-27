@@ -348,6 +348,14 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 UiTextKey::SettingsEditKeybindingsTomlDescription,
             ),
             row(
+                UiTextKey::SettingsVimQuickStart,
+                UiTextKey::SettingsVimQuickStartDescription,
+            ),
+            row(
+                UiTextKey::SettingsVimLeader,
+                UiTextKey::SettingsVimLeaderDescription,
+            ),
+            row(
                 UiTextKey::SettingsKeybindingDiagnostics,
                 UiTextKey::SettingsKeybindingDiagnosticsDescription,
             ),

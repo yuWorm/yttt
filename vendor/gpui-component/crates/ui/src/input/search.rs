@@ -255,6 +255,12 @@ impl InputState {
         self.search_panel = Some(search_panel);
         cx.notify();
     }
+
+    pub fn search_panel_is_open(&self, cx: &App) -> bool {
+        self.search_panel
+            .as_ref()
+            .is_some_and(|panel| panel.read(cx).open)
+    }
 }
 
 impl SearchPanel {

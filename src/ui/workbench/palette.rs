@@ -387,6 +387,14 @@ impl WorkbenchView {
             input
         };
 
+        let text_input_enabled = self.vim.support() != VimModeSetting::Global
+            || self.vim.mode() == WorkbenchVimMode::Insert;
+        input.update(cx, |input, input_cx| {
+            if input.text_input_enabled() != text_input_enabled {
+                input.set_text_input_enabled(text_input_enabled, input_cx);
+            }
+        });
+
         if self.palette.input_needs_focus {
             input.update(cx, |input, cx| input.focus(window, cx));
             self.palette.input_needs_focus = false;

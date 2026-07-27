@@ -6,12 +6,12 @@ use gpui::{
 };
 use gpui_component::input::{InputCursorShape, InputState, Rope, RopeExt as _, Search};
 
-const VIM_EDITOR_CONTEXT: &str = "VimEditor";
-const VIM_CONTROL_CONTEXT: &str = "VimControl";
-const VIM_CONTROL_BINDING_CONTEXT: &str = "VimControl && !SearchPanel";
-const VIM_EDITOR_BINDING_CONTEXT: &str = "VimEditor && !SearchPanel";
-const NORMAL_CONTEXT: &str = "VimEditor && vim_mode == normal && !SearchPanel";
-const INSERT_CONTEXT: &str = "VimEditor && vim_mode == insert && !SearchPanel";
+pub const VIM_EDITOR_CONTEXT: &str = "VimEditor";
+pub const VIM_CONTROL_CONTEXT: &str = "VimControl";
+pub const VIM_CONTROL_BINDING_CONTEXT: &str = "VimControl && !SearchPanel";
+pub const VIM_EDITOR_BINDING_CONTEXT: &str = "VimEditor && !SearchPanel";
+pub const NORMAL_CONTEXT: &str = "VimEditor && vim_mode == normal && !SearchPanel";
+pub const INSERT_CONTEXT: &str = "VimEditor && vim_mode == insert && !SearchPanel";
 const MAX_VIM_COUNT: usize = 999_999;
 const MAX_REPEAT_BYTES: usize = 16 * 1024 * 1024;
 
@@ -136,6 +136,351 @@ actions!(
     ]
 );
 
+macro_rules! define_editor_vim_actions {
+    (
+        $(
+            $variant:ident => {
+                id: $id:literal,
+                action: $action:expr,
+                title: $title:literal,
+                description: $description:literal,
+            },
+        )+
+    ) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum EditorVimActionId {
+            $( $variant, )+
+        }
+
+        impl EditorVimActionId {
+            pub const ALL: &'static [Self] = &[$( Self::$variant, )+];
+
+            pub fn from_str_id(id: &str) -> Option<Self> {
+                match id {
+                    $( $id => Some(Self::$variant), )+
+                    _ => None,
+                }
+            }
+
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $( Self::$variant => $id, )+
+                }
+            }
+
+            pub const fn title(self) -> &'static str {
+                match self {
+                    $( Self::$variant => $title, )+
+                }
+            }
+
+            pub const fn description(self) -> &'static str {
+                match self {
+                    $( Self::$variant => $description, )+
+                }
+            }
+
+            pub fn build(self) -> Box<dyn Action> {
+                match self {
+                    $( Self::$variant => Box::new($action), )+
+                }
+            }
+
+            pub fn key_binding(self, keys: &str, context: Option<&str>) -> KeyBinding {
+                match self {
+                    $( Self::$variant => KeyBinding::new(keys, $action, context), )+
+                }
+            }
+        }
+    };
+}
+
+define_editor_vim_actions! {
+    MoveLeft => {
+        id: "editor.vim.motion.left",
+        action: MoveAction { motion: Motion::Left },
+        title: "Editor Vim: Move Left",
+        description: "Move the Vim cursor left.",
+    },
+    MoveRight => {
+        id: "editor.vim.motion.right",
+        action: MoveAction { motion: Motion::Right },
+        title: "Editor Vim: Move Right",
+        description: "Move the Vim cursor right.",
+    },
+    MoveDown => {
+        id: "editor.vim.motion.down",
+        action: MoveAction { motion: Motion::Down { display_lines: false } },
+        title: "Editor Vim: Move Down",
+        description: "Move the Vim cursor down by logical lines.",
+    },
+    MoveUp => {
+        id: "editor.vim.motion.up",
+        action: MoveAction { motion: Motion::Up { display_lines: false } },
+        title: "Editor Vim: Move Up",
+        description: "Move the Vim cursor up by logical lines.",
+    },
+    MoveDisplayDown => {
+        id: "editor.vim.motion.display_down",
+        action: MoveAction { motion: Motion::Down { display_lines: true } },
+        title: "Editor Vim: Move Display Line Down",
+        description: "Move the Vim cursor down by display lines.",
+    },
+    MoveDisplayUp => {
+        id: "editor.vim.motion.display_up",
+        action: MoveAction { motion: Motion::Up { display_lines: true } },
+        title: "Editor Vim: Move Display Line Up",
+        description: "Move the Vim cursor up by display lines.",
+    },
+    MoveNextWordStart => {
+        id: "editor.vim.motion.next_word_start",
+        action: MoveAction { motion: Motion::NextWordStart },
+        title: "Editor Vim: Next Word",
+        description: "Move to the start of the next word.",
+    },
+    MoveNextWordEnd => {
+        id: "editor.vim.motion.next_word_end",
+        action: MoveAction { motion: Motion::NextWordEnd },
+        title: "Editor Vim: Next Word End",
+        description: "Move to the end of the next word.",
+    },
+    MovePreviousWordStart => {
+        id: "editor.vim.motion.previous_word_start",
+        action: MoveAction { motion: Motion::PreviousWordStart },
+        title: "Editor Vim: Previous Word",
+        description: "Move to the start of the previous word.",
+    },
+    MoveLineStart => {
+        id: "editor.vim.motion.line_start",
+        action: MoveAction { motion: Motion::StartOfLine },
+        title: "Editor Vim: Line Start",
+        description: "Move to the start of the current line.",
+    },
+    MoveFirstNonWhitespace => {
+        id: "editor.vim.motion.first_non_whitespace",
+        action: MoveAction { motion: Motion::FirstNonWhitespace },
+        title: "Editor Vim: First Non-Whitespace",
+        description: "Move to the first non-whitespace character.",
+    },
+    MoveLineEnd => {
+        id: "editor.vim.motion.line_end",
+        action: MoveAction { motion: Motion::EndOfLine },
+        title: "Editor Vim: Line End",
+        description: "Move to the end of the current line.",
+    },
+    MoveDocumentStart => {
+        id: "editor.vim.motion.document_start",
+        action: MoveAction { motion: Motion::StartOfDocument },
+        title: "Editor Vim: Document Start",
+        description: "Move to the start of the document.",
+    },
+    MoveDocumentEnd => {
+        id: "editor.vim.motion.document_end",
+        action: MoveAction { motion: Motion::EndOfDocument },
+        title: "Editor Vim: Document End",
+        description: "Move to the end of the document.",
+    },
+    CountZero => {
+        id: "editor.vim.count.zero",
+        action: Zero,
+        title: "Editor Vim: Zero",
+        description: "Enter zero in a count or move to line start.",
+    },
+    CountOne => {
+        id: "editor.vim.count.one",
+        action: Number(1),
+        title: "Editor Vim: Count 1",
+        description: "Append 1 to the Vim count.",
+    },
+    CountTwo => {
+        id: "editor.vim.count.two",
+        action: Number(2),
+        title: "Editor Vim: Count 2",
+        description: "Append 2 to the Vim count.",
+    },
+    CountThree => {
+        id: "editor.vim.count.three",
+        action: Number(3),
+        title: "Editor Vim: Count 3",
+        description: "Append 3 to the Vim count.",
+    },
+    CountFour => {
+        id: "editor.vim.count.four",
+        action: Number(4),
+        title: "Editor Vim: Count 4",
+        description: "Append 4 to the Vim count.",
+    },
+    CountFive => {
+        id: "editor.vim.count.five",
+        action: Number(5),
+        title: "Editor Vim: Count 5",
+        description: "Append 5 to the Vim count.",
+    },
+    CountSix => {
+        id: "editor.vim.count.six",
+        action: Number(6),
+        title: "Editor Vim: Count 6",
+        description: "Append 6 to the Vim count.",
+    },
+    CountSeven => {
+        id: "editor.vim.count.seven",
+        action: Number(7),
+        title: "Editor Vim: Count 7",
+        description: "Append 7 to the Vim count.",
+    },
+    CountEight => {
+        id: "editor.vim.count.eight",
+        action: Number(8),
+        title: "Editor Vim: Count 8",
+        description: "Append 8 to the Vim count.",
+    },
+    CountNine => {
+        id: "editor.vim.count.nine",
+        action: Number(9),
+        title: "Editor Vim: Count 9",
+        description: "Append 9 to the Vim count.",
+    },
+    DeleteOperator => {
+        id: "editor.vim.operator.delete",
+        action: PushOperator { operator: Operator::Delete },
+        title: "Editor Vim: Delete Operator",
+        description: "Begin a Vim delete operation.",
+    },
+    ChangeOperator => {
+        id: "editor.vim.operator.change",
+        action: PushOperator { operator: Operator::Change },
+        title: "Editor Vim: Change Operator",
+        description: "Begin a Vim change operation.",
+    },
+    YankOperator => {
+        id: "editor.vim.operator.yank",
+        action: PushOperator { operator: Operator::Yank },
+        title: "Editor Vim: Yank Operator",
+        description: "Begin a Vim yank operation.",
+    },
+    InsertCurrent => {
+        id: "editor.vim.insert.current",
+        action: EnterInsert { placement: InsertPlacement::Current },
+        title: "Editor Vim: Insert",
+        description: "Enter insert mode at the cursor.",
+    },
+    InsertAfter => {
+        id: "editor.vim.insert.after",
+        action: EnterInsert { placement: InsertPlacement::After },
+        title: "Editor Vim: Append",
+        description: "Enter insert mode after the cursor.",
+    },
+    InsertFirstNonWhitespace => {
+        id: "editor.vim.insert.first_non_whitespace",
+        action: EnterInsert { placement: InsertPlacement::FirstNonWhitespace },
+        title: "Editor Vim: Insert at Indentation",
+        description: "Enter insert mode at the first non-whitespace character.",
+    },
+    InsertLineEnd => {
+        id: "editor.vim.insert.line_end",
+        action: EnterInsert { placement: InsertPlacement::EndOfLine },
+        title: "Editor Vim: Append at Line End",
+        description: "Enter insert mode at the end of the line.",
+    },
+    InsertLineBelow => {
+        id: "editor.vim.insert.line_below",
+        action: EnterInsert { placement: InsertPlacement::NewLineBelow },
+        title: "Editor Vim: Open Line Below",
+        description: "Open a new line below and enter insert mode.",
+    },
+    InsertLineAbove => {
+        id: "editor.vim.insert.line_above",
+        action: EnterInsert { placement: InsertPlacement::NewLineAbove },
+        title: "Editor Vim: Open Line Above",
+        description: "Open a new line above and enter insert mode.",
+    },
+    ToggleVisual => {
+        id: "editor.vim.visual.toggle",
+        action: ToggleVisual,
+        title: "Editor Vim: Toggle Visual",
+        description: "Enter or leave character-wise visual mode.",
+    },
+    ToggleVisualLine => {
+        id: "editor.vim.visual.toggle_line",
+        action: ToggleVisualLine,
+        title: "Editor Vim: Toggle Visual Line",
+        description: "Enter or leave line-wise visual mode.",
+    },
+    DeleteCharacters => {
+        id: "editor.vim.delete_characters",
+        action: DeleteCharacters,
+        title: "Editor Vim: Delete Characters",
+        description: "Delete characters under the cursor.",
+    },
+    SubstituteCharacters => {
+        id: "editor.vim.substitute_characters",
+        action: SubstituteCharacters,
+        title: "Editor Vim: Substitute Characters",
+        description: "Delete characters and enter insert mode.",
+    },
+    ReplaceCharacters => {
+        id: "editor.vim.replace_characters",
+        action: ReplaceCharacters,
+        title: "Editor Vim: Replace Characters",
+        description: "Replace characters under the cursor.",
+    },
+    PasteAfter => {
+        id: "editor.vim.paste_after",
+        action: Paste { before: false },
+        title: "Editor Vim: Paste After",
+        description: "Paste after the cursor.",
+    },
+    PasteBefore => {
+        id: "editor.vim.paste_before",
+        action: Paste { before: true },
+        title: "Editor Vim: Paste Before",
+        description: "Paste before the cursor.",
+    },
+    Undo => {
+        id: "editor.vim.undo",
+        action: Undo,
+        title: "Editor Vim: Undo",
+        description: "Undo the previous edit.",
+    },
+    Redo => {
+        id: "editor.vim.redo",
+        action: Redo,
+        title: "Editor Vim: Redo",
+        description: "Redo the previous edit.",
+    },
+    SearchForward => {
+        id: "editor.vim.search_forward",
+        action: SearchForward,
+        title: "Editor Vim: Search",
+        description: "Open forward search.",
+    },
+    SearchNext => {
+        id: "editor.vim.search_next",
+        action: SearchNext,
+        title: "Editor Vim: Next Search Match",
+        description: "Move to the next search match.",
+    },
+    SearchPrevious => {
+        id: "editor.vim.search_previous",
+        action: SearchPrevious,
+        title: "Editor Vim: Previous Search Match",
+        description: "Move to the previous search match.",
+    },
+    Escape => {
+        id: "editor.vim.escape",
+        action: Escape,
+        title: "Editor Vim: Escape",
+        description: "Return to Vim normal mode.",
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EditorVimBindingSpec {
+    pub keys: &'static str,
+    pub action: EditorVimActionId,
+    pub context: &'static str,
+}
+
 #[derive(Clone, Debug, Default)]
 struct Register {
     text: String,
@@ -186,250 +531,236 @@ impl Default for VimState {
 
 pub fn init(cx: &mut App) {
     cx.set_global(VimRegisters::default());
+    rebind_keybindings(cx);
+}
+
+pub fn rebind_keybindings(cx: &mut App) {
     cx.bind_keys(default_keybindings());
 }
 
 fn default_keybindings() -> Vec<KeyBinding> {
-    let control = Some(VIM_CONTROL_BINDING_CONTEXT);
-    let normal = Some(NORMAL_CONTEXT);
-    let insert = Some(INSERT_CONTEXT);
-    let editor = Some(VIM_EDITOR_BINDING_CONTEXT);
+    default_bindable_keybindings()
+        .into_iter()
+        .map(|binding| {
+            binding
+                .action
+                .key_binding(binding.keys, Some(binding.context))
+        })
+        .collect()
+}
 
+pub fn default_bindable_keybindings() -> Vec<EditorVimBindingSpec> {
     vec![
-        KeyBinding::new(
+        editor_binding(
             "h",
-            MoveAction {
-                motion: Motion::Left,
-            },
-            control,
+            EditorVimActionId::MoveLeft,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new(
+        editor_binding(
             "left",
-            MoveAction {
-                motion: Motion::Left,
-            },
-            control,
+            EditorVimActionId::MoveLeft,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new(
+        editor_binding(
             "l",
-            MoveAction {
-                motion: Motion::Right,
-            },
-            control,
+            EditorVimActionId::MoveRight,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new(
+        editor_binding(
             "right",
-            MoveAction {
-                motion: Motion::Right,
-            },
-            control,
+            EditorVimActionId::MoveRight,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new(
+        editor_binding(
             "j",
-            MoveAction {
-                motion: Motion::Down {
-                    display_lines: false,
-                },
-            },
-            control,
+            EditorVimActionId::MoveDown,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new(
+        editor_binding(
             "down",
-            MoveAction {
-                motion: Motion::Down {
-                    display_lines: false,
-                },
-            },
-            control,
+            EditorVimActionId::MoveDown,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new(
-            "k",
-            MoveAction {
-                motion: Motion::Up {
-                    display_lines: false,
-                },
-            },
-            control,
-        ),
-        KeyBinding::new(
-            "up",
-            MoveAction {
-                motion: Motion::Up {
-                    display_lines: false,
-                },
-            },
-            control,
-        ),
-        KeyBinding::new(
+        editor_binding("k", EditorVimActionId::MoveUp, VIM_CONTROL_BINDING_CONTEXT),
+        editor_binding("up", EditorVimActionId::MoveUp, VIM_CONTROL_BINDING_CONTEXT),
+        editor_binding(
             "g j",
-            MoveAction {
-                motion: Motion::Down {
-                    display_lines: true,
-                },
-            },
-            control,
+            EditorVimActionId::MoveDisplayDown,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new(
+        editor_binding(
             "g k",
-            MoveAction {
-                motion: Motion::Up {
-                    display_lines: true,
-                },
-            },
-            control,
+            EditorVimActionId::MoveDisplayUp,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new(
+        editor_binding(
             "w",
-            MoveAction {
-                motion: Motion::NextWordStart,
-            },
-            control,
+            EditorVimActionId::MoveNextWordStart,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new(
+        editor_binding(
             "e",
-            MoveAction {
-                motion: Motion::NextWordEnd,
-            },
-            control,
+            EditorVimActionId::MoveNextWordEnd,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new(
+        editor_binding(
             "b",
-            MoveAction {
-                motion: Motion::PreviousWordStart,
-            },
-            control,
+            EditorVimActionId::MovePreviousWordStart,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new("0", Zero, control),
-        KeyBinding::new(
+        editor_binding(
+            "0",
+            EditorVimActionId::CountZero,
+            VIM_CONTROL_BINDING_CONTEXT,
+        ),
+        editor_binding(
             "home",
-            MoveAction {
-                motion: Motion::StartOfLine,
-            },
-            control,
+            EditorVimActionId::MoveLineStart,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new(
+        editor_binding(
             "^",
-            MoveAction {
-                motion: Motion::FirstNonWhitespace,
-            },
-            control,
+            EditorVimActionId::MoveFirstNonWhitespace,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new(
+        editor_binding(
             "$",
-            MoveAction {
-                motion: Motion::EndOfLine,
-            },
-            control,
+            EditorVimActionId::MoveLineEnd,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new(
+        editor_binding(
             "end",
-            MoveAction {
-                motion: Motion::EndOfLine,
-            },
-            control,
+            EditorVimActionId::MoveLineEnd,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new(
+        editor_binding(
             "g g",
-            MoveAction {
-                motion: Motion::StartOfDocument,
-            },
-            control,
+            EditorVimActionId::MoveDocumentStart,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new(
+        editor_binding(
             "shift-g",
-            MoveAction {
-                motion: Motion::EndOfDocument,
-            },
-            control,
+            EditorVimActionId::MoveDocumentEnd,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new("1", Number(1), control),
-        KeyBinding::new("2", Number(2), control),
-        KeyBinding::new("3", Number(3), control),
-        KeyBinding::new("4", Number(4), control),
-        KeyBinding::new("5", Number(5), control),
-        KeyBinding::new("6", Number(6), control),
-        KeyBinding::new("7", Number(7), control),
-        KeyBinding::new("8", Number(8), control),
-        KeyBinding::new("9", Number(9), control),
-        KeyBinding::new(
+        editor_binding(
+            "1",
+            EditorVimActionId::CountOne,
+            VIM_CONTROL_BINDING_CONTEXT,
+        ),
+        editor_binding(
+            "2",
+            EditorVimActionId::CountTwo,
+            VIM_CONTROL_BINDING_CONTEXT,
+        ),
+        editor_binding(
+            "3",
+            EditorVimActionId::CountThree,
+            VIM_CONTROL_BINDING_CONTEXT,
+        ),
+        editor_binding(
+            "4",
+            EditorVimActionId::CountFour,
+            VIM_CONTROL_BINDING_CONTEXT,
+        ),
+        editor_binding(
+            "5",
+            EditorVimActionId::CountFive,
+            VIM_CONTROL_BINDING_CONTEXT,
+        ),
+        editor_binding(
+            "6",
+            EditorVimActionId::CountSix,
+            VIM_CONTROL_BINDING_CONTEXT,
+        ),
+        editor_binding(
+            "7",
+            EditorVimActionId::CountSeven,
+            VIM_CONTROL_BINDING_CONTEXT,
+        ),
+        editor_binding(
+            "8",
+            EditorVimActionId::CountEight,
+            VIM_CONTROL_BINDING_CONTEXT,
+        ),
+        editor_binding(
+            "9",
+            EditorVimActionId::CountNine,
+            VIM_CONTROL_BINDING_CONTEXT,
+        ),
+        editor_binding(
             "d",
-            PushOperator {
-                operator: Operator::Delete,
-            },
-            control,
+            EditorVimActionId::DeleteOperator,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new(
+        editor_binding(
             "c",
-            PushOperator {
-                operator: Operator::Change,
-            },
-            control,
+            EditorVimActionId::ChangeOperator,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new(
+        editor_binding(
             "y",
-            PushOperator {
-                operator: Operator::Yank,
-            },
-            control,
+            EditorVimActionId::YankOperator,
+            VIM_CONTROL_BINDING_CONTEXT,
         ),
-        KeyBinding::new(
-            "i",
-            EnterInsert {
-                placement: InsertPlacement::Current,
-            },
-            normal,
-        ),
-        KeyBinding::new(
-            "a",
-            EnterInsert {
-                placement: InsertPlacement::After,
-            },
-            normal,
-        ),
-        KeyBinding::new(
+        editor_binding("i", EditorVimActionId::InsertCurrent, NORMAL_CONTEXT),
+        editor_binding("a", EditorVimActionId::InsertAfter, NORMAL_CONTEXT),
+        editor_binding(
             "shift-i",
-            EnterInsert {
-                placement: InsertPlacement::FirstNonWhitespace,
-            },
-            normal,
+            EditorVimActionId::InsertFirstNonWhitespace,
+            NORMAL_CONTEXT,
         ),
-        KeyBinding::new(
-            "shift-a",
-            EnterInsert {
-                placement: InsertPlacement::EndOfLine,
-            },
-            normal,
-        ),
-        KeyBinding::new(
-            "o",
-            EnterInsert {
-                placement: InsertPlacement::NewLineBelow,
-            },
-            normal,
-        ),
-        KeyBinding::new(
+        editor_binding("shift-a", EditorVimActionId::InsertLineEnd, NORMAL_CONTEXT),
+        editor_binding("o", EditorVimActionId::InsertLineBelow, NORMAL_CONTEXT),
+        editor_binding(
             "shift-o",
-            EnterInsert {
-                placement: InsertPlacement::NewLineAbove,
-            },
-            normal,
+            EditorVimActionId::InsertLineAbove,
+            NORMAL_CONTEXT,
         ),
-        KeyBinding::new("v", ToggleVisual, control),
-        KeyBinding::new("shift-v", ToggleVisualLine, control),
-        KeyBinding::new("x", DeleteCharacters, normal),
-        KeyBinding::new("s", SubstituteCharacters, normal),
-        KeyBinding::new("r", ReplaceCharacters, normal),
-        KeyBinding::new("p", Paste { before: false }, normal),
-        KeyBinding::new("shift-p", Paste { before: true }, normal),
-        KeyBinding::new("u", Undo, normal),
-        KeyBinding::new("ctrl-r", Redo, normal),
-        KeyBinding::new("/", SearchForward, normal),
-        KeyBinding::new("n", SearchNext, normal),
-        KeyBinding::new("shift-n", SearchPrevious, normal),
-        KeyBinding::new("escape", Escape, editor),
-        KeyBinding::new("ctrl-[", Escape, editor),
-        KeyBinding::new("escape", Escape, insert),
+        editor_binding(
+            "v",
+            EditorVimActionId::ToggleVisual,
+            VIM_CONTROL_BINDING_CONTEXT,
+        ),
+        editor_binding(
+            "shift-v",
+            EditorVimActionId::ToggleVisualLine,
+            VIM_CONTROL_BINDING_CONTEXT,
+        ),
+        editor_binding("x", EditorVimActionId::DeleteCharacters, NORMAL_CONTEXT),
+        editor_binding("s", EditorVimActionId::SubstituteCharacters, NORMAL_CONTEXT),
+        editor_binding("r", EditorVimActionId::ReplaceCharacters, NORMAL_CONTEXT),
+        editor_binding("p", EditorVimActionId::PasteAfter, NORMAL_CONTEXT),
+        editor_binding("shift-p", EditorVimActionId::PasteBefore, NORMAL_CONTEXT),
+        editor_binding("u", EditorVimActionId::Undo, NORMAL_CONTEXT),
+        editor_binding("ctrl-r", EditorVimActionId::Redo, NORMAL_CONTEXT),
+        editor_binding("/", EditorVimActionId::SearchForward, NORMAL_CONTEXT),
+        editor_binding("n", EditorVimActionId::SearchNext, NORMAL_CONTEXT),
+        editor_binding("shift-n", EditorVimActionId::SearchPrevious, NORMAL_CONTEXT),
+        editor_binding(
+            "escape",
+            EditorVimActionId::Escape,
+            VIM_EDITOR_BINDING_CONTEXT,
+        ),
+        editor_binding(
+            "ctrl-[",
+            EditorVimActionId::Escape,
+            VIM_EDITOR_BINDING_CONTEXT,
+        ),
+        editor_binding("escape", EditorVimActionId::Escape, INSERT_CONTEXT),
     ]
+}
+
+fn editor_binding(
+    keys: &'static str,
+    action: EditorVimActionId,
+    context: &'static str,
+) -> EditorVimBindingSpec {
+    EditorVimBindingSpec {
+        keys,
+        action,
+        context,
+    }
 }
 
 impl VimState {

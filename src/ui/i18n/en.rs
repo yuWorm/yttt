@@ -481,9 +481,17 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::SettingsEditorLineNumbers => "Line numbers",
         UiTextKey::SettingsEditorLineNumbersDescription => "Show line numbers in project files.",
-        UiTextKey::SettingsEditorVimMode => "Vim mode",
-        UiTextKey::SettingsEditorVimModeDescription => {
-            "Use modal Vim keybindings in project code editors."
+        UiTextKey::SettingsVimMode => "Vim mode",
+        UiTextKey::SettingsVimModeDescription => {
+            "Choose one Vim mode: Global unifies editors, terminals, project trees, settings, panes, tabs, and palettes; Editor only limits Vim to project editors; Disabled turns Vim off."
+        }
+        UiTextKey::SettingsVimQuickStart => "Vim quick start",
+        UiTextKey::SettingsVimQuickStartDescription => {
+            "Global mode: Ctrl-[ or Escape enters Normal; i returns to Insert or terminal input; Ctrl-W H/J/K/L focuses panes, work areas, and the project tree; tree j/k moves rows and h/l collapses, expands, or opens; gt/gT cycles tabs; Leader commands open files, palettes, and tabs."
+        }
+        UiTextKey::SettingsVimLeader => "Vim leader key",
+        UiTextKey::SettingsVimLeaderDescription => {
+            "Defaults to Space. Set top-level leader = \"...\" in keybindings.toml and use <leader> in multi-key bindings; changes reload automatically."
         }
         UiTextKey::SettingsEditorAutosave => "Autosave",
         UiTextKey::SettingsEditorAutosaveDescription => "Choose when edited files are saved.",
@@ -595,10 +603,11 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsUnbound => "Unbound",
         UiTextKey::SettingsConflict => "conflict",
         UiTextKey::SettingsKeybindingDialogTitle => "Edit keybinding",
-        UiTextKey::SettingsKeybindingRecorderPrompt => "Press a shortcut",
+        UiTextKey::SettingsKeybindingRecorderPrompt => "Press a key sequence",
         UiTextKey::SettingsKeybindingRecorderHint => {
-            "The first recorded shortcut replaces the current bindings. Keep pressing to add alternatives; modifier keys alone are ignored."
+            "Keystrokes form one sequence (for example, Space F F). Choose Add alternative before recording another shortcut. The first recording replaces current bindings; modifier keys alone are ignored."
         }
+        UiTextKey::SettingsAddKeybindingAlternative => "Add alternative",
         UiTextKey::SettingsClearKeybindings => "Clear",
         UiTextKey::SettingsConflictingKeybinding => "Conflicting keybinding",
         UiTextKey::SettingsInvalidCommandId => "Invalid command id",

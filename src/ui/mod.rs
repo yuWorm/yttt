@@ -10,4 +10,5 @@ pub mod project_tree;
 pub mod settings;
 pub mod terminal;
 pub mod theme;
+pub mod vim;
 pub mod workbench;

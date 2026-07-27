@@ -123,6 +123,7 @@ fn command_palette_uses_active_file_surface_availability() {
         CommandId::TabClose,
         CommandId::ProjectPanelToggle,
         CommandId::ProjectPanelRefresh,
+        CommandId::PaneFocusLeft,
     ] {
         assert!(
             items
@@ -137,7 +138,6 @@ fn command_palette_uses_active_file_surface_availability() {
         CommandId::TabNew,
         CommandId::TabRename,
         CommandId::PaneSplitVertical,
-        CommandId::PaneFocusLeft,
     ] {
         assert!(
             !items

@@ -43,6 +43,7 @@ mod ssh_project_picker;
 mod state;
 mod surface;
 mod update;
+mod vim_controller;
 mod work_area;
 use dialogs::*;
 use git::*;
@@ -105,7 +106,7 @@ enum SettingsNumberField {
 use crate::{
     commands::{
         ActiveSurface, CommandContext, CommandDispatchError, CommandId, CommandRegistry,
-        default_registry, dispatch_workspace_command,
+        dispatch_workspace_command,
     },
     config::{
         default_layout::{
@@ -127,7 +128,7 @@ use crate::{
             AppSettings, DEFAULT_UI_FONT_SIZE, DEFAULT_UI_LINE_HEIGHT, DEFAULT_WINDOW_OPACITY,
             EditorAutosave, LanguageSetting, MAX_UI_FONT_SIZE, MAX_UI_LINE_HEIGHT,
             MAX_WINDOW_OPACITY, MIN_UI_FONT_SIZE, MIN_UI_LINE_HEIGHT, MIN_WINDOW_OPACITY,
-            SettingsLoadWarning, SettingsSaveError, WindowBackgroundEffect,
+            SettingsLoadWarning, SettingsSaveError, VimModeSetting, WindowBackgroundEffect,
             detect_shell_candidates, detect_system_language_setting, load_or_create_settings,
             resolve_default_shell, save_settings,
         },
@@ -185,24 +186,31 @@ use crate::{
         },
         i18n::{Locale, UiText, UiTextKey},
         interaction::actions::{
-            CreateProject, FileSave, GitBranchSwitch, GitDiffOpen, LayoutDefaultEdit,
-            LayoutDefaultReload, LayoutDefaultReset, LayoutExportProjectConfig, LayoutOpenFile,
-            LayoutProjectEdit, LayoutResetLocalOverride, LayoutSaveCurrent, OpenCommandPalette,
-            OpenFileFinder, OpenOpenedProjectPalette, OpenPanePalette, OpenProject,
-            OpenProjectPalette, OpenSshProject, OpenTabPalette, PaletteCancel, PaletteConfirm,
+            BindableActionId, CreateProject, FileSave, FocusProjects, GIT_DIFF_CONTEXT,
+            GitBranchSwitch, GitDiffClose, GitDiffCopySelected, GitDiffOpen, GitDiffSelectNextFile,
+            GitDiffSelectPreviousFile, GitDiffToggleStageMode, GitDiffToggleViewMode,
+            GitDiffToggleWhitespace, LayoutDefaultEdit, LayoutDefaultReload, LayoutDefaultReset,
+            LayoutExportProjectConfig, LayoutOpenFile, LayoutProjectEdit, LayoutResetLocalOverride,
+            LayoutSaveCurrent, OpenCommandPalette, OpenFileFinder, OpenOpenedProjectPalette,
+            OpenPanePalette, OpenProject, OpenProjectPalette, OpenRecentProjectPalette,
+            OpenSshProject, OpenTabPalette, PALETTE_CONTEXT, PaletteCancel, PaletteConfirm,
             PaletteSelectNext, PaletteSelectPrev, PaneClose, PaneFocusDown, PaneFocusLeft,
             PaneFocusRight, PaneFocusUp, PaneRename, PaneResizeDown, PaneResizeLeft,
             PaneResizeRight, PaneResizeUp, PaneSplitHorizontal, PaneSplitVertical, ProjectClose,
-            ProjectPanelRefresh, ProjectPanelToggle, SettingsKeybindings, SettingsNotifications,
-            SettingsOpen, TabClose, TabCloseAfter, TabCloseAll, TabCloseAllFiles,
+            ProjectPanelRefresh, ProjectPanelToggle, ProjectsSelectFirst, ProjectsSelectLast,
+            ProjectsSelectNext, ProjectsSelectPrevious, SettingsKeybindings, SettingsNotifications,
+            SettingsOpen, SettingsVimFirstGroup, SettingsVimLastGroup, SettingsVimNextGroup,
+            SettingsVimPreviousGroup, TabClose, TabCloseAfter, TabCloseAll, TabCloseAllFiles,
             TabCloseAllTerminals, TabCloseBefore, TabNew, TabNext, TabPrev, TabRename,
-            UiKeybindingSpec, WORKSPACE_CONTEXT, runtime_command_for_keystroke,
-            ui_keybinding_specs_from_config,
+            UiKeybindingSpec, WORKSPACE_CONTEXT, bindable_registry, layered_ui_keybinding_specs,
+            runtime_command_for_keystroke,
         },
         interaction::input_owner::{
             InputOwnerKind, InputOwnerRegistration, InputScopeId, TerminalInputGate,
         },
-        interaction::key_dispatch::workspace_command_for_keystroke,
+        interaction::key_dispatch::{
+            workspace_command_for_keystroke, workspace_runtime_command_allowed,
+        },
         interaction::overlay::capture_overlay_input,
         notifications::{ToastItem, ToastQueue, ToastTone, toast_item_for_event},
         palette::surface::palette_input_placeholder,
@@ -253,6 +261,7 @@ use crate::{
                 zed_icon_theme_output_path, zed_ui_theme_output_path,
             },
         },
+        vim::{VimControllerState, VimSurface, WorkbenchVimMode},
         workbench::layout_editor::{
             LayoutEditorSession, LayoutEditorTarget, ProjectLayoutEditorFormat,
             write_layout_file_atomic,
@@ -293,6 +302,8 @@ pub struct WorkbenchView {
     pending_open_project_request: bool,
     pending_status_notifications: Vec<ToastItem>,
     focus_handle: Option<FocusHandle>,
+    projects_focus_active: bool,
+    pending_projects_focus: bool,
     window_activation_subscription: Option<Subscription>,
     terminal: TerminalControllerState,
     sidebar_collapsed: bool,
@@ -305,9 +316,15 @@ pub struct WorkbenchView {
     system_notifications_enabled: bool,
     ui_text: UiText,
     app_settings: AppSettings,
+    vim: VimControllerState,
+    vim_key_feedback_task: Option<Task<()>>,
+    vim_keystroke_subscription: Option<Subscription>,
+    vim_pending_input_subscription: Option<Subscription>,
     appearance: AppearanceState,
     icon_theme: IconTheme,
     active_project_file_watcher: Option<ActiveProjectFileWatcher>,
+    active_keybindings_watcher: Option<ActiveKeybindingsWatcher>,
+    keybindings_reload_requested: bool,
     project_file_watching_enabled: bool,
 }
 
@@ -316,6 +333,11 @@ struct WorkbenchErrorNotification;
 struct ActiveProjectFileWatcher {
     project_id: ProjectId,
     project_path: PathBuf,
+    _task: Task<()>,
+}
+
+struct ActiveKeybindingsWatcher {
+    path: PathBuf,
     _task: Task<()>,
 }
 
@@ -429,9 +451,10 @@ struct PendingTabRename {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PendingKeybindingEdit {
-    command: CommandId,
+    action: BindableActionId,
     keys: Vec<String>,
     has_recorded: bool,
+    recording_index: Option<usize>,
     error: Option<String>,
 }
 
@@ -448,6 +471,12 @@ impl WorkbenchView {
 
     pub fn with_config_paths(config_paths: AppConfigPaths) -> Self {
         Self::with_config_paths_and_force_onboarding(config_paths, false)
+    }
+    pub fn with_config_paths_for_test(config_paths: AppConfigPaths) -> Self {
+        let mut root = Self::with_config_paths(config_paths);
+        root.terminal.start_processes = false;
+        root.project_file_watching_enabled = false;
+        root
     }
 
     pub fn with_config_paths_and_force_onboarding(
@@ -555,11 +584,10 @@ impl WorkbenchView {
         force_onboarding: bool,
     ) -> Self {
         let default_layout_state = DefaultLayoutState::load_or_create(&config_paths);
-        let command_registry = default_registry();
+        let command_registry = bindable_registry();
         let recent_projects_config = load_recent_projects(&config_paths).unwrap_or_default();
         let (ssh, ssh_load_error) = SshControllerState::new(&config_paths);
         let recent_projects = recent_projects_for_palette(&recent_projects_config);
-        let keybindings_editor = load_keybindings_editor_state(&config_paths, &command_registry);
         let (mut app_settings, settings_warning_lines) = load_app_settings_messages(&config_paths);
         let language_detection_error = (!app_settings.general.onboarding_completed
             && workspace.opened_projects().is_empty()
@@ -572,7 +600,9 @@ impl WorkbenchView {
             })
             .flatten();
         let ui_text = ui_text_for_language(app_settings.general.language);
-        let (load_error, keybinding_warning_lines) =
+        let keybindings_editor =
+            load_keybindings_editor_state(&config_paths, &command_registry, &ui_text);
+        let (keybinding_load_error, keybinding_warning_lines) =
             load_keybindings_messages(&config_paths, &command_registry, &ui_text);
         let (theme_runtime, theme_warning_lines) =
             load_theme_runtime_messages(&config_paths, &app_settings);
@@ -582,7 +612,7 @@ impl WorkbenchView {
                 Err(error) => (IconTheme::default(), Some(error.to_string())),
             };
         let load_error = combine_load_messages(
-            load_error,
+            keybinding_load_error.clone(),
             settings_warning_lines
                 .iter()
                 .chain(theme_warning_lines.iter())
@@ -604,6 +634,7 @@ impl WorkbenchView {
         );
         let load_error = combine_load_messages(load_error, ssh_load_error);
         let system_notifications_enabled = app_settings.notifications.system;
+        let vim = VimControllerState::new(app_settings.vim.mode);
         let onboarding = ((force_onboarding || !app_settings.general.onboarding_completed)
             && workspace.opened_projects().is_empty())
         .then(|| {
@@ -648,8 +679,14 @@ impl WorkbenchView {
             },
             ssh,
             active_project_file_watcher: None,
+            active_keybindings_watcher: None,
+            keybindings_reload_requested: false,
             project_file_watching_enabled: true,
-            settings: SettingsControllerState::new(keybinding_warning_lines, keybindings_editor),
+            settings: SettingsControllerState::new(
+                keybinding_warning_lines,
+                keybindings_editor,
+                keybinding_load_error,
+            ),
             update: UpdateControllerState::default(),
             performance: performance::PerformanceMonitorState::default(),
             last_opened_layout_file: None,
@@ -660,6 +697,8 @@ impl WorkbenchView {
             pending_open_project_request: false,
             pending_status_notifications: Vec::new(),
             focus_handle: None,
+            projects_focus_active: false,
+            pending_projects_focus: false,
             window_activation_subscription: None,
             terminal: TerminalControllerState::default(),
             sidebar_collapsed: false,
@@ -671,6 +710,10 @@ impl WorkbenchView {
             system_notifier: NoopSystemNotifier,
             system_notifications_enabled,
             ui_text,
+            vim,
+            vim_key_feedback_task: None,
+            vim_keystroke_subscription: None,
+            vim_pending_input_subscription: None,
             app_settings,
             appearance: AppearanceState::new(theme_runtime),
             icon_theme,
@@ -822,6 +865,54 @@ impl WorkbenchView {
             self.apply_active_work_item(&active)?;
         }
         Ok(())
+    }
+
+    fn select_adjacent_project(&mut self, forward: bool) -> Result<bool, WorkbenchError> {
+        let projects = self.workspace.opened_projects();
+        let Some(selected_project_id) = self.workspace.selected_project_id() else {
+            return Ok(false);
+        };
+        let Some(selected_index) = projects
+            .iter()
+            .position(|project| &project.id == selected_project_id)
+        else {
+            return Ok(false);
+        };
+        let target_index = if forward {
+            selected_index
+                .checked_add(1)
+                .filter(|index| *index < projects.len())
+        } else {
+            selected_index.checked_sub(1)
+        };
+        let Some(target_project_id) =
+            target_index.and_then(|index| projects.get(index).map(|project| project.id.clone()))
+        else {
+            return Ok(false);
+        };
+
+        self.select_project(&target_project_id)?;
+        self.queue_projects_focus();
+        Ok(true)
+    }
+
+    fn select_boundary_project(&mut self, first: bool) -> Result<bool, WorkbenchError> {
+        let target_project_id = if first {
+            self.workspace.opened_projects().first()
+        } else {
+            self.workspace.opened_projects().last()
+        }
+        .map(|project| project.id.clone());
+        let Some(target_project_id) = target_project_id else {
+            return Ok(false);
+        };
+        if self.workspace.selected_project_id() == Some(&target_project_id) {
+            return Ok(false);
+        }
+
+        self.select_project(&target_project_id)?;
+        self.queue_projects_focus();
+        Ok(true)
     }
 
     pub fn project_editor_runtime(&self) -> &ProjectEditorRuntime {
@@ -1033,11 +1124,19 @@ impl WorkbenchView {
         &mut self,
         command: CommandId,
     ) -> Result<(), WorkbenchError> {
-        let keys = self.settings.keybindings_editor.command_keys(command);
+        self.open_keybinding_action_edit_dialog(BindableActionId::Command(command))
+    }
+
+    pub fn open_keybinding_action_edit_dialog(
+        &mut self,
+        action: BindableActionId,
+    ) -> Result<(), WorkbenchError> {
+        let keys = self.settings.keybindings_editor.action_keys(action);
         self.overlays.pending_keybinding_edit = Some(PendingKeybindingEdit {
-            command,
+            action,
             keys,
             has_recorded: false,
+            recording_index: None,
             error: None,
         });
         self.overlays.keybinding_recorder_needs_focus = true;
@@ -1050,7 +1149,7 @@ impl WorkbenchView {
         let Some(edit) = self.overlays.pending_keybinding_edit.clone() else {
             return Ok(());
         };
-        if let Err(error) = self.set_keybinding_command_keys(edit.command, edit.keys) {
+        if let Err(error) = self.set_keybinding_action_keys(edit.action, edit.keys) {
             let message = match &error {
                 WorkbenchError::KeybindingEdit(error) => {
                     self.localized_keybinding_edit_error(error)
@@ -1079,18 +1178,32 @@ impl WorkbenchView {
         if !edit.has_recorded {
             edit.keys.clear();
             edit.has_recorded = true;
+            edit.recording_index = None;
         }
-        if !edit.keys.contains(&keybinding) {
+        if let Some(recording_index) = edit.recording_index {
+            edit.keys[recording_index].push(' ');
+            edit.keys[recording_index].push_str(&keybinding);
+        } else {
             edit.keys.push(keybinding);
+            edit.recording_index = Some(edit.keys.len() - 1);
         }
         edit.error = None;
         true
+    }
+
+    pub fn begin_keybinding_edit_alternative(&mut self) {
+        if let Some(edit) = &mut self.overlays.pending_keybinding_edit {
+            edit.has_recorded = true;
+            edit.recording_index = None;
+            edit.error = None;
+        }
     }
 
     pub fn clear_keybinding_edit_keys(&mut self) {
         if let Some(edit) = &mut self.overlays.pending_keybinding_edit {
             edit.keys.clear();
             edit.has_recorded = true;
+            edit.recording_index = None;
             edit.error = None;
         }
     }
@@ -1107,7 +1220,10 @@ impl WorkbenchView {
                 self.ui_text.get(UiTextKey::SettingsInvalidCommandId),
                 commands.join(", ")
             ),
-            KeybindingEditError::Save(message) => message.clone(),
+            KeybindingEditError::InvalidBindings(bindings) => bindings.join("; "),
+            KeybindingEditError::InvalidSource(message) | KeybindingEditError::Save(message) => {
+                message.clone()
+            }
         }
     }
 
@@ -1470,7 +1586,7 @@ impl WorkbenchView {
     }
 
     pub fn runtime_keybinding_specs(&self) -> Vec<UiKeybindingSpec> {
-        ui_keybinding_specs_from_config(
+        layered_ui_keybinding_specs(
             self.settings.keybindings_editor.config(),
             &self.command_registry,
         )
@@ -1496,6 +1612,9 @@ impl WorkbenchView {
     pub fn terminal_should_receive_keystroke(&self, keystroke: &Keystroke) -> bool {
         self.terminal_input_allowed()
             && self.selected_focused_pane_id().is_some()
+            && (self.vim.support() != VimModeSetting::Global
+                || self.vim.surface() != VimSurface::Terminal
+                || self.vim.mode() == WorkbenchVimMode::Terminal)
             && !keystroke.modifiers.platform
             && TerminalKeyEvent::from_gpui_keystroke(keystroke, KeyState::Pressed, false).is_some()
     }
@@ -1505,10 +1624,18 @@ impl WorkbenchView {
         command: CommandId,
         keys: Vec<String>,
     ) -> Result<(), WorkbenchError> {
+        self.set_keybinding_action_keys(BindableActionId::Command(command), keys)
+    }
+
+    pub fn set_keybinding_action_keys(
+        &mut self,
+        action: BindableActionId,
+        keys: Vec<String>,
+    ) -> Result<(), WorkbenchError> {
         let previous = self.settings.keybindings_editor.clone();
         self.settings
             .keybindings_editor
-            .set_command_keys(command, keys);
+            .set_action_keys(action, keys);
         if let Err(error) = self.save_keybindings_editor() {
             self.settings.keybindings_editor = previous;
             return Err(error);
@@ -1520,18 +1647,40 @@ impl WorkbenchView {
         &mut self,
         command: CommandId,
     ) -> Result<(), WorkbenchError> {
-        self.settings
-            .keybindings_editor
-            .delete_command_keys(command);
-        self.save_keybindings_editor()
+        self.delete_keybinding_action_keys(BindableActionId::Command(command))
+    }
+
+    pub fn delete_keybinding_action_keys(
+        &mut self,
+        action: BindableActionId,
+    ) -> Result<(), WorkbenchError> {
+        let previous = self.settings.keybindings_editor.clone();
+        self.settings.keybindings_editor.delete_action_keys(action);
+        if let Err(error) = self.save_keybindings_editor() {
+            self.settings.keybindings_editor = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub fn reset_keybinding_command_keys(
         &mut self,
         command: CommandId,
     ) -> Result<(), WorkbenchError> {
-        self.settings.keybindings_editor.reset_command_keys(command);
-        self.save_keybindings_editor()
+        self.reset_keybinding_action_keys(BindableActionId::Command(command))
+    }
+
+    pub fn reset_keybinding_action_keys(
+        &mut self,
+        action: BindableActionId,
+    ) -> Result<(), WorkbenchError> {
+        let previous = self.settings.keybindings_editor.clone();
+        self.settings.keybindings_editor.reset_action_keys(action);
+        if let Err(error) = self.save_keybindings_editor() {
+            self.settings.keybindings_editor = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub fn visible_empty_workspace_actions(&self) -> Vec<&'static str> {
@@ -1671,51 +1820,6 @@ impl WorkbenchView {
 
     pub fn pending_editor_focus_document_id(&self) -> Option<&crate::ui::editor::DocumentId> {
         self.project.pending_editor_focus_document_id.as_ref()
-    }
-
-    pub fn workspace_arrow_keydown_command(
-        key: &str,
-        platform: bool,
-        control: bool,
-        alt: bool,
-        shift: bool,
-    ) -> Option<CommandId> {
-        Self::workspace_arrow_keydown_command_for_owner(
-            InputOwnerKind::Workspace,
-            key,
-            platform,
-            control,
-            alt,
-            shift,
-        )
-    }
-
-    pub fn workspace_arrow_keydown_command_for_owner(
-        owner: InputOwnerKind,
-        key: &str,
-        platform: bool,
-        control: bool,
-        alt: bool,
-        shift: bool,
-    ) -> Option<CommandId> {
-        if owner != InputOwnerKind::Workspace {
-            return None;
-        }
-        if !(platform || control) || !alt {
-            return None;
-        }
-
-        match (key, shift) {
-            ("left", false) => Some(CommandId::PaneFocusLeft),
-            ("right", false) => Some(CommandId::PaneFocusRight),
-            ("up", false) => Some(CommandId::PaneFocusUp),
-            ("down", false) => Some(CommandId::PaneFocusDown),
-            ("left", true) => Some(CommandId::PaneResizeLeft),
-            ("right", true) => Some(CommandId::PaneResizeRight),
-            ("up", true) => Some(CommandId::PaneResizeUp),
-            ("down", true) => Some(CommandId::PaneResizeDown),
-            _ => None,
-        }
     }
 
     pub fn last_opened_layout_file(&self) -> Option<&Path> {
@@ -1927,6 +2031,10 @@ impl WorkbenchView {
                 self.last_opened_layout_file = Some(layout_file);
                 Ok(())
             }
+            CommandId::PaneFocusLeft
+            | CommandId::PaneFocusRight
+            | CommandId::PaneFocusUp
+            | CommandId::PaneFocusDown => self.focus_pane_or_work_area(command_id),
             _ => {
                 dispatch_workspace_command(&mut self.workspace, command_id)?;
                 self.reconcile_active_terminal_with_workspace()?;
@@ -1935,6 +2043,77 @@ impl WorkbenchView {
                 }
                 Ok(())
             }
+        }
+    }
+
+    fn focus_pane_or_work_area(&mut self, command_id: CommandId) -> Result<(), WorkbenchError> {
+        let edge = match command_id {
+            CommandId::PaneFocusLeft => WorkAreaDropEdge::Left,
+            CommandId::PaneFocusRight => WorkAreaDropEdge::Right,
+            CommandId::PaneFocusUp => WorkAreaDropEdge::Top,
+            CommandId::PaneFocusDown => WorkAreaDropEdge::Bottom,
+            _ => unreachable!("only pane focus commands reach this helper"),
+        };
+
+        if self.vim.surface() == VimSurface::Projects {
+            if edge == WorkAreaDropEdge::Right
+                && let Some(item) = self.active_work_item()
+            {
+                self.queue_work_item_focus(&item);
+            }
+            return Ok(());
+        }
+
+        if self.vim.surface() == VimSurface::ProjectTree {
+            if edge == WorkAreaDropEdge::Left
+                && let Some(item) = self.active_work_item()
+            {
+                self.queue_work_item_focus(&item);
+            }
+            return Ok(());
+        }
+
+        if matches!(self.active_work_item(), Some(WorkItemId::File(_))) {
+            if !self.focus_adjacent_work_area_group(edge)? {
+                if edge == WorkAreaDropEdge::Right {
+                    self.queue_project_tree_focus();
+                } else if edge == WorkAreaDropEdge::Left {
+                    self.queue_projects_focus();
+                }
+            }
+            return Ok(());
+        }
+
+        let focused_pane_before = self.selected_focused_pane_id().map(str::to_owned);
+        match dispatch_workspace_command(&mut self.workspace, command_id) {
+            Ok(_) => {
+                self.reconcile_active_terminal_with_workspace()?;
+                let focused_pane_after = self.selected_focused_pane_id().map(str::to_owned);
+                if focused_pane_after == focused_pane_before {
+                    if self.focus_adjacent_work_area_group(edge)? {
+                        return Ok(());
+                    }
+                    if edge == WorkAreaDropEdge::Right && self.queue_project_tree_focus() {
+                        return Ok(());
+                    }
+                    if edge == WorkAreaDropEdge::Left && self.queue_projects_focus() {
+                        return Ok(());
+                    }
+                }
+                self.queue_selected_terminal_focus();
+                Ok(())
+            }
+            Err(CommandDispatchError::Workspace(WorkspaceError::PaneNotFound(_))) => {
+                if !self.focus_adjacent_work_area_group(edge)? {
+                    if edge == WorkAreaDropEdge::Right {
+                        self.queue_project_tree_focus();
+                    } else if edge == WorkAreaDropEdge::Left {
+                        self.queue_projects_focus();
+                    }
+                }
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -2178,6 +2357,11 @@ impl WorkbenchView {
             .expect("dev fixture layout should be valid");
         let mut root = Self::with_workspace(workspace);
         root.project_file_watching_enabled = false;
+        root
+    }
+    pub fn dev_fixture_for_test() -> Self {
+        let mut root = Self::dev_fixture();
+        root.terminal.start_processes = false;
         root
     }
 
@@ -2585,6 +2769,7 @@ impl WorkbenchView {
     }
 
     fn queue_terminal_focus(&mut self, pane_id: &str) {
+        self.project.pending_project_tree_focus = false;
         let Some(project_id) = self.workspace.selected_project_id().cloned() else {
             self.terminal.pending_terminal_focus = None;
             return;
@@ -2606,6 +2791,8 @@ impl WorkbenchView {
         tab_id: String,
         pane_id: String,
     ) {
+        self.pending_projects_focus = false;
+        self.projects_focus_active = false;
         self.terminal.pending_terminal_focus = Some(TerminalPaneTarget {
             project_id,
             tab_id,
@@ -2641,7 +2828,34 @@ impl WorkbenchView {
         owner_accepts_focus && self.queue_work_item_focus(&item)
     }
 
+    fn queue_projects_focus(&mut self) -> bool {
+        if self.workspace.opened_projects().is_empty() {
+            return false;
+        }
+        self.terminal.pending_terminal_focus = None;
+        self.project.pending_editor_focus_document_id = None;
+        self.project.pending_project_tree_focus = false;
+        self.projects_focus_active = true;
+        self.pending_projects_focus = true;
+        true
+    }
+
+    fn queue_project_tree_focus(&mut self) -> bool {
+        if !self.selected_project_panel_visible() {
+            return false;
+        }
+        self.pending_projects_focus = false;
+        self.projects_focus_active = false;
+        self.terminal.pending_terminal_focus = None;
+        self.project.pending_editor_focus_document_id = None;
+        self.project.pending_project_tree_focus = true;
+        true
+    }
+
     fn queue_work_item_focus(&mut self, item: &WorkItemId) -> bool {
+        self.pending_projects_focus = false;
+        self.projects_focus_active = false;
+        self.project.pending_project_tree_focus = false;
         match item {
             WorkItemId::Terminal(tab_id) => {
                 self.project.pending_editor_focus_document_id = None;

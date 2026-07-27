@@ -328,6 +328,7 @@ impl WorkbenchView {
             .flex_1()
             .min_w_0()
             .min_h_0()
+            .relative()
             .on_drag_move::<DraggedWorkbenchTab>(cx.listener(
                 move |this, event: &DragMoveEvent<DraggedWorkbenchTab>, _window, cx| {
                     this.update_work_area_drop_target(group_id, event, cx);
@@ -335,7 +336,7 @@ impl WorkbenchView {
             ))
             .border(appearance.style.border.hairline)
             .border_color(if group_active {
-                appearance.ui.accent
+                appearance.ui.border_strong
             } else {
                 appearance.ui.border
             })
@@ -447,6 +448,11 @@ impl WorkbenchView {
         let appearance = self.theme_runtime();
         let theme = appearance.ui;
         let ui_style = appearance.style;
+        if self.project.pending_project_tree_focus {
+            tree.update(cx, |tree, tree_cx| tree.focus(window, tree_cx));
+            self.project.pending_project_tree_focus = false;
+        }
+        let tree_has_keyboard_focus = tree.read(cx).is_focused(window, cx);
         let tree_is_editing = tree.read(cx).is_editing();
         let new_entry_tree = tree.clone();
         let workbench_for_new_entry = cx.weak_entity();
@@ -542,26 +548,51 @@ impl WorkbenchView {
                         .h_10()
                         .flex_none()
                         .border_b(ui_style.border.hairline)
-                        .border_color(theme.border)
+                        .border_color(if tree_has_keyboard_focus {
+                            theme.accent.alpha(0.55)
+                        } else {
+                            theme.border
+                        })
                         .px(ui_style.spacing.lg)
                         .child(
                             div()
                                 .flex()
-                                .flex_col()
-                                .overflow_hidden()
+                                .items_center()
+                                .gap(ui_style.spacing.sm)
+                                .children(tree_has_keyboard_focus.then(|| {
+                                    div()
+                                        .debug_selector(|| {
+                                            "project-file-panel-focus-indicator".to_string()
+                                        })
+                                        .w(px(2.0))
+                                        .h_4()
+                                        .rounded_full()
+                                        .bg(theme.accent)
+                                }))
                                 .child(
                                     div()
-                                        .text_sm()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .truncate()
-                                        .child(self.ui_text.get(UiTextKey::ProjectFiles)),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.text_subtle)
-                                        .truncate()
-                                        .child(project_name),
+                                        .flex()
+                                        .flex_col()
+                                        .overflow_hidden()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(if tree_has_keyboard_focus {
+                                                    theme.accent
+                                                } else {
+                                                    theme.text
+                                                })
+                                                .truncate()
+                                                .child(self.ui_text.get(UiTextKey::ProjectFiles)),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.text_subtle)
+                                                .truncate()
+                                                .child(project_name),
+                                        ),
                                 ),
                         )
                         .child(
@@ -894,21 +925,13 @@ impl WorkbenchView {
         {
             self.terminal.pending_terminal_focus = None;
         }
+        let terminal_has_keyboard_focus = self.vim.surface() == VimSurface::Terminal
+            && pane_view.read(cx).terminal_is_focused(window, cx);
 
         let appearance = self.theme_runtime();
-        let ui_style = appearance.style;
-        let border_color = if input.is_focused {
-            appearance.ui.focused_pane_border
-        } else {
-            rgba(0x00000000)
-        };
+        let focus_indicator_pane_id = pane_id.clone();
         let terminal_input_allowed = self.terminal_input_allowed();
-        let mut wrapper = div()
-            .flex()
-            .flex_1()
-            .relative()
-            .border(ui_style.border.hairline)
-            .border_color(border_color);
+        let mut wrapper = div().flex().flex_1().relative();
         let group_id = input.group_id;
         let project_id = ProjectId::new(input.project_id);
         let tab_id = input.tab_id.to_string();
@@ -929,7 +952,22 @@ impl WorkbenchView {
                 cx.notify();
             }),
         );
-        wrapper = wrapper.child(pane_view);
+        wrapper = wrapper
+            .child(pane_view)
+            .when(terminal_has_keyboard_focus, |pane| {
+                pane.child(
+                    div()
+                        .debug_selector(move || {
+                            format!("terminal-pane-focus-indicator-{focus_indicator_pane_id}")
+                        })
+                        .absolute()
+                        .top(px(6.0))
+                        .right(px(6.0))
+                        .size(px(5.0))
+                        .rounded_full()
+                        .bg(appearance.ui.accent.alpha(0.72)),
+                )
+            });
         if !terminal_input_allowed {
             let project_id = ProjectId::new(input.project_id);
             let tab_id = input.tab_id.to_string();

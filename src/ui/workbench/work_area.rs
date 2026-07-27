@@ -26,6 +26,25 @@ impl WorkbenchView {
         self.apply_work_area_active_change(previous, next)
     }
 
+    pub(super) fn focus_adjacent_work_area_group(
+        &mut self,
+        edge: WorkAreaDropEdge,
+    ) -> Result<bool, WorkbenchError> {
+        let Some(project_id) = self.workspace.selected_project_id() else {
+            return Ok(false);
+        };
+        let Some(group_id) = self
+            .project
+            .project_editor_runtime
+            .workspace()
+            .session(project_id)
+            .and_then(|session| session.adjacent_group_id(edge))
+        else {
+            return Ok(false);
+        };
+        self.activate_work_area_group(group_id)
+    }
+
     pub(super) fn move_dragged_work_item_tab(
         &mut self,
         dragged: &DraggedWorkbenchTab,

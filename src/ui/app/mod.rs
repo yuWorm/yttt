@@ -21,11 +21,25 @@ use crate::{
         app::startup::{
             FORCE_ONBOARDING_ENV, StartupMode, force_onboarding_from_env, startup_mode_from_fixture,
         },
-        interaction::actions::{app_startup_keybindings, ui_action_for_command},
+        interaction::actions::{
+            bindable_registry, compiled_app_keybindings, load_app_keybindings,
+            ui_action_for_command,
+        },
         theme::{AppearanceState, ThemeRuntime},
         workbench::WorkbenchView,
     },
 };
+
+pub(crate) fn rebind_application_keybindings(
+    cx: &mut App,
+    config: &crate::config::keybindings::KeybindingsConfig,
+) {
+    cx.clear_key_bindings();
+    gpui_component::rebind_keybindings(cx);
+    cx.bind_keys(gpui_markdown_editor::default_key_bindings());
+    let registry = bindable_registry();
+    cx.bind_keys(compiled_app_keybindings(config, &registry));
+}
 
 pub fn run() {
     let config_paths = AppConfigPaths::for_app();
@@ -51,7 +65,8 @@ pub fn run() {
                 appearance.runtime().to_gpui_component_theme_config(),
             ));
             cx.set_global(appearance.clone());
-            cx.bind_keys(app_startup_keybindings());
+            let command_registry = bindable_registry();
+            cx.bind_keys(load_app_keybindings(&config_paths, &command_registry));
 
             let bounds = Bounds::centered(None, size(px(960.0), px(640.0)), cx);
             cx.open_window(
@@ -91,6 +106,12 @@ pub fn run() {
 pub fn register_workbench_keybinding_interceptor(cx: &mut App, view: &Entity<WorkbenchView>) {
     let runtime_keybinding_view = view.clone();
     let keybinding_subscription = cx.intercept_keystrokes(move |event, window, cx| {
+        if window
+            .pending_input_keystrokes()
+            .is_some_and(|pending| !pending.is_empty())
+        {
+            return;
+        }
         let command = runtime_keybinding_view
             .read(cx)
             .runtime_command_for_dispatch(&event.keystroke);

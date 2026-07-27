@@ -33,7 +33,11 @@ pub use state::{
     EditorDiagnosticSeverity, EditorLanguageService, EditorRange,
 };
 pub use view::{code_editor_input_state, styled_code_editor_input};
-pub use vim::{VimMode, init as init_vim_mode};
+pub use vim::{
+    EditorVimActionId, EditorVimBindingSpec, VIM_CONTROL_BINDING_CONTEXT, VimMode,
+    default_bindable_keybindings, init as init_vim_mode,
+    rebind_keybindings as rebind_vim_keybindings,
+};
 pub use work_area::{
     TabGroup, TabGroupId, WorkAreaDropEdge, WorkAreaDropPlacement, WorkAreaNode, WorkAreaSplitAxis,
     WorkAreaSplitId,

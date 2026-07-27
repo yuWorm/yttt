@@ -84,9 +84,10 @@ use std::ops::RangeInclusive;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
-const TERMINAL_KEY_CONTEXT: &str = "YtttTerminal";
-const TERMINAL_SEARCH_KEY_CONTEXT: &str = "YtttTerminalSearch";
-const TERMINAL_HINT_KEY_CONTEXT: &str = "YtttTerminalHint";
+pub const TERMINAL_KEY_CONTEXT: &str = "YtttTerminal";
+pub const TERMINAL_SEARCH_KEY_CONTEXT: &str = "YtttTerminalSearch";
+pub const TERMINAL_HINT_KEY_CONTEXT: &str = "YtttTerminalHint";
+pub const TERMINAL_VI_KEY_CONTEXT: &str = "YtttTerminalVi";
 const MAX_SEARCH_HISTORY: usize = 100;
 
 /// Alacritty's default URL matcher used by terminal hint mode.
@@ -164,16 +165,66 @@ actions!(
         SearchHistoryNext,
         CancelSearch,
         ToggleViMode,
-        StartHintMode
+        StartHintMode,
+        TerminalViExit,
+        TerminalViToggleSelection,
+        TerminalViCopySelection,
     ]
 );
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalViMotion {
+    Left,
+    Down,
+    Up,
+    Right,
+    First,
+    Last,
+    FirstOccupied,
+    High,
+    Middle,
+    Low,
+    SemanticLeft,
+    SemanticRight,
+    SemanticRightEnd,
+    Bracket,
+    ParagraphUp,
+    ParagraphDown,
+}
+
+#[derive(Action, Clone, Copy, Debug, PartialEq, Eq)]
+#[action(namespace = yttt_terminal, no_json)]
+pub struct TerminalViMotionAction {
+    pub motion: TerminalViMotion,
+}
+
+impl TerminalViMotion {
+    fn into_alacritty(self) -> ViMotion {
+        match self {
+            Self::Left => ViMotion::Left,
+            Self::Down => ViMotion::Down,
+            Self::Up => ViMotion::Up,
+            Self::Right => ViMotion::Right,
+            Self::First => ViMotion::First,
+            Self::Last => ViMotion::Last,
+            Self::FirstOccupied => ViMotion::FirstOccupied,
+            Self::High => ViMotion::High,
+            Self::Middle => ViMotion::Middle,
+            Self::Low => ViMotion::Low,
+            Self::SemanticLeft => ViMotion::SemanticLeft,
+            Self::SemanticRight => ViMotion::SemanticRight,
+            Self::SemanticRightEnd => ViMotion::SemanticRightEnd,
+            Self::Bracket => ViMotion::Bracket,
+            Self::ParagraphUp => ViMotion::ParagraphUp,
+            Self::ParagraphDown => ViMotion::ParagraphDown,
+        }
+    }
+}
 /// Register terminal-specific key bindings.
 pub fn init(cx: &mut App) {
     let mut bindings = vec![
         KeyBinding::new("tab", SendTab, Some(TERMINAL_KEY_CONTEXT)),
         KeyBinding::new("shift-tab", SendBacktab, Some(TERMINAL_KEY_CONTEXT)),
-        KeyBinding::new("ctrl-shift-space", ToggleViMode, Some(TERMINAL_KEY_CONTEXT)),
         KeyBinding::new("enter", SearchNext, Some(TERMINAL_SEARCH_KEY_CONTEXT)),
         KeyBinding::new(
             "shift-enter",
@@ -188,6 +239,32 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("down", SearchHistoryNext, Some(TERMINAL_SEARCH_KEY_CONTEXT)),
         KeyBinding::new("escape", CancelSearch, Some(TERMINAL_SEARCH_KEY_CONTEXT)),
         KeyBinding::new("escape", CancelSearch, Some(TERMINAL_HINT_KEY_CONTEXT)),
+        KeyBinding::new(
+            "v",
+            TerminalViToggleSelection,
+            Some(TERMINAL_VI_KEY_CONTEXT),
+        ),
+        KeyBinding::new("y", TerminalViCopySelection, Some(TERMINAL_VI_KEY_CONTEXT)),
+        terminal_vi_motion_binding("h", TerminalViMotion::Left),
+        terminal_vi_motion_binding("left", TerminalViMotion::Left),
+        terminal_vi_motion_binding("j", TerminalViMotion::Down),
+        terminal_vi_motion_binding("down", TerminalViMotion::Down),
+        terminal_vi_motion_binding("k", TerminalViMotion::Up),
+        terminal_vi_motion_binding("up", TerminalViMotion::Up),
+        terminal_vi_motion_binding("l", TerminalViMotion::Right),
+        terminal_vi_motion_binding("right", TerminalViMotion::Right),
+        terminal_vi_motion_binding("0", TerminalViMotion::First),
+        terminal_vi_motion_binding("$", TerminalViMotion::Last),
+        terminal_vi_motion_binding("^", TerminalViMotion::FirstOccupied),
+        terminal_vi_motion_binding("shift-h", TerminalViMotion::High),
+        terminal_vi_motion_binding("shift-m", TerminalViMotion::Middle),
+        terminal_vi_motion_binding("shift-l", TerminalViMotion::Low),
+        terminal_vi_motion_binding("b", TerminalViMotion::SemanticLeft),
+        terminal_vi_motion_binding("w", TerminalViMotion::SemanticRight),
+        terminal_vi_motion_binding("e", TerminalViMotion::SemanticRightEnd),
+        terminal_vi_motion_binding("%", TerminalViMotion::Bracket),
+        terminal_vi_motion_binding("{", TerminalViMotion::ParagraphUp),
+        terminal_vi_motion_binding("}", TerminalViMotion::ParagraphDown),
     ];
     #[cfg(target_os = "macos")]
     bindings.extend([
@@ -204,6 +281,14 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-shift-o", StartHintMode, Some(TERMINAL_KEY_CONTEXT)),
     ]);
     cx.bind_keys(bindings);
+}
+
+fn terminal_vi_motion_binding(keys: &str, motion: TerminalViMotion) -> KeyBinding {
+    KeyBinding::new(
+        keys,
+        TerminalViMotionAction { motion },
+        Some(TERMINAL_VI_KEY_CONTEXT),
+    )
 }
 
 fn tab_key_down_event(shift: bool) -> &'static KeyDownEvent {
@@ -340,6 +425,9 @@ pub struct TerminalConfig {
     /// Enable the Kitty keyboard protocol.
     pub kitty_keyboard: bool,
 
+    /// Start newly created terminals in Vi mode.
+    pub start_in_vi_mode: bool,
+
     /// Characters used to label keyboard hints.
     pub hint_alphabet: String,
 
@@ -373,6 +461,7 @@ impl Default for TerminalConfig {
             semantic_escape_chars: SEMANTIC_ESCAPE_CHARS.to_string(),
             osc52_policy: TerminalOsc52Policy::CopyOnly,
             kitty_keyboard: false,
+            start_in_vi_mode: false,
             hint_alphabet: "jfkdls;ahgurieowpq".to_string(),
             hints: vec![TerminalHintConfig::default()],
             colors: ColorPalette::default(),
@@ -607,6 +696,7 @@ pub type IoErrorCallback = Box<dyn Fn(&mut Context<TerminalView>, PtyIoOperation
 ///
 /// `TerminalView` is not `Send` as it contains GPUI handles. The stdin writer
 /// is internally wrapped in `Arc<parking_lot::Mutex<>>` for safe concurrent access.
+
 pub struct TerminalView {
     /// The terminal state managing the grid and VTE parser
     state: TerminalState,
@@ -808,6 +898,9 @@ impl TerminalView {
             config.term_options(),
             event_proxy,
         );
+        if config.start_in_vi_mode {
+            state.with_term_mut(|term| term.toggle_vi_mode());
+        }
         let io_driver = PtyIoDriver::start_with_performance(
             stdin_writer,
             stdout_reader,
@@ -2049,6 +2142,79 @@ impl TerminalView {
         cx.stop_propagation();
     }
 
+    fn on_terminal_vi_exit(
+        &mut self,
+        _: &TerminalViExit,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.state.mode().contains(TermMode::VI) {
+            cx.propagate();
+            return;
+        }
+        self.state.with_term_mut(|term| term.toggle_vi_mode());
+        self.restart_cursor_blink(cx);
+        cx.notify();
+        cx.stop_propagation();
+    }
+
+    fn on_terminal_vi_toggle_selection(
+        &mut self,
+        _: &TerminalViToggleSelection,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.state.mode().contains(TermMode::VI) {
+            cx.propagate();
+            return;
+        }
+        self.state.with_term_mut(|term| {
+            if term.selection.is_some() {
+                term.selection = None;
+            } else {
+                term.selection = Some(Selection::new(
+                    AlacSelectionType::Simple,
+                    term.vi_mode_cursor.point,
+                    Side::Left,
+                ));
+            }
+        });
+        cx.notify();
+        cx.stop_propagation();
+    }
+
+    fn on_terminal_vi_copy_selection(
+        &mut self,
+        _: &TerminalViCopySelection,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.state.mode().contains(TermMode::VI) {
+            cx.propagate();
+            return;
+        }
+        let _ = self.copy_selection_to_clipboard(cx);
+        self.state.clear_selection();
+        cx.notify();
+        cx.stop_propagation();
+    }
+
+    fn on_terminal_vi_motion(
+        &mut self,
+        action: &TerminalViMotionAction,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.state.mode().contains(TermMode::VI) {
+            cx.propagate();
+            return;
+        }
+        self.state
+            .with_term_mut(|term| term.vi_motion(action.motion.into_alacritty()));
+        cx.notify();
+        cx.stop_propagation();
+    }
+
     fn on_start_hint_mode(
         &mut self,
         _: &StartHintMode,
@@ -2066,77 +2232,11 @@ impl TerminalView {
 
     fn handle_vi_key(
         &mut self,
-        key_event: &TerminalKeyEvent,
+        _key_event: &TerminalKeyEvent,
         mode: TermMode,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) -> bool {
-        if !mode.contains(TermMode::VI) {
-            return false;
-        }
-        let character = key_event
-            .text
-            .as_deref()
-            .filter(|text| text.chars().count() == 1);
-        if matches!(
-            key_event.key,
-            TerminalKey::Named(crate::input::TerminalNamedKey::Escape)
-        ) {
-            self.state.with_term_mut(|term| term.toggle_vi_mode());
-            self.restart_cursor_blink(cx);
-            cx.notify();
-            return true;
-        }
-        if character == Some("v") {
-            self.state.with_term_mut(|term| {
-                if term.selection.is_some() {
-                    term.selection = None;
-                } else {
-                    term.selection = Some(Selection::new(
-                        AlacSelectionType::Simple,
-                        term.vi_mode_cursor.point,
-                        Side::Left,
-                    ));
-                }
-            });
-            cx.notify();
-            return true;
-        }
-        if character == Some("y") {
-            let _ = self.copy_selection_to_clipboard(cx);
-            self.state.clear_selection();
-            cx.notify();
-            return true;
-        }
-
-        let motion =
-            match (&key_event.key, character) {
-                (TerminalKey::Named(crate::input::TerminalNamedKey::ArrowLeft), _)
-                | (_, Some("h")) => Some(ViMotion::Left),
-                (TerminalKey::Named(crate::input::TerminalNamedKey::ArrowDown), _)
-                | (_, Some("j")) => Some(ViMotion::Down),
-                (TerminalKey::Named(crate::input::TerminalNamedKey::ArrowUp), _)
-                | (_, Some("k")) => Some(ViMotion::Up),
-                (TerminalKey::Named(crate::input::TerminalNamedKey::ArrowRight), _)
-                | (_, Some("l")) => Some(ViMotion::Right),
-                (_, Some("0")) => Some(ViMotion::First),
-                (_, Some("$")) => Some(ViMotion::Last),
-                (_, Some("^")) => Some(ViMotion::FirstOccupied),
-                (_, Some("H")) => Some(ViMotion::High),
-                (_, Some("M")) => Some(ViMotion::Middle),
-                (_, Some("L")) => Some(ViMotion::Low),
-                (_, Some("b")) => Some(ViMotion::SemanticLeft),
-                (_, Some("w")) => Some(ViMotion::SemanticRight),
-                (_, Some("e")) => Some(ViMotion::SemanticRightEnd),
-                (_, Some("%")) => Some(ViMotion::Bracket),
-                (_, Some("{")) => Some(ViMotion::ParagraphUp),
-                (_, Some("}")) => Some(ViMotion::ParagraphDown),
-                _ => None,
-            };
-        if let Some(motion) = motion {
-            self.state.with_term_mut(|term| term.vi_motion(motion));
-            cx.notify();
-        }
-        true
+        mode.contains(TermMode::VI)
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
@@ -2770,6 +2870,33 @@ impl TerminalView {
         &self.focus_handle
     }
 
+    /// Whether terminal scrollback is currently controlled by the Vi cursor.
+    pub fn is_vi_mode(&self) -> bool {
+        self.state.mode().contains(TermMode::VI)
+    }
+
+    pub fn search_is_active(&self) -> bool {
+        self.search.active
+    }
+
+    fn platform_text_input_allowed(&self) -> bool {
+        !self.is_vi_mode() || self.search.active
+    }
+
+    /// Enter or leave terminal Vi cursor mode without synthesizing a key event.
+    pub fn set_vi_mode(&mut self, enabled: bool, cx: &mut Context<Self>) -> bool {
+        if self.is_vi_mode() == enabled {
+            return false;
+        }
+        if enabled {
+            self.ime_state.clear_marked_text();
+        }
+        self.state.with_term_mut(|term| term.toggle_vi_mode());
+        self.restart_cursor_blink(cx);
+        cx.notify();
+        true
+    }
+
     #[cfg(feature = "perf-metrics")]
     pub fn performance_handle(&self) -> crate::TerminalPerformanceHandle {
         self.performance.clone()
@@ -3011,6 +3138,16 @@ impl EntityInputHandler for TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.platform_text_input_allowed() {
+            let had_marked_text = self.ime_state.is_active();
+            self.ime_state.clear_marked_text();
+            if had_marked_text {
+                window.invalidate_character_coordinates();
+                cx.notify();
+            }
+            return;
+        }
+
         let had_marked_text = self.ime_state.is_active();
 
         let committed = self.ime_state.commit_text(text);
@@ -3064,6 +3201,16 @@ impl EntityInputHandler for TerminalView {
 
         cx: &mut Context<Self>,
     ) {
+        if !self.platform_text_input_allowed() {
+            let had_marked_text = self.ime_state.is_active();
+            self.ime_state.clear_marked_text();
+            if had_marked_text {
+                _window.invalidate_character_coordinates();
+                cx.notify();
+            }
+            return;
+        }
+
         self.performance.record_ime_preedit();
         self.ime_state.set_marked_text(new_text, new_selected_range);
         self.restart_cursor_blink(cx);
@@ -3129,6 +3276,8 @@ impl Render for TerminalView {
             "YtttTerminal YtttTerminalSearch"
         } else if self.hint.active {
             "YtttTerminal YtttTerminalHint"
+        } else if self.state.mode().contains(TermMode::VI) {
+            "YtttTerminal YtttTerminalVi"
         } else {
             TERMINAL_KEY_CONTEXT
         };
@@ -3172,6 +3321,10 @@ impl Render for TerminalView {
             .on_action(cx.listener(Self::on_cancel_search))
             .on_action(cx.listener(Self::on_toggle_vi_mode))
             .on_action(cx.listener(Self::on_start_hint_mode))
+            .on_action(cx.listener(Self::on_terminal_vi_exit))
+            .on_action(cx.listener(Self::on_terminal_vi_toggle_selection))
+            .on_action(cx.listener(Self::on_terminal_vi_copy_selection))
+            .on_action(cx.listener(Self::on_terminal_vi_motion))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_key_up(cx.listener(Self::on_key_up))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
@@ -3489,6 +3642,24 @@ mod tests {
             config.hints[0].regex.as_deref(),
             Some(DEFAULT_TERMINAL_URL_REGEX)
         );
+    }
+
+    #[gpui::test]
+    fn terminal_can_start_directly_in_vi_mode(cx: &mut TestAppContext) {
+        let config = TerminalConfig {
+            start_in_vi_mode: true,
+            ..TerminalConfig::default()
+        };
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new(
+                RecordingWriter::default(),
+                ScriptedReader::new([ReadStep::Sleep(Duration::from_secs(2)), ReadStep::Eof]),
+                config,
+                cx,
+            )
+        });
+
+        assert!(cx.read(|cx| terminal.read(cx).state.mode().contains(TermMode::VI)));
     }
 
     #[gpui::test]
@@ -4003,6 +4174,29 @@ mod tests {
             terminal.unmark_text(window, cx);
         });
         assert_eq!(recorded.bytes(), "中文".as_bytes());
+    }
+
+    #[gpui::test]
+    fn terminal_vi_mode_blocks_ime_preedit_and_commit(cx: &mut TestAppContext) {
+        let writer = RecordingWriter::default();
+        let recorded = writer.clone();
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new(
+                writer,
+                ScriptedReader::new([ReadStep::Sleep(Duration::from_secs(2)), ReadStep::Eof]),
+                TerminalConfig::default(),
+                cx,
+            )
+        });
+
+        terminal.update_in(cx, |terminal, window, cx| {
+            assert!(terminal.set_vi_mode(true, cx));
+            terminal.replace_and_mark_text_in_range(None, "中文", Some(2..2), window, cx);
+            assert!(!terminal.ime_state.is_active());
+            terminal.replace_text_in_range(None, "中文", window, cx);
+        });
+
+        assert!(recorded.bytes().is_empty());
     }
 
     #[gpui::test]
@@ -4525,8 +4719,10 @@ mod tests {
         });
         terminal.update(cx, |terminal, cx| {
             terminal.state.process_bytes(b"abc");
-            terminal.state.with_term_mut(|term| term.toggle_vi_mode());
-            cx.notify();
+            assert!(!terminal.is_vi_mode());
+            assert!(terminal.set_vi_mode(true, cx));
+            assert!(terminal.is_vi_mode());
+            assert!(!terminal.set_vi_mode(true, cx));
         });
         cx.run_until_parked();
         cx.update(|window, cx| {
@@ -4548,6 +4744,10 @@ mod tests {
         });
         assert_ne!(after, before);
         assert!(recorded.bytes().is_empty());
+        terminal.update(cx, |terminal, cx| {
+            assert!(terminal.set_vi_mode(false, cx));
+            assert!(!terminal.is_vi_mode());
+        });
     }
 
     #[gpui::test]

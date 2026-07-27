@@ -87,7 +87,7 @@ pub(super) fn tab_rename_dialog(
 pub(super) fn keybinding_edit_dialog(
     cx: &mut Context<WorkbenchView>,
     ui_text: &UiText,
-    command: CommandId,
+    action: BindableActionId,
     keybindings: &[String],
     error: Option<&str>,
     theme: WorkbenchTheme,
@@ -156,7 +156,10 @@ pub(super) fn keybinding_edit_dialog(
                         div()
                             .text_xs()
                             .text_color(dialog.hint)
-                            .child(command_title_with_text(command, ui_text)),
+                            .child(match action.command() {
+                                Some(command) => command_title_with_text(command, ui_text),
+                                None => action.title().unwrap_or(action.as_str()),
+                            }),
                     )
                     .child(
                         div()
@@ -188,6 +191,22 @@ pub(super) fn keybinding_edit_dialog(
                             .flex()
                             .justify_end()
                             .gap(ui_style.spacing.md)
+                            .child(
+                                div()
+                                    .id("add-keybinding-alternative")
+                                    .debug_selector(|| "add-keybinding-alternative".to_string())
+                                    .child(yttt_dialog_button(
+                                        cx,
+                                        "add-keybinding-alternative-button",
+                                        ui_text.get(UiTextKey::SettingsAddKeybindingAlternative),
+                                        YtttButtonVariant::Secondary,
+                                        theme,
+                                        cx.listener(|this, _, _window, cx| {
+                                            this.begin_keybinding_edit_alternative();
+                                            cx.notify();
+                                        }),
+                                    )),
+                            )
                             .child(yttt_dialog_button(
                                 cx,
                                 "clear-keybinding-edit",

@@ -3,7 +3,154 @@ pub(super) use view::{settings_button, settings_overlay};
 
 use super::*;
 
+const KEYBINDINGS_WATCH_DEBOUNCE: Duration = Duration::from_millis(150);
+const VIM_MODE_GLOBAL_LABEL: &str = "Global";
+const VIM_MODE_EDITOR_LABEL: &str = "Editor only";
+const VIM_MODE_DISABLED_LABEL: &str = "Disabled";
+
 impl WorkbenchView {
+    fn set_keybinding_load_error(&mut self, message: String) {
+        self.settings.keybinding_load_error = Some(message.clone());
+        self.load_error = Some(message);
+    }
+
+    fn clear_keybinding_load_error(&mut self) {
+        let Some(message) = self.settings.keybinding_load_error.take() else {
+            return;
+        };
+        let Some(current) = self.load_error.take() else {
+            return;
+        };
+        if current == message {
+            return;
+        }
+        let prefix = format!("{message}; ");
+        self.load_error = current
+            .strip_prefix(&prefix)
+            .map(str::to_string)
+            .or(Some(current));
+    }
+    pub(super) fn ensure_keybindings_watcher(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let path = self.config_paths.keybindings_file();
+        if self
+            .active_keybindings_watcher
+            .as_ref()
+            .is_some_and(|watcher| watcher.path == path)
+        {
+            return;
+        }
+        self.active_keybindings_watcher = None;
+
+        let Some(parent) = path.parent().map(Path::to_path_buf) else {
+            return;
+        };
+        let pending_reload = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let callback_reload = pending_reload.clone();
+        let callback_path = path.clone();
+        let mut watcher =
+            match notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+                let Ok(event) = result else {
+                    return;
+                };
+                if event.paths.iter().any(|event_path| {
+                    event_path == &callback_path
+                        || event_path.file_name() == callback_path.file_name()
+                }) {
+                    callback_reload.store(true, std::sync::atomic::Ordering::Release);
+                }
+            }) {
+                Ok(watcher) => watcher,
+                Err(error) => {
+                    self.set_keybinding_load_error(format!(
+                        "Failed to watch keybindings at {}: {error}",
+                        path.display()
+                    ));
+                    return;
+                }
+            };
+        use notify::Watcher as _;
+        if let Err(error) = watcher.watch(&parent, notify::RecursiveMode::NonRecursive) {
+            self.set_keybinding_load_error(format!(
+                "Failed to watch keybindings at {}: {error}",
+                path.display()
+            ));
+            return;
+        }
+
+        let watched_path = path.clone();
+        let task = cx.spawn_in(window, async move |this, cx| {
+            let _watcher = watcher;
+            loop {
+                cx.background_executor()
+                    .timer(KEYBINDINGS_WATCH_DEBOUNCE)
+                    .await;
+                if !pending_reload.swap(false, std::sync::atomic::Ordering::AcqRel) {
+                    continue;
+                }
+                let _ = this.update_in(cx, |root, _window, cx| {
+                    if root
+                        .active_keybindings_watcher
+                        .as_ref()
+                        .is_none_or(|watcher| watcher.path != watched_path)
+                    {
+                        return;
+                    }
+                    match load_keybindings(&root.config_paths, &root.command_registry) {
+                        Ok(loaded) if loaded.warnings.is_empty() => {
+                            root.settings.keybindings_editor = KeybindingsEditorState::new(
+                                loaded.config.clone(),
+                                root.command_registry.clone(),
+                            );
+                            root.settings.keybinding_warning_lines.clear();
+                            crate::ui::app::rebind_application_keybindings(cx, &loaded.config);
+                            root.clear_keybinding_load_error();
+                        }
+                        Ok(loaded) => {
+                            let lines =
+                                format_keybinding_warning_lines(&loaded.warnings, &root.ui_text);
+                            let message = format!(
+                                "{}: {}",
+                                root.ui_text.get(UiTextKey::StatusKeybindingsFile),
+                                lines.join("; ")
+                            );
+                            root.settings
+                                .keybindings_editor
+                                .mark_source_invalid(message.clone());
+                            root.settings.keybinding_warning_lines = lines;
+                            root.set_keybinding_load_error(message);
+                        }
+                        Err(error) => {
+                            let message = format!(
+                                "{}: {error}",
+                                root.ui_text.get(UiTextKey::StatusKeybindingsFile)
+                            );
+                            root.settings
+                                .keybindings_editor
+                                .mark_source_invalid(message.clone());
+                            root.set_keybinding_load_error(message);
+                        }
+                    }
+                    cx.notify();
+                });
+            }
+        });
+        self.active_keybindings_watcher = Some(ActiveKeybindingsWatcher { path, _task: task });
+    }
+
+    pub(super) fn flush_pending_keybindings_reload(&mut self, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.keybindings_reload_requested) {
+            return;
+        }
+        crate::ui::app::rebind_application_keybindings(
+            cx,
+            self.settings.keybindings_editor.config(),
+        );
+    }
+
     pub fn system_notifications_enabled(&self) -> bool {
         self.system_notifications_enabled
     }
@@ -35,11 +182,24 @@ impl WorkbenchView {
         self.app_settings.terminal.kitty_keyboard
     }
 
+    pub fn vim_mode_setting(&self) -> VimModeSetting {
+        self.app_settings.vim.mode
+    }
+
+    pub fn vim_status(&self) -> Option<crate::ui::vim::VimStatus> {
+        self.vim.current_status()
+    }
+
+    pub fn editor_vim_enabled(&self) -> bool {
+        self.app_settings.vim.mode != VimModeSetting::Disabled
+    }
+
+    pub fn keybinding_leader(&self) -> &str {
+        &self.settings.keybindings_editor.config().leader
+    }
+
     pub fn editor_auto_detect_language(&self) -> bool {
         self.app_settings.editor.auto_detect_language
-    }
-    pub fn editor_vim_mode(&self) -> bool {
-        self.app_settings.editor.vim_mode
     }
 
     pub fn editor_default_language(&self) -> &str {
@@ -96,6 +256,35 @@ impl WorkbenchView {
     ) -> Result<(), WorkbenchError> {
         self.app_settings.general.restore_last_session = enabled;
         save_settings(&self.config_paths, &self.app_settings)?;
+        Ok(())
+    }
+
+    pub fn set_vim_mode_setting(
+        &mut self,
+        mode: VimModeSetting,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), WorkbenchError> {
+        self.app_settings.vim.mode = mode;
+        save_settings(&self.config_paths, &self.app_settings)?;
+        self.vim.set_support(mode);
+        self.sync_editor_vim_modes(window, cx);
+        if mode != VimModeSetting::Global {
+            let panes = self
+                .terminal
+                .terminal_panes
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
+            for pane in panes {
+                pane.update(cx, |pane, pane_cx| {
+                    pane.set_terminal_vi_mode(false, pane_cx);
+                });
+            }
+        }
+        self.sync_input_owner_state();
+        self.sync_vim_controller(window, cx);
+        cx.notify();
         Ok(())
     }
 
@@ -514,17 +703,6 @@ impl WorkbenchView {
         self.sync_editor_document_appearances(window, cx);
         Ok(())
     }
-    pub fn set_editor_vim_mode(
-        &mut self,
-        vim_mode: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Result<(), WorkbenchError> {
-        self.app_settings.editor.vim_mode = vim_mode;
-        self.save_app_settings_and_refresh_runtime()?;
-        self.sync_editor_vim_modes(window, cx);
-        Ok(())
-    }
 
     pub fn set_editor_autosave(&mut self, autosave: EditorAutosave) -> Result<(), WorkbenchError> {
         self.app_settings.editor.autosave = autosave;
@@ -615,6 +793,96 @@ impl WorkbenchView {
         Ok(())
     }
 
+    pub(super) fn on_settings_vim_previous_group(
+        &mut self,
+        _: &SettingsVimPreviousGroup,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.settings_vim_navigation_active() {
+            cx.propagate();
+            return;
+        }
+        self.move_settings_group(-1);
+        cx.notify();
+        cx.stop_propagation();
+    }
+
+    pub(super) fn on_settings_vim_next_group(
+        &mut self,
+        _: &SettingsVimNextGroup,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.settings_vim_navigation_active() {
+            cx.propagate();
+            return;
+        }
+        self.move_settings_group(1);
+        cx.notify();
+        cx.stop_propagation();
+    }
+
+    pub(super) fn on_settings_vim_first_group(
+        &mut self,
+        _: &SettingsVimFirstGroup,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.settings_vim_navigation_active() {
+            cx.propagate();
+            return;
+        }
+        if let Some(group) = self
+            .settings
+            .settings_page
+            .visible_groups(&self.ui_text)
+            .first()
+        {
+            self.settings.settings_page.selected_group = group.id;
+        }
+        cx.notify();
+        cx.stop_propagation();
+    }
+
+    pub(super) fn on_settings_vim_last_group(
+        &mut self,
+        _: &SettingsVimLastGroup,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.settings_vim_navigation_active() {
+            cx.propagate();
+            return;
+        }
+        if let Some(group) = self
+            .settings
+            .settings_page
+            .visible_groups(&self.ui_text)
+            .last()
+        {
+            self.settings.settings_page.selected_group = group.id;
+        }
+        cx.notify();
+        cx.stop_propagation();
+    }
+
+    fn move_settings_group(&mut self, delta: isize) {
+        let groups = self.settings.settings_page.visible_groups(&self.ui_text);
+        let Some(current) = groups
+            .iter()
+            .position(|group| group.id == self.settings.settings_page.selected_group)
+        else {
+            return;
+        };
+        let target = current
+            .saturating_add_signed(delta)
+            .min(groups.len().saturating_sub(1));
+        if let Some(group) = groups.get(target) {
+            self.settings.settings_page.selected_group = group.id;
+        }
+    }
+
     pub fn visible_settings_group_titles(&self) -> Vec<&'static str> {
         self.settings
             .settings_page
@@ -673,7 +941,7 @@ impl WorkbenchView {
     }
 
     fn sync_editor_vim_modes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let enabled = self.app_settings.editor.vim_mode;
+        let enabled = self.app_settings.vim.mode != VimModeSetting::Disabled;
         let project_ids = self
             .workspace
             .opened_projects()
@@ -694,6 +962,12 @@ impl WorkbenchView {
                 document.set_vim_mode(enabled, window, document_cx);
             });
         }
+    }
+
+    fn settings_vim_navigation_active(&self) -> bool {
+        self.vim.support() == VimModeSetting::Global
+            && self.vim.surface() == VimSurface::Settings
+            && self.vim.mode() == WorkbenchVimMode::Normal
     }
 
     pub(super) fn sync_editor_document_appearances(
@@ -764,6 +1038,7 @@ impl WorkbenchView {
 
     pub(super) fn save_keybindings_editor(&mut self) -> Result<(), WorkbenchError> {
         self.settings.keybindings_editor.save(&self.config_paths)?;
+        self.keybindings_reload_requested = true;
         self.settings.keybinding_warning_lines.clear();
         Ok(())
     }
@@ -1095,6 +1370,34 @@ impl WorkbenchView {
             self.settings.settings_language_select_subscription = Some(subscription);
             select
         }
+    }
+
+    pub(super) fn settings_vim_mode_select(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SettingsStringSelectState> {
+        if let Some(select) = &self.settings.settings_vim_mode_select {
+            return select.clone();
+        }
+        let items = vec![
+            VIM_MODE_GLOBAL_LABEL.to_string(),
+            VIM_MODE_EDITOR_LABEL.to_string(),
+            VIM_MODE_DISABLED_LABEL.to_string(),
+        ];
+        let selected = match self.app_settings.vim.mode {
+            VimModeSetting::Global => VIM_MODE_GLOBAL_LABEL,
+            VimModeSetting::Editor => VIM_MODE_EDITOR_LABEL,
+            VimModeSetting::Disabled => VIM_MODE_DISABLED_LABEL,
+        };
+        let selected_index = selected_index_for_settings_option(&items, selected);
+        let select =
+            cx.new(|cx| SelectState::new(SearchableVec::new(items), selected_index, window, cx));
+        let subscription =
+            cx.subscribe_in(&select, window, Self::on_settings_vim_mode_select_event);
+        self.settings.settings_vim_mode_select = Some(select.clone());
+        self.settings.settings_vim_mode_select_subscription = Some(subscription);
+        select
     }
 
     pub(super) fn settings_custom_shell_input(
@@ -1581,6 +1884,28 @@ impl WorkbenchView {
             return;
         };
         if let Err(error) = self.set_language(language) {
+            self.load_error = Some(error.to_string());
+        }
+        cx.notify();
+    }
+
+    pub(super) fn on_settings_vim_mode_select_event(
+        &mut self,
+        _select: &Entity<SettingsStringSelectState>,
+        event: &SelectEvent<SearchableVec<String>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectEvent::Confirm(Some(value)) = event else {
+            return;
+        };
+        let mode = match value.as_str() {
+            VIM_MODE_GLOBAL_LABEL => VimModeSetting::Global,
+            VIM_MODE_EDITOR_LABEL => VimModeSetting::Editor,
+            VIM_MODE_DISABLED_LABEL => VimModeSetting::Disabled,
+            _ => return,
+        };
+        if let Err(error) = self.set_vim_mode_setting(mode, window, cx) {
             self.load_error = Some(error.to_string());
         }
         cx.notify();

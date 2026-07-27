@@ -16,6 +16,7 @@ pub(in super::super) struct ZedThemeImportDialogState {
 
 pub(in super::super) struct SettingsControllerState {
     pub(in super::super) keybinding_warning_lines: Vec<String>,
+    pub(in super::super) keybinding_load_error: Option<String>,
     pub(in super::super) keybindings_editor: KeybindingsEditorState,
     pub(in super::super) keybinding_interceptor_subscription: Option<Subscription>,
     pub(in super::super) settings_search_input: Option<Entity<InputState>>,
@@ -23,6 +24,8 @@ pub(in super::super) struct SettingsControllerState {
     pub(in super::super) settings_search_input_needs_focus: bool,
     pub(in super::super) settings_language_select: Option<Entity<SettingsStringSelectState>>,
     pub(in super::super) settings_language_select_subscription: Option<Subscription>,
+    pub(in super::super) settings_vim_mode_select: Option<Entity<SettingsStringSelectState>>,
+    pub(in super::super) settings_vim_mode_select_subscription: Option<Subscription>,
     pub(in super::super) settings_shell_select: Option<Entity<SettingsStringSelectState>>,
     pub(in super::super) settings_shell_select_subscription: Option<Subscription>,
     pub(in super::super) settings_custom_shell_input: Option<Entity<InputState>>,
@@ -66,16 +69,20 @@ impl SettingsControllerState {
     pub(in super::super) fn new(
         keybinding_warning_lines: Vec<String>,
         keybindings_editor: KeybindingsEditorState,
+        keybinding_load_error: Option<String>,
     ) -> Self {
         Self {
             keybinding_warning_lines,
             keybindings_editor,
+            keybinding_load_error,
             keybinding_interceptor_subscription: None,
             settings_search_input: None,
             settings_search_input_subscription: None,
             settings_search_input_needs_focus: false,
             settings_language_select: None,
             settings_language_select_subscription: None,
+            settings_vim_mode_select: None,
+            settings_vim_mode_select_subscription: None,
             settings_shell_select: None,
             settings_shell_select_subscription: None,
             settings_custom_shell_input: None,

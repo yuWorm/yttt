@@ -5,7 +5,7 @@ use yttt::config::{
     paths::AppConfigPaths,
     settings::{
         AUTO_SHELL, AppSettings, EditorAutosave, LanguageSetting, SettingsLoadWarning,
-        ShellPlatform, WindowBackgroundEffect, detect_shell_candidates_with,
+        ShellPlatform, VimModeSetting, WindowBackgroundEffect, detect_shell_candidates_with,
         language_setting_for_locale, load_or_create_settings, resolve_default_shell, save_settings,
     },
 };
@@ -104,6 +104,7 @@ fn missing_settings_file_writes_defaults() {
     assert_eq!(loaded.settings.terminal.hint_alphabet, "jfkdls;ahgurieowpq");
     assert_eq!(loaded.settings.terminal.hints.len(), 1);
     assert!(loaded.settings.editor.auto_detect_language);
+    assert_eq!(loaded.settings.vim.mode, VimModeSetting::Disabled);
     assert_eq!(loaded.settings.editor.default_language, "plain_text");
     assert!(!loaded.settings.editor.lsp.enabled);
     assert_eq!(loaded.settings.editor.lsp.command, "");
@@ -362,6 +363,73 @@ fn settings_persist_editor_and_project_panel_choices() {
 }
 
 #[test]
+fn vim_mode_setting_persists_each_scope() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+
+    for mode in [
+        VimModeSetting::Global,
+        VimModeSetting::Editor,
+        VimModeSetting::Disabled,
+    ] {
+        let mut settings = AppSettings::default();
+        settings.vim.mode = mode;
+        save_settings(&paths, &settings).unwrap();
+
+        let loaded = load_or_create_settings(&paths).unwrap();
+        assert_eq!(loaded.settings.vim.mode, mode);
+        assert!(loaded.warnings.is_empty());
+    }
+}
+
+#[test]
+fn legacy_vim_toggles_migrate_to_one_mode_and_are_removed() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(
+        paths.settings_file(),
+        r#"
+[general]
+workspace_vim_navigation = false
+settings_vim_navigation = false
+
+[editor]
+vim_mode = true
+
+[terminal]
+start_in_vim_mode = false
+"#,
+    )
+    .unwrap();
+
+    let loaded = load_or_create_settings(&paths).unwrap();
+    assert_eq!(loaded.settings.vim.mode, VimModeSetting::Editor);
+    let migrated = std::fs::read_to_string(paths.settings_file()).unwrap();
+    assert!(migrated.contains("[vim]"));
+    assert!(migrated.contains("mode = \"editor\""));
+    assert!(!migrated.contains("workspace_vim_navigation"));
+    assert!(!migrated.contains("settings_vim_navigation"));
+    assert!(!migrated.contains("vim_mode"));
+    assert!(!migrated.contains("start_in_vim_mode"));
+}
+
+#[test]
+fn any_legacy_non_editor_vim_toggle_migrates_to_global() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(
+        paths.settings_file(),
+        "[terminal]\nstart_in_vim_mode = true\n",
+    )
+    .unwrap();
+
+    let loaded = load_or_create_settings(&paths).unwrap();
+    assert_eq!(loaded.settings.vim.mode, VimModeSetting::Global);
+}
+
+#[test]
 fn invalid_general_window_theme_editor_and_project_panel_values_are_normalized() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
@@ -373,6 +441,9 @@ fn invalid_general_window_theme_editor_and_project_panel_values_are_normalized()
 language = "zh-CN"
 ui_font_size = nan
 ui_line_height = 0.5
+
+[vim]
+mode = "all"
 
 [window]
 effect = "glass"
@@ -430,6 +501,7 @@ project_sidebar_width = 1.0
         SettingsLoadWarning::InvalidWindowValue { field: "effect" },
         SettingsLoadWarning::InvalidWindowValue { field: "opacity" },
         SettingsLoadWarning::InvalidThemeValue { field: "ui_style" },
+        SettingsLoadWarning::InvalidVimValue { field: "mode" },
         SettingsLoadWarning::InvalidEditorValue { field: "autosave" },
         SettingsLoadWarning::InvalidEditorValue { field: "font_size" },
         SettingsLoadWarning::InvalidEditorValue {

@@ -6,8 +6,8 @@ use std::{
 };
 
 use gpui::{
-    App, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Styled as _, Subscription, Window, div, px,
+    App, AppContext as _, Context, Entity, EventEmitter, Focusable as _, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, Styled as _, Subscription, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme as _, Sizable as _,
@@ -21,8 +21,11 @@ use crate::{
     runtime::git_status::{GitFileStatus, ProjectGitStatus},
     ui::{
         interaction::actions::{
-            ProjectTreeCopy, ProjectTreeCut, ProjectTreeDelete, ProjectTreeNewDirectory,
-            ProjectTreeNewFile, ProjectTreePaste, ProjectTreeRename,
+            ProjectTreeCollapse, ProjectTreeCollapseAll, ProjectTreeCopy, ProjectTreeCut,
+            ProjectTreeDelete, ProjectTreeExpand, ProjectTreeNewDirectory, ProjectTreeNewFile,
+            ProjectTreeOpen, ProjectTreePaste, ProjectTreeRename, ProjectTreeSelectFirst,
+            ProjectTreeSelectLast, ProjectTreeSelectNext, ProjectTreeSelectPrevious,
+            ProjectTreeToggle, ProjectTreeToggleHidden,
         },
         theme::{
             current_ui_style,
@@ -166,6 +169,12 @@ impl ProjectTreeRenderSnapshot {
         self.rows_by_id
             .values()
             .find(|row| row.relative_path.as_deref() == Some(path))
+    }
+
+    fn selected_path(&self) -> Option<PathBuf> {
+        self.selected_index
+            .and_then(|index| self.visible_rows.get(index))
+            .and_then(|row| row.relative_path.clone())
     }
 
     fn row_for_id(&self, id: &str) -> Option<&ProjectTreeRenderRow> {
@@ -386,9 +395,20 @@ impl ProjectTreeView {
         icon_theme: IconTheme,
         cx: &mut Context<Self>,
     ) {
+        let previous_model_selection = self.snapshot.selected_path();
+        let current_selection = self
+            .selected_row(cx)
+            .and_then(|row| row.relative_path.clone());
+        let next_model_selection = snapshot.selected_path();
+        let model_selection_changed = next_model_selection != previous_model_selection;
+        let selected_path = if model_selection_changed {
+            next_model_selection
+        } else {
+            current_selection.or(next_model_selection)
+        };
         self.snapshot = snapshot;
         self.icon_theme = icon_theme;
-        self.rebuild_tree_state(cx);
+        self.rebuild_tree_state_with_selection(selected_path, cx);
         cx.notify();
     }
 
@@ -415,6 +435,29 @@ impl ProjectTreeView {
 
     pub fn tree_state(&self) -> &Entity<TreeState> {
         &self.tree
+    }
+
+    pub fn is_focused(&self, window: &Window, cx: &gpui::App) -> bool {
+        self.tree
+            .read(cx)
+            .focus_handle()
+            .contains_focused(window, cx)
+    }
+
+    pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_row(cx).is_none()
+            && let Some(index) = self.first_selectable_index()
+        {
+            self.select_index(index, cx);
+        }
+        self.tree
+            .update(cx, |tree, tree_cx| tree.focus(window, tree_cx));
+    }
+
+    pub fn edit_input_is_focused(&self, window: &Window, cx: &gpui::App) -> bool {
+        self.edit_input
+            .as_ref()
+            .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window))
     }
 
     pub fn snapshot(&self) -> &ProjectTreeRenderSnapshot {
@@ -446,7 +489,7 @@ impl ProjectTreeView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let row = self.selected_row();
+        let row = self.selected_row(cx);
         self.begin_create(row, force_directory, window, cx);
     }
 
@@ -461,8 +504,9 @@ impl ProjectTreeView {
         let Some(path) = row.relative_path else {
             return false;
         };
+        cx.emit(ProjectTreeViewEvent::SelectPath(path.clone()));
         match row.kind {
-            Some(ProjectTreeEntryKind::Directory) => {
+            Some(ProjectTreeEntryKind::Directory | ProjectTreeEntryKind::SymlinkDirectory) => {
                 cx.emit(ProjectTreeViewEvent::ToggleDirectory {
                     path,
                     expanded: !row.expanded,
@@ -473,16 +517,174 @@ impl ProjectTreeView {
                 cx.emit(ProjectTreeViewEvent::OpenFile(path));
                 true
             }
-            Some(ProjectTreeEntryKind::SymlinkDirectory) | None => false,
+            None => false,
         }
     }
 
-    fn selected_row(&self) -> Option<ProjectTreeRenderRow> {
+    fn selected_row(&self, cx: &App) -> Option<ProjectTreeRenderRow> {
+        let selected_id = self
+            .tree
+            .read(cx)
+            .selected_item()
+            .map(|item| item.id.to_string());
+        selected_id
+            .as_deref()
+            .and_then(|id| self.snapshot.row_for_id(id))
+            .or_else(|| self.snapshot.rows().iter().find(|row| row.selected))
+            .filter(|row| !row.synthetic)
+            .cloned()
+    }
+
+    fn first_selectable_index(&self) -> Option<usize> {
         self.snapshot
             .rows()
             .iter()
-            .find(|row| row.selected && !row.synthetic)
+            .position(|row| !row.synthetic && row.relative_path.is_some())
+    }
+
+    fn last_selectable_index(&self) -> Option<usize> {
+        self.snapshot
+            .rows()
+            .iter()
+            .rposition(|row| !row.synthetic && row.relative_path.is_some())
+    }
+
+    fn select_index(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
+        let Some(row) = self
+            .snapshot
+            .rows()
+            .get(index)
+            .filter(|row| !row.synthetic)
             .cloned()
+        else {
+            return false;
+        };
+        let Some(path) = row.relative_path else {
+            return false;
+        };
+        self.tree.update(cx, |tree, tree_cx| {
+            tree.set_selected_index(Some(index), tree_cx);
+            tree.scroll_to_item(index, gpui::ScrollStrategy::Center);
+        });
+        cx.emit(ProjectTreeViewEvent::SelectPath(path));
+        true
+    }
+
+    fn move_selection(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let len = self.snapshot.rows().len();
+        if len == 0 {
+            return;
+        }
+        let current = self.tree.read(cx).selected_index();
+        for offset in 0..len {
+            let index = match (current, forward) {
+                (Some(current), true) => (current + 1 + offset) % len,
+                (Some(current), false) => (current + len - 1 - offset) % len,
+                (None, true) => offset,
+                (None, false) => len - 1 - offset,
+            };
+            if self.select_index(index, cx) {
+                return;
+            }
+        }
+    }
+
+    fn collapse_or_select_parent(&mut self, cx: &mut Context<Self>) {
+        let Some(row) = self.selected_row(cx) else {
+            return;
+        };
+        if matches!(
+            row.kind,
+            Some(ProjectTreeEntryKind::Directory | ProjectTreeEntryKind::SymlinkDirectory)
+        ) && row.expanded
+        {
+            if let Some(path) = row.relative_path {
+                cx.emit(ProjectTreeViewEvent::ToggleDirectory {
+                    path,
+                    expanded: false,
+                });
+            }
+            return;
+        }
+        let Some(parent) = row.relative_path.as_deref().and_then(Path::parent) else {
+            return;
+        };
+        if let Some(index) = self
+            .snapshot
+            .rows()
+            .iter()
+            .position(|candidate| candidate.relative_path.as_deref() == Some(parent))
+        {
+            self.select_index(index, cx);
+        }
+    }
+
+    fn expand_or_open(&mut self, cx: &mut Context<Self>) {
+        let Some(row) = self.selected_row(cx) else {
+            return;
+        };
+        match row.kind {
+            Some(ProjectTreeEntryKind::Directory | ProjectTreeEntryKind::SymlinkDirectory) => {
+                if !row.expanded {
+                    if let Some(path) = row.relative_path {
+                        cx.emit(ProjectTreeViewEvent::ToggleDirectory {
+                            path,
+                            expanded: true,
+                        });
+                    }
+                    return;
+                }
+                let Some(current_index) = self.tree.read(cx).selected_index() else {
+                    return;
+                };
+                let child_index = current_index + 1;
+                if self
+                    .snapshot
+                    .rows()
+                    .get(child_index)
+                    .is_some_and(|child| child.depth > row.depth)
+                {
+                    self.select_index(child_index, cx);
+                }
+            }
+            Some(ProjectTreeEntryKind::File | ProjectTreeEntryKind::SymlinkFile) => {
+                self.activate_row(row, cx);
+            }
+            None => {}
+        }
+    }
+
+    fn toggle_selected_directory(&mut self, cx: &mut Context<Self>) {
+        let Some(row) = self.selected_row(cx) else {
+            return;
+        };
+        if matches!(
+            row.kind,
+            Some(ProjectTreeEntryKind::Directory | ProjectTreeEntryKind::SymlinkDirectory)
+        ) && let Some(path) = row.relative_path
+        {
+            cx.emit(ProjectTreeViewEvent::ToggleDirectory {
+                path,
+                expanded: !row.expanded,
+            });
+        }
+    }
+
+    fn collapse_all(&mut self, cx: &mut Context<Self>) {
+        for row in self.snapshot.rows() {
+            if row.expanded
+                && matches!(
+                    row.kind,
+                    Some(ProjectTreeEntryKind::Directory | ProjectTreeEntryKind::SymlinkDirectory)
+                )
+                && let Some(path) = row.relative_path.clone()
+            {
+                cx.emit(ProjectTreeViewEvent::ToggleDirectory {
+                    path,
+                    expanded: false,
+                });
+            }
+        }
     }
 
     fn select_context_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
@@ -631,6 +833,17 @@ impl ProjectTreeView {
     }
 
     fn rebuild_tree_state(&mut self, cx: &mut Context<Self>) {
+        let selected_path = self
+            .selected_row(cx)
+            .and_then(|row| row.relative_path.clone());
+        self.rebuild_tree_state_with_selection(selected_path, cx);
+    }
+
+    fn rebuild_tree_state_with_selection(
+        &mut self,
+        selected_path: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
         let mut items = self.snapshot.tree_items();
         if let Some(ProjectTreeEditTarget::Create {
             parent, placement, ..
@@ -638,11 +851,9 @@ impl ProjectTreeView {
         {
             insert_edit_item(&mut items, parent, placement);
         }
-        let selected_id = self
-            .selected_row()
-            .and_then(|row| row.relative_path)
-            .map(|path| stable_path_id(&path));
-        let selected_item = selected_id
+        let selected_item = selected_path
+            .as_deref()
+            .map(stable_path_id)
             .as_deref()
             .and_then(|id| find_tree_item(&items, id))
             .cloned();
@@ -657,13 +868,88 @@ impl ProjectTreeView {
         event: impl FnOnce(PathBuf) -> ProjectTreeViewEvent,
         cx: &mut Context<Self>,
     ) {
-        let Some(path) = self.selected_row().and_then(|row| row.relative_path) else {
+        let Some(path) = self.selected_row(cx).and_then(|row| row.relative_path) else {
             cx.propagate();
             return;
         };
         cx.emit(event(path));
     }
 
+    fn on_select_previous(
+        &mut self,
+        _: &ProjectTreeSelectPrevious,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_selection(false, cx);
+    }
+
+    fn on_select_next(
+        &mut self,
+        _: &ProjectTreeSelectNext,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_selection(true, cx);
+    }
+
+    fn on_collapse(&mut self, _: &ProjectTreeCollapse, _: &mut Window, cx: &mut Context<Self>) {
+        self.collapse_or_select_parent(cx);
+    }
+
+    fn on_expand(&mut self, _: &ProjectTreeExpand, _: &mut Window, cx: &mut Context<Self>) {
+        self.expand_or_open(cx);
+    }
+
+    fn on_open(&mut self, _: &ProjectTreeOpen, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(row) = self.selected_row(cx) {
+            self.activate_row(row, cx);
+        }
+    }
+
+    fn on_toggle(&mut self, _: &ProjectTreeToggle, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_selected_directory(cx);
+    }
+
+    fn on_select_first(
+        &mut self,
+        _: &ProjectTreeSelectFirst,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(index) = self.first_selectable_index() {
+            self.select_index(index, cx);
+        }
+    }
+
+    fn on_select_last(
+        &mut self,
+        _: &ProjectTreeSelectLast,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(index) = self.last_selectable_index() {
+            self.select_index(index, cx);
+        }
+    }
+
+    fn on_collapse_all(
+        &mut self,
+        _: &ProjectTreeCollapseAll,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.collapse_all(cx);
+    }
+
+    fn on_toggle_hidden(
+        &mut self,
+        _: &ProjectTreeToggleHidden,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_show_hidden(cx);
+    }
     fn on_new_file(&mut self, _: &ProjectTreeNewFile, window: &mut Window, cx: &mut Context<Self>) {
         self.begin_create_selected(false, window, cx);
     }
@@ -678,7 +964,7 @@ impl ProjectTreeView {
     }
 
     fn on_rename(&mut self, _: &ProjectTreeRename, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(row) = self.selected_row() else {
+        let Some(row) = self.selected_row(cx) else {
             cx.propagate();
             return;
         };
@@ -699,7 +985,7 @@ impl ProjectTreeView {
 
     fn on_paste(&mut self, _: &ProjectTreePaste, _: &mut Window, cx: &mut Context<Self>) {
         let destination_directory = self
-            .selected_row()
+            .selected_row(cx)
             .as_ref()
             .map(operation_destination_directory)
             .unwrap_or_default();
@@ -737,6 +1023,7 @@ impl Render for ProjectTreeView {
         let edit_target = self.edit_target.clone();
         let edit_input = self.edit_input.clone();
         let text = self.interaction_text.clone();
+        let tree_has_keyboard_focus = self.is_focused(window, cx);
         let show_hidden = self.show_hidden;
         let tree = tree(&self.tree, move |ix, entry, selected, _window, cx| {
             let id = entry.item().id.as_str().to_string();
@@ -775,6 +1062,7 @@ impl Render for ProjectTreeView {
                 ix,
                 entry.depth(),
                 selected,
+                tree_has_keyboard_focus,
                 row,
                 &icon_theme,
                 view.clone(),
@@ -892,6 +1180,16 @@ impl Render for ProjectTreeView {
 
         div()
             .size_full()
+            .on_action(cx.listener(Self::on_select_previous))
+            .on_action(cx.listener(Self::on_select_next))
+            .on_action(cx.listener(Self::on_collapse))
+            .on_action(cx.listener(Self::on_expand))
+            .on_action(cx.listener(Self::on_open))
+            .on_action(cx.listener(Self::on_toggle))
+            .on_action(cx.listener(Self::on_select_first))
+            .on_action(cx.listener(Self::on_select_last))
+            .on_action(cx.listener(Self::on_collapse_all))
+            .on_action(cx.listener(Self::on_toggle_hidden))
             .on_action(cx.listener(Self::on_new_file))
             .on_action(cx.listener(Self::on_new_directory))
             .on_action(cx.listener(Self::on_rename))
@@ -1047,6 +1345,7 @@ fn render_component_row(
     ix: usize,
     depth: usize,
     selected: bool,
+    tree_has_keyboard_focus: bool,
     row: Option<ProjectTreeRenderRow>,
     icon_theme: &IconTheme,
     view: gpui::WeakEntity<ProjectTreeView>,
@@ -1082,7 +1381,10 @@ fn render_component_row(
         Some(GitFileStatus::Deleted) => Some(cx.theme().danger),
         Some(GitFileStatus::Ignored) | None => None,
     };
-    let label_color = if row.git_status == Some(GitFileStatus::Ignored) {
+    let focused_selection = selected && tree_has_keyboard_focus;
+    let label_color = if focused_selection {
+        cx.theme().foreground
+    } else if row.git_status == Some(GitFileStatus::Ignored) {
         cx.theme().muted_foreground
     } else {
         cx.theme().foreground
@@ -1099,6 +1401,17 @@ fn render_component_row(
     ListItem::new(("project-tree-row", ix))
         .selected(selected)
         .pl(px(8.0 + depth as f32 * 14.0))
+        .children(focused_selection.then(|| {
+            div()
+                .debug_selector(|| "project-tree-focused-row-indicator".to_string())
+                .absolute()
+                .left(px(2.0))
+                .top(px(6.0))
+                .bottom(px(6.0))
+                .w(px(2.0))
+                .rounded_full()
+                .bg(cx.theme().caret)
+        }))
         .child(
             div()
                 .flex()
@@ -1146,8 +1459,21 @@ fn render_component_row(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::Focusable as _;
     use std::{cell::RefCell, rc::Rc};
+
+    struct VimTreeHarness {
+        tree: Entity<ProjectTreeView>,
+        key_context: gpui::KeyContext,
+    }
+
+    impl Render for VimTreeHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .key_context(self.key_context.clone())
+                .child(self.tree.clone())
+        }
+    }
 
     fn item(path: &str, children: Vec<TreeItem>) -> TreeItem {
         TreeItem::new(stable_path_id(Path::new(path)), path)
@@ -1293,7 +1619,7 @@ mod tests {
         );
 
         view.update_in(cx, |view, window, view_cx| {
-            let row = view.selected_row().unwrap();
+            let row = view.selected_row(view_cx).unwrap();
             view.begin_rename(row, window, view_cx);
         });
         cx.run_until_parked();
@@ -1357,6 +1683,195 @@ mod tests {
                 ProjectTreeViewEvent::SetShowHidden(true),
                 ProjectTreeViewEvent::SetShowHidden(false),
                 ProjectTreeViewEvent::CreateProjectLayout,
+            ]
+        );
+        drop(subscription);
+    }
+
+    #[gpui::test]
+    fn global_vim_tree_navigation_opens_and_operates_on_keyboard_selection(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        cx.update(|cx| cx.bind_keys(crate::ui::interaction::actions::app_startup_keybindings()));
+        let mut model = ProjectFileTree::new("/project");
+        let request = model.request_expand(Path::new("")).unwrap();
+        model.apply_snapshot(
+            request.generation,
+            crate::ui::project_tree::DirectorySnapshot {
+                relative_directory: PathBuf::new(),
+                entries: vec![
+                    crate::ui::project_tree::ProjectTreeEntry {
+                        name: "first.rs".into(),
+                        relative_path: PathBuf::from("first.rs"),
+                        kind: ProjectTreeEntryKind::File,
+                    },
+                    crate::ui::project_tree::ProjectTreeEntry {
+                        name: "second.rs".into(),
+                        relative_path: PathBuf::from("second.rs"),
+                        kind: ProjectTreeEntryKind::File,
+                    },
+                ],
+            },
+        );
+        model.select(Some(PathBuf::from("first.rs")));
+        let snapshot = ProjectTreeRenderSnapshot::from_tree(&model, None);
+        let mut vim = crate::ui::vim::VimControllerState::new(
+            crate::config::settings::VimModeSetting::Global,
+        );
+        vim.sync_surface(crate::ui::vim::VimSurface::ProjectTree);
+        let key_context = vim.current_key_context();
+        let view_slot = Rc::new(RefCell::new(None));
+        let view_slot_for_window = view_slot.clone();
+        let (_root, cx) = cx.add_window_view(move |window, cx| {
+            let tree = cx.new(|cx| ProjectTreeView::new(snapshot, cx));
+            *view_slot_for_window.borrow_mut() = Some(tree.clone());
+            let harness = cx.new(|_| VimTreeHarness { tree, key_context });
+            gpui_component::Root::new(harness, window, cx)
+        });
+        let tree = view_slot.borrow_mut().take().unwrap();
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let subscription = cx.update(|_, cx| {
+            tree.update(cx, |_, tree_cx| {
+                let events = events.clone();
+                tree_cx.subscribe(&tree, move |_, _, event, _| {
+                    events.borrow_mut().push(event.clone());
+                })
+            })
+        });
+        tree.update_in(cx, |tree, window, tree_cx| {
+            tree.focus(window, tree_cx);
+        });
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        assert!(
+            cx.debug_bounds("project-tree-focused-row-indicator")
+                .is_some()
+        );
+
+        cx.simulate_keystrokes("j");
+        cx.run_until_parked();
+        cx.read(|app| {
+            assert_eq!(
+                tree.read(app).tree_state().read(app).selected_index(),
+                Some(1)
+            );
+        });
+        assert_eq!(
+            events.borrow().as_slice(),
+            [ProjectTreeViewEvent::SelectPath(PathBuf::from("second.rs"))]
+        );
+
+        cx.simulate_keystrokes("l");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("y");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("k");
+        cx.run_until_parked();
+        assert_eq!(
+            events.borrow().as_slice(),
+            [
+                ProjectTreeViewEvent::SelectPath(PathBuf::from("second.rs")),
+                ProjectTreeViewEvent::SelectPath(PathBuf::from("second.rs")),
+                ProjectTreeViewEvent::OpenFile(PathBuf::from("second.rs")),
+                ProjectTreeViewEvent::CopyEntry(PathBuf::from("second.rs")),
+                ProjectTreeViewEvent::SelectPath(PathBuf::from("first.rs")),
+            ]
+        );
+        drop(subscription);
+    }
+
+    #[gpui::test]
+    fn global_vim_h_and_l_traverse_project_tree_directories(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(|cx| cx.bind_keys(crate::ui::interaction::actions::app_startup_keybindings()));
+        let mut model = ProjectFileTree::new("/project");
+        let root_request = model.request_expand(Path::new("")).unwrap();
+        model.apply_snapshot(
+            root_request.generation,
+            crate::ui::project_tree::DirectorySnapshot {
+                relative_directory: PathBuf::new(),
+                entries: vec![
+                    crate::ui::project_tree::ProjectTreeEntry {
+                        name: "src".into(),
+                        relative_path: PathBuf::from("src"),
+                        kind: ProjectTreeEntryKind::Directory,
+                    },
+                    crate::ui::project_tree::ProjectTreeEntry {
+                        name: "README.md".into(),
+                        relative_path: PathBuf::from("README.md"),
+                        kind: ProjectTreeEntryKind::File,
+                    },
+                ],
+            },
+        );
+        let src_request = model.request_expand(Path::new("src")).unwrap();
+        model.apply_snapshot(
+            src_request.generation,
+            crate::ui::project_tree::DirectorySnapshot {
+                relative_directory: PathBuf::from("src"),
+                entries: vec![crate::ui::project_tree::ProjectTreeEntry {
+                    name: "main.rs".into(),
+                    relative_path: PathBuf::from("src/main.rs"),
+                    kind: ProjectTreeEntryKind::File,
+                }],
+            },
+        );
+        model.select(Some(PathBuf::from("src")));
+        let snapshot = ProjectTreeRenderSnapshot::from_tree(&model, None);
+        let mut vim = crate::ui::vim::VimControllerState::new(
+            crate::config::settings::VimModeSetting::Global,
+        );
+        vim.sync_surface(crate::ui::vim::VimSurface::ProjectTree);
+        let key_context = vim.current_key_context();
+        let view_slot = Rc::new(RefCell::new(None));
+        let view_slot_for_window = view_slot.clone();
+        let (_root, cx) = cx.add_window_view(move |window, cx| {
+            let tree = cx.new(|cx| ProjectTreeView::new(snapshot, cx));
+            *view_slot_for_window.borrow_mut() = Some(tree.clone());
+            let harness = cx.new(|_| VimTreeHarness { tree, key_context });
+            gpui_component::Root::new(harness, window, cx)
+        });
+        let tree = view_slot.borrow_mut().take().unwrap();
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let subscription = cx.update(|_, cx| {
+            tree.update(cx, |_, tree_cx| {
+                let events = events.clone();
+                tree_cx.subscribe(&tree, move |_, _, event, _| {
+                    events.borrow_mut().push(event.clone());
+                })
+            })
+        });
+        tree.update_in(cx, |tree, window, tree_cx| {
+            tree.focus(window, tree_cx);
+        });
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("l");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("h");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("h");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("shift-h");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("z");
+        cx.run_until_parked();
+
+        assert_eq!(
+            events.borrow().as_slice(),
+            [
+                ProjectTreeViewEvent::SelectPath(PathBuf::from("src/main.rs")),
+                ProjectTreeViewEvent::SelectPath(PathBuf::from("src")),
+                ProjectTreeViewEvent::ToggleDirectory {
+                    path: PathBuf::from("src"),
+                    expanded: false,
+                },
+                ProjectTreeViewEvent::SetShowHidden(true),
+                ProjectTreeViewEvent::ToggleDirectory {
+                    path: PathBuf::from("src"),
+                    expanded: false,
+                },
             ]
         );
         drop(subscription);

@@ -213,7 +213,7 @@ pub struct TerminalPaneView {
     exit_emitted: bool,
     terminal_input_gate: TerminalInputGate,
     generation: u64,
-    idle_reader_release: Option<mpsc::Sender<()>>,
+    idle_reader_release: Option<mpsc::Sender<Vec<u8>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -241,13 +241,15 @@ fn accepts_process_exit(
 }
 
 struct IdleTerminalReader {
-    release: mpsc::Receiver<()>,
+    reader: mpsc::Receiver<Vec<u8>>,
 }
 
 impl Read for IdleTerminalReader {
-    fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
-        let _ = self.release.recv();
-        Ok(0)
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let bytes = self.reader.recv().unwrap_or_default();
+        let read = bytes.len().min(buffer.len());
+        buffer[..read].copy_from_slice(&bytes[..read]);
+        Ok(read)
     }
 }
 
@@ -326,17 +328,13 @@ impl TerminalPaneView {
     }
 
     fn start_idle_terminal(&mut self, cx: &mut Context<Self>) {
-        let (release, reader) = mpsc::channel();
         let terminal_input_allowed = self.terminal_input_gate.shared_flag();
+        let (release, reader) = mpsc::channel::<Vec<u8>>();
+        let reader = IdleTerminalReader { reader };
         let config = self.terminal_config.clone();
         self.terminal = Some(cx.new(|cx| {
-            TerminalView::new(
-                io::sink(),
-                IdleTerminalReader { release: reader },
-                config,
-                cx,
-            )
-            .with_key_handler(move |_event| !terminal_input_allowed.load(Ordering::SeqCst))
+            TerminalView::new(std::io::sink(), reader, config, cx)
+                .with_key_handler(move |_event| !terminal_input_allowed.load(Ordering::SeqCst))
         }));
         self.idle_reader_release = Some(release);
         self.lifecycle = PaneLifecycle::Running;
@@ -624,6 +622,33 @@ impl TerminalPaneView {
             focus_handle.focus(window, cx);
         });
         true
+    }
+
+    pub fn terminal_is_focused(&self, window: &Window, cx: &gpui::App) -> bool {
+        self.terminal
+            .as_ref()
+            .is_some_and(|terminal| terminal.read(cx).focus_handle().is_focused(window))
+    }
+
+    pub fn terminal_vi_mode(&self, cx: &gpui::App) -> bool {
+        self.terminal
+            .as_ref()
+            .is_some_and(|terminal| terminal.read(cx).is_vi_mode())
+    }
+
+    pub fn terminal_search_is_active(&self, cx: &gpui::App) -> bool {
+        self.terminal
+            .as_ref()
+            .is_some_and(|terminal| terminal.read(cx).search_is_active())
+    }
+
+    pub fn set_terminal_vi_mode(&mut self, enabled: bool, cx: &mut Context<Self>) -> bool {
+        let Some(terminal) = self.terminal.clone() else {
+            return false;
+        };
+        terminal.update(cx, |terminal, terminal_cx| {
+            terminal.set_vi_mode(enabled, terminal_cx)
+        })
     }
 
     pub fn default_chrome() -> TerminalPaneChrome {

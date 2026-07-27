@@ -19,7 +19,7 @@ mod virtual_list;
 mod window_border;
 mod window_ext;
 
-pub(crate) mod actions;
+pub mod actions;
 
 pub mod accordion;
 pub mod alert;
@@ -107,13 +107,18 @@ rust_i18n::i18n!("locales", fallback = "en");
 pub fn init(cx: &mut App) {
     theme::init(cx);
     global_state::init(cx);
+    focus_trap::init(cx);
+    dock::init(cx);
+    rebind_keybindings(cx);
+}
+
+/// Re-register component keybindings after the application keymap is cleared.
+pub fn rebind_keybindings(cx: &mut App) {
     #[cfg(any(feature = "inspector", debug_assertions))]
     inspector::init(cx);
     root::init(cx);
-    focus_trap::init(cx);
     color_picker::init(cx);
     date_picker::init(cx);
-    dock::init(cx);
     sheet::init(cx);
     combobox::init(cx);
     select::init(cx);

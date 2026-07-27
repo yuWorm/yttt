@@ -30,6 +30,15 @@ impl WorkbenchView {
         cx.notify();
     }
 
+    pub(super) fn on_recent_project_palette(
+        &mut self,
+        _: &OpenRecentProjectPalette,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_command_action(CommandId::ProjectOpenRecent, cx);
+    }
+
     pub(super) fn on_opened_project_palette(
         &mut self,
         _: &OpenOpenedProjectPalette,
@@ -55,6 +64,65 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) {
         self.dispatch_command_action(CommandId::ProjectPanelRefresh, cx);
+    }
+
+    pub(super) fn on_focus_projects(
+        &mut self,
+        _: &FocusProjects,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.queue_projects_focus() {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn on_projects_select_previous(
+        &mut self,
+        _: &ProjectsSelectPrevious,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(error) = self.select_adjacent_project(false) {
+            self.load_error = Some(error.to_string());
+        }
+        cx.notify();
+    }
+
+    pub(super) fn on_projects_select_next(
+        &mut self,
+        _: &ProjectsSelectNext,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(error) = self.select_adjacent_project(true) {
+            self.load_error = Some(error.to_string());
+        }
+        cx.notify();
+    }
+
+    pub(super) fn on_projects_select_first(
+        &mut self,
+        _: &ProjectsSelectFirst,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(error) = self.select_boundary_project(true) {
+            self.load_error = Some(error.to_string());
+        }
+        cx.notify();
+    }
+
+    pub(super) fn on_projects_select_last(
+        &mut self,
+        _: &ProjectsSelectLast,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(error) = self.select_boundary_project(false) {
+            self.load_error = Some(error.to_string());
+        }
+        cx.notify();
     }
 
     pub(super) fn on_create_project(
@@ -726,6 +794,13 @@ impl WorkbenchView {
             cx.propagate();
             return;
         }
+        let input_owner = self.foreground_input_owner_kind();
+        if input_owner == InputOwnerKind::Editor
+            && !workspace_runtime_command_allowed(input_owner, command_id)
+        {
+            cx.propagate();
+            return;
+        }
 
         let _ = self.run_command(command_id);
         cx.notify();
@@ -751,12 +826,7 @@ impl WorkbenchView {
         }
 
         if self.overlays.git_diff_panel.is_some() {
-            if self.handle_git_diff_key_down(event, cx) {
-                cx.stop_propagation();
-                cx.notify();
-            } else {
-                cx.propagate();
-            }
+            cx.propagate();
             return;
         }
 
@@ -766,20 +836,6 @@ impl WorkbenchView {
         }
 
         if self.palette.active_palette.is_none() {
-            if let Some(command_id) = Self::workspace_arrow_keydown_command_for_owner(
-                self.foreground_input_owner_kind(),
-                &event.keystroke.key,
-                event.keystroke.modifiers.platform,
-                event.keystroke.modifiers.control,
-                event.keystroke.modifiers.alt,
-                event.keystroke.modifiers.shift,
-            ) {
-                let _ = self.run_command(command_id);
-                cx.stop_propagation();
-                cx.notify();
-                return;
-            }
-
             cx.propagate();
             return;
         }

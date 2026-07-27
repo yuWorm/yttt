@@ -173,6 +173,20 @@ pub struct UiStyle {
     pub active_accent_alpha: f32,
 }
 
+fn interaction_background(background: Rgba, accent: Rgba, accent_alpha: f32) -> Rgba {
+    if accent_alpha == 0.0 {
+        return background;
+    }
+
+    let opacity = background.a;
+    let mut tinted = background.blend(Rgba {
+        a: accent_alpha,
+        ..accent
+    });
+    tinted.a = opacity;
+    tinted
+}
+
 impl UiStyle {
     pub fn resolve(id: UiStyleId) -> Self {
         match id {
@@ -182,25 +196,11 @@ impl UiStyle {
     }
 
     pub fn hover_background(self, theme: WorkbenchTheme) -> Rgba {
-        if self.hover_accent_alpha == 0.0 {
-            theme.hover_surface
-        } else {
-            theme.surface.blend(Rgba {
-                a: self.hover_accent_alpha,
-                ..theme.accent
-            })
-        }
+        interaction_background(theme.hover_surface, theme.accent, self.hover_accent_alpha)
     }
 
     pub fn active_background(self, theme: WorkbenchTheme) -> Rgba {
-        if self.active_accent_alpha == 0.0 {
-            theme.active_surface
-        } else {
-            theme.surface.blend(Rgba {
-                a: self.active_accent_alpha,
-                ..theme.accent
-            })
-        }
+        interaction_background(theme.active_surface, theme.accent, self.active_accent_alpha)
     }
 
     fn zed() -> Self {
@@ -470,5 +470,17 @@ mod tests {
             rounded.active_background(theme),
             zed.active_background(theme)
         );
+    }
+
+    #[test]
+    fn interaction_tints_preserve_accessible_overlay_opacity() {
+        let rounded = UiStyle::resolve(UiStyleId::Rounded);
+        let mut theme = WorkbenchTheme::one_dark();
+        theme.hover_surface.a = 0.11;
+        theme.active_surface.a = 0.27;
+        theme.surface.a = 0.04;
+
+        assert_eq!(rounded.hover_background(theme).a, 0.11);
+        assert_eq!(rounded.active_background(theme).a, 0.27);
     }
 }

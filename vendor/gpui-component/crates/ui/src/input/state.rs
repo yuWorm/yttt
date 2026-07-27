@@ -1305,6 +1305,9 @@ impl InputState {
 
     /// Enable or disable text supplied by the platform input handler.
     pub fn set_text_input_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.text_input_enabled == enabled {
+            return;
+        }
         self.text_input_enabled = enabled;
         if !enabled {
             self.ime_marked_range = None;
@@ -3073,7 +3076,7 @@ impl EntityInputHandler for InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.disabled {
+        if self.disabled || !self.text_input_enabled {
             return;
         }
 

@@ -88,15 +88,17 @@ impl WindowMaterialTheme {
             };
         }
 
+        let window_tint_opacity = settings.opacity.clamp(0.0, 1.0);
+        let backdrop_visibility = 1.0 - window_tint_opacity;
         Self {
             translucent: true,
-            window_tint_opacity: settings.opacity.clamp(0.0, 1.0),
+            window_tint_opacity,
             panel_tint_opacity: 0.04,
             elevated_tint_opacity: 0.08,
-            hover_overlay_opacity: 0.06,
-            active_overlay_opacity: 0.12,
-            selection_overlay_opacity: 0.28,
-            focused_overlay_opacity: 0.36,
+            hover_overlay_opacity: 0.08 + 0.04 * backdrop_visibility,
+            active_overlay_opacity: 0.20 + 0.10 * backdrop_visibility,
+            selection_overlay_opacity: 0.32 + 0.08 * backdrop_visibility,
+            focused_overlay_opacity: 0.40 + 0.08 * backdrop_visibility,
             scrim: gpui::rgba(0x00000042),
         }
     }
@@ -151,6 +153,10 @@ fn cap_color_opacity(color: &mut Rgba, opacity: f32) {
     color.a = color.a.min(opacity);
 }
 
+fn set_color_opacity(color: &mut Rgba, opacity: f32) {
+    color.a = opacity;
+}
+
 fn apply_window_material(
     ui: &mut WorkbenchTheme,
     editor: &mut EditorTheme,
@@ -172,30 +178,30 @@ fn apply_window_material(
         cap_color_opacity(color, material.panel_tint_opacity);
     }
     cap_color_opacity(&mut ui.surface_elevated, material.elevated_tint_opacity);
-    cap_color_opacity(&mut ui.hover_surface, material.hover_overlay_opacity);
-    cap_color_opacity(&mut ui.active_surface, material.active_overlay_opacity);
-    cap_color_opacity(&mut ui.selection, material.selection_overlay_opacity);
+    set_color_opacity(&mut ui.hover_surface, material.hover_overlay_opacity);
+    set_color_opacity(&mut ui.active_surface, material.active_overlay_opacity);
+    set_color_opacity(&mut ui.selection, material.selection_overlay_opacity);
 
     cap_color_opacity(&mut editor.background, material.panel_tint_opacity);
-    cap_color_opacity(&mut editor.active_line, material.hover_overlay_opacity);
+    set_color_opacity(&mut editor.active_line, material.hover_overlay_opacity);
 
     cap_color_opacity(&mut terminal.background, material.panel_tint_opacity);
     if let Some(selection_background) = &mut terminal.selection_background {
-        cap_color_opacity(selection_background, material.selection_overlay_opacity);
+        set_color_opacity(selection_background, material.selection_overlay_opacity);
     }
-    cap_color_opacity(
+    set_color_opacity(
         &mut terminal.search_background,
         material.selection_overlay_opacity,
     );
-    cap_color_opacity(
+    set_color_opacity(
         &mut terminal.focused_search_background,
         material.focused_overlay_opacity,
     );
-    cap_color_opacity(
+    set_color_opacity(
         &mut terminal.hint_start_background,
         material.selection_overlay_opacity,
     );
-    cap_color_opacity(
+    set_color_opacity(
         &mut terminal.hint_end_background,
         material.selection_overlay_opacity,
     );
@@ -360,6 +366,7 @@ impl ThemeRuntime {
             semantic_escape_chars: self.terminal_settings.semantic_escape_chars.clone(),
             osc52_policy: self.terminal_settings.osc52_policy,
             kitty_keyboard: self.terminal_settings.kitty_keyboard,
+            start_in_vi_mode: false,
             hint_alphabet: self.terminal_settings.hint_alphabet.clone(),
             hints: self.terminal_settings.hints.clone(),
             colors: self.terminal.to_color_palette(),

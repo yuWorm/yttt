@@ -265,6 +265,10 @@ impl Editor {
         }
     }
 
+    pub fn is_focused(&self, window: &Window, cx: &App) -> bool {
+        self.focused_edit_target(window, cx).is_some()
+    }
+
     pub fn set_source_selection(&mut self, selection: SourceSelection, cx: &mut Context<Self>) {
         let snapshot = UndoSelectionSnapshot {
             range: selection.range.clone(),

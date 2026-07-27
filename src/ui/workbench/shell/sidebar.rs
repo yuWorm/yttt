@@ -127,19 +127,22 @@ pub fn visible_project_items(workspace: &Workspace) -> Vec<ProjectSidebarItem> {
         .collect()
 }
 
-pub fn project_sidebar<SelectH, SelectF, ContextH, ContextF, ToggleH>(
+pub fn project_sidebar<FocusH, SelectH, SelectF, ContextH, ContextF, ToggleH>(
     workspace: &Workspace,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
     text: UiText,
     action_context: FocusHandle,
+    has_keyboard_focus: bool,
     expanded_width: f32,
     collapsed: bool,
+    on_focus_sidebar: FocusH,
     on_toggle_sidebar: ToggleH,
     mut on_select_project: SelectF,
     mut on_context_project: ContextF,
 ) -> impl IntoElement
 where
+    FocusH: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
     SelectH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     SelectF: FnMut(String) -> SelectH,
     ContextH: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
@@ -159,6 +162,7 @@ where
         ))
     };
     let mut sidebar = div()
+        .on_mouse_down(MouseButton::Left, on_focus_sidebar)
         .flex()
         .flex_col()
         .flex_none()
@@ -191,6 +195,7 @@ where
             collapsed,
             theme,
             ui_style,
+            has_keyboard_focus,
             text,
             action_context.clone(),
             on_click,
@@ -244,6 +249,7 @@ fn project_sidebar_item<H, C>(
     collapsed: bool,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
+    has_keyboard_focus: bool,
     text: UiText,
     action_context: FocusHandle,
     on_select_project: H,
@@ -254,10 +260,12 @@ where
     C: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 {
     let row_style = yttt_row_style(YtttRowKind::Sidebar, item.state, true, theme, ui_style);
+    let focused_selection = item.state == SelectableState::Active && has_keyboard_focus;
 
     div()
         .id(("project-sidebar-item", index))
         .flex()
+        .relative()
         .items_center()
         .justify_between()
         .gap(ui_style.spacing.md)
@@ -271,6 +279,17 @@ where
         .hover(move |this| this.bg(row_style.hover_background))
         .on_click(on_select_project)
         .on_mouse_down(MouseButton::Right, on_context_project)
+        .children(focused_selection.then(|| {
+            div()
+                .debug_selector(|| "project-sidebar-focus-indicator".to_string())
+                .absolute()
+                .left(gpui::px(2.0))
+                .top(gpui::px(6.0))
+                .bottom(gpui::px(6.0))
+                .w(gpui::px(2.0))
+                .rounded_full()
+                .bg(theme.accent)
+        }))
         .child(
             div()
                 .flex()

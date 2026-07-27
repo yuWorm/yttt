@@ -274,11 +274,26 @@ pub(super) fn load_keybindings_messages(
 pub(super) fn load_keybindings_editor_state(
     paths: &AppConfigPaths,
     registry: &CommandRegistry,
+    text: &UiText,
 ) -> KeybindingsEditorState {
-    let config = load_keybindings(paths, registry)
-        .map(|loaded| loaded.config)
-        .unwrap_or_else(|_| crate::config::keybindings::default_keybindings());
-    KeybindingsEditorState::new(config, registry.clone())
+    match load_keybindings(paths, registry) {
+        Ok(loaded) if loaded.warnings.is_empty() => {
+            KeybindingsEditorState::new(loaded.config, registry.clone())
+        }
+        Ok(loaded) => {
+            let warning = format_keybinding_warning_lines(&loaded.warnings, text).join("; ");
+            KeybindingsEditorState::with_load_error(
+                crate::config::keybindings::default_keybindings(),
+                registry.clone(),
+                warning,
+            )
+        }
+        Err(error) => KeybindingsEditorState::with_load_error(
+            crate::config::keybindings::default_keybindings(),
+            registry.clone(),
+            error.to_string(),
+        ),
+    }
 }
 
 pub(super) fn load_app_settings_messages(paths: &AppConfigPaths) -> (AppSettings, Vec<String>) {
@@ -345,6 +360,9 @@ pub(super) fn format_settings_warning_line(warning: &SettingsLoadWarning) -> Str
         SettingsLoadWarning::InvalidEditorValue { field } => {
             format!("Settings editor.{field} is invalid; using default")
         }
+        SettingsLoadWarning::InvalidVimValue { field } => {
+            format!("Settings vim.{field} is invalid; using default")
+        }
         SettingsLoadWarning::InvalidProjectPanelValue { field } => {
             format!("Settings project_panel.{field} is invalid; using default")
         }
@@ -402,6 +420,7 @@ pub(super) fn format_keybinding_warning_lines(
                 "{}: {command}",
                 text.get(UiTextKey::SettingsInvalidCommandId)
             ),
+            KeybindingLoadWarning::InvalidBinding(message) => message.clone(),
         })
         .collect()
 }

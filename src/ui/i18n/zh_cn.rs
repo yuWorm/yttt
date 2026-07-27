@@ -413,8 +413,18 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsEditorSoftWrapDescription => "按编辑器可用宽度换行显示长行。",
         UiTextKey::SettingsEditorLineNumbers => "行号",
         UiTextKey::SettingsEditorLineNumbersDescription => "在项目文件中显示行号。",
-        UiTextKey::SettingsEditorVimMode => "Vim 模式",
-        UiTextKey::SettingsEditorVimModeDescription => "在项目代码编辑器中使用 Vim 模态键位。",
+        UiTextKey::SettingsVimMode => "Vim 模式",
+        UiTextKey::SettingsVimModeDescription => {
+            "选择唯一的 Vim 模式：全局模式统一编辑器、终端、项目树、设置页、面板、标签和命令面板；仅编辑器模式只在项目编辑器中启用 Vim；禁用则完全关闭。"
+        }
+        UiTextKey::SettingsVimQuickStart => "Vim 快速上手",
+        UiTextKey::SettingsVimQuickStartDescription => {
+            "全局模式：Ctrl-[ 或 Escape 进入普通模式；i 返回插入模式或终端输入；Ctrl-W H/J/K/L 在窗格、工作区与项目树之间切换焦点；项目树中 j/k 移动条目，h/l 折叠、展开或打开；gt/gT 切换标签；Leader 命令用于打开文件、命令面板和标签。"
+        }
+        UiTextKey::SettingsVimLeader => "Vim Leader 键",
+        UiTextKey::SettingsVimLeaderDescription => {
+            "默认为 Space。在 keybindings.toml 顶层设置 leader = \"...\"，并在多键序列中使用 <leader>；修改后会自动重载。"
+        }
         UiTextKey::SettingsEditorAutosave => "自动保存",
         UiTextKey::SettingsEditorAutosaveDescription => "选择编辑文件的自动保存时机。",
         UiTextKey::SettingsEditorAutosaveOff => "关闭",
@@ -499,10 +509,11 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsUnbound => "未绑定",
         UiTextKey::SettingsConflict => "冲突",
         UiTextKey::SettingsKeybindingDialogTitle => "编辑快捷键",
-        UiTextKey::SettingsKeybindingRecorderPrompt => "请按下快捷键",
+        UiTextKey::SettingsKeybindingRecorderPrompt => "请按下按键序列",
         UiTextKey::SettingsKeybindingRecorderHint => {
-            "首次录制会替换当前绑定；继续按键可添加备用快捷键。单独按修饰键不会被录制。"
+            "连续按键会组成一个序列（例如 Space F F）。录制另一套快捷键前，请先选择“添加备用键”。首次录制会替换当前绑定；单独按修饰键不会被录制。"
         }
+        UiTextKey::SettingsAddKeybindingAlternative => "添加备用键",
         UiTextKey::SettingsClearKeybindings => "清除",
         UiTextKey::SettingsConflictingKeybinding => "快捷键冲突",
         UiTextKey::SettingsInvalidCommandId => "无效的命令 ID",

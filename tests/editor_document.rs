@@ -1,6 +1,7 @@
 use gpui::{
-    AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, KeyBinding,
-    ParentElement as _, Render, StatefulInteractiveElement as _, Window, actions, div,
+    AppContext as _, Context, Entity, EntityInputHandler as _, InteractiveElement as _,
+    IntoElement, KeyBinding, ParentElement as _, Render, StatefulInteractiveElement as _, Window,
+    actions, div,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -226,6 +227,12 @@ fn vim_mode_blocks_normal_input_and_handles_unicode_edits(cx: &mut gpui::TestApp
             gpui_component::input::InputCursorShape::Block
         );
     });
+
+    input.update_in(cx, |input, window, input_cx| {
+        input.replace_and_mark_text_in_range(None, "中文", Some(2..2), window, input_cx);
+        input.replace_text_in_range(None, "中文", window, input_cx);
+    });
+    assert_eq!(cx.read(|app| input.read(app).value()), "a界b");
 
     cx.simulate_keystrokes("l x");
     assert_eq!(cx.read(|app| input.read(app).value().to_string()), "ab");

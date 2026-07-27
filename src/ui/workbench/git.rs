@@ -199,48 +199,90 @@ impl WorkbenchView {
         true
     }
 
-    pub(super) fn handle_git_diff_key_down(
+    pub(super) fn on_git_diff_close(
         &mut self,
-        event: &KeyDownEvent,
+        _: &GitDiffClose,
+        _window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> bool {
-        if self.overlays.git_diff_panel.is_none() {
-            return false;
+    ) {
+        self.close_git_diff_panel();
+        cx.notify();
+        cx.stop_propagation();
+    }
+
+    pub(super) fn on_git_diff_toggle_stage_mode(
+        &mut self,
+        _: &GitDiffToggleStageMode,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mode = match self.git_diff_mode().unwrap_or_default() {
+            GitDiffMode::Unstaged => GitDiffMode::Staged,
+            GitDiffMode::Staged => GitDiffMode::Unstaged,
+        };
+        self.set_git_diff_mode(mode);
+        cx.notify();
+        cx.stop_propagation();
+    }
+
+    pub(super) fn on_git_diff_toggle_view_mode(
+        &mut self,
+        _: &GitDiffToggleViewMode,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mode = match self.git_diff_view_mode().unwrap_or_default() {
+            GitDiffViewMode::Unified => GitDiffViewMode::Split,
+            GitDiffViewMode::Split => GitDiffViewMode::Unified,
+        };
+        self.set_git_diff_view_mode(mode);
+        cx.notify();
+        cx.stop_propagation();
+    }
+
+    pub(super) fn on_git_diff_toggle_whitespace(
+        &mut self,
+        _: &GitDiffToggleWhitespace,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_git_diff_whitespace();
+        cx.notify();
+        cx.stop_propagation();
+    }
+
+    pub(super) fn on_git_diff_select_previous_file(
+        &mut self,
+        _: &GitDiffSelectPreviousFile,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_relative_git_diff_file(false);
+        cx.notify();
+        cx.stop_propagation();
+    }
+
+    pub(super) fn on_git_diff_select_next_file(
+        &mut self,
+        _: &GitDiffSelectNextFile,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_relative_git_diff_file(true);
+        cx.notify();
+        cx.stop_propagation();
+    }
+
+    pub(super) fn on_git_diff_copy_selected(
+        &mut self,
+        _: &GitDiffCopySelected,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(text) = self.selected_git_diff_text() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
-        let key = event.keystroke.key.as_str();
-        match key {
-            "escape" => self.close_git_diff_panel(),
-            "tab" => {
-                let mode = match self.git_diff_mode().unwrap_or_default() {
-                    GitDiffMode::Unstaged => GitDiffMode::Staged,
-                    GitDiffMode::Staged => GitDiffMode::Unstaged,
-                };
-                self.set_git_diff_mode(mode);
-            }
-            "s" => {
-                let mode = match self.git_diff_view_mode().unwrap_or_default() {
-                    GitDiffViewMode::Unified => GitDiffViewMode::Split,
-                    GitDiffViewMode::Split => GitDiffViewMode::Unified,
-                };
-                self.set_git_diff_view_mode(mode);
-            }
-            "w" => {
-                self.toggle_git_diff_whitespace();
-            }
-            "up" => {
-                self.select_relative_git_diff_file(false);
-            }
-            "down" => {
-                self.select_relative_git_diff_file(true);
-            }
-            "c" if event.keystroke.modifiers.platform || event.keystroke.modifiers.control => {
-                if let Some(text) = self.selected_git_diff_text() {
-                    cx.write_to_clipboard(ClipboardItem::new_string(text));
-                }
-            }
-            _ => return false,
-        }
-        true
+        cx.stop_propagation();
     }
 
     fn select_relative_git_diff_file(&mut self, forward: bool) -> bool {
@@ -696,6 +738,7 @@ impl WorkbenchView {
                     div()
                         .debug_selector(|| "git-diff-panel".to_string())
                         .track_focus(&focus_handle)
+                        .key_context(GIT_DIFF_CONTEXT)
                         .flex()
                         .flex_col()
                         .w(relative(0.96))

@@ -3,7 +3,8 @@ use std::{collections::HashMap, path::PathBuf};
 use crate::{model::ids::ProjectId, ui::project_tree::ProjectFileTree};
 
 use super::work_area::{
-    TabGroupId, WorkAreaDropPlacement, WorkAreaNode, WorkAreaSplitId, WorkAreaState,
+    TabGroupId, WorkAreaDropEdge, WorkAreaDropPlacement, WorkAreaNode, WorkAreaSplitId,
+    WorkAreaState,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -76,6 +77,10 @@ impl ProjectWorkItemSession {
 
     pub fn work_area(&self) -> &WorkAreaNode {
         self.work_area.root()
+    }
+
+    pub fn adjacent_group_id(&self, edge: WorkAreaDropEdge) -> Option<TabGroupId> {
+        self.work_area.adjacent_group_id(edge)
     }
 
     pub fn activation_history(&self) -> &[WorkItemId] {

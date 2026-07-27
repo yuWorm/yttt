@@ -221,6 +221,7 @@ fn settings_general_rows(
     let theme = root.theme_runtime().ui;
     let text = root.ui_text;
     let language_select = root.settings_language_select(window, cx);
+    let vim_mode_select = root.settings_vim_mode_select(window, cx);
     let command_input = root.settings_new_tab_command_input(window, cx);
     let command_input_for_add = command_input.clone();
     let command_add_control = div()
@@ -374,6 +375,24 @@ fn settings_general_rows(
             )
             .into_any_element(),
         ))
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsVimMode),
+                text.get(UiTextKey::SettingsVimModeDescription),
+                settings_select_control(
+                    vim_mode_select,
+                    theme,
+                    style.ui_style,
+                    false,
+                    text.get(UiTextKey::SettingsVimMode),
+                )
+                .into_any_element(),
+            )
+            .id("settings-vim-mode-row")
+            .debug_selector(|| "settings-vim-mode-row".to_string()),
+        )
         .child(setting_row(
             style,
             theme,
@@ -951,28 +970,6 @@ fn settings_editor_rows(
             setting_row(
                 style,
                 theme,
-                text.get(UiTextKey::SettingsEditorVimMode),
-                text.get(UiTextKey::SettingsEditorVimModeDescription),
-                settings_switch(
-                    "settings-editor-vim-mode",
-                    root.editor_vim_mode(),
-                    theme,
-                    style.ui_style,
-                    cx.listener(|this, checked: &bool, window, cx| {
-                        if let Err(error) = this.set_editor_vim_mode(*checked, window, cx) {
-                            this.load_error = Some(error.to_string());
-                        }
-                        cx.notify();
-                    }),
-                )
-                .into_any_element(),
-            )
-            .debug_selector(|| "settings-editor-vim-mode-row".to_string()),
-        )
-        .child(
-            setting_row(
-                style,
-                theme,
                 text.get(UiTextKey::SettingsEditorAutosave),
                 text.get(UiTextKey::SettingsEditorAutosaveDescription),
                 settings_select_control(
@@ -1403,6 +1400,7 @@ fn settings_keybinding_rows(
     } else {
         root.settings.keybinding_warning_lines.join("; ")
     };
+    let leader = root.keybinding_leader().to_string();
 
     let mut rows = div()
         .flex()
@@ -1422,6 +1420,35 @@ fn settings_keybinding_rows(
             )
             .into_any_element(),
         ))
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsVimQuickStart),
+                text.get(UiTextKey::SettingsVimQuickStartDescription),
+                settings_value("Ctrl-W · gt · j/k · i/Esc", theme, style.ui_style)
+                    .into_any_element(),
+            )
+            .id("settings-vim-quick-start-row")
+            .debug_selector(|| "settings-vim-quick-start-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsVimLeader),
+                text.get(UiTextKey::SettingsVimLeaderDescription),
+                settings_keybinding_value(
+                    vec![leader],
+                    text.get(UiTextKey::SettingsUnbound),
+                    theme,
+                    style.ui_style,
+                )
+                .into_any_element(),
+            )
+            .id("settings-vim-leader-row")
+            .debug_selector(|| "settings-vim-leader-row".to_string()),
+        )
         .child(setting_row(
             style,
             theme,
@@ -1492,7 +1519,7 @@ fn settings_keybinding_rows(
                             theme,
                             cx,
                             cx.listener(move |this, _, _window, cx| {
-                                let _ = this.open_keybinding_edit_dialog(command);
+                                let _ = this.open_keybinding_action_edit_dialog(command);
                                 cx.notify();
                             }),
                         ))
@@ -1503,7 +1530,7 @@ fn settings_keybinding_rows(
                             theme,
                             cx,
                             cx.listener(move |this, _, _window, cx| {
-                                let _ = this.reset_keybinding_command_keys(command);
+                                let _ = this.reset_keybinding_action_keys(command);
                                 cx.notify();
                             }),
                         ))
@@ -1514,7 +1541,7 @@ fn settings_keybinding_rows(
                             theme,
                             cx,
                             cx.listener(move |this, _, _window, cx| {
-                                let _ = this.delete_keybinding_command_keys(command);
+                                let _ = this.delete_keybinding_action_keys(command);
                                 cx.notify();
                             }),
                         )),

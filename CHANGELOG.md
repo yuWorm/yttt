@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Added
+
+- Added a unified, live-reloadable GPUI keymap covering commands, palettes, project tree, Git diff, terminal, editor Vim, and modal UI actions, with contextual sequences and per-action unbinding.
+- Added a single `Global` / `Editor only` / `Disabled` Vim setting backed by one window-level mode controller and a persistent mode/context status bar; Global mode spans editors, terminals, project trees, settings, panes, tabs, and command palettes.
+- Added configurable Vim leader expansion, multi-keystroke shortcut recording, alternative shortcut sequences, and an in-app quick-start guide for the unified keymap.
+- Added transient pressed-key feedback to the Vim status bar for normal-mode commands and pending multi-key sequences without echoing insert or terminal text.
+- Added configurable neo-tree-style Global Vim controls for the Projects list (`j/k`, `gg/G`) and project files (`j/k`, `h/l`, `gg/G`, Enter/`o`, create, rename, delete, copy, cut, paste, collapse-all, hidden-file, refresh, finder, and panel-close actions).
+
+### Changed
+
+- Legacy workspace, settings, editor, and terminal Vim toggles now migrate to the least restrictive equivalent unified mode, and legacy `WorkspaceVim` keybinding contexts migrate to the Global scope.
+
+### Fixed
+
+- Fixed schema-4 `ctrl-w` pane-close overrides shadowing the `ctrl-w h/j/k/l` sequence; migration now removes the obsolete single-key override so pending Vim prefixes resolve correctly.
+- Fixed Vim status-bar key feedback to preserve printable key case, so `g` and `G` remain distinguishable.
+- Fixed `ctrl-w h/j/k/l` navigation to cross the left Projects list, edge terminal panes, adjacent work-area groups, and the right project tree, with the standard held-Control variants `ctrl-w ctrl-h/j/k/l`; focus transitions now update in one frame and use restrained pane-edge, panel-header, and current-row indicators instead of stacked full-panel outlines.
+- Fixed active and selected states losing contrast on translucent backgrounds by deriving interaction overlays from backdrop visibility and using focused foreground colors for keyboard-owned rows.
+- Fixed platform text and IME composition reaching palette inputs or terminal panes while Global Vim is in Normal mode; Insert and Terminal modes continue to accept composed text.
+
 ## 0.2.0 - 2026-07-18
 
 ### Added

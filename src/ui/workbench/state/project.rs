@@ -20,6 +20,7 @@ pub(in super::super) struct ProjectTreeClipboard {
 pub(in super::super) struct ProjectControllerState {
     pub(in super::super) layout_source_messages: HashMap<ProjectId, String>,
     pub(in super::super) pending_editor_focus_document_id: Option<DocumentId>,
+    pub(in super::super) pending_project_tree_focus: bool,
     pub(in super::super) project_editor_runtime: ProjectEditorRuntime,
     pub(in super::super) services: HashMap<ProjectId, ProjectServices>,
     pub(in super::super) pending_project_tree_loads: Vec<(ProjectId, DirectoryLoadRequest)>,

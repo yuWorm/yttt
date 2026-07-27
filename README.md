@@ -49,6 +49,40 @@ remain visible while only the body hides. Open in-file search with the **Find** 
 - Open Find with the **Find** toolbar control, `⌘F` on macOS, and `Ctrl+F` elsewhere; confirm
   next and previous navigate highlighted matches.
 
+## Keybindings and Vim Quick Start
+
+Open **Settings → Keybindings** to search commands, record one or more shortcut sequences,
+change the Vim leader key, and save. Changes take effect immediately. Under **Settings → Editor**,
+set **Vim mode** to **Global** for one modal keymap across editors, terminals, project trees,
+settings, panes, tabs, and palettes; choose **Editor only** to keep Vim behavior inside project
+editors, or **Disabled** to turn it off.
+
+For a minimal manual configuration, edit `<app-config>/keybindings.toml`:
+
+```toml
+schema_version = 6
+leader = "space"
+
+[[bindings]]
+keys = "<leader> f"
+command = "file.find"
+context = "Workspace"
+
+[[bindings]]
+keys = "<leader> p"
+command = "command_palette.open"
+context = "Workspace"
+```
+
+`<leader>` expands to the configured leader key. User entries are sparse overrides layered over
+the defaults; set `unbind = true` on an entry to remove its exact default assignment. The status
+bar shows the current Vim mode and pending multi-key sequence. In the focused **Projects** list,
+`j/k` and `gg/G` select opened projects. In the focused project tree, `j/k`, `h/l`, `gg/G`,
+Enter/`o`, `a/A`, `r/d`, `y/x/p`, `z`, `H/R`, `/`, and `q` provide configurable
+neo-tree-style navigation and file operations. `Ctrl-W h/j/k/l` traverses the Projects list,
+work-area panes and groups, and the right project tree. See [Usage](docs/usage.md#keybindings) for
+config paths and command IDs.
+
 ## SSH Projects
 
 Use **Open SSH Project** from the command palette, empty-workbench action, or project sidebar

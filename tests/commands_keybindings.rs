@@ -20,7 +20,9 @@ use yttt::model::{
 };
 use yttt::ui::i18n::{Locale, UiText};
 use yttt::ui::interaction::actions::{
-    app_startup_keybindings, default_ui_keybinding_specs, runtime_command_for_keystroke,
+    BindableActionId, CompiledKeybindingAction, app_startup_keybindings, bindable_registry,
+    compile_layered_keybinding_specs, default_ui_keybinding_specs, layered_ui_keybinding_specs,
+    runtime_command_for_keystroke,
 };
 use yttt::ui::interaction::{
     input_owner::InputOwnerKind, key_dispatch::workspace_command_for_keystroke,
@@ -29,7 +31,12 @@ use yttt::ui::settings::keybinding_display::{
     KeybindingDisplayPlatform, display_keybindings_for_platform, recorded_keybinding,
 };
 use yttt::ui::settings::keybindings::{KeybindingEditError, KeybindingsEditorState};
+use yttt::ui::vim::{
+    VIM_CONTROL_CONTEXT, VIM_NORMAL_CONTEXT, VIM_PALETTE_NORMAL_CONTEXT,
+    VIM_PROJECT_TREE_NORMAL_CONTEXT, VIM_PROJECTS_NORMAL_CONTEXT,
+};
 use yttt::ui::workbench::shell::split_view::visible_pane_titles;
+use yttt_terminal::{TERMINAL_HINT_KEY_CONTEXT, TERMINAL_SEARCH_KEY_CONTEXT};
 
 fn local_project(path: PathBuf) -> ProjectDescriptor {
     let location = ProjectLocation::local(path);
@@ -152,14 +159,21 @@ fn command_availability_tracks_active_surface() {
     }
 
     for command in [
-        CommandId::TabRename,
-        CommandId::PaneSplitHorizontal,
-        CommandId::PaneSplitVertical,
-        CommandId::PaneClose,
         CommandId::PaneFocusLeft,
         CommandId::PaneFocusRight,
         CommandId::PaneFocusUp,
         CommandId::PaneFocusDown,
+    ] {
+        assert!(!command.availability_for_context(no_surface).enabled);
+        assert!(command.availability_for_context(terminal).enabled);
+        assert!(command.availability_for_context(file).enabled);
+    }
+
+    for command in [
+        CommandId::TabRename,
+        CommandId::PaneSplitHorizontal,
+        CommandId::PaneSplitVertical,
+        CommandId::PaneClose,
         CommandId::PaneResizeLeft,
         CommandId::PaneResizeRight,
         CommandId::PaneResizeUp,
@@ -405,41 +419,340 @@ fn default_keybindings_include_tab_new_shortcuts() {
 }
 
 #[test]
-fn default_keybindings_include_context_close_shortcuts() {
+fn default_keybindings_reserve_ctrl_w_for_vim_sequences() {
     let config = default_keybindings();
 
     assert_has_config_binding(&config, "cmd-w", "pane.close");
-    assert_has_config_binding(&config, "ctrl-w", "pane.close");
     assert_has_ui_binding("cmd-w", "pane.close");
-    assert_has_ui_binding("ctrl-w", "pane.close");
+    assert!(
+        !config
+            .bindings
+            .iter()
+            .any(|binding| { binding.keys == "ctrl-w" && binding.command == "pane.close" })
+    );
+    assert!(
+        !default_ui_keybinding_specs()
+            .iter()
+            .any(|binding| { binding.keys == "ctrl-w" && binding.command == CommandId::PaneClose })
+    );
 }
 
 #[test]
-fn user_keybindings_specs_override_default_ui_bindings() {
+fn layered_keybindings_apply_sparse_overrides_sequences_and_unbinds() {
     let config: KeybindingsConfig = toml::from_str(
         r#"
         [[bindings]]
+        keys = "cmd-j"
+        command = "tab.palette"
+        context = "Workspace"
+        unbind = true
+
+        [[bindings]]
         keys = "cmd-l"
         command = "tab.palette"
+        context = "Workspace"
+
+        [[bindings]]
+        keys = "g x"
+        command = "tab.next"
+        context = "WorkspaceVim && !Input"
+    "#,
+    )
+    .unwrap();
+    let registry = bindable_registry();
+    let compiled = compile_layered_keybinding_specs(&config, &registry);
+    let specs = layered_ui_keybinding_specs(&config, &registry);
+
+    assert!(compiled.iter().any(|binding| {
+        binding.keys == "cmd-j"
+            && binding.context.as_deref() == Some("Workspace")
+            && binding.action
+                == CompiledKeybindingAction::Unbind(Some(BindableActionId::Command(
+                    CommandId::TabPalette,
+                )))
+    }));
+    assert!(specs.iter().any(|spec| {
+        spec.keys == "cmd-l"
+            && spec.command == CommandId::TabPalette
+            && spec.context.as_deref() == Some("Workspace")
+    }));
+    assert!(!specs.iter().any(|spec| {
+        spec.keys == "cmd-j"
+            && spec.command == CommandId::TabPalette
+            && spec.context.as_deref() == Some("Workspace")
+    }));
+    assert!(specs.iter().any(|spec| {
+        spec.keys == "g x"
+            && spec.command == CommandId::TabNext
+            && spec.context.as_deref() == Some("WorkspaceVim && !Input")
+    }));
+}
+
+#[test]
+fn configurable_leader_expands_default_and_user_sequences() {
+    let config: KeybindingsConfig = toml::from_str(
+        r#"
+        leader = "ctrl-space"
+
+        [[bindings]]
+        keys = "<leader> x"
+        command = "tab.next"
+        context = "YtttVim && yttt_vim_scope == global && yttt_vim_control == true"
+        "#,
+    )
+    .unwrap();
+
+    let specs = layered_ui_keybinding_specs(&config, &bindable_registry());
+
+    assert!(specs.iter().any(|spec| {
+        spec.keys == "ctrl-space f f"
+            && spec.command == CommandId::FileFind
+            && spec.context.as_deref() == Some(VIM_CONTROL_CONTEXT)
+    }));
+    assert!(specs.iter().any(|spec| {
+        spec.keys == "ctrl-space x"
+            && spec.command == CommandId::TabNext
+            && spec.context.as_deref() == Some(VIM_CONTROL_CONTEXT)
+    }));
+    assert!(!specs.iter().any(|spec| spec.keys.contains("<leader>")));
+}
+
+#[test]
+fn conflicts_compare_resolved_leader_sequences() {
+    let config: KeybindingsConfig = toml::from_str(
+        r#"
+        leader = "ctrl-space"
+
+        [[bindings]]
+        keys = "<leader> p"
+        command = "tab.palette"
+        context = "Workspace"
+
+        [[bindings]]
+        keys = "ctrl-space p"
+        command = "pane.palette"
+        context = "Workspace"
+        "#,
+    )
+    .unwrap();
+
+    let conflicts = config.conflicts();
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0].keys, "ctrl-space p");
+}
+
+#[test]
+fn recursive_leader_is_rejected() {
+    let config: KeybindingsConfig = toml::from_str(
+        r#"
+        leader = "<leader>"
+        "#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        config.invalid_bindings(),
+        vec!["invalid leader key \"<leader>\"".to_string()]
+    );
+}
+
+#[test]
+fn layered_keybindings_use_last_binding_in_the_same_context() {
+    let config: KeybindingsConfig = toml::from_str(
+        r#"
+        [[bindings]]
+        keys = "cmd-p"
+        command = "tab.palette"
+        context = "Workspace"
     "#,
     )
     .unwrap();
 
-    let specs = yttt::ui::interaction::actions::ui_keybinding_specs_from_config(
-        &config,
-        &default_registry(),
-    );
+    let specs = layered_ui_keybinding_specs(&config, &bindable_registry());
 
-    assert!(
-        specs
-            .iter()
-            .any(|spec| spec.keys == "cmd-l" && spec.command == CommandId::TabPalette)
-    );
-    assert!(
-        !specs
-            .iter()
-            .any(|spec| spec.keys == "cmd-j" && spec.command == CommandId::TabPalette)
-    );
+    assert!(specs.iter().any(|spec| {
+        spec.keys == "cmd-p"
+            && spec.command == CommandId::TabPalette
+            && spec.context.as_deref() == Some("Workspace")
+    }));
+    assert!(!specs.iter().any(|spec| {
+        spec.keys == "cmd-p"
+            && spec.command == CommandId::FileFind
+            && spec.context.as_deref() == Some("Workspace")
+    }));
+}
+
+#[test]
+fn action_specific_unbind_preserves_another_action_in_the_same_slot() {
+    let config: KeybindingsConfig = toml::from_str(
+        r#"
+        schema_version = 5
+
+        [[bindings]]
+        keys = "cmd-p"
+        command = "tab.palette"
+        context = "Workspace"
+
+        [[bindings]]
+        keys = "cmd-p"
+        command = "file.find"
+        context = "Workspace"
+        unbind = true
+        "#,
+    )
+    .unwrap();
+
+    let compiled = compile_layered_keybinding_specs(&config, &bindable_registry());
+
+    assert!(compiled.iter().any(|binding| {
+        binding.keys == "cmd-p"
+            && binding.context.as_deref() == Some("Workspace")
+            && binding.action
+                == CompiledKeybindingAction::Bind(BindableActionId::Command(CommandId::TabPalette))
+    }));
+    assert!(compiled.iter().any(|binding| {
+        binding.keys == "cmd-p"
+            && binding.context.as_deref() == Some("Workspace")
+            && binding.action
+                == CompiledKeybindingAction::Unbind(Some(BindableActionId::Command(
+                    CommandId::FileFind,
+                )))
+    }));
+}
+
+#[test]
+fn contexts_allow_the_same_keys_to_bind_different_actions() {
+    let config: KeybindingsConfig = toml::from_str(
+        r#"
+        [[bindings]]
+        keys = "j"
+        command = "settings.vim.next_group"
+        context = "YtttSettingsVim && !Input"
+
+        [[bindings]]
+        keys = "j"
+        command = "terminal.vi.motion.down"
+        context = "YtttTerminalVi"
+    "#,
+    )
+    .unwrap();
+
+    assert!(config.conflicts().is_empty());
+    let specs = layered_ui_keybinding_specs(&config, &bindable_registry());
+    assert!(specs.iter().any(|spec| {
+        spec.keys == "j"
+            && spec.command.as_str() == "settings.vim.next_group"
+            && spec.context.as_deref() == Some("YtttSettingsVim && !Input")
+    }));
+    assert!(specs.iter().any(|spec| {
+        spec.keys == "j"
+            && spec.command.as_str() == "terminal.vi.motion.down"
+            && spec.context.as_deref() == Some("YtttTerminalVi")
+    }));
+}
+
+#[test]
+fn bindable_catalog_covers_commands_and_modal_ui_actions() {
+    let actions = BindableActionId::all().collect::<Vec<_>>();
+    for &command in CommandId::ALL {
+        assert!(
+            actions.contains(&BindableActionId::Command(command)),
+            "missing bindable action for {}",
+            command.as_str()
+        );
+    }
+    for id in [
+        "palette.select_next",
+        "project_tree.new_file",
+        "tab.close_all",
+        "terminal.vi.motion.down",
+        "vim.mode.normal",
+        "vim.mode.terminal",
+        "editor.vim.motion.down",
+        "settings.vim.next_group",
+        "projects.focus",
+        "projects.vim.previous",
+        "projects.vim.next",
+        "projects.vim.first",
+        "projects.vim.last",
+        "project_tree.vim.down",
+        "project_tree.vim.left",
+        "project_tree.vim.right",
+        "project_tree.vim.open",
+        "project_tree.collapse_all",
+        "project_tree.toggle_hidden",
+    ] {
+        assert!(
+            BindableActionId::from_str_id(id).is_some(),
+            "missing bindable action {id}"
+        );
+    }
+    assert!(default_ui_keybinding_specs().iter().any(|spec| {
+        spec.keys == "g t"
+            && spec.command == CommandId::TabNext
+            && spec.context.as_deref() == Some(VIM_NORMAL_CONTEXT)
+    }));
+    for (keys, command) in [
+        ("ctrl-w h", CommandId::PaneFocusLeft),
+        ("ctrl-w j", CommandId::PaneFocusDown),
+        ("ctrl-w k", CommandId::PaneFocusUp),
+        ("ctrl-w l", CommandId::PaneFocusRight),
+        ("ctrl-w ctrl-h", CommandId::PaneFocusLeft),
+        ("ctrl-w ctrl-j", CommandId::PaneFocusDown),
+        ("ctrl-w ctrl-k", CommandId::PaneFocusUp),
+        ("ctrl-w ctrl-l", CommandId::PaneFocusRight),
+    ] {
+        assert!(default_ui_keybinding_specs().iter().any(|spec| {
+            spec.keys == keys
+                && spec.command == command
+                && spec.context.as_deref() == Some(VIM_NORMAL_CONTEXT)
+        }));
+    }
+    for (keys, action) in [
+        ("j", "projects.vim.next"),
+        ("k", "projects.vim.previous"),
+        ("g g", "projects.vim.first"),
+        ("shift-g", "projects.vim.last"),
+    ] {
+        assert!(default_ui_keybinding_specs().iter().any(|spec| {
+            spec.keys == keys
+                && spec.command.as_str() == action
+                && spec.context.as_deref() == Some(VIM_PROJECTS_NORMAL_CONTEXT)
+        }));
+    }
+    for (keys, action) in [
+        ("j", "project_tree.vim.down"),
+        ("k", "project_tree.vim.up"),
+        ("h", "project_tree.vim.left"),
+        ("l", "project_tree.vim.right"),
+        ("enter", "project_tree.vim.open"),
+        ("o", "project_tree.vim.open"),
+        ("g g", "project_tree.vim.first"),
+        ("shift-g", "project_tree.vim.last"),
+        ("z", "project_tree.collapse_all"),
+        ("a", "project_tree.new_file"),
+        ("shift-a", "project_tree.new_directory"),
+        ("r", "project_tree.rename"),
+        ("d", "project_tree.delete"),
+        ("y", "project_tree.copy"),
+        ("x", "project_tree.cut"),
+        ("p", "project_tree.paste"),
+        ("shift-h", "project_tree.toggle_hidden"),
+        ("shift-r", "project_panel.refresh"),
+        ("q", "project_panel.toggle"),
+        ("/", "file.find"),
+    ] {
+        assert!(default_ui_keybinding_specs().iter().any(|spec| {
+            spec.keys == keys
+                && spec.command.as_str() == action
+                && spec.context.as_deref() == Some(VIM_PROJECT_TREE_NORMAL_CONTEXT)
+        }));
+    }
+    assert!(default_ui_keybinding_specs().iter().any(|spec| {
+        spec.keys == "j"
+            && spec.command == BindableActionId::PaletteNext
+            && spec.context.as_deref() == Some(VIM_PALETTE_NORMAL_CONTEXT)
+    }));
 }
 
 #[test]
@@ -516,36 +829,70 @@ fn runtime_keybinding_matcher_uses_current_config_specs_only() {
 }
 
 #[test]
-fn app_startup_keybindings_keep_user_editable_bindings_out_of_gpui_keymap() {
-    assert_eq!(app_startup_keybindings().len(), 17);
+fn app_startup_keybindings_compile_the_complete_default_catalog() {
+    let startup = app_startup_keybindings();
+    assert_eq!(startup.len(), default_ui_keybinding_specs().len());
+    assert!(startup.len() > default_keybindings().bindings.len());
 }
 
 #[test]
-fn load_app_keybindings_missing_file_writes_defaults_without_registering_editable_keys() {
+fn load_app_keybindings_missing_file_compiles_complete_defaults() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
 
     let bindings =
-        yttt::ui::interaction::actions::load_app_keybindings(&paths, &default_registry());
+        yttt::ui::interaction::actions::load_app_keybindings(&paths, &bindable_registry());
 
     assert!(paths.keybindings_file().exists());
     assert_eq!(bindings.len(), app_startup_keybindings().len());
 }
 
 #[test]
-fn missing_keybindings_file_writes_defaults() {
+fn load_app_keybindings_with_warnings_uses_complete_defaults() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(
+        paths.keybindings_file(),
+        r#"
+        schema_version = 5
 
-    let loaded = load_keybindings(&paths, &default_registry()).unwrap();
+        [[bindings]]
+        keys = "cmd-p"
+        command = "tab.palette"
+        context = "Workspace"
 
-    assert_eq!(loaded.config, default_keybindings());
-    assert!(loaded.warnings.is_empty());
-    assert!(paths.keybindings_file().exists());
+        [[bindings]]
+        keys = "cmd-p"
+        command = "project.palette"
+        context = "Workspace"
+        "#,
+    )
+    .unwrap();
+
+    let bindings =
+        yttt::ui::interaction::actions::load_app_keybindings(&paths, &bindable_registry());
+
+    assert_eq!(bindings.len(), app_startup_keybindings().len());
 }
 
 #[test]
-fn legacy_default_keybindings_are_upgraded_with_editor_shortcuts() {
+fn missing_keybindings_file_writes_sparse_overrides() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+
+    let loaded = load_keybindings(&paths, &bindable_registry()).unwrap();
+
+    assert_eq!(loaded.config, KeybindingsConfig::default());
+    assert!(loaded.warnings.is_empty());
+    assert!(paths.keybindings_file().exists());
+    let persisted: KeybindingsConfig =
+        toml::from_str(&std::fs::read_to_string(paths.keybindings_file()).unwrap()).unwrap();
+    assert_eq!(persisted, KeybindingsConfig::default());
+}
+
+#[test]
+fn legacy_default_keybindings_migrate_to_sparse_overrides() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     std::fs::create_dir_all(paths.config_dir()).unwrap();
@@ -565,16 +912,14 @@ fn legacy_default_keybindings_are_upgraded_with_editor_shortcuts() {
 
     let loaded = load_keybindings(&paths, &default_registry()).unwrap();
 
-    assert_eq!(loaded.config.schema_version, KEYBINDINGS_SCHEMA_VERSION);
-    assert_has_config_binding(&loaded.config, "cmd-s", "file.save");
-    assert_has_config_binding(&loaded.config, "ctrl-s", "file.save");
+    assert_eq!(loaded.config, KeybindingsConfig::default());
     let persisted: KeybindingsConfig =
         toml::from_str(&std::fs::read_to_string(paths.keybindings_file()).unwrap()).unwrap();
     assert_eq!(persisted, loaded.config);
 }
 
 #[test]
-fn schema_one_default_keybindings_add_opened_project_shortcuts() {
+fn schema_one_defaults_migrate_to_sparse_overrides() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut legacy = legacy_v2_default_keybindings();
@@ -586,16 +931,14 @@ fn schema_one_default_keybindings_add_opened_project_shortcuts() {
 
     let loaded = load_keybindings(&paths, &default_registry()).unwrap();
 
-    assert_eq!(loaded.config.schema_version, KEYBINDINGS_SCHEMA_VERSION);
-    assert_has_config_binding(&loaded.config, "cmd-alt-p", "project.opened_palette");
-    assert_has_config_binding(&loaded.config, "ctrl-alt-p", "project.opened_palette");
+    assert_eq!(loaded.config, KeybindingsConfig::default());
     let persisted: KeybindingsConfig =
         toml::from_str(&std::fs::read_to_string(paths.keybindings_file()).unwrap()).unwrap();
     assert_eq!(persisted, loaded.config);
 }
 
 #[test]
-fn schema_two_default_keybindings_adopt_file_finder_shortcuts() {
+fn schema_two_defaults_migrate_to_sparse_overrides() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let legacy = legacy_v2_default_keybindings();
@@ -603,11 +946,119 @@ fn schema_two_default_keybindings_adopt_file_finder_shortcuts() {
 
     let loaded = load_keybindings(&paths, &default_registry()).unwrap();
 
+    assert_eq!(loaded.config, KeybindingsConfig::default());
+}
+
+#[test]
+fn schema_three_defaults_migrate_to_sparse_overrides() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let legacy = legacy_v3_default_keybindings();
+    save_keybindings(&paths, &legacy).unwrap();
+
+    let loaded = load_keybindings(&paths, &default_registry()).unwrap();
+
+    assert_eq!(loaded.config, KeybindingsConfig::default());
+}
+
+#[test]
+fn schema_four_sparse_config_remains_sparse() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    save_keybindings(
+        &paths,
+        &KeybindingsConfig {
+            schema_version: 4,
+            leader: "comma".to_string(),
+            bindings: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    let loaded = load_keybindings(&paths, &default_registry()).unwrap();
+
     assert_eq!(loaded.config.schema_version, KEYBINDINGS_SCHEMA_VERSION);
-    assert_has_config_binding(&loaded.config, "cmd-p", "file.find");
-    assert_has_config_binding(&loaded.config, "ctrl-p", "file.find");
-    assert_has_config_binding(&loaded.config, "cmd-shift-p", "command_palette.open");
-    assert_has_config_binding(&loaded.config, "ctrl-shift-p", "command_palette.open");
+    assert_eq!(loaded.config.leader, "comma");
+    assert!(loaded.config.bindings.is_empty());
+    let persisted: KeybindingsConfig =
+        toml::from_str(&std::fs::read_to_string(paths.keybindings_file()).unwrap()).unwrap();
+    assert_eq!(persisted, loaded.config);
+}
+
+#[test]
+fn schema_four_ctrl_w_close_is_removed_for_vim_sequences() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let stale = KeybindingsConfig {
+        schema_version: 4,
+        leader: "space".to_string(),
+        bindings: vec![
+            Keybinding {
+                keys: "ctrl-w".to_string(),
+                command: "pane.close".to_string(),
+                context: Some("Workspace".to_string()),
+                unbind: false,
+            },
+            Keybinding {
+                keys: "cmd-l".to_string(),
+                command: "tab.palette".to_string(),
+                context: Some("Workspace".to_string()),
+                unbind: false,
+            },
+            Keybinding {
+                keys: "cmd-g".to_string(),
+                command: "tab.next".to_string(),
+                context: Some("WorkspaceVim".to_string()),
+                unbind: false,
+            },
+            Keybinding {
+                keys: "cmd-h".to_string(),
+                command: "tab.prev".to_string(),
+                context: Some("Workspace && !WorkspaceVim".to_string()),
+                unbind: false,
+            },
+        ],
+    };
+    save_keybindings(&paths, &stale).unwrap();
+
+    let loaded = load_keybindings(&paths, &default_registry()).unwrap();
+
+    assert_eq!(loaded.config.schema_version, KEYBINDINGS_SCHEMA_VERSION);
+    assert!(
+        !loaded
+            .config
+            .bindings
+            .iter()
+            .any(|binding| { binding.keys == "ctrl-w" && binding.command == "pane.close" })
+    );
+    assert!(loaded.config.bindings.iter().any(|binding| {
+        binding.keys == "cmd-l"
+            && binding.command == "tab.palette"
+            && binding.context.as_deref() == Some("Workspace")
+            && !binding.unbind
+    }));
+    assert!(loaded.config.bindings.iter().any(|binding| {
+        binding.keys == "cmd-g"
+            && binding.command == "tab.next"
+            && binding.context.as_deref() == Some("YtttVim && yttt_vim_scope == global")
+            && !binding.unbind
+    }));
+    assert!(loaded.config.bindings.iter().any(|binding| {
+        binding.keys == "cmd-h"
+            && binding.command == "tab.prev"
+            && binding.context.as_deref()
+                == Some("Workspace && !(YtttVim && yttt_vim_scope == global)")
+            && !binding.unbind
+    }));
+    let specs = layered_ui_keybinding_specs(&loaded.config, &default_registry());
+    assert!(
+        !specs
+            .iter()
+            .any(|binding| { binding.keys == "ctrl-w" && binding.command == CommandId::PaneClose })
+    );
+    let persisted: KeybindingsConfig =
+        toml::from_str(&std::fs::read_to_string(paths.keybindings_file()).unwrap()).unwrap();
+    assert_eq!(persisted, loaded.config);
 }
 
 #[test]
@@ -616,9 +1067,12 @@ fn custom_legacy_keybindings_are_versioned_without_restoring_defaults() {
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let legacy = KeybindingsConfig {
         schema_version: 0,
+        leader: "space".to_string(),
         bindings: vec![Keybinding {
             keys: "cmd-l".to_string(),
             command: "tab.palette".to_string(),
+            context: None,
+            unbind: false,
         }],
     };
     save_keybindings(&paths, &legacy).unwrap();
@@ -626,14 +1080,22 @@ fn custom_legacy_keybindings_are_versioned_without_restoring_defaults() {
     let loaded = load_keybindings(&paths, &default_registry()).unwrap();
 
     assert_eq!(loaded.config.schema_version, KEYBINDINGS_SCHEMA_VERSION);
-    assert_eq!(loaded.config.bindings, legacy.bindings);
-    assert!(
-        loaded
-            .config
-            .bindings
+    let specs = layered_ui_keybinding_specs(&loaded.config, &default_registry());
+    assert_eq!(
+        specs
             .iter()
-            .all(|binding| binding.command != "file.save")
+            .filter(|binding| binding.context.as_deref() == Some("Workspace"))
+            .count(),
+        1
     );
+    assert!(specs.iter().any(|binding| {
+        binding.keys == "cmd-l"
+            && binding.command == CommandId::TabPalette
+            && binding.context.as_deref() == Some("Workspace")
+    }));
+    assert!(loaded.config.bindings.iter().any(|binding| {
+        binding.unbind && binding.keys == "cmd-o" && binding.command == "project.open"
+    }));
     assert_eq!(
         load_keybindings(&paths, &default_registry())
             .unwrap()
@@ -648,9 +1110,12 @@ fn custom_schema_one_keybindings_do_not_gain_default_shortcuts() {
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let custom = KeybindingsConfig {
         schema_version: 1,
+        leader: "space".to_string(),
         bindings: vec![Keybinding {
             keys: "cmd-l".to_string(),
             command: "tab.palette".to_string(),
+            context: None,
+            unbind: false,
         }],
     };
     save_keybindings(&paths, &custom).unwrap();
@@ -658,14 +1123,22 @@ fn custom_schema_one_keybindings_do_not_gain_default_shortcuts() {
     let loaded = load_keybindings(&paths, &default_registry()).unwrap();
 
     assert_eq!(loaded.config.schema_version, KEYBINDINGS_SCHEMA_VERSION);
-    assert_eq!(loaded.config.bindings, custom.bindings);
-    assert!(
-        loaded
-            .config
-            .bindings
+    let specs = layered_ui_keybinding_specs(&loaded.config, &default_registry());
+    assert_eq!(
+        specs
             .iter()
-            .all(|binding| binding.command != "project.opened_palette")
+            .filter(|binding| binding.context.as_deref() == Some("Workspace"))
+            .count(),
+        1
     );
+    assert!(specs.iter().any(|binding| {
+        binding.keys == "cmd-l"
+            && binding.command == CommandId::TabPalette
+            && binding.context.as_deref() == Some("Workspace")
+    }));
+    assert!(loaded.config.bindings.iter().any(|binding| {
+        binding.unbind && binding.keys == "cmd-o" && binding.command == "project.open"
+    }));
 }
 
 #[test]
@@ -674,9 +1147,12 @@ fn save_keybindings_writes_user_toml() {
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let config = KeybindingsConfig {
         schema_version: KEYBINDINGS_SCHEMA_VERSION,
+        leader: "space".to_string(),
         bindings: vec![Keybinding {
             keys: "cmd-l".to_string(),
             command: "tab.palette".to_string(),
+            context: None,
+            unbind: false,
         }],
     };
 
@@ -705,6 +1181,26 @@ fn keybindings_editor_lists_commands_with_current_keys() {
     } else {
         assert_eq!(row.display_keys(), vec!["ctrl-shift-p".to_string()]);
     }
+}
+
+#[test]
+fn keybindings_editor_lists_non_command_ui_actions() {
+    let editor = KeybindingsEditorState::new(KeybindingsConfig::default(), bindable_registry());
+
+    let rows = editor.rows();
+    let terminal_motion = rows
+        .iter()
+        .find(|row| row.command_id == "terminal.vi.motion.down")
+        .expect("terminal Vi motions must be user-rebindable");
+    assert!(terminal_motion.keys.contains(&"j".to_string()));
+    assert!(
+        rows.iter()
+            .any(|row| row.command_id == "settings.vim.next_group")
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.command_id == "project_tree.new_file")
+    );
 }
 
 #[test]
@@ -767,10 +1263,43 @@ fn keybindings_editor_edits_deletes_and_resets_command_keys() {
 }
 
 #[test]
-fn keybindings_editor_blocks_conflicting_save() {
+fn saving_unchanged_action_keys_preserves_context_assignments() {
+    let config = KeybindingsConfig::default();
+    let mut editor = KeybindingsEditorState::new(config.clone(), bindable_registry());
+    let action = BindableActionId::Command(CommandId::PaneFocusLeft);
+    let keys = editor.action_keys(action);
+
+    assert!(keys.contains(&"ctrl-w h".to_string()));
+    editor.set_action_keys(action, keys);
+
+    assert_eq!(editor.config(), &config);
+}
+
+#[test]
+fn deleting_default_leader_binding_uses_configured_leader() {
+    let config = KeybindingsConfig {
+        schema_version: KEYBINDINGS_SCHEMA_VERSION,
+        leader: "ctrl-space".to_string(),
+        bindings: Vec::new(),
+    };
+    let mut editor = KeybindingsEditorState::new(config, bindable_registry());
+
+    editor.delete_command_keys(CommandId::FileFind);
+
+    let specs = layered_ui_keybinding_specs(editor.config(), &bindable_registry());
+    assert!(!specs.iter().any(|spec| spec.command == CommandId::FileFind));
+    assert!(editor.config().bindings.iter().any(|binding| {
+        binding.unbind
+            && binding.command == CommandId::FileFind.as_str()
+            && binding.keys == "ctrl-space f f"
+    }));
+}
+
+#[test]
+fn keybindings_editor_blocks_default_conflict_from_sparse_config() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut editor = KeybindingsEditorState::new(default_keybindings(), default_registry());
+    let mut editor = KeybindingsEditorState::new(KeybindingsConfig::default(), default_registry());
     editor.set_command_keys(CommandId::TabPalette, vec!["cmd-p".to_string()]);
 
     let error = editor.save(&paths).unwrap_err();
@@ -780,6 +1309,64 @@ fn keybindings_editor_blocks_conflicting_save() {
         KeybindingEditError::ConflictingBindings(vec!["cmd-p".to_string()])
     );
     assert!(!paths.keybindings_file().exists());
+}
+
+#[test]
+fn keybindings_editor_can_reassign_a_released_default_key() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut editor = KeybindingsEditorState::new(KeybindingsConfig::default(), default_registry());
+    editor.set_command_keys(
+        CommandId::FileFind,
+        vec!["ctrl-p".to_string(), "cmd-alt-shift-f".to_string()],
+    );
+    editor.set_command_keys(CommandId::TabPalette, vec!["cmd-p".to_string()]);
+
+    editor.save(&paths).unwrap();
+
+    assert!(paths.keybindings_file().exists());
+}
+
+#[test]
+fn keybindings_editor_replaces_shared_action_in_every_default_context() {
+    let mut editor = KeybindingsEditorState::new(KeybindingsConfig::default(), bindable_registry());
+
+    editor.set_action_keys(
+        BindableActionId::TerminalSearchDismiss,
+        vec!["q".to_string()],
+    );
+
+    assert_eq!(
+        editor.action_keys(BindableActionId::TerminalSearchDismiss),
+        vec!["q".to_string()]
+    );
+    let mut contexts = editor
+        .config()
+        .bindings
+        .iter()
+        .filter(|binding| {
+            !binding.unbind && binding.keys == "q" && binding.command == "terminal.search.cancel"
+        })
+        .filter_map(|binding| binding.context.as_deref())
+        .collect::<Vec<_>>();
+    contexts.sort_unstable();
+    assert_eq!(
+        contexts,
+        vec![TERMINAL_HINT_KEY_CONTEXT, TERMINAL_SEARCH_KEY_CONTEXT]
+    );
+    assert_eq!(
+        editor
+            .config()
+            .bindings
+            .iter()
+            .filter(|binding| {
+                binding.unbind
+                    && binding.keys == "escape"
+                    && binding.command == "terminal.search.cancel"
+            })
+            .count(),
+        2
+    );
 }
 
 #[test]
@@ -1003,8 +1590,28 @@ fn assert_ratio(actual: f32, expected: f32) {
     );
 }
 
-fn legacy_v2_default_keybindings() -> KeybindingsConfig {
+fn legacy_v3_default_keybindings() -> KeybindingsConfig {
     let mut legacy = default_keybindings();
+    legacy.schema_version = 3;
+    legacy
+        .bindings
+        .retain(|binding| !matches!(binding.command.as_str(), "tab.next" | "tab.prev"));
+    let cmd_w_index = legacy
+        .bindings
+        .iter()
+        .position(|binding| binding.keys == "cmd-w" && binding.command == "pane.close")
+        .unwrap();
+    let mut ctrl_w = legacy.bindings[cmd_w_index].clone();
+    ctrl_w.keys = "ctrl-w".to_string();
+    legacy.bindings.insert(cmd_w_index + 1, ctrl_w);
+    for binding in &mut legacy.bindings {
+        binding.context = None;
+    }
+    legacy
+}
+
+fn legacy_v2_default_keybindings() -> KeybindingsConfig {
+    let mut legacy = legacy_v3_default_keybindings();
     legacy.schema_version = 2;
     legacy
         .bindings

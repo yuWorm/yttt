@@ -60,6 +60,7 @@ shell-words = "1.1"
 sysinfo = "0.31.4"
 sys-locale = "0.3.2"
 thiserror = "2"
+tempfile = "3"
 toml = "0.8"
 uuid = { version = "1", features = ["v4", "serde"] }
 
@@ -86,4 +87,3 @@ winresource = "0.1"
 
 [dev-dependencies]
 gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = ["test-support"] }
-tempfile = "3"

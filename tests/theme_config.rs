@@ -85,6 +85,12 @@ fn window_effect_controls_whether_theme_surfaces_use_configured_opacity() {
     let store = ThemeStore::builtin();
     let mut settings = AppSettings::default();
     settings.window.opacity = 0.42;
+    let close = |actual: f32, expected: f32| {
+        assert!(
+            (actual - expected).abs() < f32::EPSILON,
+            "expected opacity {expected}, got {actual}"
+        );
+    };
 
     for effect in [
         WindowBackgroundEffect::Transparent,
@@ -96,11 +102,12 @@ fn window_effect_controls_whether_theme_surfaces_use_configured_opacity() {
         assert_eq!(runtime.window_material.window_tint_opacity, 0.42);
         assert_eq!(runtime.ui.app_background.a, 0.42);
         assert_eq!(runtime.ui.surface.a, 0.04);
-        assert_eq!(runtime.ui.hover_surface.a, 0.06);
-        assert_eq!(runtime.ui.active_surface.a, 0.12);
-        assert_eq!(runtime.editor.background.a, 0.04);
-        assert_eq!(runtime.editor.active_line.a, 0.06);
-        assert_eq!(runtime.terminal.background.a, 0.04);
+        close(runtime.ui.hover_surface.a, 0.08 + 0.04 * 0.58);
+        close(runtime.ui.active_surface.a, 0.20 + 0.10 * 0.58);
+        close(runtime.ui.selection.a, 0.32 + 0.08 * 0.58);
+        close(runtime.editor.background.a, 0.04);
+        close(runtime.editor.active_line.a, 0.08 + 0.04 * 0.58);
+        close(runtime.terminal.background.a, 0.04);
         let highlight = runtime.editor.to_highlight_theme_style();
         assert_eq!(highlight.editor_background.unwrap().a, 0.04);
         assert_eq!(highlight.editor_gutter_background.unwrap().a, 0.0);
@@ -112,6 +119,30 @@ fn window_effect_controls_whether_theme_surfaces_use_configured_opacity() {
     assert_eq!(runtime.ui.app_background.a, 1.0);
     assert_eq!(runtime.editor.background.a, 1.0);
     assert_eq!(runtime.terminal.background.a, 1.0);
+}
+
+#[test]
+fn translucent_interaction_overlays_strengthen_as_the_backdrop_becomes_more_visible() {
+    let store = ThemeStore::builtin();
+    let mut settings = AppSettings::default();
+    settings.window.effect = WindowBackgroundEffect::Transparent;
+    settings.window.opacity = 1.0;
+    let opaque_tint = ThemeRuntime::resolve(&settings, &store);
+
+    settings.window.opacity = 0.0;
+    let clear_tint = ThemeRuntime::resolve(&settings, &store);
+
+    assert!(clear_tint.ui.hover_surface.a > opaque_tint.ui.hover_surface.a);
+    assert!(clear_tint.ui.active_surface.a > opaque_tint.ui.active_surface.a);
+    assert!(clear_tint.ui.selection.a > opaque_tint.ui.selection.a);
+    assert_eq!(
+        clear_tint.ui.active_surface.a,
+        clear_tint.window_material.active_overlay_opacity
+    );
+    assert_eq!(
+        clear_tint.terminal.selection_background.unwrap().a,
+        clear_tint.window_material.selection_overlay_opacity
+    );
 }
 
 #[test]
@@ -148,16 +179,16 @@ fn workbench_theme_maps_to_gpui_component_theme_config() {
             .as_ref()
             .map(|color| color.to_string())
             .as_deref(),
-        Some("#67769640")
+        Some("#67769657")
     );
     assert!(config.colors.title_bar.is_some());
     for (color, expected) in [
         (&config.colors.list, "#23272e00"),
-        (&config.colors.list_hover, "#2c313a0f"),
-        (&config.colors.list_active, "#2c313a1f"),
+        (&config.colors.list_hover, "#2c313a17"),
+        (&config.colors.list_active, "#2c313a3a"),
         (&config.colors.sidebar, "#23272e00"),
         (&config.colors.tab, "#23272e00"),
-        (&config.colors.tab_active, "#2c313a1f"),
+        (&config.colors.tab_active, "#2c313a3a"),
         (&config.colors.tab_bar, "#23272e00"),
         (&config.colors.overlay, "#00000042"),
         (&config.colors.popover, "#1e2227"),
@@ -226,7 +257,7 @@ selection = "#445566"
             .as_ref()
             .map(|color| color.to_string())
             .as_deref(),
-        Some("#44556647")
+        Some("#44556657")
     );
     assert!(loaded.warnings.is_empty());
 }
@@ -269,7 +300,7 @@ focus_ring = "#112233"
             .as_ref()
             .map(|color| color.to_string())
             .as_deref(),
-        Some("#11223347")
+        Some("#11223357")
     );
     assert!(loaded.warnings.is_empty());
 }
@@ -291,7 +322,9 @@ fn builtin_one_dark_theme_maps_editor_and_terminal_palettes() {
     );
     assert_eq!(
         highlight.editor_active_line,
-        Some(gpui::Hsla::from(rgb(0x2c313c).alpha(0.06)))
+        Some(gpui::Hsla::from(
+            rgb(0x2c313c).alpha(0.08 + 0.04 * (1.0 - DEFAULT_WINDOW_OPACITY))
+        ))
     );
     assert_eq!(
         highlight.editor_line_number,
@@ -333,7 +366,7 @@ fn builtin_one_dark_theme_maps_editor_and_terminal_palettes() {
     assert_eq!(runtime.terminal.cursor, Some(rgb(0xabb2bf)));
     assert_eq!(
         runtime.terminal.selection_background,
-        Some(rgba(0x67769640))
+        Some(rgb(0x677696).alpha(0.32 + 0.08 * (1.0 - DEFAULT_WINDOW_OPACITY)))
     );
     assert_eq!(
         runtime.terminal.normal,
@@ -404,7 +437,9 @@ comment = "#555555"
     );
     assert_eq!(
         highlight.editor_active_line,
-        Some(gpui::Hsla::from(rgba(0x22222208)))
+        Some(gpui::Hsla::from(
+            rgb(0x222222).alpha(0.08 + 0.04 * (1.0 - DEFAULT_WINDOW_OPACITY))
+        ))
     );
     assert_eq!(
         highlight
@@ -456,7 +491,11 @@ fn terminal_config_uses_runtime_settings_and_colors() {
         yttt_terminal::TerminalOsc52Policy::ReadWrite
     );
     assert!(config.kitty_keyboard);
-    assert_eq!(config.colors.selection_background().a, rgba(0x67769640).a);
+    assert!(!config.start_in_vi_mode);
+    assert_eq!(
+        config.colors.selection_background().a,
+        0.32 + 0.08 * (1.0 - DEFAULT_WINDOW_OPACITY)
+    );
 }
 
 #[test]
