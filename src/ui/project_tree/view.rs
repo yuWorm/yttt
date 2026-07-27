@@ -348,6 +348,7 @@ pub struct ProjectTreeView {
     icon_theme: IconTheme,
     interaction_text: ProjectTreeInteractionText,
     show_hidden: bool,
+    show_focus_indicator: bool,
     edit_target: Option<ProjectTreeEditTarget>,
     edit_input: Option<Entity<InputState>>,
     edit_subscription: Option<Subscription>,
@@ -378,6 +379,7 @@ impl ProjectTreeView {
             icon_theme,
             interaction_text: ProjectTreeInteractionText::default(),
             show_hidden: false,
+            show_focus_indicator: true,
             edit_target: None,
             edit_input: None,
             edit_subscription: None,
@@ -426,6 +428,15 @@ impl ProjectTreeView {
             return;
         }
         self.show_hidden = show_hidden;
+        cx.notify();
+    }
+
+    /// Controls the keyboard-focused row's side marker. Enabled by default.
+    pub fn set_show_focus_indicator(&mut self, show_focus_indicator: bool, cx: &mut Context<Self>) {
+        if self.show_focus_indicator == show_focus_indicator {
+            return;
+        }
+        self.show_focus_indicator = show_focus_indicator;
         cx.notify();
     }
 
@@ -1025,6 +1036,7 @@ impl Render for ProjectTreeView {
         let text = self.interaction_text.clone();
         let tree_has_keyboard_focus = self.is_focused(window, cx);
         let show_hidden = self.show_hidden;
+        let show_focus_indicator = self.show_focus_indicator;
         let tree = tree(&self.tree, move |ix, entry, selected, _window, cx| {
             let id = entry.item().id.as_str().to_string();
             if id == EDIT_ROW_ID {
@@ -1063,6 +1075,7 @@ impl Render for ProjectTreeView {
                 entry.depth(),
                 selected,
                 tree_has_keyboard_focus,
+                show_focus_indicator,
                 row,
                 &icon_theme,
                 view.clone(),
@@ -1346,6 +1359,7 @@ fn render_component_row(
     depth: usize,
     selected: bool,
     tree_has_keyboard_focus: bool,
+    show_focus_indicator: bool,
     row: Option<ProjectTreeRenderRow>,
     icon_theme: &IconTheme,
     view: gpui::WeakEntity<ProjectTreeView>,
@@ -1400,8 +1414,9 @@ fn render_component_row(
 
     ListItem::new(("project-tree-row", ix))
         .selected(selected)
+        .hover_matches_selected(true)
         .pl(px(8.0 + depth as f32 * 14.0))
-        .children(focused_selection.then(|| {
+        .children((focused_selection && show_focus_indicator).then(|| {
             div()
                 .debug_selector(|| "project-tree-focused-row-indicator".to_string())
                 .absolute()

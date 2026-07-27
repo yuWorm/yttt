@@ -20,6 +20,7 @@
 - Fixed Vim status-bar key feedback to preserve printable key case, so `g` and `G` remain distinguishable.
 - Fixed `ctrl-w h/j/k/l` navigation to cross the left Projects list, edge terminal panes, adjacent work-area groups, and the right project tree, with the standard held-Control variants `ctrl-w ctrl-h/j/k/l`; focus transitions now update in one frame and use restrained pane-edge, panel-header, and current-row indicators instead of stacked full-panel outlines.
 - Fixed active and selected states losing contrast on translucent backgrounds by deriving interaction overlays from backdrop visibility and using focused foreground colors for keyboard-owned rows.
+- Fixed project-file hover feedback to match the focused-row background and removed the focused-row side marker from the workbench file tree.
 - Fixed platform text and IME composition reaching palette inputs or terminal panes while Global Vim is in Normal mode; Insert and Terminal modes continue to accept composed text.
 
 ## 0.2.0 - 2026-07-18

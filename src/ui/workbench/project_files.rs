@@ -470,6 +470,7 @@ impl WorkbenchView {
             let mut tree = ProjectTreeView::new_with_icon_theme(snapshot, icon_theme, tree_cx);
             tree.set_interaction_text(interaction_text, tree_cx);
             tree.set_show_hidden(show_hidden, tree_cx);
+            tree.set_show_focus_indicator(false, tree_cx);
             tree
         });
         let event_project_id = project_id.clone();

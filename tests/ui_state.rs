@@ -6643,8 +6643,8 @@ fn ctrl_w_moves_focus_between_terminal_and_project_tree(cx: &mut gpui::TestAppCo
     );
     assert!(
         cx.debug_bounds("project-tree-focused-row-indicator")
-            .is_some(),
-        "focusing the project tree must expose its current row"
+            .is_none(),
+        "the workbench file tree must hide the focused-row side indicator"
     );
     assert!(
         cx.debug_bounds("terminal-pane-focus-indicator-shell")
