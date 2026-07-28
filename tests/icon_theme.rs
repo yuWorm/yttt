@@ -41,6 +41,7 @@ const THEME_JSON: &str = r#"
       "rust": { "path": "icons/rust.svg" },
       "toml": { "path": "icons/toml.svg" },
       "javascript": { "path": "icons/javascript.svg" },
+      "typescript": { "path": "icons/typescript.svg" },
       "vue": { "path": "icons/vue.svg" }
     }
   }]
@@ -87,6 +88,7 @@ fn zed_compatible_icon_theme_resolves_icons_and_loads_svg_assets() {
         "toml",
         "javascript",
         "vue",
+        "typescript",
         "folder",
         "folder-open",
         "src",
@@ -124,6 +126,10 @@ fn zed_compatible_icon_theme_resolves_icons_and_loads_svg_assets() {
     assert_asset_path(
         theme.resolve_file(Path::new("eslint.config.js")),
         "fixture-theme/icons/javascript.svg",
+    );
+    assert_asset_path(
+        theme.resolve_file(Path::new("clear-browsing-data-service.ts")),
+        "fixture-theme/icons/typescript.svg",
     );
     assert_asset_path(
         theme.resolve_file(Path::new("App.vue")),

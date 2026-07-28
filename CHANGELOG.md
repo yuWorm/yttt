@@ -23,6 +23,7 @@
 - Fixed project-file hover feedback to match the focused-row background and removed the focused-row side marker from the workbench file tree.
 - Fixed platform text and IME composition reaching palette inputs or terminal panes while Global Vim is in Normal mode; Insert and Terminal modes continue to accept composed text.
 - Fixed Global Vim Terminal mode intercepting `Escape` and `Ctrl-[`; both now reach the terminal process, while `Ctrl-\ Ctrl-N` returns to yttt Normal mode.
+- Fixed Zed-compatible icon themes falling back to the generic file icon for common extensions, including TypeScript, when the theme relies on Zed's built-in file associations.
 
 ## 0.2.0 - 2026-07-18
 
