@@ -1,4 +1,11 @@
-use gpui::{Pixels, Rems, Rgba, px, rgba};
+use gpui::{
+    App, ClickEvent, Div, ElementId, Pixels, Rems, Rgba, Stateful, Window, div, prelude::*, px,
+    rgba,
+};
+use gpui_component::{
+    Icon, IconName, Sizable as _,
+    button::{Button, ButtonVariants as _},
+};
 
 use crate::{style::UiStyle, theme::WorkbenchTheme};
 
@@ -71,4 +78,55 @@ pub fn yttt_icon_button_style(
         text,
         hover_text: theme.text,
     }
+}
+
+pub fn yttt_icon_button<H>(
+    id: impl Into<ElementId>,
+    icon: IconName,
+    kind: YtttIconButtonKind,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+    on_click: H,
+) -> Stateful<Div>
+where
+    H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+{
+    let style = yttt_icon_button_style(kind, theme, ui_style);
+
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(style.size)
+        .rounded(style.radius)
+        .border(style.border_width)
+        .border_color(style.border)
+        .bg(style.background)
+        .text_color(style.text)
+        .hover(move |this| this.bg(style.hover_background).text_color(style.hover_text))
+        .on_click(on_click)
+        .child(Icon::new(icon).size(style.icon_size))
+}
+
+pub fn yttt_menu_icon_button(
+    id: impl Into<ElementId>,
+    icon: IconName,
+    kind: YtttIconButtonKind,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Button {
+    let style = yttt_icon_button_style(kind, theme, ui_style);
+    Button::new(id)
+        .ghost()
+        .xsmall()
+        .compact()
+        .icon(icon)
+        .w(style.size)
+        .h(style.size)
+        .p_0()
+        .rounded(style.radius)
+        .border(style.border_width)
+        .border_color(style.border)
+        .text_color(style.text)
 }

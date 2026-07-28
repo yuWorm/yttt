@@ -8,41 +8,26 @@ pub(in super::super) fn settings_overlay(
 ) -> Div {
     let appearance = root.theme_runtime();
     let theme = appearance.ui;
-    let style = settings_panel_style(appearance.style);
-    let panel = yttt_panel_style(YtttPanelKind::Settings, theme, appearance.style);
+    let style = yttt_settings_layout(appearance.style);
 
-    capture_overlay_input(
-        div()
-            .absolute()
-            .inset_0()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(panel.overlay)
-            .child(
-                div()
-                    .flex()
-                    .w(panel.width)
-                    .h(panel.height.unwrap_or(style.height))
-                    .max_w(panel.max_width)
-                    .max_h(panel.max_height)
-                    .rounded(panel.radius)
-                    .border(panel.border_width)
-                    .border_color(panel.border)
-                    .bg(panel.background)
-                    .when(panel.shadow, |this| this.shadow_lg())
-                    .text_color(theme.text)
-                    .overflow_hidden()
-                    .child(settings_sidebar(root, search_input, style, cx))
-                    .child(settings_content(root, style, window, cx)),
-            ),
+    yttt_panel_overlay(
+        yttt_panel(YtttPanelKind::Settings, theme, appearance.style)
+            .flex_row()
+            .p_0()
+            .overflow_hidden()
+            .child(settings_sidebar(root, search_input, style, cx))
+            .child(settings_content(root, style, window, cx)),
+        YtttPanelKind::Settings,
+        YtttOverlayPlacement::Center,
+        theme,
+        appearance.style,
     )
 }
 
 fn settings_sidebar(
     root: &WorkbenchView,
     search_input: &Entity<InputState>,
-    style: SettingsPanelStyle,
+    style: YtttSettingsLayout,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
     let theme = root.theme_runtime().ui;
@@ -114,11 +99,9 @@ fn settings_sidebar(
                 .bg(theme.surface)
                 .overflow_hidden()
                 .child(
-                    Input::new(search_input)
+                    yttt_input(search_input, YtttInputKind::Search, theme, ui_style)
                         .prefix(IconName::Search)
-                        .cleanable(true)
-                        .appearance(true)
-                        .bg(theme.surface),
+                        .cleanable(true),
                 ),
         )
         .child(
@@ -131,7 +114,7 @@ fn settings_sidebar(
 
 fn settings_content(
     root: &mut WorkbenchView,
-    style: SettingsPanelStyle,
+    style: YtttSettingsLayout,
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
@@ -173,7 +156,7 @@ fn settings_content(
                                 .child(group.description(&root.ui_text)),
                         ),
                 )
-                .child(workbench_icon_button(
+                .child(yttt_icon_button(
                     "settings-close",
                     IconName::Close,
                     YtttIconButtonKind::OverlayClose,
@@ -197,7 +180,7 @@ fn settings_content(
 fn settings_rows(
     root: &mut WorkbenchView,
     group: SettingsGroupId,
-    style: SettingsPanelStyle,
+    style: YtttSettingsLayout,
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
@@ -214,7 +197,7 @@ fn settings_rows(
 
 fn settings_general_rows(
     root: &mut WorkbenchView,
-    style: SettingsPanelStyle,
+    style: YtttSettingsLayout,
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
@@ -230,11 +213,15 @@ fn settings_general_rows(
         .gap(style.ui_style.spacing.md)
         .w(style.control_width)
         .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .h(style.control_height)
-                .child(Input::new(&command_input).small().appearance(true)),
+            div().flex_1().min_w_0().h(style.control_height).child(
+                yttt_input(
+                    &command_input,
+                    YtttInputKind::Settings,
+                    theme,
+                    style.ui_style,
+                )
+                .small(),
+            ),
         )
         .child(
             settings_button(
@@ -574,7 +561,7 @@ fn settings_general_rows(
 
 fn settings_appearance_rows(
     root: &mut WorkbenchView,
-    style: SettingsPanelStyle,
+    style: YtttSettingsLayout,
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
@@ -613,7 +600,7 @@ fn settings_appearance_rows(
                 theme,
                 text.get(UiTextKey::SettingsWindowOpacity),
                 text.get(UiTextKey::SettingsWindowOpacityDescription),
-                settings_number_control(window_opacity_input, style).into_any_element(),
+                settings_number_control(window_opacity_input, theme, style).into_any_element(),
             )
             .debug_selector(|| "settings-window-opacity-row".to_string()),
         )
@@ -640,7 +627,7 @@ fn settings_appearance_rows(
                 theme,
                 text.get(UiTextKey::SettingsUiFontSize),
                 text.get(UiTextKey::SettingsUiFontSizeDescription),
-                settings_number_control(ui_font_size_input, style).into_any_element(),
+                settings_number_control(ui_font_size_input, theme, style).into_any_element(),
             )
             .debug_selector(|| "settings-ui-font-size-row".to_string()),
         )
@@ -650,7 +637,7 @@ fn settings_appearance_rows(
                 theme,
                 text.get(UiTextKey::SettingsUiLineHeight),
                 text.get(UiTextKey::SettingsUiLineHeightDescription),
-                settings_number_control(ui_line_height_input, style).into_any_element(),
+                settings_number_control(ui_line_height_input, theme, style).into_any_element(),
             )
             .debug_selector(|| "settings-ui-line-height-row".to_string()),
         )
@@ -768,7 +755,7 @@ fn settings_appearance_rows(
 
 fn settings_language_rows(
     root: &mut WorkbenchView,
-    style: SettingsPanelStyle,
+    style: YtttSettingsLayout,
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
@@ -852,7 +839,7 @@ fn settings_language_rows(
 
 fn settings_editor_rows(
     root: &mut WorkbenchView,
-    style: SettingsPanelStyle,
+    style: YtttSettingsLayout,
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
@@ -898,7 +885,7 @@ fn settings_editor_rows(
                 theme,
                 text.get(UiTextKey::SettingsEditorFontSize),
                 text.get(UiTextKey::SettingsEditorFontSizeDescription),
-                settings_number_control(font_size_input, style).into_any_element(),
+                settings_number_control(font_size_input, theme, style).into_any_element(),
             )
             .debug_selector(|| "settings-editor-font-size-row".to_string()),
         )
@@ -908,7 +895,7 @@ fn settings_editor_rows(
                 theme,
                 text.get(UiTextKey::SettingsEditorLineHeight),
                 text.get(UiTextKey::SettingsEditorLineHeightDescription),
-                settings_number_control(line_height_input, style).into_any_element(),
+                settings_number_control(line_height_input, theme, style).into_any_element(),
             )
             .debug_selector(|| "settings-editor-line-height-row".to_string()),
         )
@@ -918,7 +905,7 @@ fn settings_editor_rows(
                 theme,
                 text.get(UiTextKey::SettingsEditorTabSize),
                 text.get(UiTextKey::SettingsEditorTabSizeDescription),
-                settings_number_control(tab_size_input, style).into_any_element(),
+                settings_number_control(tab_size_input, theme, style).into_any_element(),
             )
             .debug_selector(|| "settings-editor-tab-size-row".to_string()),
         )
@@ -989,7 +976,7 @@ fn settings_editor_rows(
                 theme,
                 text.get(UiTextKey::SettingsEditorAutosaveDelay),
                 text.get(UiTextKey::SettingsEditorAutosaveDelayDescription),
-                settings_number_control(autosave_delay_input, style).into_any_element(),
+                settings_number_control(autosave_delay_input, theme, style).into_any_element(),
             )
             .debug_selector(|| "settings-editor-autosave-delay-row".to_string()),
         )
@@ -1043,7 +1030,7 @@ fn settings_editor_rows(
                 theme,
                 text.get(UiTextKey::SettingsProjectPanelWidth),
                 text.get(UiTextKey::SettingsProjectPanelWidthDescription),
-                settings_number_control(project_panel_width_input, style).into_any_element(),
+                settings_number_control(project_panel_width_input, theme, style).into_any_element(),
             )
             .debug_selector(|| "settings-project-panel-width-row".to_string()),
         )
@@ -1053,7 +1040,8 @@ fn settings_editor_rows(
                 theme,
                 text.get(UiTextKey::SettingsProjectSidebarWidth),
                 text.get(UiTextKey::SettingsProjectSidebarWidthDescription),
-                settings_number_control(project_sidebar_width_input, style).into_any_element(),
+                settings_number_control(project_sidebar_width_input, theme, style)
+                    .into_any_element(),
             )
             .debug_selector(|| "settings-project-sidebar-width-row".to_string()),
         )
@@ -1061,7 +1049,7 @@ fn settings_editor_rows(
 
 fn settings_terminal_rows(
     root: &mut WorkbenchView,
-    style: SettingsPanelStyle,
+    style: YtttSettingsLayout,
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
@@ -1083,11 +1071,15 @@ fn settings_terminal_rows(
         .gap(style.ui_style.spacing.md)
         .w(style.control_width)
         .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .h(style.control_height)
-                .child(Input::new(&custom_shell_input).small().appearance(true)),
+            div().flex_1().min_w_0().h(style.control_height).child(
+                yttt_input(
+                    &custom_shell_input,
+                    YtttInputKind::Settings,
+                    theme,
+                    style.ui_style,
+                )
+                .small(),
+            ),
         )
         .child(settings_button(
             "settings-add-custom-shell",
@@ -1147,28 +1139,28 @@ fn settings_terminal_rows(
             theme,
             text.get(UiTextKey::SettingsFontSize),
             text.get(UiTextKey::SettingsFontSizeDescription),
-            settings_number_control(font_size_input, style).into_any_element(),
+            settings_number_control(font_size_input, theme, style).into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
             text.get(UiTextKey::SettingsLineHeight),
             text.get(UiTextKey::SettingsLineHeightDescription),
-            settings_number_control(line_height_input, style).into_any_element(),
+            settings_number_control(line_height_input, theme, style).into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
             text.get(UiTextKey::SettingsPadding),
             text.get(UiTextKey::SettingsPaddingDescription),
-            settings_number_control(padding_input, style).into_any_element(),
+            settings_number_control(padding_input, theme, style).into_any_element(),
         ))
         .child(setting_row(
             style,
             theme,
             text.get(UiTextKey::SettingsScrollback),
             text.get(UiTextKey::SettingsScrollbackDescription),
-            settings_number_control(scrollback_input, style).into_any_element(),
+            settings_number_control(scrollback_input, theme, style).into_any_element(),
         ))
         .child(
             setting_row(
@@ -1323,7 +1315,7 @@ fn settings_terminal_rows(
 
 fn settings_default_layout_rows(
     root: &WorkbenchView,
-    style: SettingsPanelStyle,
+    style: YtttSettingsLayout,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
     let theme = root.theme_runtime().ui;
@@ -1389,7 +1381,7 @@ fn settings_default_layout_rows(
 
 fn settings_keybinding_rows(
     root: &mut WorkbenchView,
-    style: SettingsPanelStyle,
+    style: YtttSettingsLayout,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
     let theme = root.theme_runtime().ui;
@@ -1469,83 +1461,85 @@ fn settings_keybinding_rows(
         };
 
         rows = rows.child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap(style.ui_style.spacing.xl)
-                .min_h(style.row_min_height)
-                .border_b(style.ui_style.border.hairline)
-                .border_color(theme.border)
-                .py(style.ui_style.spacing.lg)
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(style.ui_style.spacing.xs)
-                        .min_w_0()
-                        .flex_1()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.text)
-                                .child(title_text),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.text_subtle)
-                                .child(description),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_end()
-                        .gap(style.ui_style.spacing.xs)
-                        .flex_none()
-                        .child(settings_keybinding_value(
-                            keys,
-                            text.get(UiTextKey::SettingsUnbound),
-                            theme,
-                            style.ui_style,
-                        ))
-                        .child(settings_button(
-                            format!("settings-keybinding-edit-{}", row.command_id),
-                            text.get(UiTextKey::SettingsEdit),
-                            false,
-                            theme,
-                            cx,
-                            cx.listener(move |this, _, _window, cx| {
-                                let _ = this.open_keybinding_action_edit_dialog(command);
-                                cx.notify();
-                            }),
-                        ))
-                        .child(settings_button(
-                            format!("settings-keybinding-reset-{}", row.command_id),
-                            text.get(UiTextKey::SettingsReset),
-                            false,
-                            theme,
-                            cx,
-                            cx.listener(move |this, _, _window, cx| {
-                                let _ = this.reset_keybinding_action_keys(command);
-                                cx.notify();
-                            }),
-                        ))
-                        .child(settings_button(
-                            format!("settings-keybinding-delete-{}", row.command_id),
-                            text.get(UiTextKey::SettingsDelete),
-                            false,
-                            theme,
-                            cx,
-                            cx.listener(move |this, _, _window, cx| {
-                                let _ = this.delete_keybinding_action_keys(command);
-                                cx.notify();
-                            }),
-                        )),
-                ),
+            yttt_row(
+                YtttRowKind::Settings,
+                SelectableState::Inactive,
+                true,
+                theme,
+                style.ui_style,
+            )
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(style.ui_style.spacing.xl)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(style.ui_style.spacing.xs)
+                    .min_w_0()
+                    .flex_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.text)
+                            .child(title_text),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.text_subtle)
+                            .child(description),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap(style.ui_style.spacing.xs)
+                    .flex_none()
+                    .child(settings_keybinding_value(
+                        keys,
+                        text.get(UiTextKey::SettingsUnbound),
+                        theme,
+                        style.ui_style,
+                    ))
+                    .child(settings_button(
+                        format!("settings-keybinding-edit-{}", row.command_id),
+                        text.get(UiTextKey::SettingsEdit),
+                        false,
+                        theme,
+                        cx,
+                        cx.listener(move |this, _, _window, cx| {
+                            let _ = this.open_keybinding_action_edit_dialog(command);
+                            cx.notify();
+                        }),
+                    ))
+                    .child(settings_button(
+                        format!("settings-keybinding-reset-{}", row.command_id),
+                        text.get(UiTextKey::SettingsReset),
+                        false,
+                        theme,
+                        cx,
+                        cx.listener(move |this, _, _window, cx| {
+                            let _ = this.reset_keybinding_action_keys(command);
+                            cx.notify();
+                        }),
+                    ))
+                    .child(settings_button(
+                        format!("settings-keybinding-delete-{}", row.command_id),
+                        text.get(UiTextKey::SettingsDelete),
+                        false,
+                        theme,
+                        cx,
+                        cx.listener(move |this, _, _window, cx| {
+                            let _ = this.delete_keybinding_action_keys(command);
+                            cx.notify();
+                        }),
+                    )),
+            ),
         );
     }
 
@@ -1553,13 +1547,13 @@ fn settings_keybinding_rows(
 }
 
 fn setting_row(
-    style: SettingsPanelStyle,
+    style: YtttSettingsLayout,
     theme: WorkbenchTheme,
     title: impl Into<String>,
     description: impl Into<String>,
     control: AnyElement,
 ) -> Div {
-    workbench_settings_row(
+    yttt_settings_row(
         style.control_width,
         theme,
         style.ui_style,
@@ -1580,29 +1574,21 @@ where
     D: SearchableListDelegate + 'static,
     <D::Item as SearchableListItem>::Value: Clone + PartialEq,
 {
-    let select_style = yttt_select_style(theme, ui_style);
-    Select::new(&select)
-        .small()
-        .menu_width(select_style.menu_width)
+    yttt_select(&select, theme, ui_style)
         .search_placeholder(search_placeholder)
-        .appearance(true)
-        .w(select_style.width)
-        .h(select_style.height)
-        .rounded(select_style.radius)
-        .bg(select_style.background)
-        .border_color(select_style.border)
-        .text_color(select_style.text)
         .when(searchable, |select| select.cleanable(false))
 }
 
-fn settings_number_control(input: Entity<InputState>, style: SettingsPanelStyle) -> Div {
+fn settings_number_control(
+    input: Entity<InputState>,
+    theme: WorkbenchTheme,
+    style: YtttSettingsLayout,
+) -> Div {
     div()
         .w(style.compact_control_width)
         .h(style.control_height)
         .child(
-            NumberInput::new(&input)
-                .small()
-                .appearance(true)
+            yttt_number_input(&input, theme, style.ui_style)
                 .w(style.compact_control_width)
                 .h(style.control_height),
         )
@@ -1644,7 +1630,7 @@ fn settings_switch<H>(
 where
     H: Fn(&bool, &mut Window, &mut gpui::App) + 'static,
 {
-    workbench_switch(
+    yttt_switch(
         SharedString::from(id.into()),
         checked,
         theme,

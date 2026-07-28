@@ -12,6 +12,8 @@
 
 ### Changed
 
+- Unified workbench controls, dialogs, overlays, rows, panels, tabs, sidebars, notifications, and split handles behind the `yttt-ui` primitive layer; one live appearance runtime now drives application colors, typography, spacing, radii, shadows, density, and the complete `gpui-component` theme bridge.
+- Clippy boundary rules now reject direct construction of style-sensitive `gpui-component` controls in business UI modules.
 - Legacy workspace, settings, editor, and terminal Vim toggles now migrate to the least restrictive equivalent unified mode, and legacy `WorkspaceVim` keybinding contexts migrate to the Global scope.
 
 ### Fixed

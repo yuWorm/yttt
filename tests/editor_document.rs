@@ -1,7 +1,6 @@
 use gpui::{
     AppContext as _, Context, Entity, EntityInputHandler as _, InteractiveElement as _,
-    IntoElement, KeyBinding, ParentElement as _, Render, StatefulInteractiveElement as _, Window,
-    actions, div,
+    IntoElement, KeyBinding, ParentElement as _, Render, Window, actions, div,
 };
 use std::{
     cell::{Cell, RefCell},

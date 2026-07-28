@@ -1,4 +1,8 @@
-use gpui::{Pixels, Rems, Rgba, px};
+use gpui::{Entity, Pixels, Rems, Rgba, prelude::*};
+use gpui_component::{
+    Sizable as _,
+    select::{Select, SelectDelegate, SelectItem, SelectState},
+};
 
 use crate::{style::UiStyle, theme::WorkbenchTheme};
 
@@ -15,12 +19,34 @@ pub struct YtttSelectStyle {
 
 pub fn yttt_select_style(theme: WorkbenchTheme, ui_style: UiStyle) -> YtttSelectStyle {
     YtttSelectStyle {
-        width: px(220.0),
+        width: ui_style.controls.settings_control_width,
         height: ui_style.controls.settings_height,
         radius: ui_style.radius.control,
-        menu_width: px(280.0),
+        menu_width: ui_style.controls.select_menu_width,
         background: theme.surface_elevated,
         border: theme.border,
         text: theme.text,
     }
+}
+
+pub fn yttt_select<D>(
+    state: &Entity<SelectState<D>>,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Select<D>
+where
+    D: SelectDelegate + 'static,
+    <D::Item as SelectItem>::Value: PartialEq + Clone,
+{
+    let style = yttt_select_style(theme, ui_style);
+    Select::new(state)
+        .small()
+        .appearance(true)
+        .w(style.width)
+        .h(style.height)
+        .menu_width(style.menu_width)
+        .rounded(style.radius)
+        .border_color(style.border)
+        .bg(style.background)
+        .text_color(style.text)
 }

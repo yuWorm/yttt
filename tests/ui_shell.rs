@@ -8,31 +8,31 @@ use yttt::config::{
 use yttt::ui::app::workbench_window_options;
 use yttt::ui::components::{
     SelectableState, notification_tone_for_toast, selectable_state_classes,
-    workbench_agent_notification, workbench_error_notification, workbench_icon_button,
-    workbench_switch,
+    workbench_agent_notification, workbench_error_notification,
 };
 use yttt::ui::editor::{DocumentId, TabGroupId, WorkItemId};
 use yttt::ui::i18n::{Locale, UiText};
-use yttt::ui::interaction::overlay::{
-    KeyboardCapture, overlay_input_capture_policy, popover_overlay_event_policy,
-};
 use yttt::ui::notifications::{ToastItem, ToastTone};
 use yttt::ui::palette::surface::{
-    PaletteFooterAction, PaletteRowTone, palette_footer_actions, palette_input_placeholder,
-    palette_panel_style, palette_row_style, palette_scroll_anchor_index,
+    PaletteFooterAction, palette_footer_actions, palette_input_placeholder,
+    palette_scroll_anchor_index,
 };
 use yttt::ui::primitives::{
     button::{YtttButtonVariant, yttt_button, yttt_button_style},
     dialog::yttt_dialog_style,
-    icon_button::{YtttIconButtonKind, yttt_icon_button_style},
+    icon_button::{YtttIconButtonKind, yttt_icon_button, yttt_icon_button_style},
     input::{YtttInputKind, yttt_input_style},
     notification::{YtttNotificationTone, yttt_notification_style},
-    panel::{YtttPanelKind, yttt_panel_style},
+    panel::{
+        KeyboardCapture, YtttPanelKind, modal_overlay_event_policy, popover_overlay_event_policy,
+        yttt_panel_style, yttt_settings_layout,
+    },
     row::{YtttRowKind, yttt_row_style},
     select::yttt_select_style,
     sidebar::{SidebarSide, SidebarWidthState, resize_sidebar_width, yttt_sidebar_style},
+    split::yttt_split_handle_style,
     status::{YtttStatusTone, yttt_status_dot_style},
-    switch::yttt_switch_style,
+    switch::{yttt_switch, yttt_switch_style},
     tabs::yttt_tabbar_style,
 };
 use yttt::ui::settings::font_options::{
@@ -41,17 +41,15 @@ use yttt::ui::settings::font_options::{
     terminal_font_family_option_for_setting, terminal_font_family_options_from_system,
     terminal_font_family_setting_from_option,
 };
-use yttt::ui::settings::{SettingsGroupId, settings_panel_style, settings_rows_for_group};
+use yttt::ui::settings::{SettingsGroupId, settings_rows_for_group};
 use yttt::ui::terminal::pane::TerminalPaneView;
 use yttt::ui::theme::icons::IconTheme;
 use yttt::ui::theme::{UiStyle, UiStyleId, WorkbenchTheme};
-use yttt::ui::workbench::shell::sidebar::{project_context_commands, project_sidebar_style};
+use yttt::ui::workbench::shell::sidebar::project_context_commands;
 use yttt::ui::workbench::shell::tabs::{
-    DraggedWorkbenchTab, ProjectTabCloseButtonVisibility, ProjectTabLeadingIcon,
-    ProjectTabStatusIndicator, ProjectTabStatusTone, ProjectTabToolbarPlacement,
-    ProjectTabsToolbar, WorkbenchTabCloseScope, WorkbenchTabItem, WorkbenchTabKind, project_tabs,
-    project_tabs_style, project_tree_toggle_icon, project_tree_toggle_tooltip, tab_close_targets,
-    tab_toolbar_icon,
+    DraggedWorkbenchTab, ProjectTabStatusTone, ProjectTabsToolbar, WorkbenchTabCloseScope,
+    WorkbenchTabItem, WorkbenchTabKind, project_tabs, project_tree_toggle_icon,
+    project_tree_toggle_tooltip, tab_close_targets, tab_toolbar_icon,
 };
 use yttt::ui::workbench::shell::titlebar::{TitlebarInfo, compact_path_for_titlebar};
 use yttt::{
@@ -197,7 +195,7 @@ fn titlebar_compacts_windows_paths_without_verbatim_prefixes() {
 
 #[test]
 fn split_resize_handle_style_uses_thin_visible_line() {
-    let style = WorkbenchView::visible_split_handle_style(SplitDirection::Horizontal);
+    let style = yttt_split_handle_style(WorkbenchTheme::one_dark());
 
     assert_eq!(style.visible_line_width, gpui::px(1.0));
     assert!(style.hit_area_width >= gpui::px(5.0));
@@ -211,8 +209,8 @@ fn terminal_pane_default_chrome_has_no_header() {
 #[test]
 fn sidebar_and_tabs_use_compact_zed_like_density() {
     let theme = WorkbenchTheme::one_dark();
-    let sidebar = project_sidebar_style(theme, UiStyle::default());
-    let tabs = project_tabs_style(theme, UiStyle::default());
+    let sidebar = yttt_sidebar_style(theme, UiStyle::default());
+    let tabs = yttt_tabbar_style(theme, UiStyle::default());
 
     assert!(sidebar.width <= gpui::px(220.0));
     assert_eq!(sidebar.default_width, sidebar.width);
@@ -225,21 +223,13 @@ fn sidebar_and_tabs_use_compact_zed_like_density() {
     assert_eq!(sidebar.item_padding_x, gpui::rems(0.5));
     assert_eq!(sidebar.background, theme.app_background);
     assert_eq!(tabs.height, gpui::rems(2.0));
+    assert_eq!(tabs.item_height, tabs.height);
     assert_eq!(tabs.border_width, gpui::px(1.0));
-    assert_eq!(
-        tabs.close_button_visibility,
-        ProjectTabCloseButtonVisibility::Hover
-    );
-    assert_eq!(tabs.leading_icon, ProjectTabLeadingIcon::PerItem);
-    assert_eq!(tabs.status_indicator, ProjectTabStatusIndicator::Dot);
-    assert!(tabs.dirty_marker_uses_close_slot);
-    assert_eq!(
-        tabs.toolbar_placement,
-        ProjectTabToolbarPlacement::FixedAfterScrollableTabs
-    );
     assert_ne!(tabs.active_background, tabs.inactive_background);
-    assert_eq!(tabs.active_indicator, theme.accent);
-    assert_eq!(tabs.active_indicator_height, gpui::px(2.0));
+    assert_eq!(
+        tabs.close_slot_size,
+        yttt_icon_button_style(YtttIconButtonKind::TabClose, theme, UiStyle::default()).size
+    );
 }
 
 #[test]
@@ -716,32 +706,32 @@ fn sidebar_style_uses_passed_theme() {
     let mut theme = WorkbenchTheme::one_dark();
     theme.active_surface = gpui::rgb(0x123456);
 
-    let style = project_sidebar_style(theme, UiStyle::default());
+    let style = yttt_sidebar_style(theme, UiStyle::default());
 
     assert_eq!(style.active_background, gpui::rgb(0x123456));
 }
 
 #[test]
-fn project_tabs_style_uses_passed_theme() {
+fn yttt_tabbar_style_uses_passed_theme() {
     let mut theme = WorkbenchTheme::one_dark();
     theme.active_surface = gpui::rgb(0x222244);
 
-    let style = project_tabs_style(theme, UiStyle::default());
+    let style = yttt_tabbar_style(theme, UiStyle::default());
 
     assert_eq!(style.active_background, gpui::rgb(0x222244));
 }
 
 #[test]
 fn palette_surface_style_is_wide_elevated_and_scroll_bounded() {
-    let style = palette_panel_style(UiStyle::default());
+    let ui_style = UiStyle::default();
+    let style = yttt_panel_style(YtttPanelKind::Palette, WorkbenchTheme::one_dark(), ui_style);
 
     assert!(style.width >= gpui::px(720.0));
     assert!(style.max_width >= style.width);
     assert!(style.max_height < gpui::px(520.0));
-    assert_eq!(style.row_height, gpui::rems(3.375));
-    assert_eq!(style.footer_height, gpui::rems(2.75));
-    assert!(style.list_max_height < style.max_height);
-    assert!(style.scrollable);
+    assert!(style.body_max_height < style.max_height);
+    assert_eq!(ui_style.rows.palette_height, gpui::rems(3.375));
+    assert_eq!(ui_style.controls.palette_footer_height, gpui::rems(2.75));
 }
 
 #[test]
@@ -765,11 +755,28 @@ fn palette_keyboard_selection_scrolls_to_center() {
 #[test]
 fn palette_row_style_uses_muted_selection_without_focus_ring() {
     let theme = WorkbenchTheme::one_dark();
-    let active = palette_row_style(SelectableState::Active, true, theme, UiStyle::default());
-    let inactive = palette_row_style(SelectableState::Inactive, true, theme, UiStyle::default());
-    let disabled = palette_row_style(SelectableState::Inactive, false, theme, UiStyle::default());
+    let active = yttt_row_style(
+        YtttRowKind::Palette,
+        SelectableState::Active,
+        true,
+        theme,
+        UiStyle::default(),
+    );
+    let inactive = yttt_row_style(
+        YtttRowKind::Palette,
+        SelectableState::Inactive,
+        true,
+        theme,
+        UiStyle::default(),
+    );
+    let disabled = yttt_row_style(
+        YtttRowKind::Palette,
+        SelectableState::Inactive,
+        false,
+        theme,
+        UiStyle::default(),
+    );
 
-    assert_eq!(active.tone, PaletteRowTone::Active);
     assert_eq!(active.background, theme.active_surface);
     assert_eq!(active.border, theme.active_surface);
     assert_ne!(active.border, theme.focus_ring);
@@ -931,20 +938,23 @@ fn palette_surface_text_is_localized() {
 
 #[test]
 fn settings_panel_style_uses_zed_like_sidebar_and_content_bounds() {
-    let style = settings_panel_style(UiStyle::default());
+    let ui_style = UiStyle::default();
+    let panel = yttt_panel_style(
+        YtttPanelKind::Settings,
+        WorkbenchTheme::one_dark(),
+        ui_style,
+    );
+    let layout = yttt_settings_layout(ui_style);
 
-    assert_eq!(style.width, gpui::px(900.0));
-    assert!(style.max_width >= style.width);
-    assert_eq!(style.height, gpui::px(560.0));
-    assert!(style.max_height < gpui::px(640.0));
-    assert_eq!(style.sidebar_width, gpui::px(240.0));
-    assert_eq!(style.row_min_height, gpui::rems(4.5));
-    assert_eq!(style.control_width, gpui::px(220.0));
-    assert_eq!(style.compact_control_width, gpui::px(128.0));
-    assert_eq!(style.control_height, gpui::rems(2.0));
-    assert_eq!(style.search_height, gpui::rems(2.25));
-    assert_eq!(style.select_menu_width, gpui::px(280.0));
-    assert_eq!(style.border_width, gpui::px(1.0));
+    assert_eq!(panel.width, gpui::px(900.0));
+    assert!(panel.max_width >= panel.width);
+    assert_eq!(panel.height, Some(gpui::px(560.0)));
+    assert!(panel.max_height < gpui::px(640.0));
+    assert_eq!(layout.sidebar_width, gpui::px(240.0));
+    assert_eq!(layout.control_width, gpui::px(220.0));
+    assert_eq!(layout.compact_control_width, gpui::px(128.0));
+    assert_eq!(layout.control_height, gpui::rems(2.0));
+    assert_eq!(layout.search_height, gpui::rems(2.25));
 }
 
 #[test]
@@ -1073,7 +1083,7 @@ fn settings_rows_are_localized() {
 
 #[test]
 fn floating_layers_leave_keyboard_events_for_focused_inputs() {
-    let policy = overlay_input_capture_policy();
+    let policy = modal_overlay_event_policy();
 
     assert_eq!(policy.keyboard, KeyboardCapture::ScopeOnly);
     assert!(policy.mouse);
@@ -1082,7 +1092,7 @@ fn floating_layers_leave_keyboard_events_for_focused_inputs() {
 
 #[test]
 fn modal_overlay_policy_captures_pointer_and_scroll_without_global_keyboard_capture() {
-    let policy = overlay_input_capture_policy();
+    let policy = modal_overlay_event_policy();
 
     assert_eq!(policy.keyboard, KeyboardCapture::ScopeOnly);
     assert!(policy.mouse);
@@ -1241,7 +1251,7 @@ impl gpui::Render for RemScaledControls {
                 .debug_selector(|| "rem-scaled-button".to_string()),
             )
             .child(
-                workbench_icon_button(
+                yttt_icon_button(
                     "rem-scaled-icon-button",
                     IconName::Search,
                     YtttIconButtonKind::Toolbar,
@@ -1252,7 +1262,7 @@ impl gpui::Render for RemScaledControls {
                 .debug_selector(|| "rem-scaled-icon-button".to_string()),
             )
             .child(
-                workbench_switch(
+                yttt_switch(
                     "rem-scaled-switch",
                     false,
                     theme,
@@ -1484,20 +1494,15 @@ fn toast_tones_map_to_workbench_notification_tones() {
 }
 
 #[test]
-fn yttt_sidebar_style_matches_project_sidebar_density() {
+fn yttt_sidebar_style_centralizes_project_sidebar_density() {
     let theme = WorkbenchTheme::one_dark();
     let primitive = yttt_sidebar_style(theme, UiStyle::default());
-    let project = project_sidebar_style(theme, UiStyle::default());
 
-    assert_eq!(primitive.width, project.width);
-    assert_eq!(primitive.default_width, project.default_width);
-    assert_eq!(primitive.min_width, project.min_width);
-    assert_eq!(primitive.max_width, project.max_width);
-    assert_eq!(primitive.collapsed_width, project.collapsed_width);
-    assert_eq!(
-        primitive.resize_hit_area_width,
-        project.resize_hit_area_width
-    );
+    assert_eq!(primitive.width, primitive.default_width);
+    assert_eq!(primitive.min_width, gpui::px(160.0));
+    assert_eq!(primitive.max_width, gpui::px(420.0));
+    assert!(primitive.collapsed_width < primitive.width);
+    assert_eq!(primitive.resize_hit_area_width, gpui::px(5.0));
     assert_eq!(primitive.item_height, gpui::rems(1.75));
     assert_eq!(primitive.item_padding_x, gpui::rems(0.5));
     assert_eq!(primitive.background, theme.sidebar_background);
@@ -1505,14 +1510,10 @@ fn yttt_sidebar_style_matches_project_sidebar_density() {
 }
 
 #[test]
-fn yttt_tabbar_style_matches_project_tab_density() {
+fn yttt_tabbar_style_centralizes_project_tab_density() {
     let theme = WorkbenchTheme::one_dark();
     let primitive = yttt_tabbar_style(theme, UiStyle::default());
-    let project = project_tabs_style(theme, UiStyle::default());
 
-    assert_eq!(primitive.height, project.height);
-    assert_eq!(primitive.item_height, project.item_height);
-    assert_eq!(primitive.close_slot_size, project.close_slot_size);
     assert_eq!(
         primitive.close_slot_size,
         yttt_icon_button_style(YtttIconButtonKind::TabClose, theme, UiStyle::default()).size

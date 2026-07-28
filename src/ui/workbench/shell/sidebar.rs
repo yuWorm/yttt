@@ -1,6 +1,6 @@
 use gpui::{
     App, ClickEvent, FocusHandle, InteractiveElement as _, IntoElement, MouseButton,
-    MouseDownEvent, Pixels, Rems, Rgba, StatefulInteractiveElement as _, Window, div, prelude::*,
+    MouseDownEvent, StatefulInteractiveElement as _, Window, div, prelude::*,
 };
 use gpui_component::{
     Icon, IconName,
@@ -9,7 +9,7 @@ use gpui_component::{
 
 use crate::commands::CommandId;
 use crate::model::workspace::Workspace;
-use crate::ui::components::{SelectableState, workbench_icon_button};
+use crate::ui::components::SelectableState;
 use crate::ui::i18n::{UiText, UiTextKey};
 use crate::ui::interaction::actions::{
     CreateProject, LayoutExportProjectConfig, LayoutOpenFile, LayoutProjectEdit,
@@ -18,8 +18,8 @@ use crate::ui::interaction::actions::{
 use crate::ui::terminal::status::{agent_status_label, project_agent_status};
 use crate::ui::{
     primitives::{
-        icon_button::YtttIconButtonKind,
-        row::{YtttRowKind, yttt_row_style},
+        icon_button::{YtttIconButtonKind, yttt_icon_button},
+        row::{YtttRowKind, yttt_row, yttt_row_style},
         sidebar::{
             PROJECT_SIDEBAR_MAX_WIDTH, PROJECT_SIDEBAR_MIN_WIDTH, resize_sidebar_width,
             yttt_sidebar_style,
@@ -51,40 +51,6 @@ pub struct ProjectSidebarItem {
     pub path: String,
     pub agent_status: Option<String>,
     pub state: SelectableState,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ProjectSidebarStyle {
-    pub width: Pixels,
-    pub default_width: Pixels,
-    pub min_width: Pixels,
-    pub max_width: Pixels,
-    pub collapsed_width: Pixels,
-    pub border_width: Pixels,
-    pub resize_hit_area_width: Pixels,
-    pub item_height: Rems,
-    pub item_padding_x: Rems,
-    pub background: Rgba,
-    pub active_background: Rgba,
-    pub hover_background: Rgba,
-}
-
-pub fn project_sidebar_style(theme: WorkbenchTheme, ui_style: UiStyle) -> ProjectSidebarStyle {
-    let primitive = yttt_sidebar_style(theme, ui_style);
-    ProjectSidebarStyle {
-        width: primitive.width,
-        default_width: primitive.default_width,
-        min_width: primitive.min_width,
-        max_width: primitive.max_width,
-        collapsed_width: primitive.collapsed_width,
-        border_width: primitive.border_width,
-        resize_hit_area_width: primitive.resize_hit_area_width,
-        item_height: primitive.item_height,
-        item_padding_x: primitive.item_padding_x,
-        background: primitive.background,
-        active_background: primitive.active_background,
-        hover_background: primitive.hover_background,
-    }
 }
 
 fn project_initial(name: &str) -> String {
@@ -149,7 +115,7 @@ where
     ContextF: FnMut(String) -> ContextH,
     ToggleH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    let style = project_sidebar_style(theme, ui_style);
+    let style = yttt_sidebar_style(theme, ui_style);
     let width = if collapsed {
         style.collapsed_width
     } else {
@@ -232,7 +198,7 @@ where
         header = header.child(div().px(ui_style.spacing.xs).child("Projects"));
     }
 
-    header.child(workbench_icon_button(
+    header.child(yttt_icon_button(
         "sidebar-toggle",
         icon,
         YtttIconButtonKind::SidebarHeader,
@@ -262,21 +228,13 @@ where
     let row_style = yttt_row_style(YtttRowKind::Sidebar, item.state, true, theme, ui_style);
     let focused_selection = item.state == SelectableState::Active && has_keyboard_focus;
 
-    div()
+    yttt_row(YtttRowKind::Sidebar, item.state, true, theme, ui_style)
         .id(("project-sidebar-item", index))
         .flex()
         .relative()
         .items_center()
         .justify_between()
         .gap(ui_style.spacing.md)
-        .h(row_style.height)
-        .w_full()
-        .rounded(row_style.radius)
-        .px(row_style.padding_x)
-        .border(row_style.border_width)
-        .border_color(row_style.border)
-        .bg(row_style.background)
-        .hover(move |this| this.bg(row_style.hover_background))
         .on_click(on_select_project)
         .on_mouse_down(MouseButton::Right, on_context_project)
         .children(focused_selection.then(|| {

@@ -10,77 +10,57 @@ pub(super) fn tab_rename_dialog(
 ) -> Div {
     let ui_style = current_ui_style(cx);
     let dialog = yttt_dialog_style(theme, ui_style);
-    capture_overlay_input(
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .right_0()
-            .bottom_0()
-            .flex()
-            .items_start()
-            .justify_center()
-            .pt(ui_style.spacing.overlay_top)
-            .bg(dialog.overlay)
+    yttt_dialog_overlay(
+        yttt_dialog_surface(theme, ui_style)
+            .gap(ui_style.spacing.lg)
+            .child(yttt_dialog_header(
+                "close-tab-rename-dialog",
+                ui_text.get(UiTextKey::RenameTabTitle),
+                theme,
+                ui_style,
+                cx.listener(|this, _, _window, cx| {
+                    this.cancel_tab_rename_dialog();
+                    cx.notify();
+                }),
+            ))
+            .child(yttt_dialog_input(input, theme, ui_style))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(dialog.hint)
+                    .child(ui_text.get(UiTextKey::RenameTabHint)),
+            )
             .child(
                 div()
                     .flex()
-                    .flex_col()
-                    .gap(ui_style.spacing.lg)
-                    .w(dialog.max_width)
-                    .rounded(dialog.radius)
-                    .border(dialog.border_width)
-                    .border_color(dialog.border)
-                    .bg(dialog.background)
-                    .when(dialog.shadow, |this| this.shadow_lg())
-                    .p(dialog.padding)
-                    .text_color(dialog.text)
-                    .child(yttt_dialog_header(
-                        "close-tab-rename-dialog",
-                        ui_text.get(UiTextKey::RenameTabTitle),
+                    .justify_end()
+                    .gap(ui_style.spacing.md)
+                    .child(yttt_dialog_button(
+                        cx,
+                        "cancel-tab-rename",
+                        ui_text.get(UiTextKey::Cancel),
+                        YtttButtonVariant::Secondary,
                         theme,
-                        ui_style,
                         cx.listener(|this, _, _window, cx| {
                             this.cancel_tab_rename_dialog();
                             cx.notify();
                         }),
                     ))
-                    .child(yttt_dialog_input(input, theme, ui_style))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(dialog.hint)
-                            .child(ui_text.get(UiTextKey::RenameTabHint)),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .gap(ui_style.spacing.md)
-                            .child(yttt_dialog_button(
-                                cx,
-                                "cancel-tab-rename",
-                                ui_text.get(UiTextKey::Cancel),
-                                YtttButtonVariant::Secondary,
-                                theme,
-                                cx.listener(|this, _, _window, cx| {
-                                    this.cancel_tab_rename_dialog();
-                                    cx.notify();
-                                }),
-                            ))
-                            .child(yttt_dialog_button(
-                                cx,
-                                "confirm-tab-rename",
-                                ui_text.get(UiTextKey::RenameTabAction),
-                                YtttButtonVariant::Primary,
-                                theme,
-                                cx.listener(|this, _, _window, cx| {
-                                    let _ = this.confirm_tab_rename_dialog_from_input(cx);
-                                    cx.notify();
-                                }),
-                            )),
-                    ),
+                    .child(yttt_dialog_button(
+                        cx,
+                        "confirm-tab-rename",
+                        ui_text.get(UiTextKey::RenameTabAction),
+                        YtttButtonVariant::Primary,
+                        theme,
+                        cx.listener(|this, _, _window, cx| {
+                            let _ = this.confirm_tab_rename_dialog_from_input(cx);
+                            cx.notify();
+                        }),
+                    )),
             ),
+        YtttDialogPlacement::Top,
+        theme,
+        ui_style,
     )
 }
 
@@ -117,131 +97,111 @@ pub(super) fn keybinding_edit_dialog(
         )
     };
 
-    capture_overlay_input(
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .right_0()
-            .bottom_0()
-            .flex()
-            .items_start()
-            .justify_center()
-            .pt(ui_style.spacing.overlay_top)
-            .bg(dialog.overlay)
+    yttt_dialog_overlay(
+        yttt_dialog_surface(theme, ui_style)
+            .gap(ui_style.spacing.lg)
+            .child(yttt_dialog_header(
+                "close-keybinding-edit-dialog",
+                ui_text.get(UiTextKey::SettingsKeybindingDialogTitle),
+                theme,
+                ui_style,
+                cx.listener(|this, _, _window, cx| {
+                    this.cancel_keybinding_edit_dialog();
+                    cx.notify();
+                }),
+            ))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(dialog.hint)
+                    .child(match action.command() {
+                        Some(command) => command_title_with_text(command, ui_text),
+                        None => action.title().unwrap_or(action.as_str()),
+                    }),
+            )
+            .child(
+                div()
+                    .id(SharedString::from("keybinding-recorder"))
+                    .debug_selector(|| "keybinding-recorder".to_string())
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .min_h_16()
+                    .rounded(ui_style.radius.control)
+                    .border(ui_style.border.hairline)
+                    .border_color(theme.focus_ring)
+                    .bg(theme.surface_elevated)
+                    .px(ui_style.spacing.xl)
+                    .py(ui_style.spacing.lg)
+                    .child(recorded),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(dialog.hint)
+                    .child(ui_text.get(UiTextKey::SettingsKeybindingRecorderHint)),
+            )
+            .when_some(error.map(str::to_string), |dialog, error| {
+                dialog.child(div().text_xs().text_color(theme.danger).child(error))
+            })
             .child(
                 div()
                     .flex()
-                    .flex_col()
-                    .gap(ui_style.spacing.lg)
-                    .w(dialog.max_width)
-                    .rounded(dialog.radius)
-                    .border(dialog.border_width)
-                    .border_color(dialog.border)
-                    .bg(dialog.background)
-                    .when(dialog.shadow, |this| this.shadow_lg())
-                    .p(dialog.padding)
-                    .text_color(dialog.text)
-                    .child(yttt_dialog_header(
-                        "close-keybinding-edit-dialog",
-                        ui_text.get(UiTextKey::SettingsKeybindingDialogTitle),
+                    .justify_end()
+                    .gap(ui_style.spacing.md)
+                    .child(
+                        div()
+                            .id("add-keybinding-alternative")
+                            .debug_selector(|| "add-keybinding-alternative".to_string())
+                            .child(yttt_dialog_button(
+                                cx,
+                                "add-keybinding-alternative-button",
+                                ui_text.get(UiTextKey::SettingsAddKeybindingAlternative),
+                                YtttButtonVariant::Secondary,
+                                theme,
+                                cx.listener(|this, _, _window, cx| {
+                                    this.begin_keybinding_edit_alternative();
+                                    cx.notify();
+                                }),
+                            )),
+                    )
+                    .child(yttt_dialog_button(
+                        cx,
+                        "clear-keybinding-edit",
+                        ui_text.get(UiTextKey::SettingsClearKeybindings),
+                        YtttButtonVariant::Secondary,
                         theme,
-                        ui_style,
+                        cx.listener(|this, _, _window, cx| {
+                            this.clear_keybinding_edit_keys();
+                            cx.notify();
+                        }),
+                    ))
+                    .child(yttt_dialog_button(
+                        cx,
+                        "cancel-keybinding-edit",
+                        ui_text.get(UiTextKey::Cancel),
+                        YtttButtonVariant::Secondary,
+                        theme,
                         cx.listener(|this, _, _window, cx| {
                             this.cancel_keybinding_edit_dialog();
                             cx.notify();
                         }),
                     ))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(dialog.hint)
-                            .child(match action.command() {
-                                Some(command) => command_title_with_text(command, ui_text),
-                                None => action.title().unwrap_or(action.as_str()),
-                            }),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from("keybinding-recorder"))
-                            .debug_selector(|| "keybinding-recorder".to_string())
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .min_h_16()
-                            .rounded(ui_style.radius.control)
-                            .border(ui_style.border.hairline)
-                            .border_color(theme.focus_ring)
-                            .bg(theme.surface_elevated)
-                            .px(ui_style.spacing.xl)
-                            .py(ui_style.spacing.lg)
-                            .child(recorded),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(dialog.hint)
-                            .child(ui_text.get(UiTextKey::SettingsKeybindingRecorderHint)),
-                    )
-                    .when_some(error.map(str::to_string), |dialog, error| {
-                        dialog.child(div().text_xs().text_color(theme.danger).child(error))
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .gap(ui_style.spacing.md)
-                            .child(
-                                div()
-                                    .id("add-keybinding-alternative")
-                                    .debug_selector(|| "add-keybinding-alternative".to_string())
-                                    .child(yttt_dialog_button(
-                                        cx,
-                                        "add-keybinding-alternative-button",
-                                        ui_text.get(UiTextKey::SettingsAddKeybindingAlternative),
-                                        YtttButtonVariant::Secondary,
-                                        theme,
-                                        cx.listener(|this, _, _window, cx| {
-                                            this.begin_keybinding_edit_alternative();
-                                            cx.notify();
-                                        }),
-                                    )),
-                            )
-                            .child(yttt_dialog_button(
-                                cx,
-                                "clear-keybinding-edit",
-                                ui_text.get(UiTextKey::SettingsClearKeybindings),
-                                YtttButtonVariant::Secondary,
-                                theme,
-                                cx.listener(|this, _, _window, cx| {
-                                    this.clear_keybinding_edit_keys();
-                                    cx.notify();
-                                }),
-                            ))
-                            .child(yttt_dialog_button(
-                                cx,
-                                "cancel-keybinding-edit",
-                                ui_text.get(UiTextKey::Cancel),
-                                YtttButtonVariant::Secondary,
-                                theme,
-                                cx.listener(|this, _, _window, cx| {
-                                    this.cancel_keybinding_edit_dialog();
-                                    cx.notify();
-                                }),
-                            ))
-                            .child(yttt_dialog_button(
-                                cx,
-                                "confirm-keybinding-edit",
-                                ui_text.get(UiTextKey::SettingsSave),
-                                YtttButtonVariant::Primary,
-                                theme,
-                                cx.listener(|this, _, _window, cx| {
-                                    let _ = this.confirm_keybinding_edit_dialog();
-                                    cx.notify();
-                                }),
-                            )),
-                    ),
+                    .child(yttt_dialog_button(
+                        cx,
+                        "confirm-keybinding-edit",
+                        ui_text.get(UiTextKey::SettingsSave),
+                        YtttButtonVariant::Primary,
+                        theme,
+                        cx.listener(|this, _, _window, cx| {
+                            let _ = this.confirm_keybinding_edit_dialog();
+                            cx.notify();
+                        }),
+                    )),
             ),
+        YtttDialogPlacement::Top,
+        theme,
+        ui_style,
     )
 }
 
@@ -260,30 +220,11 @@ pub(super) fn zed_theme_import_dialog(
     let existing_count =
         detected_zed_theme_existing_count(detection, &ui_output_dir, &icon_output_dir);
 
-    capture_overlay_input(
-        div()
+    yttt_dialog_overlay(
+        yttt_dialog_surface(theme, ui_style)
             .debug_selector(|| "zed-theme-import-dialog".to_string())
-            .absolute()
-            .inset_0()
-            .flex()
-            .items_start()
-            .justify_center()
-            .pt(ui_style.spacing.overlay_top)
-            .bg(dialog.overlay)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(ui_style.spacing.lg)
-                    .w(dialog.max_width)
-                    .max_h(px(640.0))
-                    .rounded(dialog.radius)
-                    .border(dialog.border_width)
-                    .border_color(dialog.border)
-                    .bg(dialog.background)
-                    .when(dialog.shadow, |this| this.shadow_lg())
-                    .p(dialog.padding)
-                    .text_color(dialog.text)
+            .gap(ui_style.spacing.lg)
+            .max_h(px(640.0))
                     .child(yttt_dialog_header("close-zed-theme-import-dialog", ui_text.get(UiTextKey::SettingsImportZedThemes), theme, ui_style, cx.listener(|this, _, _window, cx| {
                         this.cancel_zed_theme_import_dialog();
                         cx.notify();
@@ -369,17 +310,14 @@ pub(super) fn zed_theme_import_dialog(
                                                     "zed-theme-import-policy-skip".to_string()
                                                 })
                                                 .child(
-                                                    Radio::new("zed-theme-import-policy-skip-radio")
-                                                        .small()
-                                                        .label(
-                                                            ui_text.get(
-                                                                UiTextKey::SettingsImportZedThemesSkipExisting,
-                                                            ),
-                                                        )
-                                                        .checked(
-                                                            conflict_policy
-                                                                == ZedThemeImportConflictPolicy::SkipExisting,
-                                                        )
+                                                    yttt_radio(
+                                                        "zed-theme-import-policy-skip-radio",
+                                                        ui_text.get(
+                                                            UiTextKey::SettingsImportZedThemesSkipExisting,
+                                                        ),
+                                                        conflict_policy
+                                                            == ZedThemeImportConflictPolicy::SkipExisting,
+                                                    )
                                                         .on_click(cx.listener(
                                                             |this, checked, _window, cx| {
                                                                 if *checked {
@@ -398,16 +336,11 @@ pub(super) fn zed_theme_import_dialog(
                                                     "zed-theme-import-policy-overwrite".to_string()
                                                 })
                                                 .child(
-                                                    Radio::new(
+                                                    yttt_radio(
                                                         "zed-theme-import-policy-overwrite-radio",
-                                                    )
-                                                    .small()
-                                                    .label(
                                                         ui_text.get(
                                                             UiTextKey::SettingsImportZedThemesOverwriteExisting,
                                                         ),
-                                                    )
-                                                    .checked(
                                                         conflict_policy
                                                             == ZedThemeImportConflictPolicy::OverwriteExisting,
                                                     )
@@ -476,7 +409,9 @@ pub(super) fn zed_theme_import_dialog(
                             .debug_selector(|| "confirm-zed-theme-import".to_string()),
                         )
                     ),
-            ),
+        YtttDialogPlacement::Top,
+        theme,
+        ui_style,
     )
 }
 
@@ -608,7 +543,6 @@ pub(super) fn file_conflict_dialog(
     path: String,
 ) -> Div {
     let ui_style = current_ui_style(cx);
-    let dialog = yttt_dialog_style(theme, ui_style);
     let title = ui_text.get(UiTextKey::FileChangedOnDisk);
     let actions = div()
         .flex()
@@ -646,52 +580,33 @@ pub(super) fn file_conflict_dialog(
             }),
         ));
 
-    capture_overlay_input(
-        div()
+    yttt_dialog_overlay(
+        yttt_dialog_surface(theme, ui_style)
             .debug_selector(|| "file-conflict-dialog".to_string())
-            .absolute()
-            .top_0()
-            .left_0()
-            .right_0()
-            .bottom_0()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(dialog.overlay)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(ui_style.spacing.lg)
-                    .w(dialog.max_width)
-                    .rounded(dialog.radius)
-                    .border(dialog.border_width)
-                    .border_color(dialog.border)
-                    .bg(dialog.background)
-                    .when(dialog.shadow, |this| this.shadow_lg())
-                    .p(dialog.padding)
-                    .text_color(dialog.text)
-                    .child(yttt_dialog_header(
-                        "close-file-conflict-dialog",
-                        title,
-                        theme,
-                        ui_style,
-                        cx.listener(|this, _, _window, cx| {
-                            this.cancel_pending_file_conflict(cx);
-                            cx.notify();
-                        }),
-                    ))
-                    .child(workbench_inline_notification(
-                        ToastItem {
-                            title: path,
-                            context: ui_text.get(UiTextKey::StatusWarningContext).to_string(),
-                            tone: ToastTone::Warning,
-                        },
-                        theme,
-                        ui_style,
-                    ))
-                    .child(actions),
-            ),
+            .gap(ui_style.spacing.lg)
+            .child(yttt_dialog_header(
+                "close-file-conflict-dialog",
+                title,
+                theme,
+                ui_style,
+                cx.listener(|this, _, _window, cx| {
+                    this.cancel_pending_file_conflict(cx);
+                    cx.notify();
+                }),
+            ))
+            .child(workbench_inline_notification(
+                ToastItem {
+                    title: path,
+                    context: ui_text.get(UiTextKey::StatusWarningContext).to_string(),
+                    tone: ToastTone::Warning,
+                },
+                theme,
+                ui_style,
+            ))
+            .child(actions),
+        YtttDialogPlacement::Center,
+        theme,
+        ui_style,
     )
 }
 
@@ -717,18 +632,8 @@ pub(super) fn dirty_close_dialog(
         UiTextKey::DiscardAndContinue
     });
     let summary = details.join("\n");
-    let mut content = div()
-        .flex()
-        .flex_col()
+    let mut content = yttt_dialog_surface(theme, ui_style)
         .gap(ui_style.spacing.lg)
-        .w(dialog.max_width)
-        .rounded(dialog.radius)
-        .border(dialog.border_width)
-        .border_color(dialog.border)
-        .bg(dialog.background)
-        .when(dialog.shadow, |this| this.shadow_lg())
-        .p(dialog.padding)
-        .text_color(dialog.text)
         .child(yttt_dialog_header(
             "close-dirty-file-dialog",
             title,
@@ -796,19 +701,11 @@ pub(super) fn dirty_close_dialog(
             )),
     );
 
-    capture_overlay_input(
-        div()
-            .debug_selector(|| "dirty-close-dialog".to_string())
-            .absolute()
-            .top_0()
-            .left_0()
-            .right_0()
-            .bottom_0()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(dialog.overlay)
-            .child(content),
+    yttt_dialog_overlay(
+        content.debug_selector(|| "dirty-close-dialog".to_string()),
+        YtttDialogPlacement::Center,
+        theme,
+        ui_style,
     )
 }
 
@@ -819,84 +716,65 @@ pub(super) fn close_project_dialog(
 ) -> Div {
     let ui_style = current_ui_style(cx);
     let dialog = yttt_dialog_style(theme, ui_style);
-    capture_overlay_input(
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .right_0()
-            .bottom_0()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(dialog.overlay)
+    yttt_dialog_overlay(
+        yttt_dialog_surface(theme, ui_style)
+            .gap(ui_style.spacing.lg)
+            .child(yttt_dialog_header(
+                "close-project-dialog",
+                ui_text.get(UiTextKey::CloseProjectTitle),
+                theme,
+                ui_style,
+                cx.listener(|this, _, _window, cx| {
+                    this.cancel_pending_project_close();
+                    cx.notify();
+                }),
+            ))
+            .child(workbench_inline_notification(
+                ToastItem {
+                    title: ui_text.get(UiTextKey::CloseProjectBody).to_string(),
+                    context: ui_text.get(UiTextKey::StatusWarningContext).to_string(),
+                    tone: ToastTone::Warning,
+                },
+                theme,
+                ui_style,
+            ))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(dialog.hint)
+                    .child("Enter to close, Escape to cancel"),
+            )
             .child(
                 div()
                     .flex()
-                    .flex_col()
-                    .gap(ui_style.spacing.lg)
-                    .w(dialog.max_width)
-                    .rounded(dialog.radius)
-                    .border(dialog.border_width)
-                    .border_color(dialog.border)
-                    .bg(dialog.background)
-                    .when(dialog.shadow, |this| this.shadow_lg())
-                    .p(dialog.padding)
-                    .text_color(dialog.text)
-                    .child(yttt_dialog_header(
-                        "close-project-dialog",
-                        ui_text.get(UiTextKey::CloseProjectTitle),
+                    .justify_end()
+                    .gap(ui_style.spacing.md)
+                    .child(yttt_dialog_button(
+                        cx,
+                        "cancel-close-project",
+                        ui_text.get(UiTextKey::Cancel),
+                        YtttButtonVariant::Secondary,
                         theme,
-                        ui_style,
                         cx.listener(|this, _, _window, cx| {
                             this.cancel_pending_project_close();
                             cx.notify();
                         }),
                     ))
-                    .child(workbench_inline_notification(
-                        ToastItem {
-                            title: ui_text.get(UiTextKey::CloseProjectBody).to_string(),
-                            context: ui_text.get(UiTextKey::StatusWarningContext).to_string(),
-                            tone: ToastTone::Warning,
-                        },
+                    .child(yttt_dialog_button(
+                        cx,
+                        "confirm-close-project",
+                        ui_text.get(UiTextKey::CloseProjectAction),
+                        YtttButtonVariant::Danger,
                         theme,
-                        ui_style,
-                    ))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(dialog.hint)
-                            .child("Enter to close, Escape to cancel"),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .gap(ui_style.spacing.md)
-                            .child(yttt_dialog_button(
-                                cx,
-                                "cancel-close-project",
-                                ui_text.get(UiTextKey::Cancel),
-                                YtttButtonVariant::Secondary,
-                                theme,
-                                cx.listener(|this, _, _window, cx| {
-                                    this.cancel_pending_project_close();
-                                    cx.notify();
-                                }),
-                            ))
-                            .child(yttt_dialog_button(
-                                cx,
-                                "confirm-close-project",
-                                ui_text.get(UiTextKey::CloseProjectAction),
-                                YtttButtonVariant::Danger,
-                                theme,
-                                cx.listener(|this, _, _window, cx| {
-                                    let _ = this.confirm_pending_project_close();
-                                    cx.notify();
-                                }),
-                            )),
-                    ),
+                        cx.listener(|this, _, _window, cx| {
+                            let _ = this.confirm_pending_project_close();
+                            cx.notify();
+                        }),
+                    )),
             ),
+        YtttDialogPlacement::Center,
+        theme,
+        ui_style,
     )
 }
 
@@ -923,7 +801,7 @@ where
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(title.into()),
         )
-        .child(workbench_icon_button(
+        .child(yttt_icon_button(
             id,
             IconName::Close,
             YtttIconButtonKind::OverlayClose,
@@ -937,23 +815,8 @@ pub(super) fn yttt_dialog_input(
     input: &Entity<InputState>,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
-) -> Div {
-    let style = yttt_input_style(YtttInputKind::Dialog, theme, ui_style);
-    div()
-        .flex()
-        .items_center()
-        .h(style.height)
-        .rounded(style.radius)
-        .bg(style.background)
-        .overflow_hidden()
-        .text_color(style.text)
-        .child(
-            Input::new(input)
-                .cleanable(false)
-                .appearance(true)
-                .rounded(style.radius)
-                .bg(style.background),
-        )
+) -> Input {
+    yttt_input(input, YtttInputKind::Dialog, theme, ui_style).cleanable(false)
 }
 
 pub(super) fn yttt_dialog_button<H>(
@@ -1016,6 +879,7 @@ fn empty_workspace_action(
     theme: &WorkbenchTheme,
     ui_style: UiStyle,
     scale: EmptyWorkspaceScale,
+    cx: &gpui::App,
 ) -> Button {
     let content = div()
         .flex()
@@ -1052,8 +916,7 @@ fn empty_workspace_action(
             .text_size(scale.text_rems(0.75))
         }));
 
-    Button::new(id)
-        .ghost()
+    yttt_button_base(id, YtttButtonVariant::Ghost, *theme, ui_style, cx)
         .w_full()
         .h(scale.spacing(rems(2.5)))
         .px(scale.spacing(ui_style.spacing.lg))
@@ -1148,6 +1011,7 @@ pub(super) fn empty_workspace(
                                 theme,
                                 ui_style,
                                 scale,
+                                cx,
                             )
                             .on_click(cx.listener(
                                 |this, _, window, cx| {
@@ -1165,6 +1029,7 @@ pub(super) fn empty_workspace(
                                 theme,
                                 ui_style,
                                 scale,
+                                cx,
                             )
                             .on_click(cx.listener(
                                 |this, _, window, cx| {
@@ -1182,6 +1047,7 @@ pub(super) fn empty_workspace(
                                 theme,
                                 ui_style,
                                 scale,
+                                cx,
                             )
                             .on_click(cx.listener(
                                 |this, _, window, cx| {
@@ -1199,6 +1065,7 @@ pub(super) fn empty_workspace(
                                 theme,
                                 ui_style,
                                 scale,
+                                cx,
                             )
                             .on_click(cx.listener(|this, _, _window, cx| {
                                 this.restore_last_opened_projects();
@@ -1217,6 +1084,7 @@ pub(super) fn empty_workspace(
                                 theme,
                                 ui_style,
                                 scale,
+                                cx,
                             )
                             .on_click(cx.listener(
                                 |this, _, window, cx| {
@@ -1267,13 +1135,17 @@ pub(super) fn project_empty_terminal_state(
                 .child(ui_text.get(UiTextKey::NoTerminalTabs)),
         )
         .child(
-            workbench_action_button(
+            yttt_button(
                 "project-empty-new-tab",
                 ui_text.get(UiTextKey::NewTab),
-                Some("secondary-t"),
-                ActionEmphasis::Primary,
+                YtttButtonVariant::Primary,
+                *theme,
                 ui_style,
+                cx,
             )
+            .child(Kbd::new(Keystroke::parse("secondary-t").expect(
+                "new terminal shortcut should be a valid GPUI keystroke",
+            )))
             .on_click(cx.listener(|this, _, _window, cx| {
                 let _ = this.run_command(CommandId::TabNew);
                 cx.notify();

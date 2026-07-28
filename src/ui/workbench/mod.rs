@@ -8,11 +8,10 @@ use gpui::{
 use gpui_component::{
     ActiveTheme as _, Disableable as _, IconName, IndexPath, Root as ComponentRoot, Sizable as _,
     Theme as ComponentTheme, WindowExt as _,
-    button::{Button, ButtonVariants as _},
+    button::Button,
     dialog::DialogFooter,
     highlighter::SyntaxHighlighter,
-    input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent, Rope, StepAction},
-    radio::Radio,
+    input::{Input, InputEvent, InputState, NumberInputEvent, Rope, StepAction},
     scroll::ScrollableElement as _,
     searchable_list::{SearchableListDelegate, SearchableListItem},
     select::{SearchableVec, Select, SelectEvent, SelectState},
@@ -169,10 +168,9 @@ use crate::{
     ui::{
         app::{platform, startup::startup_project_paths},
         components::{
-            ActionEmphasis, workbench_action_button, workbench_agent_notification,
-            workbench_error_notification, workbench_icon_button, workbench_inline_notification,
-            workbench_keybinding_badge, workbench_settings_row, workbench_status_notification,
-            workbench_switch,
+            SelectableState, workbench_agent_notification, workbench_error_notification,
+            workbench_inline_notification, workbench_keybinding_badge,
+            workbench_status_notification,
         },
         editor::{
             CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, CurrentDiskState,
@@ -211,22 +209,31 @@ use crate::{
         interaction::key_dispatch::{
             workspace_command_for_keystroke, workspace_runtime_command_allowed,
         },
-        interaction::overlay::capture_overlay_input,
         notifications::{ToastItem, ToastQueue, ToastTone, toast_item_for_event},
         palette::surface::palette_input_placeholder,
         palette::{file_finder_palette_overlay, palette_overlay},
         primitives::{
-            button::{YtttButtonVariant, yttt_button},
-            dialog::yttt_dialog_style,
-            icon_button::YtttIconButtonKind,
-            input::{YtttInputKind, yttt_input_style},
-            panel::{YtttPanelKind, yttt_panel_style},
-            select::yttt_select_style,
+            button::{YtttButtonVariant, yttt_button, yttt_button_base},
+            dialog::{
+                YtttDialogPlacement, yttt_dialog_overlay, yttt_dialog_style, yttt_dialog_surface,
+            },
+            icon_button::{YtttIconButtonKind, yttt_icon_button, yttt_menu_icon_button},
+            input::{YtttInputKind, yttt_input, yttt_number_input},
+            notification::{YtttNotificationTone, yttt_alert},
+            panel::{
+                YtttOverlayPlacement, YtttPanelKind, YtttSettingsLayout, yttt_fullscreen_panel,
+                yttt_panel, yttt_panel_overlay, yttt_settings_layout,
+            },
+            radio::yttt_radio,
+            row::{YtttRowKind, yttt_row, yttt_settings_row},
+            select::yttt_select,
             sidebar::{
                 PROJECT_FILE_PANEL_MAX_WIDTH, PROJECT_FILE_PANEL_MIN_WIDTH,
                 PROJECT_SIDEBAR_MAX_WIDTH, PROJECT_SIDEBAR_MIN_WIDTH,
                 SIDEBAR_RESIZE_HIT_AREA_WIDTH, SidebarSide, resize_sidebar_width,
             },
+            split::yttt_split_handle_style,
+            switch::{yttt_labeled_switch, yttt_switch},
         },
         project_tree::{
             DirectoryLoadRequest, DirectorySnapshot, ProjectEntryFsError, ProjectEntryPasteMode,
@@ -234,6 +241,7 @@ use crate::{
             ProjectTreeRenderSnapshot, ProjectTreeRenderText, ProjectTreeView,
             ProjectTreeViewEvent,
         },
+        settings::SettingsGroupId,
         settings::font_options::{
             FontFamilyOptions, font_family_option_for_setting, font_family_options_from_system,
             font_family_setting_from_option, recommend_installed_monospace_nerd_font,
@@ -244,7 +252,6 @@ use crate::{
             primary_display_keybinding_for_current_platform, recorded_keybinding,
         },
         settings::keybindings::{KeybindingEditError, KeybindingRow, KeybindingsEditorState},
-        settings::{SettingsGroupId, SettingsPanelStyle, settings_panel_style},
         terminal::pane::{
             SshTerminalContext, TerminalPaneContext, TerminalPaneEvent, TerminalPaneExitedEvent,
             TerminalPaneStartedEvent, TerminalPaneView,
@@ -276,8 +283,6 @@ use crate::{
         workbench::shell::titlebar::{TitlebarInfo, compact_path_for_titlebar, workbench_titlebar},
     },
 };
-
-pub use crate::ui::interaction::overlay::overlay_input_capture_policy;
 
 pub struct WorkbenchView {
     workspace: Workspace,
@@ -455,12 +460,6 @@ struct PendingKeybindingEdit {
     has_recorded: bool,
     recording_index: Option<usize>,
     error: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SplitHandleStyle {
-    pub visible_line_width: Pixels,
-    pub hit_area_width: Pixels,
 }
 
 impl WorkbenchView {

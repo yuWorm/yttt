@@ -1,4 +1,4 @@
-use gpui::{rgb, rgba};
+use gpui::rgb;
 use tempfile::tempdir;
 use yttt::config::{
     paths::AppConfigPaths,

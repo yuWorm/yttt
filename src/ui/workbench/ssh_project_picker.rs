@@ -3,10 +3,8 @@ use std::path::Path;
 use crate::config::ssh::{SshAuthPreference, SshConnectionConfig};
 use crate::ui::theme::icons::icon_for_visual;
 use gpui_component::{
-    alert::Alert,
     list::{List, ListEvent, ListState},
     radio::RadioGroup,
-    switch::Switch,
 };
 
 use yttt_core::model::{
@@ -1147,7 +1145,6 @@ pub(super) fn ssh_project_picker_overlay(
 ) -> Div {
     let theme = root.theme_runtime().ui;
     let ui_style = current_ui_style(cx);
-    let dialog = yttt_dialog_style(theme, ui_style);
     let content = match root.ssh.project_picker.view {
         SshProjectPickerView::Connections => {
             ssh_project_connections(root, window, theme, ui_style, cx)
@@ -1164,30 +1161,15 @@ pub(super) fn ssh_project_picker_overlay(
         SshProjectPickerView::Browsing => ssh_project_browser(root, window, theme, ui_style, cx),
     };
 
-    capture_overlay_input(
-        div()
-            .absolute()
-            .inset_0()
-            .flex()
-            .items_start()
-            .justify_center()
-            .pt(ui_style.spacing.overlay_top)
-            .bg(dialog.overlay)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .w(px(680.0))
-                    .max_h(px(640.0))
-                    .rounded(dialog.radius)
-                    .border(dialog.border_width)
-                    .border_color(dialog.border)
-                    .bg(dialog.background)
-                    .when(dialog.shadow, |panel| panel.shadow_lg())
-                    .p(dialog.padding)
-                    .text_color(dialog.text)
-                    .child(content),
-            ),
+    yttt_dialog_overlay(
+        yttt_dialog_surface(theme, ui_style)
+            .w(px(680.0))
+            .max_w(px(680.0))
+            .max_h(px(640.0))
+            .child(content),
+        YtttDialogPlacement::Top,
+        theme,
+        ui_style,
     )
 }
 
@@ -1224,8 +1206,14 @@ fn ssh_project_connections(
         );
     if let Some(error) = root.ssh.project_picker.error.clone() {
         body = body.child(
-            Alert::error("ssh-project-connections-error", error)
-                .title(root.ui_text.get(UiTextKey::SshProjectConnectionFailed)),
+            yttt_alert(
+                "ssh-project-connections-error",
+                error,
+                YtttNotificationTone::Error,
+                theme,
+                ui_style,
+            )
+            .title(root.ui_text.get(UiTextKey::SshProjectConnectionFailed)),
         );
     }
     body.child(
@@ -1409,17 +1397,19 @@ fn ssh_project_quick_connect(
                 theme,
                 ui_style,
             ))
-            .child(
-                Switch::new("ssh-project-remember-password")
-                    .label(root.ui_text.get(UiTextKey::SshRememberPassword))
-                    .checked(remember_password)
-                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
-                        if let Some(form) = this.ssh.form.as_mut() {
-                            form.remember_password = *checked;
-                        }
-                        cx.notify();
-                    })),
-            );
+            .child(yttt_labeled_switch(
+                "ssh-project-remember-password",
+                root.ui_text.get(UiTextKey::SshRememberPassword),
+                remember_password,
+                theme,
+                ui_style,
+                cx.listener(|this, checked: &bool, _window, cx| {
+                    if let Some(form) = this.ssh.form.as_mut() {
+                        form.remember_password = *checked;
+                    }
+                    cx.notify();
+                }),
+            ));
     }
     let error = root
         .ssh
@@ -1429,8 +1419,14 @@ fn ssh_project_quick_connect(
         .or_else(|| root.ssh.error.clone());
     if let Some(error) = error {
         fields = fields.child(
-            Alert::error("ssh-project-quick-connect-error", error)
-                .title(root.ui_text.get(UiTextKey::SshProjectConnectionFailed)),
+            yttt_alert(
+                "ssh-project-quick-connect-error",
+                error,
+                YtttNotificationTone::Error,
+                theme,
+                ui_style,
+            )
+            .title(root.ui_text.get(UiTextKey::SshProjectConnectionFailed)),
         );
     }
 
@@ -1515,7 +1511,13 @@ fn ssh_project_password_prompt(
         )
         .child(div().font_family("monospace").text_sm().child(endpoint));
     if let Some(error) = error {
-        body = body.child(Alert::error("ssh-password-prompt-error", error));
+        body = body.child(yttt_alert(
+            "ssh-password-prompt-error",
+            error,
+            YtttNotificationTone::Error,
+            theme,
+            ui_style,
+        ));
     }
     if let Some(input) = password_input {
         body = body.child(ssh_form_field(
@@ -1525,15 +1527,17 @@ fn ssh_project_password_prompt(
             ui_style,
         ));
     }
-    body.child(
-        Switch::new("ssh-password-prompt-remember")
-            .label(root.ui_text.get(UiTextKey::SshRememberPassword))
-            .checked(root.ssh.project_picker.remember_password)
-            .on_click(cx.listener(|this, checked: &bool, _window, cx| {
-                this.ssh.project_picker.remember_password = *checked;
-                cx.notify();
-            })),
-    )
+    body.child(yttt_labeled_switch(
+        "ssh-password-prompt-remember",
+        root.ui_text.get(UiTextKey::SshRememberPassword),
+        root.ssh.project_picker.remember_password,
+        theme,
+        ui_style,
+        cx.listener(|this, checked: &bool, _window, cx| {
+            this.ssh.project_picker.remember_password = *checked;
+            cx.notify();
+        }),
+    ))
     .child(
         div()
             .flex()
@@ -1623,7 +1627,14 @@ fn ssh_project_connecting(
             UiTextKey::SshProjectConnectionFailed
         };
         body = body.child(
-            Alert::error("ssh-project-connection-error", message).title(root.ui_text.get(title)),
+            yttt_alert(
+                "ssh-project-connection-error",
+                message,
+                YtttNotificationTone::Error,
+                theme,
+                ui_style,
+            )
+            .title(root.ui_text.get(title)),
         );
     }
     body.child(
@@ -1698,25 +1709,30 @@ fn ssh_project_browser(
         .gap(ui_style.spacing.xs);
     if has_parent {
         list_rows = list_rows.child(
-            Button::new("ssh-project-parent-directory")
-                .ghost()
-                .w_full()
-                .child(
-                    div()
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .gap(ui_style.spacing.sm)
-                        .text_left()
-                        .child(icon_for_visual(
-                            root.icon_theme.resolve_directory(Path::new(".."), true),
-                            theme.text_muted,
-                        ))
-                        .child(".."),
-                )
-                .on_click(cx.listener(|this, _, _window, cx| {
-                    this.navigate_ssh_project_parent(cx);
-                })),
+            yttt_button_base(
+                "ssh-project-parent-directory",
+                YtttButtonVariant::Ghost,
+                theme,
+                ui_style,
+                cx,
+            )
+            .w_full()
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap(ui_style.spacing.sm)
+                    .text_left()
+                    .child(icon_for_visual(
+                        root.icon_theme.resolve_directory(Path::new(".."), true),
+                        theme.text_muted,
+                    ))
+                    .child(".."),
+            )
+            .on_click(cx.listener(|this, _, _window, cx| {
+                this.navigate_ssh_project_parent(cx);
+            })),
         );
     }
     for directory in directories {
@@ -1731,11 +1747,13 @@ fn ssh_project_browser(
         let chevron_icon =
             icon_for_visual(root.icon_theme.resolve_chevron(false), theme.text_muted);
         list_rows = list_rows.child(
-            Button::new(SharedString::from(format!(
-                "ssh-project-directory-{}",
-                directory.path
-            )))
-            .ghost()
+            yttt_button_base(
+                SharedString::from(format!("ssh-project-directory-{}", directory.path)),
+                YtttButtonVariant::Ghost,
+                theme,
+                ui_style,
+                cx,
+            )
             .w_full()
             .child(
                 div()
@@ -1899,26 +1917,32 @@ fn ssh_project_back_header(
         .justify_between()
         .gap(ui_style.spacing.md)
         .child(
-            Button::new("ssh-project-back")
-                .ghost()
-                .label(format!(
-                    "← {}",
-                    root.ui_text.get(UiTextKey::SshOpenRemoteProject)
-                ))
-                .on_click(cx.listener(|this, _, _window, cx| {
-                    this.back_ssh_project_picker(cx);
-                    cx.notify();
-                })),
+            yttt_button(
+                "ssh-project-back",
+                format!("← {}", root.ui_text.get(UiTextKey::SshOpenRemoteProject)),
+                YtttButtonVariant::Ghost,
+                theme,
+                ui_style,
+                cx,
+            )
+            .on_click(cx.listener(|this, _, _window, cx| {
+                this.back_ssh_project_picker(cx);
+                cx.notify();
+            })),
         )
         .child(
-            Button::new("ssh-project-close")
-                .ghost()
-                .label("×")
-                .text_color(theme.text_muted)
-                .on_click(cx.listener(|this, _, _window, cx| {
-                    this.close_ssh_project_picker(cx);
-                    cx.notify();
-                })),
+            yttt_button(
+                "ssh-project-close",
+                "×",
+                YtttButtonVariant::Ghost,
+                theme,
+                ui_style,
+                cx,
+            )
+            .on_click(cx.listener(|this, _, _window, cx| {
+                this.close_ssh_project_picker(cx);
+                cx.notify();
+            })),
         )
 }
 

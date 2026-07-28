@@ -9,8 +9,8 @@ impl WorkbenchView {
         direction: SplitDirection,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let style = Self::visible_split_handle_style(direction);
         let theme = self.theme_runtime().ui;
+        let style = yttt_split_handle_style(theme);
         let mut handle = div()
             .id(match direction {
                 SplitDirection::Horizontal => "horizontal-split-resize-handle",
@@ -53,12 +53,8 @@ impl WorkbenchView {
         axis: WorkAreaSplitAxis,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let direction = match axis {
-            WorkAreaSplitAxis::Row => SplitDirection::Horizontal,
-            WorkAreaSplitAxis::Column => SplitDirection::Vertical,
-        };
-        let style = Self::visible_split_handle_style(direction);
         let theme = self.theme_runtime().ui;
+        let style = yttt_split_handle_style(theme);
         let line_color = if self
             .active_work_area_resize_drag
             .is_some_and(|drag| drag.split_id == split_id)
@@ -140,14 +136,6 @@ impl WorkbenchView {
             SidebarSide::Right => handle.left(offset),
         }
         .into_any_element()
-    }
-
-    pub fn visible_split_handle_style(_direction: SplitDirection) -> SplitHandleStyle {
-        let theme = WorkbenchTheme::one_dark();
-        SplitHandleStyle {
-            visible_line_width: theme.split_line_width,
-            hit_area_width: theme.split_hit_area_width,
-        }
     }
 
     pub(super) fn begin_split_resize_drag(

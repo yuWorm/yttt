@@ -611,7 +611,6 @@ impl WorkbenchView {
         let ui_style = appearance.style;
         let theme = appearance.ui;
         let editor_theme = appearance.editor;
-        let panel_background = git_diff_panel_background(theme, ui_style);
         let editor_appearance = EditorAppearance::from(&self.app_settings.editor);
         let panel = self.overlays.git_diff_panel.as_mut()?;
         let focus_handle = panel
@@ -724,223 +723,191 @@ impl WorkbenchView {
                 .into_any_element(),
         };
 
-        Some(
-            div()
-                .debug_selector(|| "git-diff-overlay".to_string())
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(ui_style.panels.fullscreen_overlay)
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        Some(yttt_panel_overlay(
+            yttt_fullscreen_panel(theme, ui_style)
+                .debug_selector(|| "git-diff-panel".to_string())
+                .track_focus(&focus_handle)
+                .key_context(GIT_DIFF_CONTEXT)
                 .child(
                     div()
-                        .debug_selector(|| "git-diff-panel".to_string())
-                        .track_focus(&focus_handle)
-                        .key_context(GIT_DIFF_CONTEXT)
                         .flex()
-                        .flex_col()
-                        .w(relative(0.96))
-                        .h(relative(0.90))
-                        .min_h_0()
-                        .rounded(ui_style.radius.surface)
-                        .border(ui_style.border.hairline)
+                        .items_center()
+                        .justify_between()
+                        .gap(ui_style.spacing.xl)
+                        .px(ui_style.spacing.xl + ui_style.spacing.xs)
+                        .py(ui_style.spacing.lg)
+                        .border_b(ui_style.border.hairline)
                         .border_color(theme.border)
-                        .bg(panel_background)
-                        .when(ui_style.panels.shadow, |this| this.shadow_lg())
+                        .bg(theme.surface_elevated)
                         .child(
                             div()
                                 .flex()
                                 .items_center()
-                                .justify_between()
-                                .gap(ui_style.spacing.xl)
-                                .px(ui_style.spacing.xl + ui_style.spacing.xs)
-                                .py(ui_style.spacing.lg)
-                                .border_b(ui_style.border.hairline)
-                                .border_color(theme.border)
-                                .bg(theme.surface_elevated)
+                                .gap(ui_style.spacing.lg)
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .font_semibold()
+                                        .text_color(theme.text)
+                                        .child(self.ui_text.get(UiTextKey::GitDiffTitle)),
+                                )
+                                .when(file_count > 0, |this| {
+                                    this.child(
+                                        div()
+                                            .h(rems(1.125))
+                                            .border_l(ui_style.border.hairline)
+                                            .border_color(theme.border),
+                                    )
+                                    .child(div().text_sm().text_color(theme.text_muted).child(
+                                        format!(
+                                            "{} {} ·",
+                                            file_count,
+                                            self.ui_text.get(if file_count == 1 {
+                                                UiTextKey::GitDiffFile
+                                            } else {
+                                                UiTextKey::GitDiffFiles
+                                            })
+                                        ),
+                                    ))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme.success)
+                                            .child(format!("+{total_added}")),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme.danger)
+                                            .child(format!("-{total_removed}")),
+                                    )
+                                }),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(ui_style.spacing.md)
+                                .when(file_count > 0, |this| {
+                                    this.child(git_diff_header_button(
+                                        "git-diff-copy",
+                                        self.ui_text.get(UiTextKey::GitDiffCopyHint),
+                                        false,
+                                        theme,
+                                        ui_style,
+                                        cx.listener(|this, _, _window, cx| {
+                                            if let Some(text) = this.selected_git_diff_text() {
+                                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                                    text,
+                                                ));
+                                            }
+                                        }),
+                                    ))
+                                    .child(git_diff_separator(theme, ui_style))
+                                })
+                                .child(git_diff_header_button(
+                                    "git-diff-whitespace",
+                                    self.ui_text.get(UiTextKey::GitDiffWhitespace),
+                                    ignore_whitespace,
+                                    theme,
+                                    ui_style,
+                                    cx.listener(|this, _, _window, cx| {
+                                        if this.toggle_git_diff_whitespace() {
+                                            cx.notify();
+                                        }
+                                    }),
+                                ))
+                                .child(git_diff_separator(theme, ui_style))
                                 .child(
                                     div()
                                         .flex()
                                         .items_center()
-                                        .gap(ui_style.spacing.lg)
-                                        .min_w_0()
-                                        .child(
-                                            div()
-                                                .font_semibold()
-                                                .text_color(theme.text)
-                                                .child(self.ui_text.get(UiTextKey::GitDiffTitle)),
-                                        )
-                                        .when(file_count > 0, |this| {
-                                            this.child(
-                                                div()
-                                                    .h(rems(1.125))
-                                                    .border_l(ui_style.border.hairline)
-                                                    .border_color(theme.border),
-                                            )
-                                            .child(
-                                                div().text_sm().text_color(theme.text_muted).child(
-                                                    format!(
-                                                        "{} {} ·",
-                                                        file_count,
-                                                        self.ui_text.get(if file_count == 1 {
-                                                            UiTextKey::GitDiffFile
-                                                        } else {
-                                                            UiTextKey::GitDiffFiles
-                                                        })
-                                                    ),
-                                                ),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .text_color(theme.success)
-                                                    .child(format!("+{total_added}")),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .text_color(theme.danger)
-                                                    .child(format!("-{total_removed}")),
-                                            )
-                                        }),
+                                        .rounded(ui_style.radius.control)
+                                        .bg(theme.app_background)
+                                        .child(git_diff_header_button(
+                                            "git-diff-unified",
+                                            self.ui_text.get(UiTextKey::GitDiffUnified),
+                                            view_mode == GitDiffViewMode::Unified,
+                                            theme,
+                                            ui_style,
+                                            cx.listener(|this, _, _window, cx| {
+                                                if this.set_git_diff_view_mode(
+                                                    GitDiffViewMode::Unified,
+                                                ) {
+                                                    cx.notify();
+                                                }
+                                            }),
+                                        ))
+                                        .child(git_diff_header_button(
+                                            "git-diff-split",
+                                            self.ui_text.get(UiTextKey::GitDiffSplit),
+                                            view_mode == GitDiffViewMode::Split,
+                                            theme,
+                                            ui_style,
+                                            cx.listener(|this, _, _window, cx| {
+                                                if this
+                                                    .set_git_diff_view_mode(GitDiffViewMode::Split)
+                                                {
+                                                    cx.notify();
+                                                }
+                                            }),
+                                        )),
                                 )
                                 .child(
                                     div()
                                         .flex()
                                         .items_center()
-                                        .gap(ui_style.spacing.md)
-                                        .when(file_count > 0, |this| {
-                                            this.child(git_diff_header_button(
-                                                "git-diff-copy",
-                                                self.ui_text.get(UiTextKey::GitDiffCopyHint),
-                                                false,
-                                                theme,
-                                                ui_style,
-                                                cx.listener(|this, _, _window, cx| {
-                                                    if let Some(text) =
-                                                        this.selected_git_diff_text()
-                                                    {
-                                                        cx.write_to_clipboard(
-                                                            ClipboardItem::new_string(text),
-                                                        );
-                                                    }
-                                                }),
-                                            ))
-                                            .child(git_diff_separator(theme, ui_style))
-                                        })
+                                        .rounded(ui_style.radius.control)
+                                        .bg(theme.app_background)
                                         .child(git_diff_header_button(
-                                            "git-diff-whitespace",
-                                            self.ui_text.get(UiTextKey::GitDiffWhitespace),
-                                            ignore_whitespace,
+                                            "git-diff-unstaged",
+                                            self.ui_text.get(UiTextKey::GitDiffUnstaged),
+                                            mode == GitDiffMode::Unstaged,
                                             theme,
                                             ui_style,
                                             cx.listener(|this, _, _window, cx| {
-                                                if this.toggle_git_diff_whitespace() {
+                                                if this.set_git_diff_mode(GitDiffMode::Unstaged) {
                                                     cx.notify();
                                                 }
                                             }),
                                         ))
-                                        .child(git_diff_separator(theme, ui_style))
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .rounded(ui_style.radius.control)
-                                                .bg(theme.app_background)
-                                                .child(git_diff_header_button(
-                                                    "git-diff-unified",
-                                                    self.ui_text.get(UiTextKey::GitDiffUnified),
-                                                    view_mode == GitDiffViewMode::Unified,
-                                                    theme,
-                                                    ui_style,
-                                                    cx.listener(|this, _, _window, cx| {
-                                                        if this.set_git_diff_view_mode(
-                                                            GitDiffViewMode::Unified,
-                                                        ) {
-                                                            cx.notify();
-                                                        }
-                                                    }),
-                                                ))
-                                                .child(git_diff_header_button(
-                                                    "git-diff-split",
-                                                    self.ui_text.get(UiTextKey::GitDiffSplit),
-                                                    view_mode == GitDiffViewMode::Split,
-                                                    theme,
-                                                    ui_style,
-                                                    cx.listener(|this, _, _window, cx| {
-                                                        if this.set_git_diff_view_mode(
-                                                            GitDiffViewMode::Split,
-                                                        ) {
-                                                            cx.notify();
-                                                        }
-                                                    }),
-                                                )),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .rounded(ui_style.radius.control)
-                                                .bg(theme.app_background)
-                                                .child(git_diff_header_button(
-                                                    "git-diff-unstaged",
-                                                    self.ui_text.get(UiTextKey::GitDiffUnstaged),
-                                                    mode == GitDiffMode::Unstaged,
-                                                    theme,
-                                                    ui_style,
-                                                    cx.listener(|this, _, _window, cx| {
-                                                        if this.set_git_diff_mode(
-                                                            GitDiffMode::Unstaged,
-                                                        ) {
-                                                            cx.notify();
-                                                        }
-                                                    }),
-                                                ))
-                                                .child(git_diff_header_button(
-                                                    "git-diff-staged",
-                                                    self.ui_text.get(UiTextKey::GitDiffStaged),
-                                                    mode == GitDiffMode::Staged,
-                                                    theme,
-                                                    ui_style,
-                                                    cx.listener(|this, _, _window, cx| {
-                                                        if this
-                                                            .set_git_diff_mode(GitDiffMode::Staged)
-                                                        {
-                                                            cx.notify();
-                                                        }
-                                                    }),
-                                                )),
-                                        )
-                                        .child(git_diff_separator(theme, ui_style))
-                                        .child(
-                                            div()
-                                                .id("git-diff-close")
-                                                .debug_selector(|| "git-diff-close".to_string())
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .size(ui_style.icon_buttons.overlay_close_size)
-                                                .rounded(ui_style.icon_buttons.overlay_close_radius)
-                                                .cursor_pointer()
-                                                .text_color(theme.text_muted)
-                                                .hover(move |this| {
-                                                    this.bg(ui_style.hover_background(theme))
-                                                        .text_color(theme.text)
-                                                })
-                                                .on_click(cx.listener(|this, _, _window, cx| {
-                                                    this.close_git_diff_panel();
+                                        .child(git_diff_header_button(
+                                            "git-diff-staged",
+                                            self.ui_text.get(UiTextKey::GitDiffStaged),
+                                            mode == GitDiffMode::Staged,
+                                            theme,
+                                            ui_style,
+                                            cx.listener(|this, _, _window, cx| {
+                                                if this.set_git_diff_mode(GitDiffMode::Staged) {
                                                     cx.notify();
-                                                }))
-                                                .child("×"),
-                                        ),
+                                                }
+                                            }),
+                                        )),
+                                )
+                                .child(git_diff_separator(theme, ui_style))
+                                .child(
+                                    yttt_icon_button(
+                                        "git-diff-close",
+                                        IconName::Close,
+                                        YtttIconButtonKind::OverlayClose,
+                                        theme,
+                                        ui_style,
+                                        cx.listener(|this, _, _window, cx| {
+                                            this.close_git_diff_panel();
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .debug_selector(|| "git-diff-close".to_string()),
                                 ),
-                        )
-                        .child(body)
-                        .child(git_diff_footer(&self.ui_text, theme, ui_style)),
-                ),
-        )
+                        ),
+                )
+                .child(body)
+                .child(git_diff_footer(&self.ui_text, theme, ui_style)),
+            YtttPanelKind::Fullscreen,
+            YtttOverlayPlacement::Center,
+            theme,
+            ui_style,
+        ))
     }
 
     fn render_git_diff_sidebar(
@@ -1862,10 +1829,6 @@ fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
     color
 }
 
-fn git_diff_panel_background(theme: WorkbenchTheme, ui_style: UiStyle) -> Rgba {
-    yttt_panel_style(YtttPanelKind::Editor, theme, ui_style).background
-}
-
 fn git_diff_message(
     message: impl Into<SharedString>,
     color: Rgba,
@@ -2012,17 +1975,6 @@ mod tests {
             new_line,
             content: content.to_string(),
         }
-    }
-
-    #[test]
-    fn diff_panel_background_is_opaque_for_translucent_window_themes() {
-        let mut theme = WorkbenchTheme::one_dark();
-        theme.surface.a = 0.04;
-
-        assert_eq!(
-            git_diff_panel_background(theme, UiStyle::default()),
-            theme.surface.alpha(1.0)
-        );
     }
 
     #[test]

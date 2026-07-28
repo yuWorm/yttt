@@ -278,19 +278,9 @@ fn terminal_font_step(
     font_detection: &OnboardingFontDetection,
     font_select: &Entity<SettingsFontFamilySelectState>,
 ) -> Div {
-    let select_style = yttt_select_style(theme, ui_style);
-    let font_select = Select::new(font_select)
-        .small()
-        .menu_width(select_style.menu_width)
+    let font_select = yttt_select(font_select, theme, ui_style)
         .search_placeholder(ui_text.get(UiTextKey::SettingsSearchFont))
-        .appearance(true)
-        .cleanable(false)
-        .w(select_style.width)
-        .h(select_style.height)
-        .rounded(select_style.radius)
-        .bg(select_style.background)
-        .border_color(select_style.border)
-        .text_color(select_style.text);
+        .cleanable(false);
     let recommendation = match font_detection {
         OnboardingFontDetection::Recommended(font_family) => div()
             .debug_selector(|| "onboarding-terminal-font-recommendation".to_string())
@@ -376,8 +366,8 @@ fn terminal_font_step(
                 .child(
                     div()
                         .debug_selector(|| "onboarding-terminal-font-select".to_string())
-                        .w(select_style.width)
-                        .h(select_style.height)
+                        .w(ui_style.controls.settings_control_width)
+                        .h(ui_style.controls.settings_height)
                         .child(font_select),
                 )
                 .child(recommendation),

@@ -2,23 +2,19 @@ use gpui::{
     AnyElement, App, ClickEvent, Div, Entity, InteractiveElement as _, IntoElement, ScrollHandle,
     StatefulInteractiveElement as _, Window, div, prelude::*, px, relative,
 };
-use gpui_component::{
-    IconName,
-    input::{Input, InputState},
-};
+use gpui_component::{IconName, input::InputState};
 
 use crate::ui::{
     components::{SelectableState, workbench_palette_item},
     i18n::{UiText, UiTextKey},
-    interaction::overlay::capture_overlay_input,
     palette::picker::PickerItem,
-    palette::surface::{
-        PaletteFooterAction, palette_footer_actions, palette_panel_style,
-        palette_scroll_anchor_index,
-    },
+    palette::surface::{PaletteFooterAction, palette_footer_actions, palette_scroll_anchor_index},
     primitives::{
-        input::{YtttInputKind, yttt_input_style},
-        panel::{YtttPanelKind, yttt_panel_style},
+        input::{YtttInputKind, yttt_input},
+        panel::{
+            YtttOverlayPlacement, YtttPanelKind, yttt_panel, yttt_panel_overlay, yttt_panel_style,
+        },
+        row::{YtttRowKind, yttt_row_style},
     },
     theme::{UiStyle, WorkbenchTheme},
 };
@@ -42,43 +38,24 @@ where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     F: FnMut(usize) -> H,
 {
-    let panel = yttt_panel_style(YtttPanelKind::Palette, theme, ui_style);
-
-    capture_overlay_input(
-        div().absolute().inset_0().child(
-            div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_start()
-                .justify_center()
-                .pt(ui_style.spacing.overlay_top)
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .w(panel.width)
-                        .max_w(panel.max_width)
-                        .max_h(panel.max_height)
-                        .rounded(panel.radius)
-                        .border(panel.border_width)
-                        .border_color(panel.border)
-                        .bg(panel.background)
-                        .when(panel.shadow, |this| this.shadow_lg())
-                        .text_color(theme.text)
-                        .overflow_hidden()
-                        .child(picker_header(query_input, theme, ui_style))
-                        .child(picker_items(
-                            rows,
-                            ui_text,
-                            scroll_handle,
-                            theme,
-                            ui_style,
-                            on_confirm_item,
-                        ))
-                        .child(picker_footer(ui_text, theme, ui_style)),
-                ),
-        ),
+    yttt_panel_overlay(
+        yttt_panel(YtttPanelKind::Palette, theme, ui_style)
+            .p_0()
+            .overflow_hidden()
+            .child(picker_header(query_input, theme, ui_style))
+            .child(picker_items(
+                rows,
+                ui_text,
+                scroll_handle,
+                theme,
+                ui_style,
+                on_confirm_item,
+            ))
+            .child(picker_footer(ui_text, theme, ui_style)),
+        YtttPanelKind::Palette,
+        YtttOverlayPlacement::Top,
+        theme,
+        ui_style,
     )
 }
 
@@ -96,71 +73,54 @@ where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     F: FnMut(usize) -> H,
 {
-    let panel = yttt_panel_style(YtttPanelKind::Palette, theme, ui_style);
-
-    capture_overlay_input(
-        div().absolute().inset_0().child(
-            div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_start()
-                .justify_center()
-                .pt(ui_style.spacing.overlay_top)
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .w(relative(0.88))
-                        .max_w(px(1_420.))
-                        .h(relative(0.78))
-                        .max_h(panel.max_height)
-                        .rounded(panel.radius)
-                        .border(panel.border_width)
-                        .border_color(panel.border)
-                        .bg(panel.background)
-                        .when(panel.shadow, |this| this.shadow_lg())
-                        .text_color(theme.text)
-                        .overflow_hidden()
-                        .child(picker_header(query_input, theme, ui_style))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_1()
-                                .min_h_0()
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .w(relative(0.42))
-                                        .min_w(px(340.))
-                                        .min_h_0()
-                                        .overflow_hidden()
-                                        .child(picker_items(
-                                            rows,
-                                            ui_text,
-                                            scroll_handle,
-                                            theme,
-                                            ui_style,
-                                            on_confirm_item,
-                                        )),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .min_h_0()
-                                        .border_l(ui_style.border.hairline)
-                                        .border_color(theme.border)
-                                        .overflow_hidden()
-                                        .child(preview),
-                                ),
-                        )
-                        .child(picker_footer(ui_text, theme, ui_style)),
-                ),
-        ),
+    yttt_panel_overlay(
+        yttt_panel(YtttPanelKind::Palette, theme, ui_style)
+            .w(relative(0.88))
+            .max_w(px(1_420.))
+            .h(relative(0.78))
+            .p_0()
+            .overflow_hidden()
+            .child(picker_header(query_input, theme, ui_style))
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .w(relative(0.42))
+                            .min_w(px(340.))
+                            .min_h_0()
+                            .overflow_hidden()
+                            .child(picker_items(
+                                rows,
+                                ui_text,
+                                scroll_handle,
+                                theme,
+                                ui_style,
+                                on_confirm_item,
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h_0()
+                            .border_l(ui_style.border.hairline)
+                            .border_color(theme.border)
+                            .overflow_hidden()
+                            .child(preview),
+                    ),
+            )
+            .child(picker_footer(ui_text, theme, ui_style)),
+        YtttPanelKind::Palette,
+        YtttOverlayPlacement::Top,
+        theme,
+        ui_style,
     )
 }
 
@@ -169,7 +129,6 @@ fn picker_header(
     theme: WorkbenchTheme,
     ui_style: UiStyle,
 ) -> Div {
-    let input_style = yttt_input_style(YtttInputKind::Palette, theme, ui_style);
     div()
         .flex()
         .items_center()
@@ -178,15 +137,9 @@ fn picker_header(
         .px(ui_style.spacing.lg)
         .py(ui_style.spacing.md)
         .child(
-            Input::new(query_input)
+            yttt_input(query_input, YtttInputKind::Palette, theme, ui_style)
                 .prefix(IconName::Search)
-                .cleanable(true)
-                .appearance(true)
-                .h(input_style.height)
-                .rounded(input_style.radius)
-                .border_color(input_style.border)
-                .bg(input_style.background)
-                .text_color(input_style.text),
+                .cleanable(true),
         )
 }
 
@@ -202,12 +155,19 @@ where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     F: FnMut(usize) -> H,
 {
-    let panel_style = palette_panel_style(ui_style);
+    let panel_style = yttt_panel_style(YtttPanelKind::Palette, theme, ui_style);
+    let row_style = yttt_row_style(
+        YtttRowKind::Palette,
+        SelectableState::Inactive,
+        true,
+        theme,
+        ui_style,
+    );
 
     if rows.is_empty() {
         return div()
             .id("palette-empty")
-            .min_h(panel_style.row_height)
+            .min_h(row_style.height)
             .p(ui_style.spacing.xl)
             .text_sm()
             .text_color(theme.text_subtle)
@@ -233,7 +193,7 @@ where
                 .flex_col()
                 .gap(ui_style.spacing.xs)
                 .p(ui_style.spacing.md)
-                .max_h(panel_style.list_max_height)
+                .max_h(panel_style.body_max_height)
                 .overflow_y_scroll()
                 .track_scroll(scroll_handle),
             |list, (index, row)| {
@@ -279,15 +239,13 @@ where
 }
 
 fn picker_footer(ui_text: &UiText, theme: WorkbenchTheme, ui_style: UiStyle) -> Div {
-    let style = palette_panel_style(ui_style);
-
     div()
         .flex()
         .items_center()
         .justify_end()
         .gap(ui_style.spacing.xl)
-        .h(style.footer_height)
-        .border_t(style.border_width)
+        .h(ui_style.controls.palette_footer_height)
+        .border_t(ui_style.border.hairline)
         .border_color(theme.border)
         .px(ui_style.spacing.lg)
         .text_xs()

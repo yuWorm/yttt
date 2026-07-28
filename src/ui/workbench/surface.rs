@@ -612,13 +612,15 @@ impl WorkbenchView {
                                 .items_center()
                                 .gap(ui_style.spacing.xs)
                                 .child(
-                                    Button::new("project-file-panel-new")
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(IconName::Plus)
-                                        .h(ui_style.icon_buttons.toolbar_size)
-                                        .rounded(ui_style.icon_buttons.toolbar_radius)
-                                        .dropdown_menu(move |menu, _, _| {
+                                    yttt_menu_icon_button(
+                                        "project-file-panel-new",
+                                        IconName::Plus,
+                                        YtttIconButtonKind::Toolbar,
+                                        theme,
+                                        ui_style,
+                                    )
+                                    .dropdown_menu(
+                                        move |menu, _, _| {
                                             let new_file_tree = new_entry_tree.clone();
                                             let new_directory_tree = new_entry_tree.clone();
                                             let new_file_workbench =
@@ -663,7 +665,8 @@ impl WorkbenchView {
                                                         );
                                                     }),
                                             )
-                                        }),
+                                        },
+                                    ),
                                 )
                                 .child(
                                     yttt_button(

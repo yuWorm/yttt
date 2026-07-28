@@ -15,25 +15,18 @@ pub fn workbench_palette_item<H>(
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    let style = palette_row_style(state, enabled, theme, ui_style);
+    let style = yttt_row_style(YtttRowKind::Palette, state, enabled, theme, ui_style);
     let title = title.into();
     let subtitle = subtitle.into();
     let status = status.into();
     let keybinding = keybinding.filter(|keybinding| !keybinding.trim().is_empty());
 
-    div()
+    yttt_row(YtttRowKind::Palette, state, enabled, theme, ui_style)
         .id(id)
         .flex()
         .items_center()
         .justify_between()
         .gap(ui_style.spacing.xl)
-        .h(style.height)
-        .rounded(style.radius)
-        .border(style.border_width)
-        .border_color(style.border)
-        .bg(style.background)
-        .px(style.padding_x)
-        .hover(move |this| this.bg(style.hover_background))
         .on_click(on_click)
         .child(
             div()

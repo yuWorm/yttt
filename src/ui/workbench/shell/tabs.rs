@@ -1,7 +1,7 @@
 use gpui::{
     App, ClickEvent, Context, Div, InteractiveElement as _, IntoElement, MouseButton,
-    MouseDownEvent, Pixels, Rems, Render, Rgba, SharedString, Stateful,
-    StatefulInteractiveElement as _, Window, div, prelude::*, px, rgba,
+    MouseDownEvent, Rems, Render, SharedString, Stateful, StatefulInteractiveElement as _, Window,
+    div, prelude::*, rgba,
 };
 use gpui_component::{
     Icon, IconName,
@@ -15,7 +15,7 @@ use crate::{
         workspace::{TabStartState, Workspace},
     },
     ui::{
-        components::{SelectableState, workbench_icon_button},
+        components::SelectableState,
         editor::{DocumentId, TabGroupId, WorkItemId},
         i18n::{UiText, UiTextKey},
         interaction::actions::{
@@ -23,10 +23,10 @@ use crate::{
             TabCloseBefore,
         },
         primitives::{
-            icon_button::YtttIconButtonKind,
+            icon_button::{YtttIconButtonKind, yttt_icon_button},
             row::{YtttRowKind, yttt_row_style},
             status::{YtttStatusTone, yttt_status_dot_style},
-            tabs::yttt_tabbar_style,
+            tabs::{YtttTabBarStyle, yttt_tab, yttt_tabbar_style},
         },
         terminal::status::{agent_status_label, tab_agent_status},
         theme::icons::{IconTheme, IconVisual, icon_for_visual},
@@ -110,8 +110,9 @@ impl DraggedWorkbenchTab {
 
 impl Render for DraggedWorkbenchTab {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let style = yttt_tabbar_style(self.theme, self.ui_style);
         div()
-            .max_w(px(220.0))
+            .max_w(style.max_width)
             .px(self.ui_style.spacing.lg)
             .py(self.ui_style.spacing.xs)
             .rounded(self.ui_style.radius.compact)
@@ -148,45 +149,6 @@ pub struct WorkbenchTabItem {
     pub state: SelectableState,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ProjectTabsStyle {
-    pub height: Rems,
-    pub item_height: Rems,
-    pub border_width: Pixels,
-    pub close_slot_size: Rems,
-    pub active_background: Rgba,
-    pub active_indicator: Rgba,
-    pub active_indicator_height: Pixels,
-    pub inactive_background: Rgba,
-    pub hover_background: Rgba,
-    pub close_button_visibility: ProjectTabCloseButtonVisibility,
-    pub leading_icon: ProjectTabLeadingIcon,
-    pub status_indicator: ProjectTabStatusIndicator,
-    pub dirty_marker_uses_close_slot: bool,
-    pub toolbar_placement: ProjectTabToolbarPlacement,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProjectTabCloseButtonVisibility {
-    Hover,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProjectTabLeadingIcon {
-    Terminal,
-    PerItem,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProjectTabStatusIndicator {
-    Dot,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProjectTabToolbarPlacement {
-    FixedAfterScrollableTabs,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectTabStatusTone {
     Lazy,
@@ -195,26 +157,6 @@ pub enum ProjectTabStatusTone {
     AgentCompleted,
     AgentFailed,
     Dirty,
-}
-
-pub fn project_tabs_style(theme: WorkbenchTheme, ui_style: UiStyle) -> ProjectTabsStyle {
-    let primitive = yttt_tabbar_style(theme, ui_style);
-    ProjectTabsStyle {
-        height: primitive.height,
-        item_height: primitive.item_height,
-        border_width: primitive.border_width,
-        close_slot_size: primitive.close_slot_size,
-        active_background: primitive.active_background,
-        active_indicator: theme.accent,
-        active_indicator_height: ui_style.border.emphasized,
-        inactive_background: primitive.inactive_background,
-        hover_background: primitive.hover_background,
-        close_button_visibility: ProjectTabCloseButtonVisibility::Hover,
-        leading_icon: ProjectTabLeadingIcon::PerItem,
-        status_indicator: ProjectTabStatusIndicator::Dot,
-        dirty_marker_uses_close_slot: true,
-        toolbar_placement: ProjectTabToolbarPlacement::FixedAfterScrollableTabs,
-    }
 }
 
 pub fn visible_tab_titles(workspace: &Workspace) -> Vec<String> {
@@ -403,7 +345,7 @@ where
     SplitHH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ToggleTreeH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    let style = project_tabs_style(theme, ui_style);
+    let style = yttt_tabbar_style(theme, ui_style);
     let ProjectTabsToolbar {
         project_tree_open,
         project_tree_tooltip,
@@ -484,7 +426,7 @@ fn project_tab<SelectH, ContextSelectH, CloseH, MoveH>(
     icon_theme: &IconTheme,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
-    style: ProjectTabsStyle,
+    style: YtttTabBarStyle,
     text: UiText,
     on_select_tab: SelectH,
     on_context_select_tab: ContextSelectH,
@@ -522,7 +464,7 @@ where
     let missing_on_disk = item.missing_on_disk;
     let status_tone = item.status_tone;
 
-    let mut tab = div()
+    let mut tab = yttt_tab(item.state, theme, ui_style)
         .id(element_id)
         .debug_selector(move || format!("project-tab-{}-{index}", tab_group_id.raw()))
         .group(group_name.clone())
@@ -530,16 +472,7 @@ where
         .flex()
         .items_center()
         .gap(ui_style.spacing.md)
-        .h(row_style.height)
-        .rounded(row_style.radius)
-        .min_w(px(128.0))
-        .max_w(px(220.0))
-        .border_r(row_style.border_width)
-        .border_color(row_style.border)
-        .bg(row_style.background)
-        .px(row_style.padding_x)
         .text_xs()
-        .hover(move |this| this.bg(row_style.hover_background))
         .on_click(on_select_tab)
         .on_mouse_down(MouseButton::Right, on_context_select_tab)
         .on_drag(
@@ -602,8 +535,8 @@ where
             .bottom_0()
             .left_0()
             .right_0()
-            .h(style.active_indicator_height)
-            .bg(style.active_indicator)
+            .h(ui_style.border.emphasized)
+            .bg(theme.accent)
     }))
     .context_menu(move |menu, _, _| {
         menu.item(
@@ -668,7 +601,7 @@ fn tab_close_button<CloseH>(
 where
     CloseH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    workbench_icon_button(
+    yttt_icon_button(
         ("project-tab-close", index),
         IconName::Close,
         YtttIconButtonKind::TabClose,
@@ -793,7 +726,7 @@ fn tab_toolbar_button<H>(
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    workbench_icon_button(
+    yttt_icon_button(
         id,
         icon,
         YtttIconButtonKind::Toolbar,

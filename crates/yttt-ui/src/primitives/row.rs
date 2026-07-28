@@ -1,4 +1,4 @@
-use gpui::{Pixels, Rems, Rgba, rgba};
+use gpui::{AnyElement, Div, FontWeight, Pixels, Rems, Rgba, div, prelude::*, rgba};
 
 use crate::{SelectableState, style::UiStyle, theme::WorkbenchTheme};
 
@@ -168,4 +168,87 @@ pub fn yttt_row_style(
             status: theme.text_muted,
         },
     }
+}
+
+pub fn yttt_row(
+    kind: YtttRowKind,
+    state: SelectableState,
+    enabled: bool,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Div {
+    let style = yttt_row_style(kind, state, enabled, theme, ui_style);
+    div()
+        .min_h(style.height)
+        .px(style.padding_x)
+        .py(style.padding_y)
+        .rounded(style.radius)
+        .border(style.border_width)
+        .border_color(style.border)
+        .bg(style.background)
+        .text_color(style.title)
+        .when(enabled, |this| {
+            this.hover(move |this| this.bg(style.hover_background))
+        })
+}
+
+pub fn yttt_settings_row(
+    control_width: Pixels,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+    title: impl Into<String>,
+    description: impl Into<String>,
+    control: AnyElement,
+) -> Div {
+    let title = title.into();
+    let description = description.into();
+    let style = yttt_row_style(
+        YtttRowKind::Settings,
+        SelectableState::Inactive,
+        true,
+        theme,
+        ui_style,
+    );
+
+    yttt_row(
+        YtttRowKind::Settings,
+        SelectableState::Inactive,
+        true,
+        theme,
+        ui_style,
+    )
+    .flex()
+    .items_center()
+    .justify_between()
+    .gap(ui_style.spacing.xxl)
+    .child(
+        div()
+            .flex()
+            .flex_col()
+            .gap(ui_style.spacing.xs)
+            .min_w_0()
+            .flex_1()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(style.title)
+                    .child(title),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(style.subtitle)
+                    .child(description),
+            ),
+    )
+    .child(
+        div()
+            .flex()
+            .justify_end()
+            .items_center()
+            .w(control_width)
+            .flex_none()
+            .child(control),
+    )
 }

@@ -199,10 +199,8 @@ mod tests {
         AppContext as _, Context, InteractiveElement as _, IntoElement, Modifiers,
         ParentElement as _, Render, Styled as _, TestAppContext, Window, div, px,
     };
-    use gpui_component::{
-        Root,
-        select::{Select, SelectState},
-    };
+    use gpui_component::{Root, select::SelectState};
+    use yttt_ui::{primitives::select::yttt_select, style::UiStyle, theme::WorkbenchTheme};
 
     use super::*;
 
@@ -216,7 +214,11 @@ mod tests {
                 .debug_selector(|| "font-select-test".to_string())
                 .w(px(220.0))
                 .h(px(32.0))
-                .child(Select::new(&self.select))
+                .child(yttt_select(
+                    &self.select,
+                    WorkbenchTheme::one_dark(),
+                    UiStyle::default(),
+                ))
         }
     }
 
@@ -225,7 +227,7 @@ mod tests {
         cx.update(gpui_component::init);
         let select_slot = Rc::new(RefCell::new(None));
         let select_slot_for_window = select_slot.clone();
-        let (_root, mut cx) = cx.add_window_view(move |window, cx| {
+        let (_root, cx) = cx.add_window_view(move |window, cx| {
             let select = cx.new(|cx| {
                 SelectState::new(
                     FontFamilyOptions::new(vec![

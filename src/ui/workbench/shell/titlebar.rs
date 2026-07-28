@@ -2,8 +2,7 @@ use gpui::{App, ClickEvent, IntoElement, Window, div, prelude::*};
 use gpui_component::{Icon, IconName, StyledExt, TitleBar, tooltip::Tooltip};
 
 use crate::ui::{
-    components::workbench_icon_button,
-    primitives::icon_button::YtttIconButtonKind,
+    primitives::icon_button::{YtttIconButtonKind, yttt_icon_button},
     theme::{UiStyle, WorkbenchTheme},
 };
 
@@ -186,7 +185,7 @@ where
                         .h_full()
                         .occlude()
                         .child(
-                            workbench_icon_button(
+                            yttt_icon_button(
                                 "titlebar-command-palette",
                                 IconName::Search,
                                 YtttIconButtonKind::Toolbar,
@@ -200,7 +199,7 @@ where
                             }),
                         )
                         .child(
-                            workbench_icon_button(
+                            yttt_icon_button(
                                 "titlebar-settings",
                                 IconName::Settings,
                                 YtttIconButtonKind::Toolbar,

@@ -135,6 +135,51 @@ pub fn current_ui_style(cx: &App) -> UiStyle {
         .unwrap_or_default()
 }
 
+pub fn current_workbench_theme(cx: &App) -> WorkbenchTheme {
+    cx.try_global::<AppearanceState>()
+        .map(|appearance| appearance.runtime().ui)
+        .unwrap_or_else(WorkbenchTheme::one_dark)
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct UiTypography {
+    pub font_family: String,
+    pub font_size: f32,
+    pub line_height: f32,
+    pub mono_font_family: String,
+    pub mono_font_size: f32,
+}
+
+impl UiTypography {
+    fn resolve(settings: &AppSettings) -> Self {
+        let font_family = if settings.general.ui_font_family.is_empty() {
+            ".SystemUIFont".to_string()
+        } else {
+            settings.general.ui_font_family.clone()
+        };
+        let mono_font_family = if settings.editor.font_family.is_empty() {
+            if cfg!(target_os = "macos") {
+                "Menlo"
+            } else if cfg!(target_os = "windows") {
+                "Consolas"
+            } else {
+                "DejaVu Sans Mono"
+            }
+            .to_string()
+        } else {
+            settings.editor.font_family.clone()
+        };
+
+        Self {
+            font_family,
+            font_size: settings.general.ui_font_size,
+            line_height: settings.general.ui_line_height,
+            mono_font_family,
+            mono_font_size: settings.editor.font_size,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ThemeRuntime {
     pub generation: u64,
@@ -144,6 +189,7 @@ pub struct ThemeRuntime {
     pub ui: WorkbenchTheme,
     pub style_id: UiStyleId,
     pub style: UiStyle,
+    pub typography: UiTypography,
     pub editor: EditorTheme,
     pub terminal: TerminalTheme,
     pub terminal_settings: TerminalSettings,
@@ -238,6 +284,7 @@ impl ThemeRuntime {
             ui,
             style_id,
             style: UiStyle::resolve(style_id),
+            typography: UiTypography::resolve(settings),
             editor,
             terminal,
             terminal_settings: settings.terminal.clone(),
@@ -270,6 +317,22 @@ impl ThemeRuntime {
         colors.button_secondary_foreground = Some(color_hex(theme.text_muted).into());
         colors.button_secondary_hover = Some(color_hex(hover).into());
         colors.button_secondary_active = Some(color_hex(active).into());
+        colors.button_danger = Some(color_hex(theme.danger).into());
+        colors.button_danger_foreground = Some(color_hex(theme.text).into());
+        colors.button_danger_hover = Some(color_hex(theme.danger).into());
+        colors.button_danger_active = Some(color_hex(theme.danger).into());
+        colors.button_info = Some(color_hex(theme.accent).into());
+        colors.button_info_foreground = Some(color_hex(theme.text).into());
+        colors.button_info_hover = Some(color_hex(theme.accent).into());
+        colors.button_info_active = Some(color_hex(theme.accent).into());
+        colors.button_success = Some(color_hex(theme.success).into());
+        colors.button_success_foreground = Some(color_hex(theme.text).into());
+        colors.button_success_hover = Some(color_hex(theme.success).into());
+        colors.button_success_active = Some(color_hex(theme.success).into());
+        colors.button_warning = Some(color_hex(theme.warning).into());
+        colors.button_warning_foreground = Some(color_hex(theme.text).into());
+        colors.button_warning_hover = Some(color_hex(theme.warning).into());
+        colors.button_warning_active = Some(color_hex(theme.warning).into());
         colors.muted = Some(color_hex(theme.surface_elevated).into());
         colors.muted_foreground = Some(color_hex(theme.text_subtle).into());
         colors.overlay = Some(color_hex(self.window_material.scrim).into());
@@ -286,6 +349,31 @@ impl ThemeRuntime {
         colors.accent = Some(color_hex(hover).into());
         colors.accent_foreground = Some(color_hex(theme.text).into());
         colors.caret = Some(color_hex(theme.accent).into());
+        colors.group_box = Some(color_hex(theme.surface).into());
+        colors.group_box_foreground = Some(color_hex(theme.text_muted).into());
+        colors.group_box_title_foreground = Some(color_hex(theme.text).into());
+        colors.chart_1 = Some(color_hex(theme.accent).into());
+        colors.chart_2 = Some(color_hex(theme.success).into());
+        colors.chart_3 = Some(color_hex(theme.warning).into());
+        colors.chart_4 = Some(color_hex(theme.danger).into());
+        colors.chart_5 = Some(color_hex(theme.focused_pane_border).into());
+        colors.chart_bullish = Some(color_hex(theme.success).into());
+        colors.chart_bearish = Some(color_hex(theme.danger).into());
+        colors.description_list_label = Some(color_hex(theme.surface_elevated).into());
+        colors.description_list_label_foreground = Some(color_hex(theme.text_muted).into());
+        colors.drag_border = Some(color_hex(theme.accent).into());
+        colors.drop_target = Some(color_hex(theme.selection).into());
+        colors.info = Some(color_hex(theme.accent).into());
+        colors.info_foreground = Some(color_hex(theme.text).into());
+        colors.info_hover = Some(color_hex(theme.accent).into());
+        colors.info_active = Some(color_hex(theme.accent).into());
+        colors.link = Some(color_hex(theme.accent).into());
+        colors.link_hover = Some(color_hex(theme.focus_ring).into());
+        colors.link_active = Some(color_hex(theme.focused_pane_border).into());
+        colors.progress_bar = Some(color_hex(theme.accent).into());
+        colors.skeleton = Some(color_hex(theme.surface_elevated).into());
+        colors.slider_bar = Some(color_hex(theme.border_strong).into());
+        colors.slider_thumb = Some(color_hex(theme.text_muted).into());
         colors.list = Some(color_hex(transparent).into());
         colors.list_active = Some(color_hex(active).into());
         colors.list_active_border = Some(color_hex(active).into());
@@ -317,14 +405,27 @@ impl ThemeRuntime {
         colors.table_even = Some(color_hex(transparent).into());
         colors.table_head = Some(color_hex(theme.surface).into());
         colors.table_hover = Some(color_hex(hover).into());
+        colors.table_head_foreground = Some(color_hex(theme.text).into());
+        colors.table_foot = Some(color_hex(theme.surface).into());
+        colors.table_foot_foreground = Some(color_hex(theme.text_muted).into());
+        colors.table_row_border = Some(color_hex(theme.border).into());
         colors.success = Some(color_hex(theme.success).into());
         colors.success_foreground = Some(color_hex(theme.text).into());
         colors.warning = Some(color_hex(theme.warning).into());
         colors.warning_foreground = Some(color_hex(theme.text).into());
         colors.danger = Some(color_hex(theme.danger).into());
         colors.danger_foreground = Some(color_hex(theme.text).into());
+        colors.success_hover = Some(color_hex(theme.success).into());
+        colors.success_active = Some(color_hex(theme.success).into());
+        colors.warning_hover = Some(color_hex(theme.warning).into());
+        colors.warning_active = Some(color_hex(theme.warning).into());
+        colors.danger_hover = Some(color_hex(theme.danger).into());
+        colors.danger_active = Some(color_hex(theme.danger).into());
         colors.title_bar = Some(color_hex(theme.titlebar_background).into());
         colors.title_bar_border = Some(color_hex(theme.border).into());
+        colors.status_bar = Some(color_hex(theme.surface).into());
+        colors.status_bar_border = Some(color_hex(theme.border).into());
+        colors.tiles = Some(color_hex(theme.surface_elevated).into());
         colors.window_border = Some(color_hex(theme.border).into());
 
         let mut config = ThemeConfig::default();
@@ -333,6 +434,10 @@ impl ThemeRuntime {
         config.radius = Some(self.style.component.radius);
         config.radius_lg = Some(self.style.component.radius_lg);
         config.shadow = Some(self.style.component.shadow);
+        config.font_family = Some(self.typography.font_family.clone().into());
+        config.font_size = Some(self.typography.font_size);
+        config.mono_font_family = Some(self.typography.mono_font_family.clone().into());
+        config.mono_font_size = Some(self.typography.mono_font_size);
         config.colors = colors;
         config.highlight = Some(self.editor.to_highlight_theme_style());
         config

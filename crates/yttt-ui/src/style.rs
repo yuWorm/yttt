@@ -75,6 +75,9 @@ pub struct UiControlMetrics {
     pub button_height: Rems,
     pub button_padding_x: Rems,
     pub settings_height: Rems,
+    pub settings_control_width: Pixels,
+    pub settings_compact_control_width: Pixels,
+    pub select_menu_width: Pixels,
     pub toolbar_height: Rems,
     pub dialog_input_height: Rems,
     pub palette_input_height: Rems,
@@ -132,6 +135,7 @@ pub struct UiPanelVisualMetrics {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UiNotificationMetrics {
+    pub width: Pixels,
     pub min_height: Rems,
     pub padding_x: Rems,
     pub padding_y: Rems,
@@ -241,6 +245,9 @@ impl UiStyle {
                 button_height: rems(1.25),
                 button_padding_x: rems(0.25),
                 settings_height: rems(2.0),
+                settings_control_width: px(220.0),
+                settings_compact_control_width: px(128.0),
+                select_menu_width: px(280.0),
                 toolbar_height: rems(1.875),
                 dialog_input_height: rems(2.125),
                 palette_input_height: rems(2.625),
@@ -290,6 +297,7 @@ impl UiStyle {
                 shadow: false,
             },
             notifications: UiNotificationMetrics {
+                width: px(360.0),
                 min_height: rems(2.75),
                 padding_x: rems(0.75),
                 padding_y: rems(0.5),
@@ -354,6 +362,9 @@ impl UiStyle {
                 button_height: rems(1.75),
                 button_padding_x: rems(0.75),
                 settings_height: rems(2.25),
+                settings_control_width: px(220.0),
+                settings_compact_control_width: px(128.0),
+                select_menu_width: px(280.0),
                 toolbar_height: rems(2.25),
                 dialog_input_height: rems(2.5),
                 palette_input_height: rems(2.875),
@@ -403,6 +414,7 @@ impl UiStyle {
                 editor_overlay: rgba(0x000000b3),
             },
             notifications: UiNotificationMetrics {
+                width: px(360.0),
                 min_height: rems(3.25),
                 padding_x: rems(0.875),
                 padding_y: rems(0.75),

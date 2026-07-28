@@ -342,7 +342,7 @@ fn keybinding_recorder_renders_focuses_and_records(cx: &mut TestAppContext) {
     let temp = tempdir().unwrap();
     let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
 
-    let (root, mut cx) = cx.add_window_view(|_, _| WorkbenchView::with_config_paths(config_paths));
+    let (root, cx) = cx.add_window_view(|_, _| WorkbenchView::with_config_paths(config_paths));
     cx.update(|_, app| {
         root.update(app, |root, cx| {
             root.open_keybinding_edit_dialog(CommandId::TabPalette)
@@ -450,7 +450,7 @@ fn project_tree_edit_blocks_active_file_focus_restore(cx: &mut TestAppContext) {
     let view_project_id = project_id.clone();
     let active_file = project_path.join("README.md");
 
-    let (root, mut cx) = cx.add_window_view(move |_, _| {
+    let (root, cx) = cx.add_window_view(move |_, _| {
         let mut root =
             WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths);
         let session = root
@@ -592,7 +592,7 @@ fn active_project_file_watcher_refreshes_tree_and_git_status(cx: &mut TestAppCon
         .unwrap();
     workspace.select_project(&project_id).unwrap();
 
-    let (root, mut cx) = cx.add_window_view(|_, _| {
+    let (root, cx) = cx.add_window_view(|_, _| {
         let mut root =
             WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths);
         root.project_file_watching_enabled = true;

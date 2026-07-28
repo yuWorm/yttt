@@ -87,9 +87,8 @@ pub fn yttt_button_variant(
         .shadow(ui_style.component.shadow)
 }
 
-pub fn yttt_button(
+pub fn yttt_button_base(
     id: impl Into<ElementId>,
-    label: impl Into<SharedString>,
     variant: YtttButtonVariant,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
@@ -97,7 +96,6 @@ pub fn yttt_button(
 ) -> Button {
     let style = yttt_button_style(variant, theme, ui_style);
     Button::new(id)
-        .label(label)
         .xsmall()
         .compact()
         .h(ui_style.controls.button_height)
@@ -107,4 +105,15 @@ pub fn yttt_button(
         .border_color(style.border)
         .custom(yttt_button_variant(variant, theme, ui_style, cx))
         .text_color(style.text)
+}
+
+pub fn yttt_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    variant: YtttButtonVariant,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+    cx: &App,
+) -> Button {
+    yttt_button_base(id, variant, theme, ui_style, cx).label(label)
 }

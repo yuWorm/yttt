@@ -6,9 +6,9 @@ use gpui::{
     StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _,
-    button::{Button, ButtonVariants as _},
+    ActiveTheme as _, IconName,
     input::{InputEvent, InputState, Position, Search},
+    tooltip::Tooltip,
 };
 use gpui_markdown_editor::{
     MarkdownEditor, MarkdownEditorEnvironment, MarkdownEditorEvent, MarkdownEditorMode,
@@ -19,7 +19,8 @@ use crate::{
     config::settings::EditorSettings,
     ui::{
         i18n::{UiText, UiTextKey},
-        theme::current_ui_style,
+        primitives::icon_button::{YtttIconButtonKind, yttt_icon_button},
+        theme::{current_ui_style, current_workbench_theme},
     },
 };
 
@@ -1057,23 +1058,17 @@ impl Render for ProjectEditorDocument {
         let header_action: AnyElement = match &self.surface {
             ProjectEditorSurface::Code { input, .. } => {
                 let input = input.clone();
-                let search_hover = cx.theme().accent;
-                let search = div()
-                    .id("editor-search")
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .justify_center()
-                    .size(ui_style.icon_buttons.toolbar_size)
-                    .rounded(ui_style.icon_buttons.toolbar_radius)
-                    .text_color(cx.theme().muted_foreground)
-                    .cursor_pointer()
-                    .hover(move |style| style.bg(search_hover))
-                    .child(Icon::new(IconName::Search).size_3())
-                    .on_click(move |_, window, cx| {
+                let search = yttt_icon_button(
+                    "editor-search",
+                    IconName::Search,
+                    YtttIconButtonKind::Toolbar,
+                    current_workbench_theme(cx),
+                    ui_style,
+                    move |_, window, cx| {
                         input.update(cx, |input, input_cx| input.focus(window, input_cx));
                         window.dispatch_action(Box::new(Search), cx);
-                    });
+                    },
+                );
                 let mut actions = div()
                     .id("editor-actions")
                     .flex()
@@ -1111,16 +1106,19 @@ impl Render for ProjectEditorDocument {
                 div()
                     .debug_selector(|| "markdown-mode-toggle".to_string())
                     .child(
-                        Button::new("markdown-mode-toggle-button")
-                            .ghost()
-                            .xsmall()
-                            .icon(icon)
-                            .tooltip(tooltip)
-                            .on_click(move |_, _, cx| {
+                        yttt_icon_button(
+                            "markdown-mode-toggle-button",
+                            icon,
+                            YtttIconButtonKind::Toolbar,
+                            current_workbench_theme(cx),
+                            ui_style,
+                            move |_, _, cx| {
                                 editor.update(cx, |editor, editor_cx| {
                                     editor.toggle_mode(editor_cx);
                                 });
-                            }),
+                            },
+                        )
+                        .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx)),
                     )
                     .into_any_element()
             }
@@ -1245,7 +1243,7 @@ mod tests {
             Arc::new(MarkdownEditorStrings::en_us()),
             UiText::english(),
         );
-        let (document, mut cx) = cx.add_window_view(move |window, cx| {
+        let (document, cx) = cx.add_window_view(move |window, cx| {
             ProjectEditorDocument::new_with_markdown_config(
                 model,
                 appearance,
@@ -1311,7 +1309,7 @@ mod tests {
             Arc::new(MarkdownEditorStrings::en_us()),
             UiText::english(),
         );
-        let (document, mut cx) = cx.add_window_view(move |window, cx| {
+        let (document, cx) = cx.add_window_view(move |window, cx| {
             ProjectEditorDocument::new_with_markdown_config(
                 model,
                 appearance,

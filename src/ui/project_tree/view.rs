@@ -11,7 +11,7 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme as _, Sizable as _,
-    input::{Escape, Input, InputEvent, InputState},
+    input::{Escape, InputEvent, InputState},
     list::ListItem,
     menu::PopupMenuItem,
     tree::{TreeItem, TreeState, tree},
@@ -27,6 +27,7 @@ use crate::{
             ProjectTreeSelectLast, ProjectTreeSelectNext, ProjectTreeSelectPrevious,
             ProjectTreeToggle, ProjectTreeToggleHidden,
         },
+        primitives::input::yttt_borderless_input,
         theme::{
             current_ui_style,
             icons::{IconTheme, icon_for_visual},
@@ -1349,7 +1350,7 @@ fn render_edit_row(
                         .rounded(ui_style.radius.compact)
                         .border(ui_style.border.hairline)
                         .border_color(cx.theme().primary)
-                        .child(Input::new(input).appearance(false).small()),
+                        .child(yttt_borderless_input(input).small()),
                 ),
         )
 }

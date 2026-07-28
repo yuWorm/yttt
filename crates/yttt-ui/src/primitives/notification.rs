@@ -1,9 +1,11 @@
-use gpui::{Pixels, Rems, Rgba, px};
+use gpui::{Div, ElementId, Pixels, Rems, Rgba, div, prelude::*};
+use gpui_component::{alert::Alert, notification::Notification};
 
 use crate::{style::UiStyle, theme::WorkbenchTheme};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum YtttNotificationTone {
+    Info,
     Success,
     Warning,
     Error,
@@ -38,13 +40,14 @@ pub fn yttt_notification_style(
     ui_style: UiStyle,
 ) -> YtttNotificationStyle {
     let tone = match tone {
+        YtttNotificationTone::Info => theme.accent,
         YtttNotificationTone::Success => theme.success,
         YtttNotificationTone::Warning => theme.warning,
         YtttNotificationTone::Error => theme.danger,
     };
 
     YtttNotificationStyle {
-        width: px(360.0),
+        width: ui_style.notifications.width,
         min_height: ui_style.notifications.min_height,
         padding_x: ui_style.notifications.padding_x,
         padding_y: ui_style.notifications.padding_y,
@@ -64,4 +67,66 @@ pub fn yttt_notification_style(
         action_background: ui_style.hover_background(theme),
         tone,
     }
+}
+
+pub fn yttt_notification_surface(
+    tone: YtttNotificationTone,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Div {
+    let style = yttt_notification_style(tone, theme, ui_style);
+    div()
+        .flex()
+        .w(style.width)
+        .min_h(style.min_height)
+        .px(style.padding_x)
+        .py(style.padding_y)
+        .gap(style.gap)
+        .rounded(style.radius)
+        .border(style.border_width)
+        .border_color(style.border)
+        .bg(style.background)
+        .text_color(style.title)
+        .when(style.shadow, |this| this.shadow_lg())
+}
+
+pub fn yttt_toast_notification(
+    tone: YtttNotificationTone,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Notification {
+    let style = yttt_notification_style(tone, theme, ui_style);
+    Notification::new()
+        .autohide(true)
+        .always_show_close_button(true)
+        .w(style.width)
+        .border(style.border_width)
+        .border_color(style.border)
+        .bg(style.background)
+        .rounded(style.radius)
+        .when(style.shadow, |this| this.shadow_lg())
+        .px(style.padding_x)
+        .py(style.padding_y)
+}
+
+pub fn yttt_alert(
+    id: impl Into<ElementId>,
+    message: impl Into<gpui_component::text::Text>,
+    tone: YtttNotificationTone,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Alert {
+    let style = yttt_notification_style(tone, theme, ui_style);
+    let alert = match tone {
+        YtttNotificationTone::Info => Alert::info(id, message),
+        YtttNotificationTone::Success => Alert::success(id, message),
+        YtttNotificationTone::Warning => Alert::warning(id, message),
+        YtttNotificationTone::Error => Alert::error(id, message),
+    };
+    alert
+        .rounded(style.radius)
+        .border(style.border_width)
+        .border_color(style.border)
+        .bg(style.background)
+        .text_color(style.title)
 }

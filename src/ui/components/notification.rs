@@ -44,18 +44,9 @@ pub fn workbench_inline_notification(
     let title = SharedString::from(item.title);
     let context = SharedString::from(item.context);
 
-    div()
-        .w(style.width)
-        .border(style.border_width)
-        .border_color(style.border)
-        .bg(style.background)
-        .rounded(style.radius)
-        .when(style.shadow, |this| this.shadow_lg())
-        .px(style.padding_x)
-        .py(style.padding_y)
-        .child(notification_content(
-            title, context, None, icon, style, None,
-        ))
+    yttt_notification_surface(tone, theme, ui_style).child(notification_content(
+        title, context, None, icon, style, None,
+    ))
 }
 
 fn workbench_notification(
@@ -70,32 +61,22 @@ fn workbench_notification(
     let title = SharedString::from(item.title);
     let context = SharedString::from(item.context);
 
-    Notification::new()
-        .autohide(true)
-        .always_show_close_button(true)
-        .w(style.width)
-        .border(style.border_width)
-        .border_color(style.border)
-        .bg(style.background)
-        .rounded(style.radius)
-        .when(style.shadow, |this| this.shadow_lg())
-        .px(style.padding_x)
-        .py(style.padding_y)
-        .content(move |_, _, _| {
-            notification_content(
-                title.clone(),
-                context.clone(),
-                action_label.clone(),
-                icon.clone(),
-                style,
-                None,
-            )
-            .into_any_element()
-        })
+    yttt_toast_notification(tone, theme, ui_style).content(move |_, _, _| {
+        notification_content(
+            title.clone(),
+            context.clone(),
+            action_label.clone(),
+            icon.clone(),
+            style,
+            None,
+        )
+        .into_any_element()
+    })
 }
 
 fn notification_icon(tone: YtttNotificationTone) -> IconName {
     match tone {
+        YtttNotificationTone::Info => IconName::Info,
         YtttNotificationTone::Success => IconName::CircleCheck,
         YtttNotificationTone::Warning => IconName::TriangleAlert,
         YtttNotificationTone::Error => IconName::CircleX,

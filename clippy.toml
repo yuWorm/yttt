@@ -1,0 +1,17 @@
+disallowed-methods = [
+    { path = "gpui_component::alert::Alert::error", reason = "Use yttt_ui::primitives::notification::yttt_alert." },
+    { path = "gpui_component::alert::Alert::info", reason = "Use yttt_ui::primitives::notification::yttt_alert." },
+    { path = "gpui_component::alert::Alert::success", reason = "Use yttt_ui::primitives::notification::yttt_alert." },
+    { path = "gpui_component::alert::Alert::warning", reason = "Use yttt_ui::primitives::notification::yttt_alert." },
+    { path = "gpui_component::button::Button::new", reason = "Use yttt_ui::primitives::button::yttt_button or yttt_button_base." },
+    { path = "gpui_component::input::Input::new", reason = "Use yttt_ui::primitives::input::yttt_input or yttt_borderless_input." },
+    { path = "gpui_component::input::NumberInput::new", reason = "Use yttt_ui::primitives::input::yttt_number_input." },
+    { path = "gpui_component::notification::Notification::new", reason = "Use yttt_ui::primitives::notification::yttt_toast_notification." },
+    { path = "gpui_component::select::Select::new", reason = "Use yttt_ui::primitives::select::yttt_select." },
+    { path = "gpui_component::radio::Radio::new", reason = "Use yttt_ui::primitives::radio::yttt_radio." },
+    { path = "gpui_component::switch::Switch::new", reason = "Use yttt_ui::primitives::switch::yttt_switch or yttt_labeled_switch." },
+]
+
+disallowed-types = [
+    { path = "gpui_component::button::ButtonVariants", reason = "Use yttt_ui::primitives::icon_button::yttt_icon_button or yttt_menu_icon_button." },
+]

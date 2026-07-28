@@ -1,10 +1,8 @@
 use std::{collections::VecDeque, path::PathBuf};
 
 use gpui_component::{
-    alert::Alert,
     list::{List, ListEvent, ListState},
     radio::RadioGroup,
-    switch::Switch,
 };
 use yttt_core::model::{
     ids::{ConnectionId, CredentialId},
@@ -1184,17 +1182,19 @@ pub(super) fn ssh_connections_overlay(
                 theme,
                 ui_style,
             ))
-            .child(
-                Switch::new("ssh-remember-password")
-                    .label(root.ui_text.get(UiTextKey::SshRememberPassword))
-                    .checked(remember_password)
-                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
-                        if let Some(form) = this.ssh.form.as_mut() {
-                            form.remember_password = *checked;
-                        }
-                        cx.notify();
-                    })),
-            );
+            .child(yttt_labeled_switch(
+                "ssh-remember-password",
+                root.ui_text.get(UiTextKey::SshRememberPassword),
+                remember_password,
+                theme,
+                ui_style,
+                cx.listener(|this, checked: &bool, _window, cx| {
+                    if let Some(form) = this.ssh.form.as_mut() {
+                        form.remember_password = *checked;
+                    }
+                    cx.notify();
+                }),
+            ));
     }
     if let Some(error) = root.ssh.error.clone() {
         let title = if error.to_ascii_lowercase().contains("host key")
@@ -1204,170 +1204,152 @@ pub(super) fn ssh_connections_overlay(
         } else {
             UiTextKey::SshFailed
         };
-        form_fields = form_fields
-            .child(Alert::error("ssh-connection-error", error).title(root.ui_text.get(title)));
+        form_fields = form_fields.child(
+            yttt_alert(
+                "ssh-connection-error",
+                error,
+                YtttNotificationTone::Error,
+                theme,
+                ui_style,
+            )
+            .title(root.ui_text.get(title)),
+        );
     }
 
-    capture_overlay_input(
-        div()
-            .absolute()
-            .inset_0()
-            .flex()
-            .items_start()
-            .justify_center()
-            .pt(ui_style.spacing.overlay_top)
-            .bg(dialog.overlay)
+    yttt_dialog_overlay(
+        yttt_dialog_surface(theme, ui_style)
+            .w(px(920.0))
+            .max_w(px(920.0))
+            .h(px(680.0))
+            .max_h(px(680.0))
+            .child(yttt_dialog_header(
+                "close-ssh-connections",
+                root.ui_text.get(UiTextKey::SshConnections),
+                theme,
+                ui_style,
+                cx.listener(|this, _, _window, cx| {
+                    this.close_ssh_connection_manager();
+                    cx.notify();
+                }),
+            ))
             .child(
                 div()
+                    .mt(ui_style.spacing.xs)
+                    .text_xs()
+                    .text_color(dialog.hint)
+                    .child(root.ui_text.get(UiTextKey::SshConnectionsDescription)),
+            )
+            .child(
+                div()
+                    .mt(ui_style.spacing.lg)
                     .flex()
-                    .flex_col()
-                    .w(px(920.0))
-                    .h(px(680.0))
-                    .max_h(px(680.0))
-                    .rounded(dialog.radius)
-                    .border(dialog.border_width)
+                    .flex_1()
+                    .min_h_0()
+                    .gap(ui_style.spacing.lg)
+                    .child(
+                        div()
+                            .w(px(285.0))
+                            .min_h_0()
+                            .flex()
+                            .flex_col()
+                            .gap(ui_style.spacing.md)
+                            .pr(ui_style.spacing.md)
+                            .border_r_1()
+                            .border_color(dialog.border)
+                            .child(
+                                div()
+                                    .min_h_0()
+                                    .flex_1()
+                                    .child(List::new(&connection_list).size_full()),
+                            )
+                            .child(yttt_dialog_button(
+                                cx,
+                                "new-ssh-connection",
+                                root.ui_text.get(UiTextKey::SshNewConnection),
+                                YtttButtonVariant::Secondary,
+                                theme,
+                                cx.listener(|this, _, _window, cx| {
+                                    this.new_ssh_connection_form();
+                                    cx.notify();
+                                }),
+                            )),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .min_h_0()
+                            .flex_1()
+                            .overflow_y_scrollbar()
+                            .pr(ui_style.spacing.sm)
+                            .child(form_fields),
+                    ),
+            )
+            .child(
+                div()
+                    .mt(ui_style.spacing.lg)
+                    .pt(ui_style.spacing.md)
+                    .border_t_1()
                     .border_color(dialog.border)
-                    .bg(dialog.background)
-                    .when(dialog.shadow, |panel| panel.shadow_lg())
-                    .p(dialog.padding)
-                    .text_color(dialog.text)
-                    .child(yttt_dialog_header(
-                        "close-ssh-connections",
-                        root.ui_text.get(UiTextKey::SshConnections),
+                    .flex()
+                    .justify_between()
+                    .gap(ui_style.spacing.md)
+                    .child(yttt_dialog_button(
+                        cx,
+                        "delete-ssh-connection",
+                        root.ui_text.get(UiTextKey::SshDeleteConnection),
+                        YtttButtonVariant::Danger,
                         theme,
-                        ui_style,
-                        cx.listener(|this, _, _window, cx| {
-                            this.close_ssh_connection_manager();
-                            cx.notify();
+                        cx.listener(move |this, _, window, cx| {
+                            if let Some(connection_id) = selected_id_for_delete.clone() {
+                                this.delete_ssh_connection(connection_id, window, cx);
+                            }
                         }),
                     ))
                     .child(
                         div()
-                            .mt(ui_style.spacing.xs)
-                            .text_xs()
-                            .text_color(dialog.hint)
-                            .child(root.ui_text.get(UiTextKey::SshConnectionsDescription)),
-                    )
-                    .child(
-                        div()
-                            .mt(ui_style.spacing.lg)
                             .flex()
-                            .flex_1()
-                            .min_h_0()
-                            .gap(ui_style.spacing.lg)
-                            .child(
-                                div()
-                                    .w(px(285.0))
-                                    .min_h_0()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(ui_style.spacing.md)
-                                    .pr(ui_style.spacing.md)
-                                    .border_r_1()
-                                    .border_color(dialog.border)
-                                    .child(
-                                        div()
-                                            .min_h_0()
-                                            .flex_1()
-                                            .child(List::new(&connection_list).size_full()),
-                                    )
-                                    .child(yttt_dialog_button(
-                                        cx,
-                                        "new-ssh-connection",
-                                        root.ui_text.get(UiTextKey::SshNewConnection),
-                                        YtttButtonVariant::Secondary,
-                                        theme,
-                                        cx.listener(|this, _, _window, cx| {
-                                            this.new_ssh_connection_form();
-                                            cx.notify();
-                                        }),
-                                    )),
-                            )
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .min_h_0()
-                                    .flex_1()
-                                    .overflow_y_scrollbar()
-                                    .pr(ui_style.spacing.sm)
-                                    .child(form_fields),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .mt(ui_style.spacing.lg)
-                            .pt(ui_style.spacing.md)
-                            .border_t_1()
-                            .border_color(dialog.border)
-                            .flex()
-                            .justify_between()
                             .gap(ui_style.spacing.md)
                             .child(yttt_dialog_button(
                                 cx,
-                                "delete-ssh-connection",
-                                root.ui_text.get(UiTextKey::SshDeleteConnection),
-                                YtttButtonVariant::Danger,
+                                "save-ssh-connection",
+                                root.ui_text.get(UiTextKey::SettingsSave),
+                                YtttButtonVariant::Secondary,
+                                theme,
+                                cx.listener(|this, _, _window, cx| {
+                                    this.save_ssh_connection(cx);
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(yttt_dialog_button(
+                                cx,
+                                "disconnect-ssh-connection",
+                                root.ui_text.get(UiTextKey::SshDisconnect),
+                                YtttButtonVariant::Secondary,
                                 theme,
                                 cx.listener(move |this, _, window, cx| {
-                                    if let Some(connection_id) = selected_id_for_delete.clone() {
-                                        this.delete_ssh_connection(connection_id, window, cx);
+                                    if let Some(connection_id) = selected_id_for_disconnect.clone()
+                                    {
+                                        this.disconnect_ssh_connection(connection_id, window, cx);
                                     }
                                 }),
                             ))
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap(ui_style.spacing.md)
-                                    .child(yttt_dialog_button(
-                                        cx,
-                                        "save-ssh-connection",
-                                        root.ui_text.get(UiTextKey::SettingsSave),
-                                        YtttButtonVariant::Secondary,
-                                        theme,
-                                        cx.listener(|this, _, _window, cx| {
-                                            this.save_ssh_connection(cx);
-                                            cx.notify();
-                                        }),
-                                    ))
-                                    .child(yttt_dialog_button(
-                                        cx,
-                                        "disconnect-ssh-connection",
-                                        root.ui_text.get(UiTextKey::SshDisconnect),
-                                        YtttButtonVariant::Secondary,
-                                        theme,
-                                        cx.listener(move |this, _, window, cx| {
-                                            if let Some(connection_id) =
-                                                selected_id_for_disconnect.clone()
-                                            {
-                                                this.disconnect_ssh_connection(
-                                                    connection_id,
-                                                    window,
-                                                    cx,
-                                                );
-                                            }
-                                        }),
-                                    ))
-                                    .child(yttt_dialog_button(
-                                        cx,
-                                        "connect-ssh-connection",
-                                        root.ui_text.get(UiTextKey::SshConnect),
-                                        YtttButtonVariant::Primary,
-                                        theme,
-                                        cx.listener(move |this, _, window, cx| {
-                                            if let Some(connection_id) =
-                                                selected_id_for_connect.clone()
-                                            {
-                                                this.connect_ssh_connection(
-                                                    connection_id,
-                                                    window,
-                                                    cx,
-                                                );
-                                            }
-                                        }),
-                                    )),
-                            ),
+                            .child(yttt_dialog_button(
+                                cx,
+                                "connect-ssh-connection",
+                                root.ui_text.get(UiTextKey::SshConnect),
+                                YtttButtonVariant::Primary,
+                                theme,
+                                cx.listener(move |this, _, window, cx| {
+                                    if let Some(connection_id) = selected_id_for_connect.clone() {
+                                        this.connect_ssh_connection(connection_id, window, cx);
+                                    }
+                                }),
+                            )),
                     ),
             ),
+        YtttDialogPlacement::Top,
+        theme,
+        ui_style,
     )
 }
 
@@ -1394,128 +1376,120 @@ pub(super) fn ssh_host_key_overlay(root: &WorkbenchView, cx: &mut Context<Workbe
     } else {
         UiTextKey::SshHostKeyTrustAndSave
     });
-    capture_overlay_input(
-        div()
-            .absolute()
-            .inset_0()
-            .flex()
-            .items_start()
-            .justify_center()
-            .pt(ui_style.spacing.overlay_top)
-            .bg(dialog.overlay)
+    yttt_dialog_overlay(
+        yttt_dialog_surface(theme, ui_style)
+            .gap(ui_style.spacing.lg)
             .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .gap(ui_style.spacing.lg)
-                    .w(dialog.max_width)
-                    .rounded(dialog.radius)
-                    .border(dialog.border_width)
-                    .border_color(dialog.border)
-                    .bg(dialog.background)
-                    .p(dialog.padding)
-                    .text_color(dialog.text)
-                    .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(title),
-                    )
-                    .child(if host_key_changed {
-                        Alert::warning("ssh-host-key-changed-warning", description)
-                            .into_any_element()
-                    } else {
-                        div()
-                            .text_sm()
-                            .text_color(dialog.hint)
-                            .child(description)
-                            .into_any_element()
-                    })
-                    .child(
-                        div()
-                            .text_sm()
-                            .child(format!("{}:{}", challenge.host, challenge.port)),
-                    )
-                    .child(
-                        div()
-                            .font_family("monospace")
-                            .text_sm()
-                            .child(challenge.algorithm.clone()),
-                    )
-                    .when_some(
-                        challenge.previous_fingerprint.clone(),
-                        |panel, fingerprint| {
-                            panel.child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(ui_style.spacing.xs)
-                                    .child(div().text_xs().text_color(dialog.hint).child(
-                                        root.ui_text.get(UiTextKey::SshHostKeySavedFingerprint),
-                                    ))
-                                    .child(
-                                        div().font_family("monospace").text_sm().child(fingerprint),
-                                    ),
-                            )
-                        },
-                    )
-                    .child(
+                    .text_lg()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(title),
+            )
+            .child(if host_key_changed {
+                yttt_alert(
+                    "ssh-host-key-changed-warning",
+                    description,
+                    YtttNotificationTone::Warning,
+                    theme,
+                    ui_style,
+                )
+                .into_any_element()
+            } else {
+                div()
+                    .text_sm()
+                    .text_color(dialog.hint)
+                    .child(description)
+                    .into_any_element()
+            })
+            .child(
+                div()
+                    .text_sm()
+                    .child(format!("{}:{}", challenge.host, challenge.port)),
+            )
+            .child(
+                div()
+                    .font_family("monospace")
+                    .text_sm()
+                    .child(challenge.algorithm.clone()),
+            )
+            .when_some(
+                challenge.previous_fingerprint.clone(),
+                |panel, fingerprint| {
+                    panel.child(
                         div()
                             .flex()
                             .flex_col()
                             .gap(ui_style.spacing.xs)
                             .child(
-                                div().text_xs().text_color(dialog.hint).child(
-                                    root.ui_text.get(UiTextKey::SshHostKeyReceivedFingerprint),
-                                ),
-                            )
-                            .child(
                                 div()
-                                    .font_family("monospace")
-                                    .text_sm()
-                                    .child(challenge.fingerprint.clone()),
-                            ),
+                                    .text_xs()
+                                    .text_color(dialog.hint)
+                                    .child(root.ui_text.get(UiTextKey::SshHostKeySavedFingerprint)),
+                            )
+                            .child(div().font_family("monospace").text_sm().child(fingerprint)),
+                    )
+                },
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(ui_style.spacing.xs)
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(dialog.hint)
+                            .child(root.ui_text.get(UiTextKey::SshHostKeyReceivedFingerprint)),
                     )
                     .child(
                         div()
-                            .flex()
-                            .justify_end()
-                            .gap(ui_style.spacing.md)
-                            .child(yttt_dialog_button(
-                                cx,
-                                "reject-ssh-host-key",
-                                root.ui_text.get(UiTextKey::SshHostKeyReject),
-                                YtttButtonVariant::Danger,
-                                theme,
-                                cx.listener(|this, _, _window, cx| {
-                                    this.answer_ssh_host_key(false, false);
-                                    cx.notify();
-                                }),
-                            ))
-                            .child(yttt_dialog_button(
-                                cx,
-                                "trust-ssh-host-key-once",
-                                root.ui_text.get(UiTextKey::SshHostKeyTrustOnce),
-                                YtttButtonVariant::Secondary,
-                                theme,
-                                cx.listener(|this, _, _window, cx| {
-                                    this.answer_ssh_host_key(true, false);
-                                    cx.notify();
-                                }),
-                            ))
-                            .child(yttt_dialog_button(
-                                cx,
-                                "trust-and-save-ssh-host-key",
-                                save_label,
-                                YtttButtonVariant::Primary,
-                                theme,
-                                cx.listener(|this, _, _window, cx| {
-                                    this.answer_ssh_host_key(true, true);
-                                    cx.notify();
-                                }),
-                            )),
+                            .font_family("monospace")
+                            .text_sm()
+                            .child(challenge.fingerprint.clone()),
                     ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap(ui_style.spacing.md)
+                    .child(yttt_dialog_button(
+                        cx,
+                        "reject-ssh-host-key",
+                        root.ui_text.get(UiTextKey::SshHostKeyReject),
+                        YtttButtonVariant::Danger,
+                        theme,
+                        cx.listener(|this, _, _window, cx| {
+                            this.answer_ssh_host_key(false, false);
+                            cx.notify();
+                        }),
+                    ))
+                    .child(yttt_dialog_button(
+                        cx,
+                        "trust-ssh-host-key-once",
+                        root.ui_text.get(UiTextKey::SshHostKeyTrustOnce),
+                        YtttButtonVariant::Secondary,
+                        theme,
+                        cx.listener(|this, _, _window, cx| {
+                            this.answer_ssh_host_key(true, false);
+                            cx.notify();
+                        }),
+                    ))
+                    .child(yttt_dialog_button(
+                        cx,
+                        "trust-and-save-ssh-host-key",
+                        save_label,
+                        YtttButtonVariant::Primary,
+                        theme,
+                        cx.listener(|this, _, _window, cx| {
+                            this.answer_ssh_host_key(true, true);
+                            cx.notify();
+                        }),
+                    )),
             ),
+        YtttDialogPlacement::Top,
+        theme,
+        ui_style,
     )
 }
 
