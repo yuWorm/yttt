@@ -207,11 +207,13 @@ fn visible_work_item_tabs_merge_terminal_and_file_items() {
             id: first_file.clone(),
             relative_path: PathBuf::from("src/main.rs"),
             dirty: true,
+            missing_on_disk: true,
         },
         FileTabSnapshot {
             id: second_file.clone(),
             relative_path: PathBuf::from("README.md"),
             dirty: false,
+            missing_on_disk: false,
         },
     ];
 
@@ -231,12 +233,14 @@ fn visible_work_item_tabs_merge_terminal_and_file_items() {
     assert_eq!(first.id, WorkItemId::File(first_file));
     assert_eq!(first.kind, WorkbenchTabKind::File);
     assert_eq!(first.title, "main.rs");
+    assert!(first.missing_on_disk);
     assert_eq!(first.tooltip, "src/main.rs");
     assert!(first.dirty);
     assert_eq!(first.state, SelectableState::Inactive);
     let second = &items[terminal_items.len() + 1];
     assert_eq!(second.id, WorkItemId::File(second_file));
     assert_eq!(second.title, "README.md");
+    assert!(!second.missing_on_disk);
     assert_eq!(second.tooltip, "README.md");
     assert!(!second.dirty);
     assert_eq!(second.state, SelectableState::Active);
@@ -2139,8 +2143,45 @@ fn root_view_file_save_requires_resolution_after_external_change(cx: &mut gpui::
         assert!(!document.read(app).model().is_dirty());
     });
 
+    fs::remove_file(project_dir.join("notes.txt")).unwrap();
+    root.update(cx, |root, cx| {
+        root.run_command(CommandId::ProjectPanelRefresh).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert!(!root.read(app).has_pending_file_conflict());
+        assert!(document.read(app).model().is_missing_on_disk());
+        assert!(!document.read(app).model().is_dirty());
+        assert_ne!(
+            root.read(app).foreground_input_owner_kind(),
+            InputOwnerKind::Dialog
+        );
+    });
+
     input.update_in(cx, |input, window, input_cx| {
         replace_editor_value(input, "recreated text", window, input_cx);
+    });
+    cx.run_until_parked();
+    root.update(cx, |root, cx| {
+        root.run_command(CommandId::FileSave).unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        fs::read_to_string(project_dir.join("notes.txt")).unwrap(),
+        "recreated text"
+    );
+    cx.read(|app| {
+        assert!(!root.read(app).has_pending_file_conflict());
+        assert!(!document.read(app).model().is_missing_on_disk());
+        assert!(!document.read(app).model().is_dirty());
+    });
+
+    input.update_in(cx, |input, window, input_cx| {
+        replace_editor_value(input, "race-safe recreation", window, input_cx);
     });
     cx.run_until_parked();
     fs::remove_file(project_dir.join("notes.txt")).unwrap();
@@ -2150,21 +2191,15 @@ fn root_view_file_save_requires_resolution_after_external_change(cx: &mut gpui::
     });
     cx.refresh().unwrap();
     cx.run_until_parked();
-    cx.read(|app| {
-        assert!(root.read(app).pending_file_conflict_is_missing());
-        assert_eq!(
-            root.read(app).visible_file_conflict_dialog_actions(),
-            vec!["Cancel", "Recreate file"]
-        );
-    });
-    root.update_in(cx, |root, window, cx| {
-        root.overwrite_pending_file_conflict(window, cx);
-    });
-    cx.run_until_parked();
     assert_eq!(
         fs::read_to_string(project_dir.join("notes.txt")).unwrap(),
-        "recreated text"
+        "race-safe recreation"
     );
+    cx.read(|app| {
+        assert!(!root.read(app).has_pending_file_conflict());
+        assert!(!document.read(app).model().is_missing_on_disk());
+        assert!(!document.read(app).model().is_dirty());
+    });
 
     fs::write(project_dir.join("notes.txt"), "refresh boundary text").unwrap();
     root.update(cx, |root, cx| {

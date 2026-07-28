@@ -420,7 +420,6 @@ enum SaveContinuation {
 struct PendingFileConflict {
     document_id: crate::ui::editor::DocumentId,
     request: SaveRequest,
-    current_disk: CurrentDiskState,
     continuation: SaveContinuation,
 }
 

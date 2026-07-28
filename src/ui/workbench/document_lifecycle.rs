@@ -448,6 +448,7 @@ impl WorkbenchView {
         else {
             return;
         };
+        let recreate_missing = document.read(cx).model().is_missing_on_disk();
         let request = document.update(cx, |document, document_cx| {
             if !force && !matches!(document.model().save_state(), ProjectEditorSaveState::Idle) {
                 return None;
@@ -457,7 +458,13 @@ impl WorkbenchView {
         let Some(request) = request else {
             return;
         };
-        self.spawn_project_file_save_request(request, force, continuation, window, cx);
+        self.spawn_project_file_save_request(
+            request,
+            force || recreate_missing,
+            continuation,
+            window,
+            cx,
+        );
     }
 
     pub(super) fn project_file_services(
@@ -577,12 +584,18 @@ impl WorkbenchView {
                 self.flush_pending_status_notifications(window, cx);
                 self.run_follow_up_autosave(&request.document_id, window, cx);
             }
-            Ok(SaveProjectFileOutcome::Conflict(current_disk)) => {
+            Ok(SaveProjectFileOutcome::Conflict(CurrentDiskState::Missing)) => {
+                document.update(cx, |document, _| {
+                    document.model_mut().mark_missing_on_disk();
+                });
+                self.load_error = None;
+                self.spawn_project_file_save_request(request, true, continuation, window, cx);
+            }
+            Ok(SaveProjectFileOutcome::Conflict(CurrentDiskState::Present(_))) => {
                 self.project
                     .project_editor_runtime
                     .take_follow_up_autosave(&request.document_id);
-                let is_dirty = document.read(cx).model().is_dirty();
-                if !is_dirty && matches!(current_disk, CurrentDiskState::Present(_)) {
+                if !document.read(cx).model().is_dirty() {
                     document.update(cx, |document, _| {
                         document.model_mut().cancel_save(&request);
                     });
@@ -592,7 +605,6 @@ impl WorkbenchView {
                 self.documents.pending_file_conflict = Some(PendingFileConflict {
                     document_id: request.document_id.clone(),
                     request,
-                    current_disk,
                     continuation,
                 });
                 self.load_error = None;
@@ -743,10 +755,11 @@ impl WorkbenchView {
         else {
             return;
         };
-        let (expected_fingerprint, save_is_idle) = {
+        let (expected_fingerprint, expected_missing_on_disk, save_is_idle) = {
             let document = document.read(cx);
             (
                 document.model().disk_fingerprint().clone(),
+                document.model().is_missing_on_disk(),
                 matches!(document.model().save_state(), ProjectEditorSaveState::Idle),
             )
         };
@@ -776,22 +789,22 @@ impl WorkbenchView {
                 else {
                     return;
                 };
-                if document.read(cx).model().disk_fingerprint() != &expected_fingerprint
-                    || !matches!(
-                        document.read(cx).model().save_state(),
-                        ProjectEditorSaveState::Idle
-                    )
+                let model = document.read(cx);
+                if model.model().disk_fingerprint() != &expected_fingerprint
+                    || model.model().is_missing_on_disk() != expected_missing_on_disk
+                    || !matches!(model.model().save_state(), ProjectEditorSaveState::Idle)
                 {
                     return;
                 }
                 match result {
-                    Ok(loaded) if loaded.fingerprint == expected_fingerprint => {}
-                    Ok(loaded) if document.read(cx).model().is_dirty() => {
+                    Ok(loaded)
+                        if loaded.fingerprint == expected_fingerprint
+                            && !expected_missing_on_disk => {}
+                    Ok(_) if document.read(cx).model().is_dirty() => {
                         let request = document.update(cx, |document, cx| document.begin_save(cx));
                         root.documents.pending_file_conflict = Some(PendingFileConflict {
                             document_id: document_id.clone(),
                             request,
-                            current_disk: CurrentDiskState::Present(loaded.fingerprint),
                             continuation: SaveContinuation::None,
                         });
                         root.load_error = None;
@@ -811,15 +824,10 @@ impl WorkbenchView {
                     Err(ProjectFileIoError::Io { source, .. })
                         if source.kind() == std::io::ErrorKind::NotFound =>
                     {
-                        let request = document.update(cx, |document, cx| document.begin_save(cx));
-                        root.documents.pending_file_conflict = Some(PendingFileConflict {
-                            document_id: document_id.clone(),
-                            request,
-                            current_disk: CurrentDiskState::Missing,
-                            continuation: SaveContinuation::None,
+                        document.update(cx, |document, _| {
+                            document.model_mut().mark_missing_on_disk();
                         });
                         root.load_error = None;
-                        root.sync_input_owner_state();
                     }
                     Err(error) => {
                         root.load_error = Some(root.localized_project_file_error(&error));
@@ -837,11 +845,7 @@ impl WorkbenchView {
 
     pub fn visible_file_conflict_dialog_text(&self) -> Option<String> {
         let conflict = self.documents.pending_file_conflict.as_ref()?;
-        let title = if matches!(conflict.current_disk, CurrentDiskState::Missing) {
-            self.ui_text.get(UiTextKey::FileDeletedOnDisk)
-        } else {
-            self.ui_text.get(UiTextKey::FileChangedOnDisk)
-        };
+        let title = self.ui_text.get(UiTextKey::FileChangedOnDisk);
         Some(format!(
             "{title}\n{}",
             conflict.document_id.canonical_path.display()
@@ -849,36 +853,18 @@ impl WorkbenchView {
     }
 
     pub fn visible_file_conflict_dialog_actions(&self) -> Vec<String> {
-        let Some(conflict) = self.documents.pending_file_conflict.as_ref() else {
+        if self.documents.pending_file_conflict.is_none() {
             return Vec::new();
-        };
-        let mut actions = vec![self.ui_text.get(UiTextKey::Cancel).to_string()];
-        if !matches!(conflict.current_disk, CurrentDiskState::Missing) {
-            actions.push(self.ui_text.get(UiTextKey::FileReload).to_string());
         }
-        actions.push(
-            self.ui_text
-                .get(
-                    if matches!(conflict.current_disk, CurrentDiskState::Missing) {
-                        UiTextKey::FileRecreate
-                    } else {
-                        UiTextKey::FileOverwrite
-                    },
-                )
-                .to_string(),
-        );
-        actions
+        vec![
+            self.ui_text.get(UiTextKey::Cancel).to_string(),
+            self.ui_text.get(UiTextKey::FileReload).to_string(),
+            self.ui_text.get(UiTextKey::FileOverwrite).to_string(),
+        ]
     }
 
     pub fn pending_document_save_count(&self) -> usize {
         self.documents.pending_document_saves.len()
-    }
-
-    pub fn pending_file_conflict_is_missing(&self) -> bool {
-        self.documents
-            .pending_file_conflict
-            .as_ref()
-            .is_some_and(|conflict| matches!(conflict.current_disk, CurrentDiskState::Missing))
     }
 
     pub fn overwrite_pending_file_conflict(&mut self, window: &mut Window, cx: &mut Context<Self>) {

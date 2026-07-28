@@ -106,6 +106,7 @@ pub struct ProjectEditorModel {
     generation: u64,
     save_state: ProjectEditorSaveState,
     external_dirty: bool,
+    missing_on_disk: bool,
 }
 
 impl ProjectEditorModel {
@@ -121,6 +122,7 @@ impl ProjectEditorModel {
             generation: 0,
             save_state: ProjectEditorSaveState::Idle,
             external_dirty: false,
+            missing_on_disk: false,
         }
     }
 
@@ -133,6 +135,7 @@ impl ProjectEditorModel {
             .relocate(document_id.canonical_path.clone(), title);
         self.document_id = document_id;
         self.save_state = ProjectEditorSaveState::Idle;
+        self.missing_on_disk = false;
     }
 
     pub fn editor(&self) -> &CodeEditorState {
@@ -157,6 +160,14 @@ impl ProjectEditorModel {
 
     pub fn disk_fingerprint(&self) -> &DiskFingerprint {
         &self.disk_fingerprint
+    }
+
+    pub fn is_missing_on_disk(&self) -> bool {
+        self.missing_on_disk
+    }
+
+    pub fn mark_missing_on_disk(&mut self) {
+        self.missing_on_disk = true;
     }
 
     pub fn generation(&self) -> u64 {
@@ -218,6 +229,7 @@ impl ProjectEditorModel {
             self.external_dirty = false;
         }
         self.disk_fingerprint = disk_fingerprint;
+        self.missing_on_disk = false;
         if self.save_state
             == (ProjectEditorSaveState::Saving {
                 generation: request.generation,
@@ -263,6 +275,7 @@ impl ProjectEditorModel {
         self.editor.replace_from_disk(value);
         self.external_dirty = false;
         self.disk_fingerprint = disk_fingerprint;
+        self.missing_on_disk = false;
         self.generation = self.generation.wrapping_add(1);
         self.save_state = ProjectEditorSaveState::Idle;
     }

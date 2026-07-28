@@ -339,7 +339,6 @@ impl Render for WorkbenchView {
                 &self.ui_text,
                 appearance.ui,
                 conflict.document_id.canonical_path.display().to_string(),
-                matches!(conflict.current_disk, CurrentDiskState::Missing),
             ));
         }
         if !self.ssh.pending_host_keys.is_empty() {

@@ -147,13 +147,8 @@ fn ui_text_returns_project_file_tree_and_open_error_labels() {
         english.get(UiTextKey::FileChangedOnDisk),
         "File changed on disk"
     );
-    assert_eq!(english.get(UiTextKey::FileRecreate), "Recreate file");
     assert_eq!(chinese.get(UiTextKey::FileSaveFailed), "保存失败");
     assert_eq!(chinese.get(UiTextKey::FileReload), "重新加载");
-    assert_eq!(
-        chinese.get(UiTextKey::FileDeletedOnDisk),
-        "文件已从磁盘删除"
-    );
 }
 
 #[test]

@@ -106,19 +106,30 @@ impl WorkbenchView {
                 session
                     .file_ids()
                     .iter()
-                    .map(|document_id| FileTabSnapshot {
-                        id: document_id.clone(),
-                        relative_path: project
-                            .location
-                            .local_path()
-                            .and_then(|root| document_id.canonical_path.strip_prefix(root).ok())
-                            .unwrap_or(&document_id.canonical_path)
-                            .to_path_buf(),
-                        dirty: self
+                    .map(|document_id| {
+                        let (dirty, missing_on_disk) = self
                             .project
                             .project_editor_runtime
                             .document(document_id)
-                            .is_some_and(|document| document.read(cx).model().is_dirty()),
+                            .map(|document| {
+                                let document = document.read(cx);
+                                (
+                                    document.model().is_dirty(),
+                                    document.model().is_missing_on_disk(),
+                                )
+                            })
+                            .unwrap_or_default();
+                        FileTabSnapshot {
+                            id: document_id.clone(),
+                            relative_path: project
+                                .location
+                                .local_path()
+                                .and_then(|root| document_id.canonical_path.strip_prefix(root).ok())
+                                .unwrap_or(&document_id.canonical_path)
+                                .to_path_buf(),
+                            dirty,
+                            missing_on_disk,
+                        }
                     })
                     .collect::<Vec<_>>()
             })

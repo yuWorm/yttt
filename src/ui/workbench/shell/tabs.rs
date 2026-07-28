@@ -131,6 +131,7 @@ pub struct FileTabSnapshot {
     pub id: DocumentId,
     pub relative_path: std::path::PathBuf,
     pub dirty: bool,
+    pub missing_on_disk: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -142,6 +143,7 @@ pub struct WorkbenchTabItem {
     pub status: Option<String>,
     pub status_tone: Option<ProjectTabStatusTone>,
     pub dirty: bool,
+    pub missing_on_disk: bool,
     pub icon_path: Option<std::path::PathBuf>,
     pub state: SelectableState,
 }
@@ -279,6 +281,7 @@ pub fn visible_work_item_tabs(
                 status: item.status.clone(),
                 status_tone: Some(item.status_tone),
                 dirty: false,
+                missing_on_disk: false,
                 icon_path: None,
             }
         })
@@ -301,6 +304,7 @@ pub fn visible_work_item_tabs(
                 status: None,
                 status_tone: file.dirty.then_some(ProjectTabStatusTone::Dirty),
                 dirty: file.dirty,
+                missing_on_disk: file.missing_on_disk,
                 icon_path: Some(file.relative_path.clone()),
             }
         }))
@@ -515,6 +519,7 @@ where
         ),
     };
     let dirty = item.dirty;
+    let missing_on_disk = item.missing_on_disk;
     let status_tone = item.status_tone;
 
     let mut tab = div()
@@ -566,6 +571,7 @@ where
                 .truncate()
                 .text_color(row_style.title)
                 .when(active, |this| this.font_weight(gpui::FontWeight::SEMIBOLD))
+                .when(missing_on_disk, |this| this.line_through())
                 .child(item.title),
         );
 

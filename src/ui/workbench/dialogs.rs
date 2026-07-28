@@ -606,38 +606,26 @@ pub(super) fn file_conflict_dialog(
     ui_text: &UiText,
     theme: WorkbenchTheme,
     path: String,
-    missing: bool,
 ) -> Div {
     let ui_style = current_ui_style(cx);
     let dialog = yttt_dialog_style(theme, ui_style);
-    let title = ui_text.get(if missing {
-        UiTextKey::FileDeletedOnDisk
-    } else {
-        UiTextKey::FileChangedOnDisk
-    });
-    let overwrite_label = ui_text.get(if missing {
-        UiTextKey::FileRecreate
-    } else {
-        UiTextKey::FileOverwrite
-    });
-    let mut actions =
-        div()
-            .flex()
-            .justify_end()
-            .gap(ui_style.spacing.md)
-            .child(yttt_dialog_button(
-                cx,
-                "cancel-file-conflict",
-                ui_text.get(UiTextKey::Cancel),
-                YtttButtonVariant::Secondary,
-                theme,
-                cx.listener(|this, _, _window, cx| {
-                    this.cancel_pending_file_conflict(cx);
-                    cx.notify();
-                }),
-            ));
-    if !missing {
-        actions = actions.child(yttt_dialog_button(
+    let title = ui_text.get(UiTextKey::FileChangedOnDisk);
+    let actions = div()
+        .flex()
+        .justify_end()
+        .gap(ui_style.spacing.md)
+        .child(yttt_dialog_button(
+            cx,
+            "cancel-file-conflict",
+            ui_text.get(UiTextKey::Cancel),
+            YtttButtonVariant::Secondary,
+            theme,
+            cx.listener(|this, _, _window, cx| {
+                this.cancel_pending_file_conflict(cx);
+                cx.notify();
+            }),
+        ))
+        .child(yttt_dialog_button(
             cx,
             "reload-file-conflict",
             ui_text.get(UiTextKey::FileReload),
@@ -646,18 +634,17 @@ pub(super) fn file_conflict_dialog(
             cx.listener(|this, _, window, cx| {
                 this.reload_pending_file_conflict(window, cx);
             }),
+        ))
+        .child(yttt_dialog_button(
+            cx,
+            "overwrite-file-conflict",
+            ui_text.get(UiTextKey::FileOverwrite),
+            YtttButtonVariant::Danger,
+            theme,
+            cx.listener(|this, _, window, cx| {
+                this.overwrite_pending_file_conflict(window, cx);
+            }),
         ));
-    }
-    actions = actions.child(yttt_dialog_button(
-        cx,
-        "overwrite-file-conflict",
-        overwrite_label,
-        YtttButtonVariant::Danger,
-        theme,
-        cx.listener(|this, _, window, cx| {
-            this.overwrite_pending_file_conflict(window, cx);
-        }),
-    ));
 
     capture_overlay_input(
         div()

@@ -37,9 +37,23 @@ fn completed_older_save_keeps_newer_edit_dirty() {
 }
 
 #[test]
+fn missing_on_disk_is_not_dirty_and_clears_after_save() {
+    let mut model = project_model("old", fingerprint(3, 1));
+    model.mark_missing_on_disk();
+
+    assert!(model.is_missing_on_disk());
+    assert!(!model.is_dirty());
+
+    let request = model.begin_save();
+    assert!(model.finish_save(&request, fingerprint(3, 2)));
+    assert!(!model.is_missing_on_disk());
+}
+
+#[test]
 fn replacing_from_disk_updates_value_baseline_generation_and_fingerprint() {
     let mut model = project_model("old", fingerprint(3, 1));
     model.on_input_changed("dirty");
+    model.mark_missing_on_disk();
     let previous_generation = model.generation();
 
     model.replace_from_disk("disk value", fingerprint(10, 3));
@@ -49,12 +63,14 @@ fn replacing_from_disk_updates_value_baseline_generation_and_fingerprint() {
     assert!(!model.is_dirty());
     assert!(model.generation() > previous_generation);
     assert_eq!(model.disk_fingerprint(), &fingerprint(10, 3));
+    assert!(!model.is_missing_on_disk());
 }
 
 #[test]
 fn failed_current_save_returns_to_idle_and_keeps_document_dirty() {
     let mut model = project_model("old", fingerprint(3, 1));
     model.on_input_changed("dirty");
+    model.mark_missing_on_disk();
     let request = model.begin_save();
     assert_eq!(
         model.save_state(),
@@ -68,6 +84,7 @@ fn failed_current_save_returns_to_idle_and_keeps_document_dirty() {
     assert_eq!(model.save_state(), &ProjectEditorSaveState::Idle);
     assert!(model.is_dirty());
     assert_eq!(model.editor().error(), Some("disk full"));
+    assert!(model.is_missing_on_disk());
 }
 
 #[test]

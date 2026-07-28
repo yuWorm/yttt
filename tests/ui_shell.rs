@@ -362,6 +362,7 @@ impl gpui::Render for TerminalAndFileTabs {
                 status: Some("started".to_string()),
                 status_tone: Some(ProjectTabStatusTone::Started),
                 dirty: false,
+                missing_on_disk: false,
                 icon_path: None,
                 state: SelectableState::Active,
             },
@@ -373,6 +374,7 @@ impl gpui::Render for TerminalAndFileTabs {
                 status: None,
                 status_tone: None,
                 dirty: false,
+                missing_on_disk: true,
                 icon_path: Some("commands.rs".into()),
                 state: SelectableState::Inactive,
             },
@@ -441,6 +443,7 @@ impl ReorderableTabs {
                     status: None,
                     status_tone: None,
                     dirty: false,
+                    missing_on_disk: false,
                     icon_path: None,
                     state: if index == 0 {
                         SelectableState::Active
