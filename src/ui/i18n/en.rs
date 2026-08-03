@@ -56,8 +56,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::NoTerminalTabs => "No terminal tabs",
         UiTextKey::Projects => "Projects",
         UiTextKey::ProjectFiles => "Files",
-        UiTextKey::ProjectFilesShow => "Show Files",
-        UiTextKey::ProjectFilesHide => "Hide Files",
+        UiTextKey::ProjectFilesShow => "Show Project Panel",
+        UiTextKey::ProjectFilesHide => "Hide Project Panel",
         UiTextKey::ProjectFilesRefresh => "Refresh",
         UiTextKey::ProjectFilesLoading => "Loading project files…",
         UiTextKey::ProjectFilesEmptyDirectory => "Empty directory",
@@ -157,8 +157,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandProjectOpenedPaletteDescription => {
             "Choose from currently opened projects"
         }
-        UiTextKey::CommandProjectPanelToggleTitle => "Toggle Project Files",
-        UiTextKey::CommandProjectPanelToggleDescription => "Show or hide the project file tree",
+        UiTextKey::CommandProjectPanelToggleTitle => "Toggle Project Panel",
+        UiTextKey::CommandProjectPanelToggleDescription => "Show or hide the project side panel",
         UiTextKey::CommandProjectPanelRefreshTitle => "Refresh Project Files",
         UiTextKey::CommandProjectPanelRefreshDescription => "Refresh the project file tree",
         UiTextKey::CommandGitBranchSwitchTitle => "Switch Git Branch",

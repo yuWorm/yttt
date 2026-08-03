@@ -278,14 +278,14 @@ fn tab_context_close_scopes_follow_visible_mixed_order() {
 fn tab_project_tree_toggle_reflects_panel_state() {
     assert_eq!(
         discriminant(&project_tree_toggle_icon(false)),
-        discriminant(&gpui_component::IconName::FolderClosed)
+        discriminant(&gpui_component::IconName::PanelRightOpen)
     );
     assert_eq!(
         discriminant(&project_tree_toggle_icon(true)),
-        discriminant(&gpui_component::IconName::FolderOpen)
+        discriminant(&gpui_component::IconName::PanelRightClose)
     );
-    assert_eq!(project_tree_toggle_tooltip(false), "Show Files");
-    assert_eq!(project_tree_toggle_tooltip(true), "Hide Files");
+    assert_eq!(project_tree_toggle_tooltip(false), "Show Project Panel");
+    assert_eq!(project_tree_toggle_tooltip(true), "Hide Project Panel");
 }
 
 struct EmptyProjectTabs;
@@ -1326,6 +1326,7 @@ fn yttt_icon_button_style_covers_toolbar_sidebar_and_close_density() {
     assert_eq!(toolbar.hover_text, theme.text);
     assert_eq!(sidebar.size, gpui::rems(1.5));
     assert_eq!(sidebar.text, theme.text_subtle);
+    assert_eq!(sidebar.active_text, theme.accent);
     assert_eq!(close.size, gpui::rems(1.0));
     assert_eq!(close.radius, gpui::px(4.0));
 }

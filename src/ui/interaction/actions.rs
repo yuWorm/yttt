@@ -34,9 +34,9 @@ use crate::{
         },
         vim::{
             VIM_CONTROL_CONTEXT, VIM_ESCAPE_CONTEXT, VIM_NORMAL_CONTEXT,
-            VIM_PALETTE_NORMAL_CONTEXT, VIM_PROJECT_TREE_NORMAL_CONTEXT,
-            VIM_PROJECTS_NORMAL_CONTEXT, VIM_SETTINGS_NORMAL_CONTEXT, VIM_TERMINAL_CONTEXT,
-            VIM_TERMINAL_NORMAL_CONTEXT,
+            VIM_PALETTE_NORMAL_CONTEXT, VIM_PROJECT_PANEL_NORMAL_CONTEXT,
+            VIM_PROJECT_TREE_NORMAL_CONTEXT, VIM_PROJECTS_NORMAL_CONTEXT,
+            VIM_SETTINGS_NORMAL_CONTEXT, VIM_TERMINAL_CONTEXT, VIM_TERMINAL_NORMAL_CONTEXT,
         },
     },
 };
@@ -61,6 +61,9 @@ actions!(
         OpenOpenedProjectPalette,
         ProjectPanelToggle,
         ProjectPanelRefresh,
+        ProjectPanelSelectPreviousPage,
+        ProjectPanelSelectNextPage,
+        ProjectPanelSelectFilesPage,
         GitBranchSwitch,
         GitDiffOpen,
         GitDiffClose,
@@ -350,6 +353,24 @@ define_bindable_actions! {
             action: SettingsVimLastGroup,
             title: "Settings Vim: Last Group",
             description: "Select the last visible settings group.",
+        },
+        ProjectPanelPreviousPage => {
+            id: "project_panel.page.previous",
+            action: ProjectPanelSelectPreviousPage,
+            title: "Project Panel: Previous Page",
+            description: "Switch to the previous page in the project panel.",
+        },
+        ProjectPanelNextPage => {
+            id: "project_panel.page.next",
+            action: ProjectPanelSelectNextPage,
+            title: "Project Panel: Next Page",
+            description: "Switch to the next page in the project panel.",
+        },
+        ProjectPanelFilesPage => {
+            id: "project_panel.page.files",
+            action: ProjectPanelSelectFilesPage,
+            title: "Project Panel: Files",
+            description: "Show and focus the Files page in the project panel.",
         },
         VimNormal => {
             id: "vim.mode.normal",
@@ -1463,6 +1484,21 @@ fn default_contextual_keybindings() -> Vec<Keybinding> {
             "shift-g",
             BindableActionId::ProjectsVimLast,
             VIM_PROJECTS_NORMAL_CONTEXT,
+        ),
+        contextual_binding(
+            "[ p",
+            BindableActionId::ProjectPanelPreviousPage,
+            VIM_PROJECT_PANEL_NORMAL_CONTEXT,
+        ),
+        contextual_binding(
+            "] p",
+            BindableActionId::ProjectPanelNextPage,
+            VIM_PROJECT_PANEL_NORMAL_CONTEXT,
+        ),
+        contextual_binding(
+            "g p f",
+            BindableActionId::ProjectPanelFilesPage,
+            VIM_PROJECT_PANEL_NORMAL_CONTEXT,
         ),
         contextual_binding(
             "k",

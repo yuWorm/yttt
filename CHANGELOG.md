@@ -9,6 +9,7 @@
 - Added configurable Vim leader expansion, multi-keystroke shortcut recording, alternative shortcut sequences, and an in-app quick-start guide for the unified keymap.
 - Added transient pressed-key feedback to the Vim status bar for normal-mode commands and pending multi-key sequences without echoing insert or terminal text.
 - Added configurable neo-tree-style Global Vim controls for the Projects list (`j/k`, `gg/G`) and project files (`j/k`, `h/l`, `gg/G`, Enter/`o`, create, rename, delete, copy, cut, paste, collapse-all, hidden-file, refresh, finder, and panel-close actions).
+- Added centered, extensible Project Panel icon tabs with an accent-highlighted Files tab, muted Search/Git/Terminal placeholders, and Vim page navigation (`[ p`, `] p`, `g p f`) scoped independently from file-tree commands.
 
 ### Changed
 
@@ -16,6 +17,7 @@
 - Reworked the Zed UI style around imported Zed semantic state colors and compact control geometry, with a full-size flat settings layout, precise button/select/menu states, focused project-tree rows, and native active/inactive tab surfaces.
 - Removed decorative outlines from work-area groups, including terminal surfaces, and from every icon-button variant while retaining structural separators and focus indicators.
 - Moved the tab-bar baseline behind tab items so the selected tab covers its segment and merges visually with the active content surface, matching Zed.
+- Replaced the Project Panel title/action toolbar with icon tabs and a stateful right-side-panel toggle in the workbench tab bar; create, refresh, hidden-file, and project-layout actions now live in row or empty-area context menus.
 - Clippy boundary rules now reject direct construction of style-sensitive `gpui-component` controls in business UI modules.
 - Legacy workspace, settings, editor, and terminal Vim toggles now migrate to the least restrictive equivalent unified mode, and legacy `WorkspaceVim` keybinding contexts migrate to the Global scope.
 

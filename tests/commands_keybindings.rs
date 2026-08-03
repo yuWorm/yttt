@@ -33,7 +33,7 @@ use yttt::ui::settings::keybinding_display::{
 use yttt::ui::settings::keybindings::{KeybindingEditError, KeybindingsEditorState};
 use yttt::ui::vim::{
     VIM_CONTROL_CONTEXT, VIM_NORMAL_CONTEXT, VIM_PALETTE_NORMAL_CONTEXT,
-    VIM_PROJECT_TREE_NORMAL_CONTEXT, VIM_PROJECTS_NORMAL_CONTEXT,
+    VIM_PROJECT_PANEL_NORMAL_CONTEXT, VIM_PROJECT_TREE_NORMAL_CONTEXT, VIM_PROJECTS_NORMAL_CONTEXT,
 };
 use yttt::ui::workbench::shell::split_view::visible_pane_titles;
 use yttt_terminal::{TERMINAL_HINT_KEY_CONTEXT, TERMINAL_SEARCH_KEY_CONTEXT};
@@ -718,6 +718,17 @@ fn bindable_catalog_covers_commands_and_modal_ui_actions() {
             spec.keys == keys
                 && spec.command.as_str() == action
                 && spec.context.as_deref() == Some(VIM_PROJECTS_NORMAL_CONTEXT)
+        }));
+    }
+    for (keys, action) in [
+        ("[ p", "project_panel.page.previous"),
+        ("] p", "project_panel.page.next"),
+        ("g p f", "project_panel.page.files"),
+    ] {
+        assert!(default_ui_keybinding_specs().iter().any(|spec| {
+            spec.keys == keys
+                && spec.command.as_str() == action
+                && spec.context.as_deref() == Some(VIM_PROJECT_PANEL_NORMAL_CONTEXT)
         }));
     }
     for (keys, action) in [

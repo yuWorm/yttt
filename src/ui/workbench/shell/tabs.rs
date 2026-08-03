@@ -264,14 +264,18 @@ pub fn visible_terminal_work_item_tabs(workspace: &Workspace) -> Vec<WorkbenchTa
 
 pub fn project_tree_toggle_icon(open: bool) -> IconName {
     if open {
-        IconName::FolderOpen
+        IconName::PanelRightClose
     } else {
-        IconName::FolderClosed
+        IconName::PanelRightOpen
     }
 }
 
 pub fn project_tree_toggle_tooltip(open: bool) -> &'static str {
-    if open { "Hide Files" } else { "Show Files" }
+    if open {
+        "Hide Project Panel"
+    } else {
+        "Show Project Panel"
+    }
 }
 
 pub struct ProjectTabsToolbar<NewH, SplitVH, SplitHH, ToggleTreeH> {

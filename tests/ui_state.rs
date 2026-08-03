@@ -762,6 +762,56 @@ fn root_view_renders_sidebar_resize_handles_only_for_visible_expanded_panels(
 }
 
 #[gpui::test]
+fn project_panel_uses_compact_local_tabs_without_legacy_actions(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    let panel = cx
+        .debug_bounds("project-file-panel")
+        .expect("project panel should render");
+    let tabs = cx
+        .debug_bounds("project-panel-tabs")
+        .expect("project panel should render its local tabs");
+    let files = cx
+        .debug_bounds("project-panel-tab-files")
+        .expect("project panel should render the Files tab");
+    let strip = cx
+        .debug_bounds("project-panel-tab-strip")
+        .expect("project panel should center its local tab strip");
+    let search = cx
+        .debug_bounds("project-panel-tab-search-placeholder")
+        .expect("project panel should reserve a Search tab");
+    let git = cx
+        .debug_bounds("project-panel-tab-git-placeholder")
+        .expect("project panel should reserve a Git tab");
+    let terminal = cx
+        .debug_bounds("project-panel-tab-terminal-placeholder")
+        .expect("project panel should reserve a Terminal tab");
+    let page = cx
+        .debug_bounds("project-panel-page-files")
+        .expect("project panel should render the Files page");
+
+    assert_eq!(tabs.origin.y, panel.origin.y);
+    assert_eq!(page.origin.y, tabs.origin.y + tabs.size.height);
+    assert!(tabs.size.height < gpui::px(36.0));
+    assert!((strip.center().x - tabs.center().x).abs() <= gpui::px(0.5));
+    assert!(files.origin.x < search.origin.x);
+    assert!(search.origin.x < git.origin.x);
+    assert!(git.origin.x < terminal.origin.x);
+    assert!(cx.debug_bounds("project-file-panel-new").is_none());
+    assert!(cx.debug_bounds("project-file-panel-refresh").is_none());
+}
+
+#[gpui::test]
 fn project_sidebar_context_menu_can_create_project(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let root_slot = Rc::new(RefCell::new(None));
@@ -6726,6 +6776,28 @@ fn ctrl_w_moves_focus_between_terminal_and_project_tree(cx: &mut gpui::TestAppCo
             .is_none(),
         "the terminal focus indicator must disappear in the same rendered frame"
     );
+
+    for keys in ["] p", "[ p", "g p f"] {
+        cx.simulate_keystrokes(keys);
+        cx.run_until_parked();
+        cx.refresh().unwrap();
+        cx.update(|window, cx| {
+            let root = root.read(cx);
+            assert_eq!(
+                root.vim_status().map(|status| status.surface),
+                Some(VimSurface::ProjectTree)
+            );
+            let project_id = root.workspace().selected_project_id().unwrap();
+            let tree = root
+                .project_editor_runtime()
+                .tree(project_id)
+                .expect("project tree");
+            assert!(
+                tree.read(cx).is_focused(window, cx),
+                "{keys} must keep focus in the active project-panel page"
+            );
+        });
+    }
 
     cx.simulate_keystrokes("ctrl-w h");
     cx.run_until_parked();

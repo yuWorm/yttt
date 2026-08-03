@@ -18,6 +18,7 @@ pub const VIM_SETTINGS_NORMAL_CONTEXT: &str = "YtttVim && yttt_vim_scope == glob
 pub const VIM_PROJECTS_NORMAL_CONTEXT: &str = "YtttVim && yttt_vim_scope == global && yttt_vim_mode == normal && yttt_vim_surface == projects";
 pub const VIM_PROJECT_TREE_NORMAL_CONTEXT: &str =
     "YtttVim && yttt_vim_scope == global && yttt_vim_mode == normal && yttt_vim_surface == tree";
+pub const VIM_PROJECT_PANEL_NORMAL_CONTEXT: &str = "YtttVim && yttt_vim_scope == global && yttt_vim_mode == normal && yttt_vim_project_panel == true && !Input";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum WorkbenchVimMode {
@@ -273,6 +274,14 @@ impl VimControllerState {
         context.set("yttt_vim_mode", mode.context_value());
         context.set("yttt_vim_surface", self.surface.label());
         context.set(
+            "yttt_vim_project_panel",
+            if self.surface == VimSurface::ProjectTree {
+                "true"
+            } else {
+                "false"
+            },
+        );
+        context.set(
             "yttt_vim_capture",
             match capture {
                 VimCapture::Inherit => "inherit",
@@ -401,6 +410,43 @@ mod tests {
         assert_eq!(
             vim.status(VimCapture::Suspended).map(|status| status.mode),
             Some(WorkbenchVimMode::Normal)
+        );
+    }
+
+    #[test]
+    fn project_panel_context_tracks_tree_surface_and_effective_mode() {
+        let mut vim = VimControllerState::new(VimModeSetting::Global);
+        vim.sync_surface(VimSurface::ProjectTree);
+        let normal_context = vim.current_key_context();
+        assert_eq!(
+            normal_context
+                .get("yttt_vim_project_panel")
+                .map(AsRef::as_ref),
+            Some("true")
+        );
+        assert_eq!(
+            normal_context.get("yttt_vim_mode").map(AsRef::as_ref),
+            Some("normal")
+        );
+
+        let insert_context = vim.key_context(VimCapture::ForceInsert);
+        assert_eq!(
+            insert_context
+                .get("yttt_vim_project_panel")
+                .map(AsRef::as_ref),
+            Some("true")
+        );
+        assert_eq!(
+            insert_context.get("yttt_vim_mode").map(AsRef::as_ref),
+            Some("insert")
+        );
+
+        vim.sync_surface(VimSurface::Editor);
+        assert_eq!(
+            vim.current_key_context()
+                .get("yttt_vim_project_panel")
+                .map(AsRef::as_ref),
+            Some("false")
         );
     }
 

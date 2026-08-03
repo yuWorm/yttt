@@ -66,6 +66,45 @@ impl WorkbenchView {
         self.dispatch_command_action(CommandId::ProjectPanelRefresh, cx);
     }
 
+    pub(super) fn activate_project_panel_page(
+        &mut self,
+        page: ProjectPanelPage,
+        cx: &mut Context<Self>,
+    ) {
+        self.project.active_panel_page = page;
+        if page == ProjectPanelPage::Files {
+            self.project.pending_project_tree_focus = true;
+        }
+        cx.notify();
+    }
+
+    pub(super) fn on_project_panel_select_previous_page(
+        &mut self,
+        _: &ProjectPanelSelectPreviousPage,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.activate_project_panel_page(self.project.active_panel_page.previous(), cx);
+    }
+
+    pub(super) fn on_project_panel_select_next_page(
+        &mut self,
+        _: &ProjectPanelSelectNextPage,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.activate_project_panel_page(self.project.active_panel_page.next(), cx);
+    }
+
+    pub(super) fn on_project_panel_select_files_page(
+        &mut self,
+        _: &ProjectPanelSelectFilesPage,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.activate_project_panel_page(ProjectPanelPage::Files, cx);
+    }
+
     pub(super) fn on_focus_projects(
         &mut self,
         _: &FocusProjects,

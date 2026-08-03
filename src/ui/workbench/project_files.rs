@@ -406,6 +406,7 @@ impl WorkbenchView {
                 .ui_text
                 .get(UiTextKey::ProjectFilesCreateProjectLayout)
                 .to_string(),
+            refresh: self.ui_text.get(UiTextKey::ProjectFilesRefresh).to_string(),
             rename: self.ui_text.get(UiTextKey::ProjectFilesRename).to_string(),
             delete: self.ui_text.get(UiTextKey::ProjectFilesDelete).to_string(),
             copy: self.ui_text.get(UiTextKey::ProjectFilesCopy).to_string(),

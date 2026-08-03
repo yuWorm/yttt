@@ -124,15 +124,21 @@ fn ui_text_returns_project_file_tree_and_open_error_labels() {
     let chinese = UiText::new(Locale::Chinese);
 
     assert_eq!(english.get(UiTextKey::ProjectFiles), "Files");
-    assert_eq!(english.get(UiTextKey::ProjectFilesShow), "Show Files");
-    assert_eq!(english.get(UiTextKey::ProjectFilesHide), "Hide Files");
+    assert_eq!(
+        english.get(UiTextKey::ProjectFilesShow),
+        "Show Project Panel"
+    );
+    assert_eq!(
+        english.get(UiTextKey::ProjectFilesHide),
+        "Hide Project Panel"
+    );
     assert_eq!(english.get(UiTextKey::ProjectFilesRefresh), "Refresh");
     assert_eq!(
         english.get(UiTextKey::ProjectFileUnsupportedBinary),
         "Binary files are not supported"
     );
     assert_eq!(chinese.get(UiTextKey::ProjectFiles), "文件");
-    assert_eq!(chinese.get(UiTextKey::ProjectFilesShow), "显示文件");
+    assert_eq!(chinese.get(UiTextKey::ProjectFilesShow), "显示项目面板");
     assert_eq!(chinese.get(UiTextKey::ProjectFilesRetry), "重试");
     assert_eq!(
         chinese.get(UiTextKey::ProjectFileInvalidEncoding),
