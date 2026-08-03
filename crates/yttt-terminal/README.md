@@ -35,6 +35,7 @@ yttt_terminal::init(cx);
 
 let mut session = spawn_portable_pty_session(
     TerminalSpawnRequest::for_shell("shell", "/bin/zsh", "")
+        .envs([("NODE_ENV", "development")])
         .cwd(project_directory),
 )?;
 let io = session.take_io().expect("PTY I/O can only be taken once");
@@ -62,7 +63,7 @@ let terminal = cx.new(|cx| {
 });
 ```
 
-`spawn_portable_pty_session` applies `configure_terminal_environment`, owns the child/master lifecycle, provides a race-safe resize handle, and reaps the child through `PortablePtySession::finish`. On Unix, a child with no inherited `LC_ALL`, `LC_CTYPE`, or `LANG` receives `LANG=C.UTF-8`; any explicit locale is preserved.
+`spawn_portable_pty_session` applies `configure_terminal_environment`, owns the child/master lifecycle, provides a race-safe resize handle, and reaps the child through `PortablePtySession::finish`. `TerminalSpawnRequest::envs` injects explicit variables into both shell and command executions, overriding inherited values and terminal defaults with the same names. On Unix, a child with no inherited `LC_ALL`, `LC_CTYPE`, or `LANG` receives `LANG=C.UTF-8`; any explicit locale is preserved.
 
 For a custom reader, dropping `TerminalView` cannot force an arbitrary blocking `Read` implementation to return. The embedder must provide cancellation that closes or otherwise unblocks the reader. A reader that returns after shutdown is discarded without touching terminal or GPUI state.
 

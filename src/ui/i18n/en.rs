@@ -527,6 +527,13 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::SettingsCustomShellPlaceholder => "Shell path or command",
         UiTextKey::SettingsAddShell => "Add",
+        UiTextKey::SettingsEnvironmentVariables => "Environment variables",
+        UiTextKey::SettingsEnvironmentVariablesDescription => {
+            "Injected into every newly started local or SSH shell and command. Setting an existing name replaces its value."
+        }
+        UiTextKey::SettingsEnvironmentNamePlaceholder => "Variable name",
+        UiTextKey::SettingsEnvironmentValuePlaceholder => "Value",
+        UiTextKey::SettingsSetEnvironmentVariable => "Add or update",
         UiTextKey::SettingsFontFamily => "Font family",
         UiTextKey::SettingsFontFamilyDescription => "Terminal font family.",
         UiTextKey::SettingsSearchFont => "Search font...",

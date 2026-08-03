@@ -76,6 +76,7 @@ fn missing_settings_file_writes_defaults() {
     assert_eq!(loaded.settings.terminal.font_family, "");
     assert_eq!(loaded.settings.terminal.shell, AUTO_SHELL);
     assert!(loaded.settings.terminal.custom_shells.is_empty());
+    assert!(loaded.settings.terminal.environment.is_empty());
     assert_eq!(loaded.settings.terminal.font_size, 13.0);
     assert_eq!(loaded.settings.terminal.line_height, 1.15);
     assert_eq!(loaded.settings.terminal.padding, 6.0);
@@ -216,6 +217,38 @@ hint_alphabet = "界"
 }
 
 #[test]
+fn terminal_settings_reject_non_portable_environment_names() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(
+        paths.settings_file(),
+        r#"
+[terminal.environment]
+VALID_NAME = "kept"
+"9INVALID" = "removed"
+"BAD-NAME" = "removed"
+"ALSO.INVALID" = "removed"
+"#,
+    )
+    .unwrap();
+
+    let loaded = load_or_create_settings(&paths).unwrap();
+
+    assert_eq!(
+        loaded.settings.terminal.environment.get("VALID_NAME"),
+        Some(&"kept".to_string())
+    );
+    assert_eq!(loaded.settings.terminal.environment.len(), 1);
+    assert_eq!(
+        loaded.warnings,
+        vec![SettingsLoadWarning::InvalidTerminalValue {
+            field: "environment"
+        }]
+    );
+}
+
+#[test]
 fn invalid_language_falls_back_to_system() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
@@ -248,6 +281,10 @@ fn settings_persist_notification_and_terminal_shell_choices() {
     settings.terminal.custom_shells =
         vec!["/opt/homebrew/bin/fish".to_string(), "/bin/zsh".to_string()];
     settings.terminal.font_size = 15.0;
+    settings
+        .terminal
+        .environment
+        .insert("RUST_LOG".to_string(), "yttt=debug".to_string());
 
     save_settings(&paths, &settings).unwrap();
     let loaded = load_or_create_settings(&paths).unwrap();
@@ -259,6 +296,10 @@ fn settings_persist_notification_and_terminal_shell_choices() {
         vec!["/opt/homebrew/bin/fish", "/bin/zsh"]
     );
     assert_eq!(loaded.settings.terminal.font_size, 15.0);
+    assert_eq!(
+        loaded.settings.terminal.environment.get("RUST_LOG"),
+        Some(&"yttt=debug".to_string())
+    );
 }
 
 #[test]

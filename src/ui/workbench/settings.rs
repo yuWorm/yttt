@@ -411,6 +411,58 @@ impl WorkbenchView {
         Ok(true)
     }
 
+    pub fn terminal_environment(&self) -> &BTreeMap<String, String> {
+        &self.app_settings.terminal.environment
+    }
+
+    pub fn set_terminal_environment_variable(
+        &mut self,
+        name: &str,
+        value: &str,
+    ) -> Result<bool, WorkbenchError> {
+        let name = name.trim();
+        if !is_valid_environment_variable_name(name) || value.contains('\0') {
+            return Ok(false);
+        }
+
+        self.app_settings
+            .terminal
+            .environment
+            .insert(name.to_string(), value.to_string());
+        save_settings(&self.config_paths, &self.app_settings)?;
+        self.sync_terminal_environment();
+        self.settings.settings_environment_name_input = None;
+        self.settings.settings_environment_value_input = None;
+        Ok(true)
+    }
+
+    pub fn remove_terminal_environment_variable(
+        &mut self,
+        name: &str,
+    ) -> Result<bool, WorkbenchError> {
+        if self
+            .app_settings
+            .terminal
+            .environment
+            .remove(name)
+            .is_none()
+        {
+            return Ok(false);
+        }
+
+        save_settings(&self.config_paths, &self.app_settings)?;
+        self.sync_terminal_environment();
+        Ok(true)
+    }
+
+    fn sync_terminal_environment(&self) {
+        self.terminal
+            .environment
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone_from(&self.app_settings.terminal.environment);
+    }
+
     pub fn set_ui_font_family(&mut self, font_family: &str) -> Result<(), WorkbenchError> {
         self.app_settings.general.ui_font_family = font_family.trim().to_string();
         self.save_app_settings_and_refresh_runtime()
@@ -1414,6 +1466,44 @@ impl WorkbenchView {
                 .placeholder(self.ui_text.get(UiTextKey::SettingsCustomShellPlaceholder))
         });
         self.settings.settings_custom_shell_input = Some(input.clone());
+        input
+    }
+
+    pub(super) fn settings_environment_name_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(input) = &self.settings.settings_environment_name_input {
+            return input.clone();
+        }
+
+        let input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(
+                self.ui_text
+                    .get(UiTextKey::SettingsEnvironmentNamePlaceholder),
+            )
+        });
+        self.settings.settings_environment_name_input = Some(input.clone());
+        input
+    }
+
+    pub(super) fn settings_environment_value_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(input) = &self.settings.settings_environment_value_input {
+            return input.clone();
+        }
+
+        let input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(
+                self.ui_text
+                    .get(UiTextKey::SettingsEnvironmentValuePlaceholder),
+            )
+        });
+        self.settings.settings_environment_value_input = Some(input.clone());
         input
     }
 

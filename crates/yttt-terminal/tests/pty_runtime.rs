@@ -27,6 +27,7 @@ fn fake_runtime_records_spawn_cwd_and_exit_status() {
 #[test]
 fn spawn_request_records_size_and_working_directory() {
     let request = TerminalSpawnRequest::for_shell("pane", "sh", "echo ok")
+        .envs([("YTTT_TEST", "injected")])
         .cwd("/tmp/yttt")
         .size(120, 32);
 
@@ -39,6 +40,10 @@ fn spawn_request_records_size_and_working_directory() {
         }
     );
     assert_eq!(request.cwd, std::path::PathBuf::from("/tmp/yttt"));
+    assert_eq!(
+        request.environment.get("YTTT_TEST"),
+        Some(&"injected".to_string())
+    );
     assert_eq!(request.cols, 120);
     assert_eq!(request.rows, 32);
 }
@@ -84,6 +89,60 @@ fn command_mode_exposes_program_output_through_the_pty() {
     assert!(
         output.contains("rendered-through-pty"),
         "PTY output did not contain the command output: {output:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn command_mode_injects_configured_environment_variables() {
+    use std::io::Read as _;
+
+    let request = TerminalSpawnRequest::for_command(
+        "probe",
+        "/bin/sh",
+        "/bin/sh",
+        vec![
+            "-c".to_string(),
+            "printf '%s' \"$YTTT_INJECTED_COMMAND\"".to_string(),
+        ],
+    )
+    .envs([("YTTT_INJECTED_COMMAND", "command value")]);
+    let mut session = spawn_portable_pty_session(request).unwrap();
+    let mut io = session.take_io().unwrap();
+    let mut output = String::new();
+
+    io.reader.read_to_string(&mut output).unwrap();
+    let status = session.finish(ExitReason::Completed).unwrap();
+
+    assert_eq!(status, ProcessStatus::Exited { code: Some(0) });
+    assert!(
+        output.contains("command value"),
+        "PTY output did not contain the injected value: {output:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn shell_mode_injects_configured_environment_variables() {
+    use std::io::Read as _;
+
+    let request = TerminalSpawnRequest::for_shell(
+        "probe",
+        "/bin/sh",
+        "printf '%s' \"$YTTT_INJECTED_SHELL\"; exit",
+    )
+    .envs([("YTTT_INJECTED_SHELL", "shell value")]);
+    let mut session = spawn_portable_pty_session(request).unwrap();
+    let mut io = session.take_io().unwrap();
+    let mut output = String::new();
+
+    io.reader.read_to_string(&mut output).unwrap();
+    let status = session.finish(ExitReason::Completed).unwrap();
+
+    assert_eq!(status, ProcessStatus::Exited { code: Some(0) });
+    assert!(
+        output.contains("shell value"),
+        "PTY output did not contain the injected value: {output:?}"
     );
 }
 

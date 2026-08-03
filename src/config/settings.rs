@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
 };
@@ -221,6 +222,7 @@ pub const AUTO_SHELL: &str = "auto";
 pub struct TerminalSettings {
     pub shell: String,
     pub custom_shells: Vec<String>,
+    pub environment: BTreeMap<String, String>,
     pub font_family: String,
     pub font_size: f32,
     pub line_height: f32,
@@ -247,6 +249,7 @@ impl Default for TerminalSettings {
         Self {
             shell: AUTO_SHELL.to_string(),
             custom_shells: Vec::new(),
+            environment: BTreeMap::new(),
             font_family: String::new(),
             font_size: 13.0,
             line_height: 1.15,
@@ -940,6 +943,16 @@ fn validate_settings(
             push_unique(&mut settings.terminal.custom_shells, shell);
         }
     }
+    let original_environment_count = settings.terminal.environment.len();
+    settings
+        .terminal
+        .environment
+        .retain(|name, value| is_valid_environment_variable_name(name) && !value.contains('\0'));
+    if settings.terminal.environment.len() != original_environment_count {
+        warnings.push(SettingsLoadWarning::InvalidTerminalValue {
+            field: "environment",
+        });
+    }
 
     let editor_defaults = EditorSettings::default();
     settings.editor.font_family = settings.editor.font_family.trim().to_string();
@@ -997,6 +1010,14 @@ fn validate_settings(
     }
 
     settings
+}
+
+pub fn is_valid_environment_variable_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes
+        .next()
+        .is_some_and(|first| first == b'_' || first.is_ascii_alphabetic())
+        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
 }
 
 fn push_unique(values: &mut Vec<String>, value: &str) {

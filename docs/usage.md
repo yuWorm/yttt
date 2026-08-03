@@ -175,6 +175,7 @@ system = false
 [terminal]
 shell = "auto"
 custom_shells = []
+environment = {}
 font_family = ""
 font_size = 13.0
 line_height = 1.15
@@ -242,6 +243,19 @@ use that keyboard-selected row immediately rather than waiting for the project m
 covers `SHELL` and common macOS/Linux shells, plus `COMSPEC`, PowerShell, `cmd.exe`, and shells
 available on `PATH` on Windows. Add executable paths or command names through Settings; they are
 stored in `terminal.custom_shells`, and selecting one stores it in `terminal.shell`.
+
+Global terminal variables can be added in Settings or declared by replacing the empty inline map
+with a table:
+
+```toml
+[terminal.environment]
+NODE_ENV = "development"
+RUST_LOG = "yttt=debug"
+```
+
+Names must match the portable form `[A-Za-z_][A-Za-z0-9_]*`. Values override the environment
+inherited by yttt and are injected into every subsequently started local or SSH shell and
+command. Already-running processes keep their original environment until restarted.
 
 ## Theme TOML
 

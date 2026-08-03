@@ -5517,6 +5517,73 @@ fn root_view_terminal_shell_setting_changes_new_shell_tabs() {
 }
 
 #[test]
+fn root_view_terminal_environment_persists_and_updates_existing_panes() {
+    let temp = tempdir().unwrap();
+    let project_dir = temp.path().join("environment-settings-project");
+    fs::create_dir(&project_dir).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
+    root.open_project_path(&project_dir).unwrap();
+
+    assert!(
+        !root
+            .set_terminal_environment_variable("9INVALID", "ignored")
+            .unwrap()
+    );
+    assert!(
+        root.set_terminal_environment_variable("YTTT_PROFILE", "development")
+            .unwrap()
+    );
+    root.run_command(CommandId::TabNew).unwrap();
+
+    let environment = root
+        .visible_terminal_pane_contexts()
+        .into_iter()
+        .find(|context| context.pane.id == "shell")
+        .unwrap()
+        .environment;
+    assert_eq!(
+        environment
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get("YTTT_PROFILE"),
+        Some(&"development".to_string())
+    );
+
+    assert!(
+        root.set_terminal_environment_variable("YTTT_PROFILE", "production")
+            .unwrap()
+    );
+    assert_eq!(
+        environment
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get("YTTT_PROFILE"),
+        Some(&"production".to_string())
+    );
+    assert_eq!(
+        load_or_create_settings(&paths)
+            .unwrap()
+            .settings
+            .terminal
+            .environment
+            .get("YTTT_PROFILE"),
+        Some(&"production".to_string())
+    );
+
+    assert!(
+        root.remove_terminal_environment_variable("YTTT_PROFILE")
+            .unwrap()
+    );
+    assert!(
+        environment
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty()
+    );
+}
+
+#[test]
 fn root_view_terminal_display_settings_persist() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));

@@ -238,6 +238,10 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 UiTextKey::SettingsCustomShellDescription,
             ),
             row(
+                UiTextKey::SettingsEnvironmentVariables,
+                UiTextKey::SettingsEnvironmentVariablesDescription,
+            ),
+            row(
                 UiTextKey::SettingsFontFamily,
                 UiTextKey::SettingsFontFamilyDescription,
             ),

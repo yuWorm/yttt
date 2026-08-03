@@ -451,6 +451,13 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::SettingsCustomShellPlaceholder => "Shell 路径或命令",
         UiTextKey::SettingsAddShell => "添加",
+        UiTextKey::SettingsEnvironmentVariables => "全局环境变量",
+        UiTextKey::SettingsEnvironmentVariablesDescription => {
+            "自动注入每个新启动的本地或 SSH Shell 与命令；设置同名变量会覆盖原值。"
+        }
+        UiTextKey::SettingsEnvironmentNamePlaceholder => "变量名",
+        UiTextKey::SettingsEnvironmentValuePlaceholder => "值",
+        UiTextKey::SettingsSetEnvironmentVariable => "添加或更新",
         UiTextKey::SettingsFontFamily => "字体族",
         UiTextKey::SettingsFontFamilyDescription => "终端字体族。",
         UiTextKey::SettingsSearchFont => "搜索字体...",

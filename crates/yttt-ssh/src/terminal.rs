@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     io::{self, Read, Write},
     sync::{Arc, Mutex, mpsc as blocking_mpsc},
 };
@@ -17,6 +18,7 @@ pub struct RemoteTerminalRequest {
     pub connection_id: ConnectionId,
     pub cwd: RemotePathBuf,
     pub execution: RemoteTerminalExecution,
+    pub environment: BTreeMap<String, String>,
     pub cols: u16,
     pub rows: u16,
 }
@@ -204,26 +206,64 @@ pub(crate) fn finish_remote_terminal(
     }
 }
 
-pub(crate) fn remote_shell_startup(cwd: &RemotePathBuf, command: &str) -> String {
-    let cwd = shell_quote(cwd.as_str());
-    if command.trim().is_empty() {
-        format!("cd -- {cwd}\r")
-    } else {
-        format!("cd -- {cwd} && {command}\r")
+pub(crate) fn remote_shell_startup(
+    cwd: &RemotePathBuf,
+    command: &str,
+    environment: &BTreeMap<String, String>,
+) -> String {
+    let mut startup = remote_environment_exports(environment);
+    if !startup.is_empty() {
+        startup.push_str(" && ");
     }
+    startup.push_str("cd -- ");
+    startup.push_str(&shell_quote(cwd.as_str()));
+    if !command.trim().is_empty() {
+        startup.push_str(" && ");
+        startup.push_str(command);
+    }
+    startup.push('\r');
+    startup
 }
 
 pub(crate) fn remote_exec_command(cwd: &RemotePathBuf, program: &str, args: &[String]) -> String {
-    let mut command = format!(
-        "cd -- {} && exec {}",
-        shell_quote(cwd.as_str()),
-        shell_quote(program)
-    );
+    remote_exec_command_with_environment(cwd, program, args, &BTreeMap::new())
+}
+
+pub(crate) fn remote_exec_command_with_environment(
+    cwd: &RemotePathBuf,
+    program: &str,
+    args: &[String],
+    environment: &BTreeMap<String, String>,
+) -> String {
+    let mut command = remote_environment_exports(environment);
+    if !command.is_empty() {
+        command.push_str(" && ");
+    }
+    command.push_str("cd -- ");
+    command.push_str(&shell_quote(cwd.as_str()));
+    command.push_str(" && exec ");
+    command.push_str(&shell_quote(program));
     for arg in args {
         command.push(' ');
         command.push_str(&shell_quote(arg));
     }
     command
+}
+
+fn remote_environment_exports(environment: &BTreeMap<String, String>) -> String {
+    let mut exports = String::new();
+    for (name, value) in environment {
+        if !exports.is_empty() {
+            exports.push_str(" && ");
+        }
+        let mut assignment = String::with_capacity(name.len() + value.len() + 1);
+        assignment.push_str(name);
+        assignment.push('=');
+        assignment.push_str(value);
+        exports.push_str("export ");
+        exports.push_str(&shell_quote(&assignment));
+    }
+    exports
 }
 
 fn shell_quote(value: &str) -> String {
@@ -242,8 +282,28 @@ mod tests {
             "cd -- '/srv/team'\"'\"'s app' && exec 'printf' 'a b' 'x'\"'\"'y'"
         );
         assert_eq!(
-            remote_shell_startup(&cwd, "cargo test"),
+            remote_shell_startup(&cwd, "cargo test", &BTreeMap::new()),
             "cd -- '/srv/team'\"'\"'s app' && cargo test\r"
+        );
+    }
+
+    #[test]
+    fn remote_shells_and_commands_export_configured_environment() {
+        let cwd = RemotePathBuf::new("/srv/app").unwrap();
+        let environment = BTreeMap::from([("YTTT_TOKEN".to_string(), "a b'c".to_string())]);
+
+        assert_eq!(
+            remote_shell_startup(&cwd, "", &environment),
+            "export 'YTTT_TOKEN=a b'\"'\"'c' && cd -- '/srv/app'\r"
+        );
+        assert_eq!(
+            remote_exec_command_with_environment(
+                &cwd,
+                "printenv",
+                &["YTTT_TOKEN".to_string()],
+                &environment,
+            ),
+            "export 'YTTT_TOKEN=a b'\"'\"'c' && cd -- '/srv/app' && exec 'printenv' 'YTTT_TOKEN'"
         );
     }
 

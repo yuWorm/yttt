@@ -10,6 +10,7 @@
 - Added transient pressed-key feedback to the Vim status bar for normal-mode commands and pending multi-key sequences without echoing insert or terminal text.
 - Added configurable neo-tree-style Global Vim controls for the Projects list (`j/k`, `gg/G`) and project files (`j/k`, `h/l`, `gg/G`, Enter/`o`, create, rename, delete, copy, cut, paste, collapse-all, hidden-file, refresh, finder, and panel-close actions).
 - Added centered, extensible Project Panel icon tabs with an accent-highlighted Files tab, muted Search/Git/Terminal placeholders, and Vim page navigation (`[ p`, `] p`, `g p f`) scoped independently from file-tree commands.
+- Added persistent global terminal environment variables that are automatically injected into newly started local and SSH shells and CLI commands.
 
 ### Changed
 

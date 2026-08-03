@@ -1100,6 +1100,100 @@ fn settings_terminal_rows(
                 cx.notify();
             }),
         ));
+    let environment_name_input = root.settings_environment_name_input(window, cx);
+    let environment_value_input = root.settings_environment_value_input(window, cx);
+    let environment_name_input_for_set = environment_name_input.clone();
+    let environment_value_input_for_set = environment_value_input.clone();
+    let environment_set_control = div()
+        .flex()
+        .items_center()
+        .gap(style.ui_style.spacing.md)
+        .w(style.control_width)
+        .child(
+            div().flex_1().min_w_0().h(style.control_height).child(
+                yttt_input(
+                    &environment_name_input,
+                    YtttInputKind::Settings,
+                    theme,
+                    style.ui_style,
+                )
+                .small(),
+            ),
+        )
+        .child(
+            div().flex_1().min_w_0().h(style.control_height).child(
+                yttt_input(
+                    &environment_value_input,
+                    YtttInputKind::Settings,
+                    theme,
+                    style.ui_style,
+                )
+                .small(),
+            ),
+        )
+        .child(settings_button(
+            "settings-set-environment-variable",
+            text.get(UiTextKey::SettingsSetEnvironmentVariable),
+            false,
+            theme,
+            cx,
+            cx.listener(move |this, _, _window, cx| {
+                let name = environment_name_input_for_set.read(cx).value().to_string();
+                let value = environment_value_input_for_set.read(cx).value().to_string();
+                if let Err(error) = this.set_terminal_environment_variable(&name, &value) {
+                    this.load_error = Some(error.to_string());
+                }
+                cx.notify();
+            }),
+        ));
+    let environment_variables = root
+        .terminal_environment()
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect::<Vec<_>>();
+    let environment_list = environment_variables.into_iter().enumerate().fold(
+        div()
+            .flex()
+            .flex_col()
+            .gap(style.ui_style.spacing.md)
+            .w(style.control_width)
+            .child(environment_set_control),
+        |list, (index, (name, value))| {
+            let name_for_remove = name.clone();
+            list.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(style.ui_style.spacing.md)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_xs()
+                            .text_color(theme.text)
+                            .child(format!("{name}={value}")),
+                    )
+                    .child(settings_button(
+                        format!("settings-delete-environment-variable-{index}"),
+                        text.get(UiTextKey::SettingsDelete),
+                        false,
+                        theme,
+                        cx,
+                        cx.listener(move |this, _, _window, cx| {
+                            if let Err(error) =
+                                this.remove_terminal_environment_variable(&name_for_remove)
+                            {
+                                this.load_error = Some(error.to_string());
+                            }
+                            cx.notify();
+                        }),
+                    )),
+            )
+        },
+    );
 
     div()
         .flex()
@@ -1125,6 +1219,16 @@ fn settings_terminal_rows(
             text.get(UiTextKey::SettingsCustomShellDescription),
             custom_shell_control.into_any_element(),
         ))
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsEnvironmentVariables),
+                text.get(UiTextKey::SettingsEnvironmentVariablesDescription),
+                environment_list.into_any_element(),
+            )
+            .debug_selector(|| "settings-terminal-environment-row".to_string()),
+        )
         .child(setting_row(
             style,
             theme,

@@ -7,7 +7,7 @@ pub use driver::{
 };
 pub(crate) use driver::{PtyIoDriver, PtyIoHandle};
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -58,6 +58,7 @@ pub struct TerminalSpawnRequest {
     pub pane_id: String,
     pub execution: TerminalExecution,
     pub cwd: PathBuf,
+    pub environment: BTreeMap<String, String>,
     pub cols: u16,
     pub rows: u16,
 }
@@ -74,6 +75,7 @@ impl TerminalSpawnRequest {
                 shell: shell.into(),
                 command: command.into(),
             },
+            environment: BTreeMap::new(),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             cols: 80,
             rows: 24,
@@ -93,10 +95,25 @@ impl TerminalSpawnRequest {
                 program: program.into(),
                 args,
             },
+            environment: BTreeMap::new(),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             cols: 80,
             rows: 24,
         }
+    }
+
+    pub fn envs<I, K, V>(mut self, environment: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        self.environment.extend(
+            environment
+                .into_iter()
+                .map(|(name, value)| (name.into(), value.into())),
+        );
+        self
     }
 
     pub fn cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
@@ -205,7 +222,8 @@ impl TerminalRuntime for PortablePtyRuntime {
             pixel_height: 0,
         })?;
         let portable_pty::PtyPair { slave, master } = pair;
-        let command_builder = command_builder(&request.execution, &request.cwd)?;
+        let command_builder =
+            command_builder(&request.execution, &request.cwd, &request.environment)?;
         let mut child = slave.spawn_command(command_builder)?;
         drop(slave);
 
@@ -300,7 +318,7 @@ pub fn spawn_portable_pty_session(
         pixel_height: 0,
     })?;
     let portable_pty::PtyPair { slave, master } = pair;
-    let command_builder = command_builder(&request.execution, &request.cwd)?;
+    let command_builder = command_builder(&request.execution, &request.cwd, &request.environment)?;
     let mut child = slave.spawn_command(command_builder)?;
     drop(slave);
 
@@ -468,7 +486,11 @@ struct PortablePtyProcess {
     status: ProcessStatus,
 }
 
-fn command_builder(execution: &TerminalExecution, cwd: &Path) -> anyhow::Result<CommandBuilder> {
+fn command_builder(
+    execution: &TerminalExecution,
+    cwd: &Path,
+    environment: &BTreeMap<String, String>,
+) -> anyhow::Result<CommandBuilder> {
     let mut builder = match execution {
         TerminalExecution::Shell { shell, .. } => {
             let shell = shell.trim();
@@ -498,6 +520,12 @@ fn command_builder(execution: &TerminalExecution, cwd: &Path) -> anyhow::Result<
         }
     };
     configure_terminal_environment(&mut builder);
+    for (name, value) in environment {
+        builder.env(name, value);
+    }
+    if environment.contains_key("NO_COLOR") && !environment.contains_key("CLICOLOR") {
+        builder.env_remove("CLICOLOR");
+    }
     builder.cwd(cwd);
     Ok(builder)
 }
@@ -652,7 +680,7 @@ mod tests {
             vec!["npm", "run", "dev server"]
         };
         assert_eq!(
-            argv(command_builder(&execution, Path::new("/tmp")).unwrap()),
+            argv(command_builder(&execution, Path::new("/tmp"), &BTreeMap::new()).unwrap()),
             expected
         );
     }
@@ -725,11 +753,11 @@ mod tests {
         };
 
         assert_eq!(
-            argv(command_builder(&sh, Path::new("/tmp")).unwrap()),
+            argv(command_builder(&sh, Path::new("/tmp"), &BTreeMap::new()).unwrap()),
             vec!["/bin/sh", "-li"]
         );
         assert_eq!(
-            argv(command_builder(&powershell, Path::new("/tmp")).unwrap()),
+            argv(command_builder(&powershell, Path::new("/tmp"), &BTreeMap::new()).unwrap()),
             vec![
                 "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
                 "-NoLogo",
@@ -755,7 +783,7 @@ mod tests {
         };
 
         assert_eq!(
-            argv(command_builder(&execution, Path::new("/tmp")).unwrap()),
+            argv(command_builder(&execution, Path::new("/tmp"), &BTreeMap::new()).unwrap()),
             vec!["/bin/zsh", "-li"]
         );
         let mut input = Vec::new();
@@ -769,7 +797,7 @@ mod tests {
             shell: "/bin/zsh".to_string(),
             command: String::new(),
         };
-        let builder = command_builder(&execution, Path::new("/tmp")).unwrap();
+        let builder = command_builder(&execution, Path::new("/tmp"), &BTreeMap::new()).unwrap();
 
         assert_eq!(
             builder.get_env("TERM"),
@@ -787,6 +815,27 @@ mod tests {
             builder.get_env("TERM_PROGRAM_VERSION"),
             Some(std::ffi::OsStr::new(env!("CARGO_PKG_VERSION")))
         );
+    }
+
+    #[test]
+    fn configured_environment_overrides_terminal_defaults_and_honors_no_color() {
+        let execution = TerminalExecution::Shell {
+            shell: "/bin/sh".to_string(),
+            command: String::new(),
+        };
+        let environment = BTreeMap::from([
+            ("TERM".to_string(), "custom-terminal".to_string()),
+            ("NO_COLOR".to_string(), "1".to_string()),
+        ]);
+
+        let builder = command_builder(&execution, Path::new("/tmp"), &environment).unwrap();
+
+        assert_eq!(
+            builder.get_env("TERM"),
+            Some(std::ffi::OsStr::new("custom-terminal"))
+        );
+        assert_eq!(builder.get_env("NO_COLOR"), Some(std::ffi::OsStr::new("1")));
+        assert_eq!(builder.get_env("CLICOLOR"), None);
     }
 
     #[cfg(unix)]

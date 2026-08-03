@@ -1,7 +1,8 @@
 use std::{
+    collections::BTreeMap,
     io::{self, Read, Write},
     path::PathBuf,
-    sync::{atomic::Ordering, mpsc},
+    sync::{Arc, RwLock, atomic::Ordering, mpsc},
     time::Duration,
 };
 
@@ -110,6 +111,7 @@ pub struct TerminalPaneContext {
     pub tab_title: String,
     pub pane: PaneConfig,
     pub shell: String,
+    pub environment: Arc<RwLock<BTreeMap<String, String>>>,
     pub is_focused: bool,
     pub terminal_input_gate: TerminalInputGate,
     pub ssh: Option<SshTerminalContext>,
@@ -202,6 +204,7 @@ pub struct TerminalPaneView {
     execution_mode: TerminalExecutionMode,
     exit_behavior: ProcessExitBehavior,
     shell: String,
+    environment: Arc<RwLock<BTreeMap<String, String>>>,
     notify_on_exit: bool,
     ssh: Option<SshTerminalContext>,
     terminal: Option<Entity<TerminalView>>,
@@ -287,6 +290,7 @@ impl TerminalPaneView {
             tab_title,
             pane,
             shell,
+            environment,
             is_focused: _,
             terminal_input_gate,
             ssh,
@@ -305,6 +309,7 @@ impl TerminalPaneView {
             execution_mode: pane.execution_mode,
             exit_behavior: pane.exit_behavior,
             shell,
+            environment,
             kind: pane.kind,
             notify_on_exit: pane.notify_on_exit,
             ssh,
@@ -369,7 +374,17 @@ impl TerminalPaneView {
                 self.args.clone(),
             ),
         };
-        request.cwd(self.project_path.clone())
+        let environment = self
+            .environment
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        request
+            .envs(
+                environment
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.as_str())),
+            )
+            .cwd(self.project_path.clone())
     }
 
     fn spawn_session(&self) -> anyhow::Result<TerminalPaneSession> {
@@ -395,11 +410,17 @@ impl TerminalPaneView {
                 args: self.args.clone(),
             },
         };
+        let environment = self
+            .environment
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         transport
             .terminal_session(RemoteTerminalRequest {
                 connection_id: ssh.connection_id.clone(),
                 cwd,
                 execution,
+                environment,
                 cols: 80,
                 rows: 24,
             })

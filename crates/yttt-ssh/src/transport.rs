@@ -34,7 +34,8 @@ use crate::sftp::{
 use crate::terminal::{
     RemoteCommandOutput, RemoteCommandRequest, RemoteTerminalCommand, RemoteTerminalEndpoint,
     RemoteTerminalExecution, RemoteTerminalRequest, RemoteTerminalSession, finish_remote_terminal,
-    remote_exec_command, remote_shell_startup, terminal_error_output,
+    remote_exec_command, remote_exec_command_with_environment, remote_shell_startup,
+    terminal_error_output,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1169,12 +1170,24 @@ async fn run_remote_terminal(
             RemoteTerminalExecution::Shell { command } => {
                 channel.request_shell(true).await?;
                 channel
-                    .data_bytes(remote_shell_startup(&request.cwd, command))
+                    .data_bytes(remote_shell_startup(
+                        &request.cwd,
+                        command,
+                        &request.environment,
+                    ))
                     .await?;
             }
             RemoteTerminalExecution::Command { program, args } => {
                 channel
-                    .exec(true, remote_exec_command(&request.cwd, program, args))
+                    .exec(
+                        true,
+                        remote_exec_command_with_environment(
+                            &request.cwd,
+                            program,
+                            args,
+                            &request.environment,
+                        ),
+                    )
                     .await?;
             }
         }
