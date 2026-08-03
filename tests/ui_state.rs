@@ -695,6 +695,28 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
     cx.read(|app| {
         assert!(root.read(app).settings_is_open());
     });
+    let panel = cx
+        .debug_bounds("settings-panel")
+        .expect("settings should render the fullscreen panel");
+    let sidebar = cx
+        .debug_bounds("settings-sidebar")
+        .expect("settings should render the navigation sidebar");
+    let content = cx
+        .debug_bounds("settings-content")
+        .expect("settings should render the content pane");
+    let search = cx
+        .debug_bounds("settings-search")
+        .expect("settings should render the compact search field");
+    let row = cx
+        .debug_bounds("settings-restore-last-session-row")
+        .expect("settings should render flat full-width rows");
+
+    assert_eq!(sidebar.size.width, gpui::px(224.0));
+    assert_eq!(search.size.height, gpui::px(28.0));
+    assert!(panel.size.width > sidebar.size.width + gpui::px(400.0));
+    assert!(content.origin.x >= sidebar.origin.x + sidebar.size.width);
+    assert!(content.size.width > sidebar.size.width);
+    assert!(row.size.height >= gpui::px(64.0));
 }
 
 #[gpui::test]

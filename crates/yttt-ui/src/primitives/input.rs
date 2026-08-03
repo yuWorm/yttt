@@ -30,6 +30,23 @@ pub fn yttt_input_style(
     theme: WorkbenchTheme,
     ui_style: UiStyle,
 ) -> YtttInputStyle {
+    let (background, border, focused_border, text, placeholder) = match kind {
+        YtttInputKind::Dialog | YtttInputKind::Settings => (
+            theme.element_background,
+            theme.border_variant,
+            theme.border_focused,
+            theme.text,
+            theme.text_subtle,
+        ),
+        YtttInputKind::Palette | YtttInputKind::Search => (
+            theme.editor_background,
+            theme.border_variant,
+            theme.border_focused,
+            theme.text,
+            theme.text_subtle,
+        ),
+    };
+
     YtttInputStyle {
         height: match kind {
             YtttInputKind::Dialog => ui_style.controls.dialog_input_height,
@@ -39,15 +56,13 @@ pub fn yttt_input_style(
         },
         radius: match kind {
             YtttInputKind::Settings => ui_style.radius.control,
-            YtttInputKind::Dialog | YtttInputKind::Palette | YtttInputKind::Search => {
-                ui_style.radius.input
-            }
+            _ => ui_style.radius.input,
         },
-        background: theme.surface_elevated,
-        border: theme.border,
-        focused_border: theme.focus_ring,
-        text: theme.text,
-        placeholder: theme.text_subtle,
+        background,
+        border,
+        focused_border,
+        text,
+        placeholder,
     }
 }
 

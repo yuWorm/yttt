@@ -345,12 +345,6 @@ impl WorkbenchView {
                     this.update_work_area_drop_target(group_id, event, cx);
                 },
             ))
-            .border(appearance.style.border.hairline)
-            .border_color(if group_active {
-                appearance.ui.border_strong
-            } else {
-                appearance.ui.border
-            })
             .child(project_tabs(
                 project_id.clone(),
                 group_id,
@@ -550,61 +544,47 @@ impl WorkbenchView {
                 .h_full()
                 .w(px(panel_width))
                 .overflow_hidden()
-                .bg(theme.sidebar_background)
+                .bg(theme.panel_background)
                 .child(
                     div()
                         .flex()
                         .items_center()
                         .justify_between()
-                        .h_10()
+                        .h(ui_style.controls.toolbar_height)
                         .flex_none()
                         .border_b(ui_style.border.hairline)
                         .border_color(if tree_has_keyboard_focus {
-                            theme.accent.alpha(0.55)
+                            theme.border_focused
                         } else {
-                            theme.border
+                            theme.border_variant
                         })
-                        .px(ui_style.spacing.lg)
+                        .px(ui_style.rows.sidebar_padding_x)
                         .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(ui_style.spacing.sm)
-                                .children(tree_has_keyboard_focus.then(|| {
-                                    div()
-                                        .debug_selector(|| {
-                                            "project-file-panel-focus-indicator".to_string()
-                                        })
-                                        .w(px(2.0))
-                                        .h_4()
-                                        .rounded_full()
-                                        .bg(theme.accent)
-                                }))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .overflow_hidden()
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .text_color(if tree_has_keyboard_focus {
-                                                    theme.accent
-                                                } else {
-                                                    theme.text
-                                                })
-                                                .truncate()
-                                                .child(self.ui_text.get(UiTextKey::ProjectFiles)),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(theme.text_subtle)
-                                                .truncate()
-                                                .child(project_name),
-                                        ),
-                                ),
+                            div().flex().items_center().gap(ui_style.spacing.sm).child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .overflow_hidden()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(if tree_has_keyboard_focus {
+                                                theme.accent
+                                            } else {
+                                                theme.text
+                                            })
+                                            .truncate()
+                                            .child(self.ui_text.get(UiTextKey::ProjectFiles)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.text_subtle)
+                                            .truncate()
+                                            .child(project_name),
+                                    ),
+                            ),
                         )
                         .child(
                             div()
@@ -618,6 +598,7 @@ impl WorkbenchView {
                                         YtttIconButtonKind::Toolbar,
                                         theme,
                                         ui_style,
+                                        cx,
                                     )
                                     .dropdown_menu(
                                         move |menu, _, _| {

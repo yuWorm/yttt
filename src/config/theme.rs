@@ -131,12 +131,18 @@ struct UiThemeFile {
     background: Option<String>,
     surface: Option<String>,
     surface_elevated: Option<String>,
+    panel_background: Option<String>,
+    editor_background: Option<String>,
+    tab_active_background: Option<String>,
+    tab_inactive_background: Option<String>,
     titlebar: Option<String>,
     sidebar: Option<String>,
     tabbar: Option<String>,
     terminal_background: Option<String>,
     border: Option<String>,
     border_strong: Option<String>,
+    border_variant: Option<String>,
+    border_focused: Option<String>,
     split_line: Option<String>,
     split_line_active: Option<String>,
     text: Option<String>,
@@ -145,6 +151,16 @@ struct UiThemeFile {
     accent: Option<String>,
     active_surface: Option<String>,
     hover_surface: Option<String>,
+    element_background: Option<String>,
+    element_hover: Option<String>,
+    element_active: Option<String>,
+    element_selected: Option<String>,
+    element_disabled: Option<String>,
+    ghost_element_background: Option<String>,
+    ghost_element_hover: Option<String>,
+    ghost_element_active: Option<String>,
+    ghost_element_selected: Option<String>,
+    ghost_element_disabled: Option<String>,
     danger: Option<String>,
     success: Option<String>,
     warning: Option<String>,
@@ -250,12 +266,18 @@ pub(crate) fn serialize_theme_file(theme: &AppTheme) -> Result<String, toml::ser
             background: color_string(ui.app_background),
             surface: color_string(ui.surface),
             surface_elevated: color_string(ui.surface_elevated),
+            panel_background: color_string(ui.panel_background),
+            editor_background: color_string(ui.editor_background),
+            tab_active_background: color_string(ui.tab_active_background),
+            tab_inactive_background: color_string(ui.tab_inactive_background),
             titlebar: color_string(ui.titlebar_background),
             sidebar: color_string(ui.sidebar_background),
             tabbar: color_string(ui.tabbar_background),
             terminal_background: color_string(ui.terminal_background),
             border: color_string(ui.border),
             border_strong: color_string(ui.border_strong),
+            border_variant: color_string(ui.border_variant),
+            border_focused: color_string(ui.border_focused),
             split_line: color_string(ui.split_line),
             split_line_active: color_string(ui.split_line_active),
             text: color_string(ui.text),
@@ -264,6 +286,16 @@ pub(crate) fn serialize_theme_file(theme: &AppTheme) -> Result<String, toml::ser
             accent: color_string(ui.accent),
             active_surface: color_string(ui.active_surface),
             hover_surface: color_string(ui.hover_surface),
+            element_background: color_string(ui.element_background),
+            element_hover: color_string(ui.element_hover),
+            element_active: color_string(ui.element_active),
+            element_selected: color_string(ui.element_selected),
+            element_disabled: color_string(ui.element_disabled),
+            ghost_element_background: color_string(ui.ghost_element_background),
+            ghost_element_hover: color_string(ui.ghost_element_hover),
+            ghost_element_active: color_string(ui.ghost_element_active),
+            ghost_element_selected: color_string(ui.ghost_element_selected),
+            ghost_element_disabled: color_string(ui.ghost_element_disabled),
             danger: color_string(ui.danger),
             success: color_string(ui.success),
             warning: color_string(ui.warning),
@@ -483,6 +515,134 @@ fn theme_from_file(file: ThemeFile, warnings: &mut Vec<ThemeLoadWarning>) -> Opt
         file.ui.focus_ring,
         &theme_name,
         "ui.focus_ring",
+        warnings,
+    );
+    ui.panel_background = ui.sidebar_background;
+    ui.editor_background = ui.app_background;
+    ui.tab_active_background = ui.surface;
+    ui.tab_inactive_background = ui.tabbar_background;
+    ui.border_variant = ui.border;
+    ui.border_focused = ui.focus_ring;
+    ui.element_background = ui.surface_elevated;
+    ui.element_hover = ui.hover_surface;
+    ui.element_active = ui.active_surface;
+    ui.element_selected = ui.active_surface;
+    ui.element_disabled = ui.surface_elevated;
+    ui.ghost_element_background = rgba(0x00000000);
+    ui.ghost_element_hover = ui.hover_surface;
+    ui.ghost_element_active = ui.active_surface;
+    ui.ghost_element_selected = ui.active_surface;
+    ui.ghost_element_disabled = rgba(0x00000000);
+    apply_color(
+        &mut ui.panel_background,
+        file.ui.panel_background,
+        &theme_name,
+        "ui.panel_background",
+        warnings,
+    );
+    apply_color(
+        &mut ui.editor_background,
+        file.ui.editor_background,
+        &theme_name,
+        "ui.editor_background",
+        warnings,
+    );
+    apply_color(
+        &mut ui.tab_active_background,
+        file.ui.tab_active_background,
+        &theme_name,
+        "ui.tab_active_background",
+        warnings,
+    );
+    apply_color(
+        &mut ui.tab_inactive_background,
+        file.ui.tab_inactive_background,
+        &theme_name,
+        "ui.tab_inactive_background",
+        warnings,
+    );
+    apply_color(
+        &mut ui.border_variant,
+        file.ui.border_variant,
+        &theme_name,
+        "ui.border_variant",
+        warnings,
+    );
+    apply_color(
+        &mut ui.border_focused,
+        file.ui.border_focused,
+        &theme_name,
+        "ui.border_focused",
+        warnings,
+    );
+    apply_color(
+        &mut ui.element_background,
+        file.ui.element_background,
+        &theme_name,
+        "ui.element_background",
+        warnings,
+    );
+    apply_color(
+        &mut ui.element_hover,
+        file.ui.element_hover,
+        &theme_name,
+        "ui.element_hover",
+        warnings,
+    );
+    apply_color(
+        &mut ui.element_active,
+        file.ui.element_active,
+        &theme_name,
+        "ui.element_active",
+        warnings,
+    );
+    apply_color(
+        &mut ui.element_selected,
+        file.ui.element_selected,
+        &theme_name,
+        "ui.element_selected",
+        warnings,
+    );
+    apply_color(
+        &mut ui.element_disabled,
+        file.ui.element_disabled,
+        &theme_name,
+        "ui.element_disabled",
+        warnings,
+    );
+    apply_color(
+        &mut ui.ghost_element_background,
+        file.ui.ghost_element_background,
+        &theme_name,
+        "ui.ghost_element_background",
+        warnings,
+    );
+    apply_color(
+        &mut ui.ghost_element_hover,
+        file.ui.ghost_element_hover,
+        &theme_name,
+        "ui.ghost_element_hover",
+        warnings,
+    );
+    apply_color(
+        &mut ui.ghost_element_active,
+        file.ui.ghost_element_active,
+        &theme_name,
+        "ui.ghost_element_active",
+        warnings,
+    );
+    apply_color(
+        &mut ui.ghost_element_selected,
+        file.ui.ghost_element_selected,
+        &theme_name,
+        "ui.ghost_element_selected",
+        warnings,
+    );
+    apply_color(
+        &mut ui.ghost_element_disabled,
+        file.ui.ghost_element_disabled,
+        &theme_name,
+        "ui.ghost_element_disabled",
         warnings,
     );
     ui.selection = ui.focus_ring;

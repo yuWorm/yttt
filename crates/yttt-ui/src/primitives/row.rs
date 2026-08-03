@@ -1,4 +1,4 @@
-use gpui::{AnyElement, Div, FontWeight, Pixels, Rems, Rgba, div, prelude::*, rgba};
+use gpui::{AnyElement, Div, Pixels, Rems, Rgba, div, prelude::*, rgba};
 
 use crate::{SelectableState, style::UiStyle, theme::WorkbenchTheme};
 
@@ -71,9 +71,9 @@ pub fn yttt_row_style(
             padding_y,
             radius,
             border_width,
-            background: theme.surface,
-            hover_background: theme.surface,
-            border: theme.border,
+            background: theme.ghost_element_background,
+            hover_background: theme.ghost_element_background,
+            border: transparent,
             title: theme.text,
             subtitle: theme.text_subtle,
             status: theme.text_muted,
@@ -82,8 +82,8 @@ pub fn yttt_row_style(
 
     if !enabled {
         let background = match kind {
-            YtttRowKind::Palette | YtttRowKind::Settings => theme.surface_elevated,
-            YtttRowKind::Sidebar | YtttRowKind::Tab => transparent,
+            YtttRowKind::Palette => theme.element_disabled,
+            YtttRowKind::Settings | YtttRowKind::Sidebar | YtttRowKind::Tab => transparent,
         };
 
         return YtttRowStyle {
@@ -108,9 +108,9 @@ pub fn yttt_row_style(
             padding_y,
             radius,
             border_width,
-            background: ui_style.active_background(theme),
-            hover_background: ui_style.active_background(theme),
-            border: theme.border,
+            background: theme.tab_active_background,
+            hover_background: theme.tab_active_background,
+            border: theme.border_variant,
             title: theme.text,
             subtitle: theme.text_muted,
             status: theme.text_muted,
@@ -121,9 +121,9 @@ pub fn yttt_row_style(
             padding_y,
             radius,
             border_width,
-            background: ui_style.active_background(theme),
-            hover_background: ui_style.active_background(theme),
-            border: ui_style.active_background(theme),
+            background: theme.ghost_element_selected,
+            hover_background: theme.ghost_element_selected,
+            border: theme.ghost_element_selected,
             title: theme.text,
             subtitle: theme.text_muted,
             status: theme.text_muted,
@@ -135,7 +135,7 @@ pub fn yttt_row_style(
             radius,
             border_width,
             background: transparent,
-            hover_background: ui_style.hover_background(theme),
+            hover_background: theme.ghost_element_hover,
             border: transparent,
             title: theme.text_muted,
             subtitle: theme.text_subtle,
@@ -147,9 +147,9 @@ pub fn yttt_row_style(
             padding_y,
             radius,
             border_width,
-            background: transparent,
-            hover_background: ui_style.hover_background(theme),
-            border: theme.border,
+            background: theme.tab_inactive_background,
+            hover_background: theme.ghost_element_hover,
+            border: theme.border_variant,
             title: theme.text_muted,
             subtitle: theme.text_subtle,
             status: theme.text_muted,
@@ -160,9 +160,9 @@ pub fn yttt_row_style(
             padding_y,
             radius,
             border_width,
-            background: theme.surface_elevated,
-            hover_background: ui_style.hover_background(theme),
-            border: theme.surface_elevated,
+            background: theme.element_background,
+            hover_background: theme.element_hover,
+            border: theme.element_background,
             title: theme.text_muted,
             subtitle: theme.text_subtle,
             status: theme.text_muted,
@@ -228,13 +228,7 @@ pub fn yttt_settings_row(
             .gap(ui_style.spacing.xs)
             .min_w_0()
             .flex_1()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(style.title)
-                    .child(title),
-            )
+            .child(div().text_sm().text_color(style.title).child(title))
             .child(
                 div()
                     .text_xs()

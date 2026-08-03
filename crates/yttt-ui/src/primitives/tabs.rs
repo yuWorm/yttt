@@ -1,5 +1,4 @@
-use super::icon_button::{YtttIconButtonKind, yttt_icon_button_style};
-use gpui::{Div, Pixels, Rems, Rgba, div, prelude::*, px, rgba};
+use gpui::{Div, Pixels, Rems, Rgba, div, prelude::*, px};
 
 use crate::{
     SelectableState,
@@ -28,10 +27,10 @@ pub fn yttt_tabbar_style(theme: WorkbenchTheme, ui_style: UiStyle) -> YtttTabBar
         border_width: ui_style.rows.tab_border_width,
         min_width: px(128.0),
         max_width: px(220.0),
-        close_slot_size: yttt_icon_button_style(YtttIconButtonKind::TabClose, theme, ui_style).size,
-        active_background: ui_style.active_background(theme),
-        inactive_background: rgba(0x00000000),
-        hover_background: ui_style.hover_background(theme),
+        close_slot_size: ui_style.icon_buttons.tab_close_size,
+        active_background: theme.tab_active_background,
+        inactive_background: theme.tab_inactive_background,
+        hover_background: theme.ghost_element_hover,
     }
 }
 
@@ -45,6 +44,12 @@ pub fn yttt_tab(state: SelectableState, theme: WorkbenchTheme, ui_style: UiStyle
         .rounded(row.radius)
         .border_r(row.border_width)
         .border_color(row.border)
+        .when(state == SelectableState::Active, |this| {
+            this.pb(row.border_width)
+        })
+        .when(state == SelectableState::Inactive, |this| {
+            this.border_b(row.border_width)
+        })
         .bg(row.background)
         .px(row.padding_x)
         .text_color(row.title)

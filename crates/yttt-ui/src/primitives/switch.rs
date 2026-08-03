@@ -17,6 +17,7 @@ pub struct YtttSwitchStyle {
     pub inactive_background: Rgba,
     pub active_border: Rgba,
     pub inactive_border: Rgba,
+    pub hover_border: Rgba,
     pub active_thumb: Rgba,
     pub inactive_thumb: Rgba,
 }
@@ -30,14 +31,15 @@ pub fn yttt_switch_style(theme: WorkbenchTheme, ui_style: UiStyle) -> YtttSwitch
         track_padding: ui_style.switches.track_padding,
         thumb_size: ui_style.switches.thumb_size,
         control_height: ui_style.switches.control_height,
-        outer_border_width: ui_style.border.emphasized,
+        outer_border_width: ui_style.border.hairline,
         track_border_width: ui_style.border.hairline,
         active_background: theme.accent,
-        inactive_background: ui_style.active_background(theme),
-        active_border: theme.focus_ring,
-        inactive_border: theme.border_strong,
+        inactive_background: theme.element_background,
+        active_border: theme.border_variant,
+        inactive_border: theme.border_variant,
+        hover_border: theme.border_focused,
         active_thumb: theme.text,
-        inactive_thumb: theme.text_subtle,
+        inactive_thumb: theme.text_muted,
     }
 }
 
@@ -86,7 +88,7 @@ where
                 .rounded_full()
                 .border(style.outer_border_width)
                 .border_color(border)
-                .hover(move |this| this.border_color(style.active_border))
+                .hover(move |this| this.border_color(style.hover_border))
                 .on_click(move |_, window, cx| on_change(&next_checked, window, cx))
                 .child(
                     div()

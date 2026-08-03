@@ -462,6 +462,7 @@ where
         let allow_open = !(self.state.open || self.state.disabled);
         let outline_visible = self.state.open || (is_focused && !self.state.disabled);
         let popup_radius = cx.theme().radius.min(px(8.));
+        let hover_background = cx.theme().accent;
 
         let (bg, fg) = input_style(self.state.disabled, cx);
 
@@ -501,6 +502,9 @@ where
                     .input_size(self.state.size)
                     .input_text_size(self.state.size)
                     .refine_style(&self.state.style)
+                    .when(allow_open, |this| {
+                        this.hover(move |this| this.bg(hover_background))
+                    })
                     .when(outline_visible, |this| this.focused_border(cx))
                     .when(allow_open, |this| {
                         this.on_click(cx.listener(Self::toggle_menu))

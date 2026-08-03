@@ -220,12 +220,36 @@ fn apply_window_material(
         &mut ui.sidebar_background,
         &mut ui.tabbar_background,
         &mut ui.terminal_background,
+        &mut ui.panel_background,
+        &mut ui.editor_background,
+        &mut ui.tab_active_background,
+        &mut ui.tab_inactive_background,
     ] {
         cap_color_opacity(color, material.panel_tint_opacity);
     }
     cap_color_opacity(&mut ui.surface_elevated, material.elevated_tint_opacity);
+    cap_color_opacity(&mut ui.element_background, material.elevated_tint_opacity);
+    cap_color_opacity(&mut ui.element_disabled, material.elevated_tint_opacity);
+    cap_color_opacity(
+        &mut ui.ghost_element_background,
+        material.elevated_tint_opacity,
+    );
+    cap_color_opacity(
+        &mut ui.ghost_element_disabled,
+        material.elevated_tint_opacity,
+    );
     set_color_opacity(&mut ui.hover_surface, material.hover_overlay_opacity);
+    set_color_opacity(&mut ui.element_hover, material.hover_overlay_opacity);
+    set_color_opacity(&mut ui.ghost_element_hover, material.hover_overlay_opacity);
     set_color_opacity(&mut ui.active_surface, material.active_overlay_opacity);
+    for color in [
+        &mut ui.element_active,
+        &mut ui.element_selected,
+        &mut ui.ghost_element_active,
+        &mut ui.ghost_element_selected,
+    ] {
+        set_color_opacity(color, material.active_overlay_opacity);
+    }
     set_color_opacity(&mut ui.selection, material.selection_overlay_opacity);
 
     cap_color_opacity(&mut editor.background, material.panel_tint_opacity);
@@ -293,30 +317,28 @@ impl ThemeRuntime {
 
     pub fn to_gpui_component_theme_config(&self) -> ThemeConfig {
         let theme = self.ui;
-        let hover = self.style.hover_background(theme);
-        let active = self.style.active_background(theme);
         let transparent = theme.app_background.alpha(0.0);
         let elevated = theme.surface_elevated.alpha(1.0);
         let mut colors = ThemeConfigColors::default();
         colors.background = Some(color_hex(theme.app_background.alpha(1.0)).into());
         colors.foreground = Some(color_hex(theme.text).into());
         colors.border = Some(color_hex(theme.border).into());
-        colors.input = Some(color_hex(theme.border).into());
-        colors.ring = Some(color_hex(theme.focus_ring).into());
+        colors.input = Some(color_hex(theme.border_variant).into());
+        colors.ring = Some(color_hex(theme.border_focused).into());
         colors.accordion = Some(color_hex(transparent).into());
-        colors.accordion_hover = Some(color_hex(hover).into());
-        colors.button = Some(color_hex(theme.surface).into());
+        colors.accordion_hover = Some(color_hex(theme.ghost_element_hover).into());
+        colors.button = Some(color_hex(theme.element_background).into());
         colors.button_foreground = Some(color_hex(theme.text).into());
-        colors.button_hover = Some(color_hex(hover).into());
-        colors.button_active = Some(color_hex(active).into());
-        colors.button_primary = Some(color_hex(active).into());
+        colors.button_hover = Some(color_hex(theme.element_hover).into());
+        colors.button_active = Some(color_hex(theme.element_active).into());
+        colors.button_primary = Some(color_hex(theme.element_selected).into());
         colors.button_primary_foreground = Some(color_hex(theme.text).into());
-        colors.button_primary_hover = Some(color_hex(active).into());
-        colors.button_primary_active = Some(color_hex(active).into());
-        colors.button_secondary = Some(color_hex(theme.surface_elevated).into());
+        colors.button_primary_hover = Some(color_hex(theme.element_hover).into());
+        colors.button_primary_active = Some(color_hex(theme.element_active).into());
+        colors.button_secondary = Some(color_hex(theme.element_background).into());
         colors.button_secondary_foreground = Some(color_hex(theme.text_muted).into());
-        colors.button_secondary_hover = Some(color_hex(hover).into());
-        colors.button_secondary_active = Some(color_hex(active).into());
+        colors.button_secondary_hover = Some(color_hex(theme.element_hover).into());
+        colors.button_secondary_active = Some(color_hex(theme.element_active).into());
         colors.button_danger = Some(color_hex(theme.danger).into());
         colors.button_danger_foreground = Some(color_hex(theme.text).into());
         colors.button_danger_hover = Some(color_hex(theme.danger).into());
@@ -333,20 +355,20 @@ impl ThemeRuntime {
         colors.button_warning_foreground = Some(color_hex(theme.text).into());
         colors.button_warning_hover = Some(color_hex(theme.warning).into());
         colors.button_warning_active = Some(color_hex(theme.warning).into());
-        colors.muted = Some(color_hex(theme.surface_elevated).into());
+        colors.muted = Some(color_hex(theme.element_background).into());
         colors.muted_foreground = Some(color_hex(theme.text_subtle).into());
         colors.overlay = Some(color_hex(self.window_material.scrim).into());
-        colors.primary = Some(color_hex(active).into());
+        colors.primary = Some(color_hex(theme.element_selected).into());
         colors.primary_foreground = Some(color_hex(theme.text).into());
-        colors.primary_hover = Some(color_hex(active).into());
-        colors.primary_active = Some(color_hex(active).into());
-        colors.secondary = Some(color_hex(theme.surface_elevated).into());
+        colors.primary_hover = Some(color_hex(theme.element_hover).into());
+        colors.primary_active = Some(color_hex(theme.element_active).into());
+        colors.secondary = Some(color_hex(theme.element_background).into());
         colors.secondary_foreground = Some(color_hex(theme.text_muted).into());
-        colors.secondary_hover = Some(color_hex(hover).into());
-        colors.secondary_active = Some(color_hex(active).into());
-        colors.switch = Some(color_hex(theme.surface_elevated).into());
+        colors.secondary_hover = Some(color_hex(theme.element_hover).into());
+        colors.secondary_active = Some(color_hex(theme.element_active).into());
+        colors.switch = Some(color_hex(theme.ghost_element_background).into());
         colors.switch_thumb = Some(color_hex(theme.text).into());
-        colors.accent = Some(color_hex(hover).into());
+        colors.accent = Some(color_hex(theme.ghost_element_hover).into());
         colors.accent_foreground = Some(color_hex(theme.text).into());
         colors.caret = Some(color_hex(theme.accent).into());
         colors.group_box = Some(color_hex(theme.surface).into());
@@ -359,7 +381,7 @@ impl ThemeRuntime {
         colors.chart_5 = Some(color_hex(theme.focused_pane_border).into());
         colors.chart_bullish = Some(color_hex(theme.success).into());
         colors.chart_bearish = Some(color_hex(theme.danger).into());
-        colors.description_list_label = Some(color_hex(theme.surface_elevated).into());
+        colors.description_list_label = Some(color_hex(theme.element_background).into());
         colors.description_list_label_foreground = Some(color_hex(theme.text_muted).into());
         colors.drag_border = Some(color_hex(theme.accent).into());
         colors.drop_target = Some(color_hex(theme.selection).into());
@@ -371,44 +393,44 @@ impl ThemeRuntime {
         colors.link_hover = Some(color_hex(theme.focus_ring).into());
         colors.link_active = Some(color_hex(theme.focused_pane_border).into());
         colors.progress_bar = Some(color_hex(theme.accent).into());
-        colors.skeleton = Some(color_hex(theme.surface_elevated).into());
+        colors.skeleton = Some(color_hex(theme.element_background).into());
         colors.slider_bar = Some(color_hex(theme.border_strong).into());
         colors.slider_thumb = Some(color_hex(theme.text_muted).into());
         colors.list = Some(color_hex(transparent).into());
-        colors.list_active = Some(color_hex(active).into());
-        colors.list_active_border = Some(color_hex(active).into());
+        colors.list_active = Some(color_hex(theme.ghost_element_selected).into());
+        colors.list_active_border = Some(color_hex(theme.ghost_element_selected).into());
         colors.list_even = Some(color_hex(transparent).into());
         colors.list_head = Some(color_hex(theme.surface).into());
-        colors.list_hover = Some(color_hex(hover).into());
+        colors.list_hover = Some(color_hex(theme.ghost_element_hover).into());
         colors.popover = Some(color_hex(elevated).into());
         colors.popover_foreground = Some(color_hex(theme.text).into());
         colors.scrollbar = Some(color_hex(transparent).into());
-        colors.scrollbar_thumb = Some(color_hex(hover).into());
-        colors.scrollbar_thumb_hover = Some(color_hex(active).into());
+        colors.scrollbar_thumb = Some(color_hex(theme.border_variant).into());
+        colors.scrollbar_thumb_hover = Some(color_hex(theme.element_hover).into());
         colors.selection = Some(color_hex(theme.selection).into());
         colors.sidebar = Some(color_hex(transparent).into());
-        colors.sidebar_accent = Some(color_hex(hover).into());
+        colors.sidebar_accent = Some(color_hex(theme.ghost_element_hover).into());
         colors.sidebar_accent_foreground = Some(color_hex(theme.text).into());
-        colors.sidebar_border = Some(color_hex(theme.border).into());
+        colors.sidebar_border = Some(color_hex(theme.border_variant).into());
         colors.sidebar_foreground = Some(color_hex(theme.text_muted).into());
-        colors.sidebar_primary = Some(color_hex(active).into());
+        colors.sidebar_primary = Some(color_hex(theme.ghost_element_selected).into());
         colors.sidebar_primary_foreground = Some(color_hex(theme.text).into());
-        colors.tab = Some(color_hex(transparent).into());
-        colors.tab_active = Some(color_hex(active).into());
+        colors.tab = Some(color_hex(theme.tab_inactive_background).into());
+        colors.tab_active = Some(color_hex(theme.tab_active_background).into());
         colors.tab_active_foreground = Some(color_hex(theme.text).into());
-        colors.tab_bar = Some(color_hex(transparent).into());
+        colors.tab_bar = Some(color_hex(theme.tabbar_background).into());
         colors.tab_bar_segmented = Some(color_hex(theme.surface).into());
         colors.tab_foreground = Some(color_hex(theme.text_muted).into());
         colors.table = Some(color_hex(transparent).into());
-        colors.table_active = Some(color_hex(active).into());
-        colors.table_active_border = Some(color_hex(active).into());
+        colors.table_active = Some(color_hex(theme.ghost_element_selected).into());
+        colors.table_active_border = Some(color_hex(theme.ghost_element_selected).into());
         colors.table_even = Some(color_hex(transparent).into());
         colors.table_head = Some(color_hex(theme.surface).into());
-        colors.table_hover = Some(color_hex(hover).into());
+        colors.table_hover = Some(color_hex(theme.ghost_element_hover).into());
         colors.table_head_foreground = Some(color_hex(theme.text).into());
         colors.table_foot = Some(color_hex(theme.surface).into());
         colors.table_foot_foreground = Some(color_hex(theme.text_muted).into());
-        colors.table_row_border = Some(color_hex(theme.border).into());
+        colors.table_row_border = Some(color_hex(theme.border_variant).into());
         colors.success = Some(color_hex(theme.success).into());
         colors.success_foreground = Some(color_hex(theme.text).into());
         colors.warning = Some(color_hex(theme.warning).into());
@@ -422,11 +444,11 @@ impl ThemeRuntime {
         colors.danger_hover = Some(color_hex(theme.danger).into());
         colors.danger_active = Some(color_hex(theme.danger).into());
         colors.title_bar = Some(color_hex(theme.titlebar_background).into());
-        colors.title_bar_border = Some(color_hex(theme.border).into());
+        colors.title_bar_border = Some(color_hex(theme.border_variant).into());
         colors.status_bar = Some(color_hex(theme.surface).into());
-        colors.status_bar_border = Some(color_hex(theme.border).into());
-        colors.tiles = Some(color_hex(theme.surface_elevated).into());
-        colors.window_border = Some(color_hex(theme.border).into());
+        colors.status_bar_border = Some(color_hex(theme.border_variant).into());
+        colors.tiles = Some(color_hex(theme.element_background).into());
+        colors.window_border = Some(color_hex(theme.border_variant).into());
 
         let mut config = ThemeConfig::default();
         config.name = self.theme_name.clone().into();

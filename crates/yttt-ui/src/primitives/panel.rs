@@ -97,7 +97,7 @@ pub struct YtttSettingsLayout {
 
 pub fn yttt_settings_layout(ui_style: UiStyle) -> YtttSettingsLayout {
     YtttSettingsLayout {
-        sidebar_width: px(240.0),
+        sidebar_width: ui_style.settings.sidebar_width,
         control_width: ui_style.controls.settings_control_width,
         compact_control_width: ui_style.controls.settings_compact_control_width,
         control_height: ui_style.controls.settings_height,
@@ -155,9 +155,13 @@ pub fn yttt_panel_style(
         body_max_height,
         padding,
         overlay,
-        background: theme.surface.alpha(1.0),
+        background: if kind == YtttPanelKind::Settings {
+            theme.editor_background.alpha(1.0)
+        } else {
+            theme.surface.alpha(1.0)
+        },
         border_width: ui_style.border.hairline,
-        border: theme.border_strong,
+        border: theme.border_variant,
         shadow: ui_style.panels.shadow,
     }
 }

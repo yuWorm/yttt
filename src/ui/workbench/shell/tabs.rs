@@ -361,6 +361,9 @@ where
         .any(|item| item.kind == WorkbenchTabKind::Terminal);
 
     let tab_row_id = SharedString::from(format!("project-tab-row-{}", tab_group_id.raw()));
+    let tabbar_border_id =
+        SharedString::from(format!("project-tabbar-border-{}", tab_group_id.raw()));
+    let tabbar_border_selector = tabbar_border_id.clone();
     let mut tab_row = div()
         .id(tab_row_id)
         .flex()
@@ -390,6 +393,23 @@ where
             on_move_tab(index),
         ));
     }
+    let tab_strip = div()
+        .relative()
+        .flex()
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .overflow_x_hidden()
+        .child(
+            div()
+                .id(tabbar_border_id)
+                .debug_selector(move || tabbar_border_selector.to_string())
+                .absolute()
+                .inset_0()
+                .border_b(style.border_width)
+                .border_color(theme.border_variant),
+        )
+        .child(tab_row.flex_1().min_w_0());
 
     div()
         .flex()
@@ -397,9 +417,7 @@ where
         .justify_between()
         .h(style.height)
         .bg(theme.tabbar_background)
-        .border_b(style.border_width)
-        .border_color(theme.border)
-        .child(tab_row.flex_1())
+        .child(tab_strip)
         .when(show_toolbar, |this| {
             this.child(tab_toolbar(
                 theme,
@@ -443,7 +461,6 @@ where
     let group_name = format!("project-tab-{}-{index}", tab_group_id.raw());
     let tooltip = item.tooltip.clone();
     let kind = item.kind;
-    let active = item.state == SelectableState::Active;
     let drag_id = item.id.clone();
     let drag_title = item.title.clone();
     let element_id = SharedString::from(group_name.clone());
@@ -503,7 +520,6 @@ where
                 .flex_1()
                 .truncate()
                 .text_color(row_style.title)
-                .when(active, |this| this.font_weight(gpui::FontWeight::SEMIBOLD))
                 .when(missing_on_disk, |this| this.line_through())
                 .child(item.title),
         );
@@ -529,16 +545,7 @@ where
         )),
     };
 
-    tab.children(active.then(|| {
-        div()
-            .absolute()
-            .bottom_0()
-            .left_0()
-            .right_0()
-            .h(ui_style.border.emphasized)
-            .bg(theme.accent)
-    }))
-    .context_menu(move |menu, _, _| {
+    tab.context_menu(move |menu, _, _| {
         menu.item(
             PopupMenuItem::new(text.get(UiTextKey::TabCloseCurrent)).action(Box::new(TabClose)),
         )
@@ -670,7 +677,8 @@ where
         .items_center()
         .h_full()
         .border_l(ui_style.border.hairline)
-        .border_color(theme.border)
+        .border_b(ui_style.border.hairline)
+        .border_color(theme.border_variant)
         .bg(rgba(0x00000000))
         .child(tab_toolbar_button(
             "tab-new",
@@ -702,8 +710,7 @@ where
                 on_toggle_project_tree,
             )
             .when(project_tree_open, |this| {
-                this.bg(ui_style.active_background(theme))
-                    .text_color(theme.text)
+                this.bg(theme.ghost_element_selected).text_color(theme.text)
             })
             .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx)),
         )

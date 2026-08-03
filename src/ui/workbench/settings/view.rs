@@ -11,7 +11,8 @@ pub(in super::super) fn settings_overlay(
     let style = yttt_settings_layout(appearance.style);
 
     yttt_panel_overlay(
-        yttt_panel(YtttPanelKind::Settings, theme, appearance.style)
+        yttt_fullscreen_panel(theme, appearance.style)
+            .debug_selector(|| "settings-panel".to_string())
             .flex_row()
             .p_0()
             .overflow_hidden()
@@ -38,13 +39,13 @@ fn settings_sidebar(
         .visible_groups(&root.ui_text)
         .into_iter()
         .fold(
-            div().flex().flex_col().gap(ui_style.spacing.xs),
+            div().flex().flex_col().gap(ui_style.spacing.xxs),
             |groups, group| {
                 let group_id = group.id.as_str().to_string();
                 let background = if group.selected {
-                    ui_style.active_background(theme)
+                    theme.ghost_element_selected
                 } else {
-                    rgba(0x00000000)
+                    theme.ghost_element_background
                 };
                 let text = if group.selected {
                     theme.text
@@ -60,13 +61,13 @@ fn settings_sidebar(
                         )))
                         .flex()
                         .items_center()
-                        .h(ui_style.controls.settings_height)
+                        .h(ui_style.rows.sidebar_height)
                         .rounded(ui_style.radius.compact)
-                        .px(ui_style.spacing.lg)
+                        .px(ui_style.settings.nav_padding_x)
                         .bg(background)
                         .text_sm()
                         .text_color(text)
-                        .hover(move |this| this.bg(ui_style.hover_background(theme)))
+                        .hover(move |this| this.bg(theme.ghost_element_hover))
                         .on_click(cx.listener(move |this, _, _window, cx| {
                             let _ = this.select_settings_group(&group_id);
                             cx.notify();
@@ -77,6 +78,7 @@ fn settings_sidebar(
         );
 
     div()
+        .debug_selector(|| "settings-sidebar".to_string())
         .flex()
         .flex_col()
         .w(style.sidebar_width)
@@ -84,19 +86,20 @@ fn settings_sidebar(
         .min_h_0()
         .flex_none()
         .border_r(ui_style.border.hairline)
-        .border_color(theme.border)
-        .bg(theme.app_background)
-        .p(ui_style.spacing.lg)
-        .gap(ui_style.spacing.lg)
+        .border_color(theme.border_variant)
+        .bg(theme.panel_background)
+        .p(ui_style.settings.nav_padding_x)
+        .gap(ui_style.settings.nav_group_gap)
         .child(
             div()
                 .id(SharedString::from("settings-search"))
+                .debug_selector(|| "settings-search".to_string())
                 .flex()
                 .items_center()
                 .h(style.search_height)
                 .flex_none()
-                .rounded(ui_style.radius.input)
-                .bg(theme.surface)
+                .rounded(ui_style.radius.control)
+                .bg(theme.editor_background)
                 .overflow_hidden()
                 .child(
                     yttt_input(search_input, YtttInputKind::Search, theme, ui_style)
@@ -122,12 +125,13 @@ fn settings_content(
     let group = root.settings.settings_page.selected_group;
 
     div()
+        .debug_selector(|| "settings-content".to_string())
         .flex()
         .flex_col()
         .flex_1()
         .min_w_0()
         .min_h_0()
-        .bg(theme.surface)
+        .bg(theme.editor_background)
         .child(
             div()
                 .flex_none()
@@ -135,9 +139,9 @@ fn settings_content(
                 .items_center()
                 .justify_between()
                 .border_b(style.ui_style.border.hairline)
-                .border_color(theme.border)
-                .px(style.ui_style.spacing.xxl)
-                .py(style.ui_style.spacing.xl)
+                .border_color(theme.border_variant)
+                .px(style.ui_style.settings.content_padding_x)
+                .py(style.ui_style.settings.content_padding_y)
                 .child(
                     div()
                         .flex()
@@ -145,7 +149,7 @@ fn settings_content(
                         .gap(style.ui_style.spacing.xs)
                         .child(
                             div()
-                                .text_lg()
+                                .text_base()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(group.title(&root.ui_text)),
                         )
@@ -171,7 +175,8 @@ fn settings_content(
         .child(
             div().flex_1().min_h_0().child(
                 settings_rows(root, group, style, window, cx)
-                    .px(style.ui_style.spacing.xxl)
+                    .px(style.ui_style.settings.content_padding_x)
+                    .py(style.ui_style.spacing.md)
                     .overflow_y_scrollbar(),
             ),
         )
@@ -1561,6 +1566,8 @@ fn setting_row(
         description,
         control,
     )
+    .border_b(style.ui_style.border.hairline)
+    .border_color(theme.border_variant.alpha(0.65))
 }
 
 fn settings_select_control<D>(
@@ -1672,8 +1679,8 @@ fn settings_value(value: impl Into<String>, theme: WorkbenchTheme, ui_style: UiS
         .max_w_64()
         .rounded(ui_style.radius.compact)
         .border(ui_style.border.hairline)
-        .border_color(theme.border)
-        .bg(theme.surface_elevated)
+        .border_color(theme.border_variant)
+        .bg(theme.element_background)
         .px(ui_style.spacing.lg)
         .py(ui_style.spacing.xs)
         .text_xs()

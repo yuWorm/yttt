@@ -147,8 +147,8 @@ pub fn yttt_sidebar_style(theme: WorkbenchTheme, ui_style: UiStyle) -> YtttSideb
         resize_hit_area_width: px(SIDEBAR_RESIZE_HIT_AREA_WIDTH),
         item_height: ui_style.rows.sidebar_height,
         item_padding_x: ui_style.rows.sidebar_padding_x,
-        background: theme.sidebar_background,
-        active_background: ui_style.active_background(theme),
-        hover_background: ui_style.hover_background(theme),
+        background: theme.panel_background,
+        active_background: theme.ghost_element_selected,
+        hover_background: theme.ghost_element_hover,
     }
 }

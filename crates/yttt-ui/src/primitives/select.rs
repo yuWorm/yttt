@@ -13,7 +13,10 @@ pub struct YtttSelectStyle {
     pub radius: Pixels,
     pub menu_width: Pixels,
     pub background: Rgba,
+    pub hover_background: Rgba,
+    pub active_background: Rgba,
     pub border: Rgba,
+    pub focused_border: Rgba,
     pub text: Rgba,
 }
 
@@ -23,8 +26,11 @@ pub fn yttt_select_style(theme: WorkbenchTheme, ui_style: UiStyle) -> YtttSelect
         height: ui_style.controls.settings_height,
         radius: ui_style.radius.control,
         menu_width: ui_style.controls.select_menu_width,
-        background: theme.surface_elevated,
-        border: theme.border,
+        background: theme.element_background,
+        hover_background: theme.element_hover,
+        active_background: theme.element_active,
+        border: theme.border_variant,
+        focused_border: theme.border_focused,
         text: theme.text,
     }
 }

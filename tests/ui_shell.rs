@@ -399,6 +399,7 @@ impl gpui::Render for TerminalAndFileTabs {
 fn file_close_button_uses_terminal_trailing_position(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let (_view, cx) = cx.add_window_view(|_, _| TerminalAndFileTabs);
+    assert!(cx.debug_bounds("project-tabbar-border-1").is_some());
 
     let terminal_tab = cx.debug_bounds("project-tab-1-0").unwrap();
     let file_tab = cx.debug_bounds("project-tab-1-1").unwrap();
@@ -704,7 +705,7 @@ fn project_sidebar_context_exposes_project_commands() {
 #[test]
 fn sidebar_style_uses_passed_theme() {
     let mut theme = WorkbenchTheme::one_dark();
-    theme.active_surface = gpui::rgb(0x123456);
+    theme.ghost_element_selected = gpui::rgb(0x123456);
 
     let style = yttt_sidebar_style(theme, UiStyle::default());
 
@@ -714,7 +715,7 @@ fn sidebar_style_uses_passed_theme() {
 #[test]
 fn yttt_tabbar_style_uses_passed_theme() {
     let mut theme = WorkbenchTheme::one_dark();
-    theme.active_surface = gpui::rgb(0x222244);
+    theme.tab_active_background = gpui::rgb(0x222244);
 
     let style = yttt_tabbar_style(theme, UiStyle::default());
 
@@ -777,10 +778,10 @@ fn palette_row_style_uses_muted_selection_without_focus_ring() {
         UiStyle::default(),
     );
 
-    assert_eq!(active.background, theme.active_surface);
-    assert_eq!(active.border, theme.active_surface);
-    assert_ne!(active.border, theme.focus_ring);
-    assert_eq!(inactive.background, theme.surface_elevated);
+    assert_eq!(active.background, theme.ghost_element_selected);
+    assert_eq!(active.border, theme.ghost_element_selected);
+    assert_ne!(active.border, theme.border_focused);
+    assert_eq!(inactive.background, theme.element_background);
     assert_eq!(disabled.title, theme.text_subtle);
 }
 
@@ -811,12 +812,12 @@ fn yttt_row_style_centralizes_selectable_row_density_and_tones() {
 
     assert_eq!(active.height, gpui::rems(3.375));
     assert_eq!(active.radius, gpui::px(6.0));
-    assert_eq!(active.background, theme.active_surface);
-    assert_eq!(active.border, theme.active_surface);
+    assert_eq!(active.background, theme.ghost_element_selected);
+    assert_eq!(active.border, theme.ghost_element_selected);
     assert_eq!(active.title, theme.text);
-    assert_eq!(inactive.background, theme.surface_elevated);
-    assert_eq!(inactive.hover_background, theme.hover_surface);
-    assert_eq!(disabled.background, theme.surface_elevated);
+    assert_eq!(inactive.background, theme.element_background);
+    assert_eq!(inactive.hover_background, theme.element_hover);
+    assert_eq!(disabled.background, theme.element_disabled);
     assert_eq!(disabled.title, theme.text_subtle);
     assert_eq!(disabled.subtitle, theme.text_subtle);
 }
@@ -832,11 +833,11 @@ fn yttt_row_style_centralizes_settings_row_spacing() {
         UiStyle::default(),
     );
 
-    assert_eq!(row.height, gpui::rems(4.5));
-    assert_eq!(row.padding_y, gpui::rems(0.75));
-    assert_eq!(row.border_width, gpui::px(1.0));
-    assert_eq!(row.border, theme.border);
-    assert_eq!(row.background, theme.surface);
+    assert_eq!(row.height, gpui::rems(4.0));
+    assert_eq!(row.padding_y, gpui::rems(1.0));
+    assert_eq!(row.border_width, gpui::px(0.0));
+    assert_eq!(row.border, gpui::rgba(0x00000000));
+    assert_eq!(row.background, theme.ghost_element_background);
     assert_eq!(row.title, theme.text);
     assert_eq!(row.subtitle, theme.text_subtle);
 }
@@ -861,10 +862,10 @@ fn yttt_row_style_uses_domain_specific_sidebar_and_tab_surfaces() {
 
     assert_eq!(sidebar.height, gpui::rems(1.75));
     assert_eq!(sidebar.background, gpui::rgba(0x00000000));
-    assert_eq!(sidebar.hover_background, theme.hover_surface);
+    assert_eq!(sidebar.hover_background, theme.ghost_element_hover);
     assert_eq!(tab.height, gpui::rems(2.0));
-    assert_eq!(tab.background, theme.active_surface);
-    assert_eq!(tab.border, theme.border);
+    assert_eq!(tab.background, theme.tab_active_background);
+    assert_eq!(tab.border, theme.border_variant);
 }
 
 #[test]
@@ -950,11 +951,11 @@ fn settings_panel_style_uses_zed_like_sidebar_and_content_bounds() {
     assert!(panel.max_width >= panel.width);
     assert_eq!(panel.height, Some(gpui::px(560.0)));
     assert!(panel.max_height < gpui::px(640.0));
-    assert_eq!(layout.sidebar_width, gpui::px(240.0));
-    assert_eq!(layout.control_width, gpui::px(220.0));
+    assert_eq!(layout.sidebar_width, gpui::px(224.0));
+    assert_eq!(layout.control_width, gpui::px(200.0));
     assert_eq!(layout.compact_control_width, gpui::px(128.0));
-    assert_eq!(layout.control_height, gpui::rems(2.0));
-    assert_eq!(layout.search_height, gpui::rems(2.25));
+    assert_eq!(layout.control_height, gpui::rems(1.75));
+    assert_eq!(layout.search_height, gpui::rems(1.75));
 }
 
 #[test]
@@ -1293,8 +1294,8 @@ fn shared_control_density_tracks_ui_font_size(cx: &mut gpui::TestAppContext) {
     let enlarged_icon = cx.debug_bounds("rem-scaled-icon-button").unwrap();
     let enlarged_switch = cx.debug_bounds("rem-scaled-switch").unwrap();
 
-    assert_eq!(compact_button.size.height, gpui::px(15.0));
-    assert_eq!(enlarged_button.size.height, gpui::px(25.0));
+    assert_eq!(compact_button.size.height, gpui::px(16.5));
+    assert_eq!(enlarged_button.size.height, gpui::px(27.5));
     assert_eq!(compact_icon.size.height, gpui::px(21.0));
     assert_eq!(enlarged_icon.size.height, gpui::px(35.0));
     assert_eq!(compact_switch.size.height, gpui::px(24.0));
@@ -1306,8 +1307,8 @@ fn yttt_button_style_keeps_primary_muted() {
     let theme = WorkbenchTheme::one_dark();
     let style = yttt_button_style(YtttButtonVariant::Primary, theme, UiStyle::default());
 
-    assert_eq!(style.radius, gpui::px(6.0));
-    assert_eq!(style.background, theme.active_surface);
+    assert_eq!(style.radius, gpui::px(5.0));
+    assert_eq!(style.background, theme.element_background);
     assert_ne!(style.background, gpui::rgb(0xffffff));
 }
 
@@ -1321,12 +1322,9 @@ fn yttt_icon_button_style_covers_toolbar_sidebar_and_close_density() {
 
     assert_eq!(toolbar.size, gpui::rems(1.75));
     assert_eq!(toolbar.icon_size, gpui::rems(0.75));
-    assert_eq!(toolbar.border_width, gpui::px(1.0));
-    assert_eq!(toolbar.border, theme.border);
     assert_eq!(toolbar.text, theme.text_muted);
     assert_eq!(toolbar.hover_text, theme.text);
     assert_eq!(sidebar.size, gpui::rems(1.5));
-    assert_eq!(sidebar.border_width, gpui::px(0.0));
     assert_eq!(sidebar.text, theme.text_subtle);
     assert_eq!(close.size, gpui::rems(1.0));
     assert_eq!(close.radius, gpui::px(4.0));
@@ -1338,9 +1336,9 @@ fn yttt_input_style_makes_dialog_input_visible() {
     let style = yttt_input_style(YtttInputKind::Dialog, theme, UiStyle::default());
 
     assert_eq!(style.height, gpui::rems(2.125));
-    assert_eq!(style.background, theme.surface_elevated);
-    assert_eq!(style.border, theme.border);
-    assert_eq!(style.focused_border, theme.focus_ring);
+    assert_eq!(style.background, theme.element_background);
+    assert_eq!(style.border, theme.border_variant);
+    assert_eq!(style.focused_border, theme.border_focused);
 }
 
 #[test]
@@ -1348,11 +1346,11 @@ fn yttt_input_style_has_settings_control_variant() {
     let theme = WorkbenchTheme::one_dark();
     let style = yttt_input_style(YtttInputKind::Settings, theme, UiStyle::default());
 
-    assert_eq!(style.height, gpui::rems(2.0));
+    assert_eq!(style.height, gpui::rems(1.75));
     assert_eq!(style.radius, gpui::px(6.0));
-    assert_eq!(style.background, theme.surface_elevated);
-    assert_eq!(style.border, theme.border);
-    assert_eq!(style.focused_border, theme.focus_ring);
+    assert_eq!(style.background, theme.element_background);
+    assert_eq!(style.border, theme.border_variant);
+    assert_eq!(style.focused_border, theme.border_focused);
 }
 
 #[test]
@@ -1363,7 +1361,7 @@ fn yttt_dialog_style_uses_bounded_panel_surface() {
     assert_eq!(style.max_width, gpui::px(420.0));
     assert_eq!(style.radius, gpui::px(8.0));
     assert_eq!(style.background, theme.surface);
-    assert_eq!(style.border, theme.border_strong);
+    assert_eq!(style.border, theme.border_variant);
 }
 
 #[test]
@@ -1380,7 +1378,7 @@ fn yttt_panel_style_centralizes_overlay_bounds() {
     assert_eq!(dialog.width, gpui::px(420.0));
     assert_eq!(dialog.height, None);
     assert_eq!(palette.background, theme.surface);
-    assert_eq!(settings.border, theme.border_strong);
+    assert_eq!(settings.border, theme.border_variant);
     assert_eq!(dialog.overlay, gpui::rgba(0x00000073));
 
     let mut translucent_theme = theme;
@@ -1401,10 +1399,10 @@ fn yttt_select_style_matches_settings_input_density() {
 
     assert_eq!(select.height, input.height);
     assert_eq!(select.radius, input.radius);
-    assert_eq!(select.background, theme.surface_elevated);
-    assert_eq!(select.border, theme.border);
+    assert_eq!(select.background, theme.element_background);
+    assert_eq!(select.border, theme.border_variant);
     assert_eq!(select.text, theme.text);
-    assert_eq!(select.menu_width, gpui::px(280.0));
+    assert_eq!(select.menu_width, gpui::px(210.0));
 }
 
 #[test]
@@ -1420,11 +1418,11 @@ fn yttt_switch_style_matches_settings_control_density() {
     assert_eq!(switch.track_padding, gpui::rems(0.125));
     assert_eq!(switch.control_height, gpui::rems(2.0));
     assert_eq!(switch.active_background, theme.accent);
-    assert_eq!(switch.inactive_background, theme.active_surface);
-    assert_eq!(switch.active_border, theme.focus_ring);
-    assert_eq!(switch.inactive_border, theme.border_strong);
+    assert_eq!(switch.inactive_background, theme.element_background);
+    assert_eq!(switch.active_border, theme.border_variant);
+    assert_eq!(switch.inactive_border, theme.border_variant);
     assert_eq!(switch.active_thumb, theme.text);
-    assert_eq!(switch.inactive_thumb, theme.text_subtle);
+    assert_eq!(switch.inactive_thumb, theme.text_muted);
 }
 
 #[test]
@@ -1505,8 +1503,8 @@ fn yttt_sidebar_style_centralizes_project_sidebar_density() {
     assert_eq!(primitive.resize_hit_area_width, gpui::px(5.0));
     assert_eq!(primitive.item_height, gpui::rems(1.75));
     assert_eq!(primitive.item_padding_x, gpui::rems(0.5));
-    assert_eq!(primitive.background, theme.sidebar_background);
-    assert_eq!(primitive.active_background, theme.active_surface);
+    assert_eq!(primitive.background, theme.panel_background);
+    assert_eq!(primitive.active_background, theme.ghost_element_selected);
 }
 
 #[test]
@@ -1519,7 +1517,7 @@ fn yttt_tabbar_style_centralizes_project_tab_density() {
         yttt_icon_button_style(YtttIconButtonKind::TabClose, theme, UiStyle::default()).size
     );
     assert_eq!(primitive.border_width, gpui::px(1.0));
-    assert_eq!(primitive.active_background, theme.active_surface);
-    assert_eq!(primitive.inactive_background, gpui::rgba(0x00000000));
-    assert_eq!(primitive.hover_background, theme.hover_surface);
+    assert_eq!(primitive.active_background, theme.tab_active_background);
+    assert_eq!(primitive.inactive_background, theme.tab_inactive_background);
+    assert_eq!(primitive.hover_background, theme.ghost_element_hover);
 }

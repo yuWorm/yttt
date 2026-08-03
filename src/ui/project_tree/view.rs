@@ -1412,21 +1412,28 @@ fn render_component_row(
     let id = row.id.clone();
     let expanded = row.expanded;
     let is_directory = row.kind == Some(ProjectTreeEntryKind::Directory);
+    let row_background = if selected && !focused_selection {
+        cx.theme().list_active
+    } else {
+        cx.theme().transparent
+    };
+    let focus_border = cx.theme().ring;
 
     ListItem::new(("project-tree-row", ix))
         .selected(selected)
-        .hover_matches_selected(true)
+        .hover_matches_selected(false)
+        .h(ui_style.rows.sidebar_height)
         .pl(px(8.0 + depth as f32 * 14.0))
+        .rounded(ui_style.radius.compact)
+        .bg(row_background)
         .children((focused_selection && show_focus_indicator).then(|| {
             div()
                 .debug_selector(|| "project-tree-focused-row-indicator".to_string())
                 .absolute()
-                .left(px(2.0))
-                .top(px(6.0))
-                .bottom(px(6.0))
-                .w(px(2.0))
-                .rounded_full()
-                .bg(cx.theme().caret)
+                .inset_0()
+                .rounded(ui_style.radius.compact)
+                .border(ui_style.border.hairline)
+                .border_color(focus_border)
         }))
         .child(
             div()

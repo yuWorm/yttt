@@ -170,7 +170,7 @@ fn workbench_theme_maps_to_gpui_component_theme_config() {
             .as_ref()
             .map(|color| color.to_string())
             .as_deref(),
-        Some("#3e4452")
+        Some("#5a6375")
     );
     assert_eq!(
         config
@@ -187,9 +187,9 @@ fn workbench_theme_maps_to_gpui_component_theme_config() {
         (&config.colors.list_hover, "#2c313a17"),
         (&config.colors.list_active, "#2c313a3a"),
         (&config.colors.sidebar, "#23272e00"),
-        (&config.colors.tab, "#23272e00"),
-        (&config.colors.tab_active, "#2c313a3a"),
-        (&config.colors.tab_bar, "#23272e00"),
+        (&config.colors.tab, "#1e22270a"),
+        (&config.colors.tab_active, "#23272e0a"),
+        (&config.colors.tab_bar, "#1e22270a"),
         (&config.colors.overlay, "#00000042"),
         (&config.colors.popover, "#1e2227"),
     ] {
@@ -205,7 +205,7 @@ fn workbench_theme_maps_to_gpui_component_theme_config() {
             .as_ref()
             .map(|color| color.to_string())
             .as_deref(),
-        Some("#1e222714")
+        Some("#00000000")
     );
     assert_eq!(
         config

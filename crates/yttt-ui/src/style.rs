@@ -107,6 +107,14 @@ pub struct UiRowMetrics {
     pub sidebar_border_width: Pixels,
     pub tab_border_width: Pixels,
 }
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UiSettingsMetrics {
+    pub sidebar_width: Pixels,
+    pub content_padding_x: Rems,
+    pub content_padding_y: Rems,
+    pub nav_padding_x: Rems,
+    pub nav_group_gap: Rems,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UiIconButtonMetrics {
@@ -119,7 +127,6 @@ pub struct UiIconButtonMetrics {
     pub sidebar_header_radius: Pixels,
     pub tab_close_radius: Pixels,
     pub overlay_close_radius: Pixels,
-    pub toolbar_border_width: Pixels,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -168,6 +175,7 @@ pub struct UiStyle {
     pub border: UiBorderScale,
     pub controls: UiControlMetrics,
     pub rows: UiRowMetrics,
+    pub settings: UiSettingsMetrics,
     pub icon_buttons: UiIconButtonMetrics,
     pub panels: UiPanelVisualMetrics,
     pub notifications: UiNotificationMetrics,
@@ -200,11 +208,21 @@ impl UiStyle {
     }
 
     pub fn hover_background(self, theme: WorkbenchTheme) -> Rgba {
-        interaction_background(theme.hover_surface, theme.accent, self.hover_accent_alpha)
+        match self.id {
+            UiStyleId::Zed => theme.ghost_element_hover,
+            UiStyleId::Rounded => {
+                interaction_background(theme.hover_surface, theme.accent, self.hover_accent_alpha)
+            }
+        }
     }
 
     pub fn active_background(self, theme: WorkbenchTheme) -> Rgba {
-        interaction_background(theme.active_surface, theme.accent, self.active_accent_alpha)
+        match self.id {
+            UiStyleId::Zed => theme.ghost_element_selected,
+            UiStyleId::Rounded => {
+                interaction_background(theme.active_surface, theme.accent, self.active_accent_alpha)
+            }
+        }
     }
 
     fn zed() -> Self {
@@ -242,27 +260,27 @@ impl UiStyle {
             radius,
             border,
             controls: UiControlMetrics {
-                button_height: rems(1.25),
-                button_padding_x: rems(0.25),
-                settings_height: rems(2.0),
-                settings_control_width: px(220.0),
+                button_height: rems(1.375),
+                button_padding_x: rems(0.375),
+                settings_height: rems(1.75),
+                settings_control_width: px(200.0),
                 settings_compact_control_width: px(128.0),
-                select_menu_width: px(280.0),
+                select_menu_width: px(210.0),
                 toolbar_height: rems(1.875),
                 dialog_input_height: rems(2.125),
                 palette_input_height: rems(2.625),
-                search_height: rems(2.25),
+                search_height: rems(1.75),
                 palette_footer_height: rems(2.75),
                 status_footer_height: rems(2.875),
             },
             rows: UiRowMetrics {
                 palette_height: rems(3.375),
-                settings_height: rems(4.5),
+                settings_height: rems(4.0),
                 sidebar_height: rems(1.75),
                 tab_height: rems(2.0),
                 diff_sidebar_height: rems(2.375),
                 palette_padding_x: rems(0.75),
-                settings_padding_y: rems(0.75),
+                settings_padding_y: rems(1.0),
                 sidebar_padding_x: rems(0.5),
                 tab_padding_x: rems(0.5),
                 palette_radius: radius.control,
@@ -271,9 +289,16 @@ impl UiStyle {
                 tab_radius: px(0.0),
                 diff_sidebar_radius: px(0.0),
                 palette_border_width: border.hairline,
-                settings_border_width: border.hairline,
+                settings_border_width: px(0.0),
                 sidebar_border_width: px(0.0),
                 tab_border_width: border.hairline,
+            },
+            settings: UiSettingsMetrics {
+                sidebar_width: px(224.0),
+                content_padding_x: rems(2.0),
+                content_padding_y: rems(1.5),
+                nav_padding_x: rems(0.5),
+                nav_group_gap: rems(0.75),
             },
             icon_buttons: UiIconButtonMetrics {
                 toolbar_size: rems(1.75),
@@ -285,7 +310,6 @@ impl UiStyle {
                 sidebar_header_radius: radius.compact,
                 tab_close_radius: radius.compact,
                 overlay_close_radius: radius.control,
-                toolbar_border_width: border.hairline,
             },
             panels: UiPanelVisualMetrics {
                 radius: radius.surface,
@@ -392,6 +416,13 @@ impl UiStyle {
                 sidebar_border_width: border.hairline,
                 tab_border_width: border.hairline,
             },
+            settings: UiSettingsMetrics {
+                sidebar_width: px(240.0),
+                content_padding_x: rems(1.5),
+                content_padding_y: rems(1.5),
+                nav_padding_x: rems(0.75),
+                nav_group_gap: rems(0.75),
+            },
             icon_buttons: UiIconButtonMetrics {
                 toolbar_size: rems(1.875),
                 sidebar_header_size: rems(1.75),
@@ -402,7 +433,6 @@ impl UiStyle {
                 sidebar_header_radius: radius.compact,
                 tab_close_radius: radius.compact,
                 overlay_close_radius: radius.control,
-                toolbar_border_width: border.hairline,
             },
             panels: UiPanelVisualMetrics {
                 radius: radius.surface,

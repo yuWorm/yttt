@@ -334,6 +334,14 @@ fn convert_theme(
         ],
         ui.surface,
     )?;
+    ui.editor_background = resolve_color(
+        &theme_name,
+        &[
+            ("editor.background", style.editor_background.as_deref()),
+            ("background", style.background.as_deref()),
+        ],
+        ui.app_background,
+    )?;
     ui.titlebar_background = resolve_color(
         &theme_name,
         &[
@@ -353,6 +361,14 @@ fn convert_theme(
         ],
         ui.surface,
     )?;
+    ui.panel_background = resolve_color(
+        &theme_name,
+        &[
+            ("panel.background", style.panel_background.as_deref()),
+            ("surface.background", style.surface_background.as_deref()),
+        ],
+        ui.sidebar_background,
+    )?;
     ui.tabbar_background = resolve_color(
         &theme_name,
         &[
@@ -363,6 +379,28 @@ fn convert_theme(
             ),
         ],
         ui.surface_elevated,
+    )?;
+    ui.tab_inactive_background = resolve_color(
+        &theme_name,
+        &[
+            (
+                "tab.inactive_background",
+                style.tab_inactive_background.as_deref(),
+            ),
+            ("tab_bar.background", style.tab_bar_background.as_deref()),
+        ],
+        ui.tabbar_background,
+    )?;
+    ui.tab_active_background = resolve_color(
+        &theme_name,
+        &[
+            (
+                "tab.active_background",
+                style.tab_active_background.as_deref(),
+            ),
+            ("editor.background", style.editor_background.as_deref()),
+        ],
+        ui.editor_background,
     )?;
     ui.terminal_background = resolve_color(
         &theme_name,
@@ -468,6 +506,74 @@ fn convert_theme(
         ],
         ui.active_surface,
     )?;
+    ui.element_background = resolve_color(
+        &theme_name,
+        &[
+            ("element.background", style.element_background.as_deref()),
+            (
+                "elevated_surface.background",
+                style.elevated_surface_background.as_deref(),
+            ),
+        ],
+        ui.surface_elevated,
+    )?;
+    ui.element_hover = resolve_color(
+        &theme_name,
+        &[("element.hover", style.element_hover.as_deref())],
+        ui.hover_surface,
+    )?;
+    ui.element_active = resolve_color(
+        &theme_name,
+        &[("element.active", style.element_active.as_deref())],
+        ui.active_surface,
+    )?;
+    ui.element_selected = resolve_color(
+        &theme_name,
+        &[("element.selected", style.element_selected.as_deref())],
+        ui.active_surface,
+    )?;
+    ui.element_disabled = resolve_color(
+        &theme_name,
+        &[("element.disabled", style.element_disabled.as_deref())],
+        ui.element_background,
+    )?;
+    ui.ghost_element_background = resolve_color(
+        &theme_name,
+        &[(
+            "ghost_element.background",
+            style.ghost_element_background.as_deref(),
+        )],
+        ui.ghost_element_background,
+    )?;
+    ui.ghost_element_hover = resolve_color(
+        &theme_name,
+        &[("ghost_element.hover", style.ghost_element_hover.as_deref())],
+        ui.hover_surface,
+    )?;
+    ui.ghost_element_active = resolve_color(
+        &theme_name,
+        &[(
+            "ghost_element.active",
+            style.ghost_element_active.as_deref(),
+        )],
+        ui.active_surface,
+    )?;
+    ui.ghost_element_selected = resolve_color(
+        &theme_name,
+        &[(
+            "ghost_element.selected",
+            style.ghost_element_selected.as_deref(),
+        )],
+        ui.active_surface,
+    )?;
+    ui.ghost_element_disabled = resolve_color(
+        &theme_name,
+        &[(
+            "ghost_element.disabled",
+            style.ghost_element_disabled.as_deref(),
+        )],
+        ui.ghost_element_background,
+    )?;
     ui.danger = resolve_color(&theme_name, &[("error", style.error.as_deref())], ui.danger)?;
     ui.success = resolve_color(
         &theme_name,
@@ -492,6 +598,22 @@ fn convert_theme(
             ("border.selected", style.border_selected.as_deref()),
         ],
         ui.border,
+    )?;
+    ui.border_variant = resolve_color(
+        &theme_name,
+        &[
+            ("border.variant", style.border_variant.as_deref()),
+            ("border", style.border.as_deref()),
+        ],
+        ui.border,
+    )?;
+    ui.border_focused = resolve_color(
+        &theme_name,
+        &[
+            ("border.focused", style.border_focused.as_deref()),
+            ("border.selected", style.border_selected.as_deref()),
+        ],
+        ui.focus_ring,
     )?;
     ui.selection = resolve_color(
         &theme_name,
@@ -911,14 +1033,26 @@ struct ZedStyle {
     #[serde(rename = "surface.background")]
     surface_background: Option<String>,
     background: Option<String>,
+    #[serde(rename = "element.background")]
+    element_background: Option<String>,
     #[serde(rename = "element.hover")]
     element_hover: Option<String>,
+    #[serde(rename = "element.active")]
+    element_active: Option<String>,
     #[serde(rename = "element.selected")]
     element_selected: Option<String>,
+    #[serde(rename = "element.disabled")]
+    element_disabled: Option<String>,
+    #[serde(rename = "ghost_element.background")]
+    ghost_element_background: Option<String>,
     #[serde(rename = "ghost_element.hover")]
     ghost_element_hover: Option<String>,
+    #[serde(rename = "ghost_element.active")]
+    ghost_element_active: Option<String>,
     #[serde(rename = "ghost_element.selected")]
     ghost_element_selected: Option<String>,
+    #[serde(rename = "ghost_element.disabled")]
+    ghost_element_disabled: Option<String>,
     text: Option<String>,
     #[serde(rename = "text.muted")]
     text_muted: Option<String>,
@@ -1065,6 +1199,18 @@ mod tests {
         assert_eq!(source.theme_file.as_deref(), Some("themes/test.json"));
         assert_eq!(source.family_author.as_deref(), Some("Zed Family Author"));
         assert_eq!(color_hex(theme.ui.selection), "#ffffff80");
+        assert_eq!(color_hex(theme.ui.panel_background), "#121212");
+        assert_eq!(color_hex(theme.ui.tab_active_background), "#131313");
+        assert_eq!(color_hex(theme.ui.tab_inactive_background), "#141414");
+        assert_eq!(color_hex(theme.ui.border_variant), "#222222");
+        assert_eq!(color_hex(theme.ui.border_focused), "#333333");
+        assert_eq!(color_hex(theme.ui.element_background), "#444444");
+        assert_eq!(color_hex(theme.ui.element_hover), "#555555");
+        assert_eq!(color_hex(theme.ui.element_active), "#666666");
+        assert_eq!(color_hex(theme.ui.element_selected), "#777777");
+        assert_eq!(color_hex(theme.ui.ghost_element_hover), "#888888");
+        assert_eq!(color_hex(theme.ui.ghost_element_active), "#999999");
+        assert_eq!(color_hex(theme.ui.ghost_element_selected), "#aaaaaa");
         assert_eq!(
             theme
                 .terminal
@@ -1155,6 +1301,19 @@ themes = ["themes/test.json"]
         "background": "#101010",
         "surface.background": "#111111",
         "editor.background": "#101010",
+        "panel.background": "#121212",
+        "tab.active_background": "#131313",
+        "tab.inactive_background": "#141414",
+        "border.variant": "#222222",
+        "border.focused": "#333333",
+        "element.background": "#444444",
+        "element.hover": "#555555",
+        "element.active": "#666666",
+        "element.selected": "#777777",
+        "ghost_element.background": "#00000000",
+        "ghost_element.hover": "#888888",
+        "ghost_element.active": "#999999",
+        "ghost_element.selected": "#aaaaaa",
         "editor.foreground": "#eeeeee",
         "terminal.ansi.red": "#aa0000",
         "players": [
