@@ -1,5 +1,14 @@
 [workspace]
-members = [".", "crates/yttt-core", "crates/yttt-ssh", "crates/yttt-terminal", "crates/yttt-ui"]
+members = [
+    ".",
+    "crates/yttt-agent-core",
+    "crates/yttt-agent-omp",
+    "crates/yttt-agent-runtime",
+    "crates/yttt-core",
+    "crates/yttt-ssh",
+    "crates/yttt-terminal",
+    "crates/yttt-ui",
+]
 exclude = ["vendor/gpui-component", "vendor/gpui-markdown-editor"]
 resolver = "3"
 
@@ -15,6 +24,7 @@ default-run = "yttt"
 
 [dependencies]
 anyhow = "1"
+base64 = "0.22"
 dunce = "1"
 futures-lite = "2"
 gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
@@ -22,6 +32,9 @@ gpui-component = { path = "vendor/gpui-component/crates/ui", features = ["tree-s
 gpui-component-assets = { path = "vendor/gpui-component/crates/assets" }
 gpui-markdown-editor = { path = "vendor/gpui-markdown-editor" }
 ignore = "0.4"
+yttt-agent-core = { path = "crates/yttt-agent-core" }
+yttt-agent-omp = { path = "crates/yttt-agent-omp" }
+yttt-agent-runtime = { path = "crates/yttt-agent-runtime" }
 yttt-ssh = { path = "crates/yttt-ssh" }
 zeroize = "1"
 notify = "7.0.0"
@@ -33,6 +46,7 @@ tree-sitter-c = "0.24.1"
 tree-sitter-c-sharp = "0.23.1"
 tree-sitter-cpp = "0.23.4"
 tree-sitter-fish = "3.6.0"
+sha2 = "0.10"
 tree-sitter-gdscript = "6.1.0"
 tree-sitter-go = "0.23.4"
 tree-sitter-java = "0.23.5"

@@ -3,10 +3,12 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use gpui::{Entity, Subscription};
+use gpui::{Entity, Subscription, Task};
 
 use crate::{
+    config::default_layout::BuiltinAgent,
     model::ids::ProjectId,
+    runtime::agent_manager::AgentPaneAddress,
     ui::{interaction::input_owner::TerminalInputGate, terminal::pane::TerminalPaneView},
 };
 
@@ -17,6 +19,13 @@ pub(in super::super) struct TerminalPaneTarget {
     pub(in super::super) pane_id: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) struct AgentProcessObservation {
+    pub(in super::super) agent: BuiltinAgent,
+    pub(in super::super) generation: u64,
+    pub(in super::super) missed_samples: u8,
+}
+
 pub(in super::super) struct TerminalControllerState {
     pub(in super::super) start_processes: bool,
     pub(in super::super) terminal_input_gate: TerminalInputGate,
@@ -24,6 +33,9 @@ pub(in super::super) struct TerminalControllerState {
     pub(in super::super) pending_terminal_focus: Option<TerminalPaneTarget>,
     pub(in super::super) terminal_panes: HashMap<String, Entity<TerminalPaneView>>,
     pub(in super::super) terminal_pane_subscriptions: HashMap<String, Subscription>,
+    pub(in super::super) agent_process_monitor_task: Option<Task<()>>,
+    pub(in super::super) agent_process_observations:
+        HashMap<AgentPaneAddress, AgentProcessObservation>,
 }
 
 impl TerminalControllerState {
@@ -35,6 +47,8 @@ impl TerminalControllerState {
             pending_terminal_focus: None,
             terminal_panes: HashMap::new(),
             terminal_pane_subscriptions: HashMap::new(),
+            agent_process_monitor_task: None,
+            agent_process_observations: HashMap::new(),
         }
     }
 }

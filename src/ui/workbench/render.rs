@@ -115,6 +115,7 @@ impl Render for WorkbenchView {
                         projects_has_keyboard_focus,
                         self.app_settings.project_panel.project_sidebar_width,
                         self.sidebar_collapsed,
+                        &self.app_settings.project_panel.collapsed_agent_projects,
                         cx.listener(|this, _: &MouseDownEvent, _window, cx| {
                             if this.queue_projects_focus() {
                                 cx.notify();
@@ -128,6 +129,21 @@ impl Render for WorkbenchView {
                             let project_id = ProjectId::new(project_id);
                             cx.listener(move |this, _, _window, cx| {
                                 let _ = this.select_project(&project_id);
+                                cx.notify();
+                            })
+                        },
+                        |project_id| {
+                            let project_id = ProjectId::new(project_id);
+                            cx.listener(move |this, _, _window, cx| {
+                                cx.stop_propagation();
+                                let _ = this.toggle_project_agent_expansion(&project_id);
+                                cx.notify();
+                            })
+                        },
+                        |project_id, tab_id, pane_id| {
+                            let project_id = ProjectId::new(project_id);
+                            cx.listener(move |this, _, _window, cx| {
+                                let _ = this.activate_agent_pane(&project_id, &tab_id, &pane_id);
                                 cx.notify();
                             })
                         },

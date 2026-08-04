@@ -45,3 +45,18 @@ fn app_assets_include_dashboard_icon() {
 
     assert!(asset.is_some(), "missing dashboard icon asset: {path}");
 }
+
+#[test]
+fn app_assets_include_builtin_agent_icons() {
+    let temp = tempdir().unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path());
+    let assets = yttt::ui::app::assets::app_assets(&config_paths);
+
+    for path in yttt::ui::app::assets::BUILTIN_AGENT_ICON_ASSET_PATHS {
+        let asset = assets
+            .load(path)
+            .unwrap_or_else(|err| panic!("load {path}: {err}"));
+
+        assert!(asset.is_some(), "missing built-in agent icon asset: {path}");
+    }
+}

@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use yttt_agent_core::AgentViewState;
 
 use crate::{
     commands::{ActiveSurface, CommandContext, CommandId, CommandRegistry},
@@ -6,7 +7,7 @@ use crate::{
         ids::ProjectId,
         layout::LayoutNode,
         project::ProjectLocation,
-        workspace::{AgentStatus, OpenedProject, PaneProcessState, TabStartState, Workspace},
+        workspace::{OpenedProject, PaneProcessState, TabStartState, Workspace},
     },
     ui::{
         editor::{DocumentId, WorkItemId},
@@ -611,7 +612,7 @@ fn pane_count_label(pane_count: usize, ui_text: &UiText) -> String {
 fn tab_status(
     is_active: bool,
     state: TabStartState,
-    agent_status: Option<AgentStatus>,
+    agent_status: Option<AgentViewState>,
     ui_text: &UiText,
 ) -> String {
     let mut parts = Vec::new();
@@ -632,7 +633,7 @@ fn pane_status(
     state: PaneProcessState,
     is_active: bool,
     is_agent: bool,
-    agent_status: Option<AgentStatus>,
+    agent_status: Option<AgentViewState>,
     ui_text: &UiText,
 ) -> String {
     let mut parts = Vec::new();
@@ -663,11 +664,17 @@ fn process_status_label(state: PaneProcessState, ui_text: &UiText) -> &'static s
     }
 }
 
-fn agent_status_label(status: AgentStatus, ui_text: &UiText) -> &'static str {
+fn agent_status_label(status: AgentViewState, ui_text: &UiText) -> &'static str {
     match status {
-        AgentStatus::Running => ui_text.get(UiTextKey::PaletteStatusAgentRunning),
-        AgentStatus::Completed => ui_text.get(UiTextKey::PaletteStatusAgentCompleted),
-        AgentStatus::Failed => ui_text.get(UiTextKey::PaletteStatusAgentFailed),
+        AgentViewState::Starting | AgentViewState::Working => {
+            ui_text.get(UiTextKey::PaletteStatusAgentRunning)
+        }
+        AgentViewState::Idle => ui_text.get(UiTextKey::PaletteStatusAgentIdle),
+        AgentViewState::Waiting => ui_text.get(UiTextKey::PaletteStatusAgentWaiting),
+        AgentViewState::Completed => ui_text.get(UiTextKey::PaletteStatusAgentCompleted),
+        AgentViewState::Failed => ui_text.get(UiTextKey::PaletteStatusAgentFailed),
+        AgentViewState::Interrupted => ui_text.get(UiTextKey::PaletteStatusAgentInterrupted),
+        AgentViewState::Stale => ui_text.get(UiTextKey::PaletteStatusAgentStale),
     }
 }
 

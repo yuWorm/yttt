@@ -9,6 +9,8 @@ use std::{
 use gpui::{
     Context, Entity, EventEmitter, IntoElement, Render, SharedString, Window, div, prelude::*,
 };
+use yttt_agent_core::AgentInstanceId;
+use yttt_agent_runtime::AGENT_TITLE_PREFIX;
 use yttt_core::model::{ids::ConnectionId, project::RemotePathBuf};
 use yttt_ssh::{
     RemoteTerminalExecution, RemoteTerminalRequest, RemoteTerminalResizeHandle,
@@ -23,6 +25,8 @@ use crate::{
     model::layout::{PaneConfig, PaneKind, ProcessExitBehavior, TerminalExecutionMode},
     runtime::{
         agent::classify_agent,
+        agent_hooks::AgentHookClient,
+        agent_manager::{AgentPaneAddress, AgentPaneLaunch},
         notification::{ExitNotificationInput, NotificationEvent, notification_for_exit},
     },
     ui::{
@@ -83,6 +87,13 @@ impl TerminalPaneSession {
         }
     }
 
+    fn local_process_id(&self) -> Option<u32> {
+        match self {
+            Self::Local(session) => session.process_id(),
+            Self::Ssh(_) => None,
+        }
+    }
+
     fn finish(self, reason: ExitReason) -> anyhow::Result<ProcessStatus> {
         match self {
             Self::Local(session) => session.finish(reason),
@@ -115,6 +126,8 @@ pub struct TerminalPaneContext {
     pub is_focused: bool,
     pub terminal_input_gate: TerminalInputGate,
     pub ssh: Option<SshTerminalContext>,
+    pub agent_launch: Option<AgentPaneLaunch>,
+    pub agent_hook_client: Option<AgentHookClient>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,6 +135,10 @@ pub enum TerminalPaneEvent {
     Notification(NotificationEvent),
     Started(TerminalPaneStartedEvent),
     Exited(TerminalPaneExitedEvent),
+    AgentStatusFrame {
+        pane_id: String,
+        frame: String,
+    },
     TitleChanged {
         pane_id: String,
         title: String,
@@ -138,6 +155,8 @@ pub struct TerminalPaneStartedEvent {
     pub project_id: String,
     pub tab_id: String,
     pub pane_id: String,
+    pub generation: u64,
+    pub agent_instance_id: Option<AgentInstanceId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -148,6 +167,8 @@ pub struct TerminalPaneExitedEvent {
     pub status: ProcessStatus,
     pub exit_reason: ExitReason,
     pub exit_behavior: ProcessExitBehavior,
+    pub generation: u64,
+    pub agent_instance_id: Option<AgentInstanceId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -206,6 +227,8 @@ pub struct TerminalPaneView {
     shell: String,
     environment: Arc<RwLock<BTreeMap<String, String>>>,
     notify_on_exit: bool,
+    agent_launch: Option<AgentPaneLaunch>,
+    agent_hook_client: Option<AgentHookClient>,
     ssh: Option<SshTerminalContext>,
     terminal: Option<Entity<TerminalView>>,
     terminal_config: TerminalConfig,
@@ -294,6 +317,8 @@ impl TerminalPaneView {
             is_focused: _,
             terminal_input_gate,
             ssh,
+            agent_launch,
+            agent_hook_client,
         } = context;
         let mut view = Self {
             project_id,
@@ -312,6 +337,8 @@ impl TerminalPaneView {
             environment,
             kind: pane.kind,
             notify_on_exit: pane.notify_on_exit,
+            agent_launch,
+            agent_hook_client,
             ssh,
             terminal: None,
             terminal_config,
@@ -362,6 +389,24 @@ impl TerminalPaneView {
         &self.title
     }
 
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn agent_instance_id(&self) -> Option<&AgentInstanceId> {
+        self.agent_launch.as_ref().map(AgentPaneLaunch::instance_id)
+    }
+
+    pub fn local_process_id(&self) -> Option<u32> {
+        self.session
+            .as_ref()
+            .and_then(TerminalPaneSession::local_process_id)
+    }
+
+    pub fn agent_pane_address(&self) -> AgentPaneAddress {
+        AgentPaneAddress::new(&self.project_id, &self.tab_id, &self.pane_id)
+    }
+
     fn spawn_request(&self) -> TerminalSpawnRequest {
         let request = match self.execution_mode {
             TerminalExecutionMode::Shell => {
@@ -371,13 +416,10 @@ impl TerminalPaneView {
                 &self.pane_id,
                 &self.shell,
                 &self.command,
-                self.args.clone(),
+                self.command_args(),
             ),
         };
-        let environment = self
-            .environment
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let environment = self.spawn_environment();
         request
             .envs(
                 environment
@@ -385,6 +427,31 @@ impl TerminalPaneView {
                     .map(|(name, value)| (name.as_str(), value.as_str())),
             )
             .cwd(self.project_path.clone())
+    }
+
+    fn command_args(&self) -> Vec<String> {
+        let mut args = self.args.clone();
+        if self.execution_mode == TerminalExecutionMode::Command
+            && let Some(agent_launch) = &self.agent_launch
+        {
+            args.extend(agent_launch.additional_args().iter().cloned());
+        }
+        args
+    }
+
+    fn spawn_environment(&self) -> BTreeMap<String, String> {
+        let mut environment = self
+            .environment
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        if let Some(agent_launch) = &self.agent_launch {
+            environment.extend(agent_launch.environment(self.generation));
+        }
+        if let Some(client) = &self.agent_hook_client {
+            environment.extend(client.environment(&self.agent_pane_address(), self.generation));
+        }
+        environment
     }
 
     fn spawn_session(&self) -> anyhow::Result<TerminalPaneSession> {
@@ -405,16 +472,19 @@ impl TerminalPaneView {
             TerminalExecutionMode::Shell => RemoteTerminalExecution::Shell {
                 command: self.command.clone(),
             },
-            TerminalExecutionMode::Command => RemoteTerminalExecution::Command {
-                program: self.command.clone(),
-                args: self.args.clone(),
+            TerminalExecutionMode::Command => match self
+                .agent_launch
+                .as_ref()
+                .and_then(|launch| launch.remote_command(&self.command, &self.args))
+            {
+                Some(command) => RemoteTerminalExecution::Shell { command },
+                None => RemoteTerminalExecution::Command {
+                    program: self.command.clone(),
+                    args: self.command_args(),
+                },
             },
         };
-        let environment = self
-            .environment
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
+        let environment = self.spawn_environment();
         transport
             .terminal_session(RemoteTerminalRequest {
                 connection_id: ssh.connection_id.clone(),
@@ -475,6 +545,13 @@ impl TerminalPaneView {
                 })
                 .with_title_callback(move |cx, title| {
                     let _ = title_parent.update(cx, |pane, cx| {
+                        if title.starts_with(AGENT_TITLE_PREFIX) {
+                            cx.emit(TerminalPaneEvent::AgentStatusFrame {
+                                pane_id: pane.pane_id.clone(),
+                                frame: title.to_string(),
+                            });
+                            return;
+                        }
                         let title = resolved_terminal_title(&pane.default_title, title);
                         pane.set_runtime_title(title, cx);
                     });
@@ -505,6 +582,8 @@ impl TerminalPaneView {
             project_id: self.project_id.clone(),
             tab_id: self.tab_id.clone(),
             pane_id: self.pane_id.clone(),
+            generation: self.generation,
+            agent_instance_id: self.agent_instance_id().cloned(),
         }));
         cx.notify();
         true
@@ -584,6 +663,8 @@ impl TerminalPaneView {
             status,
             exit_reason,
             exit_behavior: self.exit_behavior,
+            generation: self.generation,
+            agent_instance_id: self.agent_instance_id().cloned(),
         };
         let notification = notification_for_terminal_pane_exit(TerminalPaneExitInput {
             project_id: self.project_id.clone(),

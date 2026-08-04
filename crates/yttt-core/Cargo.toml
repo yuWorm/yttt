@@ -7,3 +7,4 @@ edition.workspace = true
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
+yttt-agent-core = { path = "../yttt-agent-core" }

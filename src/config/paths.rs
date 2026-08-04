@@ -74,6 +74,14 @@ impl AppConfigPaths {
     pub fn icon_themes_dir(&self) -> PathBuf {
         self.themes_dir().join("icons")
     }
+
+    pub fn agent_provider_dir(&self, provider: &str) -> PathBuf {
+        self.config_dir.join("agent-providers").join(provider)
+    }
+
+    pub fn agent_state_path(&self) -> PathBuf {
+        self.config_dir.join("agent-state.json")
+    }
 }
 
 pub fn canonicalize_path(path: &Path) -> io::Result<PathBuf> {

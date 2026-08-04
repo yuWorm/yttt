@@ -4,7 +4,7 @@ use crate::{style::UiStyle, theme::WorkbenchTheme};
 
 pub const PROJECT_SIDEBAR_MIN_WIDTH: f32 = 160.0;
 pub const PROJECT_SIDEBAR_MAX_WIDTH: f32 = 420.0;
-pub const PROJECT_SIDEBAR_DEFAULT_WIDTH: f32 = 216.0;
+pub const PROJECT_SIDEBAR_DEFAULT_WIDTH: f32 = 320.0;
 pub const PROJECT_SIDEBAR_COLLAPSED_WIDTH: f32 = 46.0;
 pub const PROJECT_FILE_PANEL_MIN_WIDTH: f32 = 200.0;
 pub const PROJECT_FILE_PANEL_MAX_WIDTH: f32 = 520.0;

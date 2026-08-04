@@ -1,11 +1,14 @@
 use std::path::PathBuf;
+use yttt_agent_core::{
+    AgentInstanceId, AgentProcessState, AgentSnapshot, AgentTurnState, AgentViewState, ProviderId,
+};
 
 use yttt::model::{
     ids::ProjectId,
     layout::TabStartup,
     project::{ProjectDescriptor, ProjectLocation},
     workspace::{
-        AgentStatus, CloseProjectDecision, CloseProjectError, ClosedProject, PaneExitCloseOutcome,
+        CloseProjectDecision, CloseProjectError, ClosedProject, PaneExitCloseOutcome,
         PaneProcessState, TabStartState, Workspace,
     },
 };
@@ -16,6 +19,26 @@ fn local_project(path: PathBuf) -> ProjectDescriptor {
         ProjectId::from_legacy_location(&location.display_path()),
         location,
     )
+}
+
+fn completed_agent_snapshot() -> AgentSnapshot {
+    AgentSnapshot {
+        instance_id: AgentInstanceId::new("workspace-test-agent").unwrap(),
+        provider_id: ProviderId::from_static("test"),
+        generation: 1,
+        process_state: AgentProcessState::Running,
+        turn_state: AgentTurnState::Completed,
+        waiting_reason: None,
+        waiting_message: None,
+        task: None,
+        current_action: None,
+        last_action_failed: false,
+        session: None,
+        children: Vec::new(),
+        process_exit: None,
+        state_started_at: 1,
+        updated_at: 1,
+    }
 }
 
 #[test]
@@ -170,14 +193,14 @@ fn confirmed_close_removes_project_with_running_panes() {
 }
 
 #[test]
-fn recording_agent_status_marks_pane_exited_with_result() {
+fn recording_agent_snapshot_preserves_process_lifecycle() {
     let mut workspace = Workspace::new();
     let project_id = workspace
         .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
 
     workspace
-        .record_agent_status(&project_id, "agent", "codex", AgentStatus::Completed)
+        .record_agent_snapshot(&project_id, "agent", "codex", completed_agent_snapshot())
         .unwrap();
 
     let project = workspace.project(&project_id).unwrap();
@@ -188,8 +211,11 @@ fn recording_agent_status_marks_pane_exited_with_result() {
         .iter()
         .find(|pane| pane.pane_id == "codex")
         .unwrap();
-    assert_eq!(pane.process_state, PaneProcessState::Exited);
-    assert_eq!(pane.agent_status, Some(AgentStatus::Completed));
+    assert_eq!(pane.process_state, PaneProcessState::Idle);
+    assert_eq!(
+        pane.agent_snapshot.as_ref().map(AgentSnapshot::view_state),
+        Some(AgentViewState::Completed)
+    );
 }
 
 #[test]

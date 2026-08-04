@@ -1,5 +1,8 @@
+use yttt::config::default_layout::BuiltinAgent;
 use yttt::model::layout::PaneKind;
-use yttt::runtime::agent::classify_agent;
+use yttt::runtime::agent::{
+    AgentProcessRecord, classify_agent, classify_agent_process, detect_agent_processes_by_root,
+};
 use yttt::runtime::notification::{
     ExitNotificationInput, NoopSystemNotifier, NotificationEvent, NotificationKind, SystemNotifier,
     maybe_notify_system, notification_for_exit,
@@ -44,10 +47,88 @@ fn explicit_agent_kind_is_agent() {
 }
 
 #[test]
-fn codex_and_claude_commands_are_agents() {
-    assert!(classify_agent(None, "codex").is_agent());
+fn all_onboarding_agent_commands_are_agents() {
+    for command in ["codex", "claude", "opencode", "pi", "omp"] {
+        assert!(
+            classify_agent(None, command).is_agent(),
+            "{command} should be classified as an agent"
+        );
+    }
     assert!(classify_agent(None, "claude --dangerously-skip-permissions").is_agent());
     assert!(classify_agent(None, "/usr/local/bin/codex").is_agent());
+    assert!(classify_agent(None, r"C:\tools\opencode.exe").is_agent());
+}
+
+#[test]
+fn interpreter_backed_agent_processes_are_identified_by_script_path() {
+    let cases = [
+        (
+            "node",
+            "/opt/lib/node_modules/@openai/codex/bin/codex.js",
+            BuiltinAgent::Codex,
+        ),
+        (
+            "node",
+            "/opt/lib/node_modules/@anthropic-ai/claude-code/cli.js",
+            BuiltinAgent::Claude,
+        ),
+        (
+            "bun",
+            "/opt/lib/node_modules/opencode-ai/bin/opencode",
+            BuiltinAgent::OpenCode,
+        ),
+        (
+            "node",
+            "/opt/lib/node_modules/@mariozechner/pi-coding-agent/dist/cli.js",
+            BuiltinAgent::Pi,
+        ),
+        (
+            "bun",
+            "/opt/lib/node_modules/@oh-my-pi/pi-coding-agent/src/cli.ts",
+            BuiltinAgent::OhMyPi,
+        ),
+    ];
+    for (interpreter, script, expected) in cases {
+        assert_eq!(
+            classify_agent_process(interpreter, &[interpreter, script]),
+            Some(expected)
+        );
+    }
+    assert_eq!(
+        classify_agent_process("node", &["node", "/tmp/runner.js", "ask codex for help"]),
+        None
+    );
+}
+
+#[test]
+fn shell_pane_process_tree_detects_the_nearest_agent_descendant() {
+    let processes = [
+        AgentProcessRecord {
+            pid: 10,
+            parent_pid: None,
+            agent: None,
+        },
+        AgentProcessRecord {
+            pid: 11,
+            parent_pid: Some(10),
+            agent: Some(BuiltinAgent::Codex),
+        },
+        AgentProcessRecord {
+            pid: 12,
+            parent_pid: Some(11),
+            agent: Some(BuiltinAgent::Claude),
+        },
+        AgentProcessRecord {
+            pid: 20,
+            parent_pid: None,
+            agent: None,
+        },
+    ];
+
+    let detected = detect_agent_processes_by_root(&[10, 20], &processes);
+
+    assert_eq!(detected.get(&10), Some(&BuiltinAgent::Codex));
+    assert!(!detected.contains_key(&20));
 }
 
 #[test]

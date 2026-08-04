@@ -757,14 +757,21 @@ fn tab_start_state_label(state: TabStartState) -> &'static str {
 
 fn tab_status_tone(
     state: TabStartState,
-    agent_status: Option<crate::model::workspace::AgentStatus>,
+    agent_status: Option<yttt_agent_core::AgentViewState>,
 ) -> ProjectTabStatusTone {
     match agent_status {
-        Some(crate::model::workspace::AgentStatus::Running) => ProjectTabStatusTone::AgentRunning,
-        Some(crate::model::workspace::AgentStatus::Completed) => {
-            ProjectTabStatusTone::AgentCompleted
+        Some(
+            yttt_agent_core::AgentViewState::Starting
+            | yttt_agent_core::AgentViewState::Working
+            | yttt_agent_core::AgentViewState::Waiting,
+        ) => ProjectTabStatusTone::AgentRunning,
+        Some(yttt_agent_core::AgentViewState::Completed) => ProjectTabStatusTone::AgentCompleted,
+        Some(
+            yttt_agent_core::AgentViewState::Failed | yttt_agent_core::AgentViewState::Interrupted,
+        ) => ProjectTabStatusTone::AgentFailed,
+        Some(yttt_agent_core::AgentViewState::Idle | yttt_agent_core::AgentViewState::Stale) => {
+            ProjectTabStatusTone::Started
         }
-        Some(crate::model::workspace::AgentStatus::Failed) => ProjectTabStatusTone::AgentFailed,
         None => match state {
             TabStartState::Lazy => ProjectTabStatusTone::Lazy,
             TabStartState::Started => ProjectTabStatusTone::Started,

@@ -390,8 +390,8 @@ it. Use command mode for services that must close or restart when their command 
 restarts wait 500 ms before starting a fresh PTY. Existing layouts may omit `args`,
 `execution_mode`, and `exit_behavior`; their defaults are `[]`, `shell`, and `close`.
 
-`detector` is reserved for future output parsing. The current MVP does not parse agent
-output.
+`detector` remains reserved for terminal-output detectors. Provider-aware agent progress does not
+scrape terminal text; it uses authenticated provider hook events.
 
 ### Global default example
 
@@ -544,23 +544,57 @@ layout.reset_local_override
 
 A pane is treated as an agent pane when:
 
-- `kind = "agent"` is set in layout TOML, or
-- the command basename is `codex` or `claude`.
+- `kind = "agent"` is set in layout TOML;
+- the configured command basename is one of the five onboarding Agents: `codex`, `claude`,
+  `opencode`, `pi`, or `omp`; or
+- a local shell pane has a live process-tree match for one of those commands. This last path
+  detects an Agent started manually after opening a new tab or pane.
 
-The app only reports process-level state:
+Local process discovery samples all pane roots in one shared monitor, recognizes native
+executables plus the Node/Bun package paths used by the script-backed CLIs, and chooses the
+nearest matching descendant. Two missed samples end the detected run, avoiding false completion
+during launcher handoff. SSH panes have no local process tree, so manual Agent discovery there
+still requires a provider hook.
 
-- `agent running`
-- `agent completed`
-- `agent failed`
+Oh My Pi (`omp`) is the first provider-backed integration. For command-mode OMP panes, yttt:
 
-It does not infer thinking, waiting for input, tool use, or patch application states.
-Those require future output detectors.
+1. creates a stable Agent instance for the Project/Tab/Pane scope;
+2. installs a managed OMP extension locally, or bootstraps it under the remote user's home
+   directory for SSH panes;
+3. injects a per-launch instance ID, generation, and random authentication token; and
+4. receives bounded hook frames through terminal title events.
+
+Provider hooks, not process names or terminal text, are authoritative for the active task, tool
+action, waiting reason, turn completion, and child-agent lifecycle. Process discovery and
+start/exit events remain the fallback for startup, interruption, failure, and providers without a
+hook adapter.
+
+The normalized status model includes:
+
+- `starting`
+- `idle`
+- `working`
+- `waiting`
+- `completed`
+- `failed`
+- `interrupted`
+- `stale`
+
+The project sidebar groups compact one-line Agent rows below each project. Each row shows a
+status icon, an Agent-type icon, and `pane name — current task · current action`; overflow is
+ellipsized instead of adding stacked metadata lines. Oh My Pi uses its OMP mark, child Agents use
+the generic Agent glyph, and hovering either icon identifies it. Clicking an Agent selects its
+project, tab, and pane. Project Agent groups can be collapsed; the collapsed project IDs and the
+latest bounded Agent snapshots are persisted.
+
+The managed transport never persists or logs the launch token, raw prompt, or complete tool
+payload. Unknown instances, stale generations, and invalid tokens are rejected before provider
+event normalization.
 
 In-app toast is always produced for agent exit events when `notify_on_exit = true`.
 `settings.notifications` persists the intended native-notification preference, but the
-platform notifier is currently a no-op placeholder.
-
-User-killed agent exits are not reported as failures.
+platform notifier is currently a no-op placeholder. User-killed agent exits are not reported as
+failures.
 
 ## Manual Smoke Checklist
 
@@ -612,7 +646,8 @@ Run these before marking a product phase complete:
   limited to the active project; inactive projects refresh when selected.
 - No client/server terminal runtime.
 - No live process restore after restart.
-- No output parser for agent internal state.
+- Provider-level task and tool progress currently has a first-party adapter only for Oh My Pi;
+  other Agent commands retain process-level fallback status.
 - No GUI layout editor.
 - Native system notifications and notification click routing are not implemented.
 - macOS packages are ad-hoc signed; Developer ID signing and notarization require release

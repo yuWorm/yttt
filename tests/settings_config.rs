@@ -161,7 +161,7 @@ fn editor_and_project_panel_defaults_match_the_design() {
     assert!(settings.project_panel.default_open);
     assert!(!settings.project_panel.show_hidden);
     assert_eq!(settings.project_panel.width, 280.0);
-    assert_eq!(settings.project_panel.project_sidebar_width, 216.0);
+    assert_eq!(settings.project_panel.project_sidebar_width, 320.0);
 }
 
 #[test]

@@ -30,7 +30,7 @@ use yttt::{
         },
         project::{ProjectDescriptor, ProjectLocation},
         split_tree::ResizeDirection,
-        workspace::{AgentStatus, PaneProcessState, Workspace},
+        workspace::{PaneProcessState, Workspace},
     },
     palette::{ActivePalette, PaletteItem, PaletteKind},
     runtime::git_status::{GitFileStatus, GitStatusSummary, parse_git_status_porcelain},
@@ -85,6 +85,10 @@ use yttt::{
         interaction::key_dispatch::workspace_command_for_keystroke,
     },
 };
+use yttt_agent_core::{
+    AgentAction, AgentInstanceId, AgentProcessState, AgentSnapshot, AgentTask, AgentTaskSource,
+    AgentTurnState, AgentViewState, ChildAgentSnapshot, ProviderId,
+};
 use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
 
 fn local_project(path: PathBuf) -> ProjectDescriptor {
@@ -97,6 +101,26 @@ fn local_project(path: PathBuf) -> ProjectDescriptor {
 
 fn local_project_id(path: &str) -> ProjectId {
     ProjectId::from_legacy_location(path)
+}
+
+fn agent_snapshot(turn_state: AgentTurnState) -> AgentSnapshot {
+    AgentSnapshot {
+        instance_id: AgentInstanceId::new("ui-state-test-agent").unwrap(),
+        provider_id: ProviderId::from_static("test"),
+        generation: 1,
+        process_state: AgentProcessState::Running,
+        turn_state,
+        waiting_reason: None,
+        waiting_message: None,
+        task: None,
+        current_action: None,
+        last_action_failed: false,
+        session: None,
+        children: Vec::new(),
+        process_exit: None,
+        state_started_at: 1,
+        updated_at: 1,
+    }
 }
 
 fn focus_workbench_key_context(root: &gpui::Entity<WorkbenchView>, cx: &mut gpui::TestAppContext) {
@@ -558,14 +582,14 @@ fn root_view_right_sidebar_drag_updates_only_selected_project() {
     workspace.select_project(&first).unwrap();
     let (_temp, mut root) = english_test_root_with_workspace(workspace);
 
-    assert_eq!(root.project_sidebar_width(), 216.0);
+    assert_eq!(root.project_sidebar_width(), 320.0);
     assert_eq!(root.selected_project_panel_width(), Some(280.0));
     assert_eq!(
         root.resize_sidebar_from_pointer_delta(SidebarSide::Right, -40.0),
         Some(320.0)
     );
     assert_eq!(root.selected_project_panel_width(), Some(320.0));
-    assert_eq!(root.project_sidebar_width(), 216.0);
+    assert_eq!(root.project_sidebar_width(), 320.0);
 
     root.select_project(&second).unwrap();
     assert_eq!(root.selected_project_panel_width(), Some(280.0));
@@ -627,13 +651,13 @@ fn root_view_sidebar_release_persists_defaults_without_rewriting_other_sessions(
             .settings
             .project_panel
             .project_sidebar_width,
-        216.0
+        320.0
     );
     root.toggle_sidebar();
     root.persist_sidebar_width(SidebarSide::Left).unwrap();
 
     assert_eq!(root.selected_project_panel_width(), Some(330.0));
-    assert_eq!(root.project_sidebar_width(), 250.0);
+    assert_eq!(root.project_sidebar_width(), 354.0);
     root.run_command(CommandId::ProjectPanelToggle).unwrap();
     assert!(!root.selected_project_panel_visible());
     assert_eq!(root.selected_project_panel_width(), Some(330.0));
@@ -647,7 +671,7 @@ fn root_view_sidebar_release_persists_defaults_without_rewriting_other_sessions(
 
     let loaded = yttt::config::settings::load_or_create_settings(&paths).unwrap();
     assert_eq!(loaded.settings.project_panel.width, 330.0);
-    assert_eq!(loaded.settings.project_panel.project_sidebar_width, 250.0);
+    assert_eq!(loaded.settings.project_panel.project_sidebar_width, 354.0);
 }
 
 #[gpui::test]
@@ -6085,7 +6109,7 @@ fn visible_project_items_fall_back_to_the_project_directory_name() {
 }
 
 #[test]
-fn visible_project_items_show_agent_running_status() {
+fn visible_project_items_show_agent_working_status() {
     let mut workspace = workspace_with_sample_project();
     let project_id = workspace.selected_project_id().unwrap().clone();
     workspace
@@ -6094,9 +6118,81 @@ fn visible_project_items_show_agent_running_status() {
 
     let items = visible_project_items(&workspace);
 
-    assert_eq!(items[0].agent_status.as_deref(), Some("agent running"));
+    assert_eq!(items[0].agent_state, Some(AgentViewState::Working));
 }
 
+#[test]
+fn visible_project_items_include_agent_task_and_action() {
+    let mut workspace = workspace_with_sample_project();
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    let mut snapshot = agent_snapshot(AgentTurnState::Working);
+    snapshot.task = AgentTask::new(
+        "Implement provider hook pipeline",
+        AgentTaskSource::UserPromptHook,
+    );
+    snapshot.current_action =
+        AgentAction::new(None, "Read", Some("src/runtime/agent.rs".to_string()));
+    snapshot.children.push(ChildAgentSnapshot {
+        id: "child-1".to_string(),
+        name: Some("Reviewer".to_string()),
+        task: AgentTask::new("Review runtime mapping", AgentTaskSource::External),
+        current_action: None,
+        turn_state: AgentTurnState::Working,
+        started_at: 2,
+        updated_at: 2,
+    });
+    workspace
+        .record_agent_snapshot(&project_id, "agent", "codex", snapshot)
+        .unwrap();
+
+    let items = visible_project_items(&workspace);
+    let agent = &items[0].agents[0];
+    assert_eq!(agent.name, "Codex");
+    assert_eq!(agent.task, "Implement provider hook pipeline");
+    assert_eq!(agent.action.as_deref(), Some("Read: src/runtime/agent.rs"));
+    assert_eq!(agent.children[0].name, "Reviewer");
+    assert_eq!(agent.children[0].task, "Review runtime mapping");
+}
+
+#[test]
+fn activating_sidebar_agent_selects_its_project_tab_and_pane() {
+    let workspace = workspace_with_sample_project();
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    let mut root = WorkbenchView::with_workspace_for_test(workspace);
+
+    root.activate_agent_pane(&project_id, "agent", "codex")
+        .unwrap();
+
+    let project = root.workspace().project(&project_id).unwrap();
+    assert_eq!(project.selected_tab_id, "agent");
+    assert_eq!(
+        project
+            .tab_state("agent")
+            .unwrap()
+            .focused_pane_id
+            .as_deref(),
+        Some("codex")
+    );
+}
+
+#[test]
+fn project_agent_expansion_is_persisted() {
+    let temp = tempdir().unwrap();
+    let project = temp.path().join("repo");
+    fs::create_dir_all(&project).unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
+    root.open_project_path(&project).unwrap();
+    let project_id = root.workspace().selected_project_id().unwrap().clone();
+
+    root.toggle_project_agent_expansion(&project_id).unwrap();
+
+    let settings = load_or_create_settings(&paths).unwrap();
+    assert_eq!(
+        settings.settings.project_panel.collapsed_agent_projects,
+        vec![project_id.as_str().to_string()]
+    );
+}
 #[test]
 fn visible_project_items_prioritize_failed_agent_status() {
     let mut workspace = Workspace::new();
@@ -6110,12 +6206,40 @@ fn visible_project_items_prioritize_failed_agent_status() {
         .mark_pane_running(&project_id, "agent", "codex")
         .unwrap();
     workspace
-        .record_agent_status(&project_id, "agent", "claude", AgentStatus::Failed)
+        .record_agent_snapshot(
+            &project_id,
+            "agent",
+            "claude",
+            agent_snapshot(AgentTurnState::Failed),
+        )
         .unwrap();
 
     let items = visible_project_items(&workspace);
 
-    assert_eq!(items[0].agent_status.as_deref(), Some("agent failed"));
+    assert_eq!(items[0].agent_state, Some(AgentViewState::Failed));
+}
+
+#[test]
+fn shell_pane_with_detected_agent_snapshot_appears_as_that_agent() {
+    let mut workspace = workspace_with_sample_project();
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    let mut snapshot = agent_snapshot(AgentTurnState::Working);
+    snapshot.provider_id = ProviderId::from_static("codex");
+    workspace
+        .record_agent_snapshot(&project_id, "dev", "shell", snapshot)
+        .unwrap();
+
+    let items = visible_project_items(&workspace);
+    let detected = items[0]
+        .agents
+        .iter()
+        .find(|agent| agent.tab_id == "dev" && agent.pane_id == "shell")
+        .unwrap();
+
+    assert_eq!(detected.name, "Codex");
+    assert_eq!(detected.provider_id, "codex");
+    assert_eq!(detected.state, AgentViewState::Working);
+    assert!(detected.task.is_empty());
 }
 
 #[test]
@@ -6137,7 +6261,12 @@ fn visible_tab_items_show_agent_completed_status() {
     let project_id = workspace.selected_project_id().unwrap().clone();
     workspace.select_tab("agent").unwrap();
     workspace
-        .record_agent_status(&project_id, "agent", "codex", AgentStatus::Completed)
+        .record_agent_snapshot(
+            &project_id,
+            "agent",
+            "codex",
+            agent_snapshot(AgentTurnState::Completed),
+        )
         .unwrap();
 
     let items = visible_tab_items(&workspace);
@@ -7199,6 +7328,8 @@ fn root_view_terminal_exit_keeps_project_open_and_allows_new_tab() {
         status: ProcessStatus::Exited { code: Some(0) },
         exit_reason: ExitReason::Completed,
         exit_behavior: ProcessExitBehavior::Close,
+        generation: 0,
+        agent_instance_id: None,
     })
     .unwrap();
 
@@ -7277,6 +7408,8 @@ fn root_view_auto_restart_exit_transitions_back_to_running() {
         project_id: project_id.as_str().to_string(),
         tab_id: "agent".to_string(),
         pane_id: "codex".to_string(),
+        generation: 0,
+        agent_instance_id: None,
     })
     .unwrap();
 
@@ -7305,6 +7438,8 @@ fn root_view_terminal_exit_keeps_last_tab_for_manual_restart() {
         status: ProcessStatus::Exited { code: Some(0) },
         exit_reason: ExitReason::Completed,
         exit_behavior: ProcessExitBehavior::ManualRestart,
+        generation: 0,
+        agent_instance_id: None,
     })
     .unwrap();
 
@@ -7366,7 +7501,7 @@ fn root_view_enqueues_agent_toast_notifications() {
 }
 
 #[test]
-fn root_view_records_agent_status_from_notification() {
+fn terminal_notification_does_not_synthesize_agent_status() {
     let mut root = WorkbenchView::dev_fixture_for_test();
 
     root.handle_terminal_notification(notification_event());
@@ -7382,7 +7517,7 @@ fn root_view_records_agent_status_from_notification() {
         .iter()
         .find(|pane| pane.pane_id == "codex")
         .unwrap();
-    assert_eq!(pane.agent_status, Some(AgentStatus::Completed));
+    assert!(pane.agent_snapshot.is_none());
 }
 
 #[test]
@@ -7511,6 +7646,8 @@ fn terminal_pane_exit_event_preserves_process_identity() {
         status: ProcessStatus::Exited { code: Some(0) },
         exit_reason: ExitReason::Completed,
         exit_behavior: ProcessExitBehavior::ManualRestart,
+        generation: 0,
+        agent_instance_id: None,
     };
 
     assert_eq!(event.project_id, local_project_id("/tmp/yttt").as_str());
@@ -7609,6 +7746,8 @@ fn terminal_pane_exited_event_with_behavior(
         status: ProcessStatus::Exited { code: Some(0) },
         exit_reason: ExitReason::Completed,
         exit_behavior,
+        generation: 0,
+        agent_instance_id: None,
     }
 }
 

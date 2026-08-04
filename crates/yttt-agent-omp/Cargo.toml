@@ -1,0 +1,10 @@
+[package]
+name = "yttt-agent-omp"
+version.workspace = true
+edition.workspace = true
+description = "Oh My Pi provider adapter for yttt agents"
+license = "MIT"
+
+[dependencies]
+yttt-agent-core = { path = "../yttt-agent-core" }
+serde_json = "1"

@@ -61,6 +61,8 @@ pub(super) fn collect_terminal_pane_contexts(
             is_focused: focused_pane_id == Some(pane.id.as_str()),
             terminal_input_gate: terminal_input_gate.clone(),
             ssh: None,
+            agent_launch: None,
+            agent_hook_client: None,
         }),
         LayoutNode::Split(split) => {
             collect_terminal_pane_contexts(

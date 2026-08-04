@@ -16,10 +16,12 @@ use gpui_component::{
     searchable_list::{SearchableListDelegate, SearchableListItem},
     select::{SearchableVec, Select, SelectEvent, SelectState},
 };
+use yttt_agent_core::{AgentExitReason, AgentProcessExit, AgentSnapshot};
 use yttt_terminal::input::{KeyState, TerminalKeyEvent};
 use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
 
 mod action_handlers;
+mod agent_process_monitor;
 mod dialogs;
 mod document_lifecycle;
 mod file_finder;
@@ -139,7 +141,7 @@ use crate::{
         layout::{LayoutNode, PaneConfig, ProcessExitBehavior, ProjectLayout, SplitDirection},
         project::{ProjectDescriptor, ProjectLocation},
         workspace::{
-            AgentStatus, CloseProjectDecision, CloseProjectError, PaneExitCloseOutcome, Workspace,
+            CloseProjectDecision, CloseProjectError, PaneExitCloseOutcome, Workspace,
             WorkspaceError,
         },
     },
@@ -152,6 +154,7 @@ use crate::{
         tab_palette_items_with_text, unified_tab_palette_items,
     },
     runtime::{
+        agent_manager::{AgentManager, AgentPaneAddress},
         file_search::{
             FileSearchCandidate, FileSearchCollection, FileSearchProject,
             collect_file_search_candidates, match_file_search_candidates,
@@ -161,9 +164,7 @@ use crate::{
             GitFileDiff, read_project_git_branches_with, read_project_git_diff_result_with,
             read_project_git_status, read_project_git_status_with, switch_project_git_branch_with,
         },
-        notification::{
-            NoopSystemNotifier, NotificationEvent, NotificationKind, maybe_notify_system,
-        },
+        notification::{NoopSystemNotifier, NotificationEvent, maybe_notify_system},
         project::ProjectServices,
     },
     ui::{
@@ -286,6 +287,9 @@ use crate::{
     },
 };
 
+#[cfg(test)]
+use crate::runtime::notification::NotificationKind;
+
 pub struct WorkbenchView {
     workspace: Workspace,
     config_paths: AppConfigPaths,
@@ -298,6 +302,7 @@ pub struct WorkbenchView {
     presented_error_notification: Option<String>,
     project: ProjectControllerState,
     ssh: SshControllerState,
+    agent_manager: AgentManager,
     settings: SettingsControllerState,
     update: UpdateControllerState,
     performance: performance::PerformanceMonitorState,
@@ -579,7 +584,7 @@ impl WorkbenchView {
     }
 
     fn with_workspace_and_config_paths(
-        workspace: Workspace,
+        mut workspace: Workspace,
         config_paths: AppConfigPaths,
         force_onboarding: bool,
     ) -> Self {
@@ -587,6 +592,16 @@ impl WorkbenchView {
         let command_registry = bindable_registry();
         let recent_projects_config = load_recent_projects(&config_paths).unwrap_or_default();
         let (ssh, ssh_load_error) = SshControllerState::new(&config_paths);
+        let agent_manager = AgentManager::new(&config_paths);
+        for (address, snapshot) in agent_manager.retained_snapshots() {
+            let _ = workspace.record_agent_snapshot(
+                &ProjectId::new(&address.project_id),
+                &address.tab_id,
+                &address.pane_id,
+                snapshot,
+            );
+        }
+        let agent_setup_error = agent_manager.setup_error().map(str::to_string);
         let recent_projects = recent_projects_for_palette(&recent_projects_config);
         let (mut app_settings, settings_warning_lines) = load_app_settings_messages(&config_paths);
         let language_detection_error = (!app_settings.general.onboarding_completed
@@ -633,6 +648,7 @@ impl WorkbenchView {
             layout_load_warning_message(default_layout_state.warnings()),
         );
         let load_error = combine_load_messages(load_error, ssh_load_error);
+        let load_error = combine_load_messages(load_error, agent_setup_error);
         let system_notifications_enabled = app_settings.notifications.system;
         let vim = VimControllerState::new(app_settings.vim.mode);
         let onboarding = ((force_onboarding || !app_settings.general.onboarding_completed)
@@ -678,6 +694,7 @@ impl WorkbenchView {
                 ..Default::default()
             },
             ssh,
+            agent_manager,
             active_project_file_watcher: None,
             active_keybindings_watcher: None,
             keybindings_reload_requested: false,
@@ -867,6 +884,21 @@ impl WorkbenchView {
         Ok(())
     }
 
+    pub fn activate_agent_pane(
+        &mut self,
+        project_id: &ProjectId,
+        tab_id: &str,
+        pane_id: &str,
+    ) -> Result<(), WorkbenchError> {
+        self.select_project(project_id)?;
+        let item = WorkItemId::Terminal(tab_id.to_string());
+        self.handle_work_item_tab_click(item.clone(), 1)?;
+        self.workspace.focus_pane(pane_id)?;
+        self.queue_work_item_focus(&item);
+        self.sync_input_owner_state();
+        Ok(())
+    }
+
     fn select_adjacent_project(&mut self, forward: bool) -> Result<bool, WorkbenchError> {
         let projects = self.workspace.opened_projects();
         let Some(selected_project_id) = self.workspace.selected_project_id() else {
@@ -979,6 +1011,23 @@ impl WorkbenchView {
     pub fn set_project_sidebar_width(&mut self, width: f32) -> Result<(), WorkbenchError> {
         self.app_settings.project_panel.project_sidebar_width =
             width.clamp(PROJECT_SIDEBAR_MIN_WIDTH, PROJECT_SIDEBAR_MAX_WIDTH);
+        self.save_app_settings_and_refresh_runtime()
+    }
+
+    pub fn toggle_project_agent_expansion(
+        &mut self,
+        project_id: &ProjectId,
+    ) -> Result<(), WorkbenchError> {
+        let collapsed = &mut self.app_settings.project_panel.collapsed_agent_projects;
+        if let Some(index) = collapsed
+            .iter()
+            .position(|candidate| candidate == project_id.as_str())
+        {
+            collapsed.remove(index);
+        } else {
+            collapsed.push(project_id.as_str().to_string());
+            collapsed.sort();
+        }
         self.save_app_settings_and_refresh_runtime()
     }
 
@@ -1233,20 +1282,6 @@ impl WorkbenchView {
     }
 
     pub fn handle_terminal_notification(&mut self, event: NotificationEvent) {
-        let project_id = ProjectId::new(event.project_id.clone());
-        let agent_status = match event.kind {
-            NotificationKind::AgentCompleted => AgentStatus::Completed,
-            NotificationKind::AgentFailed => AgentStatus::Failed,
-        };
-        if let Err(error) = self.workspace.record_agent_status(
-            &project_id,
-            &event.tab_id,
-            &event.pane_id,
-            agent_status,
-        ) {
-            self.load_error = Some(error.to_string());
-        }
-
         let _ = maybe_notify_system(
             &self.system_notifier,
             self.system_notifications_enabled,

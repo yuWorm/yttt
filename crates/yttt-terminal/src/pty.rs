@@ -397,6 +397,10 @@ impl PortablePtySession {
         self.io.take()
     }
 
+    pub fn process_id(&self) -> Option<u32> {
+        self.child.process_id()
+    }
+
     pub fn resize_handle(&self) -> PortablePtyResizeHandle {
         PortablePtyResizeHandle {
             master: self.master.clone(),

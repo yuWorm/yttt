@@ -343,6 +343,7 @@ pub struct ProjectPanelSettings {
     pub show_hidden: bool,
     pub width: f32,
     pub project_sidebar_width: f32,
+    pub collapsed_agent_projects: Vec<String>,
 }
 
 impl Default for ProjectPanelSettings {
@@ -351,7 +352,8 @@ impl Default for ProjectPanelSettings {
             default_open: true,
             show_hidden: false,
             width: 280.0,
-            project_sidebar_width: 216.0,
+            project_sidebar_width: 320.0,
+            collapsed_agent_projects: Vec::new(),
         }
     }
 }

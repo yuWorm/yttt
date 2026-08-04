@@ -1,20 +1,18 @@
+use yttt_agent_core::AgentViewState;
+
 use crate::{
     model::{
         layout::PaneConfig,
-        workspace::{AgentStatus, OpenedProject, PaneProcessState, PaneState},
+        workspace::{OpenedProject, PaneProcessState, PaneState},
     },
     runtime::agent::classify_agent,
 };
 
-pub fn agent_status_label(status: AgentStatus) -> &'static str {
-    match status {
-        AgentStatus::Running => "agent running",
-        AgentStatus::Completed => "agent completed",
-        AgentStatus::Failed => "agent failed",
-    }
+pub fn agent_status_label(status: AgentViewState) -> &'static str {
+    status.label()
 }
 
-pub fn project_agent_status(project: &OpenedProject) -> Option<AgentStatus> {
+pub fn project_agent_status(project: &OpenedProject) -> Option<AgentViewState> {
     project
         .layout
         .tabs
@@ -23,7 +21,7 @@ pub fn project_agent_status(project: &OpenedProject) -> Option<AgentStatus> {
         .fold(None, merge_agent_status)
 }
 
-pub fn tab_agent_status(project: &OpenedProject, tab_id: &str) -> Option<AgentStatus> {
+pub fn tab_agent_status(project: &OpenedProject, tab_id: &str) -> Option<AgentViewState> {
     let tab_config = project.layout.tabs.iter().find(|tab| tab.id == tab_id)?;
     let tab_state = project.tab_state(tab_id)?;
 
@@ -37,34 +35,33 @@ pub fn tab_agent_status(project: &OpenedProject, tab_id: &str) -> Option<AgentSt
         .fold(None, merge_agent_status)
 }
 
-pub fn pane_agent_status(pane_config: &PaneConfig, pane_state: &PaneState) -> Option<AgentStatus> {
+pub fn pane_agent_status(
+    pane_config: &PaneConfig,
+    pane_state: &PaneState,
+) -> Option<AgentViewState> {
+    if let Some(snapshot) = &pane_state.agent_snapshot {
+        return Some(snapshot.view_state());
+    }
     if !is_agent_pane(pane_config) {
         return None;
     }
 
-    pane_state.agent_status.or(match pane_state.process_state {
-        PaneProcessState::Running => Some(AgentStatus::Running),
+    match pane_state.process_state {
+        PaneProcessState::Running => Some(AgentViewState::Working),
         PaneProcessState::Idle | PaneProcessState::Exited => None,
-    })
+    }
 }
 
 pub fn is_agent_pane(pane_config: &PaneConfig) -> bool {
     classify_agent(Some(pane_config.kind.clone()), &pane_config.command).is_agent()
 }
 
-fn merge_agent_status(current: Option<AgentStatus>, candidate: AgentStatus) -> Option<AgentStatus> {
+fn merge_agent_status(
+    current: Option<AgentViewState>,
+    candidate: AgentViewState,
+) -> Option<AgentViewState> {
     match current {
-        Some(current) if agent_status_priority(current) >= agent_status_priority(candidate) => {
-            Some(current)
-        }
+        Some(current) if current.priority() >= candidate.priority() => Some(current),
         _ => Some(candidate),
-    }
-}
-
-fn agent_status_priority(status: AgentStatus) -> u8 {
-    match status {
-        AgentStatus::Running => 1,
-        AgentStatus::Completed => 2,
-        AgentStatus::Failed => 3,
     }
 }

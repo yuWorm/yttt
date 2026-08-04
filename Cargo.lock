@@ -10982,6 +10982,7 @@ name = "yttt"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "cocoa 0.26.0",
  "dunce",
  "futures-lite 2.6.1",
@@ -10998,6 +10999,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "shell-words",
  "sys-locale",
  "sysinfo",
@@ -11029,11 +11031,44 @@ dependencies = [
  "tree-sitter-zig",
  "uuid",
  "winresource",
+ "yttt-agent-core",
+ "yttt-agent-omp",
+ "yttt-agent-runtime",
  "yttt-core",
  "yttt-ssh",
  "yttt-terminal",
  "yttt-ui",
  "zeroize",
+]
+
+[[package]]
+name = "yttt-agent-core"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "yttt-agent-omp"
+version = "0.2.0"
+dependencies = [
+ "serde_json",
+ "yttt-agent-core",
+]
+
+[[package]]
+name = "yttt-agent-runtime"
+version = "0.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+ "yttt-agent-core",
 ]
 
 [[package]]
@@ -11043,6 +11078,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "uuid",
+ "yttt-agent-core",
 ]
 
 [[package]]

@@ -1,11 +1,14 @@
 use std::path::PathBuf;
+use yttt_agent_core::{
+    AgentInstanceId, AgentProcessState, AgentSnapshot, AgentTurnState, ProviderId,
+};
 
 use yttt::{
     commands::{ActiveSurface, CommandContext, CommandId, default_registry},
     model::{
         ids::ProjectId,
         project::{ProjectDescriptor, ProjectLocation},
-        workspace::{AgentStatus, Workspace},
+        workspace::Workspace,
     },
     palette::{
         ActivePalette, CommandPaletteContext, PaletteItem, PaletteKind, RecentProject,
@@ -35,6 +38,26 @@ fn recent_project(title: &str, path: PathBuf) -> RecentProject {
         id: project.id,
         title: title.to_string(),
         location: project.location,
+    }
+}
+
+fn agent_snapshot(turn_state: AgentTurnState) -> AgentSnapshot {
+    AgentSnapshot {
+        instance_id: AgentInstanceId::new("palette-test-agent").unwrap(),
+        provider_id: ProviderId::from_static("test"),
+        generation: 1,
+        process_state: AgentProcessState::Running,
+        turn_state,
+        waiting_reason: None,
+        waiting_message: None,
+        task: None,
+        current_action: None,
+        last_action_failed: false,
+        session: None,
+        children: Vec::new(),
+        process_exit: None,
+        state_started_at: 1,
+        updated_at: 1,
     }
 }
 
@@ -259,7 +282,12 @@ fn project_palette_shows_open_project_agent_status() {
         .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
         .unwrap();
     workspace
-        .record_agent_status(&project_id, "agent", "codex", AgentStatus::Failed)
+        .record_agent_snapshot(
+            &project_id,
+            "agent",
+            "codex",
+            agent_snapshot(AgentTurnState::Failed),
+        )
         .unwrap();
 
     let items = project_palette_items(&workspace, &[]);
@@ -337,7 +365,12 @@ fn tab_palette_shows_agent_status() {
         .unwrap();
     workspace.select_tab("agent").unwrap();
     workspace
-        .record_agent_status(&project_id, "agent", "codex", AgentStatus::Completed)
+        .record_agent_snapshot(
+            &project_id,
+            "agent",
+            "codex",
+            agent_snapshot(AgentTurnState::Completed),
+        )
         .unwrap();
 
     let items = tab_palette_items(&workspace).unwrap();
@@ -390,7 +423,15 @@ fn pane_palette_shows_agent_exit_result() {
         .unwrap();
     workspace.select_tab("agent").unwrap();
     workspace
-        .record_agent_status(&project_id, "agent", "codex", AgentStatus::Failed)
+        .record_pane_exited(&project_id, "agent", "codex")
+        .unwrap();
+    workspace
+        .record_agent_snapshot(
+            &project_id,
+            "agent",
+            "codex",
+            agent_snapshot(AgentTurnState::Failed),
+        )
         .unwrap();
 
     let items = pane_palette_items(&workspace).unwrap();
