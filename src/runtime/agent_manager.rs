@@ -9,8 +9,8 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use yttt_agent_core::{
-    AgentExitReason, AgentInstanceId, AgentProcessExit, AgentProvider, AgentReducer, AgentSnapshot,
-    ProviderHookEvent, ProviderId,
+    AgentExitReason, AgentInstanceId, AgentProcessExit, AgentProcessState, AgentProvider,
+    AgentReducer, AgentSnapshot, ProviderHookEvent, ProviderId,
 };
 use yttt_agent_omp::{OMP_EXTENSION_FILE_NAME, OMP_EXTENSION_SOURCE, OMP_PROVIDER_ID, OmpProvider};
 use yttt_agent_runtime::{
@@ -384,7 +384,10 @@ impl AgentManager {
             unix_timestamp_millis(),
         );
         let snapshot = reducer.snapshot().clone();
-        self.persist_snapshot(address.clone(), snapshot.clone());
+        self.retained_snapshots.remove(address);
+        if let Err(error) = write_agent_state(&self.state_path, &self.retained_snapshots) {
+            self.last_error = Some(error.to_string());
+        }
         Some(snapshot)
     }
 
@@ -465,7 +468,9 @@ fn load_agent_state(path: &Path) -> io::Result<HashMap<AgentPaneAddress, AgentSn
         .sort_by_key(|entry| std::cmp::Reverse(entry.snapshot.updated_at));
     let mut snapshots = HashMap::new();
     for entry in persisted.entries.into_iter().take(AGENT_STATE_MAX_ENTRIES) {
-        if valid_address(&entry.address) {
+        if valid_address(&entry.address)
+            && entry.snapshot.process_state != AgentProcessState::Exited
+        {
             snapshots.entry(entry.address).or_insert(entry.snapshot);
         }
     }
@@ -588,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn detected_shell_agent_starts_idle_and_completes_on_exit() {
+    fn detected_shell_agent_snapshot_is_removed_on_exit() {
         let temp = TempDir::new().unwrap();
         let paths = AppConfigPaths::from_config_dir(temp.path());
         let mut manager = AgentManager::new(&paths);
@@ -612,10 +617,9 @@ mod tests {
             completed.view_state(),
             yttt_agent_core::AgentViewState::Completed
         );
-        assert_eq!(
-            manager.retained_snapshots()[0].1.instance_id,
-            completed.instance_id
-        );
+        assert!(manager.retained_snapshots().is_empty());
+        drop(manager);
+        assert!(AgentManager::new(&paths).retained_snapshots().is_empty());
     }
     #[test]
     fn five_managed_agents_follow_prompt_working_and_completion_hooks() {

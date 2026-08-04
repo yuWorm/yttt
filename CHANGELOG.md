@@ -13,6 +13,8 @@
 - Added persistent global terminal environment variables that are automatically injected into newly started local and SSH shells and CLI commands.
 - Added local process-tree discovery for Codex, Claude Code, OpenCode, Pi, and Oh My Pi launched
   manually from an existing shell tab or pane.
+- Added in-app and optional native desktop notifications when hook-backed agents need input,
+  complete a task, or fail.
 
 ### Changed
 
@@ -36,6 +38,8 @@
 - Fixed Global Vim Terminal mode intercepting `Escape` and `Ctrl-[`; both now reach the terminal process, while `Ctrl-\ Ctrl-N` returns to yttt Normal mode.
 - Fixed Zed-compatible icon themes falling back to the generic file icon for common extensions, including TypeScript, when the theme relies on Zed's built-in file associations.
 - Open files deleted outside yttt now stay editable with a struck-through tab title and are recreated directly on save instead of blocking on a confirmation dialog.
+- Fixed manually launched agents remaining in the sidebar after their terminal process exits or is
+  killed; detected-agent snapshots are now removed from memory and persisted state.
 
 ## 0.2.0 - 2026-07-18
 

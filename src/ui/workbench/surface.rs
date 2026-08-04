@@ -915,7 +915,7 @@ impl WorkbenchView {
             .terminal_pane_subscriptions
             .insert(key.clone(), subscription);
         self.terminal.terminal_panes.insert(key, pane_view.clone());
-        self.sync_agent_process_monitoring(cx);
+        self.sync_agent_process_monitoring(window, cx);
         pane_view
     }
 
@@ -1069,33 +1069,109 @@ impl WorkbenchView {
         }
         result
     }
+    pub(super) fn record_agent_event_snapshot(
+        &mut self,
+        address: AgentPaneAddress,
+        snapshot: AgentSnapshot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), WorkspaceError> {
+        let notification = self.agent_transition_notification(&address, &snapshot);
+        let result = self.record_agent_runtime_snapshot(address, snapshot);
+        if result.is_ok()
+            && let Some(notification) = notification
+        {
+            self.present_notification(notification, window, cx);
+        }
+        result
+    }
+
+    pub(super) fn agent_transition_notification(
+        &self,
+        address: &AgentPaneAddress,
+        snapshot: &AgentSnapshot,
+    ) -> Option<NotificationEvent> {
+        let project_id = ProjectId::new(&address.project_id);
+        let project = self.workspace.project(&project_id)?;
+        let tab = project.layout.tab(&address.tab_id)?;
+        let pane = tab.layout.find_pane(&address.pane_id)?;
+        notification_for_agent_transition(AgentTransitionNotificationInput {
+            previous_state: project
+                .tab_state(&address.tab_id)
+                .and_then(|tab| {
+                    tab.pane_states
+                        .iter()
+                        .find(|pane| pane.pane_id == address.pane_id)
+                })
+                .and_then(|pane| pane.agent_snapshot.as_ref())
+                .map(AgentSnapshot::view_state),
+            state: snapshot.view_state(),
+            project_id: address.project_id.clone(),
+            tab_id: address.tab_id.clone(),
+            pane_id: address.pane_id.clone(),
+            project_title: project.location.fallback_title(),
+            tab_title: tab.title.clone(),
+            pane_title: pane.title.clone(),
+        })
+    }
+
+    fn notification_matches_current_agent_state(&self, event: &NotificationEvent) -> bool {
+        let project_id = ProjectId::new(&event.project_id);
+        let state = self
+            .workspace
+            .project(&project_id)
+            .and_then(|project| project.tab_state(&event.tab_id))
+            .and_then(|tab| {
+                tab.pane_states
+                    .iter()
+                    .find(|pane| pane.pane_id == event.pane_id)
+            })
+            .and_then(|pane| pane.agent_snapshot.as_ref())
+            .map(AgentSnapshot::view_state);
+        matches!(
+            (event.kind, state),
+            (
+                NotificationKind::AgentWaiting,
+                Some(AgentViewState::Waiting)
+            ) | (
+                NotificationKind::AgentCompleted | NotificationKind::AgentFailed,
+                Some(
+                    AgentViewState::Completed
+                        | AgentViewState::Failed
+                        | AgentViewState::Interrupted
+                )
+            )
+        )
+    }
+
+    pub(super) fn present_notification(
+        &mut self,
+        event: NotificationEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let root = cx.entity();
+        let action_label = self.ui_text.get(UiTextKey::OpenNotificationTarget);
+        let appearance = self.theme_runtime();
+        let theme = appearance.ui;
+        let ui_style = appearance.style;
+        self.handle_terminal_notification(event.clone());
+        push_component_notification(root, event, action_label, theme, ui_style, window, cx);
+        cx.notify();
+    }
 
     pub(super) fn on_terminal_pane_event(
         &mut self,
         _pane: &Entity<TerminalPaneView>,
         event: &TerminalPaneEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match event {
             TerminalPaneEvent::Notification(event) => {
-                let root = cx.entity();
-                let event = event.clone();
-                let action_label = self.ui_text.get(UiTextKey::OpenNotificationTarget);
-                let appearance = self.theme_runtime();
-                let theme = appearance.ui;
-                let ui_style = appearance.style;
-                self.handle_terminal_notification(event.clone());
-                push_component_notification(
-                    root,
-                    event,
-                    action_label,
-                    theme,
-                    ui_style,
-                    _window,
-                    cx,
-                );
-                cx.notify();
+                if !self.notification_matches_current_agent_state(event) {
+                    self.present_notification(event.clone(), window, cx);
+                }
             }
             TerminalPaneEvent::Started(event) => {
                 if let Err(error) = self.handle_terminal_pane_started(event.clone()) {
@@ -1117,7 +1193,8 @@ impl WorkbenchView {
             }
             TerminalPaneEvent::AgentStatusFrame { frame, .. } => {
                 if let Ok(Some((address, snapshot))) = self.agent_manager.ingest_title(frame)
-                    && let Err(error) = self.record_agent_runtime_snapshot(address, snapshot)
+                    && let Err(error) =
+                        self.record_agent_event_snapshot(address, snapshot, window, cx)
                 {
                     self.load_error = Some(error.to_string());
                 }
@@ -1158,7 +1235,7 @@ impl WorkbenchView {
                         .is_some_and(|observation| observation.generation == event.generation)
                     {
                         self.terminal.agent_process_observations.remove(&address);
-                        self.finish_detected_agent(&address, event.generation, reason);
+                        self.finish_detected_agent(&address, event.generation, reason, window, cx);
                     }
                 }
                 cx.notify();

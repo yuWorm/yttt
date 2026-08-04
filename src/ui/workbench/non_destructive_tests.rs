@@ -1205,3 +1205,166 @@ fn project_entry_delete_alert_renders_and_executes_confirmation(cx: &mut TestApp
 
     assert!(!victim_path.exists());
 }
+
+#[derive(Clone)]
+struct CountingSystemNotifier(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl SystemNotifier for CountingSystemNotifier {
+    fn notify(&self, _event: &NotificationEvent) -> anyhow::Result<()> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[gpui::test]
+fn agent_state_transitions_enqueue_attention_and_completion_notifications(cx: &mut TestAppContext) {
+    use yttt_agent_core::{AgentInstanceId, AgentProcessState, AgentTurnState, ProviderId};
+
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir_all(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(local_project(project_path), dev_fixture_layout())
+        .unwrap();
+    let address = AgentPaneAddress::new(project_id.as_str(), "agent", "codex");
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let system_notification_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let system_notification_count_for_window = system_notification_count.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| {
+            let mut root =
+                WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths);
+            root.system_notifications_enabled = true;
+            root.system_notifier =
+                Arc::new(CountingSystemNotifier(system_notification_count_for_window));
+            root
+        });
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        ComponentRoot::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    let snapshot = |turn_state| AgentSnapshot {
+        instance_id: AgentInstanceId::new("notification-test-agent").unwrap(),
+        provider_id: ProviderId::from_static("codex"),
+        generation: 1,
+        process_state: AgentProcessState::Running,
+        turn_state,
+        waiting_reason: None,
+        waiting_message: None,
+        task: None,
+        current_action: None,
+        last_action_failed: false,
+        children: Vec::new(),
+        session: None,
+        process_exit: None,
+        state_started_at: 1,
+        updated_at: 1,
+    };
+
+    root.update_in(cx, |root, window, cx| {
+        root.record_agent_event_snapshot(
+            address.clone(),
+            snapshot(AgentTurnState::Waiting),
+            window,
+            cx,
+        )
+        .unwrap();
+        root.record_agent_event_snapshot(
+            address.clone(),
+            snapshot(AgentTurnState::Waiting),
+            window,
+            cx,
+        )
+        .unwrap();
+        root.record_agent_event_snapshot(
+            address.clone(),
+            snapshot(AgentTurnState::Working),
+            window,
+            cx,
+        )
+        .unwrap();
+        root.record_agent_event_snapshot(address, snapshot(AgentTurnState::Completed), window, cx)
+            .unwrap();
+        assert_eq!(
+            root.visible_toast_titles(),
+            vec![
+                "Codex needs attention".to_string(),
+                "Codex completed".to_string()
+            ]
+        );
+    });
+    assert_eq!(
+        system_notification_count.load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
+}
+
+#[gpui::test]
+fn killed_detected_agent_clears_sidebar_snapshot_without_notification(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir_all(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(local_project(project_path), dev_fixture_layout())
+        .unwrap();
+    let address = AgentPaneAddress::new(project_id.as_str(), "dev", "shell");
+    let view_project_id = project_id.clone();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| {
+            WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
+        });
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        ComponentRoot::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+
+    root.update_in(cx, |root, window, cx| {
+        let running = root
+            .agent_manager
+            .detected_process_started(address.clone(), BuiltinAgent::Codex, 7)
+            .unwrap();
+        root.record_agent_runtime_snapshot(address.clone(), running)
+            .unwrap();
+        assert!(
+            root.workspace
+                .project(&view_project_id)
+                .unwrap()
+                .tab_state("dev")
+                .unwrap()
+                .pane_states
+                .iter()
+                .find(|pane| pane.pane_id == "shell")
+                .unwrap()
+                .agent_snapshot
+                .is_some()
+        );
+
+        assert!(
+            root.finish_detected_agent(&address, 7, AgentExitReason::KilledByUser, window, cx,)
+        );
+        assert!(
+            root.workspace
+                .project(&view_project_id)
+                .unwrap()
+                .tab_state("dev")
+                .unwrap()
+                .pane_states
+                .iter()
+                .find(|pane| pane.pane_id == "shell")
+                .unwrap()
+                .agent_snapshot
+                .is_none()
+        );
+        assert!(root.agent_manager.retained_snapshots().is_empty());
+        assert!(root.visible_toast_titles().is_empty());
+    });
+}

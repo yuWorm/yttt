@@ -38,6 +38,7 @@ yttt-agent-runtime = { path = "crates/yttt-agent-runtime" }
 yttt-ssh = { path = "crates/yttt-ssh" }
 zeroize = "1"
 notify = "7.0.0"
+notify-rust = "4.18"
 nucleo-matcher = "0.3.1"
 reqwest_client = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
 tree-sitter = "0.26"

@@ -16,7 +16,7 @@ use gpui_component::{
     searchable_list::{SearchableListDelegate, SearchableListItem},
     select::{SearchableVec, Select, SelectEvent, SelectState},
 };
-use yttt_agent_core::{AgentExitReason, AgentProcessExit, AgentSnapshot};
+use yttt_agent_core::{AgentExitReason, AgentProcessExit, AgentSnapshot, AgentViewState};
 use yttt_terminal::input::{KeyState, TerminalKeyEvent};
 use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
 
@@ -164,7 +164,11 @@ use crate::{
             GitFileDiff, read_project_git_branches_with, read_project_git_diff_result_with,
             read_project_git_status, read_project_git_status_with, switch_project_git_branch_with,
         },
-        notification::{NoopSystemNotifier, NotificationEvent, maybe_notify_system},
+        notification::{
+            AgentTransitionNotificationInput, DesktopSystemNotifier, NoopSystemNotifier,
+            NotificationEvent, NotificationKind, SystemNotifier, maybe_notify_system,
+            notification_for_agent_transition,
+        },
         project::ProjectServices,
     },
     ui::{
@@ -287,9 +291,6 @@ use crate::{
     },
 };
 
-#[cfg(test)]
-use crate::runtime::notification::NotificationKind;
-
 pub struct WorkbenchView {
     workspace: Workspace,
     config_paths: AppConfigPaths,
@@ -324,7 +325,7 @@ pub struct WorkbenchView {
     active_work_area_resize_drag: Option<ActiveWorkAreaResizeDrag>,
     work_area_drop_target: Option<WorkAreaDropTarget>,
     toast_queue: ToastQueue,
-    system_notifier: NoopSystemNotifier,
+    system_notifier: Arc<dyn SystemNotifier>,
     system_notifications_enabled: bool,
     ui_text: UiText,
     app_settings: AppSettings,
@@ -481,6 +482,7 @@ impl WorkbenchView {
         let mut root = Self::with_config_paths(config_paths);
         root.terminal.start_processes = false;
         root.project_file_watching_enabled = false;
+        root.system_notifier = Arc::new(NoopSystemNotifier);
         root
     }
 
@@ -724,7 +726,7 @@ impl WorkbenchView {
             active_work_area_resize_drag: None,
             work_area_drop_target: None,
             toast_queue: ToastQueue::default(),
-            system_notifier: NoopSystemNotifier,
+            system_notifier: Arc::new(DesktopSystemNotifier),
             system_notifications_enabled,
             ui_text,
             vim,
@@ -1283,7 +1285,7 @@ impl WorkbenchView {
 
     pub fn handle_terminal_notification(&mut self, event: NotificationEvent) {
         let _ = maybe_notify_system(
-            &self.system_notifier,
+            self.system_notifier.as_ref(),
             self.system_notifications_enabled,
             &event,
         );
@@ -2398,6 +2400,7 @@ impl WorkbenchView {
     pub fn dev_fixture_for_test() -> Self {
         let mut root = Self::dev_fixture();
         root.terminal.start_processes = false;
+        root.system_notifier = Arc::new(NoopSystemNotifier);
         root
     }
 
@@ -2422,6 +2425,7 @@ impl WorkbenchView {
         let mut root = Self::with_workspace(workspace);
         root.terminal.start_processes = false;
         root.project_file_watching_enabled = false;
+        root.system_notifier = Arc::new(NoopSystemNotifier);
         root
     }
 
@@ -2432,6 +2436,7 @@ impl WorkbenchView {
         let mut root = Self::with_workspace_and_config_paths(workspace, config_paths, false);
         root.terminal.start_processes = false;
         root.project_file_watching_enabled = false;
+        root.system_notifier = Arc::new(NoopSystemNotifier);
         root
     }
 

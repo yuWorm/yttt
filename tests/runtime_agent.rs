@@ -4,12 +4,14 @@ use yttt::runtime::agent::{
     AgentProcessRecord, classify_agent, classify_agent_process, detect_agent_processes_by_root,
 };
 use yttt::runtime::notification::{
-    ExitNotificationInput, NoopSystemNotifier, NotificationEvent, NotificationKind, SystemNotifier,
-    maybe_notify_system, notification_for_exit,
+    AgentTransitionNotificationInput, ExitNotificationInput, NoopSystemNotifier, NotificationEvent,
+    NotificationKind, SystemNotifier, maybe_notify_system, notification_for_agent_transition,
+    notification_for_exit,
 };
 use yttt::runtime::terminal::{
     ExitReason, FakeTerminalRuntime, ProcessStatus, TerminalRuntime, TerminalSpawnRequest,
 };
+use yttt_agent_core::AgentViewState;
 
 #[test]
 fn fake_runtime_marks_process_running_then_exited() {
@@ -188,6 +190,50 @@ fn system_notification_is_sent_only_when_enabled() {
     assert!(maybe_notify_system(&notifier, true, &event).unwrap());
     assert_eq!(notifier.count.get(), 1);
 }
+#[test]
+fn agent_state_transitions_emit_attention_and_completion_notifications_once() {
+    let waiting =
+        notification_for_agent_transition(agent_transition_input(None, AgentViewState::Waiting))
+            .unwrap();
+    assert_eq!(waiting.kind, NotificationKind::AgentWaiting);
+    assert_eq!(waiting.title(), "Codex needs attention");
+
+    assert!(
+        notification_for_agent_transition(agent_transition_input(
+            Some(AgentViewState::Waiting),
+            AgentViewState::Waiting,
+        ))
+        .is_none()
+    );
+    assert!(
+        notification_for_agent_transition(agent_transition_input(
+            Some(AgentViewState::Waiting),
+            AgentViewState::Working,
+        ))
+        .is_none()
+    );
+
+    let completed = notification_for_agent_transition(agent_transition_input(
+        Some(AgentViewState::Working),
+        AgentViewState::Completed,
+    ))
+    .unwrap();
+    assert_eq!(completed.kind, NotificationKind::AgentCompleted);
+
+    let failed = notification_for_agent_transition(agent_transition_input(
+        Some(AgentViewState::Working),
+        AgentViewState::Failed,
+    ))
+    .unwrap();
+    assert_eq!(failed.kind, NotificationKind::AgentFailed);
+    assert!(
+        notification_for_agent_transition(agent_transition_input(
+            Some(AgentViewState::Failed),
+            AgentViewState::Completed,
+        ))
+        .is_none()
+    );
+}
 
 #[derive(Default)]
 struct CountingNotifier {
@@ -204,6 +250,22 @@ impl SystemNotifier for CountingNotifier {
 fn notification_event() -> NotificationEvent {
     NotificationEvent {
         kind: NotificationKind::AgentCompleted,
+        project_id: "/tmp/yttt".to_string(),
+        tab_id: "agent".to_string(),
+        pane_id: "codex".to_string(),
+        project_title: "yttt".to_string(),
+        tab_title: "Agent".to_string(),
+        pane_title: "Codex".to_string(),
+    }
+}
+
+fn agent_transition_input(
+    previous_state: Option<AgentViewState>,
+    state: AgentViewState,
+) -> AgentTransitionNotificationInput {
+    AgentTransitionNotificationInput {
+        previous_state,
+        state,
         project_id: "/tmp/yttt".to_string(),
         tab_id: "agent".to_string(),
         pane_id: "codex".to_string(),

@@ -1,12 +1,13 @@
 use std::{collections::HashMap, time::Duration};
 
-use gpui::{App, Context};
+use gpui::{App, Context, Window};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use yttt_agent_core::AgentExitReason;
 
-use super::{WorkbenchView, state::terminal::AgentProcessObservation};
+use super::{WorkbenchView, combine_load_messages, state::terminal::AgentProcessObservation};
 use crate::{
     config::default_layout::BuiltinAgent,
+    model::ids::ProjectId,
     runtime::{
         agent::{AgentProcessRecord, classify_agent_process, detect_agent_processes_by_root},
         agent_manager::AgentPaneAddress,
@@ -24,7 +25,11 @@ struct AgentProcessProbe {
 }
 
 impl WorkbenchView {
-    pub(super) fn sync_agent_process_monitoring(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn sync_agent_process_monitoring(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.terminal.agent_process_monitor_task.is_some()
             || !self.terminal.start_processes
             || !sysinfo::IS_SUPPORTED_SYSTEM
@@ -32,39 +37,40 @@ impl WorkbenchView {
             return;
         }
 
-        self.terminal.agent_process_monitor_task = Some(cx.spawn(async move |this, cx| {
-            let mut system = System::new();
-            loop {
-                let probes = match this.update(cx, |view, cx| {
-                    view.apply_agent_hook_requests(cx);
-                    view.agent_process_probes(cx)
-                }) {
-                    Ok(probes) => probes,
-                    Err(_) => break,
-                };
-                let root_pids = probes
-                    .iter()
-                    .map(|probe| probe.root_pid)
-                    .collect::<Vec<_>>();
-                let scan = cx.background_executor().spawn(async move {
-                    let detected = scan_agent_processes(&mut system, &root_pids);
-                    (system, detected)
-                });
-                let (refreshed_system, detected) = scan.await;
-                system = refreshed_system;
-                if this
-                    .update(cx, |view, cx| {
-                        view.apply_agent_process_scan(&detected, cx);
-                    })
-                    .is_err()
-                {
-                    break;
+        self.terminal.agent_process_monitor_task =
+            Some(cx.spawn_in(window, async move |this, cx| {
+                let mut system = System::new();
+                loop {
+                    let probes = match this.update_in(cx, |view, window, cx| {
+                        view.apply_agent_hook_requests(window, cx);
+                        view.agent_process_probes(cx)
+                    }) {
+                        Ok(probes) => probes,
+                        Err(_) => break,
+                    };
+                    let root_pids = probes
+                        .iter()
+                        .map(|probe| probe.root_pid)
+                        .collect::<Vec<_>>();
+                    let scan = cx.background_executor().spawn(async move {
+                        let detected = scan_agent_processes(&mut system, &root_pids);
+                        (system, detected)
+                    });
+                    let (refreshed_system, detected) = scan.await;
+                    system = refreshed_system;
+                    if this
+                        .update_in(cx, |view, window, cx| {
+                            view.apply_agent_process_scan(&detected, window, cx);
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                    cx.background_executor()
+                        .timer(AGENT_PROCESS_SCAN_INTERVAL)
+                        .await;
                 }
-                cx.background_executor()
-                    .timer(AGENT_PROCESS_SCAN_INTERVAL)
-                    .await;
-            }
-        }));
+            }));
     }
 
     fn agent_process_probes(&self, cx: &App) -> Vec<AgentProcessProbe> {
@@ -84,13 +90,15 @@ impl WorkbenchView {
             })
             .collect()
     }
-    fn apply_agent_hook_requests(&mut self, cx: &mut Context<Self>) {
+    fn apply_agent_hook_requests(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let requests = self.agent_manager.drain_hook_requests();
         let mut changed = false;
         for request in requests {
             match self.agent_manager.ingest_hook_request(request) {
                 Ok(Some((address, snapshot))) => {
-                    if let Err(error) = self.record_agent_runtime_snapshot(address, snapshot) {
+                    if let Err(error) =
+                        self.record_agent_event_snapshot(address, snapshot, window, cx)
+                    {
                         self.load_error = Some(error.to_string());
                     } else {
                         changed = true;
@@ -108,6 +116,7 @@ impl WorkbenchView {
     fn apply_agent_process_scan(
         &mut self,
         detected_by_root: &HashMap<u32, BuiltinAgent>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let probes = self.agent_process_probes(cx);
@@ -129,8 +138,13 @@ impl WorkbenchView {
         let mut changed = false;
         for (address, generation) in vanished {
             self.terminal.agent_process_observations.remove(&address);
-            changed |=
-                self.finish_detected_agent(&address, generation, AgentExitReason::KilledByUser);
+            changed |= self.finish_detected_agent(
+                &address,
+                generation,
+                AgentExitReason::KilledByUser,
+                window,
+                cx,
+            );
         }
 
         for probe in &probes {
@@ -166,6 +180,8 @@ impl WorkbenchView {
                         } else {
                             AgentExitReason::KilledByUser
                         },
+                        window,
+                        cx,
                     );
                     changed |= self.start_detected_agent(probe, agent);
                 }
@@ -182,6 +198,8 @@ impl WorkbenchView {
                             &probe.address,
                             probe.generation,
                             AgentExitReason::Completed,
+                            window,
+                            cx,
                         );
                     } else {
                         self.terminal.agent_process_observations.insert(
@@ -201,6 +219,8 @@ impl WorkbenchView {
                         &probe.address,
                         previous.generation,
                         AgentExitReason::KilledByUser,
+                        window,
+                        cx,
                     );
                 }
                 (None, None) => {}
@@ -239,6 +259,8 @@ impl WorkbenchView {
         address: &AgentPaneAddress,
         generation: u64,
         reason: AgentExitReason,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> bool {
         let Some(snapshot) = self
             .agent_manager
@@ -246,8 +268,21 @@ impl WorkbenchView {
         else {
             return false;
         };
-        if let Err(error) = self.record_agent_runtime_snapshot(address.clone(), snapshot) {
+        let notification = (reason != AgentExitReason::KilledByUser)
+            .then(|| self.agent_transition_notification(address, &snapshot))
+            .flatten();
+        if let Err(error) = self.workspace.clear_agent_snapshot(
+            &ProjectId::new(&address.project_id),
+            &address.tab_id,
+            &address.pane_id,
+        ) {
             self.load_error = Some(error.to_string());
+        }
+        if let Some(error) = self.agent_manager.take_error() {
+            self.load_error = combine_load_messages(self.load_error.take(), Some(error));
+        }
+        if let Some(notification) = notification {
+            self.present_notification(notification, window, cx);
         }
         true
     }

@@ -629,6 +629,27 @@ impl Workspace {
         pane.agent_snapshot = Some(snapshot);
         Ok(())
     }
+    pub fn clear_agent_snapshot(
+        &mut self,
+        project_id: &ProjectId,
+        tab_id: &str,
+        pane_id: &str,
+    ) -> Result<(), WorkspaceError> {
+        let project = self
+            .opened_projects
+            .iter_mut()
+            .find(|project| &project.id == project_id)
+            .ok_or_else(|| WorkspaceError::ProjectNotFound(project_id.as_str().to_string()))?;
+        let tab = project
+            .tab_state_mut(tab_id)
+            .ok_or_else(|| WorkspaceError::TabNotFound(tab_id.to_string()))?;
+        let pane = tab
+            .pane_state_mut(pane_id)
+            .ok_or_else(|| WorkspaceError::PaneNotFound(pane_id.to_string()))?;
+
+        pane.agent_snapshot = None;
+        Ok(())
+    }
 
     pub fn record_pane_exited(
         &mut self,

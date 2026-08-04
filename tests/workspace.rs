@@ -216,6 +216,20 @@ fn recording_agent_snapshot_preserves_process_lifecycle() {
         pane.agent_snapshot.as_ref().map(AgentSnapshot::view_state),
         Some(AgentViewState::Completed)
     );
+
+    workspace
+        .clear_agent_snapshot(&project_id, "agent", "codex")
+        .unwrap();
+    let pane = workspace
+        .project(&project_id)
+        .unwrap()
+        .tab_state("agent")
+        .unwrap()
+        .pane_states
+        .iter()
+        .find(|pane| pane.pane_id == "codex")
+        .unwrap();
+    assert!(pane.agent_snapshot.is_none());
 }
 
 #[test]
