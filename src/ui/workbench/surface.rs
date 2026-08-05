@@ -4,6 +4,14 @@ use gpui_component::{
     tooltip::Tooltip,
 };
 
+#[derive(Clone, Copy)]
+struct AgentSessionTooltipText {
+    resume_hint: &'static str,
+    session_id_label: &'static str,
+    model_label: &'static str,
+    transcript_label: &'static str,
+}
+
 use super::*;
 
 impl WorkbenchView {
@@ -732,8 +740,18 @@ impl WorkbenchView {
         ui_style: UiStyle,
         cx: &mut Context<Self>,
     ) -> Div {
-        let provider = self.primary_agent();
-        let session_count = self.agent_sessions.sessions.len();
+        let sessions = self.agent_sessions.sessions.clone();
+        let mut providers = Vec::with_capacity(BuiltinAgent::ALL.len());
+        for session in sessions.iter() {
+            if !providers.contains(&session.provider) {
+                providers.push(session.provider);
+            }
+        }
+        let header_title = match providers.as_slice() {
+            [provider] => provider.display_name(),
+            [] => self.primary_agent().display_name(),
+            _ => self.ui_text.get(UiTextKey::AgentSessions),
+        };
         let header = div()
             .flex()
             .items_center()
@@ -750,12 +768,12 @@ impl WorkbenchView {
                     .truncate()
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_muted)
-                    .child(provider.display_name()),
+                    .child(header_title),
             )
             .child(
                 div()
                     .text_color(theme.text_subtle)
-                    .child(session_count.to_string()),
+                    .child(sessions.len().to_string()),
             );
         let remote = self
             .workspace
@@ -816,80 +834,132 @@ impl WorkbenchView {
                 ui_style,
             )
         } else {
-            let resume_hint = self
-                .ui_text
-                .get(UiTextKey::AgentSessionsResumeHint)
-                .to_string();
-            let rows = self
-                .agent_sessions
-                .sessions
-                .iter()
-                .enumerate()
-                .map(|(index, session)| {
-                    let title = session.title.clone();
-                    let age = self.agent_session_age_label(session.updated_at_ms);
-                    let tooltip = resume_hint.clone();
-                    div()
-                        .id(("agent-session-row", index))
-                        .debug_selector(move || format!("agent-session-row-{index}"))
+            let tooltip_text = AgentSessionTooltipText {
+                resume_hint: self.ui_text.get(UiTextKey::AgentSessionsResumeHint),
+                session_id_label: self.ui_text.get(UiTextKey::AgentSessionsSessionId),
+                model_label: self.ui_text.get(UiTextKey::AgentSessionsModel),
+                transcript_label: self.ui_text.get(UiTextKey::AgentSessionsTranscript),
+            };
+            let mut list = div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .overflow_y_scrollbar()
+                .py(ui_style.spacing.xs);
+            if providers.len() == 1 {
+                let rows = sessions
+                    .iter()
+                    .enumerate()
+                    .map(|(index, session)| {
+                        self.agent_session_row(
+                            index,
+                            session,
+                            true,
+                            false,
+                            theme,
+                            ui_style,
+                            tooltip_text,
+                            cx,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                list = list.children(rows);
+            } else {
+                for provider in providers {
+                    let provider_id = provider.id();
+                    let expanded = self.agent_sessions.expanded_providers.contains(provider_id);
+                    let provider_session_count = sessions
+                        .iter()
+                        .filter(|session| session.provider == provider)
+                        .count();
+                    let rows = if expanded {
+                        sessions
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, session)| session.provider == provider)
+                            .map(|(index, session)| {
+                                self.agent_session_row(
+                                    index,
+                                    session,
+                                    false,
+                                    true,
+                                    theme,
+                                    ui_style,
+                                    tooltip_text,
+                                    cx,
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    } else {
+                        Vec::new()
+                    };
+                    let group_header = div()
+                        .id(SharedString::from(format!(
+                            "agent-session-provider-{provider_id}"
+                        )))
+                        .debug_selector(move || format!("agent-session-provider-{provider_id}"))
                         .cursor_pointer()
                         .flex()
                         .items_center()
-                        .gap(ui_style.spacing.sm)
+                        .h(px(30.0))
+                        .gap(ui_style.spacing.xs)
                         .mx(ui_style.spacing.xs)
                         .px(ui_style.spacing.sm)
-                        .py(ui_style.spacing.sm)
                         .rounded_sm()
                         .hover(move |style| style.bg(theme.hover_surface))
-                        .on_click(cx.listener(move |this, event: &ClickEvent, _window, cx| {
-                            if event.click_count() >= 2 {
-                                if let Err(error) = this.resume_agent_session(index) {
-                                    this.load_error = Some(error);
-                                }
-                                cx.notify();
+                        .on_click(cx.listener(move |this, _, _window, cx| {
+                            if !this.agent_sessions.expanded_providers.remove(provider_id) {
+                                this.agent_sessions.expanded_providers.insert(provider_id);
                             }
+                            cx.notify();
                         }))
-                        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
                         .child(
-                            Icon::new(IconName::Bot)
-                                .size(px(13.0))
-                                .text_color(theme.text_subtle),
+                            Icon::new(if expanded {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .size(px(12.0))
+                            .text_color(theme.text_subtle),
                         )
+                        .child(agent_type_icon(
+                            format!("agent-session-provider-icon-{provider_id}").into(),
+                            provider_id,
+                            theme,
+                        ))
                         .child(
                             div()
                                 .min_w_0()
                                 .flex_1()
                                 .truncate()
                                 .text_sm()
-                                .text_color(theme.text)
-                                .child(title),
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme.text_muted)
+                                .child(provider.display_name()),
                         )
-                        .when(!age.is_empty(), |row| {
-                            row.child(
-                                div()
-                                    .flex_none()
-                                    .text_xs()
-                                    .text_color(theme.text_subtle)
-                                    .child(age),
-                            )
-                        })
-                })
-                .collect::<Vec<_>>();
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .text_color(theme.text_subtle)
+                                .child(provider_session_count.to_string()),
+                        );
+                    list = list.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(group_header)
+                            .when(expanded, |group| group.children(rows)),
+                    );
+                }
+            }
             div()
                 .debug_selector(|| "agent-sessions-list".to_string())
                 .flex()
                 .flex_col()
                 .flex_1()
                 .min_h_0()
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .overflow_y_scrollbar()
-                        .py(ui_style.spacing.xs)
-                        .children(rows),
-                )
+                .child(list)
         };
 
         div()
@@ -900,6 +970,141 @@ impl WorkbenchView {
             .min_h_0()
             .child(header)
             .child(body)
+    }
+
+    fn agent_session_row(
+        &self,
+        index: usize,
+        session: &AgentSession,
+        show_provider_icon: bool,
+        inset: bool,
+        theme: WorkbenchTheme,
+        ui_style: UiStyle,
+        tooltip_text: AgentSessionTooltipText,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        let title = self.agent_session_title(session);
+        let tooltip_title = title.clone();
+        let age = self.agent_session_age_label(session.updated_at_ms);
+        let provider = session.provider.display_name();
+        let tooltip_meta = if age.is_empty() {
+            provider.to_string()
+        } else {
+            format!("{provider} · {age}")
+        };
+        let session_id = session.id.clone();
+        let model = session.model.clone();
+        let transcript = session
+            .transcript_path
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned());
+        div()
+            .id(("agent-session-row", index))
+            .debug_selector(move || format!("agent-session-row-{index}"))
+            .cursor_pointer()
+            .flex()
+            .items_center()
+            .gap(ui_style.spacing.sm)
+            .mx(ui_style.spacing.xs)
+            .when(inset, |row| row.ml(ui_style.spacing.xl))
+            .px(ui_style.spacing.sm)
+            .py(ui_style.spacing.sm)
+            .rounded_sm()
+            .hover(move |style| style.bg(theme.hover_surface))
+            .on_click(cx.listener(move |this, event: &ClickEvent, _window, cx| {
+                if event.click_count() >= 2 {
+                    if let Err(error) = this.resume_agent_session(index) {
+                        this.load_error = Some(error);
+                    }
+                    cx.notify();
+                }
+            }))
+            .tooltip(move |window, cx| {
+                let title = tooltip_title.clone();
+                let meta = tooltip_meta.clone();
+                let session_id = session_id.clone();
+                let model = model.clone();
+                let transcript = transcript.clone();
+                Tooltip::element(move |_, _| {
+                    div()
+                        .debug_selector(|| "agent-session-tooltip".to_string())
+                        .flex()
+                        .flex_col()
+                        .gap(ui_style.spacing.xs)
+                        .max_w(px(420.0))
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme.text)
+                                .child(title.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.text_subtle)
+                                .child(meta.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(format!("{}: {session_id}", tooltip_text.session_id_label)),
+                        )
+                        .when_some(model.clone(), |tooltip, model| {
+                            tooltip.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.text_muted)
+                                    .child(format!("{}: {model}", tooltip_text.model_label)),
+                            )
+                        })
+                        .when_some(transcript.clone(), |tooltip, transcript| {
+                            tooltip.child(
+                                div().text_xs().text_color(theme.text_muted).child(format!(
+                                    "{}: {transcript}",
+                                    tooltip_text.transcript_label
+                                )),
+                            )
+                        })
+                        .child(
+                            div()
+                                .pt(ui_style.spacing.xs)
+                                .border_t(ui_style.border.hairline)
+                                .border_color(theme.border_variant)
+                                .text_xs()
+                                .text_color(theme.text_subtle)
+                                .child(tooltip_text.resume_hint),
+                        )
+                })
+                .build(window, cx)
+            })
+            .when(show_provider_icon, |row| {
+                row.child(agent_type_icon(
+                    format!("agent-session-provider-icon-{index}").into(),
+                    session.provider.id(),
+                    theme,
+                ))
+            })
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .truncate()
+                    .text_sm()
+                    .text_color(theme.text)
+                    .child(title),
+            )
+            .when(!age.is_empty(), |row| {
+                row.child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(theme.text_subtle)
+                        .child(age),
+                )
+            })
     }
 
     fn agent_sessions_message(

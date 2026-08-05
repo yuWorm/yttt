@@ -157,7 +157,7 @@ use crate::{
     },
     runtime::{
         agent_manager::{AgentManager, AgentPaneAddress, AgentPaneExitOutcome},
-        agent_sessions::scan_agent_sessions,
+        agent_sessions::{AgentSession, scan_agent_sessions},
         file_search::{
             FileSearchCandidate, FileSearchCollection, FileSearchProject,
             collect_file_search_candidates, match_file_search_candidates,
@@ -283,7 +283,7 @@ use crate::{
             LayoutEditorSession, LayoutEditorTarget, ProjectLayoutEditorFormat,
             write_layout_file_atomic,
         },
-        workbench::shell::sidebar::project_sidebar,
+        workbench::shell::sidebar::{agent_type_icon, project_sidebar},
         workbench::shell::split_view::{pointer_resize_for_drag_delta, split_child_basis},
         workbench::shell::tabs::{
             DraggedWorkbenchTab, FileTabSnapshot, ProjectTabsToolbar, WorkbenchTabCloseScope,

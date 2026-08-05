@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use crate::{
     config::default_layout::BuiltinAgent, model::ids::ProjectId,
@@ -19,6 +19,7 @@ pub(in super::super) struct AgentSessionsControllerState {
     pub(in super::super) key: Option<AgentSessionScanKey>,
     pub(in super::super) sessions: Arc<Vec<AgentSession>>,
     pub(in super::super) error: Option<String>,
+    pub(in super::super) expanded_providers: HashSet<&'static str>,
 }
 
 impl AgentSessionsControllerState {
@@ -29,5 +30,6 @@ impl AgentSessionsControllerState {
         self.key = None;
         self.sessions = Arc::new(Vec::new());
         self.error = None;
+        self.expanded_providers.clear();
     }
 }

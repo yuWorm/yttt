@@ -28,9 +28,7 @@ impl WorkbenchView {
     }
 
     pub(super) fn ensure_agent_session_scan_requested(&mut self) {
-        if !self.agent_sessions_enabled()
-            || self.project.active_panel_page != ProjectPanelPage::AgentSessions
-        {
+        if !self.agent_sessions_enabled() {
             return;
         }
         let Some(project_id) = self.workspace.selected_project_id().cloned() else {
@@ -130,6 +128,16 @@ impl WorkbenchView {
         .detach();
     }
 
+    pub(super) fn agent_session_title(&self, session: &AgentSession) -> String {
+        if session.title.is_empty() {
+            self.ui_text
+                .get(UiTextKey::AgentSessionsUntitled)
+                .to_string()
+        } else {
+            session.title.clone()
+        }
+    }
+
     pub(super) fn resume_agent_session(&mut self, index: usize) -> Result<(), String> {
         let session = self
             .agent_sessions
@@ -137,6 +145,7 @@ impl WorkbenchView {
             .get(index)
             .cloned()
             .ok_or_else(|| "Agent session is no longer available".to_string())?;
+        let title = self.agent_session_title(&session);
         let resume = self
             .agent_manager
             .resume_command(session.provider.id(), &session.metadata())
@@ -148,7 +157,7 @@ impl WorkbenchView {
             })?;
         let tab_id = self
             .workspace
-            .create_agent_tab(session.title, resume.program, resume.arguments)
+            .create_agent_tab(title, resume.program, resume.arguments)
             .map_err(|error| error.to_string())?;
         self.select_work_item(WorkItemId::Terminal(tab_id))
             .map(|_| ())

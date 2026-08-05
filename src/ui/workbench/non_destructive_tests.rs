@@ -1615,10 +1615,140 @@ fn failed_restored_shell_session_is_replaced_with_a_fresh_agent(cx: &mut TestApp
 }
 
 #[gpui::test]
-fn double_clicking_discovered_session_creates_an_agent_command_tab(cx: &mut TestAppContext) {
+fn local_agent_sessions_are_preloaded_before_the_tab_is_selected(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir_all(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut settings = AppSettings::default();
+    settings.agent.sessions_enabled = false;
+    save_settings(&config_paths, &settings).unwrap();
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(local_project(project_path), dev_fixture_layout())
+        .unwrap();
+    let (root, cx) = cx.add_window_view(|_, _| {
+        WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
+    });
+
+    root.update(cx, |root, _cx| {
+        assert_eq!(
+            root.project.active_panel_page,
+            ProjectPanelPage::Files,
+            "the sessions tab must remain unopened"
+        );
+        root.app_settings.agent.sessions_enabled = true;
+        root.app_settings.agent.primary = Some(BuiltinAgent::OhMyPi);
+        root.ensure_agent_session_scan_requested();
+
+        assert!(root.agent_sessions.pending_scan);
+        assert!(root.agent_sessions.loading);
+        let untitled = AgentSession {
+            provider: BuiltinAgent::OhMyPi,
+            id: "opaque-session-id".to_string(),
+            title: String::new(),
+            model: None,
+            transcript_path: None,
+            updated_at_ms: 0,
+        };
+        assert_ne!(root.agent_session_title(&untitled), untitled.id);
+        assert_eq!(
+            root.agent_sessions.key,
+            Some(AgentSessionScanKey {
+                project_id,
+                agent: BuiltinAgent::OhMyPi,
+            })
+        );
+    });
+}
+
+#[gpui::test]
+fn multiple_agent_providers_are_collapsed_into_groups(cx: &mut TestAppContext) {
     use std::sync::Arc;
 
-    use crate::runtime::agent_sessions::AgentSession;
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir_all(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut settings = AppSettings::default();
+    settings.agent.sessions_enabled = false;
+    save_settings(&config_paths, &settings).unwrap();
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(local_project(project_path), dev_fixture_layout())
+        .unwrap();
+    let (root, cx) = cx.add_window_view(|_, _| {
+        WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
+    });
+    cx.run_until_parked();
+
+    root.update(cx, |root, cx| {
+        root.app_settings.agent.sessions_enabled = true;
+        root.app_settings.agent.primary = Some(BuiltinAgent::Codex);
+        root.project.active_panel_page = ProjectPanelPage::AgentSessions;
+        root.agent_sessions.key = Some(AgentSessionScanKey {
+            project_id,
+            agent: BuiltinAgent::Codex,
+        });
+        root.agent_sessions.sessions = Arc::new(vec![
+            AgentSession {
+                provider: BuiltinAgent::Codex,
+                id: "codex-session-1".to_string(),
+                title: "Codex work".to_string(),
+                model: None,
+                transcript_path: None,
+                updated_at_ms: 2,
+            },
+            AgentSession {
+                provider: BuiltinAgent::Claude,
+                id: "claude-session-1".to_string(),
+                title: "Claude work".to_string(),
+                model: None,
+                transcript_path: None,
+                updated_at_ms: 1,
+            },
+        ]);
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+
+    let codex_group = cx
+        .debug_bounds("agent-session-provider-codex")
+        .expect("multiple providers should render a Codex group");
+    assert!(
+        cx.debug_bounds("agent-session-provider-claude").is_some(),
+        "multiple providers should render a Claude Code group"
+    );
+    assert!(
+        cx.debug_bounds("agent-session-provider-icon-codex")
+            .is_some(),
+        "provider groups should use the Codex icon"
+    );
+    assert!(
+        cx.debug_bounds("agent-session-row-0").is_none()
+            && cx.debug_bounds("agent-session-row-1").is_none(),
+        "provider groups should start collapsed"
+    );
+
+    cx.simulate_click(codex_group.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    assert!(
+        cx.debug_bounds("agent-session-row-0").is_some(),
+        "expanding Codex should reveal its sessions"
+    );
+    assert!(
+        cx.debug_bounds("agent-session-row-1").is_none(),
+        "expanding Codex must not expand Claude Code"
+    );
+}
+
+#[gpui::test]
+fn double_clicking_discovered_session_creates_an_agent_command_tab(cx: &mut TestAppContext) {
+    use std::sync::Arc;
 
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
@@ -1645,7 +1775,8 @@ fn double_clicking_discovered_session_creates_an_agent_command_tab(cx: &mut Test
             provider: BuiltinAgent::Codex,
             id: "codex-session-1".to_string(),
             title: "Restore auth session".to_string(),
-            transcript_path: None,
+            model: Some("gpt-5.6".to_string()),
+            transcript_path: Some(PathBuf::from("codex-session-1.jsonl")),
             updated_at_ms: 1,
         }]);
         cx.notify();
@@ -1664,6 +1795,23 @@ fn double_clicking_discovered_session_creates_an_agent_command_tab(cx: &mut Test
     let row = cx
         .debug_bounds("agent-session-row-0")
         .expect("discovered session row should render");
+    assert!(
+        cx.debug_bounds("agent-session-provider-codex").is_none(),
+        "a single provider must not add a collapsible group"
+    );
+    assert!(
+        cx.debug_bounds("agent-session-provider-icon-0").is_some(),
+        "a single provider row should use its Agent icon"
+    );
+    cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
+    cx.background_executor
+        .advance_clock(Duration::from_millis(500));
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    assert!(
+        cx.debug_bounds("agent-session-tooltip").is_some(),
+        "hovering a session row should show its metadata tooltip"
+    );
 
     cx.simulate_click(row.center(), gpui::Modifiers::none());
     cx.update(|_, app| {

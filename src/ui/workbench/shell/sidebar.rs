@@ -434,7 +434,7 @@ enum AgentLogo {
     Generic,
 }
 
-fn agent_type_icon(
+pub(in super::super) fn agent_type_icon(
     element_id: SharedString,
     provider_id: &str,
     theme: WorkbenchTheme,
@@ -481,9 +481,11 @@ fn agent_type_icon(
             })
             .into_any_element(),
     };
+    let debug_element_id = element_id.clone();
 
     div()
         .id(element_id)
+        .debug_selector(move || debug_element_id.to_string())
         .flex_none()
         .flex()
         .items_center()

@@ -65,6 +65,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::AgentSessionsResumeHint => "Double-click to resume this session",
         UiTextKey::AgentSessionsJustNow => "now",
+        UiTextKey::AgentSessionsSessionId => "Session ID",
+        UiTextKey::AgentSessionsModel => "Model",
+        UiTextKey::AgentSessionsTranscript => "Transcript",
+        UiTextKey::AgentSessionsUntitled => "Untitled session",
         UiTextKey::ProjectFilesShow => "Show Project Panel",
         UiTextKey::ProjectFilesHide => "Hide Project Panel",
         UiTextKey::ProjectFilesRefresh => "Refresh",

@@ -28,6 +28,7 @@ pub struct AgentSession {
     pub provider: BuiltinAgent,
     pub id: String,
     pub title: String,
+    pub model: Option<String>,
     pub transcript_path: Option<PathBuf>,
     pub updated_at_ms: u64,
 }
@@ -36,8 +37,8 @@ impl AgentSession {
     pub fn metadata(&self) -> AgentSessionMetadata {
         AgentSessionMetadata {
             session_id: Some(self.id.clone()),
-            model: None,
-            title: Some(self.title.clone()),
+            model: self.model.clone(),
+            title: (!self.title.is_empty()).then(|| self.title.clone()),
             transcript_path: self
                 .transcript_path
                 .as_ref()
@@ -132,6 +133,7 @@ fn parse_codex_session(file: &SessionFile, project_path: &Path) -> Option<AgentS
     let mut id = None;
     let mut cwd = None;
     let mut title = None;
+    let mut model = None;
     for value in transcript_values(&file.path) {
         let event_type = value.get("type").and_then(Value::as_str);
         if event_type == Some("session_meta") {
@@ -141,6 +143,7 @@ fn parse_codex_session(file: &SessionFile, project_path: &Path) -> Option<AgentS
         } else if title.is_none() {
             title = codex_title(&value);
         }
+        model = model.or_else(|| session_model(&value));
     }
     let cwd = cwd?;
     if !belongs_to_project(Path::new(&cwd), project_path) {
@@ -149,7 +152,8 @@ fn parse_codex_session(file: &SessionFile, project_path: &Path) -> Option<AgentS
     let id = id?;
     Some(AgentSession {
         provider: BuiltinAgent::Codex,
-        title: title.unwrap_or_else(|| id.clone()),
+        title: title.unwrap_or_default(),
+        model,
         id,
         transcript_path: Some(file.path.clone()),
         updated_at_ms: file.updated_at_ms,
@@ -272,11 +276,12 @@ fn parse_claude_index(
         .map(|entry| {
             let title = clean_title(&entry.summary)
                 .or_else(|| clean_title(&entry.first_prompt))
-                .unwrap_or_else(|| entry.session_id.clone());
+                .unwrap_or_default();
             AgentSession {
                 provider: BuiltinAgent::Claude,
                 id: entry.session_id,
                 title,
+                model: None,
                 transcript_path: Some(entry.full_path),
                 updated_at_ms: entry.file_mtime,
             }
@@ -288,19 +293,15 @@ fn parse_claude_transcript(file: &SessionFile, project_path: &Path) -> Option<Ag
     let mut id = None;
     let mut cwd = None;
     let mut title = None;
+    let mut model = None;
     for value in transcript_values(&file.path) {
         id = id.or_else(|| string_at(&value, &["sessionId"]));
         cwd = cwd.or_else(|| string_at(&value, &["cwd"]));
-        if title.is_none()
-            && value.get("type").and_then(Value::as_str) == Some("user")
-            && value.pointer("/message/role").and_then(Value::as_str) == Some("user")
-        {
-            title = value
-                .pointer("/message/content")
-                .and_then(value_text)
-                .and_then(clean_title);
+        if title.is_none() && value.get("type").and_then(Value::as_str) == Some("user") {
+            title = user_message_title(&value);
         }
-        if id.is_some() && cwd.is_some() && title.is_some() {
+        model = model.or_else(|| session_model(&value));
+        if id.is_some() && cwd.is_some() && title.is_some() && model.is_some() {
             break;
         }
     }
@@ -311,7 +312,8 @@ fn parse_claude_transcript(file: &SessionFile, project_path: &Path) -> Option<Ag
     let id = id?;
     Some(AgentSession {
         provider: BuiltinAgent::Claude,
-        title: title.unwrap_or_else(|| id.clone()),
+        title: title.unwrap_or_default(),
+        model,
         id,
         transcript_path: Some(file.path.clone()),
         updated_at_ms: file.updated_at_ms,
@@ -338,6 +340,8 @@ fn parse_pi_family_session(
     let mut id = None;
     let mut cwd = None;
     let mut title = None;
+    let mut first_prompt = None;
+    let mut model = None;
     for value in transcript_values(&file.path) {
         match value.get("type").and_then(Value::as_str) {
             Some("session") => {
@@ -347,9 +351,17 @@ fn parse_pi_family_session(
             Some("title") => {
                 title = string_at(&value, &["title"]).and_then(clean_title);
             }
+            Some("message") if first_prompt.is_none() => {
+                first_prompt = user_message_title(&value);
+            }
             _ => {}
         }
-        if id.is_some() && cwd.is_some() && title.is_some() {
+        model = model.or_else(|| session_model(&value));
+        if id.is_some()
+            && cwd.is_some()
+            && (title.is_some() || first_prompt.is_some())
+            && model.is_some()
+        {
             break;
         }
     }
@@ -360,7 +372,8 @@ fn parse_pi_family_session(
     let id = id?;
     Some(AgentSession {
         provider,
-        title: title.unwrap_or_else(|| id.clone()),
+        title: title.or(first_prompt).unwrap_or_default(),
+        model,
         id,
         transcript_path: Some(file.path.clone()),
         updated_at_ms: file.updated_at_ms,
@@ -416,7 +429,8 @@ fn parse_opencode_output(
         .filter(|entry| belongs_to_project(&entry.directory, project_path))
         .map(|entry| AgentSession {
             provider: BuiltinAgent::OpenCode,
-            title: clean_title(&entry.title).unwrap_or_else(|| entry.id.clone()),
+            title: clean_title(&entry.title).unwrap_or_default(),
+            model: None,
             id: entry.id,
             transcript_path: None,
             updated_at_ms: entry.updated,
@@ -503,6 +517,29 @@ fn value_text(value: &Value) -> Option<&str> {
             .or_else(|| part.get("input_text"))
             .and_then(Value::as_str)
     })
+}
+
+fn user_message_title(value: &Value) -> Option<String> {
+    (value.pointer("/message/role").and_then(Value::as_str) == Some("user"))
+        .then(|| value.pointer("/message/content"))
+        .flatten()
+        .and_then(value_text)
+        .and_then(clean_title)
+}
+
+fn session_model(value: &Value) -> Option<String> {
+    string_at(value, &["model"])
+        .or_else(|| {
+            value
+                .get("payload")
+                .and_then(|payload| string_at(payload, &["model"]))
+        })
+        .or_else(|| {
+            value
+                .get("message")
+                .and_then(|message| string_at(message, &["model"]))
+        })
+        .and_then(clean_title)
 }
 
 fn string_at(value: &Value, keys: &[&str]) -> Option<String> {
@@ -600,6 +637,65 @@ mod tests {
             sessions[0].transcript_path.as_deref(),
             Some(transcript.as_path())
         );
+    }
+
+    #[test]
+    fn omp_blank_title_falls_back_to_first_user_prompt_and_reads_model() {
+        let temporary = tempfile::tempdir().unwrap();
+        let roots = roots(temporary.path());
+        let project = temporary.path().join("project");
+        fs::create_dir_all(roots.omp.join("encoded-project")).unwrap();
+        fs::write(
+            roots.omp.join("encoded-project/session.jsonl"),
+            format!(
+                concat!(
+                    "{{\"type\":\"title\",\"title\":\"\"}}\n",
+                    "{{\"type\":\"session\",\"id\":\"session-1\",\"cwd\":{:?}}}\n",
+                    "{{\"type\":\"model_change\",\"model\":\"openai-codex/gpt-5.6-sol\"}}\n",
+                    "{{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":[",
+                    "{{\"type\":\"text\",\"text\":\"Improve the session list\"}}]}}}}\n"
+                ),
+                project.to_string_lossy()
+            ),
+        )
+        .unwrap();
+
+        let sessions =
+            scan_agent_sessions_with_roots(BuiltinAgent::OhMyPi, &project, &roots).unwrap();
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].title, "Improve the session list");
+        assert_eq!(
+            sessions[0].model.as_deref(),
+            Some("openai-codex/gpt-5.6-sol")
+        );
+        assert_eq!(
+            sessions[0].metadata().model.as_deref(),
+            Some("openai-codex/gpt-5.6-sol")
+        );
+    }
+
+    #[test]
+    fn untitled_omp_session_does_not_use_its_id_as_a_title() {
+        let temporary = tempfile::tempdir().unwrap();
+        let roots = roots(temporary.path());
+        let project = temporary.path().join("project");
+        fs::create_dir_all(roots.omp.join("encoded-project")).unwrap();
+        fs::write(
+            roots.omp.join("encoded-project/session.jsonl"),
+            format!(
+                "{{\"type\":\"session\",\"id\":\"opaque-session-id\",\"cwd\":{:?}}}\n",
+                project.to_string_lossy()
+            ),
+        )
+        .unwrap();
+
+        let sessions =
+            scan_agent_sessions_with_roots(BuiltinAgent::OhMyPi, &project, &roots).unwrap();
+
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].title.is_empty());
+        assert!(sessions[0].metadata().title.is_none());
     }
 
     #[test]
