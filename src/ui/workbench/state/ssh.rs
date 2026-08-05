@@ -1,11 +1,11 @@
 use std::collections::{HashMap, VecDeque};
 
 use gpui::{
-    App, Context, Entity, FontWeight, IntoElement, ParentElement as _, SharedString, Styled as _,
-    Subscription, Task, Window, div,
+    App, Context, Entity, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _,
+    SharedString, Styled as _, Subscription, Task, Window, div,
 };
 use gpui_component::{
-    ActiveTheme as _, IndexPath,
+    ActiveTheme as _, Icon, IconName, IndexPath,
     input::InputState,
     list::{ListDelegate, ListItem, ListState},
 };
@@ -17,9 +17,12 @@ use yttt_ssh::{
     ConnectionEpoch, ConnectionStatus, CredentialStore, HostKeyChallenge, TransportService,
 };
 
-use crate::config::{
-    paths::AppConfigPaths,
-    ssh::{SshAuthPreference, SshConnectionConfig, SshConnectionsConfig, load_ssh_connections},
+use crate::{
+    config::{
+        paths::AppConfigPaths,
+        ssh::{SshAuthPreference, SshConnectionConfig, SshConnectionsConfig, load_ssh_connections},
+    },
+    ui::theme::UiStyle,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -235,22 +238,30 @@ pub(in super::super) struct SshConnectionListDelegate {
     sections: Vec<SshConnectionListSection>,
     selected_index: Option<IndexPath>,
     empty_message: SharedString,
+    ui_style: UiStyle,
 }
 
 impl SshConnectionListDelegate {
     pub(in super::super) fn new(
         sections: Vec<SshConnectionListSection>,
         empty_message: impl Into<SharedString>,
+        ui_style: UiStyle,
     ) -> Self {
         Self {
             sections,
             selected_index: None,
             empty_message: empty_message.into(),
+            ui_style,
         }
     }
 
-    pub(in super::super) fn replace_sections(&mut self, sections: Vec<SshConnectionListSection>) {
+    pub(in super::super) fn replace_sections(
+        &mut self,
+        sections: Vec<SshConnectionListSection>,
+        ui_style: UiStyle,
+    ) {
         self.sections = sections;
+        self.ui_style = ui_style;
         if self
             .selected_index
             .is_some_and(|index| self.entry(index).is_none())
@@ -310,46 +321,79 @@ impl ListDelegate for SshConnectionListDelegate {
             SshConnectionListTone::Warning => cx.theme().warning,
             SshConnectionListTone::Danger => cx.theme().danger,
         };
+        let icon = match &entry.action {
+            SshConnectionListAction::OpenRecent { .. } => IconName::FolderClosed,
+            SshConnectionListAction::Edit(_) | SshConnectionListAction::Open(_) => IconName::Globe,
+        };
+        let ui_style = self.ui_style;
+
         Some(
-            ListItem::new(index).child(
-                div()
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .px_2()
-                    .py_2()
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .gap_0p5()
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(entry.title),
-                            )
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(entry.subtitle),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_xs()
-                            .text_color(status_color)
-                            .child(entry.status),
-                    ),
-            ),
+            ListItem::new(index)
+                .min_h(ui_style.rows.palette_height)
+                .mx(ui_style.palette.list_padding_x)
+                .mb(ui_style.palette.list_gap)
+                .px(ui_style.rows.palette_padding_x)
+                .py(ui_style.spacing.xxs)
+                .rounded(ui_style.rows.palette_radius)
+                .child(
+                    div()
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(ui_style.palette.item_content_gap)
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .flex()
+                                .items_center()
+                                .gap(ui_style.palette.item_content_gap)
+                                .child(
+                                    div()
+                                        .flex()
+                                        .debug_selector(|| "ssh-connection-list-icon".to_string())
+                                        .flex_none()
+                                        .items_center()
+                                        .justify_center()
+                                        .w(ui_style.palette.icon_column_width)
+                                        .child(
+                                            Icon::new(icon)
+                                                .size(ui_style.palette.icon_size)
+                                                .text_color(cx.theme().muted_foreground),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_0p5()
+                                        .child(
+                                            div()
+                                                .truncate()
+                                                .text_sm()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .child(entry.title),
+                                        )
+                                        .child(
+                                            div()
+                                                .truncate()
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(entry.subtitle),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .text_color(status_color)
+                                .child(entry.status),
+                        ),
+                ),
         )
     }
 
@@ -360,11 +404,13 @@ impl ListDelegate for SshConnectionListDelegate {
         cx: &mut Context<ListState<Self>>,
     ) -> Option<impl IntoElement> {
         let title = self.sections.get(section)?.title.clone();
+        let ui_style = self.ui_style;
         Some(
             div()
                 .w_full()
-                .px_2()
-                .py_1()
+                .px(ui_style.rows.palette_padding_x)
+                .pt(ui_style.spacing.md)
+                .pb(ui_style.spacing.xs)
                 .text_xs()
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(cx.theme().muted_foreground)

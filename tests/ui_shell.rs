@@ -723,16 +723,23 @@ fn yttt_tabbar_style_uses_passed_theme() {
 }
 
 #[test]
-fn palette_surface_style_is_wide_elevated_and_scroll_bounded() {
+fn palette_surface_style_uses_zed_density_and_embedded_search() {
     let ui_style = UiStyle::default();
-    let style = yttt_panel_style(YtttPanelKind::Palette, WorkbenchTheme::one_dark(), ui_style);
+    let theme = WorkbenchTheme::one_dark();
+    let style = yttt_panel_style(YtttPanelKind::Palette, theme, ui_style);
+    let input = yttt_input_style(YtttInputKind::Palette, theme, ui_style);
 
-    assert!(style.width >= gpui::px(720.0));
-    assert!(style.max_width >= style.width);
-    assert!(style.max_height < gpui::px(520.0));
-    assert!(style.body_max_height < style.max_height);
-    assert_eq!(ui_style.rows.palette_height, gpui::rems(3.375));
-    assert_eq!(ui_style.controls.palette_footer_height, gpui::rems(2.75));
+    assert_eq!(style.width, ui_style.palette.panel_width);
+    assert_eq!(style.max_width, ui_style.palette.panel_max_width);
+    assert_eq!(style.max_height, ui_style.palette.panel_max_height);
+    assert_eq!(style.body_max_height, ui_style.palette.body_max_height);
+    assert_eq!(ui_style.rows.palette_height, gpui::rems(3.0));
+    assert_eq!(ui_style.rows.palette_compact_height, gpui::rems(2.25));
+    assert_eq!(ui_style.controls.palette_footer_height, gpui::rems(2.5));
+    assert!(ui_style.palette.list_gap.0 > 0.0);
+    assert!(ui_style.palette.remote_list_height < ui_style.palette.remote_panel_max_height);
+    assert!(!input.appearance);
+    assert!(!ui_style.palette.item_cards);
 }
 
 #[test]
@@ -754,7 +761,7 @@ fn palette_keyboard_selection_scrolls_to_center() {
 }
 
 #[test]
-fn palette_row_style_uses_muted_selection_without_focus_ring() {
+fn palette_row_style_uses_ghost_surfaces_without_focus_ring() {
     let theme = WorkbenchTheme::one_dark();
     let active = yttt_row_style(
         YtttRowKind::Palette,
@@ -781,45 +788,48 @@ fn palette_row_style_uses_muted_selection_without_focus_ring() {
     assert_eq!(active.background, theme.ghost_element_selected);
     assert_eq!(active.border, theme.ghost_element_selected);
     assert_ne!(active.border, theme.border_focused);
-    assert_eq!(inactive.background, theme.element_background);
+    assert_eq!(inactive.background, gpui::rgba(0x00000000));
+    assert_eq!(inactive.hover_background, theme.ghost_element_hover);
+    assert_eq!(inactive.border, gpui::rgba(0x00000000));
+    assert_eq!(disabled.background, gpui::rgba(0x00000000));
     assert_eq!(disabled.title, theme.text_subtle);
 }
 
 #[test]
-fn yttt_row_style_centralizes_selectable_row_density_and_tones() {
+fn palette_profiles_centralize_row_density_and_surface_treatment() {
     let theme = WorkbenchTheme::one_dark();
+    let zed = UiStyle::default();
     let active = yttt_row_style(
         YtttRowKind::Palette,
         SelectableState::Active,
         true,
         theme,
-        UiStyle::default(),
+        zed,
     );
-    let inactive = yttt_row_style(
+    let compact = yttt_row_style(
+        YtttRowKind::PaletteCompact,
+        SelectableState::Inactive,
+        true,
+        theme,
+        zed,
+    );
+    let rounded_inactive = yttt_row_style(
         YtttRowKind::Palette,
         SelectableState::Inactive,
         true,
         theme,
-        UiStyle::default(),
-    );
-    let disabled = yttt_row_style(
-        YtttRowKind::Palette,
-        SelectableState::Inactive,
-        false,
-        theme,
-        UiStyle::default(),
+        UiStyle::resolve(UiStyleId::Rounded),
     );
 
-    assert_eq!(active.height, gpui::rems(3.375));
-    assert_eq!(active.radius, gpui::px(6.0));
+    assert_eq!(active.height, gpui::rems(3.0));
+    assert_eq!(compact.height, gpui::rems(2.25));
+    assert_eq!(active.radius, gpui::px(4.0));
     assert_eq!(active.background, theme.ghost_element_selected);
-    assert_eq!(active.border, theme.ghost_element_selected);
     assert_eq!(active.title, theme.text);
-    assert_eq!(inactive.background, theme.element_background);
-    assert_eq!(inactive.hover_background, theme.element_hover);
-    assert_eq!(disabled.background, theme.element_disabled);
-    assert_eq!(disabled.title, theme.text_subtle);
-    assert_eq!(disabled.subtitle, theme.text_subtle);
+    assert_eq!(compact.background, gpui::rgba(0x00000000));
+    assert_eq!(compact.hover_background, theme.ghost_element_hover);
+    assert_eq!(rounded_inactive.background, theme.element_background);
+    assert_eq!(rounded_inactive.hover_background, theme.element_hover);
 }
 
 #[test]

@@ -4,6 +4,8 @@ use gpui::{
 };
 use gpui_component::{IconName, input::InputState};
 
+use crate::palette::PaletteKind;
+
 use crate::ui::{
     components::{SelectableState, workbench_palette_item},
     i18n::{UiText, UiTextKey},
@@ -27,6 +29,7 @@ pub struct PickerOverlayRow {
 
 pub fn picker_overlay<H, F>(
     rows: Vec<PickerOverlayRow>,
+    kind: PaletteKind,
     ui_text: &UiText,
     query_input: &Entity<InputState>,
     scroll_handle: &ScrollHandle,
@@ -45,6 +48,7 @@ where
             .child(picker_header(query_input, theme, ui_style))
             .child(picker_items(
                 rows,
+                kind,
                 ui_text,
                 scroll_handle,
                 theme,
@@ -61,6 +65,7 @@ where
 
 pub fn picker_overlay_with_preview<H, F>(
     rows: Vec<PickerOverlayRow>,
+    kind: PaletteKind,
     ui_text: &UiText,
     query_input: &Entity<InputState>,
     scroll_handle: &ScrollHandle,
@@ -96,6 +101,7 @@ where
                             .overflow_hidden()
                             .child(picker_items(
                                 rows,
+                                kind,
                                 ui_text,
                                 scroll_handle,
                                 theme,
@@ -129,22 +135,25 @@ fn picker_header(
     theme: WorkbenchTheme,
     ui_style: UiStyle,
 ) -> Div {
+    let mut input =
+        yttt_input(query_input, YtttInputKind::Palette, theme, ui_style).cleanable(true);
+    if ui_style.palette.show_search_icon {
+        input = input.prefix(IconName::Search);
+    }
+
     div()
         .flex()
         .items_center()
         .border_b(ui_style.border.hairline)
         .border_color(theme.border)
-        .px(ui_style.spacing.lg)
-        .py(ui_style.spacing.md)
-        .child(
-            yttt_input(query_input, YtttInputKind::Palette, theme, ui_style)
-                .prefix(IconName::Search)
-                .cleanable(true),
-        )
+        .px(ui_style.palette.header_padding_x)
+        .py(ui_style.palette.header_padding_y)
+        .child(input)
 }
 
 fn picker_items<H, F>(
     rows: Vec<PickerOverlayRow>,
+    kind: PaletteKind,
     ui_text: &UiText,
     scroll_handle: &ScrollHandle,
     theme: WorkbenchTheme,
@@ -157,7 +166,7 @@ where
 {
     let panel_style = yttt_panel_style(YtttPanelKind::Palette, theme, ui_style);
     let row_style = yttt_row_style(
-        YtttRowKind::Palette,
+        YtttRowKind::PaletteCompact,
         SelectableState::Inactive,
         true,
         theme,
@@ -191,8 +200,9 @@ where
                 .debug_selector(|| "palette-list".to_string())
                 .flex()
                 .flex_col()
-                .gap(ui_style.spacing.xs)
-                .p(ui_style.spacing.md)
+                .gap(ui_style.palette.list_gap)
+                .px(ui_style.palette.list_padding_x)
+                .py(ui_style.palette.list_padding_y)
                 .max_h(panel_style.body_max_height)
                 .overflow_y_scroll()
                 .track_scroll(scroll_handle),
@@ -200,6 +210,7 @@ where
                 list.child(picker_item(
                     row,
                     index,
+                    kind,
                     theme,
                     ui_style,
                     on_confirm_item(index),
@@ -212,6 +223,7 @@ where
 fn picker_item<H>(
     row: PickerOverlayRow,
     index: usize,
+    kind: PaletteKind,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
     on_click: H,
@@ -219,23 +231,51 @@ fn picker_item<H>(
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    let status = if row.item.enabled {
-        row.item.status.clone().unwrap_or_default()
-    } else {
+    let status = if !row.item.enabled {
         row.item.disabled_reason.clone().unwrap_or_default()
+    } else if matches!(kind, PaletteKind::Project | PaletteKind::RecentProject) {
+        String::new()
+    } else {
+        row.item.status.clone().unwrap_or_default()
     };
+    let subtitle = row.item.subtitle.unwrap_or_default();
+    let show_subtitle = !subtitle.trim().is_empty()
+        && (kind != PaletteKind::Command || ui_style.palette.show_command_subtitles);
+    let row_kind = if show_subtitle {
+        YtttRowKind::Palette
+    } else {
+        YtttRowKind::PaletteCompact
+    };
+    let leading_icon = picker_item_icon(kind, &row.item.id);
+
     workbench_palette_item(
         ("palette-item", index),
         row.item.title,
-        row.item.subtitle.unwrap_or_default(),
+        subtitle,
         status,
         row.item.keybinding,
+        leading_icon,
+        row_kind,
         row.state,
         row.item.enabled,
         theme,
         ui_style,
         on_click,
     )
+}
+
+fn picker_item_icon(kind: PaletteKind, item_id: &str) -> Option<IconName> {
+    match kind {
+        PaletteKind::Command => None,
+        PaletteKind::NewTabCommand | PaletteKind::Pane => Some(IconName::SquareTerminal),
+        PaletteKind::File => Some(IconName::File),
+        PaletteKind::Project | PaletteKind::OpenedProject | PaletteKind::RecentProject => {
+            Some(IconName::FolderClosed)
+        }
+        PaletteKind::Tab if item_id.starts_with("file:") => Some(IconName::File),
+        PaletteKind::Tab => Some(IconName::SquareTerminal),
+        PaletteKind::GitBranch => Some(IconName::Network),
+    }
 }
 
 fn picker_footer(ui_text: &UiText, theme: WorkbenchTheme, ui_style: UiStyle) -> Div {
@@ -265,15 +305,18 @@ fn picker_footer_action(
     div()
         .flex()
         .items_center()
-        .gap(ui_style.spacing.md)
-        .child(div().child(action.label))
+        .gap(ui_style.palette.footer_action_gap)
+        .child(div().text_color(theme.text).child(action.label))
         .child(
             div()
-                .rounded(ui_style.radius.compact)
-                .border(ui_style.border.hairline)
-                .border_color(theme.border)
-                .px(ui_style.spacing.xs)
                 .text_color(theme.text_subtle)
+                .when(ui_style.palette.bordered_shortcuts, |this| {
+                    this.rounded(ui_style.radius.compact)
+                        .border(ui_style.border.hairline)
+                        .border_color(theme.border)
+                        .bg(theme.surface_elevated)
+                        .px(ui_style.spacing.xs)
+                })
                 .child(action.key),
         )
 }

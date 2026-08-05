@@ -118,7 +118,14 @@ pub fn yttt_panel_style(
         YtttPanelKind::Palette | YtttPanelKind::Settings => ui_style.panels.panel_overlay,
     };
     let (width, height, max_width, max_height, body_max_height, padding) = match kind {
-        YtttPanelKind::Palette => (px(760.0), None, px(900.0), px(480.0), px(376.0), px(0.0)),
+        YtttPanelKind::Palette => (
+            ui_style.palette.panel_width,
+            None,
+            ui_style.palette.panel_max_width,
+            ui_style.palette.panel_max_height,
+            ui_style.palette.body_max_height,
+            px(0.0),
+        ),
         YtttPanelKind::Settings => (
             px(900.0),
             Some(px(560.0)),

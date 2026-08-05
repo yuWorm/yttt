@@ -16,6 +16,7 @@ pub enum YtttInputKind {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct YtttInputStyle {
+    pub appearance: bool,
     pub height: Rems,
     pub radius: Pixels,
     pub background: Rgba,
@@ -48,6 +49,7 @@ pub fn yttt_input_style(
     };
 
     YtttInputStyle {
+        appearance: kind != YtttInputKind::Palette || !ui_style.palette.embedded_input,
         height: match kind {
             YtttInputKind::Dialog => ui_style.controls.dialog_input_height,
             YtttInputKind::Palette => ui_style.controls.palette_input_height,
@@ -74,7 +76,7 @@ pub fn yttt_input(
 ) -> Input {
     let style = yttt_input_style(kind, theme, ui_style);
     Input::new(state)
-        .appearance(true)
+        .appearance(style.appearance)
         .h(style.height)
         .rounded(style.radius)
         .border_color(style.border)

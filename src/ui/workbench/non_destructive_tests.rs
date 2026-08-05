@@ -167,6 +167,15 @@ fn ssh_project_password_connection_without_a_saved_secret_opens_a_focused_prompt
     let root = root_slot.borrow_mut().take().unwrap();
     root.update_in(cx, |root, _window, cx| {
         root.open_ssh_project_picker();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let icon = cx
+        .debug_bounds("ssh-connection-list-icon")
+        .expect("remote connection rows must render a semantic icon");
+    assert!(icon.size.width > px(0.0) && icon.size.height > px(0.0));
+
+    root.update_in(cx, |root, _window, cx| {
         root.select_ssh_project_connection(connection_id.clone(), cx);
         cx.notify();
     });

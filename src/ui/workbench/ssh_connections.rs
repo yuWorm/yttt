@@ -859,6 +859,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<ListState<SshConnectionListDelegate>> {
+        let ui_style = current_ui_style(cx);
         let entries = self
             .ssh
             .connections
@@ -897,7 +898,7 @@ impl WorkbenchView {
 
         if let Some(list) = self.ssh.manager_connection_list.clone() {
             list.update(cx, |list, cx| {
-                list.delegate_mut().replace_sections(sections);
+                list.delegate_mut().replace_sections(sections, ui_style);
                 let selected_index = selected_action
                     .as_ref()
                     .and_then(|action| list.delegate().index_of(action));
@@ -911,7 +912,7 @@ impl WorkbenchView {
         let empty_message = self.ui_text.get(UiTextKey::SshNoConnections);
         let list = cx.new(|cx| {
             ListState::new(
-                SshConnectionListDelegate::new(sections, empty_message),
+                SshConnectionListDelegate::new(sections, empty_message, ui_style),
                 window,
                 cx,
             )

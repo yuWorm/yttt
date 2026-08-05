@@ -5,6 +5,7 @@ use crate::{SelectableState, style::UiStyle, theme::WorkbenchTheme};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum YtttRowKind {
     Palette,
+    PaletteCompact,
     Settings,
     Sidebar,
     Tab,
@@ -35,6 +36,13 @@ pub fn yttt_row_style(
     let (height, padding_x, padding_y, radius, border_width) = match kind {
         YtttRowKind::Palette => (
             ui_style.rows.palette_height,
+            ui_style.rows.palette_padding_x,
+            ui_style.spacing.xxs,
+            ui_style.rows.palette_radius,
+            ui_style.rows.palette_border_width,
+        ),
+        YtttRowKind::PaletteCompact => (
+            ui_style.rows.palette_compact_height,
             ui_style.rows.palette_padding_x,
             ui_style.spacing.xxs,
             ui_style.rows.palette_radius,
@@ -82,8 +90,14 @@ pub fn yttt_row_style(
 
     if !enabled {
         let background = match kind {
-            YtttRowKind::Palette => theme.element_disabled,
-            YtttRowKind::Settings | YtttRowKind::Sidebar | YtttRowKind::Tab => transparent,
+            YtttRowKind::Palette | YtttRowKind::PaletteCompact if ui_style.palette.item_cards => {
+                theme.element_disabled
+            }
+            YtttRowKind::Palette
+            | YtttRowKind::PaletteCompact
+            | YtttRowKind::Settings
+            | YtttRowKind::Sidebar
+            | YtttRowKind::Tab => transparent,
         };
 
         return YtttRowStyle {
@@ -154,6 +168,24 @@ pub fn yttt_row_style(
             subtitle: theme.text_subtle,
             status: theme.text_muted,
         },
+        SelectableState::Inactive
+            if matches!(kind, YtttRowKind::Palette | YtttRowKind::PaletteCompact)
+                && !ui_style.palette.item_cards =>
+        {
+            YtttRowStyle {
+                height,
+                padding_x,
+                padding_y,
+                radius,
+                border_width,
+                background: transparent,
+                hover_background: theme.ghost_element_hover,
+                border: transparent,
+                title: theme.text,
+                subtitle: theme.text_muted,
+                status: theme.text_muted,
+            }
+        }
         SelectableState::Inactive => YtttRowStyle {
             height,
             padding_x,

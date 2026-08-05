@@ -104,6 +104,7 @@ where
 
     picker_overlay(
         rows,
+        active_palette.kind,
         ui_text,
         query_input,
         scroll_handle,
@@ -150,6 +151,7 @@ where
 
     picker_overlay_with_preview(
         rows,
+        active_palette.kind,
         ui_text,
         query_input,
         scroll_handle,

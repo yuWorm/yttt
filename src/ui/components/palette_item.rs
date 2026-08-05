@@ -6,6 +6,8 @@ pub fn workbench_palette_item<H>(
     subtitle: impl Into<String>,
     status: impl Into<String>,
     keybinding: Option<String>,
+    leading_icon: Option<IconName>,
+    row_kind: YtttRowKind,
     state: SelectableState,
     enabled: bool,
     theme: WorkbenchTheme,
@@ -15,38 +17,60 @@ pub fn workbench_palette_item<H>(
 where
     H: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    let style = yttt_row_style(YtttRowKind::Palette, state, enabled, theme, ui_style);
+    let style = yttt_row_style(row_kind, state, enabled, theme, ui_style);
     let title = title.into();
     let subtitle = subtitle.into();
+    let show_subtitle = row_kind != YtttRowKind::PaletteCompact && !subtitle.trim().is_empty();
     let status = status.into();
     let keybinding = keybinding.filter(|keybinding| !keybinding.trim().is_empty());
 
-    yttt_row(YtttRowKind::Palette, state, enabled, theme, ui_style)
+    yttt_row(row_kind, state, enabled, theme, ui_style)
         .id(id)
         .flex()
         .items_center()
         .justify_between()
-        .gap(ui_style.spacing.xl)
+        .gap(ui_style.palette.item_content_gap)
         .on_click(on_click)
         .child(
             div()
                 .flex()
-                .flex_col()
-                .gap(ui_style.spacing.xs)
-                .overflow_hidden()
+                .flex_1()
+                .min_w_0()
+                .items_center()
+                .gap(ui_style.palette.item_content_gap)
+                .children(leading_icon.map(|icon| {
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .justify_center()
+                        .w(ui_style.palette.icon_column_width)
+                        .child(
+                            Icon::new(icon)
+                                .size(ui_style.palette.icon_size)
+                                .text_color(style.subtitle),
+                        )
+                }))
                 .child(
                     div()
-                        .text_sm()
-                        .text_color(style.title)
-                        .truncate()
-                        .child(title),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(style.subtitle)
-                        .truncate()
-                        .child(subtitle),
+                        .flex()
+                        .flex_col()
+                        .min_w_0()
+                        .gap(ui_style.spacing.xs)
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(style.title)
+                                .truncate()
+                                .child(title),
+                        )
+                        .children(show_subtitle.then(|| {
+                            div()
+                                .text_xs()
+                                .text_color(style.subtitle)
+                                .truncate()
+                                .child(subtitle)
+                        })),
                 ),
         )
         .child(palette_item_trailing(

@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::config::ssh::{SshAuthPreference, SshConnectionConfig};
 use crate::ui::theme::icons::icon_for_visual;
 use gpui_component::{
+    Icon,
     list::{List, ListEvent, ListState},
     radio::RadioGroup,
 };
@@ -930,6 +931,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<ListState<SshConnectionListDelegate>> {
+        let ui_style = current_ui_style(cx);
         let recent_entries = self
             .palette
             .recent_projects
@@ -1011,7 +1013,7 @@ impl WorkbenchView {
 
         if let Some(list) = self.ssh.project_picker.connection_list.clone() {
             list.update(cx, |list, cx| {
-                list.delegate_mut().replace_sections(sections);
+                list.delegate_mut().replace_sections(sections, ui_style);
                 cx.notify();
             });
             return list;
@@ -1020,7 +1022,7 @@ impl WorkbenchView {
         let empty_message = self.ui_text.get(UiTextKey::SshNoConnections);
         let list = cx.new(|cx| {
             ListState::new(
-                SshConnectionListDelegate::new(sections, empty_message),
+                SshConnectionListDelegate::new(sections, empty_message, ui_style),
                 window,
                 cx,
             )
@@ -1163,9 +1165,9 @@ pub(super) fn ssh_project_picker_overlay(
 
     yttt_dialog_overlay(
         yttt_dialog_surface(theme, ui_style)
-            .w(px(680.0))
-            .max_w(px(680.0))
-            .max_h(px(640.0))
+            .w(ui_style.palette.remote_panel_width)
+            .max_w(ui_style.palette.remote_panel_width)
+            .max_h(ui_style.palette.remote_panel_max_height)
             .child(content),
         YtttDialogPlacement::Top,
         theme,
@@ -1181,10 +1183,47 @@ fn ssh_project_connections(
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
     let connection_list = root.ssh_project_connection_list(window, cx);
+    let new_connection = yttt_row(
+        YtttRowKind::PaletteCompact,
+        SelectableState::Inactive,
+        true,
+        theme,
+        ui_style,
+    )
+    .id("ssh-project-new-connection")
+    .debug_selector(|| "ssh-project-new-connection".to_string())
+    .mx(ui_style.palette.list_padding_x)
+    .flex()
+    .items_center()
+    .gap(ui_style.palette.item_content_gap)
+    .on_click(cx.listener(|this, _, _window, cx| {
+        this.new_ssh_project_connection();
+        cx.notify();
+    }))
+    .child(
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .w(ui_style.palette.icon_column_width)
+            .child(
+                Icon::new(IconName::Plus)
+                    .size(ui_style.palette.icon_size)
+                    .text_color(theme.text_muted),
+            ),
+    )
+    .child(
+        div()
+            .text_sm()
+            .text_color(theme.text)
+            .child(root.ui_text.get(UiTextKey::SshNewConnection)),
+    );
+
     let mut body = div()
         .flex()
         .flex_col()
-        .gap(ui_style.spacing.lg)
+        .gap(ui_style.spacing.md)
         .child(yttt_dialog_header(
             "close-ssh-project-picker",
             root.ui_text.get(UiTextKey::SshOpenRemoteProject),
@@ -1195,13 +1234,18 @@ fn ssh_project_connections(
                 cx.notify();
             }),
         ))
+        .child(new_connection)
         .child(
             div()
-                .h(px(420.0))
+                .debug_selector(|| "ssh-project-connection-list".to_string())
+                .h(ui_style.palette.remote_list_height)
                 .min_h_0()
-                .rounded(ui_style.radius.control)
-                .border_1()
-                .border_color(theme.border)
+                .overflow_hidden()
+                .when(ui_style.palette.item_cards, |this| {
+                    this.rounded(ui_style.radius.control)
+                        .border(ui_style.border.hairline)
+                        .border_color(theme.border)
+                })
                 .child(List::new(&connection_list).size_full()),
         );
     if let Some(error) = root.ssh.project_picker.error.clone() {
@@ -1219,24 +1263,15 @@ fn ssh_project_connections(
     body.child(
         div()
             .flex()
-            .justify_between()
-            .gap(ui_style.spacing.md)
-            .child(yttt_dialog_button(
-                cx,
-                "ssh-project-new-connection",
-                root.ui_text.get(UiTextKey::SshNewConnection),
-                YtttButtonVariant::Secondary,
-                theme,
-                cx.listener(|this, _, _window, cx| {
-                    this.new_ssh_project_connection();
-                    cx.notify();
-                }),
-            ))
+            .justify_end()
+            .border_t(ui_style.border.hairline)
+            .border_color(theme.border)
+            .pt(ui_style.spacing.md)
             .child(yttt_dialog_button(
                 cx,
                 "ssh-project-cancel",
                 root.ui_text.get(UiTextKey::Cancel),
-                YtttButtonVariant::Secondary,
+                YtttButtonVariant::Ghost,
                 theme,
                 cx.listener(|this, _, _window, cx| {
                     this.close_ssh_project_picker(cx);
