@@ -1377,15 +1377,12 @@ fn killed_detected_agent_clears_sidebar_snapshot_without_notification(cx: &mut T
         assert!(root.visible_toast_titles().is_empty());
     });
 }
-#[gpui::test]
-fn persisted_shell_agent_resumes_with_generated_title(cx: &mut TestAppContext) {
+fn persist_codex_shell_session(
+    config_paths: &AppConfigPaths,
+    project_path: &Path,
+) -> ProjectReferenceConfig {
     use crate::runtime::agent_hooks::AgentHookRequest;
 
-    cx.update(gpui_component::init);
-    let temp = tempdir().unwrap();
-    let project_path = temp.path().join("project");
-    fs::create_dir_all(&project_path).unwrap();
-    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut layout = dev_fixture_layout();
     layout
         .tabs
@@ -1393,44 +1390,54 @@ fn persisted_shell_agent_resumes_with_generated_title(cx: &mut TestAppContext) {
         .find(|tab| tab.id == "dev")
         .unwrap()
         .startup = TabStartup::Eager;
-    save_local_layout(&config_paths, &project_path, &layout).unwrap();
-    let project_id = open_project_config(
-        &config_paths,
-        &project_path,
-        &mut DefaultLayoutState::load_or_create(&config_paths),
+    save_local_layout(config_paths, project_path, &layout).unwrap();
+    let opened = open_project_config(
+        config_paths,
+        project_path,
+        &mut DefaultLayoutState::load_or_create(config_paths),
     )
-    .unwrap()
-    .descriptor
-    .id;
-    let address = AgentPaneAddress::new(project_id.as_str(), "dev", "shell");
-    {
-        let mut manager = AgentManager::new(&config_paths);
-        manager
-            .detected_process_started(address.clone(), BuiltinAgent::Codex, 7)
-            .unwrap();
-        manager
-            .ingest_hook_request(AgentHookRequest {
-                address: address.clone(),
-                generation: 7,
-                source: BuiltinAgent::Codex,
-                event: "SessionStart".to_string(),
-                payload: serde_json::json!({ "session_id": "codex-session-1" }),
-            })
-            .unwrap()
-            .unwrap();
-        manager
-            .ingest_hook_request(AgentHookRequest {
-                address: address.clone(),
-                generation: 7,
-                source: BuiltinAgent::Codex,
-                event: "UserPromptSubmit".to_string(),
-                payload: serde_json::json!({ "prompt": "Fix the flaky terminal test" }),
-            })
-            .unwrap()
-            .unwrap();
-    }
+    .unwrap();
+    let project = ProjectReferenceConfig::new(
+        opened.descriptor.id.clone(),
+        opened.descriptor.location.clone(),
+    );
+    let address = AgentPaneAddress::new(project.id.as_str(), "dev", "shell");
+    let mut manager = AgentManager::new(config_paths);
+    manager
+        .detected_process_started(address.clone(), BuiltinAgent::Codex, 7)
+        .unwrap();
+    manager
+        .ingest_hook_request(AgentHookRequest {
+            address: address.clone(),
+            generation: 7,
+            source: BuiltinAgent::Codex,
+            event: "SessionStart".to_string(),
+            payload: serde_json::json!({ "session_id": "codex-session-1" }),
+        })
+        .unwrap()
+        .unwrap();
+    manager
+        .ingest_hook_request(AgentHookRequest {
+            address,
+            generation: 7,
+            source: BuiltinAgent::Codex,
+            event: "UserPromptSubmit".to_string(),
+            payload: serde_json::json!({ "prompt": "Fix the flaky terminal test" }),
+        })
+        .unwrap()
+        .unwrap();
+    project
+}
 
-    let view_project_id = project_id.clone();
+#[gpui::test]
+fn opening_recent_project_does_not_restore_persisted_agent_session(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir_all(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let project = persist_codex_shell_session(&config_paths, &project_path);
+    let view_project_id = project.id.clone();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
@@ -1441,6 +1448,56 @@ fn persisted_shell_agent_resumes_with_generated_title(cx: &mut TestAppContext) {
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
         root.open_project_path(&project_path).unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    cx.update(|_, app| {
+        let root = root.read(app);
+        let project = root.workspace.project(&view_project_id).unwrap();
+        let pane_state = project
+            .tab_state("dev")
+            .unwrap()
+            .pane_states
+            .iter()
+            .find(|pane| pane.pane_id == "shell")
+            .unwrap();
+        assert!(
+            pane_state.agent_snapshot.is_none(),
+            "opening a recent project must start a fresh workspace"
+        );
+        let pane = root
+            .terminal
+            .terminal_panes
+            .get(&terminal_pane_key(view_project_id.as_str(), "dev", "shell"))
+            .unwrap()
+            .read(app);
+        assert_eq!(pane.title(), "shell");
+        assert!(pane.agent_instance_id().is_none());
+        assert!(root.agent_manager.retained_snapshots().is_empty());
+    });
+}
+
+#[gpui::test]
+fn restoring_last_session_restores_persisted_agent_session(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir_all(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let project = persist_codex_shell_session(&config_paths, &project_path);
+    let view_project_id = project.id.clone();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(config_paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        ComponentRoot::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.recent_projects_config.last_opened_projects = vec![project];
+        assert_eq!(root.restore_last_opened_projects(), 1);
         cx.notify();
     });
     cx.run_until_parked();
@@ -1469,6 +1526,91 @@ fn persisted_shell_agent_resumes_with_generated_title(cx: &mut TestAppContext) {
             .read(app);
         assert_eq!(pane.title(), "Fix the flaky terminal test");
         assert!(pane.agent_instance_id().is_some());
+    });
+}
+
+#[gpui::test]
+fn failed_restored_shell_session_is_replaced_with_a_fresh_agent(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir_all(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let project = persist_codex_shell_session(&config_paths, &project_path);
+    let project_id = project.id.clone();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(config_paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        ComponentRoot::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.recent_projects_config.last_opened_projects = vec![project];
+        assert_eq!(root.restore_last_opened_projects(), 1);
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    let key = terminal_pane_key(project_id.as_str(), "dev", "shell");
+    let (failed_pane, failed_instance, generation) = cx.update(|_, app| {
+        let pane = root
+            .read(app)
+            .terminal
+            .terminal_panes
+            .get(&key)
+            .unwrap()
+            .clone();
+        let pane_state = pane.read(app);
+        (
+            pane.clone(),
+            pane_state.agent_instance_id().unwrap().clone(),
+            pane_state.generation(),
+        )
+    });
+    root.update_in(cx, |root, window, cx| {
+        root.on_terminal_pane_event(
+            &failed_pane,
+            &TerminalPaneEvent::Exited(TerminalPaneExitedEvent {
+                project_id: project_id.as_str().to_string(),
+                tab_id: "dev".to_string(),
+                pane_id: "shell".to_string(),
+                status: yttt_terminal::ProcessStatus::Exited { code: Some(1) },
+                exit_reason: yttt_terminal::ExitReason::Failed,
+                exit_behavior: ProcessExitBehavior::ManualRestart,
+                generation,
+                agent_instance_id: Some(failed_instance.clone()),
+            }),
+            window,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+
+    cx.update(|_, app| {
+        let root = root.read(app);
+        let fresh_pane = root.terminal.terminal_panes.get(&key).unwrap().read(app);
+        assert_ne!(
+            fresh_pane.agent_instance_id(),
+            Some(&failed_instance),
+            "the failed resume launch must not be reused"
+        );
+        let snapshot = root
+            .workspace
+            .project(&project_id)
+            .unwrap()
+            .tab_state("dev")
+            .unwrap()
+            .pane_states
+            .iter()
+            .find(|pane| pane.pane_id == "shell")
+            .unwrap()
+            .agent_snapshot
+            .as_ref()
+            .unwrap();
+        assert_eq!(snapshot.provider_id.as_str(), "codex");
+        assert!(snapshot.session.is_none());
     });
 }
 

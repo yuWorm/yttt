@@ -1496,12 +1496,36 @@ impl WorkbenchView {
                         yttt_terminal::ProcessStatus::Exited { code } => code,
                     };
                     let exit = AgentProcessExit { code, reason };
-                    if let Some((address, snapshot)) =
-                        self.agent_manager
-                            .process_exited(instance_id, event.generation, exit)
-                        && let Err(error) = self.record_agent_runtime_snapshot(address, snapshot)
+                    match self
+                        .agent_manager
+                        .process_exited(instance_id, event.generation, exit)
                     {
-                        self.load_error = Some(error.to_string());
+                        Some(AgentPaneExitOutcome::Snapshot { address, snapshot }) => {
+                            if let Err(error) =
+                                self.record_agent_runtime_snapshot(address, snapshot)
+                            {
+                                self.load_error = Some(error.to_string());
+                            }
+                        }
+                        Some(AgentPaneExitOutcome::ResumeFailed { address }) => {
+                            let project_id = ProjectId::new(&address.project_id);
+                            if let Err(error) = self.workspace.clear_agent_snapshot(
+                                &project_id,
+                                &address.tab_id,
+                                &address.pane_id,
+                            ) {
+                                self.load_error = Some(error.to_string());
+                            }
+                            let key = terminal_pane_key(
+                                &address.project_id,
+                                &address.tab_id,
+                                &address.pane_id,
+                            );
+                            self.terminal.terminal_panes.remove(&key);
+                            self.terminal.terminal_pane_subscriptions.remove(&key);
+                            self.terminal.agent_process_observations.remove(&address);
+                        }
+                        None => {}
                     }
                 } else {
                     let address =

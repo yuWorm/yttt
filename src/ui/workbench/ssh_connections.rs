@@ -763,6 +763,21 @@ impl WorkbenchView {
         root: RemotePathBuf,
         require_connected: bool,
     ) -> Result<(), WorkbenchError> {
+        self.open_ssh_project_location_with_mode(
+            connection_id,
+            root,
+            require_connected,
+            ProjectOpenMode::Fresh,
+        )
+    }
+
+    pub(super) fn open_ssh_project_location_with_mode(
+        &mut self,
+        connection_id: ConnectionId,
+        root: RemotePathBuf,
+        require_connected: bool,
+        mode: ProjectOpenMode,
+    ) -> Result<(), WorkbenchError> {
         let connection = self
             .ssh
             .connections
@@ -804,10 +819,20 @@ impl WorkbenchView {
         )?;
         let source_message = layout_source_message(&opened.layout_source);
         let warning_message = layout_load_warning_message(&opened.warnings);
+        let already_open = self.workspace.project(&opened.descriptor.id).is_some();
         let project_id = self
             .workspace
             .open_project(opened.descriptor, opened.layout)?;
-        self.restore_project_agent_snapshots(&project_id);
+        if !already_open {
+            match mode {
+                ProjectOpenMode::Fresh => self
+                    .agent_manager
+                    .reset_project_sessions(project_id.as_str()),
+                ProjectOpenMode::RestoreLastSession => {
+                    self.restore_project_agent_snapshots(&project_id)
+                }
+            }
+        }
         let selected_terminal_id = self.workspace.project(&project_id).and_then(|project| {
             project
                 .layout

@@ -156,7 +156,7 @@ use crate::{
         tab_palette_items_with_text, unified_tab_palette_items,
     },
     runtime::{
-        agent_manager::{AgentManager, AgentPaneAddress},
+        agent_manager::{AgentManager, AgentPaneAddress, AgentPaneExitOutcome},
         agent_sessions::scan_agent_sessions,
         file_search::{
             FileSearchCandidate, FileSearchCollection, FileSearchProject,
@@ -474,6 +474,12 @@ struct PendingKeybindingEdit {
     error: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProjectOpenMode {
+    Fresh,
+    RestoreLastSession,
+}
+
 impl WorkbenchView {
     pub fn new() -> Self {
         Self::with_config_paths(AppConfigPaths::for_app())
@@ -554,11 +560,18 @@ impl WorkbenchView {
         let mut messages = self.load_error.take().into_iter().collect::<Vec<_>>();
         for project in projects {
             let result = match project.location {
-                ProjectLocation::Local { path } => self.open_project_path(path),
+                ProjectLocation::Local { path } => {
+                    self.open_project_path_with_mode(path, ProjectOpenMode::RestoreLastSession)
+                }
                 ProjectLocation::Ssh {
                     connection_id,
                     root,
-                } => self.open_ssh_project_location(connection_id, root, false),
+                } => self.open_ssh_project_location_with_mode(
+                    connection_id,
+                    root,
+                    false,
+                    ProjectOpenMode::RestoreLastSession,
+                ),
             };
             if result.is_ok() {
                 restored += 1;
@@ -572,6 +585,8 @@ impl WorkbenchView {
     }
 
     fn restore_project_agent_snapshots(&mut self, project_id: &ProjectId) {
+        self.agent_manager
+            .enable_project_session_restore(project_id.as_str());
         for (address, snapshot) in self.agent_manager.retained_snapshots() {
             if address.project_id != project_id.as_str() {
                 continue;
@@ -604,7 +619,7 @@ impl WorkbenchView {
     }
 
     fn with_workspace_and_config_paths(
-        mut workspace: Workspace,
+        workspace: Workspace,
         config_paths: AppConfigPaths,
         force_onboarding: bool,
     ) -> Self {
@@ -613,14 +628,6 @@ impl WorkbenchView {
         let recent_projects_config = load_recent_projects(&config_paths).unwrap_or_default();
         let (ssh, ssh_load_error) = SshControllerState::new(&config_paths);
         let agent_manager = AgentManager::new(&config_paths);
-        for (address, snapshot) in agent_manager.retained_snapshots() {
-            let _ = workspace.record_agent_snapshot(
-                &ProjectId::new(&address.project_id),
-                &address.tab_id,
-                &address.pane_id,
-                snapshot,
-            );
-        }
         let agent_setup_error = agent_manager.setup_error().map(str::to_string);
         let recent_projects = recent_projects_for_palette(&recent_projects_config);
         let (mut app_settings, settings_warning_lines) = load_app_settings_messages(&config_paths);
@@ -2344,6 +2351,14 @@ impl WorkbenchView {
         &mut self,
         project_path: impl AsRef<Path>,
     ) -> Result<(), WorkbenchError> {
+        self.open_project_path_with_mode(project_path, ProjectOpenMode::Fresh)
+    }
+
+    fn open_project_path_with_mode(
+        &mut self,
+        project_path: impl AsRef<Path>,
+        mode: ProjectOpenMode,
+    ) -> Result<(), WorkbenchError> {
         match open_project_config(
             &self.config_paths,
             project_path.as_ref(),
@@ -2362,10 +2377,20 @@ impl WorkbenchView {
                     .local_path()
                     .cloned()
                     .ok_or(WorkbenchError::UnsupportedRemoteProject)?;
+                let already_open = self.workspace.project(&opened.descriptor.id).is_some();
                 let project_id = self
                     .workspace
                     .open_project(opened.descriptor, opened.layout)?;
-                self.restore_project_agent_snapshots(&project_id);
+                if !already_open {
+                    match mode {
+                        ProjectOpenMode::Fresh => self
+                            .agent_manager
+                            .reset_project_sessions(project_id.as_str()),
+                        ProjectOpenMode::RestoreLastSession => {
+                            self.restore_project_agent_snapshots(&project_id)
+                        }
+                    }
+                }
                 self.project.services.insert(
                     project_id.clone(),
                     ProjectServices::local(opened_path.clone()),
@@ -2576,6 +2601,8 @@ impl WorkbenchView {
             self.overlays.pending_git_diff_load = None;
         }
         self.remove_terminal_panes_for_project(project_id.as_str());
+        self.agent_manager
+            .reset_project_sessions(project_id.as_str());
         self.project
             .project_editor_runtime
             .close_project(project_id);
