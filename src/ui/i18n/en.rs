@@ -56,6 +56,15 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::NoTerminalTabs => "No terminal tabs",
         UiTextKey::Projects => "Projects",
         UiTextKey::ProjectFiles => "Files",
+        UiTextKey::AgentSessions => "Agent Sessions",
+        UiTextKey::AgentSessionsRefresh => "Refresh Sessions",
+        UiTextKey::AgentSessionsLoading => "Scanning agent sessions…",
+        UiTextKey::AgentSessionsEmpty => "No sessions found for this project",
+        UiTextKey::AgentSessionsRemoteUnavailable => {
+            "Session scanning is not available for remote projects"
+        }
+        UiTextKey::AgentSessionsResumeHint => "Double-click to resume this session",
+        UiTextKey::AgentSessionsJustNow => "now",
         UiTextKey::ProjectFilesShow => "Show Project Panel",
         UiTextKey::ProjectFilesHide => "Hide Project Panel",
         UiTextKey::ProjectFilesRefresh => "Refresh",
@@ -328,6 +337,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsGroupEditorDescription => "Text editing and project file tree behavior",
         UiTextKey::SettingsGroupTerminal => "Terminal",
         UiTextKey::SettingsGroupTerminalDescription => "Shell, font, and terminal runtime defaults",
+        UiTextKey::SettingsGroupAgent => "Agent",
+        UiTextKey::SettingsGroupAgentDescription => "Primary agent and local session discovery",
         UiTextKey::SettingsGroupProjectLayout => "Project Layout",
         UiTextKey::SettingsGroupProjectLayoutDescription => "Project layout files and TOML editing",
         UiTextKey::SettingsGroupDefaultLayout => "Default Layout",
@@ -337,6 +348,14 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsGroupKeybindings => "Keybindings",
         UiTextKey::SettingsGroupKeybindingsDescription => {
             "Keyboard shortcuts and conflict diagnostics"
+        }
+        UiTextKey::SettingsAgentPrimary => "Primary agent",
+        UiTextKey::SettingsAgentPrimaryDescription => {
+            "The agent selected during onboarding and used for session discovery."
+        }
+        UiTextKey::SettingsAgentSessions => "Session list",
+        UiTextKey::SettingsAgentSessionsDescription => {
+            "Show the Agent Sessions tab and scan this agent's local sessions."
         }
         UiTextKey::SettingsLanguage => "Language",
         UiTextKey::SettingsLanguageDescription => "Application display language.",

@@ -20,10 +20,11 @@ pub(in super::super) struct ProjectTreeClipboard {
 pub(in super::super) enum ProjectPanelPage {
     #[default]
     Files,
+    AgentSessions,
 }
 
 impl ProjectPanelPage {
-    const ALL: [Self; 1] = [Self::Files];
+    const ALL: [Self; 2] = [Self::Files, Self::AgentSessions];
 
     pub(in super::super) fn next(self) -> Self {
         let index = Self::ALL

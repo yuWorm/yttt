@@ -5,7 +5,7 @@ use yttt_agent_core::{
 
 use yttt::model::{
     ids::ProjectId,
-    layout::TabStartup,
+    layout::{PaneKind, TabStartup, TerminalExecutionMode},
     project::{ProjectDescriptor, ProjectLocation},
     workspace::{
         CloseProjectDecision, CloseProjectError, ClosedProject, PaneExitCloseOutcome,
@@ -284,6 +284,33 @@ fn bulk_tab_close_can_leave_a_project_without_terminal_tabs() {
     assert!(project.tab_states.is_empty());
     assert!(project.selected_tab_id.is_empty());
     assert!(workspace.create_shell_tab().is_ok());
+}
+
+#[test]
+fn creating_agent_tab_preserves_resume_arguments_and_agent_semantics() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
+        .unwrap();
+
+    let tab_id = workspace
+        .create_agent_tab(
+            "Restore auth session",
+            "codex",
+            vec!["resume".to_string(), "session-1".to_string()],
+        )
+        .unwrap();
+
+    let project = workspace.project(&project_id).unwrap();
+    let tab = project.layout.tab(&tab_id).unwrap();
+    let pane = tab.layout.find_pane("agent").unwrap();
+    assert_eq!(project.selected_tab_id, tab_id);
+    assert_eq!(tab.title, "Restore auth session");
+    assert_eq!(pane.command, "codex");
+    assert_eq!(pane.args, ["resume", "session-1"]);
+    assert_eq!(pane.kind, PaneKind::Agent);
+    assert_eq!(pane.execution_mode, TerminalExecutionMode::Command);
+    assert!(pane.notify_on_exit);
 }
 
 #[test]

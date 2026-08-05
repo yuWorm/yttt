@@ -50,6 +50,7 @@ fn onboarding_agents_build_a_valid_split_view_default() {
         assert_eq!(template.tabs.len(), 1);
         assert_eq!(template.tabs[0].id, "workspace");
         assert_eq!(template.validate(), Ok(()));
+        assert_eq!(template.primary_agent(), Some(agent));
 
         let LayoutNode::Split(split) = &template.tabs[0].layout else {
             panic!("split view onboarding layout should be split");

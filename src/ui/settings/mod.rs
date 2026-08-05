@@ -11,6 +11,7 @@ pub enum SettingsGroupId {
     Languages,
     Editor,
     Terminal,
+    Agent,
     DefaultLayout,
     Keybindings,
 }
@@ -22,6 +23,7 @@ impl SettingsGroupId {
         Self::Languages,
         Self::Editor,
         Self::Terminal,
+        Self::Agent,
         Self::DefaultLayout,
         Self::Keybindings,
     ];
@@ -33,6 +35,7 @@ impl SettingsGroupId {
             Self::Languages => "languages",
             Self::Editor => "editor",
             Self::Terminal => "terminal",
+            Self::Agent => "agent",
             Self::DefaultLayout => "default-layout",
             Self::Keybindings => "keybindings",
         }
@@ -45,6 +48,7 @@ impl SettingsGroupId {
             Self::Languages => UiTextKey::SettingsGroupLanguages,
             Self::Editor => UiTextKey::SettingsGroupEditor,
             Self::Terminal => UiTextKey::SettingsGroupTerminal,
+            Self::Agent => UiTextKey::SettingsGroupAgent,
             Self::DefaultLayout => UiTextKey::SettingsGroupDefaultLayout,
             Self::Keybindings => UiTextKey::SettingsGroupKeybindings,
         }
@@ -57,6 +61,7 @@ impl SettingsGroupId {
             Self::Languages => UiTextKey::SettingsGroupLanguagesDescription,
             Self::Editor => UiTextKey::SettingsGroupEditorDescription,
             Self::Terminal => UiTextKey::SettingsGroupTerminalDescription,
+            Self::Agent => UiTextKey::SettingsGroupAgentDescription,
             Self::DefaultLayout => UiTextKey::SettingsGroupDefaultLayoutDescription,
             Self::Keybindings => UiTextKey::SettingsGroupKeybindingsDescription,
         }
@@ -288,6 +293,16 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
             row(
                 UiTextKey::SettingsTerminalKittyKeyboard,
                 UiTextKey::SettingsTerminalKittyKeyboardDescription,
+            ),
+        ],
+        SettingsGroupId::Agent => vec![
+            row(
+                UiTextKey::SettingsAgentPrimary,
+                UiTextKey::SettingsAgentPrimaryDescription,
+            ),
+            row(
+                UiTextKey::SettingsAgentSessions,
+                UiTextKey::SettingsAgentSessionsDescription,
             ),
         ],
         SettingsGroupId::DefaultLayout => vec![

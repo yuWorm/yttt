@@ -10,7 +10,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use yttt_agent_core::{
     AgentExitReason, AgentInstanceId, AgentProcessExit, AgentProcessState, AgentProvider,
-    AgentReducer, AgentSnapshot, ProviderHookEvent, ProviderId,
+    AgentReducer, AgentSessionMetadata, AgentSnapshot, ProviderHookEvent, ProviderId,
+    ProviderResumeCommand,
 };
 use yttt_agent_providers::{
     OMP_EXTENSION_FILE_NAME, OMP_EXTENSION_SOURCE, OMP_PROVIDER_ID, builtin_providers,
@@ -198,6 +199,16 @@ impl AgentManager {
 
     pub fn setup_error(&self) -> Option<&str> {
         self.setup_error.as_deref()
+    }
+
+    pub fn resume_command(
+        &self,
+        provider_id: &str,
+        session: &AgentSessionMetadata,
+    ) -> Option<ProviderResumeCommand> {
+        self.hook_providers
+            .get(provider_id)?
+            .resume_command(session)
     }
 
     pub fn retained_snapshots(&self) -> Vec<(AgentPaneAddress, AgentSnapshot)> {

@@ -1471,3 +1471,100 @@ fn persisted_shell_agent_resumes_with_generated_title(cx: &mut TestAppContext) {
         assert!(pane.agent_instance_id().is_some());
     });
 }
+
+#[gpui::test]
+fn double_clicking_discovered_session_creates_an_agent_command_tab(cx: &mut TestAppContext) {
+    use std::sync::Arc;
+
+    use crate::runtime::agent_sessions::AgentSession;
+
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir_all(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(local_project(project_path), dev_fixture_layout())
+        .unwrap();
+    let (root, cx) = cx.add_window_view(|_, _| {
+        WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
+    });
+    cx.run_until_parked();
+
+    root.update(cx, |root, cx| {
+        root.app_settings.agent.primary = Some(BuiltinAgent::Codex);
+        root.project.active_panel_page = ProjectPanelPage::AgentSessions;
+        root.agent_sessions.key = Some(AgentSessionScanKey {
+            project_id: project_id.clone(),
+            agent: BuiltinAgent::Codex,
+        });
+        root.agent_sessions.sessions = Arc::new(vec![AgentSession {
+            provider: BuiltinAgent::Codex,
+            id: "codex-session-1".to_string(),
+            title: "Restore auth session".to_string(),
+            transcript_path: None,
+            updated_at_ms: 1,
+        }]);
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+
+    let original_tab_count = cx.update(|_, app| {
+        root.read(app)
+            .workspace
+            .project(&project_id)
+            .unwrap()
+            .layout
+            .tabs
+            .len()
+    });
+    let row = cx
+        .debug_bounds("agent-session-row-0")
+        .expect("discovered session row should render");
+
+    cx.simulate_click(row.center(), gpui::Modifiers::none());
+    cx.update(|_, app| {
+        assert_eq!(
+            root.read(app)
+                .workspace
+                .project(&project_id)
+                .unwrap()
+                .layout
+                .tabs
+                .len(),
+            original_tab_count,
+            "a single click must not resume a session"
+        );
+    });
+
+    cx.simulate_event(MouseDownEvent {
+        position: row.center(),
+        button: MouseButton::Left,
+        modifiers: gpui::Modifiers::none(),
+        click_count: 2,
+        first_mouse: false,
+    });
+    cx.simulate_event(MouseUpEvent {
+        position: row.center(),
+        button: MouseButton::Left,
+        modifiers: gpui::Modifiers::none(),
+        click_count: 2,
+    });
+
+    cx.update(|_, app| {
+        let root = root.read(app);
+        let project = root.workspace.project(&project_id).unwrap();
+        assert_eq!(project.layout.tabs.len(), original_tab_count + 1);
+        let tab = project.layout.tab(&project.selected_tab_id).unwrap();
+        let pane = tab.layout.find_pane("agent").unwrap();
+        assert_eq!(tab.title, "Restore auth session");
+        assert_eq!(pane.command, "codex");
+        assert_eq!(pane.args, ["resume", "codex-session-1"]);
+        assert_eq!(pane.kind, crate::model::layout::PaneKind::Agent);
+        assert_eq!(
+            pane.execution_mode,
+            crate::model::layout::TerminalExecutionMode::Command
+        );
+    });
+}

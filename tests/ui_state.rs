@@ -808,6 +808,9 @@ fn project_panel_uses_compact_local_tabs_without_legacy_actions(cx: &mut gpui::T
     let files = cx
         .debug_bounds("project-panel-tab-files")
         .expect("project panel should render the Files tab");
+    let sessions = cx
+        .debug_bounds("project-panel-tab-agent-sessions")
+        .expect("project panel should render the Agent Sessions tab");
     let strip = cx
         .debug_bounds("project-panel-tab-strip")
         .expect("project panel should center its local tab strip");
@@ -828,7 +831,8 @@ fn project_panel_uses_compact_local_tabs_without_legacy_actions(cx: &mut gpui::T
     assert_eq!(page.origin.y, tabs.origin.y + tabs.size.height);
     assert!(tabs.size.height < gpui::px(36.0));
     assert!((strip.center().x - tabs.center().x).abs() <= gpui::px(0.5));
-    assert!(files.origin.x < search.origin.x);
+    assert!(files.origin.x < sessions.origin.x);
+    assert!(sessions.origin.x < search.origin.x);
     assert!(search.origin.x < git.origin.x);
     assert!(git.origin.x < terminal.origin.x);
     assert!(cx.debug_bounds("project-file-panel-new").is_none());
@@ -1104,6 +1108,14 @@ fn first_run_onboarding_persists_separate_tabs_and_does_not_repeat() {
             .settings
             .general
             .onboarding_completed
+    );
+    assert_eq!(
+        load_or_create_settings(&paths)
+            .unwrap()
+            .settings
+            .agent
+            .primary,
+        Some(BuiltinAgent::OpenCode)
     );
 
     let template: DefaultLayoutTemplate =
@@ -4557,6 +4569,60 @@ fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppCon
             .settings
             .general
             .restore_last_session
+    );
+}
+
+#[gpui::test]
+fn agent_settings_toggle_persists_and_hides_session_tab(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut settings = load_or_create_settings(&paths).unwrap().settings;
+    settings.general.onboarding_completed = true;
+    save_settings(&paths, &settings).unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir_all(&project_path).unwrap();
+    let view_paths = paths.clone();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.open_project_path(&project_path).unwrap();
+        root.open_settings();
+        root.select_settings_group("agent").unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    assert!(cx.debug_bounds("settings-agent-primary-row").is_some());
+    let toggle = cx
+        .debug_bounds("settings-agent-sessions")
+        .expect("Agent settings should expose the session-list switch");
+    cx.simulate_click(toggle.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    root.update(cx, |root, cx| {
+        root.close_settings();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+
+    cx.read(|app| assert!(!root.read(app).agent_sessions_enabled()));
+    assert!(
+        !load_or_create_settings(&paths)
+            .unwrap()
+            .settings
+            .agent
+            .sessions_enabled
+    );
+    assert!(
+        cx.debug_bounds("project-panel-tab-agent-sessions")
+            .is_none()
     );
 }
 

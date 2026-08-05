@@ -22,6 +22,7 @@ use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
 
 mod action_handlers;
 mod agent_process_monitor;
+mod agent_sessions;
 mod dialogs;
 mod document_lifecycle;
 mod file_finder;
@@ -56,6 +57,7 @@ use ssh_connections::{ssh_connections_overlay, ssh_host_key_overlay};
 use ssh_project_picker::ssh_project_picker_overlay;
 pub use state::update::UpdateStatus;
 use state::{
+    agent_sessions::{AgentSessionScanKey, AgentSessionsControllerState},
     documents::DocumentLifecycleState,
     overlays::OverlayControllerState,
     palette::PaletteControllerState,
@@ -155,6 +157,7 @@ use crate::{
     },
     runtime::{
         agent_manager::{AgentManager, AgentPaneAddress},
+        agent_sessions::scan_agent_sessions,
         file_search::{
             FileSearchCandidate, FileSearchCollection, FileSearchProject,
             collect_file_search_candidates, match_file_search_candidates,
@@ -304,6 +307,7 @@ pub struct WorkbenchView {
     project: ProjectControllerState,
     ssh: SshControllerState,
     agent_manager: AgentManager,
+    agent_sessions: AgentSessionsControllerState,
     settings: SettingsControllerState,
     update: UpdateControllerState,
     performance: performance::PerformanceMonitorState,
@@ -711,6 +715,7 @@ impl WorkbenchView {
             },
             ssh,
             agent_manager,
+            agent_sessions: AgentSessionsControllerState::default(),
             active_project_file_watcher: None,
             active_keybindings_watcher: None,
             keybindings_reload_requested: false,
@@ -880,6 +885,7 @@ impl WorkbenchView {
 
         let mut settings = self.app_settings.clone();
         settings.general.onboarding_completed = true;
+        settings.agent.primary = Some(state.selected_agent);
         save_settings(&self.config_paths, &settings).map_err(|error| error.to_string())?;
 
         self.app_settings = settings;

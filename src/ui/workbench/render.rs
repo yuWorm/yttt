@@ -11,6 +11,8 @@ impl Render for WorkbenchView {
         self.flush_pending_keybindings_reload(cx);
         self.flush_pending_git_operations(window, cx);
         self.flush_pending_file_finder_operations(window, cx);
+        self.ensure_agent_session_scan_requested();
+        self.flush_pending_agent_session_scan(window, cx);
         self.flush_pending_project_tree_loads(window, cx);
         self.flush_pending_document_saves(window, cx);
         self.flush_pending_focus_change_autosaves(window, cx);

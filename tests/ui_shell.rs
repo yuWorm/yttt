@@ -974,6 +974,7 @@ fn settings_rows_are_grouped_by_user_facing_sections() {
     let general_rows = settings_rows_for_group(SettingsGroupId::General, &text);
     let language_rows = settings_rows_for_group(SettingsGroupId::Languages, &text);
     let terminal_rows = settings_rows_for_group(SettingsGroupId::Terminal, &text);
+    let agent_rows = settings_rows_for_group(SettingsGroupId::Agent, &text);
     let layout_rows = settings_rows_for_group(SettingsGroupId::DefaultLayout, &text);
 
     assert!(general_rows.iter().any(|row| row.title == "Language"));
@@ -1019,6 +1020,8 @@ fn settings_rows_are_grouped_by_user_facing_sections() {
     assert!(terminal_rows.iter().any(|row| row.title == "Font size"));
     assert!(terminal_rows.iter().any(|row| row.title == "Cursor shape"));
     assert!(terminal_rows.iter().any(|row| row.title == "Scrollbar"));
+    assert!(agent_rows.iter().any(|row| row.title == "Primary agent"));
+    assert!(agent_rows.iter().any(|row| row.title == "Session list"));
     assert!(
         layout_rows
             .iter()

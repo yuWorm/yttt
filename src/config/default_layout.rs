@@ -9,13 +9,15 @@ use crate::model::layout::{
     ProjectLayout, SplitConfig, SplitDirection, TabConfig, TabStartup, TerminalExecutionMode,
 };
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum BuiltinAgent {
     #[default]
     Codex,
     Claude,
     OpenCode,
     Pi,
+    #[serde(rename = "omp")]
     OhMyPi,
 }
 
@@ -35,6 +37,17 @@ impl BuiltinAgent {
             Self::OpenCode => "opencode",
             Self::Pi => "pi",
             Self::OhMyPi => "omp",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "codex" => Some(Self::Codex),
+            "claude" | "claude-code" => Some(Self::Claude),
+            "opencode" | "open-code" => Some(Self::OpenCode),
+            "pi" => Some(Self::Pi),
+            "omp" | "oh-my-pi" => Some(Self::OhMyPi),
+            _ => None,
         }
     }
 
@@ -184,6 +197,12 @@ impl DefaultLayoutTemplate {
         }
     }
 
+    pub fn primary_agent(&self) -> Option<BuiltinAgent> {
+        self.tabs
+            .iter()
+            .find_map(|tab| primary_agent_in_layout(&tab.layout))
+    }
+
     pub fn materialize(&self, project_name: impl Into<String>) -> ProjectLayout {
         ProjectLayout {
             project: ProjectConfig {
@@ -196,6 +215,22 @@ impl DefaultLayoutTemplate {
 
     pub fn validate(&self) -> Result<(), LayoutError> {
         self.materialize("Project").validate()
+    }
+}
+
+fn primary_agent_in_layout(layout: &LayoutNode) -> Option<BuiltinAgent> {
+    match layout {
+        LayoutNode::Pane(pane) => {
+            let command = pane.command.split_whitespace().next().unwrap_or_default();
+            let command = Path::new(command)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(command);
+            BuiltinAgent::from_id(command)
+        }
+        LayoutNode::Split(split) => {
+            primary_agent_in_layout(&split.left).or_else(|| primary_agent_in_layout(&split.right))
+        }
     }
 }
 

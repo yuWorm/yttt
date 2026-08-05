@@ -5,7 +5,7 @@ use std::{
 };
 
 use super::atomic_write;
-use crate::config::paths::AppConfigPaths;
+use crate::config::{default_layout::BuiltinAgent, paths::AppConfigPaths};
 use crate::ui::theme::DEFAULT_THEME_NAME;
 
 use yttt_ui::style::UiStyleId;
@@ -21,6 +21,7 @@ pub struct AppSettings {
     pub window: WindowSettings,
     pub theme: ThemeSettings,
     pub notifications: NotificationSettings,
+    pub agent: AgentSettings,
     pub terminal: TerminalSettings,
     pub editor: EditorSettings,
     pub vim: VimSettings,
@@ -34,6 +35,7 @@ impl Default for AppSettings {
             window: WindowSettings::default(),
             theme: ThemeSettings::default(),
             notifications: NotificationSettings::default(),
+            agent: AgentSettings::default(),
             terminal: TerminalSettings::default(),
             editor: EditorSettings::default(),
             vim: VimSettings::default(),
@@ -212,6 +214,23 @@ pub struct NotificationSettings {
 impl Default for NotificationSettings {
     fn default() -> Self {
         Self { system: false }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct AgentSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary: Option<BuiltinAgent>,
+    pub sessions_enabled: bool,
+}
+
+impl Default for AgentSettings {
+    fn default() -> Self {
+        Self {
+            primary: None,
+            sessions_enabled: true,
+        }
     }
 }
 

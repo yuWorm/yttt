@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod agent_hooks;
 pub mod agent_manager;
+pub mod agent_sessions;
 pub mod file_search;
 pub mod git_status;
 pub mod notification;

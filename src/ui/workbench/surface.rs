@@ -578,6 +578,9 @@ impl WorkbenchView {
                 .flex_1()
                 .min_h_0()
                 .child(files_content),
+            ProjectPanelPage::AgentSessions => {
+                self.agent_sessions_panel_content(theme, ui_style, cx)
+            }
         };
 
         let files_tab_workbench = cx.weak_entity();
@@ -606,6 +609,47 @@ impl WorkbenchView {
         .context_menu(move |menu, _, _| {
             menu.item(PopupMenuItem::new(files_refresh_label).action(Box::new(ProjectPanelRefresh)))
         });
+        let agent_sessions_tab = self.agent_sessions_enabled().then(|| {
+            let sessions_tab_workbench = cx.weak_entity();
+            let sessions_refresh_workbench = sessions_tab_workbench.clone();
+            let sessions_tab_tooltip = self.ui_text.get(UiTextKey::AgentSessions);
+            let sessions_refresh_label = self.ui_text.get(UiTextKey::AgentSessionsRefresh);
+            yttt_icon_button(
+                "project-panel-tab-agent-sessions",
+                IconName::Bot,
+                YtttIconButtonKind::SidebarHeader,
+                theme,
+                ui_style,
+                move |_, _, cx| {
+                    let _ = sessions_tab_workbench.update(cx, |workbench, workbench_cx| {
+                        workbench.activate_project_panel_page(
+                            ProjectPanelPage::AgentSessions,
+                            workbench_cx,
+                        );
+                    });
+                },
+            )
+            .debug_selector(|| "project-panel-tab-agent-sessions".to_string())
+            .when(
+                active_panel_page == ProjectPanelPage::AgentSessions,
+                |this| {
+                    this.bg(theme.ghost_element_selected)
+                        .text_color(panel_tab_style.active_text)
+                },
+            )
+            .tooltip(move |window, cx| Tooltip::new(sessions_tab_tooltip).build(window, cx))
+            .context_menu(move |menu, _, _| {
+                let sessions_refresh_workbench = sessions_refresh_workbench.clone();
+                menu.item(
+                    PopupMenuItem::new(sessions_refresh_label).on_click(move |_, _, cx| {
+                        let _ = sessions_refresh_workbench.update(cx, |workbench, workbench_cx| {
+                            workbench.refresh_agent_sessions();
+                            workbench_cx.notify();
+                        });
+                    }),
+                )
+            })
+        });
         let placeholder_tab = |id: &'static str, icon: IconName| {
             div()
                 .id(id)
@@ -631,6 +675,7 @@ impl WorkbenchView {
             .items_center()
             .gap(ui_style.spacing.xs)
             .child(files_tab)
+            .when_some(agent_sessions_tab, |strip, tab| strip.child(tab))
             .child(search_tab_placeholder)
             .child(git_tab_placeholder)
             .child(terminal_tab_placeholder);
@@ -647,18 +692,21 @@ impl WorkbenchView {
                 .w(px(panel_width))
                 .overflow_hidden()
                 .bg(theme.panel_background)
-                .when(tree_has_keyboard_focus, |panel| {
-                    panel.child(
-                        div()
-                            .debug_selector(|| "project-file-panel-focus-indicator".to_string())
-                            .absolute()
-                            .top(px(6.0))
-                            .right(px(6.0))
-                            .size(px(5.0))
-                            .rounded_full()
-                            .bg(theme.accent.alpha(0.72)),
-                    )
-                })
+                .when(
+                    tree_has_keyboard_focus && active_panel_page == ProjectPanelPage::Files,
+                    |panel| {
+                        panel.child(
+                            div()
+                                .debug_selector(|| "project-file-panel-focus-indicator".to_string())
+                                .absolute()
+                                .top(px(6.0))
+                                .right(px(6.0))
+                                .size(px(5.0))
+                                .rounded_full()
+                                .bg(theme.accent.alpha(0.72)),
+                        )
+                    },
+                )
                 .child(
                     div()
                         .debug_selector(|| "project-panel-tabs".to_string())
@@ -676,6 +724,202 @@ impl WorkbenchView {
                 .child(content)
                 .child(resize_handle),
         )
+    }
+
+    fn agent_sessions_panel_content(
+        &mut self,
+        theme: WorkbenchTheme,
+        ui_style: UiStyle,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let provider = self.primary_agent();
+        let session_count = self.agent_sessions.sessions.len();
+        let header = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .h(ui_style.icon_buttons.toolbar_size)
+            .flex_none()
+            .border_b(ui_style.border.hairline)
+            .border_color(theme.border_variant)
+            .px(ui_style.spacing.md)
+            .text_xs()
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.text_muted)
+                    .child(provider.display_name()),
+            )
+            .child(
+                div()
+                    .text_color(theme.text_subtle)
+                    .child(session_count.to_string()),
+            );
+        let remote = self
+            .workspace
+            .selected_project_id()
+            .and_then(|project_id| self.workspace.project(project_id))
+            .is_some_and(|project| project.location.local_path().is_none());
+        let body = if remote {
+            self.agent_sessions_message(
+                "agent-sessions-remote",
+                self.ui_text
+                    .get(UiTextKey::AgentSessionsRemoteUnavailable)
+                    .to_string(),
+                theme,
+                ui_style,
+            )
+        } else if self.agent_sessions.loading {
+            self.agent_sessions_message(
+                "agent-sessions-loading",
+                self.ui_text
+                    .get(UiTextKey::AgentSessionsLoading)
+                    .to_string(),
+                theme,
+                ui_style,
+            )
+        } else if let Some(error) = self.agent_sessions.error.clone() {
+            div()
+                .debug_selector(|| "agent-sessions-error".to_string())
+                .flex()
+                .flex_col()
+                .flex_1()
+                .items_center()
+                .justify_center()
+                .gap(ui_style.spacing.lg)
+                .px(ui_style.spacing.xl)
+                .text_center()
+                .text_sm()
+                .text_color(theme.text_muted)
+                .child(error)
+                .child(
+                    yttt_button(
+                        "agent-sessions-retry",
+                        self.ui_text.get(UiTextKey::ProjectFilesRetry),
+                        YtttButtonVariant::Secondary,
+                        theme,
+                        ui_style,
+                        cx,
+                    )
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.refresh_agent_sessions();
+                        cx.notify();
+                    })),
+                )
+        } else if self.agent_sessions.sessions.is_empty() {
+            self.agent_sessions_message(
+                "agent-sessions-empty",
+                self.ui_text.get(UiTextKey::AgentSessionsEmpty).to_string(),
+                theme,
+                ui_style,
+            )
+        } else {
+            let resume_hint = self
+                .ui_text
+                .get(UiTextKey::AgentSessionsResumeHint)
+                .to_string();
+            let rows = self
+                .agent_sessions
+                .sessions
+                .iter()
+                .enumerate()
+                .map(|(index, session)| {
+                    let title = session.title.clone();
+                    let age = self.agent_session_age_label(session.updated_at_ms);
+                    let tooltip = resume_hint.clone();
+                    div()
+                        .id(("agent-session-row", index))
+                        .debug_selector(move || format!("agent-session-row-{index}"))
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .gap(ui_style.spacing.sm)
+                        .mx(ui_style.spacing.xs)
+                        .px(ui_style.spacing.sm)
+                        .py(ui_style.spacing.sm)
+                        .rounded_sm()
+                        .hover(move |style| style.bg(theme.hover_surface))
+                        .on_click(cx.listener(move |this, event: &ClickEvent, _window, cx| {
+                            if event.click_count() >= 2 {
+                                if let Err(error) = this.resume_agent_session(index) {
+                                    this.load_error = Some(error);
+                                }
+                                cx.notify();
+                            }
+                        }))
+                        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+                        .child(
+                            Icon::new(IconName::Bot)
+                                .size(px(13.0))
+                                .text_color(theme.text_subtle),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .text_sm()
+                                .text_color(theme.text)
+                                .child(title),
+                        )
+                        .when(!age.is_empty(), |row| {
+                            row.child(
+                                div()
+                                    .flex_none()
+                                    .text_xs()
+                                    .text_color(theme.text_subtle)
+                                    .child(age),
+                            )
+                        })
+                })
+                .collect::<Vec<_>>();
+            div()
+                .debug_selector(|| "agent-sessions-list".to_string())
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .overflow_y_scrollbar()
+                        .py(ui_style.spacing.xs)
+                        .children(rows),
+                )
+        };
+
+        div()
+            .debug_selector(|| "project-panel-page-agent-sessions".to_string())
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(header)
+            .child(body)
+    }
+
+    fn agent_sessions_message(
+        &self,
+        selector: &'static str,
+        message: String,
+        theme: WorkbenchTheme,
+        ui_style: UiStyle,
+    ) -> Div {
+        div()
+            .debug_selector(move || selector.to_string())
+            .flex()
+            .flex_1()
+            .items_center()
+            .justify_center()
+            .px(ui_style.spacing.xl)
+            .text_center()
+            .text_sm()
+            .text_color(theme.text_subtle)
+            .child(message)
     }
 
     pub(super) fn terminal_split_view_for_layout(

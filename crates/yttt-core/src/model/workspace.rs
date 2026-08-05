@@ -269,6 +269,49 @@ impl Workspace {
         Ok(tab_id)
     }
 
+    pub fn create_agent_tab(
+        &mut self,
+        title: impl Into<String>,
+        command: impl Into<String>,
+        args: Vec<String>,
+    ) -> Result<String, WorkspaceError> {
+        let project = self.selected_project_mut()?;
+        let (tab_id, _) = next_tab_identity(&project.layout);
+        let pane_id = "agent".to_string();
+        let title = title.into();
+
+        project.layout.tabs.push(TabConfig {
+            id: tab_id.clone(),
+            title: title.clone(),
+            cwd: None,
+            startup: TabStartup::Lazy,
+            layout: LayoutNode::Pane(PaneConfig {
+                id: pane_id.clone(),
+                title,
+                command: command.into(),
+                args,
+                execution_mode: TerminalExecutionMode::Command,
+                exit_behavior: ProcessExitBehavior::ManualRestart,
+                kind: PaneKind::Agent,
+                notify_on_exit: true,
+                detector: None,
+            }),
+        });
+        project.selected_tab_id = tab_id.clone();
+        project.tab_states.push(TabState {
+            tab_id: tab_id.clone(),
+            start_state: TabStartState::Started,
+            focused_pane_id: Some(pane_id.clone()),
+            pane_states: vec![PaneState {
+                pane_id,
+                process_state: PaneProcessState::Idle,
+                agent_snapshot: None,
+            }],
+        });
+
+        Ok(tab_id)
+    }
+
     pub fn close_selected_tab(&mut self) -> Result<String, WorkspaceError> {
         let project = self.selected_project_mut()?;
         if project.layout.tabs.len() <= 1 {

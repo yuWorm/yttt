@@ -195,6 +195,7 @@ fn settings_rows(
         SettingsGroupId::Languages => settings_language_rows(root, style, window, cx),
         SettingsGroupId::Editor => settings_editor_rows(root, style, window, cx),
         SettingsGroupId::Terminal => settings_terminal_rows(root, style, window, cx),
+        SettingsGroupId::Agent => settings_agent_rows(root, style, cx),
         SettingsGroupId::DefaultLayout => settings_default_layout_rows(root, style, cx),
         SettingsGroupId::Keybindings => settings_keybinding_rows(root, style, cx),
     }
@@ -1419,6 +1420,54 @@ fn settings_terminal_rows(
                 .into_any_element(),
             )
             .debug_selector(|| "settings-terminal-kitty-keyboard-row".to_string()),
+        )
+}
+
+fn settings_agent_rows(
+    root: &mut WorkbenchView,
+    style: YtttSettingsLayout,
+    cx: &mut Context<WorkbenchView>,
+) -> Div {
+    let theme = root.theme_runtime().ui;
+    let text = root.ui_text;
+
+    div()
+        .flex()
+        .flex_col()
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsAgentPrimary),
+                text.get(UiTextKey::SettingsAgentPrimaryDescription),
+                settings_value(root.primary_agent().display_name(), theme, style.ui_style)
+                    .debug_selector(|| "settings-agent-primary".to_string())
+                    .into_any_element(),
+            )
+            .debug_selector(|| "settings-agent-primary-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsAgentSessions),
+                text.get(UiTextKey::SettingsAgentSessionsDescription),
+                settings_switch(
+                    "settings-agent-sessions",
+                    root.agent_sessions_enabled(),
+                    theme,
+                    style.ui_style,
+                    cx.listener(|this, checked: &bool, _window, cx| {
+                        if let Err(error) = this.set_agent_sessions_enabled(*checked) {
+                            this.load_error = Some(error.to_string());
+                        }
+                        cx.notify();
+                    }),
+                )
+                .debug_selector(|| "settings-agent-sessions".to_string())
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-agent-sessions-row".to_string()),
         )
 }
 

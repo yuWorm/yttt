@@ -1,3 +1,4 @@
+pub(super) mod agent_sessions;
 pub(super) mod documents;
 pub(super) mod overlays;
 pub(super) mod palette;

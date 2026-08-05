@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use tempfile::tempdir;
 use yttt::config::{
+    default_layout::BuiltinAgent,
     paths::AppConfigPaths,
     settings::{
         AUTO_SHELL, AppSettings, EditorAutosave, LanguageSetting, SettingsLoadWarning,
@@ -73,6 +74,8 @@ fn missing_settings_file_writes_defaults() {
     assert_eq!(loaded.settings.theme.name, "one-dark-theme");
     assert_eq!(loaded.settings.theme.terminal, None);
     assert!(!loaded.settings.notifications.system);
+    assert_eq!(loaded.settings.agent.primary, None);
+    assert!(loaded.settings.agent.sessions_enabled);
     assert_eq!(loaded.settings.terminal.font_family, "");
     assert_eq!(loaded.settings.terminal.shell, AUTO_SHELL);
     assert!(loaded.settings.terminal.custom_shells.is_empty());
@@ -118,6 +121,21 @@ fn settings_default_language_is_system() {
     let settings = AppSettings::default();
 
     assert_eq!(settings.general.language, LanguageSetting::System);
+}
+
+#[test]
+fn agent_session_settings_round_trip() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    let mut settings = AppSettings::default();
+    settings.agent.primary = Some(BuiltinAgent::OhMyPi);
+    settings.agent.sessions_enabled = false;
+
+    save_settings(&paths, &settings).unwrap();
+    let loaded = load_or_create_settings(&paths).unwrap();
+
+    assert_eq!(loaded.settings.agent.primary, Some(BuiltinAgent::OhMyPi));
+    assert!(!loaded.settings.agent.sessions_enabled);
 }
 
 #[test]
