@@ -786,6 +786,71 @@ fn root_view_renders_sidebar_resize_handles_only_for_visible_expanded_panels(
 }
 
 #[gpui::test]
+fn double_clicking_project_row_toggles_agent_list(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut workspace = workspace_with_sample_project();
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    workspace
+        .mark_pane_running(&project_id, "agent", "codex")
+        .unwrap();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root =
+            cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let _root = root_slot.borrow_mut().take().unwrap();
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    assert!(cx.debug_bounds("project-sidebar-agent-0-0").is_some());
+    let project_row = cx
+        .debug_bounds("project-sidebar-item-0")
+        .expect("project sidebar should render its project row");
+    cx.simulate_event(gpui::MouseDownEvent {
+        position: project_row.center(),
+        button: gpui::MouseButton::Left,
+        modifiers: gpui::Modifiers::none(),
+        click_count: 2,
+        first_mouse: false,
+    });
+    cx.simulate_event(gpui::MouseUpEvent {
+        position: project_row.center(),
+        button: gpui::MouseButton::Left,
+        modifiers: gpui::Modifiers::none(),
+        click_count: 2,
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    assert!(cx.debug_bounds("project-sidebar-agent-0-0").is_none());
+    let project_row = cx
+        .debug_bounds("project-sidebar-item-0")
+        .expect("collapsed agent list should preserve its project row");
+    cx.simulate_event(gpui::MouseDownEvent {
+        position: project_row.center(),
+        button: gpui::MouseButton::Left,
+        modifiers: gpui::Modifiers::none(),
+        click_count: 2,
+        first_mouse: false,
+    });
+    cx.simulate_event(gpui::MouseUpEvent {
+        position: project_row.center(),
+        button: gpui::MouseButton::Left,
+        modifiers: gpui::Modifiers::none(),
+        click_count: 2,
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    assert!(cx.debug_bounds("project-sidebar-agent-0-0").is_some());
+}
+
+#[gpui::test]
 fn project_panel_uses_compact_local_tabs_without_legacy_actions(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let root_slot = Rc::new(RefCell::new(None));
@@ -6160,6 +6225,32 @@ fn visible_project_items_mark_selection_and_distinct_initials() {
 }
 
 #[test]
+fn visible_project_items_highlight_agent_in_selected_tab() {
+    let mut workspace = workspace_with_sample_project();
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    workspace
+        .mark_pane_running(&project_id, "agent", "codex")
+        .unwrap();
+
+    assert_eq!(
+        visible_project_items(&workspace)[0].agents[0].selection,
+        SelectableState::Inactive
+    );
+
+    workspace.select_tab("agent").unwrap();
+    assert_eq!(
+        visible_project_items(&workspace)[0].agents[0].selection,
+        SelectableState::Active
+    );
+
+    workspace.select_tab("dev").unwrap();
+    assert_eq!(
+        visible_project_items(&workspace)[0].agents[0].selection,
+        SelectableState::Inactive
+    );
+}
+
+#[test]
 fn visible_project_items_fall_back_to_the_project_directory_name() {
     let mut workspace = Workspace::new();
     let mut layout = sample_layout();
@@ -6222,8 +6313,11 @@ fn visible_project_items_include_agent_task_and_action() {
 
 #[test]
 fn activating_sidebar_agent_selects_its_project_tab_and_pane() {
-    let workspace = workspace_with_sample_project();
+    let mut workspace = workspace_with_sample_project();
     let project_id = workspace.selected_project_id().unwrap().clone();
+    workspace
+        .mark_pane_running(&project_id, "agent", "codex")
+        .unwrap();
     let mut root = WorkbenchView::with_workspace_for_test(workspace);
 
     root.activate_agent_pane(&project_id, "agent", "codex")
@@ -6238,6 +6332,10 @@ fn activating_sidebar_agent_selects_its_project_tab_and_pane() {
             .focused_pane_id
             .as_deref(),
         Some("codex")
+    );
+    assert_eq!(
+        visible_project_items(root.workspace())[0].agents[0].selection,
+        SelectableState::Active
     );
 }
 

@@ -66,6 +66,7 @@ pub struct ProjectSidebarAgentItem {
     pub pane_id: String,
     pub name: String,
     pub provider_id: String,
+    pub selection: SelectableState,
     pub state: AgentViewState,
     pub task: String,
     pub action: Option<String>,
@@ -92,6 +93,7 @@ fn project_initial(name: &str) -> String {
 
 fn project_agent_items(
     project: &crate::model::workspace::OpenedProject,
+    project_selected: bool,
 ) -> Vec<ProjectSidebarAgentItem> {
     let mut agents = Vec::new();
     for tab in &project.layout.tabs {
@@ -159,6 +161,14 @@ fn project_agent_items(
                 pane_id: pane.id.clone(),
                 name,
                 provider_id,
+                selection: if project_selected
+                    && project.selected_tab_id == tab.id
+                    && tab_state.focused_pane_id.as_deref() == Some(pane.id.as_str())
+                {
+                    SelectableState::Active
+                } else {
+                    SelectableState::Inactive
+                },
                 state,
                 task,
                 action,
@@ -206,14 +216,15 @@ pub fn visible_project_items(workspace: &Workspace) -> Vec<ProjectSidebarItem> {
             } else {
                 configured_name.clone()
             };
+            let selected = Some(&project.id) == selected_project_id;
             ProjectSidebarItem {
                 id: project.id.as_str().to_string(),
                 initial: project_initial(&title),
                 title,
                 path,
                 agent_state: project_agent_status(project),
-                agents: project_agent_items(project),
-                state: if Some(&project.id) == selected_project_id {
+                agents: project_agent_items(project, selected),
+                state: if selected {
                     SelectableState::Active
                 } else {
                     SelectableState::Inactive
@@ -579,6 +590,7 @@ where
     let ProjectSidebarAgentItem {
         name,
         provider_id,
+        selection,
         state,
         task,
         action,
@@ -586,14 +598,17 @@ where
         ..
     } = agent;
     let label: SharedString = compact_agent_label(name, &provider_id, task, action, false).into();
+    let row_style = yttt_row_style(YtttRowKind::Sidebar, selection, true, theme, ui_style);
     let tooltip_label = label.clone();
     let row_id = format!("project-sidebar-agent-{project_index}-{agent_index}");
+    let debug_row_id = row_id.clone();
     let state_id = format!("{row_id}-state").into();
     let type_id = format!("{row_id}-type").into();
     let label_id: SharedString = format!("{row_id}-label").into();
     div()
         .w_full()
         .id(SharedString::from(row_id.clone()))
+        .debug_selector(move || debug_row_id.clone())
         .cursor_pointer()
         .on_click(on_select_agent)
         .child(
@@ -608,7 +623,8 @@ where
                 .min_w_0()
                 .gap(ui_style.spacing.xs)
                 .rounded_sm()
-                .hover(|style| style.bg(theme.hover_surface))
+                .bg(row_style.background)
+                .hover(move |style| style.bg(row_style.hover_background))
                 .child(agent_type_icon(type_id, &provider_id, theme))
                 .child(
                     div()
@@ -616,7 +632,7 @@ where
                         .min_w_0()
                         .flex_1()
                         .text_xs()
-                        .text_color(theme.text_muted)
+                        .text_color(row_style.title)
                         .truncate()
                         .tooltip(move |window, cx| {
                             Tooltip::new(tooltip_label.clone()).build(window, cx)
@@ -666,6 +682,7 @@ where
 
     yttt_row(YtttRowKind::Sidebar, item.state, true, theme, ui_style)
         .id(("project-sidebar-item", index))
+        .debug_selector(move || format!("project-sidebar-item-{index}"))
         .mb(gpui::px(3.0))
         .flex()
         .relative()

@@ -129,8 +129,11 @@ impl Render for WorkbenchView {
                         }),
                         |project_id| {
                             let project_id = ProjectId::new(project_id);
-                            cx.listener(move |this, _, _window, cx| {
+                            cx.listener(move |this, event: &ClickEvent, _window, cx| {
                                 let _ = this.select_project(&project_id);
+                                if event.click_count() >= 2 {
+                                    let _ = this.toggle_project_agent_expansion(&project_id);
+                                }
                                 cx.notify();
                             })
                         },
