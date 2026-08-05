@@ -21,7 +21,6 @@ use uuid::Uuid;
 use crate::{config::default_layout::BuiltinAgent, runtime::agent_manager::AgentPaneAddress};
 
 pub mod installer;
-pub mod providers;
 
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 const MAX_BODY_BYTES: usize = 1024 * 1024;

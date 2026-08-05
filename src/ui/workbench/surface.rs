@@ -871,6 +871,14 @@ impl WorkbenchView {
             {
                 self.load_error = Some(error.to_string());
             }
+        } else if !self.agent_manager.has_retained_snapshot(&agent_address)
+            && let Err(error) = self.workspace.clear_agent_snapshot(
+                &project_id,
+                &agent_address.tab_id,
+                &agent_address.pane_id,
+            )
+        {
+            self.load_error = Some(error.to_string());
         }
         let key = terminal_pane_key(&context.project_id, &context.tab_id, &context.pane.id);
         if let Some(pane_view) = self.terminal.terminal_panes.get(&key) {
@@ -1053,6 +1061,27 @@ impl WorkbenchView {
             .retain(|key, _subscription| live_keys.contains(key));
     }
 
+    pub(super) fn update_terminal_agent_title(
+        &mut self,
+        address: &AgentPaneAddress,
+        provider_id: &str,
+        title: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        let key = terminal_pane_key(&address.project_id, &address.tab_id, &address.pane_id);
+        let Some(pane) = self.terminal.terminal_panes.get(&key).cloned() else {
+            return;
+        };
+        let provider_display_name = BuiltinAgent::ALL
+            .into_iter()
+            .find(|agent| agent.id() == provider_id)
+            .map(BuiltinAgent::display_name)
+            .unwrap_or(provider_id);
+        pane.update(cx, |pane, cx| {
+            pane.set_agent_session_title(provider_display_name, title, cx);
+        });
+    }
+
     pub(super) fn record_agent_runtime_snapshot(
         &mut self,
         address: AgentPaneAddress,
@@ -1076,6 +1105,11 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), WorkspaceError> {
+        let title = snapshot
+            .session
+            .as_ref()
+            .and_then(|session| session.title.as_deref());
+        self.update_terminal_agent_title(&address, snapshot.provider_id.as_str(), title, cx);
         let notification = self.agent_transition_notification(&address, &snapshot);
         let result = self.record_agent_runtime_snapshot(address, snapshot);
         if result.is_ok()

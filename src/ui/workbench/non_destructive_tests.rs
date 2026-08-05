@@ -1377,3 +1377,97 @@ fn killed_detected_agent_clears_sidebar_snapshot_without_notification(cx: &mut T
         assert!(root.visible_toast_titles().is_empty());
     });
 }
+#[gpui::test]
+fn persisted_shell_agent_resumes_with_generated_title(cx: &mut TestAppContext) {
+    use crate::runtime::agent_hooks::AgentHookRequest;
+
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir_all(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut layout = dev_fixture_layout();
+    layout
+        .tabs
+        .iter_mut()
+        .find(|tab| tab.id == "dev")
+        .unwrap()
+        .startup = TabStartup::Eager;
+    save_local_layout(&config_paths, &project_path, &layout).unwrap();
+    let project_id = open_project_config(
+        &config_paths,
+        &project_path,
+        &mut DefaultLayoutState::load_or_create(&config_paths),
+    )
+    .unwrap()
+    .descriptor
+    .id;
+    let address = AgentPaneAddress::new(project_id.as_str(), "dev", "shell");
+    {
+        let mut manager = AgentManager::new(&config_paths);
+        manager
+            .detected_process_started(address.clone(), BuiltinAgent::Codex, 7)
+            .unwrap();
+        manager
+            .ingest_hook_request(AgentHookRequest {
+                address: address.clone(),
+                generation: 7,
+                source: BuiltinAgent::Codex,
+                event: "SessionStart".to_string(),
+                payload: serde_json::json!({ "session_id": "codex-session-1" }),
+            })
+            .unwrap()
+            .unwrap();
+        manager
+            .ingest_hook_request(AgentHookRequest {
+                address: address.clone(),
+                generation: 7,
+                source: BuiltinAgent::Codex,
+                event: "UserPromptSubmit".to_string(),
+                payload: serde_json::json!({ "prompt": "Fix the flaky terminal test" }),
+            })
+            .unwrap()
+            .unwrap();
+    }
+
+    let view_project_id = project_id.clone();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(config_paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        ComponentRoot::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.open_project_path(&project_path).unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    cx.update(|_, app| {
+        let root = root.read(app);
+        let snapshot = root
+            .workspace
+            .project(&view_project_id)
+            .unwrap()
+            .tab_state("dev")
+            .unwrap()
+            .pane_states
+            .iter()
+            .find(|pane| pane.pane_id == "shell")
+            .unwrap()
+            .agent_snapshot
+            .as_ref()
+            .unwrap();
+        assert_eq!(snapshot.primary_text(), "Fix the flaky terminal test");
+        let pane = root
+            .terminal
+            .terminal_panes
+            .get(&terminal_pane_key(view_project_id.as_str(), "dev", "shell"))
+            .unwrap()
+            .read(app);
+        assert_eq!(pane.title(), "Fix the flaky terminal test");
+        assert!(pane.agent_instance_id().is_some());
+    });
+}

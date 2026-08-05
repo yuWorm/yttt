@@ -807,6 +807,7 @@ impl WorkbenchView {
         let project_id = self
             .workspace
             .open_project(opened.descriptor, opened.layout)?;
+        self.restore_project_agent_snapshots(&project_id);
         let selected_terminal_id = self.workspace.project(&project_id).and_then(|project| {
             project
                 .layout

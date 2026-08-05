@@ -12,7 +12,9 @@ pub use model::{
     AgentViewState, ChildAgentDescriptor, ChildAgentSnapshot, ChildAgentUpdate, ProviderId,
     ProviderIdError, TurnOutcome, WaitingReason,
 };
-pub use provider::{AgentProvider, ProviderDescriptor, ProviderError, ProviderHookEvent};
+pub use provider::{
+    AgentProvider, ProviderDescriptor, ProviderError, ProviderHookEvent, ProviderResumeCommand,
+};
 pub use reducer::{AgentReducer, AgentSnapshot};
 
 #[cfg(test)]
@@ -151,5 +153,82 @@ mod tests {
         assert_eq!(child.primary_text(), "Review event mapping");
         assert_eq!(child.turn_state, AgentTurnState::Completed);
         assert!(child.current_action.is_none());
+    }
+    #[test]
+    fn reducer_generates_updates_and_restores_session_titles() {
+        let mut reducer = reducer();
+        reducer.process_starting(1, 2);
+        reducer.process_started(1, 3);
+        reducer.apply(
+            1,
+            AgentEventKind::SessionStarted {
+                metadata: AgentSessionMetadata {
+                    session_id: Some("session-1".to_string()),
+                    model: Some("model-1".to_string()),
+                    ..Default::default()
+                },
+            },
+            4,
+        );
+        reducer.apply(
+            1,
+            AgentEventKind::TurnStarted {
+                task: AgentTask::new(
+                    "  Refactor\n the authentication middleware  ",
+                    AgentTaskSource::UserPromptHook,
+                ),
+            },
+            5,
+        );
+        assert_eq!(
+            reducer
+                .snapshot()
+                .session
+                .as_ref()
+                .and_then(|session| session.title.as_deref()),
+            Some("Refactor the authentication middleware")
+        );
+        reducer.apply(
+            1,
+            AgentEventKind::SessionUpdated {
+                metadata: AgentSessionMetadata {
+                    title: Some("Authentication cleanup".to_string()),
+                    ..Default::default()
+                },
+            },
+            6,
+        );
+        assert_eq!(reducer.snapshot().primary_text(), "Authentication cleanup");
+
+        let restored = reducer.snapshot().clone();
+        let mut resumed = AgentReducer::from_restored(
+            AgentInstanceId::new("agent-2").unwrap(),
+            ProviderId::new("omp").unwrap(),
+            &restored,
+            7,
+        );
+        resumed.process_starting(1, 7);
+        assert_eq!(resumed.snapshot().primary_text(), "Authentication cleanup");
+        assert_eq!(
+            resumed
+                .snapshot()
+                .session
+                .as_ref()
+                .and_then(|session| session.session_id.as_deref()),
+            Some("session-1")
+        );
+
+        resumed.apply(
+            1,
+            AgentEventKind::SessionStarted {
+                metadata: AgentSessionMetadata {
+                    session_id: Some("session-2".to_string()),
+                    ..Default::default()
+                },
+            },
+            8,
+        );
+        assert!(resumed.snapshot().task.is_none());
+        assert_eq!(resumed.snapshot().primary_text(), "omp");
     }
 }

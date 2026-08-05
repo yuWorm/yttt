@@ -25,6 +25,8 @@
 - Replaced the Project Panel title/action toolbar with icon tabs and a stateful right-side-panel toggle in the workbench tab bar; create, refresh, hidden-file, and project-layout actions now live in row or empty-area context menus.
 - Clippy boundary rules now reject direct construction of style-sensitive `gpui-component` controls in business UI modules.
 - Legacy workspace, settings, editor, and terminal Vim toggles now migrate to the least restrictive equivalent unified mode, and legacy `WorkspaceVim` keybinding contexts migrate to the Global scope.
+- Consolidated all built-in agent adapters and embedded hook sources into the extensible `yttt-agent-providers` crate instead of keeping Oh My Pi in a separate crate.
+- Restored running Claude, Codex, OpenCode, Pi, and Oh My Pi sessions with provider-specific resume commands after workspace restart; provider titles or stable first-prompt titles now persist with the session while custom pane titles remain authoritative.
 
 ### Fixed
 
@@ -40,6 +42,7 @@
 - Open files deleted outside yttt now stay editable with a struck-through tab title and are recreated directly on save instead of blocking on a confirmation dialog.
 - Fixed manually launched agents remaining in the sidebar after their terminal process exits or is
   killed; detected-agent snapshots are now removed from memory and persisted state.
+- Fixed late Oh My Pi hook deliveries recreating a sidebar session after the monitored CLI process had already exited.
 
 ## 0.2.0 - 2026-07-18
 

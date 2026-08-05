@@ -271,6 +271,7 @@ impl WorkbenchView {
         let notification = (reason != AgentExitReason::KilledByUser)
             .then(|| self.agent_transition_notification(address, &snapshot))
             .flatten();
+        self.update_terminal_agent_title(address, snapshot.provider_id.as_str(), None, cx);
         if let Err(error) = self.workspace.clear_agent_snapshot(
             &ProjectId::new(&address.project_id),
             &address.tab_id,

@@ -556,18 +556,18 @@ nearest matching descendant. Two missed samples end the detected run, avoiding f
 during launcher handoff. SSH panes have no local process tree, so manual Agent discovery there
 still requires a provider hook.
 
-Oh My Pi (`omp`) is the first provider-backed integration. For command-mode OMP panes, yttt:
+All five built-in Agents have managed provider adapters. For configured command panes, yttt:
 
 1. creates a stable Agent instance for the Project/Tab/Pane scope;
-2. installs a managed OMP extension locally, or bootstraps it under the remote user's home
-   directory for SSH panes;
+2. installs the provider hook or extension without replacing unrelated user configuration;
 3. injects a per-launch instance ID, generation, and random authentication token; and
-4. receives bounded hook frames through terminal title events.
+4. receives bounded events through the local hook server or authenticated terminal-title frames.
 
-Provider hooks, not process names or terminal text, are authoritative for the active task, tool
-action, waiting reason, turn completion, and child-agent lifecycle. Process discovery and
-start/exit events remain the fallback for startup, interruption, failure, and providers without a
-hook adapter.
+OMP extensions are installed locally and bootstrapped under the remote user's home directory for
+SSH panes. Provider hooks, not process names or terminal text, are authoritative for the session,
+active task, tool action, waiting reason, turn completion, and child-agent lifecycle. Process
+discovery and start/exit events remain the fallback for startup, interruption, failure, and
+manually launched local Agents.
 
 The normalized status model includes:
 
@@ -587,9 +587,17 @@ the generic Agent glyph, and hovering either icon identifies it. Clicking an Age
 project, tab, and pane. Project Agent groups can be collapsed; the collapsed project IDs and the
 latest bounded Agent snapshots are persisted.
 
-The managed transport never persists or logs the launch token, raw prompt, or complete tool
-payload. Unknown instances, stale generations, and invalid tokens are rejected before provider
-event normalization.
+If yttt closes while a resumable Agent is still running, reopening the workspace restores that
+session with the provider's native command: `claude --resume`, `codex resume`,
+`opencode --session`, `pi --session <session-file>`, or `omp --resume`. Configured Agent panes keep
+their command overrides; Agents detected inside a shell resume with the detected provider command.
+An explicit provider session title is preferred, otherwise the first prompt supplies a stable
+bounded title. The title survives restoration, while a custom pane title remains authoritative.
+Normal CLI exit still removes a detected shell Agent instead of retaining it for restoration.
+
+The managed transport never persists or logs the launch token or complete tool payload. Session
+identity, model, resume path, title, and prompt summary are bounded before persistence. Unknown
+instances, stale generations, and invalid tokens are rejected before provider event normalization.
 
 In-app toast is always produced for agent exit events when `notify_on_exit = true`.
 `settings.notifications` persists the intended native-notification preference, but the

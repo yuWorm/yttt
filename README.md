@@ -207,9 +207,8 @@ with a visible warning.
 - Manual GPUI visual verification is still required for several phase gates.
 - Real terminal input/output and resize should be smoke-tested in the launched app.
 - Pointer split resize has code support, but still needs real GPUI smoke verification.
-- Agent state is process-level only; output parsing is intentionally not implemented.
+- Agent status uses bounded provider hook and process metadata; terminal output parsing is intentionally not implemented.
 - Native system notifications are intentionally left as a no-op placeholder.
-- Sessions and running processes are not restored after app restart.
 - Project editing accepts UTF-8 text files up to 10 MiB; binary and invalid UTF-8 files are
   rejected.
 - Continuous filesystem watching is local-only; remote documents are checked when their tree is

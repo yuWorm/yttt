@@ -12,7 +12,9 @@ use yttt_agent_core::{
     AgentExitReason, AgentInstanceId, AgentProcessExit, AgentProcessState, AgentProvider,
     AgentReducer, AgentSnapshot, ProviderHookEvent, ProviderId,
 };
-use yttt_agent_omp::{OMP_EXTENSION_FILE_NAME, OMP_EXTENSION_SOURCE, OMP_PROVIDER_ID, OmpProvider};
+use yttt_agent_providers::{
+    OMP_EXTENSION_FILE_NAME, OMP_EXTENSION_SOURCE, OMP_PROVIDER_ID, builtin_providers,
+};
 use yttt_agent_runtime::{
     AgentRuntime, AgentRuntimeError, AgentRuntimeUpdate, AgentScopeKey, PreparedAgentLaunch,
 };
@@ -20,9 +22,7 @@ use yttt_agent_runtime::{
 use crate::{
     config::{atomic_write, default_layout::BuiltinAgent, paths::AppConfigPaths},
     runtime::agent_hooks::{
-        AgentHookClient, AgentHookRequest, AgentHookServer,
-        installer::install_managed_hooks,
-        providers::{ClaudeProvider, CodexProvider, OpenCodeProvider, PiProvider},
+        AgentHookClient, AgentHookRequest, AgentHookServer, installer::install_managed_hooks,
     },
 };
 
@@ -87,8 +87,22 @@ impl AgentPaneLaunch {
         &self.additional_args
     }
 
+    pub fn program_override(&self) -> Option<&str> {
+        self.prepared.program_override()
+    }
+
+    pub fn restored_title_for(&self, default_title: &str) -> Option<&str> {
+        let default_is_generic = default_title.eq_ignore_ascii_case("shell")
+            || default_title.eq_ignore_ascii_case("terminal")
+            || default_title.eq_ignore_ascii_case(self.prepared.provider_display_name());
+        default_is_generic
+            .then(|| self.prepared.restored_title())
+            .flatten()
+    }
+
     pub fn remote_command(&self, program: &str, args: &[String]) -> Option<String> {
         let encoded = self.remote_extension_base64.as_deref()?;
+        let program = self.program_override().unwrap_or(program);
         let mut command = format!(
             "umask 077 && yttt_agent_dir=\"$HOME/.config/yttt/agent-providers/{OMP_PROVIDER_ID}\" && \\
              mkdir -p \"$yttt_agent_dir\" && yttt_agent_path=\"$yttt_agent_dir/{OMP_EXTENSION_FILE_NAME}\" && \\
@@ -96,7 +110,13 @@ impl AgentPaneLaunch {
              mv -f \"$yttt_agent_tmp\" \"$yttt_agent_path\" && exec {}",
             shell_quote(program)
         );
-        for arg in args {
+        if self.program_override().is_none() {
+            for arg in args {
+                command.push(' ');
+                command.push_str(&shell_quote(arg));
+            }
+        }
+        for arg in self.additional_args() {
             command.push(' ');
             command.push_str(&shell_quote(arg));
         }
@@ -116,6 +136,7 @@ pub struct AgentManager {
     launches_by_address: HashMap<AgentPaneAddress, AgentPaneLaunch>,
     addresses_by_instance: HashMap<AgentInstanceId, AgentPaneAddress>,
     detected_by_address: HashMap<AgentPaneAddress, DetectedAgentProcess>,
+    finished_detected_generations: HashMap<AgentPaneAddress, u64>,
     hook_providers: HashMap<String, Arc<dyn AgentProvider>>,
     hook_server: Option<AgentHookServer>,
     omp_extension_path: Option<PathBuf>,
@@ -129,13 +150,7 @@ pub struct AgentManager {
 impl AgentManager {
     pub fn new(config_paths: &AppConfigPaths) -> Self {
         let mut runtime = AgentRuntime::default();
-        let providers: Vec<Arc<dyn AgentProvider>> = vec![
-            Arc::new(CodexProvider),
-            Arc::new(ClaudeProvider),
-            Arc::new(OpenCodeProvider),
-            Arc::new(PiProvider),
-            Arc::new(OmpProvider),
-        ];
+        let providers = builtin_providers();
         let hook_providers = providers
             .iter()
             .map(|provider| (provider.descriptor().id.to_string(), Arc::clone(provider)))
@@ -169,6 +184,7 @@ impl AgentManager {
             launches_by_address: HashMap::new(),
             addresses_by_instance: HashMap::new(),
             detected_by_address: HashMap::new(),
+            finished_detected_generations: HashMap::new(),
             hook_providers,
             hook_server,
             omp_extension_path,
@@ -189,6 +205,10 @@ impl AgentManager {
             .iter()
             .map(|(address, snapshot)| (address.clone(), snapshot.clone()))
             .collect()
+    }
+
+    pub fn has_retained_snapshot(&self, address: &AgentPaneAddress) -> bool {
+        self.retained_snapshots.contains_key(address)
     }
 
     pub fn take_error(&mut self) -> Option<String> {
@@ -222,6 +242,13 @@ impl AgentManager {
                 &request.payload,
             )?;
             return Ok(self.resolve_update(update));
+        }
+        if self
+            .finished_detected_generations
+            .get(&request.address)
+            .is_some_and(|generation| *generation == request.generation)
+        {
+            return Ok(None);
         }
 
         if !self
@@ -269,21 +296,29 @@ impl AgentManager {
             let snapshot = self.runtime.snapshot(launch.instance_id())?.clone();
             return Some((launch.clone(), snapshot));
         }
-        let (prepared, snapshot) = self.runtime.prepare_launch(command, address.scope_key())?;
-        let is_omp = prepared.provider_id.as_str() == OMP_PROVIDER_ID;
-        let additional_args = if is_omp && !remote {
-            self.omp_extension_path
-                .as_ref()
-                .map(|path| {
-                    vec![
-                        "--extension".to_string(),
-                        path.to_string_lossy().into_owned(),
-                    ]
-                })
-                .unwrap_or_default()
-        } else {
-            Vec::new()
+        let restored = self.retained_snapshots.get(&address).cloned();
+        let Some((prepared, snapshot)) = self.runtime.prepare_launch_with_snapshot(
+            command,
+            address.scope_key(),
+            restored.as_ref(),
+        ) else {
+            if restored.is_some() {
+                self.retained_snapshots.remove(&address);
+                if let Err(error) = write_agent_state(&self.state_path, &self.retained_snapshots) {
+                    self.last_error = Some(error.to_string());
+                }
+            }
+            return None;
         };
+        let is_omp = prepared.provider_id.as_str() == OMP_PROVIDER_ID;
+        let mut additional_args = prepared.resume_arguments().to_vec();
+        if is_omp
+            && !remote
+            && let Some(path) = &self.omp_extension_path
+        {
+            additional_args.push("--extension".to_string());
+            additional_args.push(path.to_string_lossy().into_owned());
+        }
         let launch = AgentPaneLaunch {
             prepared,
             additional_args,
@@ -340,6 +375,7 @@ impl AgentManager {
         {
             return None;
         }
+        self.finished_detected_generations.remove(&address);
 
         let now = unix_timestamp_millis();
         let mut reducer = AgentReducer::new(
@@ -373,6 +409,8 @@ impl AgentManager {
             self.detected_by_address.insert(address.clone(), detected);
             return None;
         }
+        self.finished_detected_generations
+            .insert(address.clone(), generation);
 
         let mut reducer = detected.reducer;
         reducer.process_exited(
@@ -621,6 +659,49 @@ mod tests {
         drop(manager);
         assert!(AgentManager::new(&paths).retained_snapshots().is_empty());
     }
+
+    #[test]
+    fn late_omp_hook_does_not_restore_an_exited_shell_session() {
+        let temp = TempDir::new().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path());
+        let mut manager = AgentManager::new(&paths);
+        let address = AgentPaneAddress::new("project", "shell", "terminal");
+
+        manager
+            .detected_process_started(address.clone(), BuiltinAgent::OhMyPi, 7)
+            .unwrap();
+        manager
+            .detected_process_exited(&address, 7, AgentExitReason::Completed)
+            .unwrap();
+
+        let late_hook = manager
+            .ingest_hook_request(AgentHookRequest {
+                address: address.clone(),
+                generation: 7,
+                source: BuiltinAgent::OhMyPi,
+                event: "agent_end".to_string(),
+                payload: json!({ "willContinue": false }),
+            })
+            .unwrap();
+        assert!(late_hook.is_none());
+        assert!(manager.retained_snapshots().is_empty());
+
+        manager
+            .detected_process_started(address.clone(), BuiltinAgent::OhMyPi, 7)
+            .unwrap();
+        assert!(
+            manager
+                .ingest_hook_request(AgentHookRequest {
+                    address,
+                    generation: 7,
+                    source: BuiltinAgent::OhMyPi,
+                    event: "session_start".to_string(),
+                    payload: json!({ "sessionId": "omp-restarted" }),
+                })
+                .unwrap()
+                .is_some()
+        );
+    }
     #[test]
     fn five_managed_agents_follow_prompt_working_and_completion_hooks() {
         let temp = TempDir::new().unwrap();
@@ -790,5 +871,128 @@ mod tests {
             snapshot.children[0].secondary_text().as_deref(),
             Some("read")
         );
+    }
+    #[test]
+    fn persisted_configured_session_resumes_with_its_title() {
+        let temp = TempDir::new().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path());
+        let address = AgentPaneAddress::new("project", "agent", "opencode");
+        let previous_instance = {
+            let mut manager = AgentManager::new(&paths);
+            let (launch, _) = manager
+                .prepare_pane(address.clone(), "opencode", false)
+                .unwrap();
+            manager.process_started(launch.instance_id(), 1).unwrap();
+            manager
+                .ingest_hook_request(AgentHookRequest {
+                    address: address.clone(),
+                    generation: 1,
+                    source: BuiltinAgent::OpenCode,
+                    event: "session_start".to_string(),
+                    payload: json!({
+                        "id": "open-session-1",
+                        "title": "Refactor authentication",
+                    }),
+                })
+                .unwrap()
+                .unwrap();
+            launch.instance_id().clone()
+        };
+
+        let mut restored_manager = AgentManager::new(&paths);
+        let (launch, snapshot) = restored_manager
+            .prepare_pane(address, "opencode", false)
+            .unwrap();
+        assert_ne!(launch.instance_id(), &previous_instance);
+        assert!(launch.program_override().is_none());
+        assert_eq!(
+            launch.additional_args(),
+            &["--session".to_string(), "open-session-1".to_string()]
+        );
+        assert_eq!(
+            launch.restored_title_for("OpenCode"),
+            Some("Refactor authentication")
+        );
+        assert_eq!(snapshot.primary_text(), "Refactor authentication");
+        assert_eq!(snapshot.process_state, AgentProcessState::Starting);
+    }
+
+    #[test]
+    fn persisted_detected_shell_session_resumes_the_detected_provider() {
+        let temp = TempDir::new().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path());
+        let address = AgentPaneAddress::new("project", "dev", "shell");
+        {
+            let mut manager = AgentManager::new(&paths);
+            manager
+                .detected_process_started(address.clone(), BuiltinAgent::Codex, 7)
+                .unwrap();
+            manager
+                .ingest_hook_request(AgentHookRequest {
+                    address: address.clone(),
+                    generation: 7,
+                    source: BuiltinAgent::Codex,
+                    event: "SessionStart".to_string(),
+                    payload: json!({ "session_id": "codex-session-1" }),
+                })
+                .unwrap()
+                .unwrap();
+            manager
+                .ingest_hook_request(AgentHookRequest {
+                    address: address.clone(),
+                    generation: 7,
+                    source: BuiltinAgent::Codex,
+                    event: "UserPromptSubmit".to_string(),
+                    payload: json!({ "prompt": "Fix the flaky terminal test" }),
+                })
+                .unwrap()
+                .unwrap();
+        }
+
+        let mut restored_manager = AgentManager::new(&paths);
+        let (launch, snapshot) = restored_manager
+            .prepare_pane(address, "zsh", false)
+            .unwrap();
+        assert_eq!(launch.program_override(), Some("codex"));
+        assert_eq!(
+            launch.additional_args(),
+            &["resume".to_string(), "codex-session-1".to_string()]
+        );
+        assert_eq!(
+            launch.restored_title_for("Shell"),
+            Some("Fix the flaky terminal test")
+        );
+        assert_eq!(snapshot.primary_text(), "Fix the flaky terminal test");
+    }
+    #[test]
+    fn remote_omp_resume_keeps_the_managed_extension_wrapper() {
+        let temp = TempDir::new().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path());
+        let address = AgentPaneAddress::new("project", "agent", "omp");
+        {
+            let mut manager = AgentManager::new(&paths);
+            let (launch, _) = manager.prepare_pane(address.clone(), "omp", true).unwrap();
+            manager.process_started(launch.instance_id(), 1).unwrap();
+            manager
+                .ingest_hook_request(AgentHookRequest {
+                    address: address.clone(),
+                    generation: 1,
+                    source: BuiltinAgent::OhMyPi,
+                    event: "session_start".to_string(),
+                    payload: json!({ "sessionId": "omp-session-1" }),
+                })
+                .unwrap()
+                .unwrap();
+        }
+
+        let mut manager = AgentManager::new(&paths);
+        let (launch, _) = manager.prepare_pane(address, "omp", true).unwrap();
+        assert_eq!(
+            launch.additional_args(),
+            &["--resume".to_string(), "omp-session-1".to_string()]
+        );
+        let command = launch.remote_command("omp", &[]).unwrap();
+        assert!(command.contains("'--resume' 'omp-session-1'"));
+        assert!(command.contains("--extension \"$yttt_agent_path\""));
     }
 }

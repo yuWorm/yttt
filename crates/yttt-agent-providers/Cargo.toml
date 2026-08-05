@@ -1,8 +1,8 @@
 [package]
-name = "yttt-agent-omp"
+name = "yttt-agent-providers"
 version.workspace = true
 edition.workspace = true
-description = "Oh My Pi provider adapter for yttt agents"
+description = "Built-in agent provider adapters for yttt"
 license = "MIT"
 
 [dependencies]

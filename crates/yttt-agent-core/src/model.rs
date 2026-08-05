@@ -268,10 +268,16 @@ impl ChildAgentSnapshot {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSessionMetadata {
+    #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub transcript_path: Option<String>,
 }
 
 pub(crate) fn bounded_text(value: String, max_bytes: usize) -> String {

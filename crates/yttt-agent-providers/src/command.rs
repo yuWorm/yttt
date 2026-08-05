@@ -1,10 +1,10 @@
+use crate::OmpProvider;
 use serde_json::Value;
 use yttt_agent_core::{
     AgentAction, AgentEventKind, AgentProvider, AgentSessionMetadata, AgentTask, AgentTaskSource,
     ChildAgentDescriptor, ProviderDescriptor, ProviderError, ProviderHookEvent, ProviderId,
-    TurnOutcome, WaitingReason,
+    ProviderResumeCommand, TurnOutcome, WaitingReason,
 };
-use yttt_agent_omp::OmpProvider;
 
 pub const CODEX_PROVIDER_ID: &str = "codex";
 pub const CLAUDE_PROVIDER_ID: &str = "claude";
@@ -32,6 +32,10 @@ impl AgentProvider for CodexProvider {
         command_basename(command) == Some("codex")
     }
 
+    fn resume_command(&self, session: &AgentSessionMetadata) -> Option<ProviderResumeCommand> {
+        resume_with_session_id(CODEX_PROVIDER_ID, "resume", session)
+    }
+
     fn normalize_hook(
         &self,
         event: ProviderHookEvent<'_>,
@@ -47,6 +51,10 @@ impl AgentProvider for ClaudeProvider {
 
     fn matches_command(&self, command: &str) -> bool {
         matches!(command_basename(command), Some("claude" | "claude-code"))
+    }
+
+    fn resume_command(&self, session: &AgentSessionMetadata) -> Option<ProviderResumeCommand> {
+        resume_with_session_id(CLAUDE_PROVIDER_ID, "--resume", session)
     }
 
     fn normalize_hook(
@@ -66,6 +74,10 @@ impl AgentProvider for OpenCodeProvider {
         matches!(command_basename(command), Some("opencode" | "open-code"))
     }
 
+    fn resume_command(&self, session: &AgentSessionMetadata) -> Option<ProviderResumeCommand> {
+        resume_with_session_id(OPENCODE_PROVIDER_ID, "--session", session)
+    }
+
     fn normalize_hook(
         &self,
         event: ProviderHookEvent<'_>,
@@ -73,7 +85,12 @@ impl AgentProvider for OpenCodeProvider {
         let payload = event.payload;
         let events = match event.name {
             "session_start" => vec![session_started(payload)],
-            "user_prompt" => vec![turn_started(payload, &["prompt", "text"])],
+            "session_updated" => vec![AgentEventKind::SessionUpdated {
+                metadata: session_metadata(payload),
+            }],
+            "user_prompt" => {
+                with_session_update(payload, turn_started(payload, &["prompt", "text"]))
+            }
             "session_busy" => vec![AgentEventKind::Working],
             "session_idle" => vec![AgentEventKind::TurnFinished {
                 outcome: TurnOutcome::Completed,
@@ -100,6 +117,14 @@ impl AgentProvider for PiProvider {
         command_basename(command) == Some("pi")
     }
 
+    fn resume_command(&self, session: &AgentSessionMetadata) -> Option<ProviderResumeCommand> {
+        let transcript_path = session.transcript_path.as_deref()?.trim();
+        (!transcript_path.is_empty()).then(|| ProviderResumeCommand {
+            program: PI_PROVIDER_ID,
+            arguments: vec!["--session".to_string(), transcript_path.to_string()],
+        })
+    }
+
     fn normalize_hook(
         &self,
         event: ProviderHookEvent<'_>,
@@ -114,7 +139,9 @@ fn normalize_command_hook(
     let payload = event.payload;
     let events = match event.name {
         "SessionStart" => vec![session_started(payload)],
-        "UserPromptSubmit" => vec![turn_started(payload, &["prompt", "user_prompt"])],
+        "UserPromptSubmit" => {
+            with_session_update(payload, turn_started(payload, &["prompt", "user_prompt"]))
+        }
         "PreToolUse" if is_user_question(payload) => {
             waiting_events(payload, WaitingReason::UserInput)
         }
@@ -148,19 +175,70 @@ fn descriptor(id: &'static str, display_name: &'static str) -> ProviderDescripto
 
 fn session_started(payload: &Value) -> AgentEventKind {
     AgentEventKind::SessionStarted {
-        metadata: AgentSessionMetadata {
-            session_id: string_field(
-                payload,
-                &[
-                    "session_id",
-                    "sessionId",
-                    "conversation_id",
-                    "conversationId",
-                ],
-            ),
-            model: string_field(payload, &["model", "model_id", "modelId"]),
-        },
+        metadata: session_metadata(payload),
     }
+}
+
+fn session_metadata(payload: &Value) -> AgentSessionMetadata {
+    AgentSessionMetadata {
+        session_id: string_field(
+            payload,
+            &[
+                "session_id",
+                "sessionId",
+                "sessionID",
+                "conversation_id",
+                "conversationId",
+                "id",
+            ],
+        ),
+        model: string_field(payload, &["model", "model_id", "modelId"]),
+        title: string_field(
+            payload,
+            &[
+                "title",
+                "session_title",
+                "sessionTitle",
+                "custom_title",
+                "customTitle",
+            ],
+        ),
+        transcript_path: string_field(
+            payload,
+            &[
+                "transcript_path",
+                "transcriptPath",
+                "session_file",
+                "sessionFile",
+            ],
+        ),
+    }
+}
+
+fn with_session_update(payload: &Value, event: AgentEventKind) -> Vec<AgentEventKind> {
+    let metadata = session_metadata(payload);
+    let has_metadata = metadata.session_id.is_some()
+        || metadata.model.is_some()
+        || metadata.title.is_some()
+        || metadata.transcript_path.is_some();
+    let mut events = Vec::with_capacity(if has_metadata { 2 } else { 1 });
+    if has_metadata {
+        events.push(AgentEventKind::SessionUpdated { metadata });
+    }
+    events.push(event);
+    events
+}
+
+fn resume_with_session_id(
+    program: &'static str,
+    option: &'static str,
+    session: &AgentSessionMetadata,
+) -> Option<ProviderResumeCommand> {
+    let session_id = session.session_id.as_deref()?.trim();
+    (!session_id.is_empty()).then(|| ProviderResumeCommand {
+        program,
+        arguments: vec![option.to_string(), session_id.to_string()],
+    })
 }
 
 fn turn_started(payload: &Value, fields: &[&str]) -> AgentEventKind {
@@ -445,5 +523,74 @@ mod tests {
             .unwrap();
         assert_eq!(events, vec![AgentEventKind::Working]);
         let _ = AgentTurnState::Working;
+    }
+    #[test]
+    fn builds_provider_specific_resume_commands() {
+        let session = AgentSessionMetadata {
+            session_id: Some("session-1".to_string()),
+            model: None,
+            title: None,
+            transcript_path: Some("/tmp/pi-session.jsonl".to_string()),
+        };
+        let cases: [(&dyn AgentProvider, &str, &[&str]); 5] = [
+            (&CodexProvider, "codex", &["resume", "session-1"]),
+            (&ClaudeProvider, "claude", &["--resume", "session-1"]),
+            (&OpenCodeProvider, "opencode", &["--session", "session-1"]),
+            (&PiProvider, "pi", &["--session", "/tmp/pi-session.jsonl"]),
+            (&OmpProvider, "omp", &["--resume", "session-1"]),
+        ];
+
+        for (provider, program, expected_arguments) in cases {
+            let command = provider.resume_command(&session).unwrap();
+            assert_eq!(command.program, program);
+            assert_eq!(
+                command.arguments,
+                expected_arguments
+                    .iter()
+                    .map(|argument| argument.to_string())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn opencode_session_updates_capture_identity_and_title() {
+        let payload = json!({
+            "id": "open-session-1",
+            "title": "Refactor the auth middleware"
+        });
+        let events = OpenCodeProvider
+            .normalize_hook(ProviderHookEvent {
+                name: "session_updated",
+                payload: &payload,
+            })
+            .unwrap();
+        assert!(matches!(
+            &events[0],
+            AgentEventKind::SessionUpdated { metadata }
+                if metadata.session_id.as_deref() == Some("open-session-1")
+                    && metadata.title.as_deref() == Some("Refactor the auth middleware")
+        ));
+    }
+    #[test]
+    fn pi_session_hook_captures_the_resume_file() {
+        let payload = json!({
+            "sessionId": "pi-session-1",
+            "sessionFile": "/tmp/pi-session.jsonl",
+            "model": "model-1"
+        });
+        let events = PiProvider
+            .normalize_hook(ProviderHookEvent {
+                name: "session_start",
+                payload: &payload,
+            })
+            .unwrap();
+        assert!(matches!(
+            &events[0],
+            AgentEventKind::SessionStarted { metadata }
+                if metadata.session_id.as_deref() == Some("pi-session-1")
+                    && metadata.transcript_path.as_deref() == Some("/tmp/pi-session.jsonl")
+                    && metadata.model.as_deref() == Some("model-1")
+        ));
     }
 }

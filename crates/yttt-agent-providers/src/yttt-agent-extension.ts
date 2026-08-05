@@ -10,7 +10,7 @@ const PREFIX = "yttt-agent-v1:";
 const MAX_TEXT = 2048;
 
 type StatusContext = {
-	sessionManager: { getSessionId(): string };
+	sessionManager: { getSessionId(): string; getSessionFile?(): string | undefined };
 	model?: { id: string };
 };
 
@@ -35,6 +35,7 @@ function send(name: string, payload: Record<string, unknown>, ctx: StatusContext
 	const payloadWithContext = {
 		...payload,
 		sessionId: ctx.sessionManager.getSessionId(),
+		sessionFile: ctx.sessionManager.getSessionFile?.(),
 		model: ctx.model?.id,
 	};
 	const hookEndpoint = process.env.YTTT_AGENT_HOOK_ENDPOINT;

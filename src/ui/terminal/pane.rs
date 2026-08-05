@@ -228,6 +228,7 @@ pub struct TerminalPaneView {
     environment: Arc<RwLock<BTreeMap<String, String>>>,
     notify_on_exit: bool,
     agent_launch: Option<AgentPaneLaunch>,
+    agent_session_title: Option<String>,
     agent_hook_client: Option<AgentHookClient>,
     ssh: Option<SshTerminalContext>,
     terminal: Option<Entity<TerminalView>>,
@@ -320,6 +321,13 @@ impl TerminalPaneView {
             agent_launch,
             agent_hook_client,
         } = context;
+        let agent_session_title = agent_launch
+            .as_ref()
+            .and_then(|launch| launch.restored_title_for(&pane.title))
+            .map(ToOwned::to_owned);
+        let initial_title = agent_session_title
+            .clone()
+            .unwrap_or_else(|| pane.title.clone());
         let mut view = Self {
             project_id,
             project_path,
@@ -327,8 +335,8 @@ impl TerminalPaneView {
             tab_id,
             tab_title,
             pane_id: pane.id,
-            default_title: pane.title.clone(),
-            title: pane.title,
+            default_title: pane.title,
+            title: initial_title,
             command: pane.command,
             args: pane.args,
             execution_mode: pane.execution_mode,
@@ -338,6 +346,7 @@ impl TerminalPaneView {
             kind: pane.kind,
             notify_on_exit: pane.notify_on_exit,
             agent_launch,
+            agent_session_title,
             agent_hook_client,
             ssh,
             terminal: None,
@@ -385,6 +394,36 @@ impl TerminalPaneView {
         cx.notify();
     }
 
+    pub(crate) fn set_agent_session_title(
+        &mut self,
+        provider_display_name: &str,
+        title: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        let default_is_generic = self.default_title.eq_ignore_ascii_case("shell")
+            || self.default_title.eq_ignore_ascii_case("terminal")
+            || self
+                .default_title
+                .eq_ignore_ascii_case(provider_display_name);
+        if self.agent_session_title.is_none() && !default_is_generic {
+            return;
+        }
+        let title = title
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+            .map(ToOwned::to_owned);
+        if self.agent_session_title == title {
+            return;
+        }
+        self.agent_session_title = title;
+        self.set_runtime_title(
+            self.agent_session_title
+                .clone()
+                .unwrap_or_else(|| self.default_title.clone()),
+            cx,
+        );
+    }
+
     pub fn title(&self) -> &str {
         &self.title
     }
@@ -408,16 +447,29 @@ impl TerminalPaneView {
     }
 
     fn spawn_request(&self) -> TerminalSpawnRequest {
-        let request = match self.execution_mode {
-            TerminalExecutionMode::Shell => {
-                TerminalSpawnRequest::for_shell(&self.pane_id, &self.shell, &self.command)
-            }
-            TerminalExecutionMode::Command => TerminalSpawnRequest::for_command(
+        let request = if let Some(program) = self
+            .agent_launch
+            .as_ref()
+            .and_then(AgentPaneLaunch::program_override)
+        {
+            TerminalSpawnRequest::for_command(
                 &self.pane_id,
                 &self.shell,
-                &self.command,
+                program,
                 self.command_args(),
-            ),
+            )
+        } else {
+            match self.execution_mode {
+                TerminalExecutionMode::Shell => {
+                    TerminalSpawnRequest::for_shell(&self.pane_id, &self.shell, &self.command)
+                }
+                TerminalExecutionMode::Command => TerminalSpawnRequest::for_command(
+                    &self.pane_id,
+                    &self.shell,
+                    &self.command,
+                    self.command_args(),
+                ),
+            }
         };
         let environment = self.spawn_environment();
         request
@@ -430,10 +482,16 @@ impl TerminalPaneView {
     }
 
     fn command_args(&self) -> Vec<String> {
-        let mut args = self.args.clone();
-        if self.execution_mode == TerminalExecutionMode::Command
-            && let Some(agent_launch) = &self.agent_launch
+        let mut args = if self
+            .agent_launch
+            .as_ref()
+            .is_some_and(|launch| launch.program_override().is_some())
         {
+            Vec::new()
+        } else {
+            self.args.clone()
+        };
+        if let Some(agent_launch) = &self.agent_launch {
             args.extend(agent_launch.additional_args().iter().cloned());
         }
         args
@@ -468,21 +526,39 @@ impl TerminalPaneView {
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("remote terminal path is not valid UTF-8"))?;
         let cwd = RemotePathBuf::new(cwd.to_string())?;
-        let execution = match self.execution_mode {
-            TerminalExecutionMode::Shell => RemoteTerminalExecution::Shell {
-                command: self.command.clone(),
-            },
-            TerminalExecutionMode::Command => match self
+        let execution = if let Some(program) = self
+            .agent_launch
+            .as_ref()
+            .and_then(AgentPaneLaunch::program_override)
+        {
+            match self
                 .agent_launch
                 .as_ref()
                 .and_then(|launch| launch.remote_command(&self.command, &self.args))
             {
                 Some(command) => RemoteTerminalExecution::Shell { command },
                 None => RemoteTerminalExecution::Command {
-                    program: self.command.clone(),
+                    program: program.to_string(),
                     args: self.command_args(),
                 },
-            },
+            }
+        } else {
+            match self.execution_mode {
+                TerminalExecutionMode::Shell => RemoteTerminalExecution::Shell {
+                    command: self.command.clone(),
+                },
+                TerminalExecutionMode::Command => match self
+                    .agent_launch
+                    .as_ref()
+                    .and_then(|launch| launch.remote_command(&self.command, &self.args))
+                {
+                    Some(command) => RemoteTerminalExecution::Shell { command },
+                    None => RemoteTerminalExecution::Command {
+                        program: self.command.clone(),
+                        args: self.command_args(),
+                    },
+                },
+            }
         };
         let environment = self.spawn_environment();
         transport
@@ -499,7 +575,11 @@ impl TerminalPaneView {
     }
 
     fn start_terminal(&mut self, cx: &mut Context<Self>) -> bool {
-        self.set_runtime_title(self.default_title.clone(), cx);
+        let initial_title = self
+            .agent_session_title
+            .clone()
+            .unwrap_or_else(|| self.default_title.clone());
+        self.set_runtime_title(initial_title, cx);
         self.terminal = None;
         if let Some(session) = self.session.take() {
             cx.background_executor()
@@ -552,8 +632,10 @@ impl TerminalPaneView {
                             });
                             return;
                         }
-                        let title = resolved_terminal_title(&pane.default_title, title);
-                        pane.set_runtime_title(title, cx);
+                        if pane.agent_session_title.is_none() {
+                            let title = resolved_terminal_title(&pane.default_title, title);
+                            pane.set_runtime_title(title, cx);
+                        }
                     });
                 })
                 .with_exit_callback(move |cx, reason| {

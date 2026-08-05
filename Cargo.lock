@@ -11118,7 +11118,7 @@ dependencies = [
  "uuid",
  "winresource",
  "yttt-agent-core",
- "yttt-agent-omp",
+ "yttt-agent-providers",
  "yttt-agent-runtime",
  "yttt-core",
  "yttt-ssh",
@@ -11138,7 +11138,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "yttt-agent-omp"
+name = "yttt-agent-providers"
 version = "0.2.0"
 dependencies = [
  "serde_json",

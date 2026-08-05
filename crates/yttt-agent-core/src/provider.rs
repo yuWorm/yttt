@@ -13,11 +13,23 @@ pub struct ProviderHookEvent<'a> {
     pub name: &'a str,
     pub payload: &'a Value,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderResumeCommand {
+    pub program: &'static str,
+    pub arguments: Vec<String>,
+}
 
 pub trait AgentProvider: Send + Sync + 'static {
     fn descriptor(&self) -> ProviderDescriptor;
 
     fn matches_command(&self, command: &str) -> bool;
+
+    fn resume_command(
+        &self,
+        _session: &crate::AgentSessionMetadata,
+    ) -> Option<ProviderResumeCommand> {
+        None
+    }
 
     fn normalize_hook(
         &self,

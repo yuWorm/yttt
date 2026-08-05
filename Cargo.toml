@@ -2,7 +2,7 @@
 members = [
     ".",
     "crates/yttt-agent-core",
-    "crates/yttt-agent-omp",
+    "crates/yttt-agent-providers",
     "crates/yttt-agent-runtime",
     "crates/yttt-core",
     "crates/yttt-ssh",
@@ -33,7 +33,7 @@ gpui-component-assets = { path = "vendor/gpui-component/crates/assets" }
 gpui-markdown-editor = { path = "vendor/gpui-markdown-editor" }
 ignore = "0.4"
 yttt-agent-core = { path = "crates/yttt-agent-core" }
-yttt-agent-omp = { path = "crates/yttt-agent-omp" }
+yttt-agent-providers = { path = "crates/yttt-agent-providers" }
 yttt-agent-runtime = { path = "crates/yttt-agent-runtime" }
 yttt-ssh = { path = "crates/yttt-ssh" }
 zeroize = "1"

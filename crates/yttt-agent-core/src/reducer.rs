@@ -55,10 +55,15 @@ impl AgentSnapshot {
     }
 
     pub fn primary_text(&self) -> String {
-        self.task
+        self.session
             .as_ref()
-            .map(AgentTask::single_line_title)
-            .filter(|title| !title.is_empty())
+            .and_then(|session| session.title.clone())
+            .or_else(|| {
+                self.task
+                    .as_ref()
+                    .map(AgentTask::single_line_title)
+                    .filter(|title| !title.is_empty())
+            })
             .unwrap_or_else(|| self.provider_id.to_string())
     }
 
@@ -99,6 +104,17 @@ impl AgentReducer {
                 updated_at: now,
             },
         }
+    }
+    pub fn from_restored(
+        instance_id: AgentInstanceId,
+        provider_id: ProviderId,
+        restored: &AgentSnapshot,
+        now: u64,
+    ) -> Self {
+        let mut reducer = Self::new(instance_id, provider_id, now);
+        reducer.snapshot.task = restored.task.clone();
+        reducer.snapshot.session = restored.session.clone().map(sanitize_session_metadata);
+        reducer
     }
 
     pub fn snapshot(&self) -> &AgentSnapshot {
@@ -165,11 +181,20 @@ impl AgentReducer {
             return false;
         }
         match event {
-            AgentEventKind::SessionStarted { metadata } => {
-                self.snapshot.session = Some(metadata);
+            AgentEventKind::SessionStarted { metadata }
+            | AgentEventKind::SessionUpdated { metadata } => {
+                self.update_session(metadata, now);
             }
             AgentEventKind::TurnStarted { task } => {
                 if let Some(task) = task {
+                    let title = task.single_line_title();
+                    let session = self
+                        .snapshot
+                        .session
+                        .get_or_insert_with(AgentSessionMetadata::default);
+                    if session.title.is_none() && !title.is_empty() {
+                        session.title = Some(title);
+                    }
                     self.snapshot.task = Some(task);
                 }
                 self.snapshot.current_action = None;
@@ -229,6 +254,45 @@ impl AgentReducer {
         }
         self.snapshot.updated_at = now;
         true
+    }
+
+    fn update_session(&mut self, metadata: AgentSessionMetadata, now: u64) {
+        let metadata = sanitize_session_metadata(metadata);
+        let current_session_id = self
+            .snapshot
+            .session
+            .as_ref()
+            .and_then(|session| session.session_id.as_ref());
+        let identity_changed = current_session_id.is_some()
+            && metadata.session_id.is_some()
+            && current_session_id != metadata.session_id.as_ref();
+        if identity_changed {
+            self.snapshot.task = None;
+            self.snapshot.current_action = None;
+            self.snapshot.children.clear();
+            self.snapshot.last_action_failed = false;
+            self.clear_waiting();
+            self.set_turn_state(AgentTurnState::Idle, now);
+            self.snapshot.session = Some(metadata);
+            return;
+        }
+
+        let session = self
+            .snapshot
+            .session
+            .get_or_insert_with(AgentSessionMetadata::default);
+        if metadata.session_id.is_some() {
+            session.session_id = metadata.session_id;
+        }
+        if metadata.model.is_some() {
+            session.model = metadata.model;
+        }
+        if metadata.title.is_some() {
+            session.title = metadata.title;
+        }
+        if metadata.transcript_path.is_some() {
+            session.transcript_path = metadata.transcript_path;
+        }
     }
 
     fn child_started(&mut self, child: ChildAgentDescriptor, now: u64) {
@@ -324,5 +388,26 @@ impl AgentReducer {
             self.snapshot.turn_state = state;
             self.snapshot.state_started_at = now;
         }
+    }
+}
+
+fn sanitize_session_metadata(metadata: AgentSessionMetadata) -> AgentSessionMetadata {
+    AgentSessionMetadata {
+        session_id: metadata
+            .session_id
+            .map(|value| bounded_text(value, 512))
+            .filter(|value| !value.is_empty()),
+        model: metadata
+            .model
+            .map(|value| bounded_text(value, 256))
+            .filter(|value| !value.is_empty()),
+        title: metadata
+            .title
+            .map(|value| bounded_text(value, 160))
+            .filter(|value| !value.is_empty()),
+        transcript_path: metadata
+            .transcript_path
+            .map(|value| bounded_text(value, 8 * 1024))
+            .filter(|value| !value.is_empty()),
     }
 }

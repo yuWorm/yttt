@@ -567,6 +567,20 @@ impl WorkbenchView {
         restored
     }
 
+    fn restore_project_agent_snapshots(&mut self, project_id: &ProjectId) {
+        for (address, snapshot) in self.agent_manager.retained_snapshots() {
+            if address.project_id != project_id.as_str() {
+                continue;
+            }
+            let _ = self.workspace.record_agent_snapshot(
+                project_id,
+                &address.tab_id,
+                &address.pane_id,
+                snapshot,
+            );
+        }
+    }
+
     fn persist_opened_project_paths(&mut self) -> Option<String> {
         let projects = self
             .workspace
@@ -2345,6 +2359,7 @@ impl WorkbenchView {
                 let project_id = self
                     .workspace
                     .open_project(opened.descriptor, opened.layout)?;
+                self.restore_project_agent_snapshots(&project_id);
                 self.project.services.insert(
                     project_id.clone(),
                     ProjectServices::local(opened_path.clone()),

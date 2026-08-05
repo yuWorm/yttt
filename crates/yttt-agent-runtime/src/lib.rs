@@ -66,6 +66,10 @@ pub struct PreparedAgentLaunch {
     pub provider_id: ProviderId,
     pub token: AgentLaunchToken,
     pub scope: AgentScopeKey,
+    resume_arguments: Vec<String>,
+    program_override: Option<&'static str>,
+    restored_title: Option<String>,
+    provider_display_name: &'static str,
 }
 
 impl PreparedAgentLaunch {
@@ -81,6 +85,22 @@ impl PreparedAgentLaunch {
             ),
             ("YTTT_AGENT_GENERATION".to_string(), generation.to_string()),
         ]
+    }
+
+    pub fn resume_arguments(&self) -> &[String] {
+        &self.resume_arguments
+    }
+
+    pub fn program_override(&self) -> Option<&'static str> {
+        self.program_override
+    }
+
+    pub fn restored_title(&self) -> Option<&str> {
+        self.restored_title.as_deref()
+    }
+
+    pub fn provider_display_name(&self) -> &'static str {
+        self.provider_display_name
     }
 }
 
@@ -116,16 +136,60 @@ impl AgentRuntime {
         command: &str,
         scope: AgentScopeKey,
     ) -> Option<(PreparedAgentLaunch, AgentSnapshot)> {
-        let provider = self
+        self.prepare_launch_with_snapshot(command, scope, None)
+    }
+
+    pub fn prepare_launch_with_snapshot(
+        &mut self,
+        command: &str,
+        scope: AgentScopeKey,
+        restored: Option<&AgentSnapshot>,
+    ) -> Option<(PreparedAgentLaunch, AgentSnapshot)> {
+        let command_provider = self
             .providers
             .iter()
-            .find(|provider| provider.matches_command(command))?
-            .clone();
+            .find(|provider| provider.matches_command(command))
+            .cloned();
+        let restored_provider = restored.and_then(|snapshot| {
+            self.providers
+                .iter()
+                .find(|provider| provider.descriptor().id == snapshot.provider_id)
+                .cloned()
+        });
+        let provider = command_provider.or(restored_provider)?;
         let descriptor = provider.descriptor();
+        let command_matches = provider.matches_command(command);
+        let resume_command = restored
+            .filter(|snapshot| snapshot.provider_id == descriptor.id)
+            .and_then(|snapshot| snapshot.session.as_ref())
+            .and_then(|session| provider.resume_command(session));
+        if !command_matches && resume_command.is_none() {
+            return None;
+        }
+        let restored = resume_command.as_ref().and(restored);
+        let program_override = resume_command
+            .as_ref()
+            .filter(|_| !command_matches)
+            .map(|command| command.program);
+        let resume_arguments = resume_command
+            .as_ref()
+            .map(|command| command.arguments.clone())
+            .unwrap_or_default();
+        let restored_title = restored
+            .and_then(|snapshot| snapshot.session.as_ref())
+            .and_then(|session| session.title.clone());
         let instance_id = AgentInstanceId::random();
         let token = AgentLaunchToken::random();
         let now = now_millis();
-        let mut reducer = AgentReducer::new(instance_id.clone(), descriptor.id.clone(), now);
+        let mut reducer = match restored {
+            Some(snapshot) => AgentReducer::from_restored(
+                instance_id.clone(),
+                descriptor.id.clone(),
+                snapshot,
+                now,
+            ),
+            None => AgentReducer::new(instance_id.clone(), descriptor.id.clone(), now),
+        };
         reducer.process_starting(1, now);
         let snapshot = reducer.snapshot().clone();
         self.records.insert(
@@ -143,6 +207,10 @@ impl AgentRuntime {
                 provider_id: descriptor.id,
                 token,
                 scope,
+                resume_arguments,
+                program_override,
+                restored_title,
+                provider_display_name: descriptor.display_name,
             },
             snapshot,
         ))

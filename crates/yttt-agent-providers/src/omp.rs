@@ -1,10 +1,8 @@
-#![forbid(unsafe_code)]
-
 use serde_json::Value;
 use yttt_agent_core::{
     AgentAction, AgentEventKind, AgentProvider, AgentSessionMetadata, AgentTask, AgentTaskSource,
     AgentTurnState, ChildAgentDescriptor, ChildAgentUpdate, ProviderDescriptor, ProviderError,
-    ProviderHookEvent, ProviderId, TurnOutcome, WaitingReason,
+    ProviderHookEvent, ProviderId, ProviderResumeCommand, TurnOutcome, WaitingReason,
 };
 
 pub const OMP_PROVIDER_ID: &str = "omp";
@@ -26,6 +24,14 @@ impl AgentProvider for OmpProvider {
         matches!(command_basename(command), Some("omp" | "oh-my-pi"))
     }
 
+    fn resume_command(&self, session: &AgentSessionMetadata) -> Option<ProviderResumeCommand> {
+        let session_id = session.session_id.as_deref()?.trim();
+        (!session_id.is_empty()).then(|| ProviderResumeCommand {
+            program: OMP_PROVIDER_ID,
+            arguments: vec!["--resume".to_string(), session_id.to_string()],
+        })
+    }
+
     fn normalize_hook(
         &self,
         event: ProviderHookEvent<'_>,
@@ -33,15 +39,18 @@ impl AgentProvider for OmpProvider {
         let payload = event.payload;
         let events = match event.name {
             "session_start" => vec![AgentEventKind::SessionStarted {
-                metadata: AgentSessionMetadata {
-                    session_id: string_field(payload, "sessionId"),
-                    model: string_field(payload, "model"),
+                metadata: session_metadata(payload),
+            }],
+            "session_updated" => vec![AgentEventKind::SessionUpdated {
+                metadata: session_metadata(payload),
+            }],
+            "before_agent_start" => with_session_update(
+                payload,
+                AgentEventKind::TurnStarted {
+                    task: string_field(payload, "prompt")
+                        .and_then(|prompt| AgentTask::new(prompt, AgentTaskSource::UserPromptHook)),
                 },
-            }],
-            "before_agent_start" => vec![AgentEventKind::TurnStarted {
-                task: string_field(payload, "prompt")
-                    .and_then(|prompt| AgentTask::new(prompt, AgentTaskSource::UserPromptHook)),
-            }],
+            ),
             "agent_start" => vec![AgentEventKind::Working],
             "agent_end" if bool_field(payload, "willContinue") == Some(true) => {
                 vec![AgentEventKind::Working]
@@ -95,6 +104,50 @@ impl AgentProvider for OmpProvider {
         };
         Ok(events)
     }
+}
+
+fn session_metadata(payload: &Value) -> AgentSessionMetadata {
+    AgentSessionMetadata {
+        session_id: string_fields(payload, &["sessionId", "session_id"]),
+        model: string_fields(payload, &["model", "modelId", "model_id"]),
+        title: string_fields(
+            payload,
+            &[
+                "title",
+                "sessionTitle",
+                "session_title",
+                "customTitle",
+                "custom_title",
+            ],
+        ),
+        transcript_path: string_fields(
+            payload,
+            &[
+                "sessionFile",
+                "session_file",
+                "transcriptPath",
+                "transcript_path",
+            ],
+        ),
+    }
+}
+
+fn with_session_update(payload: &Value, event: AgentEventKind) -> Vec<AgentEventKind> {
+    let metadata = session_metadata(payload);
+    let has_metadata = metadata.session_id.is_some()
+        || metadata.model.is_some()
+        || metadata.title.is_some()
+        || metadata.transcript_path.is_some();
+    let mut events = Vec::with_capacity(if has_metadata { 2 } else { 1 });
+    if has_metadata {
+        events.push(AgentEventKind::SessionUpdated { metadata });
+    }
+    events.push(event);
+    events
+}
+
+fn string_fields(payload: &Value, names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| string_field(payload, name))
 }
 
 fn action_started(payload: &Value) -> Result<Vec<AgentEventKind>, ProviderError> {
