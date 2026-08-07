@@ -20,6 +20,7 @@ pub struct NotificationEvent {
     pub project_title: String,
     pub tab_title: String,
     pub pane_title: String,
+    pub summary: Option<String>,
 }
 
 impl NotificationEvent {
@@ -32,7 +33,14 @@ impl NotificationEvent {
     }
 
     pub fn context(&self) -> String {
-        format!("{} / {}", self.project_title, self.tab_title)
+        if self.tab_title == self.pane_title {
+            format!("{} › {}", self.project_title, self.tab_title)
+        } else {
+            format!(
+                "{} › {} › {}",
+                self.project_title, self.tab_title, self.pane_title
+            )
+        }
     }
 }
 
@@ -88,6 +96,7 @@ pub struct AgentTransitionNotificationInput {
     pub project_title: String,
     pub tab_title: String,
     pub pane_title: String,
+    pub summary: Option<String>,
 }
 
 pub fn notification_for_agent_transition(
@@ -122,6 +131,7 @@ pub fn notification_for_agent_transition(
         project_title: input.project_title,
         tab_title: input.tab_title,
         pane_title: input.pane_title,
+        summary: input.summary,
     })
 }
 
@@ -158,5 +168,6 @@ pub fn notification_for_exit(input: ExitNotificationInput) -> Option<Notificatio
         project_title: input.project_title,
         tab_title: input.tab_title,
         pane_title: input.pane_title,
+        summary: None,
     })
 }

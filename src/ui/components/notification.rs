@@ -7,14 +7,22 @@ pub fn notification_tone_for_toast(tone: ToastTone) -> YtttNotificationTone {
         ToastTone::Error => YtttNotificationTone::Error,
     }
 }
+type NotificationAction = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
 pub fn workbench_agent_notification(
     item: ToastItem,
     action_label: impl Into<SharedString>,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
+    on_action: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Notification {
-    workbench_notification(item, Some(action_label.into()), theme, ui_style)
+    let on_action: NotificationAction = Rc::new(on_action);
+    workbench_notification(
+        item,
+        Some((action_label.into(), on_action)),
+        theme,
+        ui_style,
+    )
 }
 
 pub fn workbench_status_notification(
@@ -42,16 +50,17 @@ pub fn workbench_inline_notification(
     let style = yttt_notification_style(tone, theme, ui_style);
     let icon = notification_icon(tone);
     let title = SharedString::from(item.title);
+    let status = item.status.map(SharedString::from);
     let context = SharedString::from(item.context);
 
     yttt_notification_surface(tone, theme, ui_style).child(notification_content(
-        title, context, None, icon, style, None,
+        status, title, context, None, icon, style,
     ))
 }
 
 fn workbench_notification(
     item: ToastItem,
-    action_label: Option<SharedString>,
+    action: Option<(SharedString, NotificationAction)>,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
 ) -> Notification {
@@ -59,16 +68,31 @@ fn workbench_notification(
     let style = yttt_notification_style(tone, theme, ui_style);
     let icon = notification_icon(tone);
     let title = SharedString::from(item.title);
+    let status = item.status.map(SharedString::from);
     let context = SharedString::from(item.context);
 
-    yttt_toast_notification(tone, theme, ui_style).content(move |_, _, _| {
+    yttt_toast_notification(tone, theme, ui_style).content(move |_, _, cx| {
+        let action = action.clone().map(|(label, on_action)| {
+            Button::new("notification-action")
+                .primary()
+                .outline()
+                .xsmall()
+                .icon(IconName::ArrowRight)
+                .label(label)
+                .on_click(cx.listener(move |notification, event, window, cx| {
+                    cx.stop_propagation();
+                    notification.dismiss(window, cx);
+                    on_action(event, window, cx);
+                }))
+        });
+
         notification_content(
+            status.clone(),
             title.clone(),
             context.clone(),
-            action_label.clone(),
+            action,
             icon.clone(),
             style,
-            None,
         )
         .into_any_element()
     })
@@ -84,48 +108,55 @@ fn notification_icon(tone: YtttNotificationTone) -> IconName {
 }
 
 fn notification_content(
+    status: Option<SharedString>,
     title: SharedString,
     context: SharedString,
-    action_label: Option<SharedString>,
+    action: Option<Button>,
     icon: IconName,
     style: crate::ui::primitives::notification::YtttNotificationStyle,
-    close_button: Option<Stateful<Div>>,
 ) -> Div {
     div()
         .flex()
-        .items_center()
+        .items_start()
         .gap(style.gap)
         .min_h(style.min_height)
         .w_full()
+        .pr_8()
         .child(Icon::new(icon).size(style.icon_size).text_color(style.tone))
         .child(
             div()
                 .flex()
                 .flex_col()
-                .gap_0()
+                .gap_1()
                 .min_w_0()
                 .flex_1()
+                .when_some(status, |this, status| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(style.tone)
+                            .truncate()
+                            .child(status),
+                    )
+                })
                 .child(
                     div()
                         .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(style.title)
+                        .truncate()
                         .child(title),
                 )
-                .child(div().text_xs().text_color(style.context).child(context)),
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(style.context)
+                        .truncate()
+                        .child(context),
+                )
+                .when_some(action, |this, action| {
+                    this.child(div().flex().justify_end().pt(style.gap).child(action))
+                }),
         )
-        .when_some(action_label, |this, action_label| {
-            this.child(
-                div()
-                    .flex_none()
-                    .rounded(style.action_radius)
-                    .bg(style.action_background)
-                    .px(style.action_padding_x)
-                    .py(style.action_padding_y)
-                    .text_xs()
-                    .text_color(style.action)
-                    .child(action_label),
-            )
-        })
-        .when_some(close_button, |this, close_button| this.child(close_button))
 }

@@ -561,20 +561,24 @@ fn right_clicking_a_tab_selects_the_context_menu_target(cx: &mut gpui::TestAppCo
 }
 
 #[gpui::test]
-fn agent_notifications_have_a_visible_working_close_button(cx: &mut gpui::TestAppContext) {
+fn agent_notification_close_is_visually_separate_from_action(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let closed = Rc::new(Cell::new(false));
+    let action_clicked = Rc::new(Cell::new(false));
     let closed_for_callback = closed.clone();
+    let action_for_callback = action_clicked.clone();
     let (_notification, cx) = cx.add_window_view(move |_, _| {
         workbench_agent_notification(
             ToastItem {
-                title: "Codex completed".to_string(),
-                context: "yttt / Agent".to_string(),
+                title: "Refine agent notifications".to_string(),
+                status: Some("Agent completed".to_string()),
+                context: "yttt › Agent › Codex".to_string(),
                 tone: ToastTone::Success,
             },
             "Open",
             WorkbenchTheme::one_dark(),
             UiStyle::default(),
+            move |_, _, _| action_for_callback.set(true),
         )
         .autohide(false)
         .on_close(move |_, _| closed_for_callback.set(true))
@@ -598,6 +602,52 @@ fn agent_notifications_have_a_visible_working_close_button(cx: &mut gpui::TestAp
         closed.get(),
         "clicking the close button should dismiss the notification"
     );
+    assert!(
+        !action_clicked.get(),
+        "clicking close must not activate the notification action"
+    );
+}
+
+#[gpui::test]
+fn agent_notification_action_opens_target_and_dismisses(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let closed = Rc::new(Cell::new(false));
+    let action_clicked = Rc::new(Cell::new(false));
+    let closed_for_callback = closed.clone();
+    let action_for_callback = action_clicked.clone();
+    let (_notification, cx) = cx.add_window_view(move |_, _| {
+        workbench_agent_notification(
+            ToastItem {
+                title: "Refine agent notifications".to_string(),
+                status: Some("Agent completed".to_string()),
+                context: "yttt › Agent › Codex".to_string(),
+                tone: ToastTone::Success,
+            },
+            "Open",
+            WorkbenchTheme::one_dark(),
+            UiStyle::default(),
+            move |_, _, _| action_for_callback.set(true),
+        )
+        .autohide(false)
+        .on_close(move |_, _| closed_for_callback.set(true))
+    });
+    cx.background_executor
+        .advance_clock(Duration::from_millis(300));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    cx.simulate_click(
+        gpui::point(gpui::px(286.0), gpui::px(104.0)),
+        gpui::Modifiers::none(),
+    );
+    cx.background_executor
+        .advance_clock(Duration::from_millis(200));
+    cx.run_until_parked();
+
+    assert!(action_clicked.get(), "action button should open the target");
+    assert!(closed.get(), "action should dismiss the notification");
 }
 
 #[gpui::test]
@@ -609,6 +659,7 @@ fn error_notifications_have_a_visible_working_close_button(cx: &mut gpui::TestAp
         workbench_error_notification(
             ToastItem {
                 title: "Error".to_string(),
+                status: None,
                 context: "Could not open the requested project because its layout is invalid"
                     .to_string(),
                 tone: ToastTone::Error,

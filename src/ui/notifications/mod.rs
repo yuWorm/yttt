@@ -1,4 +1,7 @@
-use crate::runtime::notification::{NotificationEvent, NotificationKind};
+use crate::{
+    runtime::notification::{NotificationEvent, NotificationKind},
+    ui::i18n::{UiText, UiTextKey},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToastTone {
@@ -10,6 +13,7 @@ pub enum ToastTone {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToastItem {
     pub title: String,
+    pub status: Option<String>,
     pub context: String,
     pub tone: ToastTone,
 }
@@ -33,24 +37,35 @@ impl ToastQueue {
     }
 }
 
-pub fn visible_toast_items(queue: &ToastQueue) -> Vec<ToastItem> {
+pub fn visible_toast_items(queue: &ToastQueue, ui_text: &UiText) -> Vec<ToastItem> {
     queue
         .events()
         .iter()
         .rev()
         .take(3)
-        .map(toast_item_for_event)
+        .map(|event| toast_item_for_event(event, ui_text))
         .collect()
 }
 
-pub fn toast_item_for_event(event: &NotificationEvent) -> ToastItem {
+pub fn toast_item_for_event(event: &NotificationEvent, ui_text: &UiText) -> ToastItem {
+    let (status_key, tone) = match event.kind {
+        NotificationKind::AgentWaiting => {
+            (UiTextKey::PaletteStatusAgentWaiting, ToastTone::Warning)
+        }
+        NotificationKind::AgentCompleted => {
+            (UiTextKey::PaletteStatusAgentCompleted, ToastTone::Success)
+        }
+        NotificationKind::AgentFailed => (UiTextKey::PaletteStatusAgentFailed, ToastTone::Error),
+    };
+
     ToastItem {
-        title: event.title(),
+        title: event
+            .summary
+            .as_deref()
+            .unwrap_or(&event.pane_title)
+            .to_string(),
+        status: Some(ui_text.get(status_key).to_string()),
         context: event.context(),
-        tone: match event.kind {
-            NotificationKind::AgentWaiting => ToastTone::Warning,
-            NotificationKind::AgentCompleted => ToastTone::Success,
-            NotificationKind::AgentFailed => ToastTone::Error,
-        },
+        tone,
     }
 }

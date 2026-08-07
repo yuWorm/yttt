@@ -597,6 +597,7 @@ pub(super) fn file_conflict_dialog(
             .child(workbench_inline_notification(
                 ToastItem {
                     title: path,
+                    status: None,
                     context: ui_text.get(UiTextKey::StatusWarningContext).to_string(),
                     tone: ToastTone::Warning,
                 },
@@ -648,6 +649,7 @@ pub(super) fn dirty_close_dialog(
         content = content.child(workbench_inline_notification(
             ToastItem {
                 title: summary,
+                status: None,
                 context: ui_text.get(UiTextKey::StatusWarningContext).to_string(),
                 tone: ToastTone::Warning,
             },
@@ -732,6 +734,7 @@ pub(super) fn close_project_dialog(
             .child(workbench_inline_notification(
                 ToastItem {
                     title: ui_text.get(UiTextKey::CloseProjectBody).to_string(),
+                    status: None,
                     context: ui_text.get(UiTextKey::StatusWarningContext).to_string(),
                     tone: ToastTone::Warning,
                 },

@@ -1595,6 +1595,11 @@ impl WorkbenchView {
             project_title: project.location.fallback_title(),
             tab_title: tab.title.clone(),
             pane_title: pane.title.clone(),
+            summary: snapshot
+                .session
+                .as_ref()
+                .and_then(|session| session.title.clone())
+                .filter(|title| !title.trim().is_empty()),
         })
     }
 
@@ -1639,7 +1644,8 @@ impl WorkbenchView {
         let theme = appearance.ui;
         let ui_style = appearance.style;
         self.handle_terminal_notification(event.clone());
-        push_component_notification(root, event, action_label, theme, ui_style, window, cx);
+        let item = toast_item_for_event(&event, &self.ui_text);
+        push_component_notification(root, event, item, action_label, theme, ui_style, window, cx);
         cx.notify();
     }
 

@@ -197,6 +197,7 @@ fn agent_state_transitions_emit_attention_and_completion_notifications_once() {
             .unwrap();
     assert_eq!(waiting.kind, NotificationKind::AgentWaiting);
     assert_eq!(waiting.title(), "Codex needs attention");
+    assert_eq!(waiting.context(), "yttt › Agent › Codex");
 
     assert!(
         notification_for_agent_transition(agent_transition_input(
@@ -219,6 +220,10 @@ fn agent_state_transitions_emit_attention_and_completion_notifications_once() {
     ))
     .unwrap();
     assert_eq!(completed.kind, NotificationKind::AgentCompleted);
+    assert_eq!(
+        completed.summary.as_deref(),
+        Some("Refine agent notifications")
+    );
 
     let failed = notification_for_agent_transition(agent_transition_input(
         Some(AgentViewState::Working),
@@ -256,6 +261,7 @@ fn notification_event() -> NotificationEvent {
         project_title: "yttt".to_string(),
         tab_title: "Agent".to_string(),
         pane_title: "Codex".to_string(),
+        summary: None,
     }
 }
 
@@ -272,6 +278,7 @@ fn agent_transition_input(
         project_title: "yttt".to_string(),
         tab_title: "Agent".to_string(),
         pane_title: "Codex".to_string(),
+        summary: Some("Refine agent notifications".to_string()),
     }
 }
 
