@@ -843,7 +843,7 @@ impl WorkbenchView {
             let mut list = div()
                 .flex()
                 .flex_col()
-                .flex_1()
+                .size_full()
                 .overflow_y_scrollbar()
                 .py(ui_style.spacing.xs);
             if providers.len() == 1 {

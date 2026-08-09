@@ -1747,6 +1747,93 @@ fn multiple_agent_providers_are_collapsed_into_groups(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn overflowing_agent_session_list_scrolls_within_the_project_panel(cx: &mut TestAppContext) {
+    use std::sync::Arc;
+
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir_all(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut settings = AppSettings::default();
+    settings.agent.sessions_enabled = false;
+    save_settings(&config_paths, &settings).unwrap();
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(local_project(project_path), dev_fixture_layout())
+        .unwrap();
+    let (root, cx) = cx.add_window_view(|_, _| {
+        WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
+    });
+    cx.run_until_parked();
+
+    root.update(cx, |root, cx| {
+        root.app_settings.agent.sessions_enabled = true;
+        root.app_settings.agent.primary = Some(BuiltinAgent::Codex);
+        root.project.active_panel_page = ProjectPanelPage::AgentSessions;
+        root.agent_sessions.key = Some(AgentSessionScanKey {
+            project_id,
+            agent: BuiltinAgent::Codex,
+        });
+        root.agent_sessions.sessions = Arc::new(
+            (0..40)
+                .map(|index| AgentSession {
+                    provider: BuiltinAgent::Codex,
+                    id: format!("codex-session-{index}"),
+                    title: format!("Codex session {index}"),
+                    model: None,
+                    transcript_path: None,
+                    updated_at_ms: 0,
+                })
+                .collect(),
+        );
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+
+    let surface = cx
+        .debug_bounds("workbench-surface")
+        .expect("workbench surface must render");
+    let panel = cx
+        .debug_bounds("project-file-panel")
+        .expect("project panel must render");
+    let page = cx
+        .debug_bounds("project-panel-page-agent-sessions")
+        .expect("session page must render");
+    let list = cx
+        .debug_bounds("agent-sessions-list")
+        .expect("session list must render");
+    assert!(
+        panel.origin.y + panel.size.height <= surface.origin.y + surface.size.height,
+        "project panel must stay within the workbench surface: surface={surface:?}, panel={panel:?}"
+    );
+    assert!(
+        list.origin.y + list.size.height <= panel.origin.y + panel.size.height,
+        "session list must stay within the project panel: panel={panel:?}, page={page:?}, list={list:?}"
+    );
+    let first_row = cx
+        .debug_bounds("agent-session-row-0")
+        .expect("first session row must render");
+    for _ in 0..4 {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: first_row.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-120.0))),
+            ..Default::default()
+        });
+    }
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    let first_row_after_scroll = cx
+        .debug_bounds("agent-session-row-0")
+        .expect("first session row must remain rendered after scrolling");
+    assert!(
+        first_row_after_scroll.origin.y < first_row.origin.y - px(1.0),
+        "session list must move rows in response to wheel input: before={first_row:?}, after={first_row_after_scroll:?}"
+    );
+}
+
+#[gpui::test]
 fn double_clicking_discovered_session_creates_an_agent_command_tab(cx: &mut TestAppContext) {
     use std::sync::Arc;
 

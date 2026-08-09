@@ -104,6 +104,7 @@ impl Render for WorkbenchView {
             let workbench = div()
                 .flex()
                 .flex_1()
+                .min_h_0()
                 .relative()
                 .bg(gpui::transparent_black())
                 .text_color(appearance.ui.text)
@@ -195,6 +196,7 @@ impl Render for WorkbenchView {
 
         let vim_status = self.vim.current_status();
         let mut root = div()
+            .debug_selector(|| "workbench-surface".to_string())
             .flex()
             .flex_col()
             .size_full()
