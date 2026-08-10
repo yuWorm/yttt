@@ -1,9 +1,12 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 
 use gpui::{Entity, Subscription};
 use gpui_component::input::InputState;
 
-use crate::ui::settings::{SettingsPageState, keybindings::KeybindingsEditorState};
+use crate::ui::settings::{
+    SettingsPageState,
+    keybindings::{KeybindingRow, KeybindingsEditorState},
+};
 use crate::ui::theme::zed::{ZedThemeDetection, ZedThemeImportConflictPolicy};
 
 use super::super::{SettingsFontFamilySelectState, SettingsNumberField, SettingsStringSelectState};
@@ -18,6 +21,7 @@ pub(in super::super) struct SettingsControllerState {
     pub(in super::super) keybinding_warning_lines: Vec<String>,
     pub(in super::super) keybinding_load_error: Option<String>,
     pub(in super::super) keybindings_editor: KeybindingsEditorState,
+    pub(in super::super) keybinding_rows_cache: Option<Rc<Vec<KeybindingRow>>>,
     pub(in super::super) keybinding_interceptor_subscription: Option<Subscription>,
     pub(in super::super) settings_search_input: Option<Entity<InputState>>,
     pub(in super::super) settings_search_input_subscription: Option<Subscription>,
@@ -77,6 +81,7 @@ impl SettingsControllerState {
             keybinding_warning_lines,
             keybindings_editor,
             keybinding_load_error,
+            keybinding_rows_cache: None,
             keybinding_interceptor_subscription: None,
             settings_search_input: None,
             settings_search_input_subscription: None,

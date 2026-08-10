@@ -721,7 +721,7 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
     });
     let panel = cx
         .debug_bounds("settings-panel")
-        .expect("settings should render the fullscreen panel");
+        .expect("settings should render the adaptive panel");
     let sidebar = cx
         .debug_bounds("settings-sidebar")
         .expect("settings should render the navigation sidebar");
@@ -733,14 +733,40 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
         .expect("settings should render the compact search field");
     let row = cx
         .debug_bounds("settings-restore-last-session-row")
-        .expect("settings should render flat full-width rows");
+        .expect("settings should render responsive setting rows");
 
-    assert_eq!(sidebar.size.width, gpui::px(224.0));
+    assert!(sidebar.size.width >= gpui::px(192.0));
+    assert!(sidebar.size.width <= gpui::px(224.0));
     assert_eq!(search.size.height, gpui::px(28.0));
+    assert!(panel.size.width <= gpui::px(1_240.0));
+    assert!(panel.size.height <= gpui::px(820.0));
     assert!(panel.size.width > sidebar.size.width + gpui::px(400.0));
     assert!(content.origin.x >= sidebar.origin.x + sidebar.size.width);
     assert!(content.size.width > sidebar.size.width);
     assert!(row.size.height >= gpui::px(64.0));
+
+    root.update(cx, |root, cx| {
+        root.set_settings_search_query("setting-that-does-not-exist");
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    assert!(
+        cx.debug_bounds("settings-no-results").is_some(),
+        "an unmatched query should render a clear empty state"
+    );
+
+    root.update(cx, |root, cx| {
+        root.set_settings_search_query("");
+        root.select_settings_group("keybindings").unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    let keybinding_list = cx
+        .debug_bounds("settings-keybinding-virtual-list")
+        .expect("the keybinding settings should render through a virtual list");
+    assert!(keybinding_list.size.height > gpui::px(0.0));
 }
 
 #[gpui::test]
@@ -3917,6 +3943,23 @@ fn root_view_settings_search_filters_groups() {
 
     assert_eq!(root.visible_settings_group_titles(), vec!["Terminal"]);
     assert_eq!(root.selected_settings_group_title(), Some("Terminal"));
+}
+
+#[test]
+fn root_view_settings_search_matches_setting_titles_and_descriptions() {
+    let (_temp, mut root) = english_test_root();
+    root.open_settings();
+
+    root.set_settings_search_query("CPU and memory");
+    assert_eq!(root.visible_settings_group_titles(), vec!["General"]);
+    assert_eq!(root.selected_settings_group_title(), Some("General"));
+
+    root.set_settings_search_query("UI style");
+    assert_eq!(root.visible_settings_group_titles(), vec!["Appearance"]);
+    assert_eq!(root.selected_settings_group_title(), Some("Appearance"));
+
+    root.set_settings_search_query("setting-that-does-not-exist");
+    assert!(root.visible_settings_group_titles().is_empty());
 }
 
 #[test]

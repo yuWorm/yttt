@@ -355,6 +355,40 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsGroupKeybindingsDescription => {
             "Keyboard shortcuts and conflict diagnostics"
         }
+        UiTextKey::SettingsNoSearchResults => "No settings found",
+        UiTextKey::SettingsNoSearchResultsDescription => {
+            "Try another setting name, description, or category."
+        }
+        UiTextKey::SettingsSectionApplicationInteraction => "Application & interaction",
+        UiTextKey::SettingsSectionStartupNotifications => "Startup & notifications",
+        UiTextKey::SettingsSectionPerformance => "Performance",
+        UiTextKey::SettingsSectionNewTabs => "New tabs",
+        UiTextKey::SettingsSectionConnections => "Connections",
+        UiTextKey::SettingsSectionUpdates => "Updates",
+        UiTextKey::SettingsSectionWindow => "Window",
+        UiTextKey::SettingsSectionInterface => "Interface",
+        UiTextKey::SettingsSectionThemes => "Themes",
+        UiTextKey::SettingsSectionAdvanced => "Advanced",
+        UiTextKey::SettingsSectionDetectionDefaults => "Detection & defaults",
+        UiTextKey::SettingsSectionLanguageServices => "Language services",
+        UiTextKey::SettingsSectionTypography => "Typography",
+        UiTextKey::SettingsSectionEditingBehavior => "Editing behavior",
+        UiTextKey::SettingsSectionSaving => "Saving",
+        UiTextKey::SettingsSectionProjectPanels => "Project panels",
+        UiTextKey::SettingsSectionShell => "Shell",
+        UiTextKey::SettingsSectionEnvironment => "Environment",
+        UiTextKey::SettingsSectionScrolling => "Scrolling",
+        UiTextKey::SettingsSectionCursorMouse => "Cursor & mouse",
+        UiTextKey::SettingsSectionCompatibility => "Compatibility & clipboard",
+        UiTextKey::SettingsSectionAgentOverview => "Agent overview",
+        UiTextKey::SettingsSectionProviders => "Session providers",
+        UiTextKey::SettingsSectionCurrentLayout => "Current layout",
+        UiTextKey::SettingsSectionLayoutActions => "Layout actions",
+        UiTextKey::SettingsSectionDangerZone => "Danger zone",
+        UiTextKey::SettingsSectionConfiguration => "Configuration",
+        UiTextKey::SettingsSectionVim => "Vim",
+        UiTextKey::SettingsSectionDiagnostics => "Diagnostics",
+        UiTextKey::SettingsSectionBindings => "Bindings",
         UiTextKey::SettingsAgentPrimary => "Primary agent",
         UiTextKey::SettingsAgentPrimaryDescription => {
             "The agent selected during onboarding and used for session discovery."

@@ -6,8 +6,8 @@ use gpui::{
     Subscription, Task, UniformListScrollHandle, Window, div, prelude::*, px, relative, rems, rgba,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, IconName, IndexPath, Root as ComponentRoot, Sizable as _,
-    Theme as ComponentTheme, WindowExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Root as ComponentRoot,
+    Sizable as _, Theme as ComponentTheme, WindowExt as _,
     button::Button,
     dialog::DialogFooter,
     highlighter::SyntaxHighlighter,
@@ -15,6 +15,7 @@ use gpui_component::{
     scroll::ScrollableElement as _,
     searchable_list::{SearchableListDelegate, SearchableListItem},
     select::{SearchableVec, Select, SelectEvent, SelectState},
+    v_virtual_list,
 };
 use yttt_agent_core::{AgentExitReason, AgentProcessExit, AgentSnapshot, AgentViewState};
 use yttt_terminal::input::{KeyState, TerminalKeyEvent};
