@@ -60,6 +60,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::AgentSessionsRefresh => "Refresh Sessions",
         UiTextKey::AgentSessionsLoading => "Scanning agent sessions…",
         UiTextKey::AgentSessionsEmpty => "No sessions found for this project",
+        UiTextKey::AgentSessionsSearchPlaceholder => "Search sessions…",
+        UiTextKey::AgentSessionsNoMatches => "No matching sessions",
         UiTextKey::AgentSessionsRemoteUnavailable => {
             "Session scanning is not available for remote projects"
         }

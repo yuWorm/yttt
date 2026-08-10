@@ -46,6 +46,8 @@ pub enum UiTextKey {
     AgentSessionsRefresh,
     AgentSessionsLoading,
     AgentSessionsEmpty,
+    AgentSessionsSearchPlaceholder,
+    AgentSessionsNoMatches,
     AgentSessionsRemoteUnavailable,
     AgentSessionsResumeHint,
     AgentSessionsJustNow,

@@ -1747,6 +1747,104 @@ fn multiple_agent_providers_are_collapsed_into_groups(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn agent_session_search_filters_visible_rows(cx: &mut TestAppContext) {
+    use std::sync::Arc;
+
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir_all(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut settings = AppSettings::default();
+    settings.agent.sessions_enabled = false;
+    save_settings(&config_paths, &settings).unwrap();
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(local_project(project_path), dev_fixture_layout())
+        .unwrap();
+    let (root, cx) = cx.add_window_view(|_, _| {
+        WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
+    });
+    cx.run_until_parked();
+
+    root.update(cx, |root, cx| {
+        root.app_settings.agent.sessions_enabled = true;
+        root.app_settings.agent.primary = Some(BuiltinAgent::Codex);
+        root.project.active_panel_page = ProjectPanelPage::AgentSessions;
+        root.agent_sessions.key = Some(AgentSessionScanKey {
+            project_id,
+            agent: BuiltinAgent::Codex,
+        });
+        root.agent_sessions.sessions = Arc::new(vec![
+            AgentSession {
+                provider: BuiltinAgent::Codex,
+                id: "restore-auth".to_string(),
+                title: "Restore authentication".to_string(),
+                model: Some("gpt-5.6".to_string()),
+                transcript_path: None,
+                updated_at_ms: 3,
+            },
+            AgentSession {
+                provider: BuiltinAgent::Codex,
+                id: "render-session".to_string(),
+                title: "Investigate rendering".to_string(),
+                model: None,
+                transcript_path: None,
+                updated_at_ms: 2,
+            },
+            AgentSession {
+                provider: BuiltinAgent::Codex,
+                id: "ship-release".to_string(),
+                title: "Ship release".to_string(),
+                model: None,
+                transcript_path: None,
+                updated_at_ms: 1,
+            },
+        ]);
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+
+    assert!(
+        cx.debug_bounds("agent-sessions-search").is_some(),
+        "a populated session list must render its search input"
+    );
+    let search_input = cx.update(|_, app| {
+        root.read(app)
+            .agent_sessions
+            .search_input
+            .clone()
+            .expect("session search input must be initialized")
+    });
+    search_input.update_in(cx, |input, window, cx| {
+        input.set_value("RENDERING", window, cx);
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    assert!(
+        cx.debug_bounds("agent-session-row-0").is_none()
+            && cx.debug_bounds("agent-session-row-2").is_none(),
+        "non-matching sessions must be hidden"
+    );
+    assert!(
+        cx.debug_bounds("agent-session-row-1").is_some(),
+        "session title matching must be case-insensitive"
+    );
+
+    search_input.update_in(cx, |input, window, cx| {
+        input.set_value("no such session", window, cx);
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    assert!(
+        cx.debug_bounds("agent-sessions-no-matches").is_some(),
+        "an unmatched query must render an empty-search result"
+    );
+}
+
+#[gpui::test]
 fn overflowing_agent_session_list_scrolls_within_the_project_panel(cx: &mut TestAppContext) {
     use std::sync::Arc;
 
@@ -1830,6 +1928,90 @@ fn overflowing_agent_session_list_scrolls_within_the_project_panel(cx: &mut Test
     assert!(
         first_row_after_scroll.origin.y < first_row.origin.y - px(1.0),
         "session list must move rows in response to wheel input: before={first_row:?}, after={first_row_after_scroll:?}"
+    );
+}
+
+#[gpui::test]
+fn long_agent_session_tooltip_content_stays_within_its_layout(cx: &mut TestAppContext) {
+    use std::sync::Arc;
+
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir_all(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut settings = AppSettings::default();
+    settings.agent.sessions_enabled = false;
+    save_settings(&config_paths, &settings).unwrap();
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(local_project(project_path), dev_fixture_layout())
+        .unwrap();
+    let (root, cx) = cx.add_window_view(|_, _| {
+        WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
+    });
+    cx.run_until_parked();
+
+    root.update(cx, |root, cx| {
+        root.app_settings.agent.sessions_enabled = true;
+        root.app_settings.agent.primary = Some(BuiltinAgent::Codex);
+        root.project.active_panel_page = ProjectPanelPage::AgentSessions;
+        root.agent_sessions.key = Some(AgentSessionScanKey {
+            project_id,
+            agent: BuiltinAgent::Codex,
+        });
+        root.agent_sessions.sessions = Arc::new(vec![AgentSession {
+            provider: BuiltinAgent::Codex,
+            id: format!("codex-session-{}", "0123456789".repeat(12)),
+            title: "Convert a very long imported theme while preserving every color and syntax token setting ".repeat(4),
+            model: Some(format!("openai-codex/{}", "gpt-5.6-specialized".repeat(8))),
+            transcript_path: Some(PathBuf::from(format!(
+                "{}.jsonl",
+                "2026-07-14T04-44-44-session-transcript".repeat(5)
+            ))),
+            updated_at_ms: 1,
+        }]);
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+
+    let row = cx
+        .debug_bounds("agent-session-row-0")
+        .expect("session row must render");
+    cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
+    cx.background_executor
+        .advance_clock(Duration::from_millis(500));
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    let tooltip = cx
+        .debug_bounds("agent-session-tooltip")
+        .expect("session tooltip must render");
+    let title = cx
+        .debug_bounds("agent-session-tooltip-title")
+        .expect("tooltip title must render");
+    let session_id = cx
+        .debug_bounds("agent-session-tooltip-session-id")
+        .expect("tooltip session ID must render");
+    let model = cx
+        .debug_bounds("agent-session-tooltip-model")
+        .expect("tooltip model must render");
+    let transcript = cx
+        .debug_bounds("agent-session-tooltip-transcript")
+        .expect("tooltip transcript must render");
+
+    for field in [title, session_id, model, transcript] {
+        assert!(
+            field.origin.x >= tooltip.origin.x
+                && field.origin.x + field.size.width <= tooltip.origin.x + tooltip.size.width,
+            "tooltip content must remain within its horizontal bounds: tooltip={tooltip:?}, field={field:?}"
+        );
+    }
+    assert!(
+        title.origin.y + title.size.height <= session_id.origin.y
+            && session_id.origin.y + session_id.size.height <= model.origin.y
+            && model.origin.y + model.size.height <= transcript.origin.y,
+        "tooltip fields must not overlap vertically: title={title:?}, session_id={session_id:?}, model={model:?}, transcript={transcript:?}"
     );
 }
 

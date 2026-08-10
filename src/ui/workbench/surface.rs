@@ -14,6 +14,55 @@ struct AgentSessionTooltipText {
 
 use super::*;
 
+fn agent_session_field_matches(value: &str, normalized_query: &str) -> bool {
+    value.contains(normalized_query) || value.to_lowercase().contains(normalized_query)
+}
+
+fn agent_session_matches_search(session: &AgentSession, normalized_query: &str) -> bool {
+    normalized_query.is_empty()
+        || agent_session_field_matches(&session.title, normalized_query)
+        || agent_session_field_matches(&session.id, normalized_query)
+        || agent_session_field_matches(session.provider.display_name(), normalized_query)
+        || session
+            .model
+            .as_deref()
+            .is_some_and(|model| agent_session_field_matches(model, normalized_query))
+        || session.transcript_path.as_ref().is_some_and(|path| {
+            agent_session_field_matches(path.to_string_lossy().as_ref(), normalized_query)
+        })
+}
+
+fn agent_session_tooltip_field(
+    selector: &'static str,
+    label: &'static str,
+    value: String,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Div {
+    div()
+        .flex()
+        .items_start()
+        .min_w_0()
+        .w_full()
+        .gap(ui_style.spacing.xs)
+        .text_xs()
+        .child(
+            div()
+                .flex_none()
+                .text_color(theme.text_subtle)
+                .child(format!("{label}:")),
+        )
+        .child(
+            div()
+                .debug_selector(move || selector.to_string())
+                .min_w_0()
+                .flex_1()
+                .truncate()
+                .text_color(theme.text_muted)
+                .child(value),
+        )
+}
+
 impl WorkbenchView {
     fn work_item_view(
         &mut self,
@@ -587,7 +636,8 @@ impl WorkbenchView {
                 .min_h_0()
                 .child(files_content),
             ProjectPanelPage::AgentSessions => {
-                self.agent_sessions_panel_content(theme, ui_style, cx)
+                let search_input = self.agent_sessions_search_input(window, cx);
+                self.agent_sessions_panel_content(&search_input, theme, ui_style, cx)
             }
         };
 
@@ -736,17 +786,36 @@ impl WorkbenchView {
 
     fn agent_sessions_panel_content(
         &mut self,
+        search_input: &Entity<InputState>,
         theme: WorkbenchTheme,
         ui_style: UiStyle,
         cx: &mut Context<Self>,
     ) -> Div {
         let sessions = self.agent_sessions.sessions.clone();
+        let search_query = search_input.read(cx).value().trim().to_lowercase();
+        let search_active = !search_query.is_empty();
+        let visible_sessions = sessions
+            .iter()
+            .enumerate()
+            .filter(|(_, session)| agent_session_matches_search(session, &search_query))
+            .collect::<Vec<_>>();
         let mut providers = Vec::with_capacity(BuiltinAgent::ALL.len());
         for session in sessions.iter() {
             if !providers.contains(&session.provider) {
                 providers.push(session.provider);
             }
         }
+        let mut visible_providers = Vec::with_capacity(providers.len());
+        for (_, session) in &visible_sessions {
+            if !visible_providers.contains(&session.provider) {
+                visible_providers.push(session.provider);
+            }
+        }
+        let count_label = if search_active {
+            format!("{} / {}", visible_sessions.len(), sessions.len())
+        } else {
+            sessions.len().to_string()
+        };
         let header_title = match providers.as_slice() {
             [provider] => provider.display_name(),
             [] => self.primary_agent().display_name(),
@@ -770,16 +839,27 @@ impl WorkbenchView {
                     .text_color(theme.text_muted)
                     .child(header_title),
             )
-            .child(
-                div()
-                    .text_color(theme.text_subtle)
-                    .child(sessions.len().to_string()),
-            );
+            .child(div().text_color(theme.text_subtle).child(count_label));
         let remote = self
             .workspace
             .selected_project_id()
             .and_then(|project_id| self.workspace.project(project_id))
             .is_some_and(|project| project.location.local_path().is_none());
+        let show_search = !remote
+            && !self.agent_sessions.loading
+            && self.agent_sessions.error.is_none()
+            && !sessions.is_empty();
+        let search = div()
+            .debug_selector(|| "agent-sessions-search".to_string())
+            .flex_none()
+            .border_b(ui_style.border.hairline)
+            .border_color(theme.border_variant)
+            .p(ui_style.spacing.xs)
+            .child(
+                yttt_input(search_input, YtttInputKind::Search, theme, ui_style)
+                    .prefix(IconName::Search)
+                    .cleanable(true),
+            );
         let body = if remote {
             self.agent_sessions_message(
                 "agent-sessions-remote",
@@ -833,6 +913,15 @@ impl WorkbenchView {
                 theme,
                 ui_style,
             )
+        } else if visible_sessions.is_empty() {
+            self.agent_sessions_message(
+                "agent-sessions-no-matches",
+                self.ui_text
+                    .get(UiTextKey::AgentSessionsNoMatches)
+                    .to_string(),
+                theme,
+                ui_style,
+            )
         } else {
             let tooltip_text = AgentSessionTooltipText {
                 resume_hint: self.ui_text.get(UiTextKey::AgentSessionsResumeHint),
@@ -847,12 +936,11 @@ impl WorkbenchView {
                 .overflow_y_scrollbar()
                 .py(ui_style.spacing.xs);
             if providers.len() == 1 {
-                let rows = sessions
+                let rows = visible_sessions
                     .iter()
-                    .enumerate()
                     .map(|(index, session)| {
                         self.agent_session_row(
-                            index,
+                            *index,
                             session,
                             true,
                             false,
@@ -865,21 +953,21 @@ impl WorkbenchView {
                     .collect::<Vec<_>>();
                 list = list.children(rows);
             } else {
-                for provider in providers {
+                for provider in visible_providers {
                     let provider_id = provider.id();
-                    let expanded = self.agent_sessions.expanded_providers.contains(provider_id);
-                    let provider_session_count = sessions
+                    let expanded = search_active
+                        || self.agent_sessions.expanded_providers.contains(provider_id);
+                    let provider_session_count = visible_sessions
                         .iter()
-                        .filter(|session| session.provider == provider)
+                        .filter(|(_, session)| session.provider == provider)
                         .count();
                     let rows = if expanded {
-                        sessions
+                        visible_sessions
                             .iter()
-                            .enumerate()
                             .filter(|(_, session)| session.provider == provider)
                             .map(|(index, session)| {
                                 self.agent_session_row(
-                                    index,
+                                    *index,
                                     session,
                                     false,
                                     true,
@@ -969,6 +1057,7 @@ impl WorkbenchView {
             .flex_1()
             .min_h_0()
             .child(header)
+            .when(show_search, |panel| panel.child(search))
             .child(body)
     }
 
@@ -1031,10 +1120,17 @@ impl WorkbenchView {
                         .debug_selector(|| "agent-session-tooltip".to_string())
                         .flex()
                         .flex_col()
-                        .gap(ui_style.spacing.xs)
+                        .min_w_0()
                         .max_w(px(420.0))
+                        .overflow_hidden()
+                        .gap(ui_style.spacing.xs)
                         .child(
                             div()
+                                .debug_selector(|| "agent-session-tooltip-title".to_string())
+                                .min_w_0()
+                                .w_full()
+                                .whitespace_normal()
+                                .line_clamp(3)
                                 .text_sm()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.text)
@@ -1042,37 +1138,47 @@ impl WorkbenchView {
                         )
                         .child(
                             div()
+                                .min_w_0()
+                                .w_full()
+                                .truncate()
                                 .text_xs()
                                 .text_color(theme.text_subtle)
                                 .child(meta.clone()),
                         )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.text_muted)
-                                .child(format!("{}: {session_id}", tooltip_text.session_id_label)),
-                        )
+                        .child(agent_session_tooltip_field(
+                            "agent-session-tooltip-session-id",
+                            tooltip_text.session_id_label,
+                            session_id.clone(),
+                            theme,
+                            ui_style,
+                        ))
                         .when_some(model.clone(), |tooltip, model| {
-                            tooltip.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.text_muted)
-                                    .child(format!("{}: {model}", tooltip_text.model_label)),
-                            )
+                            tooltip.child(agent_session_tooltip_field(
+                                "agent-session-tooltip-model",
+                                tooltip_text.model_label,
+                                model,
+                                theme,
+                                ui_style,
+                            ))
                         })
                         .when_some(transcript.clone(), |tooltip, transcript| {
-                            tooltip.child(
-                                div().text_xs().text_color(theme.text_muted).child(format!(
-                                    "{}: {transcript}",
-                                    tooltip_text.transcript_label
-                                )),
-                            )
+                            tooltip.child(agent_session_tooltip_field(
+                                "agent-session-tooltip-transcript",
+                                tooltip_text.transcript_label,
+                                transcript,
+                                theme,
+                                ui_style,
+                            ))
                         })
                         .child(
                             div()
                                 .pt(ui_style.spacing.xs)
                                 .border_t(ui_style.border.hairline)
                                 .border_color(theme.border_variant)
+                                .min_w_0()
+                                .w_full()
+                                .whitespace_normal()
+                                .line_clamp(2)
                                 .text_xs()
                                 .text_color(theme.text_subtle)
                                 .child(tooltip_text.resume_hint),

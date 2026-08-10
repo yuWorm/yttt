@@ -128,6 +128,39 @@ impl WorkbenchView {
         .detach();
     }
 
+    pub(super) fn agent_sessions_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(input) = &self.agent_sessions.search_input {
+            return input.clone();
+        }
+
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(self.ui_text.get(UiTextKey::AgentSessionsSearchPlaceholder))
+                .clean_on_escape()
+        });
+        let subscription =
+            cx.subscribe_in(&input, window, Self::on_agent_sessions_search_input_event);
+        self.agent_sessions.search_input = Some(input.clone());
+        self.agent_sessions.search_input_subscription = Some(subscription);
+        input
+    }
+
+    fn on_agent_sessions_search_input_event(
+        &mut self,
+        _input: &Entity<InputState>,
+        event: &InputEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(event, InputEvent::Change) {
+            cx.notify();
+        }
+    }
+
     pub(super) fn agent_session_title(&self, session: &AgentSession) -> String {
         if session.title.is_empty() {
             self.ui_text
