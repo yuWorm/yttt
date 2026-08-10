@@ -389,6 +389,20 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSectionVim => "Vim",
         UiTextKey::SettingsSectionDiagnostics => "Diagnostics",
         UiTextKey::SettingsSectionBindings => "Bindings",
+        UiTextKey::SettingsSectionKeymapProfile => "Keymap profile",
+        UiTextKey::SettingsKeybindingProfileBase => "Base",
+        UiTextKey::SettingsKeybindingProfileBaseDescription => {
+            "Shortcuts used without Vim and inherited by Vim when they do not conflict."
+        }
+        UiTextKey::SettingsKeybindingProfileVim => "Vim",
+        UiTextKey::SettingsKeybindingProfileVimDescription => {
+            "The effective Vim keymap: inherited base shortcuts plus modal overrides."
+        }
+        UiTextKey::SettingsKeybindingOriginInherited => "Inherited",
+        UiTextKey::SettingsKeybindingOriginBuiltin => "Built-in",
+        UiTextKey::SettingsKeybindingOriginUser => "User",
+        UiTextKey::SettingsKeybindingShadowed => "shadowed",
+        UiTextKey::SettingsKeybindingPrefixConflict => "prefix",
         UiTextKey::SettingsAgentPrimary => "Primary agent",
         UiTextKey::SettingsAgentPrimaryDescription => {
             "The agent selected during onboarding and used for session discovery."
@@ -552,6 +566,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsVimQuickStart => "Vim quick start",
         UiTextKey::SettingsVimQuickStartDescription => {
             "Global mode: Ctrl-[ or Escape enters Normal; i returns to Insert or terminal input; Ctrl-W H/J/K/L focuses panes, work areas, and the project tree; tree j/k moves rows and h/l collapses, expands, or opens; gt/gT cycles tabs; Leader commands open files, palettes, and tabs."
+        }
+        UiTextKey::SettingsVimModeScope => "Modes and surfaces",
+        UiTextKey::SettingsVimModeScopeDescription => {
+            "Normal · Insert · Visual · Operator · Terminal · Settings · Palette · Project Tree"
         }
         UiTextKey::SettingsVimLeader => "Vim leader key",
         UiTextKey::SettingsVimLeaderDescription => {

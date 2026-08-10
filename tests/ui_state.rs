@@ -767,6 +767,56 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
         .debug_bounds("settings-keybinding-virtual-list")
         .expect("the keybinding settings should render through a virtual list");
     assert!(keybinding_list.size.height > gpui::px(0.0));
+    assert!(
+        cx.debug_bounds("settings-keybinding-profile-base")
+            .is_some(),
+        "keybinding settings should expose the base profile"
+    );
+    let vim_profile = cx
+        .debug_bounds("settings-keybinding-profile-vim")
+        .expect("keybinding settings should expose the Vim profile");
+    cx.simulate_click(vim_profile.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).selected_keybinding_profile(),
+            yttt::ui::settings::keybindings::KeybindingProfile::Vim
+        );
+    });
+    cx.refresh().unwrap();
+    assert!(
+        cx.debug_bounds("settings-vim-profile-summary").is_some(),
+        "the Vim profile should show its mode, surface, and leader summary"
+    );
+    assert!(
+        cx.debug_bounds("settings-keybinding-row-project.create")
+            .is_some(),
+        "the first keybinding row should initially be visible"
+    );
+    let keybinding_list = cx
+        .debug_bounds("settings-keybinding-virtual-list")
+        .expect("the virtualized keybinding list should remain visible");
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: keybinding_list.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-640.0))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    assert!(
+        cx.debug_bounds("settings-keybinding-row-project.create")
+            .is_none(),
+        "scrolling should move the first keybinding row off screen"
+    );
+
+    root.update(cx, |_root, cx| cx.notify());
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    assert!(
+        cx.debug_bounds("settings-keybinding-row-project.create")
+            .is_none(),
+        "a redraw should preserve the keybinding list scroll position"
+    );
 }
 
 #[gpui::test]
@@ -3927,6 +3977,7 @@ fn root_view_settings_open_command_opens_settings_page() {
             "Languages",
             "Editor",
             "Terminal",
+            "Agent",
             "Default Layout",
             "Keybindings"
         ]
@@ -5067,17 +5118,14 @@ fn keybindings_settings_explains_vim_leader_and_sequence_recording(cx: &mut gpui
     root.update(cx, |root, cx| {
         root.open_settings();
         root.select_settings_group("keybindings").unwrap();
+        root.select_keybinding_profile(yttt::ui::settings::keybindings::KeybindingProfile::Vim);
         cx.notify();
     });
     cx.refresh().unwrap();
 
     assert!(
-        cx.debug_bounds("settings-vim-quick-start-row").is_some(),
-        "Keybindings settings should explain how to use each Vim mode"
-    );
-    assert!(
-        cx.debug_bounds("settings-vim-leader-row").is_some(),
-        "Keybindings settings should expose the current Vim leader"
+        cx.debug_bounds("settings-vim-profile-summary").is_some(),
+        "the Vim keymap should summarize modes, surfaces, shortcuts, and the leader"
     );
     cx.read(|app| assert_eq!(root.read(app).keybinding_leader(), "space"));
 
@@ -5424,6 +5472,7 @@ fn root_view_language_setting_updates_settings_labels() {
             "语言",
             "编辑器",
             "终端",
+            "Agent",
             "默认布局",
             "快捷键"
         ]

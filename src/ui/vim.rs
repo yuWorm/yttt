@@ -10,6 +10,8 @@ pub const VIM_NORMAL_CONTEXT: &str =
     "YtttVim && yttt_vim_scope == global && yttt_vim_mode == normal";
 pub const VIM_CONTROL_CONTEXT: &str =
     "YtttVim && yttt_vim_scope == global && yttt_vim_control == true";
+pub const VIM_PROFILE_CONTEXT: &str =
+    "(VimControl && !SearchPanel) || (YtttVim && yttt_vim_control == true)";
 pub const VIM_ESCAPE_CONTEXT: &str = "YtttVim && yttt_vim_scope == global && yttt_vim_capture == inherit && yttt_vim_surface != editor && yttt_vim_surface != terminal";
 pub const VIM_TERMINAL_CONTEXT: &str = "YtttVim && yttt_vim_scope == global && yttt_vim_mode == terminal && yttt_vim_surface == terminal";
 pub const VIM_TERMINAL_NORMAL_CONTEXT: &str = "YtttVim && yttt_vim_scope == global && yttt_vim_mode == normal && yttt_vim_surface == terminal";

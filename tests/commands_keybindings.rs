@@ -30,7 +30,10 @@ use yttt::ui::interaction::{
 use yttt::ui::settings::keybinding_display::{
     KeybindingDisplayPlatform, display_keybindings_for_platform, recorded_keybinding,
 };
-use yttt::ui::settings::keybindings::{KeybindingEditError, KeybindingsEditorState};
+use yttt::ui::settings::keybindings::{
+    KeybindingDiagnosticKind, KeybindingEditError, KeybindingOrigin, KeybindingProfile,
+    KeybindingsEditorState,
+};
 use yttt::ui::vim::{
     VIM_CONTROL_CONTEXT, VIM_NORMAL_CONTEXT, VIM_PALETTE_NORMAL_CONTEXT,
     VIM_PROJECT_PANEL_NORMAL_CONTEXT, VIM_PROJECT_TREE_NORMAL_CONTEXT, VIM_PROJECTS_NORMAL_CONTEXT,
@@ -1284,6 +1287,168 @@ fn saving_unchanged_action_keys_preserves_context_assignments() {
     editor.set_action_keys(action, keys);
 
     assert_eq!(editor.config(), &config);
+}
+
+#[test]
+fn keybindings_editor_profiles_keep_the_complete_catalog_and_inherit_base_bindings() {
+    let editor = KeybindingsEditorState::new(KeybindingsConfig::default(), bindable_registry());
+    let text = UiText::new(Locale::English);
+    let base_rows = editor.rows_for_profile(KeybindingProfile::Base, &text);
+    let vim_rows = editor.rows_for_profile(KeybindingProfile::Vim, &text);
+
+    assert_eq!(base_rows.len(), BindableActionId::all().count());
+    assert_eq!(
+        base_rows.iter().map(|row| row.command).collect::<Vec<_>>(),
+        vim_rows.iter().map(|row| row.command).collect::<Vec<_>>()
+    );
+
+    let action = BindableActionId::Command(CommandId::CommandPaletteOpen);
+    let base = base_rows.iter().find(|row| row.command == action).unwrap();
+    let vim = vim_rows.iter().find(|row| row.command == action).unwrap();
+    assert!(
+        base.assignments
+            .iter()
+            .all(|assignment| assignment.origin != KeybindingOrigin::Inherited)
+    );
+    assert!(vim.assignments.iter().any(|assignment| {
+        assignment.origin == KeybindingOrigin::Inherited
+            && assignment.keys == "cmd-shift-p"
+            && !assignment.shadowed
+    }));
+}
+
+#[test]
+fn editing_the_vim_profile_creates_a_difference_without_mutating_base_bindings() {
+    let mut editor = KeybindingsEditorState::new(KeybindingsConfig::default(), bindable_registry());
+    let action = BindableActionId::Command(CommandId::TabPalette);
+    let base_before = editor.action_keys_for_profile(action, KeybindingProfile::Base);
+    let vim_before = editor.action_keys_for_profile(action, KeybindingProfile::Vim);
+
+    editor.set_action_keys_for_profile(
+        action,
+        KeybindingProfile::Vim,
+        vec!["ctrl-alt-shift-y".to_string()],
+    );
+
+    assert_eq!(
+        editor.action_keys_for_profile(action, KeybindingProfile::Base),
+        base_before
+    );
+    assert_eq!(
+        editor.action_keys_for_profile(action, KeybindingProfile::Vim),
+        vec!["ctrl-alt-shift-y".to_string()]
+    );
+    assert!(editor.config().bindings.iter().any(|binding| {
+        binding.command == action.as_str()
+            && binding.keys == "ctrl-alt-shift-y"
+            && binding.context.as_deref() == Some(yttt::ui::vim::VIM_PROFILE_CONTEXT)
+            && !binding.unbind
+    }));
+
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    editor.save(&paths).unwrap();
+    let loaded = load_keybindings(&paths, &bindable_registry()).unwrap();
+    let mut editor = KeybindingsEditorState::new(loaded.config, bindable_registry());
+    assert_eq!(
+        editor.action_keys_for_profile(action, KeybindingProfile::Vim),
+        vec!["ctrl-alt-shift-y".to_string()]
+    );
+    assert_eq!(
+        editor.action_keys_for_profile(action, KeybindingProfile::Base),
+        base_before
+    );
+
+    editor.reset_action_keys_for_profile(action, KeybindingProfile::Vim);
+    assert_eq!(
+        editor.action_keys_for_profile(action, KeybindingProfile::Vim),
+        vim_before
+    );
+    assert_eq!(
+        editor.action_keys_for_profile(action, KeybindingProfile::Base),
+        base_before
+    );
+}
+
+#[test]
+fn vim_profile_reports_exact_shadow_and_prefix_diagnostics() {
+    let context = yttt::ui::vim::VIM_NORMAL_CONTEXT.to_string();
+    let config = KeybindingsConfig {
+        schema_version: KEYBINDINGS_SCHEMA_VERSION,
+        leader: "space".to_string(),
+        bindings: vec![
+            Keybinding {
+                keys: "x".to_string(),
+                command: CommandId::ProjectOpen.as_str().to_string(),
+                context: Some("Workspace".to_string()),
+                unbind: false,
+            },
+            Keybinding {
+                keys: "x".to_string(),
+                command: CommandId::FileFind.as_str().to_string(),
+                context: Some(context.clone()),
+                unbind: false,
+            },
+            Keybinding {
+                keys: "g".to_string(),
+                command: CommandId::ProjectOpen.as_str().to_string(),
+                context: Some(context.clone()),
+                unbind: false,
+            },
+            Keybinding {
+                keys: "g".to_string(),
+                command: CommandId::FileFind.as_str().to_string(),
+                context: Some(context.clone()),
+                unbind: false,
+            },
+            Keybinding {
+                keys: "g g".to_string(),
+                command: CommandId::TabPalette.as_str().to_string(),
+                context: Some(context),
+                unbind: false,
+            },
+        ],
+    };
+    let editor = KeybindingsEditorState::new(config, bindable_registry());
+    let rows = editor.rows_for_profile(KeybindingProfile::Vim, &UiText::new(Locale::English));
+    let project_open = rows
+        .iter()
+        .find(|row| row.command == BindableActionId::Command(CommandId::ProjectOpen))
+        .unwrap();
+    let file_find = rows
+        .iter()
+        .find(|row| row.command == BindableActionId::Command(CommandId::FileFind))
+        .unwrap();
+    let tab_palette = rows
+        .iter()
+        .find(|row| row.command == BindableActionId::Command(CommandId::TabPalette))
+        .unwrap();
+
+    assert!(project_open.assignments.iter().any(|assignment| {
+        assignment.keys == "x"
+            && assignment.origin == KeybindingOrigin::Inherited
+            && assignment.shadowed
+    }));
+    assert!(
+        project_open
+            .diagnostics
+            .contains(&KeybindingDiagnosticKind::Conflict)
+    );
+    assert!(
+        file_find
+            .diagnostics
+            .contains(&KeybindingDiagnosticKind::Conflict)
+    );
+    assert!(
+        project_open
+            .diagnostics
+            .contains(&KeybindingDiagnosticKind::Prefix)
+    );
+    assert!(
+        tab_palette
+            .diagnostics
+            .contains(&KeybindingDiagnosticKind::Prefix)
+    );
 }
 
 #[test]

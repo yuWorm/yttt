@@ -345,6 +345,20 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSectionVim => "Vim",
         UiTextKey::SettingsSectionDiagnostics => "诊断",
         UiTextKey::SettingsSectionBindings => "快捷键列表",
+        UiTextKey::SettingsSectionKeymapProfile => "快捷键配置",
+        UiTextKey::SettingsKeybindingProfileBase => "基础",
+        UiTextKey::SettingsKeybindingProfileBaseDescription => {
+            "非 Vim 模式使用的快捷键；无冲突时由 Vim 自动继承。"
+        }
+        UiTextKey::SettingsKeybindingProfileVim => "Vim",
+        UiTextKey::SettingsKeybindingProfileVimDescription => {
+            "Vim 的有效快捷键：继承基础快捷键，并叠加模态覆盖。"
+        }
+        UiTextKey::SettingsKeybindingOriginInherited => "继承",
+        UiTextKey::SettingsKeybindingOriginBuiltin => "内置",
+        UiTextKey::SettingsKeybindingOriginUser => "用户",
+        UiTextKey::SettingsKeybindingShadowed => "已遮蔽",
+        UiTextKey::SettingsKeybindingPrefixConflict => "前缀冲突",
         UiTextKey::SettingsAgentPrimary => "主 Agent",
         UiTextKey::SettingsAgentPrimaryDescription => "引导时选择、用于扫描会话的 Agent。",
         UiTextKey::SettingsAgentSessions => "会话列表",
@@ -478,6 +492,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsVimQuickStart => "Vim 快速上手",
         UiTextKey::SettingsVimQuickStartDescription => {
             "全局模式：Ctrl-[ 或 Escape 进入普通模式；i 返回插入模式或终端输入；Ctrl-W H/J/K/L 在窗格、工作区与项目树之间切换焦点；项目树中 j/k 移动条目，h/l 折叠、展开或打开；gt/gT 切换标签；Leader 命令用于打开文件、命令面板和标签。"
+        }
+        UiTextKey::SettingsVimModeScope => "模式与界面",
+        UiTextKey::SettingsVimModeScopeDescription => {
+            "普通 · 插入 · 可视 · 操作符 · 终端 · 设置 · 命令面板 · 项目树"
         }
         UiTextKey::SettingsVimLeader => "Vim Leader 键",
         UiTextKey::SettingsVimLeaderDescription => {

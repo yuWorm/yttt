@@ -262,7 +262,10 @@ use crate::{
         settings::keybinding_display::{
             primary_display_keybinding_for_current_platform, recorded_keybinding,
         },
-        settings::keybindings::{KeybindingEditError, KeybindingRow, KeybindingsEditorState},
+        settings::keybindings::{
+            KeybindingAssignment, KeybindingDiagnosticKind, KeybindingEditError, KeybindingOrigin,
+            KeybindingProfile, KeybindingRow, KeybindingsEditorState,
+        },
         terminal::pane::{
             SshTerminalContext, TerminalPaneContext, TerminalPaneEvent, TerminalPaneExitedEvent,
             TerminalPaneStartedEvent, TerminalPaneView,
@@ -469,6 +472,7 @@ struct PendingTabRename {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PendingKeybindingEdit {
     action: BindableActionId,
+    profile: KeybindingProfile,
     keys: Vec<String>,
     has_recorded: bool,
     recording_index: Option<usize>,
@@ -1210,9 +1214,14 @@ impl WorkbenchView {
         &mut self,
         action: BindableActionId,
     ) -> Result<(), WorkbenchError> {
-        let keys = self.settings.keybindings_editor.action_keys(action);
+        let profile = self.settings.keybinding_profile;
+        let keys = self
+            .settings
+            .keybindings_editor
+            .action_keys_for_profile(action, profile);
         self.overlays.pending_keybinding_edit = Some(PendingKeybindingEdit {
             action,
+            profile,
             keys,
             has_recorded: false,
             recording_index: None,
@@ -1228,7 +1237,9 @@ impl WorkbenchView {
         let Some(edit) = self.overlays.pending_keybinding_edit.clone() else {
             return Ok(());
         };
-        if let Err(error) = self.set_keybinding_action_keys(edit.action, edit.keys) {
+        if let Err(error) =
+            self.set_keybinding_action_keys_for_profile(edit.action, edit.profile, edit.keys)
+        {
             let message = match &error {
                 WorkbenchError::KeybindingEdit(error) => {
                     self.localized_keybinding_edit_error(error)
@@ -1647,7 +1658,22 @@ impl WorkbenchView {
     pub fn visible_keybinding_rows(&self) -> Vec<KeybindingRow> {
         self.settings
             .keybindings_editor
-            .rows_with_text(&self.ui_text)
+            .rows_for_profile(self.settings.keybinding_profile, &self.ui_text)
+    }
+
+    pub fn selected_keybinding_profile(&self) -> KeybindingProfile {
+        self.settings.keybinding_profile
+    }
+
+    pub fn select_keybinding_profile(&mut self, profile: KeybindingProfile) {
+        if self.settings.keybinding_profile == profile {
+            return;
+        }
+        self.settings.keybinding_profile = profile;
+        self.settings.keybinding_rows_cache = None;
+        self.settings
+            .keybinding_scroll_handle
+            .set_offset(Point::default());
     }
 
     pub fn runtime_keybinding_specs(&self) -> Vec<UiKeybindingSpec> {
@@ -1708,6 +1734,23 @@ impl WorkbenchView {
         Ok(())
     }
 
+    pub fn set_keybinding_action_keys_for_profile(
+        &mut self,
+        action: BindableActionId,
+        profile: KeybindingProfile,
+        keys: Vec<String>,
+    ) -> Result<(), WorkbenchError> {
+        let previous = self.settings.keybindings_editor.clone();
+        self.settings
+            .keybindings_editor
+            .set_action_keys_for_profile(action, profile, keys);
+        if let Err(error) = self.save_keybindings_editor() {
+            self.settings.keybindings_editor = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
+
     pub fn delete_keybinding_command_keys(
         &mut self,
         command: CommandId,
@@ -1728,6 +1771,22 @@ impl WorkbenchView {
         Ok(())
     }
 
+    pub fn delete_keybinding_action_keys_for_profile(
+        &mut self,
+        action: BindableActionId,
+        profile: KeybindingProfile,
+    ) -> Result<(), WorkbenchError> {
+        let previous = self.settings.keybindings_editor.clone();
+        self.settings
+            .keybindings_editor
+            .delete_action_keys_for_profile(action, profile);
+        if let Err(error) = self.save_keybindings_editor() {
+            self.settings.keybindings_editor = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
+
     pub fn reset_keybinding_command_keys(
         &mut self,
         command: CommandId,
@@ -1741,6 +1800,22 @@ impl WorkbenchView {
     ) -> Result<(), WorkbenchError> {
         let previous = self.settings.keybindings_editor.clone();
         self.settings.keybindings_editor.reset_action_keys(action);
+        if let Err(error) = self.save_keybindings_editor() {
+            self.settings.keybindings_editor = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub fn reset_keybinding_action_keys_for_profile(
+        &mut self,
+        action: BindableActionId,
+        profile: KeybindingProfile,
+    ) -> Result<(), WorkbenchError> {
+        let previous = self.settings.keybindings_editor.clone();
+        self.settings
+            .keybindings_editor
+            .reset_action_keys_for_profile(action, profile);
         if let Err(error) = self.save_keybindings_editor() {
             self.settings.keybindings_editor = previous;
             return Err(error);

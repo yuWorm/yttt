@@ -1800,16 +1800,23 @@ fn settings_keybinding_rows(
 ) -> Div {
     let theme = root.theme_runtime().ui;
     let text = root.ui_text;
+    let profile = root.settings.keybinding_profile;
     let diagnostics = if root.settings.keybinding_warning_lines.is_empty() {
         text.get(UiTextKey::SettingsNoKeybindingConflicts)
             .to_string()
     } else {
         root.settings.keybinding_warning_lines.join("; ")
     };
+    let profile_description = match profile {
+        KeybindingProfile::Base => text.get(UiTextKey::SettingsKeybindingProfileBaseDescription),
+        KeybindingProfile::Vim => text.get(UiTextKey::SettingsKeybindingProfileVimDescription),
+    };
     let leader = root.keybinding_leader().to_string();
     if root.settings.keybinding_rows_cache.is_none() {
         root.settings.keybinding_rows_cache = Some(Rc::new(
-            root.settings.keybindings_editor.rows_with_text(&text),
+            root.settings
+                .keybindings_editor
+                .rows_for_profile(profile, &text),
         ));
     }
     let keybinding_rows = root
@@ -1822,6 +1829,7 @@ fn settings_keybinding_rows(
         style.ui_style.rows.settings_height.0 + if style.stack_rows { 2.5 } else { 0.0 };
     let row_height = px(f32::from(window.rem_size()) * row_height_rems);
     let item_sizes = Rc::new(vec![gpui::size(px(0.0), row_height); keybinding_rows.len()]);
+    let scroll_handle = root.settings.keybinding_scroll_handle.clone();
     let list_rows = keybinding_rows.clone();
     let virtual_list = v_virtual_list(
         cx.entity(),
@@ -1830,12 +1838,57 @@ fn settings_keybinding_rows(
         move |_root, visible_range, _window, cx| {
             visible_range
                 .filter_map(|index| list_rows.get(index))
-                .map(|row| settings_keybinding_row(row, style, theme, text, cx))
+                .map(|row| settings_keybinding_row(row, profile, style, theme, text, cx))
                 .collect::<Vec<_>>()
         },
     );
+    let profile_selector = div()
+        .debug_selector(|| "settings-keybinding-profile-selector".to_string())
+        .flex()
+        .items_center()
+        .gap(style.ui_style.spacing.xs)
+        .px(style.ui_style.spacing.md)
+        .py(style.ui_style.spacing.sm)
+        .child(
+            div()
+                .debug_selector(|| "settings-keybinding-profile-base".to_string())
+                .child(settings_button(
+                    "settings-keybinding-profile-base-button",
+                    text.get(UiTextKey::SettingsKeybindingProfileBase),
+                    profile == KeybindingProfile::Base,
+                    theme,
+                    cx,
+                    cx.listener(|this, _, _window, cx| {
+                        this.select_keybinding_profile(KeybindingProfile::Base);
+                        cx.notify();
+                    }),
+                )),
+        )
+        .child(
+            div()
+                .debug_selector(|| "settings-keybinding-profile-vim".to_string())
+                .child(settings_button(
+                    "settings-keybinding-profile-vim-button",
+                    text.get(UiTextKey::SettingsKeybindingProfileVim),
+                    profile == KeybindingProfile::Vim,
+                    theme,
+                    cx,
+                    cx.listener(|this, _, _window, cx| {
+                        this.select_keybinding_profile(KeybindingProfile::Vim);
+                        cx.notify();
+                    }),
+                )),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .text_xs()
+                .text_color(theme.text_muted)
+                .child(profile_description),
+        );
 
-    div()
+    let mut rows = div()
         .flex()
         .flex_col()
         .size_full()
@@ -1864,69 +1917,111 @@ fn settings_keybinding_rows(
         .child(settings_section_header(
             style,
             theme,
-            text.get(UiTextKey::SettingsSectionVim),
+            text.get(UiTextKey::SettingsSectionKeymapProfile),
             false,
         ))
-        .child(
-            setting_row(
-                style,
-                theme,
-                text.get(UiTextKey::SettingsVimQuickStart),
-                text.get(UiTextKey::SettingsVimQuickStartDescription),
-                settings_value("Ctrl-W · gt · j/k · i/Esc", theme, style.ui_style)
-                    .into_any_element(),
-            )
-            .id("settings-vim-quick-start-row")
-            .debug_selector(|| "settings-vim-quick-start-row".to_string()),
-        )
-        .child(
-            setting_row(
-                style,
-                theme,
-                text.get(UiTextKey::SettingsVimLeader),
-                text.get(UiTextKey::SettingsVimLeaderDescription),
-                settings_keybinding_value(
-                    vec![leader],
-                    text.get(UiTextKey::SettingsUnbound),
-                    theme,
-                    style.ui_style,
-                )
-                .into_any_element(),
-            )
-            .id("settings-vim-leader-row")
-            .debug_selector(|| "settings-vim-leader-row".to_string()),
-        )
-        .child(settings_section_header(
-            style,
-            theme,
-            text.get(UiTextKey::SettingsSectionDiagnostics),
-            false,
-        ))
-        .child(setting_row(
-            style,
-            theme,
-            text.get(UiTextKey::SettingsKeybindingDiagnostics),
-            text.get(UiTextKey::SettingsKeybindingDiagnosticsDescription),
-            settings_value(diagnostics, theme, style.ui_style).into_any_element(),
-        ))
-        .child(settings_section_header(
-            style,
-            theme,
-            text.get(UiTextKey::SettingsSectionBindings),
-            false,
-        ))
-        .child(
+        .child(profile_selector);
+
+    if profile == KeybindingProfile::Vim {
+        rows = rows.child(
             div()
-                .debug_selector(|| "settings-keybinding-virtual-list".to_string())
-                .flex_1()
-                .min_h_0()
-                .overflow_hidden()
-                .child(virtual_list),
-        )
+                .debug_selector(|| "settings-vim-profile-summary".to_string())
+                .flex()
+                .flex_col()
+                .gap(style.ui_style.spacing.sm)
+                .mx(style.ui_style.spacing.xxs)
+                .mt(style.ui_style.spacing.sm)
+                .p(style.ui_style.spacing.md)
+                .rounded(style.ui_style.radius.compact)
+                .border(style.ui_style.border.hairline)
+                .border_color(theme.border_variant.alpha(0.65))
+                .bg(theme.surface.alpha(0.55))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.text)
+                        .child(text.get(UiTextKey::SettingsSectionVim)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(style.ui_style.spacing.sm)
+                        .child(settings_value(
+                            format!(
+                                "{}: {}",
+                                text.get(UiTextKey::SettingsVimModeScope),
+                                text.get(UiTextKey::SettingsVimModeScopeDescription)
+                            ),
+                            theme,
+                            style.ui_style,
+                        ))
+                        .child(settings_value(
+                            format!("{}: {}", text.get(UiTextKey::SettingsVimLeader), leader),
+                            theme,
+                            style.ui_style,
+                        ))
+                        .child(settings_value(
+                            format!(
+                                "{}: Ctrl-W · gt · j/k · i/Esc",
+                                text.get(UiTextKey::SettingsVimQuickStart)
+                            ),
+                            theme,
+                            style.ui_style,
+                        )),
+                ),
+        );
+    }
+
+    rows.child(
+        div()
+            .debug_selector(|| "settings-keybinding-diagnostics-summary".to_string())
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(style.ui_style.spacing.lg)
+            .mt(style.ui_style.spacing.md)
+            .px(style.ui_style.spacing.md)
+            .py(style.ui_style.spacing.sm)
+            .border_y(style.ui_style.border.hairline)
+            .border_color(theme.border_variant.alpha(0.65))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.text)
+                    .child(text.get(UiTextKey::SettingsSectionDiagnostics)),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .text_xs()
+                    .text_color(theme.text_muted)
+                    .truncate()
+                    .child(diagnostics),
+            ),
+    )
+    .child(settings_section_header(
+        style,
+        theme,
+        text.get(UiTextKey::SettingsSectionBindings),
+        false,
+    ))
+    .child(
+        div()
+            .debug_selector(|| "settings-keybinding-virtual-list".to_string())
+            .flex_1()
+            .min_h_0()
+            .overflow_hidden()
+            .child(virtual_list.track_scroll(&scroll_handle)),
+    )
 }
 
 fn settings_keybinding_row(
     row: &KeybindingRow,
+    profile: KeybindingProfile,
     style: YtttSettingsLayout,
     theme: WorkbenchTheme,
     text: UiText,
@@ -1934,10 +2029,26 @@ fn settings_keybinding_row(
 ) -> Div {
     let command = row.command;
     let row_id = row.command_id;
-    let title_text = if row.has_conflict {
-        format!("{} ({})", row.title, text.get(UiTextKey::SettingsConflict))
-    } else {
+    let mut diagnostic_labels = Vec::new();
+    if row
+        .diagnostics
+        .contains(&KeybindingDiagnosticKind::Conflict)
+    {
+        diagnostic_labels.push(text.get(UiTextKey::SettingsConflict));
+    }
+    if row
+        .diagnostics
+        .contains(&KeybindingDiagnosticKind::Shadowed)
+    {
+        diagnostic_labels.push(text.get(UiTextKey::SettingsKeybindingShadowed));
+    }
+    if row.diagnostics.contains(&KeybindingDiagnosticKind::Prefix) {
+        diagnostic_labels.push(text.get(UiTextKey::SettingsKeybindingPrefixConflict));
+    }
+    let title_text = if diagnostic_labels.is_empty() {
         row.title.to_string()
+    } else {
+        format!("{} ({})", row.title, diagnostic_labels.join(" · "))
     };
     let label = div()
         .flex()
@@ -1960,19 +2071,19 @@ fn settings_keybinding_row(
                 .text_color(theme.text_muted)
                 .child(row.description),
         );
-    let actions = div()
+    let assignments = settings_keybinding_assignments(
+        &row.assignments,
+        text.get(UiTextKey::SettingsUnbound),
+        theme,
+        style.ui_style,
+        text,
+    );
+    let buttons = div()
         .flex()
         .flex_wrap()
         .items_center()
         .justify_end()
         .gap(style.ui_style.spacing.xs)
-        .flex_none()
-        .child(settings_keybinding_value(
-            row.display_keys(),
-            text.get(UiTextKey::SettingsUnbound),
-            theme,
-            style.ui_style,
-        ))
         .child(settings_button(
             format!("settings-keybinding-edit-{row_id}"),
             text.get(UiTextKey::SettingsEdit),
@@ -1991,7 +2102,7 @@ fn settings_keybinding_row(
             theme,
             cx,
             cx.listener(move |this, _, _window, cx| {
-                let _ = this.reset_keybinding_action_keys(command);
+                let _ = this.reset_keybinding_action_keys_for_profile(command, profile);
                 cx.notify();
             }),
         ))
@@ -2002,10 +2113,18 @@ fn settings_keybinding_row(
             theme,
             cx,
             cx.listener(move |this, _, _window, cx| {
-                let _ = this.delete_keybinding_action_keys(command);
+                let _ = this.delete_keybinding_action_keys_for_profile(command, profile);
                 cx.notify();
             }),
         ));
+    let controls = div()
+        .flex()
+        .flex_col()
+        .items_end()
+        .gap(style.ui_style.spacing.xs)
+        .flex_none()
+        .child(assignments)
+        .child(buttons);
     let binding_row = yttt_row(
         YtttRowKind::Settings,
         SelectableState::Inactive,
@@ -2021,20 +2140,80 @@ fn settings_keybinding_row(
             .items_start()
             .gap(style.ui_style.spacing.lg)
             .child(label)
-            .child(actions.w_full().justify_start())
+            .child(controls.w_full().items_start())
     } else {
         binding_row
             .items_center()
             .justify_between()
             .gap(style.ui_style.spacing.xl)
             .child(label)
-            .child(actions)
+            .child(controls)
     };
 
     binding_row
         .debug_selector(move || format!("settings-keybinding-row-{row_id}"))
         .border_b(style.ui_style.border.hairline)
         .border_color(theme.border_variant.alpha(0.65))
+}
+
+fn settings_keybinding_assignments(
+    assignments: &[KeybindingAssignment],
+    unbound_label: &str,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+    text: UiText,
+) -> Div {
+    if assignments.is_empty() {
+        return div().child(settings_keybinding_value(
+            Vec::new(),
+            unbound_label,
+            theme,
+            ui_style,
+        ));
+    }
+
+    assignments.iter().fold(
+        div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .justify_end()
+            .gap(ui_style.spacing.xs)
+            .max_w_96(),
+        |items, assignment| {
+            let origin = match assignment.origin {
+                KeybindingOrigin::Builtin => text.get(UiTextKey::SettingsKeybindingOriginBuiltin),
+                KeybindingOrigin::User => text.get(UiTextKey::SettingsKeybindingOriginUser),
+                KeybindingOrigin::Inherited => {
+                    text.get(UiTextKey::SettingsKeybindingOriginInherited)
+                }
+            };
+            let mut metadata = format!("{origin} · {}", assignment.scope_label());
+            if assignment.shadowed {
+                metadata.push_str(" · ");
+                metadata.push_str(text.get(UiTextKey::SettingsKeybindingShadowed));
+            }
+            items.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(ui_style.spacing.xs)
+                    .when(assignment.shadowed, |item| item.opacity(0.55))
+                    .child(settings_keybinding_value(
+                        assignment.display_keys(),
+                        unbound_label,
+                        theme,
+                        ui_style,
+                    ))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.text_subtle)
+                            .child(metadata),
+                    ),
+            )
+        },
+    )
 }
 
 fn setting_row(
