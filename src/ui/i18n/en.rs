@@ -694,8 +694,14 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsKeybindingDialogTitle => "Edit keybinding",
         UiTextKey::SettingsKeybindingRecorderPrompt => "Press a key sequence",
         UiTextKey::SettingsKeybindingRecorderHint => {
-            "Keystrokes form one sequence (for example, Space F F). Choose Add alternative before recording another shortcut. The first recording replaces current bindings; modifier keys alone are ignored."
+            "Continue typing to build a sequence. Modifier keys alone are ignored."
         }
+        UiTextKey::SettingsKeybindingCurrentBindings => "Current shortcuts",
+        UiTextKey::SettingsKeybindingNoBindings => "No shortcuts assigned",
+        UiTextKey::SettingsKeybindingReplace => "Replace shortcut",
+        UiTextKey::SettingsKeybindingRecording => "Recording",
+        UiTextKey::SettingsKeybindingFinishRecording => "Finish recording",
+        UiTextKey::SettingsKeybindingRemove => "Remove",
         UiTextKey::SettingsAddKeybindingAlternative => "Add alternative",
         UiTextKey::SettingsClearKeybindings => "Clear",
         UiTextKey::SettingsConflictingKeybinding => "Conflicting keybinding",

@@ -356,6 +356,7 @@ fn keybinding_recorder_renders_focuses_and_records(cx: &mut TestAppContext) {
         root.update(app, |root, cx| {
             root.open_keybinding_edit_dialog(CommandId::TabPalette)
                 .unwrap();
+            root.begin_keybinding_edit_replacement();
             cx.notify();
         });
     });

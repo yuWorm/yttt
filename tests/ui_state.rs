@@ -127,6 +127,7 @@ fn focus_workbench_key_context(root: &gpui::Entity<WorkbenchView>, cx: &mut gpui
     root.update(cx, |root, cx| {
         root.open_keybinding_edit_dialog(CommandId::TabPalette)
             .unwrap();
+        root.begin_keybinding_edit_replacement();
         cx.notify();
     });
     cx.refresh().unwrap();
@@ -809,6 +810,13 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
     assert!(
         first_keybinding_row.size.width >= keybinding_list.size.width - gpui::px(1.0),
         "keybinding rows should use the full list width"
+    );
+    let first_keybinding_title = cx
+        .debug_bounds("settings-keybinding-title-project.create")
+        .unwrap();
+    assert!(
+        first_keybinding_title.size.width > gpui::px(80.0),
+        "command titles should receive enough width instead of collapsing to an ellipsis"
     );
     let first_keybinding_bindings = cx
         .debug_bounds("settings-keybinding-bindings-project.create")
@@ -4359,6 +4367,13 @@ fn global_vim_keymap_spans_terminal_tabs_and_settings(cx: &mut gpui::TestAppCont
     });
     cx.refresh().unwrap();
     focus_workbench_key_context(&root, cx);
+    cx.read(|app| {
+        let root = root.read(app);
+        assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Settings);
+        let status = root.vim_status().expect("settings Vim status");
+        assert_eq!(status.mode, WorkbenchVimMode::Normal);
+        assert_eq!(status.surface, VimSurface::Settings);
+    });
     cx.simulate_keystrokes("j");
     cx.run_until_parked();
     cx.read(|app| {
@@ -4454,6 +4469,7 @@ fn modal_keybinding_recorder_owns_workspace_and_vim_keystrokes(cx: &mut gpui::Te
         root.open_settings();
         root.open_keybinding_edit_dialog(CommandId::TabPalette)
             .unwrap();
+        root.begin_keybinding_edit_replacement();
         cx.notify();
     });
     cx.refresh().unwrap();
@@ -5160,15 +5176,61 @@ fn keybindings_settings_explains_vim_leader_and_sequence_recording(cx: &mut gpui
     cx.read(|app| assert_eq!(root.read(app).keybinding_leader(), "space"));
 
     root.update(cx, |root, cx| {
+        root.select_keybinding_profile(yttt::ui::settings::keybindings::KeybindingProfile::Base);
         root.open_keybinding_edit_dialog(CommandId::TabPalette)
             .unwrap();
         cx.notify();
     });
     cx.refresh().unwrap();
+    let dialog = cx
+        .debug_bounds("keybinding-edit-dialog")
+        .expect("the keybinding editor should render one contained dialog");
+    let footer = cx
+        .debug_bounds("keybinding-edit-footer")
+        .expect("the keybinding editor should keep its actions inside a footer");
     assert!(
-        cx.debug_bounds("add-keybinding-alternative").is_some(),
-        "The recorder should distinguish sequences from alternative bindings"
+        footer.origin.y + footer.size.height <= dialog.origin.y + dialog.size.height,
+        "the keybinding editor footer must stay inside the dialog surface"
     );
+    assert!(cx.debug_bounds("keybinding-current-bindings").is_some());
+    assert!(cx.debug_bounds("keybinding-recording-actions").is_some());
+    assert!(cx.debug_bounds("keybinding-recorder").is_none());
+
+    let replace = cx
+        .debug_bounds("replace-keybinding")
+        .expect("the editor should require an explicit replace action");
+    cx.simulate_click(replace.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    assert!(cx.debug_bounds("keybinding-recorder").is_some());
+    assert!(cx.debug_bounds("keybinding-recording-actions").is_none());
+
+    cx.simulate_keystrokes("cmd-p");
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    assert!(
+        cx.debug_bounds("keybinding-edit-error").is_some(),
+        "a conflicting shortcut should be reported while recording"
+    );
+
+    let finish = cx
+        .debug_bounds("finish-keybinding-recording")
+        .expect("recording should have an explicit finish action");
+    cx.simulate_click(finish.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    let replace = cx.debug_bounds("replace-keybinding").unwrap();
+    cx.simulate_click(replace.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-l");
+    cx.run_until_parked();
+    let finish = cx.debug_bounds("finish-keybinding-recording").unwrap();
+    cx.simulate_click(finish.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    assert!(cx.debug_bounds("keybinding-recorder").is_none());
+    assert!(cx.debug_bounds("keybinding-recording-actions").is_some());
+    assert!(cx.debug_bounds("keybinding-edit-error").is_none());
 }
 
 #[gpui::test]
@@ -6304,20 +6366,19 @@ fn root_view_keybinding_edit_dialog_updates_command_keys() {
 
     assert_eq!(
         root.pending_keybinding_edit_keys(),
-        Some(vec![
-            "cmd-j".to_string(),
-            "ctrl-j".to_string(),
-            "space b".to_string(),
-        ])
+        Some(vec!["cmd-j".to_string(), "ctrl-j".to_string(),])
     );
     assert_eq!(
         root.foreground_input_owner_kind(),
         InputOwnerKind::KeybindingRecorder
     );
 
+    root.begin_keybinding_edit_replacement();
     assert!(root.record_keybinding_edit_keystroke(&Keystroke::parse("cmd-l").unwrap()));
+    root.finish_keybinding_edit_recording();
     root.begin_keybinding_edit_alternative();
     assert!(root.record_keybinding_edit_keystroke(&Keystroke::parse("ctrl-l").unwrap()));
+    root.finish_keybinding_edit_recording();
     root.confirm_keybinding_edit_dialog().unwrap();
 
     assert!(root.pending_keybinding_edit_keys().is_none());
@@ -6339,6 +6400,54 @@ fn root_view_keybinding_edit_dialog_updates_command_keys() {
             .unwrap()
             .keys,
         vec!["cmd-l".to_string(), "ctrl-l".to_string()]
+    );
+}
+
+#[test]
+fn keybinding_edit_dialog_stages_remove_clear_and_reset_until_save() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = WorkbenchView::with_config_paths_for_test(paths);
+    let original = root
+        .visible_keybinding_rows()
+        .into_iter()
+        .find(|row| row.command == CommandId::TabPalette)
+        .unwrap()
+        .keys;
+
+    root.open_keybinding_edit_dialog(CommandId::TabPalette)
+        .unwrap();
+    root.remove_keybinding_edit_key(0);
+    assert_ne!(
+        root.pending_keybinding_edit_keys().as_deref(),
+        Some(original.as_slice())
+    );
+    assert_eq!(
+        root.visible_keybinding_rows()
+            .into_iter()
+            .find(|row| row.command == CommandId::TabPalette)
+            .unwrap()
+            .keys,
+        original
+    );
+
+    root.clear_keybinding_edit_keys();
+    assert_eq!(root.pending_keybinding_edit_keys(), Some(Vec::new()));
+    root.reset_keybinding_edit_keys();
+    assert_eq!(
+        root.pending_keybinding_edit_keys().as_deref(),
+        Some(original.as_slice())
+    );
+    root.cancel_keybinding_edit_dialog();
+
+    assert!(root.pending_keybinding_edit_keys().is_none());
+    assert_eq!(
+        root.visible_keybinding_rows()
+            .into_iter()
+            .find(|row| row.command == CommandId::TabPalette)
+            .unwrap()
+            .keys,
+        original
     );
 }
 

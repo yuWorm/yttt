@@ -593,9 +593,13 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsConflict => "冲突",
         UiTextKey::SettingsKeybindingDialogTitle => "编辑快捷键",
         UiTextKey::SettingsKeybindingRecorderPrompt => "请按下按键序列",
-        UiTextKey::SettingsKeybindingRecorderHint => {
-            "连续按键会组成一个序列（例如 Space F F）。录制另一套快捷键前，请先选择“添加备用键”。首次录制会替换当前绑定；单独按修饰键不会被录制。"
-        }
+        UiTextKey::SettingsKeybindingRecorderHint => "继续按键可组成序列；单独按修饰键不会被录制。",
+        UiTextKey::SettingsKeybindingCurrentBindings => "当前快捷键",
+        UiTextKey::SettingsKeybindingNoBindings => "尚未设置快捷键",
+        UiTextKey::SettingsKeybindingReplace => "替换快捷键",
+        UiTextKey::SettingsKeybindingRecording => "正在录制",
+        UiTextKey::SettingsKeybindingFinishRecording => "完成录制",
+        UiTextKey::SettingsKeybindingRemove => "移除",
         UiTextKey::SettingsAddKeybindingAlternative => "添加备用键",
         UiTextKey::SettingsClearKeybindings => "清除",
         UiTextKey::SettingsConflictingKeybinding => "快捷键冲突",

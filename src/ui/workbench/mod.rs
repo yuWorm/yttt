@@ -474,8 +474,10 @@ struct PendingTabRename {
 struct PendingKeybindingEdit {
     action: BindableActionId,
     profile: KeybindingProfile,
+    original_keys: Vec<String>,
     keys: Vec<String>,
-    has_recorded: bool,
+    is_recording: bool,
+    replace_on_record: bool,
     recording_index: Option<usize>,
     error: Option<String>,
 }
@@ -1223,12 +1225,14 @@ impl WorkbenchView {
         self.overlays.pending_keybinding_edit = Some(PendingKeybindingEdit {
             action,
             profile,
+            original_keys: keys.clone(),
             keys,
-            has_recorded: false,
+            is_recording: false,
+            replace_on_record: false,
             recording_index: None,
             error: None,
         });
-        self.overlays.keybinding_recorder_needs_focus = true;
+        self.overlays.keybinding_recorder_needs_focus = false;
         self.load_error = None;
         self.sync_input_owner_state();
         Ok(())
@@ -1258,44 +1262,140 @@ impl WorkbenchView {
         Ok(())
     }
 
+    pub fn pending_keybinding_edit_is_recording(&self) -> bool {
+        self.overlays
+            .pending_keybinding_edit
+            .as_ref()
+            .is_some_and(|edit| edit.is_recording)
+    }
+
+    pub fn begin_keybinding_edit_replacement(&mut self) {
+        self.begin_keybinding_edit_recording(true);
+    }
+
+    pub fn begin_keybinding_edit_alternative(&mut self) {
+        self.begin_keybinding_edit_recording(false);
+    }
+
+    fn begin_keybinding_edit_recording(&mut self, replace: bool) {
+        if let Some(edit) = &mut self.overlays.pending_keybinding_edit {
+            edit.is_recording = true;
+            edit.replace_on_record = replace;
+            edit.recording_index = None;
+            edit.error = None;
+            self.overlays.keybinding_recorder_needs_focus = true;
+        }
+    }
+
+    pub fn finish_keybinding_edit_recording(&mut self) {
+        if let Some(edit) = &mut self.overlays.pending_keybinding_edit {
+            edit.is_recording = false;
+            edit.replace_on_record = false;
+            edit.recording_index = None;
+        }
+    }
+
     pub fn record_keybinding_edit_keystroke(&mut self, keystroke: &Keystroke) -> bool {
         let Some(keybinding) = recorded_keybinding(keystroke) else {
             return false;
         };
-        let Some(edit) = &mut self.overlays.pending_keybinding_edit else {
-            return false;
-        };
-
-        if !edit.has_recorded {
-            edit.keys.clear();
-            edit.has_recorded = true;
-            edit.recording_index = None;
+        {
+            let Some(edit) = &mut self.overlays.pending_keybinding_edit else {
+                return false;
+            };
+            if !edit.is_recording {
+                return false;
+            }
+            if edit.replace_on_record {
+                edit.keys.clear();
+                edit.replace_on_record = false;
+                edit.recording_index = None;
+            }
+            if let Some(recording_index) = edit.recording_index {
+                edit.keys[recording_index].push(' ');
+                edit.keys[recording_index].push_str(&keybinding);
+            } else {
+                edit.keys.push(keybinding);
+                edit.recording_index = Some(edit.keys.len() - 1);
+            }
         }
-        if let Some(recording_index) = edit.recording_index {
-            edit.keys[recording_index].push(' ');
-            edit.keys[recording_index].push_str(&keybinding);
-        } else {
-            edit.keys.push(keybinding);
-            edit.recording_index = Some(edit.keys.len() - 1);
-        }
-        edit.error = None;
+        self.refresh_pending_keybinding_conflict();
         true
     }
 
-    pub fn begin_keybinding_edit_alternative(&mut self) {
+    pub fn remove_keybinding_edit_key(&mut self, index: usize) {
         if let Some(edit) = &mut self.overlays.pending_keybinding_edit {
-            edit.has_recorded = true;
+            if index < edit.keys.len() {
+                edit.keys.remove(index);
+            }
+            edit.is_recording = false;
+            edit.replace_on_record = false;
             edit.recording_index = None;
-            edit.error = None;
         }
+        self.refresh_pending_keybinding_conflict();
+    }
+
+    pub fn reset_keybinding_edit_keys(&mut self) {
+        let Some((action, profile)) = self
+            .overlays
+            .pending_keybinding_edit
+            .as_ref()
+            .map(|edit| (edit.action, edit.profile))
+        else {
+            return;
+        };
+        let mut preview = self.settings.keybindings_editor.clone();
+        preview.reset_action_keys_for_profile(action, profile);
+        let keys = preview.action_keys_for_profile(action, profile);
+        if let Some(edit) = &mut self.overlays.pending_keybinding_edit {
+            edit.keys = keys;
+            edit.is_recording = false;
+            edit.replace_on_record = false;
+            edit.recording_index = None;
+        }
+        self.refresh_pending_keybinding_conflict();
     }
 
     pub fn clear_keybinding_edit_keys(&mut self) {
         if let Some(edit) = &mut self.overlays.pending_keybinding_edit {
             edit.keys.clear();
-            edit.has_recorded = true;
+            edit.is_recording = false;
+            edit.replace_on_record = false;
             edit.recording_index = None;
             edit.error = None;
+        }
+    }
+
+    pub fn dismiss_keybinding_edit_recording_or_dialog(&mut self) {
+        if self.pending_keybinding_edit_is_recording() {
+            self.finish_keybinding_edit_recording();
+        } else {
+            self.cancel_keybinding_edit_dialog();
+        }
+    }
+
+    fn refresh_pending_keybinding_conflict(&mut self) {
+        let Some((action, profile, keys)) = self
+            .overlays
+            .pending_keybinding_edit
+            .as_ref()
+            .map(|edit| (edit.action, edit.profile, edit.keys.clone()))
+        else {
+            return;
+        };
+        let conflicts = self
+            .settings
+            .keybindings_editor
+            .conflicting_keys_for_profile(action, profile, keys);
+        let error = (!conflicts.is_empty()).then(|| {
+            format!(
+                "{}: {}",
+                self.ui_text.get(UiTextKey::SettingsConflictingKeybinding),
+                conflicts.join(", ")
+            )
+        });
+        if let Some(edit) = &mut self.overlays.pending_keybinding_edit {
+            edit.error = error;
         }
     }
 
