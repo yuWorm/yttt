@@ -856,6 +856,12 @@ impl WorkbenchView {
         }
 
         if self.overlays.pending_keybinding_edit.is_some() {
+            if event.keystroke.key == "escape" {
+                self.dismiss_keybinding_edit_recording_or_dialog();
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
             let recorded = self.record_keybinding_edit_keystroke(&event.keystroke);
             cx.stop_propagation();
             if recorded {

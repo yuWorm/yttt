@@ -326,7 +326,11 @@ impl Render for WorkbenchView {
                     cx,
                     &self.ui_text,
                     edit.action,
+                    edit.profile,
                     &edit.keys,
+                    &edit.original_keys,
+                    edit.is_recording,
+                    edit.recording_index,
                     edit.error.as_deref(),
                     appearance.ui,
                 ));
@@ -383,11 +387,19 @@ impl Render for WorkbenchView {
             focus_handle.focus(window, cx);
         }
 
-        let mut key_context = self.vim.current_key_context();
         let input_owner = self.foreground_input_owner_kind();
-        key_context.add(WORKSPACE_CONTEXT);
-        if input_owner == InputOwnerKind::Palette {
-            key_context.add(PALETTE_CONTEXT);
+        let mut key_context = if input_owner == InputOwnerKind::KeybindingRecorder {
+            gpui::KeyContext::new_with_defaults()
+        } else {
+            self.vim.current_key_context()
+        };
+        if input_owner == InputOwnerKind::KeybindingRecorder {
+            key_context.add("YtttKeybindingRecorder");
+        } else {
+            key_context.add(WORKSPACE_CONTEXT);
+            if input_owner == InputOwnerKind::Palette {
+                key_context.add(PALETTE_CONTEXT);
+            }
         }
 
         root.track_focus(&focus_handle)

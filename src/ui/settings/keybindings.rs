@@ -264,6 +264,25 @@ impl KeybindingsEditorState {
         action_keys_for_profile_from_bindings(&bindings, action, profile, &vim_unbinds)
     }
 
+    pub fn conflicting_keys_for_profile(
+        &self,
+        action: BindableActionId,
+        profile: KeybindingProfile,
+        keys: Vec<String>,
+    ) -> Vec<String> {
+        let mut preview = self.clone();
+        preview.set_action_keys_for_profile(action, profile, keys);
+        let bindings = assigned_ui_keybinding_specs(&preview.config, &preview.registry);
+        let mut conflicts = assignment_conflicts(&bindings)
+            .into_iter()
+            .filter(|conflict| conflict.actions.contains(&action))
+            .map(|conflict| conflict.keys)
+            .collect::<Vec<_>>();
+        conflicts.sort();
+        conflicts.dedup();
+        conflicts
+    }
+
     pub fn command_keys(&self, command: CommandId) -> Vec<String> {
         self.action_keys(BindableActionId::Command(command))
     }

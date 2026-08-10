@@ -68,37 +68,331 @@ pub(super) fn keybinding_edit_dialog(
     cx: &mut Context<WorkbenchView>,
     ui_text: &UiText,
     action: BindableActionId,
+    profile: KeybindingProfile,
     keybindings: &[String],
+    original_keybindings: &[String],
+    is_recording: bool,
+    recording_index: Option<usize>,
     error: Option<&str>,
     theme: WorkbenchTheme,
 ) -> Div {
     let ui_style = current_ui_style(cx);
     let dialog = yttt_dialog_style(theme, ui_style);
-    let recorded = if keybindings.is_empty() {
+    let action_title = match action.command() {
+        Some(command) => command_title_with_text(command, ui_text),
+        None => action.title().unwrap_or(action.as_str()),
+    };
+    let profile_label = match profile {
+        KeybindingProfile::Base => ui_text.get(UiTextKey::SettingsKeybindingProfileBase),
+        KeybindingProfile::Vim => ui_text.get(UiTextKey::SettingsKeybindingProfileVim),
+    };
+    let dirty = keybindings != original_keybindings;
+    let current_bindings = if keybindings.is_empty() {
         div()
-            .text_sm()
+            .debug_selector(|| "keybinding-current-bindings".to_string())
+            .flex()
+            .items_center()
+            .justify_center()
+            .min_h_12()
+            .rounded(ui_style.radius.control)
+            .border(ui_style.border.hairline)
+            .border_color(theme.border_variant.alpha(0.65))
+            .bg(theme.editor_background.alpha(0.45))
+            .text_xs()
             .text_color(dialog.hint)
-            .child(ui_text.get(UiTextKey::SettingsKeybindingRecorderPrompt))
+            .child(ui_text.get(UiTextKey::SettingsKeybindingNoBindings))
+            .into_any_element()
     } else {
-        keybindings.iter().fold(
+        keybindings
+            .iter()
+            .enumerate()
+            .fold(
+                div()
+                    .debug_selector(|| "keybinding-current-bindings".to_string())
+                    .flex()
+                    .flex_col()
+                    .gap(ui_style.spacing.xs)
+                    .max_h(px(168.0))
+                    .overflow_y_scrollbar(),
+                |bindings, (index, keybinding)| {
+                    bindings.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(ui_style.spacing.lg)
+                            .rounded(ui_style.radius.control)
+                            .border(ui_style.border.hairline)
+                            .border_color(theme.border_variant.alpha(0.65))
+                            .bg(theme.editor_background.alpha(0.45))
+                            .px(ui_style.spacing.md)
+                            .py(ui_style.spacing.sm)
+                            .child(workbench_keybinding_badge(
+                                keybinding.clone(),
+                                theme,
+                                ui_style,
+                            ))
+                            .child(
+                                yttt_button(
+                                    format!("remove-keybinding-{index}"),
+                                    ui_text.get(UiTextKey::SettingsKeybindingRemove),
+                                    YtttButtonVariant::Ghost,
+                                    theme,
+                                    ui_style,
+                                    cx,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _window, cx| {
+                                        this.remove_keybinding_edit_key(index);
+                                        cx.notify();
+                                    },
+                                )),
+                            ),
+                    )
+                },
+            )
+            .into_any_element()
+    };
+    let recorder_value = recording_index
+        .and_then(|index| keybindings.get(index))
+        .map(|keybinding| workbench_keybinding_badge(keybinding.clone(), theme, ui_style));
+
+    let mut body = div()
+        .flex()
+        .flex_col()
+        .gap(ui_style.spacing.lg)
+        .child(
             div()
                 .flex()
-                .flex_wrap()
                 .items_center()
-                .justify_center()
-                .gap(ui_style.spacing.md),
-            |bindings, keybinding| {
-                bindings.child(workbench_keybinding_badge(
-                    keybinding.clone(),
-                    theme,
-                    ui_style,
-                ))
-            },
+                .justify_between()
+                .gap(ui_style.spacing.lg)
+                .rounded(ui_style.radius.control)
+                .bg(theme.editor_background.alpha(0.45))
+                .px(ui_style.spacing.md)
+                .py(ui_style.spacing.sm)
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .truncate()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.text)
+                        .child(action_title),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .rounded_full()
+                        .border(ui_style.border.hairline)
+                        .border_color(theme.border_variant)
+                        .px(ui_style.spacing.sm)
+                        .py(ui_style.spacing.xxs)
+                        .text_xs()
+                        .text_color(theme.text_muted)
+                        .child(profile_label),
+                ),
         )
-    };
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(ui_style.spacing.sm)
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.text_muted)
+                        .child(ui_text.get(UiTextKey::SettingsKeybindingCurrentBindings)),
+                )
+                .child(current_bindings),
+        );
+
+    if is_recording {
+        body = body.child(
+            div()
+                .id(SharedString::from("keybinding-recorder"))
+                .debug_selector(|| "keybinding-recorder".to_string())
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(ui_style.spacing.md)
+                .min_h_24()
+                .rounded(ui_style.radius.control)
+                .border(ui_style.border.emphasized)
+                .border_color(theme.accent)
+                .bg(theme.active_surface.alpha(0.55))
+                .px(ui_style.spacing.xl)
+                .py(ui_style.spacing.lg)
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.accent)
+                        .child(ui_text.get(UiTextKey::SettingsKeybindingRecording)),
+                )
+                .child(recorder_value.unwrap_or_else(|| {
+                    div()
+                        .text_sm()
+                        .text_color(dialog.hint)
+                        .child(ui_text.get(UiTextKey::SettingsKeybindingRecorderPrompt))
+                        .into_any_element()
+                }))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(dialog.hint)
+                        .child(ui_text.get(UiTextKey::SettingsKeybindingRecorderHint)),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "finish-keybinding-recording".to_string())
+                        .child(yttt_dialog_button(
+                            cx,
+                            "finish-keybinding-recording-button",
+                            ui_text.get(UiTextKey::SettingsKeybindingFinishRecording),
+                            YtttButtonVariant::Secondary,
+                            theme,
+                            cx.listener(|this, _, _window, cx| {
+                                this.finish_keybinding_edit_recording();
+                                cx.notify();
+                            }),
+                        )),
+                ),
+        );
+    } else {
+        body = body.child(
+            div()
+                .debug_selector(|| "keybinding-recording-actions".to_string())
+                .flex()
+                .items_center()
+                .gap(ui_style.spacing.md)
+                .child(
+                    div()
+                        .debug_selector(|| "replace-keybinding".to_string())
+                        .child(yttt_dialog_button(
+                            cx,
+                            "replace-keybinding-button",
+                            ui_text.get(UiTextKey::SettingsKeybindingReplace),
+                            YtttButtonVariant::Primary,
+                            theme,
+                            cx.listener(|this, _, _window, cx| {
+                                this.begin_keybinding_edit_replacement();
+                                cx.notify();
+                            }),
+                        )),
+                )
+                .child(
+                    div()
+                        .id("add-keybinding-alternative")
+                        .debug_selector(|| "add-keybinding-alternative".to_string())
+                        .child(yttt_dialog_button(
+                            cx,
+                            "add-keybinding-alternative-button",
+                            ui_text.get(UiTextKey::SettingsAddKeybindingAlternative),
+                            YtttButtonVariant::Secondary,
+                            theme,
+                            cx.listener(|this, _, _window, cx| {
+                                this.begin_keybinding_edit_alternative();
+                                cx.notify();
+                            }),
+                        )),
+                ),
+        );
+    }
+
+    if let Some(error) = error {
+        body = body.child(
+            div()
+                .debug_selector(|| "keybinding-edit-error".to_string())
+                .rounded(ui_style.radius.control)
+                .border(ui_style.border.hairline)
+                .border_color(theme.danger.alpha(0.65))
+                .bg(theme.danger.alpha(0.12))
+                .px(ui_style.spacing.md)
+                .py(ui_style.spacing.sm)
+                .text_xs()
+                .text_color(theme.danger)
+                .child(error.to_string()),
+        );
+    }
+
+    let footer = div()
+        .debug_selector(|| "keybinding-edit-footer".to_string())
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(ui_style.spacing.lg)
+        .pt(ui_style.spacing.md)
+        .border_t(ui_style.border.hairline)
+        .border_color(theme.border_variant.alpha(0.65))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(ui_style.spacing.xs)
+                .child(yttt_dialog_button(
+                    cx,
+                    "reset-keybinding-edit",
+                    ui_text.get(UiTextKey::SettingsReset),
+                    YtttButtonVariant::Ghost,
+                    theme,
+                    cx.listener(|this, _, _window, cx| {
+                        this.reset_keybinding_edit_keys();
+                        cx.notify();
+                    }),
+                ))
+                .child(yttt_dialog_button(
+                    cx,
+                    "clear-keybinding-edit",
+                    ui_text.get(UiTextKey::SettingsClearKeybindings),
+                    YtttButtonVariant::Ghost,
+                    theme,
+                    cx.listener(|this, _, _window, cx| {
+                        this.clear_keybinding_edit_keys();
+                        cx.notify();
+                    }),
+                )),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(ui_style.spacing.sm)
+                .child(yttt_dialog_button(
+                    cx,
+                    "cancel-keybinding-edit",
+                    ui_text.get(UiTextKey::Cancel),
+                    YtttButtonVariant::Secondary,
+                    theme,
+                    cx.listener(|this, _, _window, cx| {
+                        this.cancel_keybinding_edit_dialog();
+                        cx.notify();
+                    }),
+                ))
+                .child(
+                    yttt_dialog_button(
+                        cx,
+                        "confirm-keybinding-edit",
+                        ui_text.get(UiTextKey::SettingsSave),
+                        YtttButtonVariant::Primary,
+                        theme,
+                        cx.listener(|this, _, _window, cx| {
+                            let _ = this.confirm_keybinding_edit_dialog();
+                            cx.notify();
+                        }),
+                    )
+                    .disabled(!dirty || is_recording || error.is_some()),
+                ),
+        );
 
     yttt_dialog_overlay(
         yttt_dialog_surface(theme, ui_style)
+            .debug_selector(|| "keybinding-edit-dialog".to_string())
+            .w(px(520.0))
+            .max_w(px(560.0))
+            .max_h(px(620.0))
             .gap(ui_style.spacing.lg)
             .child(yttt_dialog_header(
                 "close-keybinding-edit-dialog",
@@ -110,96 +404,9 @@ pub(super) fn keybinding_edit_dialog(
                     cx.notify();
                 }),
             ))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(dialog.hint)
-                    .child(match action.command() {
-                        Some(command) => command_title_with_text(command, ui_text),
-                        None => action.title().unwrap_or(action.as_str()),
-                    }),
-            )
-            .child(
-                div()
-                    .id(SharedString::from("keybinding-recorder"))
-                    .debug_selector(|| "keybinding-recorder".to_string())
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .min_h_16()
-                    .rounded(ui_style.radius.control)
-                    .border(ui_style.border.hairline)
-                    .border_color(theme.focus_ring)
-                    .bg(theme.surface_elevated)
-                    .px(ui_style.spacing.xl)
-                    .py(ui_style.spacing.lg)
-                    .child(recorded),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(dialog.hint)
-                    .child(ui_text.get(UiTextKey::SettingsKeybindingRecorderHint)),
-            )
-            .when_some(error.map(str::to_string), |dialog, error| {
-                dialog.child(div().text_xs().text_color(theme.danger).child(error))
-            })
-            .child(
-                div()
-                    .flex()
-                    .justify_end()
-                    .gap(ui_style.spacing.md)
-                    .child(
-                        div()
-                            .id("add-keybinding-alternative")
-                            .debug_selector(|| "add-keybinding-alternative".to_string())
-                            .child(yttt_dialog_button(
-                                cx,
-                                "add-keybinding-alternative-button",
-                                ui_text.get(UiTextKey::SettingsAddKeybindingAlternative),
-                                YtttButtonVariant::Secondary,
-                                theme,
-                                cx.listener(|this, _, _window, cx| {
-                                    this.begin_keybinding_edit_alternative();
-                                    cx.notify();
-                                }),
-                            )),
-                    )
-                    .child(yttt_dialog_button(
-                        cx,
-                        "clear-keybinding-edit",
-                        ui_text.get(UiTextKey::SettingsClearKeybindings),
-                        YtttButtonVariant::Secondary,
-                        theme,
-                        cx.listener(|this, _, _window, cx| {
-                            this.clear_keybinding_edit_keys();
-                            cx.notify();
-                        }),
-                    ))
-                    .child(yttt_dialog_button(
-                        cx,
-                        "cancel-keybinding-edit",
-                        ui_text.get(UiTextKey::Cancel),
-                        YtttButtonVariant::Secondary,
-                        theme,
-                        cx.listener(|this, _, _window, cx| {
-                            this.cancel_keybinding_edit_dialog();
-                            cx.notify();
-                        }),
-                    ))
-                    .child(yttt_dialog_button(
-                        cx,
-                        "confirm-keybinding-edit",
-                        ui_text.get(UiTextKey::SettingsSave),
-                        YtttButtonVariant::Primary,
-                        theme,
-                        cx.listener(|this, _, _window, cx| {
-                            let _ = this.confirm_keybinding_edit_dialog();
-                            cx.notify();
-                        }),
-                    )),
-            ),
-        YtttDialogPlacement::Top,
+            .child(body)
+            .child(footer),
+        YtttDialogPlacement::Center,
         theme,
         ui_style,
     )

@@ -1839,7 +1839,7 @@ fn settings_keybinding_rows(
         move |_root, visible_range, _window, cx| {
             visible_range
                 .filter_map(|index| list_rows.get(index))
-                .map(|row| settings_keybinding_row(row, profile, style, theme, text, cx))
+                .map(|row| settings_keybinding_row(row, style, theme, text, cx))
                 .collect::<Vec<_>>()
         },
     );
@@ -1992,7 +1992,6 @@ fn settings_keybinding_rows(
 
 fn settings_keybinding_row(
     row: &KeybindingRow,
-    profile: KeybindingProfile,
     style: YtttSettingsLayout,
     theme: WorkbenchTheme,
     text: UiText,
@@ -2024,6 +2023,9 @@ fn settings_keybinding_row(
         .min_w_0()
         .child(
             div()
+                .debug_selector(move || format!("settings-keybinding-title-{row_id}"))
+                .min_w_0()
+                .flex_1()
                 .truncate()
                 .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
@@ -2066,47 +2068,18 @@ fn settings_keybinding_row(
         .flex()
         .items_center()
         .justify_end()
-        .gap(style.ui_style.spacing.xxs)
         .flex_none()
         .child(
             yttt_button(
                 format!("settings-keybinding-edit-{row_id}"),
                 text.get(UiTextKey::SettingsEdit),
-                YtttButtonVariant::Secondary,
+                YtttButtonVariant::Ghost,
                 theme,
                 style.ui_style,
                 cx,
             )
             .on_click(cx.listener(move |this, _, _window, cx| {
                 let _ = this.open_keybinding_action_edit_dialog(command);
-                cx.notify();
-            })),
-        )
-        .child(
-            yttt_button(
-                format!("settings-keybinding-reset-{row_id}"),
-                text.get(UiTextKey::SettingsReset),
-                YtttButtonVariant::Ghost,
-                theme,
-                style.ui_style,
-                cx,
-            )
-            .on_click(cx.listener(move |this, _, _window, cx| {
-                let _ = this.reset_keybinding_action_keys_for_profile(command, profile);
-                cx.notify();
-            })),
-        )
-        .child(
-            yttt_button(
-                format!("settings-keybinding-delete-{row_id}"),
-                text.get(UiTextKey::SettingsClearKeybindings),
-                YtttButtonVariant::Ghost,
-                theme,
-                style.ui_style,
-                cx,
-            )
-            .on_click(cx.listener(move |this, _, _window, cx| {
-                let _ = this.delete_keybinding_action_keys_for_profile(command, profile);
                 cx.notify();
             })),
         );
@@ -2406,7 +2379,13 @@ fn settings_keybinding_value(
     ui_style: UiStyle,
 ) -> Div {
     if keybindings.is_empty() {
-        return div().child(settings_value(unbound_label, theme, ui_style));
+        return div()
+            .flex()
+            .items_center()
+            .justify_end()
+            .text_xs()
+            .text_color(theme.text_subtle)
+            .child(unbound_label.into());
     }
 
     let mut value = div()
