@@ -11,7 +11,7 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in super::super) struct AgentSessionScanKey {
     pub(in super::super) project_id: ProjectId,
-    pub(in super::super) agent: BuiltinAgent,
+    pub(in super::super) agents: Vec<BuiltinAgent>,
 }
 
 #[derive(Default)]

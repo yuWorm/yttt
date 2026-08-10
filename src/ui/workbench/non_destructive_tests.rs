@@ -1654,10 +1654,15 @@ fn local_agent_sessions_are_preloaded_before_the_tab_is_selected(cx: &mut TestAp
         };
         assert_ne!(root.agent_session_title(&untitled), untitled.id);
         assert_eq!(
+            root.agent_session_agents(),
+            vec![BuiltinAgent::OhMyPi],
+            "the primary agent must be the only default session provider"
+        );
+        assert_eq!(
             root.agent_sessions.key,
             Some(AgentSessionScanKey {
                 project_id,
-                agent: BuiltinAgent::OhMyPi,
+                agents: vec![BuiltinAgent::OhMyPi],
             })
         );
     });
@@ -1687,10 +1692,11 @@ fn multiple_agent_providers_are_collapsed_into_groups(cx: &mut TestAppContext) {
     root.update(cx, |root, cx| {
         root.app_settings.agent.sessions_enabled = true;
         root.app_settings.agent.primary = Some(BuiltinAgent::Codex);
+        root.app_settings.agent.additional_session_agents = vec![BuiltinAgent::Claude];
         root.project.active_panel_page = ProjectPanelPage::AgentSessions;
         root.agent_sessions.key = Some(AgentSessionScanKey {
             project_id,
-            agent: BuiltinAgent::Codex,
+            agents: vec![BuiltinAgent::Codex, BuiltinAgent::Claude],
         });
         root.agent_sessions.sessions = Arc::new(vec![
             AgentSession {
@@ -1770,10 +1776,11 @@ fn agent_session_search_filters_visible_rows(cx: &mut TestAppContext) {
     root.update(cx, |root, cx| {
         root.app_settings.agent.sessions_enabled = true;
         root.app_settings.agent.primary = Some(BuiltinAgent::Codex);
+        root.app_settings.agent.additional_session_agents = vec![BuiltinAgent::Claude];
         root.project.active_panel_page = ProjectPanelPage::AgentSessions;
         root.agent_sessions.key = Some(AgentSessionScanKey {
             project_id,
-            agent: BuiltinAgent::Codex,
+            agents: vec![BuiltinAgent::Codex, BuiltinAgent::Claude],
         });
         root.agent_sessions.sessions = Arc::new(vec![
             AgentSession {
@@ -1785,7 +1792,7 @@ fn agent_session_search_filters_visible_rows(cx: &mut TestAppContext) {
                 updated_at_ms: 3,
             },
             AgentSession {
-                provider: BuiltinAgent::Codex,
+                provider: BuiltinAgent::Claude,
                 id: "render-session".to_string(),
                 title: "Investigate rendering".to_string(),
                 model: None,
@@ -1805,9 +1812,19 @@ fn agent_session_search_filters_visible_rows(cx: &mut TestAppContext) {
     });
     cx.refresh().unwrap();
 
+    let search = cx
+        .debug_bounds("agent-sessions-search")
+        .expect("a populated session list must render its global search input");
+    let search_input_bounds = cx
+        .debug_bounds("agent-sessions-search-input")
+        .expect("the global search input must render");
     assert!(
-        cx.debug_bounds("agent-sessions-search").is_some(),
-        "a populated session list must render its search input"
+        search_input_bounds.origin.x >= search.origin.x + px(7.0)
+            && search_input_bounds.origin.x + search_input_bounds.size.width
+                <= search.origin.x + search.size.width - px(7.0)
+            && search_input_bounds.origin.y > search.origin.y
+            && search_input_bounds.size.height < search.size.height,
+        "the search input must use compact dimensions with breathing room: container={search:?}, input={search_input_bounds:?}"
     );
     let search_input = cx.update(|_, app| {
         root.read(app)
@@ -1871,7 +1888,7 @@ fn overflowing_agent_session_list_scrolls_within_the_project_panel(cx: &mut Test
         root.project.active_panel_page = ProjectPanelPage::AgentSessions;
         root.agent_sessions.key = Some(AgentSessionScanKey {
             project_id,
-            agent: BuiltinAgent::Codex,
+            agents: vec![BuiltinAgent::Codex],
         });
         root.agent_sessions.sessions = Arc::new(
             (0..40)
@@ -1958,7 +1975,7 @@ fn long_agent_session_tooltip_content_stays_within_its_layout(cx: &mut TestAppCo
         root.project.active_panel_page = ProjectPanelPage::AgentSessions;
         root.agent_sessions.key = Some(AgentSessionScanKey {
             project_id,
-            agent: BuiltinAgent::Codex,
+            agents: vec![BuiltinAgent::Codex],
         });
         root.agent_sessions.sessions = Arc::new(vec![AgentSession {
             provider: BuiltinAgent::Codex,
@@ -2038,7 +2055,7 @@ fn double_clicking_discovered_session_creates_an_agent_command_tab(cx: &mut Test
         root.project.active_panel_page = ProjectPanelPage::AgentSessions;
         root.agent_sessions.key = Some(AgentSessionScanKey {
             project_id: project_id.clone(),
-            agent: BuiltinAgent::Codex,
+            agents: vec![BuiltinAgent::Codex],
         });
         root.agent_sessions.sessions = Arc::new(vec![AgentSession {
             provider: BuiltinAgent::Codex,

@@ -223,6 +223,8 @@ pub struct AgentSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub primary: Option<BuiltinAgent>,
     pub sessions_enabled: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub additional_session_agents: Vec<BuiltinAgent>,
 }
 
 impl Default for AgentSettings {
@@ -230,6 +232,7 @@ impl Default for AgentSettings {
         Self {
             primary: None,
             sessions_enabled: true,
+            additional_session_agents: Vec::new(),
         }
     }
 }

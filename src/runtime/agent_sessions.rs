@@ -96,26 +96,42 @@ impl AgentSessionRoots {
 }
 
 pub fn scan_agent_sessions(
-    agent: BuiltinAgent,
+    agents: &[BuiltinAgent],
     project_path: &Path,
 ) -> Result<Vec<AgentSession>, AgentSessionScanError> {
     let roots = AgentSessionRoots::from_environment()?;
-    scan_agent_sessions_with_roots(agent, project_path, &roots)
+    scan_agent_sessions_for_agents_with_roots(agents, project_path, &roots)
 }
 
+fn scan_agent_sessions_for_agents_with_roots(
+    agents: &[BuiltinAgent],
+    project_path: &Path,
+    roots: &AgentSessionRoots,
+) -> Result<Vec<AgentSession>, AgentSessionScanError> {
+    let mut sessions = Vec::new();
+    let mut scanned_agents = HashSet::new();
+    for agent in agents {
+        if !scanned_agents.insert(agent.id()) {
+            continue;
+        }
+        sessions.extend(match agent {
+            BuiltinAgent::Codex => scan_codex(&roots.codex.join("sessions"), project_path)?,
+            BuiltinAgent::Claude => scan_claude(&roots.claude.join("projects"), project_path)?,
+            BuiltinAgent::OpenCode => scan_opencode(project_path)?,
+            BuiltinAgent::Pi => scan_pi_family(&roots.pi, project_path, BuiltinAgent::Pi)?,
+            BuiltinAgent::OhMyPi => scan_pi_family(&roots.omp, project_path, BuiltinAgent::OhMyPi)?,
+        });
+    }
+    Ok(finalize_sessions(sessions))
+}
+
+#[cfg(test)]
 fn scan_agent_sessions_with_roots(
     agent: BuiltinAgent,
     project_path: &Path,
     roots: &AgentSessionRoots,
 ) -> Result<Vec<AgentSession>, AgentSessionScanError> {
-    let sessions = match agent {
-        BuiltinAgent::Codex => scan_codex(&roots.codex.join("sessions"), project_path)?,
-        BuiltinAgent::Claude => scan_claude(&roots.claude.join("projects"), project_path)?,
-        BuiltinAgent::OpenCode => scan_opencode(project_path)?,
-        BuiltinAgent::Pi => scan_pi_family(&roots.pi, project_path, BuiltinAgent::Pi)?,
-        BuiltinAgent::OhMyPi => scan_pi_family(&roots.omp, project_path, BuiltinAgent::OhMyPi)?,
-    };
-    Ok(finalize_sessions(sessions))
+    scan_agent_sessions_for_agents_with_roots(&[agent], project_path, roots)
 }
 
 fn scan_codex(
@@ -636,6 +652,56 @@ mod tests {
         assert_eq!(
             sessions[0].transcript_path.as_deref(),
             Some(transcript.as_path())
+        );
+    }
+
+    #[test]
+    fn scans_and_combines_sessions_from_multiple_agents() {
+        let temporary = tempfile::tempdir().unwrap();
+        let roots = roots(temporary.path());
+        let project = temporary.path().join("project");
+        let codex_directory = roots.codex.join("sessions/2026/08/10");
+        let omp_directory = roots.omp.join("encoded-project");
+        fs::create_dir_all(&codex_directory).unwrap();
+        fs::create_dir_all(&omp_directory).unwrap();
+        fs::write(
+            codex_directory.join("rollout.jsonl"),
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"codex-session\",\"cwd\":{:?}}}}}\n",
+                project.to_string_lossy()
+            ),
+        )
+        .unwrap();
+        fs::write(
+            omp_directory.join("session.jsonl"),
+            format!(
+                "{{\"type\":\"session\",\"id\":\"omp-session\",\"cwd\":{:?}}}\n",
+                project.to_string_lossy()
+            ),
+        )
+        .unwrap();
+
+        let sessions = scan_agent_sessions_for_agents_with_roots(
+            &[
+                BuiltinAgent::OhMyPi,
+                BuiltinAgent::Codex,
+                BuiltinAgent::OhMyPi,
+            ],
+            &project,
+            &roots,
+        )
+        .unwrap();
+
+        assert_eq!(sessions.len(), 2);
+        assert!(
+            sessions
+                .iter()
+                .any(|session| session.provider == BuiltinAgent::Codex)
+        );
+        assert!(
+            sessions
+                .iter()
+                .any(|session| session.provider == BuiltinAgent::OhMyPi)
         );
     }
 

@@ -317,7 +317,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsAgentPrimaryDescription => "引导时选择、用于扫描会话的 Agent。",
         UiTextKey::SettingsAgentSessions => "会话列表",
         UiTextKey::SettingsAgentSessionsDescription => {
-            "显示 Agent 会话标签页，并扫描该 Agent 的本地会话。"
+            "显示 Agent 会话标签页；默认仅包含主 Agent。"
+        }
+        UiTextKey::SettingsAgentSessionProviderDescription => {
+            "同时扫描此 Agent，并在全局会话列表中显示。"
         }
         UiTextKey::SettingsLanguage => "语言",
         UiTextKey::SettingsLanguageDescription => "应用显示语言。",

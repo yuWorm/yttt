@@ -1430,6 +1430,36 @@ fn settings_agent_rows(
 ) -> Div {
     let theme = root.theme_runtime().ui;
     let text = root.ui_text;
+    let primary = root.primary_agent();
+    let sessions_enabled = root.agent_sessions_enabled();
+    let additional_agent_rows = BuiltinAgent::ALL
+        .into_iter()
+        .filter(|agent| *agent != primary)
+        .map(|agent| {
+            let provider_id = agent.id();
+            setting_row(
+                style,
+                theme,
+                agent.display_name(),
+                text.get(UiTextKey::SettingsAgentSessionProviderDescription),
+                settings_switch(
+                    format!("settings-agent-session-provider-{provider_id}"),
+                    root.agent_session_agent_enabled(agent),
+                    theme,
+                    style.ui_style,
+                    cx.listener(move |this, checked: &bool, _window, cx| {
+                        if let Err(error) = this.set_agent_session_agent_enabled(agent, *checked) {
+                            this.load_error = Some(error.to_string());
+                        }
+                        cx.notify();
+                    }),
+                )
+                .debug_selector(move || format!("settings-agent-session-provider-{provider_id}"))
+                .into_any_element(),
+            )
+            .debug_selector(move || format!("settings-agent-session-provider-{provider_id}-row"))
+        })
+        .collect::<Vec<_>>();
 
     div()
         .flex()
@@ -1440,7 +1470,7 @@ fn settings_agent_rows(
                 theme,
                 text.get(UiTextKey::SettingsAgentPrimary),
                 text.get(UiTextKey::SettingsAgentPrimaryDescription),
-                settings_value(root.primary_agent().display_name(), theme, style.ui_style)
+                settings_value(primary.display_name(), theme, style.ui_style)
                     .debug_selector(|| "settings-agent-primary".to_string())
                     .into_any_element(),
             )
@@ -1454,7 +1484,7 @@ fn settings_agent_rows(
                 text.get(UiTextKey::SettingsAgentSessionsDescription),
                 settings_switch(
                     "settings-agent-sessions",
-                    root.agent_sessions_enabled(),
+                    sessions_enabled,
                     theme,
                     style.ui_style,
                     cx.listener(|this, checked: &bool, _window, cx| {
@@ -1469,6 +1499,9 @@ fn settings_agent_rows(
             )
             .debug_selector(|| "settings-agent-sessions-row".to_string()),
         )
+        .when(sessions_enabled, |settings| {
+            settings.children(additional_agent_rows)
+        })
 }
 
 fn settings_default_layout_rows(

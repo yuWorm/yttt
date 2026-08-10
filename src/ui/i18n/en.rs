@@ -361,7 +361,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::SettingsAgentSessions => "Session list",
         UiTextKey::SettingsAgentSessionsDescription => {
-            "Show the Agent Sessions tab and scan this agent's local sessions."
+            "Show the Agent Sessions tab. The primary agent is included by default."
+        }
+        UiTextKey::SettingsAgentSessionProviderDescription => {
+            "Also scan and show this agent in the global session list."
         }
         UiTextKey::SettingsLanguage => "Language",
         UiTextKey::SettingsLanguageDescription => "Application display language.",

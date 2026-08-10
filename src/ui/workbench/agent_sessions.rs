@@ -15,6 +15,62 @@ impl WorkbenchView {
         self.app_settings.agent.sessions_enabled
     }
 
+    pub fn agent_session_agents(&self) -> Vec<BuiltinAgent> {
+        let primary = self.primary_agent();
+        let mut agents = Vec::with_capacity(BuiltinAgent::ALL.len());
+        agents.push(primary);
+        agents.extend(BuiltinAgent::ALL.into_iter().filter(|agent| {
+            *agent != primary
+                && self
+                    .app_settings
+                    .agent
+                    .additional_session_agents
+                    .contains(agent)
+        }));
+        agents
+    }
+
+    pub fn agent_session_agent_enabled(&self, agent: BuiltinAgent) -> bool {
+        agent == self.primary_agent()
+            || self
+                .app_settings
+                .agent
+                .additional_session_agents
+                .contains(&agent)
+    }
+
+    pub fn set_agent_session_agent_enabled(
+        &mut self,
+        agent: BuiltinAgent,
+        enabled: bool,
+    ) -> Result<(), WorkbenchError> {
+        let primary = self.primary_agent();
+        self.app_settings
+            .agent
+            .additional_session_agents
+            .retain(|candidate| *candidate != primary && *candidate != agent);
+        if enabled && agent != primary {
+            self.app_settings
+                .agent
+                .additional_session_agents
+                .push(agent);
+        }
+        self.app_settings
+            .agent
+            .additional_session_agents
+            .sort_by_key(|agent| {
+                BuiltinAgent::ALL
+                    .iter()
+                    .position(|candidate| candidate == agent)
+                    .unwrap_or(usize::MAX)
+            });
+        save_settings(&self.config_paths, &self.app_settings)?;
+        if self.agent_sessions_enabled() {
+            self.refresh_agent_sessions();
+        }
+        Ok(())
+    }
+
     pub fn set_agent_sessions_enabled(&mut self, enabled: bool) -> Result<(), WorkbenchError> {
         self.app_settings.agent.sessions_enabled = enabled;
         save_settings(&self.config_paths, &self.app_settings)?;
@@ -42,7 +98,7 @@ impl WorkbenchView {
         }
         let key = AgentSessionScanKey {
             project_id,
-            agent: self.primary_agent(),
+            agents: self.agent_session_agents(),
         };
         if self.agent_sessions.key.as_ref() != Some(&key) {
             self.request_agent_session_scan(key);
@@ -64,7 +120,7 @@ impl WorkbenchView {
         }
         self.request_agent_session_scan(AgentSessionScanKey {
             project_id,
-            agent: self.primary_agent(),
+            agents: self.agent_session_agents(),
         });
     }
 
@@ -99,8 +155,9 @@ impl WorkbenchView {
             return;
         };
         let generation = self.agent_sessions.generation;
+        let agents = key.agents.clone();
         let task = cx.background_spawn(async move {
-            scan_agent_sessions(key.agent, &project_path).map_err(|error| error.to_string())
+            scan_agent_sessions(&agents, &project_path).map_err(|error| error.to_string())
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;

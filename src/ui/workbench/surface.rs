@@ -799,18 +799,20 @@ impl WorkbenchView {
             .enumerate()
             .filter(|(_, session)| agent_session_matches_search(session, &search_query))
             .collect::<Vec<_>>();
-        let mut providers = Vec::with_capacity(BuiltinAgent::ALL.len());
-        for session in sessions.iter() {
-            if !providers.contains(&session.provider) {
-                providers.push(session.provider);
-            }
-        }
-        let mut visible_providers = Vec::with_capacity(providers.len());
-        for (_, session) in &visible_sessions {
-            if !visible_providers.contains(&session.provider) {
-                visible_providers.push(session.provider);
-            }
-        }
+        let providers = self.agent_session_agents();
+        let visible_providers = if search_active {
+            providers
+                .iter()
+                .copied()
+                .filter(|provider| {
+                    visible_sessions
+                        .iter()
+                        .any(|(_, session)| session.provider == *provider)
+                })
+                .collect::<Vec<_>>()
+        } else {
+            providers.clone()
+        };
         let count_label = if search_active {
             format!("{} / {}", visible_sessions.len(), sessions.len())
         } else {
@@ -852,13 +854,20 @@ impl WorkbenchView {
         let search = div()
             .debug_selector(|| "agent-sessions-search".to_string())
             .flex_none()
-            .border_b(ui_style.border.hairline)
-            .border_color(theme.border_variant)
-            .p(ui_style.spacing.xs)
+            .px(ui_style.spacing.md)
+            .pt(ui_style.spacing.md)
+            .pb(ui_style.spacing.xs)
             .child(
-                yttt_input(search_input, YtttInputKind::Search, theme, ui_style)
-                    .prefix(IconName::Search)
-                    .cleanable(true),
+                div()
+                    .debug_selector(|| "agent-sessions-search-input".to_string())
+                    .h(ui_style.icon_buttons.toolbar_size)
+                    .child(
+                        yttt_input(search_input, YtttInputKind::Search, theme, ui_style)
+                            .small()
+                            .h(ui_style.icon_buttons.toolbar_size)
+                            .prefix(IconName::Search)
+                            .cleanable(true),
+                    ),
             );
         let body = if remote {
             self.agent_sessions_message(

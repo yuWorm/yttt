@@ -76,6 +76,7 @@ fn missing_settings_file_writes_defaults() {
     assert!(!loaded.settings.notifications.system);
     assert_eq!(loaded.settings.agent.primary, None);
     assert!(loaded.settings.agent.sessions_enabled);
+    assert!(loaded.settings.agent.additional_session_agents.is_empty());
     assert_eq!(loaded.settings.terminal.font_family, "");
     assert_eq!(loaded.settings.terminal.shell, AUTO_SHELL);
     assert!(loaded.settings.terminal.custom_shells.is_empty());
@@ -130,12 +131,17 @@ fn agent_session_settings_round_trip() {
     let mut settings = AppSettings::default();
     settings.agent.primary = Some(BuiltinAgent::OhMyPi);
     settings.agent.sessions_enabled = false;
+    settings.agent.additional_session_agents = vec![BuiltinAgent::Claude, BuiltinAgent::Pi];
 
     save_settings(&paths, &settings).unwrap();
     let loaded = load_or_create_settings(&paths).unwrap();
 
     assert_eq!(loaded.settings.agent.primary, Some(BuiltinAgent::OhMyPi));
     assert!(!loaded.settings.agent.sessions_enabled);
+    assert_eq!(
+        loaded.settings.agent.additional_session_agents,
+        vec![BuiltinAgent::Claude, BuiltinAgent::Pi]
+    );
 }
 
 #[test]

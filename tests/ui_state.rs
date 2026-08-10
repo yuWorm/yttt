@@ -4644,6 +4644,7 @@ fn agent_settings_toggle_persists_and_hides_session_tab(cx: &mut gpui::TestAppCo
     let paths = english_test_config_paths(&temp);
     let mut settings = load_or_create_settings(&paths).unwrap().settings;
     settings.general.onboarding_completed = true;
+    settings.agent.primary = Some(BuiltinAgent::Codex);
     save_settings(&paths, &settings).unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir_all(&project_path).unwrap();
@@ -4664,8 +4665,34 @@ fn agent_settings_toggle_persists_and_hides_session_tab(cx: &mut gpui::TestAppCo
     });
     cx.run_until_parked();
     cx.refresh().unwrap();
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).agent_session_agents(),
+            vec![BuiltinAgent::Codex]
+        );
+        assert!(root.read(app).agent_sessions_enabled());
+    });
 
     assert!(cx.debug_bounds("settings-agent-primary-row").is_some());
+    let claude_toggle = cx
+        .debug_bounds("settings-agent-session-provider-claude")
+        .expect("Agent settings should expose an additional Claude session switch");
+    cx.simulate_click(claude_toggle.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert!(
+            root.read(app)
+                .agent_session_agent_enabled(BuiltinAgent::Claude)
+        );
+    });
+    assert_eq!(
+        load_or_create_settings(&paths)
+            .unwrap()
+            .settings
+            .agent
+            .additional_session_agents,
+        vec![BuiltinAgent::Claude]
+    );
     let toggle = cx
         .debug_bounds("settings-agent-sessions")
         .expect("Agent settings should expose the session-list switch");

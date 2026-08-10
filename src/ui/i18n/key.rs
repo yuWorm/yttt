@@ -305,6 +305,7 @@ pub enum UiTextKey {
     SettingsAgentPrimaryDescription,
     SettingsAgentSessions,
     SettingsAgentSessionsDescription,
+    SettingsAgentSessionProviderDescription,
     SettingsLanguage,
     SettingsLanguageDescription,
     SettingsSelectLanguage,
