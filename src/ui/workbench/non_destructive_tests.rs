@@ -1669,7 +1669,7 @@ fn local_agent_sessions_are_preloaded_before_the_tab_is_selected(cx: &mut TestAp
 }
 
 #[gpui::test]
-fn multiple_agent_providers_are_collapsed_into_groups(cx: &mut TestAppContext) {
+fn multiple_agent_providers_expand_primary_group_by_default(cx: &mut TestAppContext) {
     use std::sync::Arc;
 
     cx.update(gpui_component::init);
@@ -1681,7 +1681,7 @@ fn multiple_agent_providers_are_collapsed_into_groups(cx: &mut TestAppContext) {
     settings.agent.sessions_enabled = false;
     save_settings(&config_paths, &settings).unwrap();
     let mut workspace = Workspace::new();
-    let project_id = workspace
+    workspace
         .open_project(local_project(project_path), dev_fixture_layout())
         .unwrap();
     let (root, cx) = cx.add_window_view(|_, _| {
@@ -1694,10 +1694,9 @@ fn multiple_agent_providers_are_collapsed_into_groups(cx: &mut TestAppContext) {
         root.app_settings.agent.primary = Some(BuiltinAgent::Codex);
         root.app_settings.agent.additional_session_agents = vec![BuiltinAgent::Claude];
         root.project.active_panel_page = ProjectPanelPage::AgentSessions;
-        root.agent_sessions.key = Some(AgentSessionScanKey {
-            project_id,
-            agents: vec![BuiltinAgent::Codex, BuiltinAgent::Claude],
-        });
+        root.refresh_agent_sessions();
+        root.agent_sessions.pending_scan = false;
+        root.agent_sessions.loading = false;
         root.agent_sessions.sessions = Arc::new(vec![
             AgentSession {
                 provider: BuiltinAgent::Codex,
@@ -1733,9 +1732,9 @@ fn multiple_agent_providers_are_collapsed_into_groups(cx: &mut TestAppContext) {
         "provider groups should use the Codex icon"
     );
     assert!(
-        cx.debug_bounds("agent-session-row-0").is_none()
+        cx.debug_bounds("agent-session-row-0").is_some()
             && cx.debug_bounds("agent-session-row-1").is_none(),
-        "provider groups should start collapsed"
+        "the primary Agent group must start expanded while other groups stay collapsed"
     );
 
     cx.simulate_click(codex_group.center(), gpui::Modifiers::none());
@@ -1743,12 +1742,21 @@ fn multiple_agent_providers_are_collapsed_into_groups(cx: &mut TestAppContext) {
     cx.refresh().unwrap();
 
     assert!(
-        cx.debug_bounds("agent-session-row-0").is_some(),
-        "expanding Codex should reveal its sessions"
+        cx.debug_bounds("agent-session-row-0").is_none()
+            && cx.debug_bounds("agent-session-row-1").is_none(),
+        "the primary Agent group must remain user-collapsible"
     );
+
+    let claude_group = cx
+        .debug_bounds("agent-session-provider-claude")
+        .expect("Claude Code group must remain visible after collapsing the primary Agent");
+    cx.simulate_click(claude_group.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.refresh().unwrap();
     assert!(
-        cx.debug_bounds("agent-session-row-1").is_none(),
-        "expanding Codex must not expand Claude Code"
+        cx.debug_bounds("agent-session-row-0").is_none()
+            && cx.debug_bounds("agent-session-row-1").is_some(),
+        "expanding Claude Code must not re-expand the primary Agent"
     );
 }
 
@@ -2004,6 +2012,11 @@ fn long_agent_session_tooltip_content_stays_within_its_layout(cx: &mut TestAppCo
     let tooltip = cx
         .debug_bounds("agent-session-tooltip")
         .expect("session tooltip must render");
+    assert_eq!(
+        tooltip.size.width,
+        px(420.0),
+        "session tooltips must use a stable wide layout"
+    );
     let title = cx
         .debug_bounds("agent-session-tooltip-title")
         .expect("tooltip title must render");
@@ -2016,6 +2029,14 @@ fn long_agent_session_tooltip_content_stays_within_its_layout(cx: &mut TestAppCo
     let transcript = cx
         .debug_bounds("agent-session-tooltip-transcript")
         .expect("tooltip transcript must render");
+    assert!(
+        title.size.height > px(30.0),
+        "long tooltip titles must grow vertically instead of being line-clamped: title={title:?}"
+    );
+    assert!(
+        tooltip.size.height < px(360.0),
+        "the tooltip must size to its content without a large empty vertical region: tooltip={tooltip:?}"
+    );
 
     for field in [title, session_id, model, transcript] {
         assert!(

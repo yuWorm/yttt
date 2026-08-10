@@ -1130,7 +1130,7 @@ impl WorkbenchView {
                         .flex()
                         .flex_col()
                         .min_w_0()
-                        .max_w(px(420.0))
+                        .w(px(420.0))
                         .overflow_hidden()
                         .gap(ui_style.spacing.xs)
                         .child(
@@ -1139,7 +1139,6 @@ impl WorkbenchView {
                                 .min_w_0()
                                 .w_full()
                                 .whitespace_normal()
-                                .line_clamp(3)
                                 .text_sm()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.text)
@@ -1187,7 +1186,6 @@ impl WorkbenchView {
                                 .min_w_0()
                                 .w_full()
                                 .whitespace_normal()
-                                .line_clamp(2)
                                 .text_xs()
                                 .text_color(theme.text_subtle)
                                 .child(tooltip_text.resume_hint),

@@ -128,6 +128,14 @@ impl WorkbenchView {
         self.agent_sessions.generation = self.agent_sessions.generation.wrapping_add(1);
         self.agent_sessions.pending_scan = true;
         self.agent_sessions.loading = true;
+        self.agent_sessions.expanded_providers.clear();
+        if key.agents.len() > 1
+            && let Some(primary_agent) = key.agents.first()
+        {
+            self.agent_sessions
+                .expanded_providers
+                .insert(primary_agent.id());
+        }
         self.agent_sessions.key = Some(key);
         self.agent_sessions.sessions = Arc::new(Vec::new());
         self.agent_sessions.error = None;
