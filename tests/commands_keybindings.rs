@@ -18,6 +18,7 @@ use yttt::model::{
     project::{ProjectDescriptor, ProjectLocation},
     workspace::{TabStartState, Workspace},
 };
+use yttt::ui::editor::EditorVimActionId;
 use yttt::ui::i18n::{Locale, UiText};
 use yttt::ui::interaction::actions::{
     BindableActionId, CompiledKeybindingAction, app_startup_keybindings, bindable_registry,
@@ -1230,6 +1231,57 @@ fn keybindings_editor_localizes_command_presentations() {
 
     assert_eq!(row.title, "打开命令面板");
     assert_eq!(row.description, "搜索并运行命令");
+}
+
+#[test]
+fn keybindings_editor_localizes_every_editor_vim_action_presentation() {
+    let editor = KeybindingsEditorState::new(KeybindingsConfig::default(), bindable_registry());
+    let english = UiText::english();
+    let chinese = UiText::new(Locale::Chinese);
+    let english_rows = editor.rows_with_text(&english);
+    let chinese_rows = editor.rows_with_text(&chinese);
+
+    let english_vim_rows = english_rows
+        .iter()
+        .filter(|row| matches!(row.command, BindableActionId::EditorVim(_)))
+        .count();
+    let chinese_vim_rows = chinese_rows
+        .iter()
+        .filter(|row| matches!(row.command, BindableActionId::EditorVim(_)))
+        .count();
+    assert_eq!(english_vim_rows, EditorVimActionId::ALL.len());
+    assert_eq!(chinese_vim_rows, EditorVimActionId::ALL.len());
+
+    for action in EditorVimActionId::ALL {
+        let action = BindableActionId::EditorVim(*action);
+        let english_row = english_rows
+            .iter()
+            .find(|row| row.command == action)
+            .expect("every EditorVimActionId must have an English keybinding row");
+        let chinese_row = chinese_rows
+            .iter()
+            .find(|row| row.command == action)
+            .expect("every EditorVimActionId must have a Chinese keybinding row");
+
+        assert_eq!(english_row.title, action.title().unwrap());
+        assert_eq!(english_row.description, action.description().unwrap());
+        assert_ne!(chinese_row.title, action.title().unwrap());
+        assert_ne!(chinese_row.description, action.description().unwrap());
+    }
+
+    let move_left = chinese_rows
+        .iter()
+        .find(|row| row.command == BindableActionId::EditorVim(EditorVimActionId::MoveLeft))
+        .unwrap();
+    assert_eq!(move_left.title, "编辑器 Vim：向左移动");
+    assert_eq!(move_left.description, "将 Vim 光标向左移动。");
+
+    let delete_operator = chinese_rows
+        .iter()
+        .find(|row| row.command == BindableActionId::EditorVim(EditorVimActionId::DeleteOperator))
+        .unwrap();
+    assert_eq!(delete_operator.title, "编辑器 Vim：删除操作符");
+    assert_eq!(delete_operator.description, "开始 Vim 删除操作。");
 }
 
 #[test]

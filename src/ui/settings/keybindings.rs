@@ -8,7 +8,8 @@ use crate::{
     },
     palette::{command_description_with_text, command_title_with_text},
     ui::{
-        i18n::UiText,
+        editor::EditorVimActionId,
+        i18n::{UiText, UiTextKey},
         interaction::actions::{
             BindableActionId, UiKeybindingSpec, assigned_ui_keybinding_specs,
             default_bindings_for_action_with_leader, preferred_context_for_action,
@@ -224,16 +225,7 @@ impl KeybindingsEditorState {
                 );
                 let diagnostics = diagnostics.get(&action).cloned().unwrap_or_default();
                 let has_conflict = diagnostics.contains(&KeybindingDiagnosticKind::Conflict);
-                let (title, description) = match action.command() {
-                    Some(command) => (
-                        command_title_with_text(command, text),
-                        command_description_with_text(command, text),
-                    ),
-                    None => (
-                        action.title().unwrap_or(action.as_str()),
-                        action.description().unwrap_or(action.as_str()),
-                    ),
-                };
+                let (title, description) = bindable_action_text_with_text(action, text);
 
                 KeybindingRow {
                     command: action,
@@ -579,6 +571,217 @@ impl KeybindingsEditorState {
 
         save_keybindings(paths, &self.config)?;
         Ok(())
+    }
+}
+
+pub(crate) fn bindable_action_text_with_text(
+    action: BindableActionId,
+    text: &UiText,
+) -> (&'static str, &'static str) {
+    match action {
+        BindableActionId::Command(command) => (
+            command_title_with_text(command, text),
+            command_description_with_text(command, text),
+        ),
+        BindableActionId::EditorVim(action) => {
+            let (title_key, description_key) = editor_vim_action_text_keys(action);
+            (text.get(title_key), text.get(description_key))
+        }
+        _ => (
+            action.title().expect("non-command actions have a title"),
+            action
+                .description()
+                .expect("non-command actions have a description"),
+        ),
+    }
+}
+
+fn editor_vim_action_text_keys(action: EditorVimActionId) -> (UiTextKey, UiTextKey) {
+    match action {
+        EditorVimActionId::MoveLeft => (
+            UiTextKey::EditorVimMoveLeftTitle,
+            UiTextKey::EditorVimMoveLeftDescription,
+        ),
+        EditorVimActionId::MoveRight => (
+            UiTextKey::EditorVimMoveRightTitle,
+            UiTextKey::EditorVimMoveRightDescription,
+        ),
+        EditorVimActionId::MoveDown => (
+            UiTextKey::EditorVimMoveDownTitle,
+            UiTextKey::EditorVimMoveDownDescription,
+        ),
+        EditorVimActionId::MoveUp => (
+            UiTextKey::EditorVimMoveUpTitle,
+            UiTextKey::EditorVimMoveUpDescription,
+        ),
+        EditorVimActionId::MoveDisplayDown => (
+            UiTextKey::EditorVimMoveDisplayDownTitle,
+            UiTextKey::EditorVimMoveDisplayDownDescription,
+        ),
+        EditorVimActionId::MoveDisplayUp => (
+            UiTextKey::EditorVimMoveDisplayUpTitle,
+            UiTextKey::EditorVimMoveDisplayUpDescription,
+        ),
+        EditorVimActionId::MoveNextWordStart => (
+            UiTextKey::EditorVimMoveNextWordStartTitle,
+            UiTextKey::EditorVimMoveNextWordStartDescription,
+        ),
+        EditorVimActionId::MoveNextWordEnd => (
+            UiTextKey::EditorVimMoveNextWordEndTitle,
+            UiTextKey::EditorVimMoveNextWordEndDescription,
+        ),
+        EditorVimActionId::MovePreviousWordStart => (
+            UiTextKey::EditorVimMovePreviousWordStartTitle,
+            UiTextKey::EditorVimMovePreviousWordStartDescription,
+        ),
+        EditorVimActionId::MoveLineStart => (
+            UiTextKey::EditorVimMoveLineStartTitle,
+            UiTextKey::EditorVimMoveLineStartDescription,
+        ),
+        EditorVimActionId::MoveFirstNonWhitespace => (
+            UiTextKey::EditorVimMoveFirstNonWhitespaceTitle,
+            UiTextKey::EditorVimMoveFirstNonWhitespaceDescription,
+        ),
+        EditorVimActionId::MoveLineEnd => (
+            UiTextKey::EditorVimMoveLineEndTitle,
+            UiTextKey::EditorVimMoveLineEndDescription,
+        ),
+        EditorVimActionId::MoveDocumentStart => (
+            UiTextKey::EditorVimMoveDocumentStartTitle,
+            UiTextKey::EditorVimMoveDocumentStartDescription,
+        ),
+        EditorVimActionId::MoveDocumentEnd => (
+            UiTextKey::EditorVimMoveDocumentEndTitle,
+            UiTextKey::EditorVimMoveDocumentEndDescription,
+        ),
+        EditorVimActionId::CountZero => (
+            UiTextKey::EditorVimCountZeroTitle,
+            UiTextKey::EditorVimCountZeroDescription,
+        ),
+        EditorVimActionId::CountOne => (
+            UiTextKey::EditorVimCountOneTitle,
+            UiTextKey::EditorVimCountOneDescription,
+        ),
+        EditorVimActionId::CountTwo => (
+            UiTextKey::EditorVimCountTwoTitle,
+            UiTextKey::EditorVimCountTwoDescription,
+        ),
+        EditorVimActionId::CountThree => (
+            UiTextKey::EditorVimCountThreeTitle,
+            UiTextKey::EditorVimCountThreeDescription,
+        ),
+        EditorVimActionId::CountFour => (
+            UiTextKey::EditorVimCountFourTitle,
+            UiTextKey::EditorVimCountFourDescription,
+        ),
+        EditorVimActionId::CountFive => (
+            UiTextKey::EditorVimCountFiveTitle,
+            UiTextKey::EditorVimCountFiveDescription,
+        ),
+        EditorVimActionId::CountSix => (
+            UiTextKey::EditorVimCountSixTitle,
+            UiTextKey::EditorVimCountSixDescription,
+        ),
+        EditorVimActionId::CountSeven => (
+            UiTextKey::EditorVimCountSevenTitle,
+            UiTextKey::EditorVimCountSevenDescription,
+        ),
+        EditorVimActionId::CountEight => (
+            UiTextKey::EditorVimCountEightTitle,
+            UiTextKey::EditorVimCountEightDescription,
+        ),
+        EditorVimActionId::CountNine => (
+            UiTextKey::EditorVimCountNineTitle,
+            UiTextKey::EditorVimCountNineDescription,
+        ),
+        EditorVimActionId::DeleteOperator => (
+            UiTextKey::EditorVimDeleteOperatorTitle,
+            UiTextKey::EditorVimDeleteOperatorDescription,
+        ),
+        EditorVimActionId::ChangeOperator => (
+            UiTextKey::EditorVimChangeOperatorTitle,
+            UiTextKey::EditorVimChangeOperatorDescription,
+        ),
+        EditorVimActionId::YankOperator => (
+            UiTextKey::EditorVimYankOperatorTitle,
+            UiTextKey::EditorVimYankOperatorDescription,
+        ),
+        EditorVimActionId::InsertCurrent => (
+            UiTextKey::EditorVimInsertCurrentTitle,
+            UiTextKey::EditorVimInsertCurrentDescription,
+        ),
+        EditorVimActionId::InsertAfter => (
+            UiTextKey::EditorVimInsertAfterTitle,
+            UiTextKey::EditorVimInsertAfterDescription,
+        ),
+        EditorVimActionId::InsertFirstNonWhitespace => (
+            UiTextKey::EditorVimInsertFirstNonWhitespaceTitle,
+            UiTextKey::EditorVimInsertFirstNonWhitespaceDescription,
+        ),
+        EditorVimActionId::InsertLineEnd => (
+            UiTextKey::EditorVimInsertLineEndTitle,
+            UiTextKey::EditorVimInsertLineEndDescription,
+        ),
+        EditorVimActionId::InsertLineBelow => (
+            UiTextKey::EditorVimInsertLineBelowTitle,
+            UiTextKey::EditorVimInsertLineBelowDescription,
+        ),
+        EditorVimActionId::InsertLineAbove => (
+            UiTextKey::EditorVimInsertLineAboveTitle,
+            UiTextKey::EditorVimInsertLineAboveDescription,
+        ),
+        EditorVimActionId::ToggleVisual => (
+            UiTextKey::EditorVimToggleVisualTitle,
+            UiTextKey::EditorVimToggleVisualDescription,
+        ),
+        EditorVimActionId::ToggleVisualLine => (
+            UiTextKey::EditorVimToggleVisualLineTitle,
+            UiTextKey::EditorVimToggleVisualLineDescription,
+        ),
+        EditorVimActionId::DeleteCharacters => (
+            UiTextKey::EditorVimDeleteCharactersTitle,
+            UiTextKey::EditorVimDeleteCharactersDescription,
+        ),
+        EditorVimActionId::SubstituteCharacters => (
+            UiTextKey::EditorVimSubstituteCharactersTitle,
+            UiTextKey::EditorVimSubstituteCharactersDescription,
+        ),
+        EditorVimActionId::ReplaceCharacters => (
+            UiTextKey::EditorVimReplaceCharactersTitle,
+            UiTextKey::EditorVimReplaceCharactersDescription,
+        ),
+        EditorVimActionId::PasteAfter => (
+            UiTextKey::EditorVimPasteAfterTitle,
+            UiTextKey::EditorVimPasteAfterDescription,
+        ),
+        EditorVimActionId::PasteBefore => (
+            UiTextKey::EditorVimPasteBeforeTitle,
+            UiTextKey::EditorVimPasteBeforeDescription,
+        ),
+        EditorVimActionId::Undo => (
+            UiTextKey::EditorVimUndoTitle,
+            UiTextKey::EditorVimUndoDescription,
+        ),
+        EditorVimActionId::Redo => (
+            UiTextKey::EditorVimRedoTitle,
+            UiTextKey::EditorVimRedoDescription,
+        ),
+        EditorVimActionId::SearchForward => (
+            UiTextKey::EditorVimSearchForwardTitle,
+            UiTextKey::EditorVimSearchForwardDescription,
+        ),
+        EditorVimActionId::SearchNext => (
+            UiTextKey::EditorVimSearchNextTitle,
+            UiTextKey::EditorVimSearchNextDescription,
+        ),
+        EditorVimActionId::SearchPrevious => (
+            UiTextKey::EditorVimSearchPreviousTitle,
+            UiTextKey::EditorVimSearchPreviousDescription,
+        ),
+        EditorVimActionId::Escape => (
+            UiTextKey::EditorVimEscapeTitle,
+            UiTextKey::EditorVimEscapeDescription,
+        ),
     }
 }
 
