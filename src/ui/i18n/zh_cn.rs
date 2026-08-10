@@ -313,6 +313,52 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsGroupDefaultLayoutDescription => "没有项目配置时继承的全局布局",
         UiTextKey::SettingsGroupKeybindings => "快捷键",
         UiTextKey::SettingsGroupKeybindingsDescription => "键盘快捷键和冲突诊断",
+        UiTextKey::SettingsNoSearchResults => "没有找到设置",
+        UiTextKey::SettingsNoSearchResultsDescription => "请尝试其他设置名称、说明或分类。",
+        UiTextKey::SettingsSectionApplicationInteraction => "应用与交互",
+        UiTextKey::SettingsSectionStartupNotifications => "启动与通知",
+        UiTextKey::SettingsSectionPerformance => "性能",
+        UiTextKey::SettingsSectionNewTabs => "新标签页",
+        UiTextKey::SettingsSectionConnections => "连接",
+        UiTextKey::SettingsSectionUpdates => "更新",
+        UiTextKey::SettingsSectionWindow => "窗口",
+        UiTextKey::SettingsSectionInterface => "界面",
+        UiTextKey::SettingsSectionThemes => "主题",
+        UiTextKey::SettingsSectionAdvanced => "高级",
+        UiTextKey::SettingsSectionDetectionDefaults => "检测与默认值",
+        UiTextKey::SettingsSectionLanguageServices => "语言服务",
+        UiTextKey::SettingsSectionTypography => "字体与排版",
+        UiTextKey::SettingsSectionEditingBehavior => "编辑行为",
+        UiTextKey::SettingsSectionSaving => "保存",
+        UiTextKey::SettingsSectionProjectPanels => "项目面板",
+        UiTextKey::SettingsSectionShell => "Shell",
+        UiTextKey::SettingsSectionEnvironment => "环境变量",
+        UiTextKey::SettingsSectionScrolling => "滚动",
+        UiTextKey::SettingsSectionCursorMouse => "光标与鼠标",
+        UiTextKey::SettingsSectionCompatibility => "兼容性与剪贴板",
+        UiTextKey::SettingsSectionAgentOverview => "Agent 概览",
+        UiTextKey::SettingsSectionProviders => "会话提供方",
+        UiTextKey::SettingsSectionCurrentLayout => "当前布局",
+        UiTextKey::SettingsSectionLayoutActions => "布局操作",
+        UiTextKey::SettingsSectionDangerZone => "危险操作",
+        UiTextKey::SettingsSectionConfiguration => "配置",
+        UiTextKey::SettingsSectionVim => "Vim",
+        UiTextKey::SettingsSectionDiagnostics => "诊断",
+        UiTextKey::SettingsSectionBindings => "快捷键列表",
+        UiTextKey::SettingsSectionKeymapProfile => "快捷键配置",
+        UiTextKey::SettingsKeybindingProfileBase => "基础",
+        UiTextKey::SettingsKeybindingProfileBaseDescription => {
+            "非 Vim 模式使用的快捷键；无冲突时由 Vim 自动继承。"
+        }
+        UiTextKey::SettingsKeybindingProfileVim => "Vim",
+        UiTextKey::SettingsKeybindingProfileVimDescription => {
+            "Vim 的有效快捷键：继承基础快捷键，并叠加模态覆盖。"
+        }
+        UiTextKey::SettingsKeybindingOriginInherited => "继承",
+        UiTextKey::SettingsKeybindingOriginBuiltin => "内置",
+        UiTextKey::SettingsKeybindingOriginUser => "用户",
+        UiTextKey::SettingsKeybindingShadowed => "已遮蔽",
+        UiTextKey::SettingsKeybindingPrefixConflict => "前缀冲突",
         UiTextKey::SettingsAgentPrimary => "主 Agent",
         UiTextKey::SettingsAgentPrimaryDescription => "引导时选择、用于扫描会话的 Agent。",
         UiTextKey::SettingsAgentSessions => "会话列表",
@@ -446,6 +492,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsVimQuickStart => "Vim 快速上手",
         UiTextKey::SettingsVimQuickStartDescription => {
             "全局模式：Ctrl-[ 或 Escape 进入普通模式；i 返回插入模式或终端输入；Ctrl-W H/J/K/L 在窗格、工作区与项目树之间切换焦点；项目树中 j/k 移动条目，h/l 折叠、展开或打开；gt/gT 切换标签；Leader 命令用于打开文件、命令面板和标签。"
+        }
+        UiTextKey::SettingsVimModeScope => "模式与界面",
+        UiTextKey::SettingsVimModeScopeDescription => {
+            "普通 · 插入 · 可视 · 操作符 · 终端 · 设置 · 命令面板 · 项目树"
         }
         UiTextKey::SettingsVimLeader => "Vim Leader 键",
         UiTextKey::SettingsVimLeaderDescription => {

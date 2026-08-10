@@ -355,6 +355,54 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsGroupKeybindingsDescription => {
             "Keyboard shortcuts and conflict diagnostics"
         }
+        UiTextKey::SettingsNoSearchResults => "No settings found",
+        UiTextKey::SettingsNoSearchResultsDescription => {
+            "Try another setting name, description, or category."
+        }
+        UiTextKey::SettingsSectionApplicationInteraction => "Application & interaction",
+        UiTextKey::SettingsSectionStartupNotifications => "Startup & notifications",
+        UiTextKey::SettingsSectionPerformance => "Performance",
+        UiTextKey::SettingsSectionNewTabs => "New tabs",
+        UiTextKey::SettingsSectionConnections => "Connections",
+        UiTextKey::SettingsSectionUpdates => "Updates",
+        UiTextKey::SettingsSectionWindow => "Window",
+        UiTextKey::SettingsSectionInterface => "Interface",
+        UiTextKey::SettingsSectionThemes => "Themes",
+        UiTextKey::SettingsSectionAdvanced => "Advanced",
+        UiTextKey::SettingsSectionDetectionDefaults => "Detection & defaults",
+        UiTextKey::SettingsSectionLanguageServices => "Language services",
+        UiTextKey::SettingsSectionTypography => "Typography",
+        UiTextKey::SettingsSectionEditingBehavior => "Editing behavior",
+        UiTextKey::SettingsSectionSaving => "Saving",
+        UiTextKey::SettingsSectionProjectPanels => "Project panels",
+        UiTextKey::SettingsSectionShell => "Shell",
+        UiTextKey::SettingsSectionEnvironment => "Environment",
+        UiTextKey::SettingsSectionScrolling => "Scrolling",
+        UiTextKey::SettingsSectionCursorMouse => "Cursor & mouse",
+        UiTextKey::SettingsSectionCompatibility => "Compatibility & clipboard",
+        UiTextKey::SettingsSectionAgentOverview => "Agent overview",
+        UiTextKey::SettingsSectionProviders => "Session providers",
+        UiTextKey::SettingsSectionCurrentLayout => "Current layout",
+        UiTextKey::SettingsSectionLayoutActions => "Layout actions",
+        UiTextKey::SettingsSectionDangerZone => "Danger zone",
+        UiTextKey::SettingsSectionConfiguration => "Configuration",
+        UiTextKey::SettingsSectionVim => "Vim",
+        UiTextKey::SettingsSectionDiagnostics => "Diagnostics",
+        UiTextKey::SettingsSectionBindings => "Bindings",
+        UiTextKey::SettingsSectionKeymapProfile => "Keymap profile",
+        UiTextKey::SettingsKeybindingProfileBase => "Base",
+        UiTextKey::SettingsKeybindingProfileBaseDescription => {
+            "Shortcuts used without Vim and inherited by Vim when they do not conflict."
+        }
+        UiTextKey::SettingsKeybindingProfileVim => "Vim",
+        UiTextKey::SettingsKeybindingProfileVimDescription => {
+            "The effective Vim keymap: inherited base shortcuts plus modal overrides."
+        }
+        UiTextKey::SettingsKeybindingOriginInherited => "Inherited",
+        UiTextKey::SettingsKeybindingOriginBuiltin => "Built-in",
+        UiTextKey::SettingsKeybindingOriginUser => "User",
+        UiTextKey::SettingsKeybindingShadowed => "shadowed",
+        UiTextKey::SettingsKeybindingPrefixConflict => "prefix",
         UiTextKey::SettingsAgentPrimary => "Primary agent",
         UiTextKey::SettingsAgentPrimaryDescription => {
             "The agent selected during onboarding and used for session discovery."
@@ -518,6 +566,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsVimQuickStart => "Vim quick start",
         UiTextKey::SettingsVimQuickStartDescription => {
             "Global mode: Ctrl-[ or Escape enters Normal; i returns to Insert or terminal input; Ctrl-W H/J/K/L focuses panes, work areas, and the project tree; tree j/k moves rows and h/l collapses, expands, or opens; gt/gT cycles tabs; Leader commands open files, palettes, and tabs."
+        }
+        UiTextKey::SettingsVimModeScope => "Modes and surfaces",
+        UiTextKey::SettingsVimModeScopeDescription => {
+            "Normal · Insert · Visual · Operator · Terminal · Settings · Palette · Project Tree"
         }
         UiTextKey::SettingsVimLeader => "Vim leader key",
         UiTextKey::SettingsVimLeaderDescription => {

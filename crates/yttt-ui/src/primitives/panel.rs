@@ -85,23 +85,99 @@ pub struct YtttPanelStyle {
     pub shadow: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum YtttSettingsWidthClass {
+    Compact,
+    Regular,
+    Wide,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum YtttSettingsHeightClass {
+    Compact,
+    Regular,
+    Tall,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct YtttSettingsLayout {
+    pub panel_width: Pixels,
+    pub panel_height: Pixels,
     pub sidebar_width: Pixels,
     pub control_width: Pixels,
     pub compact_control_width: Pixels,
     pub control_height: gpui::Rems,
     pub search_height: gpui::Rems,
+    pub content_padding_x: gpui::Rems,
+    pub content_padding_y: gpui::Rems,
+    pub section_gap: gpui::Rems,
+    pub width_class: YtttSettingsWidthClass,
+    pub height_class: YtttSettingsHeightClass,
+    pub stack_rows: bool,
     pub ui_style: UiStyle,
 }
 
-pub fn yttt_settings_layout(ui_style: UiStyle) -> YtttSettingsLayout {
+pub fn yttt_settings_layout(ui_style: UiStyle, viewport: gpui::Size<Pixels>) -> YtttSettingsLayout {
+    let viewport_width = f32::from(viewport.width);
+    let viewport_height = f32::from(viewport.height);
+    let panel_width_value = (viewport_width * 0.92)
+        .clamp(860.0, 1_240.0)
+        .min((viewport_width - 32.0).max(0.0));
+    let panel_height_value = (viewport_height * 0.90)
+        .clamp(520.0, 820.0)
+        .min((viewport_height - 24.0).max(0.0));
+    let width_class = if panel_width_value < 980.0 {
+        YtttSettingsWidthClass::Compact
+    } else if panel_width_value < 1_180.0 {
+        YtttSettingsWidthClass::Regular
+    } else {
+        YtttSettingsWidthClass::Wide
+    };
+    let height_class = if panel_height_value < 620.0 {
+        YtttSettingsHeightClass::Compact
+    } else if panel_height_value < 780.0 {
+        YtttSettingsHeightClass::Regular
+    } else {
+        YtttSettingsHeightClass::Tall
+    };
+    let (sidebar_width, control_width, content_padding_x) = match width_class {
+        YtttSettingsWidthClass::Compact => (
+            px(192.0),
+            px(f32::from(ui_style.controls.settings_control_width).min(200.0)),
+            ui_style.spacing.xl,
+        ),
+        YtttSettingsWidthClass::Regular => (
+            px(208.0),
+            ui_style.controls.settings_control_width,
+            ui_style.spacing.xxl,
+        ),
+        YtttSettingsWidthClass::Wide => (
+            px(224.0),
+            ui_style.controls.settings_control_width,
+            ui_style.settings.content_padding_x,
+        ),
+    };
+    let (content_padding_y, section_gap) = match height_class {
+        YtttSettingsHeightClass::Compact => (ui_style.spacing.lg, ui_style.spacing.xxl),
+        YtttSettingsHeightClass::Regular | YtttSettingsHeightClass::Tall => {
+            (ui_style.settings.content_padding_y, ui_style.spacing.xxxl)
+        }
+    };
+
     YtttSettingsLayout {
-        sidebar_width: ui_style.settings.sidebar_width,
-        control_width: ui_style.controls.settings_control_width,
+        panel_width: px(panel_width_value),
+        panel_height: px(panel_height_value),
+        sidebar_width,
+        control_width,
         compact_control_width: ui_style.controls.settings_compact_control_width,
         control_height: ui_style.controls.settings_height,
         search_height: ui_style.controls.search_height,
+        content_padding_x,
+        content_padding_y,
+        section_gap,
+        width_class,
+        height_class,
+        stack_rows: panel_width_value < 920.0,
         ui_style,
     }
 }

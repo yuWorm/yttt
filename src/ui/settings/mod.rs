@@ -99,6 +99,10 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 UiTextKey::SettingsLanguageDescription,
             ),
             row(
+                UiTextKey::SettingsVimMode,
+                UiTextKey::SettingsVimModeDescription,
+            ),
+            row(
                 UiTextKey::SettingsSystemNotifications,
                 UiTextKey::SettingsSystemNotificationsDescription,
             ),
@@ -115,6 +119,14 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 UiTextKey::SettingsRestoreLastSessionDescription,
             ),
             row(
+                UiTextKey::SettingsPerformanceMetrics,
+                UiTextKey::SettingsPerformanceMetricsDescription,
+            ),
+            row(
+                UiTextKey::SettingsSystemPerformanceMetrics,
+                UiTextKey::SettingsSystemPerformanceMetricsDescription,
+            ),
+            row(
                 UiTextKey::SettingsNewTabCommandPicker,
                 UiTextKey::SettingsNewTabCommandPickerDescription,
             ),
@@ -122,8 +134,20 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 UiTextKey::SettingsNewTabCommands,
                 UiTextKey::SettingsNewTabCommandsDescription,
             ),
+            row(
+                UiTextKey::SshConnections,
+                UiTextKey::SshConnectionsDescription,
+            ),
         ],
         SettingsGroupId::Appearance => vec![
+            row(
+                UiTextKey::SettingsWindowEffect,
+                UiTextKey::SettingsWindowEffectDescription,
+            ),
+            row(
+                UiTextKey::SettingsWindowOpacity,
+                UiTextKey::SettingsWindowOpacityDescription,
+            ),
             row(
                 UiTextKey::SettingsUiFontFamily,
                 UiTextKey::SettingsUiFontFamilyDescription,
@@ -139,6 +163,10 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
             row(
                 UiTextKey::SettingsUiTheme,
                 UiTextKey::SettingsUiThemeDescription,
+            ),
+            row(
+                UiTextKey::SettingsUiStyle,
+                UiTextKey::SettingsUiStyleDescription,
             ),
             row(
                 UiTextKey::SettingsIconTheme,
@@ -379,6 +407,10 @@ impl SettingsPageState {
                 query.is_empty()
                     || group.title(text).to_lowercase().contains(&query)
                     || group.description(text).to_lowercase().contains(&query)
+                    || settings_rows_for_group(*group, text).iter().any(|row| {
+                        row.title.to_lowercase().contains(&query)
+                            || row.description.to_lowercase().contains(&query)
+                    })
             })
             .map(|group| SettingsGroupItem {
                 id: group,

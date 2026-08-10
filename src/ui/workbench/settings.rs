@@ -105,6 +105,7 @@ impl WorkbenchView {
                                 loaded.config.clone(),
                                 root.command_registry.clone(),
                             );
+                            root.settings.keybinding_rows_cache = None;
                             root.settings.keybinding_warning_lines.clear();
                             crate::ui::app::rebind_application_keybindings(cx, &loaded.config);
                             root.clear_keybinding_load_error();
@@ -370,6 +371,7 @@ impl WorkbenchView {
         self.app_settings.general.language = language;
         save_settings(&self.config_paths, &self.app_settings)?;
         self.ui_text = ui_text_for_language(language);
+        self.settings.keybinding_rows_cache = None;
         if let Ok(loaded) = load_keybindings(&self.config_paths, &self.command_registry) {
             self.settings.keybinding_warning_lines =
                 format_keybinding_warning_lines(&loaded.warnings, &self.ui_text);
@@ -1090,6 +1092,7 @@ impl WorkbenchView {
 
     pub(super) fn save_keybindings_editor(&mut self) -> Result<(), WorkbenchError> {
         self.settings.keybindings_editor.save(&self.config_paths)?;
+        self.settings.keybinding_rows_cache = None;
         self.keybindings_reload_requested = true;
         self.settings.keybinding_warning_lines.clear();
         Ok(())

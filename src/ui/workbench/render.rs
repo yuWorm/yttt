@@ -385,12 +385,7 @@ impl Render for WorkbenchView {
 
         let mut key_context = self.vim.current_key_context();
         let input_owner = self.foreground_input_owner_kind();
-        if matches!(
-            input_owner,
-            InputOwnerKind::Workspace | InputOwnerKind::Editor
-        ) {
-            key_context.add(WORKSPACE_CONTEXT);
-        }
+        key_context.add(WORKSPACE_CONTEXT);
         if input_owner == InputOwnerKind::Palette {
             key_context.add(PALETTE_CONTEXT);
         }

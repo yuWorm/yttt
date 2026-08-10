@@ -226,6 +226,7 @@ pub fn yttt_row(
 
 pub fn yttt_settings_row(
     control_width: Pixels,
+    stacked: bool,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
     title: impl Into<String>,
@@ -241,40 +242,35 @@ pub fn yttt_settings_row(
         theme,
         ui_style,
     );
-
-    yttt_row(
+    let label = div()
+        .flex()
+        .flex_col()
+        .gap(ui_style.spacing.xs)
+        .min_w_0()
+        .flex_1()
+        .child(div().text_sm().text_color(style.title).child(title))
+        .child(div().text_xs().text_color(style.status).child(description));
+    let control = div().flex().items_center().flex_none().child(control);
+    let row = yttt_row(
         YtttRowKind::Settings,
         SelectableState::Inactive,
         true,
         theme,
         ui_style,
     )
-    .flex()
-    .items_center()
-    .justify_between()
-    .gap(ui_style.spacing.xxl)
-    .child(
-        div()
-            .flex()
-            .flex_col()
-            .gap(ui_style.spacing.xs)
-            .min_w_0()
-            .flex_1()
-            .child(div().text_sm().text_color(style.title).child(title))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(style.subtitle)
-                    .child(description),
-            ),
-    )
-    .child(
-        div()
-            .flex()
-            .justify_end()
-            .items_center()
-            .w(control_width)
-            .flex_none()
-            .child(control),
-    )
+    .flex();
+
+    if stacked {
+        row.flex_col()
+            .items_start()
+            .gap(ui_style.spacing.lg)
+            .child(label)
+            .child(control.w_full().justify_start())
+    } else {
+        row.items_center()
+            .justify_between()
+            .gap(ui_style.spacing.xxl)
+            .child(label)
+            .child(control.w(control_width).justify_end())
+    }
 }

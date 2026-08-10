@@ -8,10 +8,14 @@ pub(in super::super) fn settings_overlay(
 ) -> Div {
     let appearance = root.theme_runtime();
     let theme = appearance.ui;
-    let style = yttt_settings_layout(appearance.style);
+    let style = yttt_settings_layout(appearance.style, window.viewport_size());
 
     yttt_panel_overlay(
-        yttt_fullscreen_panel(theme, appearance.style)
+        yttt_panel(YtttPanelKind::Settings, theme, appearance.style)
+            .w(style.panel_width)
+            .max_w(style.panel_width)
+            .h(style.panel_height)
+            .max_h(style.panel_height)
             .debug_selector(|| "settings-panel".to_string())
             .flex_row()
             .p_0()
@@ -33,49 +37,46 @@ fn settings_sidebar(
 ) -> Div {
     let theme = root.theme_runtime().ui;
     let ui_style = style.ui_style;
-    let groups = root
-        .settings
-        .settings_page
-        .visible_groups(&root.ui_text)
-        .into_iter()
-        .fold(
-            div().flex().flex_col().gap(ui_style.spacing.xxs),
-            |groups, group| {
-                let group_id = group.id.as_str().to_string();
-                let background = if group.selected {
-                    theme.ghost_element_selected
-                } else {
-                    theme.ghost_element_background
-                };
-                let text = if group.selected {
-                    theme.text
-                } else {
-                    theme.text_muted
-                };
+    let visible_groups = root.settings.settings_page.visible_groups(&root.ui_text);
+    let no_results = visible_groups.is_empty();
+    let groups = visible_groups.into_iter().fold(
+        div().flex().flex_col().gap(ui_style.spacing.xxs),
+        |groups, group| {
+            let group_id = group.id.as_str().to_string();
+            let background = if group.selected {
+                theme.ghost_element_selected
+            } else {
+                theme.ghost_element_background
+            };
+            let text = if group.selected {
+                theme.text
+            } else {
+                theme.text_muted
+            };
 
-                groups.child(
-                    div()
-                        .id(SharedString::from(format!(
-                            "settings-group-{}",
-                            group.id.as_str()
-                        )))
-                        .flex()
-                        .items_center()
-                        .h(ui_style.rows.sidebar_height)
-                        .rounded(ui_style.radius.compact)
-                        .px(ui_style.settings.nav_padding_x)
-                        .bg(background)
-                        .text_sm()
-                        .text_color(text)
-                        .hover(move |this| this.bg(theme.ghost_element_hover))
-                        .on_click(cx.listener(move |this, _, _window, cx| {
-                            let _ = this.select_settings_group(&group_id);
-                            cx.notify();
-                        }))
-                        .child(group.title),
-                )
-            },
-        );
+            groups.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "settings-group-{}",
+                        group.id.as_str()
+                    )))
+                    .flex()
+                    .items_center()
+                    .h(ui_style.rows.sidebar_height)
+                    .rounded(ui_style.radius.compact)
+                    .px(ui_style.settings.nav_padding_x)
+                    .bg(background)
+                    .text_sm()
+                    .text_color(text)
+                    .hover(move |this| this.bg(theme.ghost_element_hover))
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        let _ = this.select_settings_group(&group_id);
+                        cx.notify();
+                    }))
+                    .child(group.title),
+            )
+        },
+    );
 
     div()
         .debug_selector(|| "settings-sidebar".to_string())
@@ -98,20 +99,29 @@ fn settings_sidebar(
                 .items_center()
                 .h(style.search_height)
                 .flex_none()
-                .rounded(ui_style.radius.control)
-                .bg(theme.editor_background)
-                .overflow_hidden()
                 .child(
                     yttt_input(search_input, YtttInputKind::Search, theme, ui_style)
+                        .small()
+                        .w_full()
                         .prefix(IconName::Search)
                         .cleanable(true),
                 ),
         )
         .child(
-            div()
-                .flex_1()
-                .min_h_0()
-                .child(groups.overflow_y_scrollbar()),
+            div().flex_1().min_h_0().child(
+                groups
+                    .when(no_results, |groups| {
+                        groups.child(
+                            div()
+                                .px(ui_style.spacing.md)
+                                .py(ui_style.spacing.xl)
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(root.ui_text.get(UiTextKey::SettingsNoSearchResults)),
+                        )
+                    })
+                    .overflow_y_scrollbar(),
+            ),
         )
 }
 
@@ -123,7 +133,58 @@ fn settings_content(
 ) -> Div {
     let theme = root.theme_runtime().ui;
     let group = root.settings.settings_page.selected_group;
-
+    let no_results = root
+        .settings
+        .settings_page
+        .visible_groups(&root.ui_text)
+        .is_empty();
+    let (title, description) = if no_results {
+        (
+            root.ui_text.get(UiTextKey::SettingsNoSearchResults),
+            root.ui_text
+                .get(UiTextKey::SettingsNoSearchResultsDescription),
+        )
+    } else {
+        (group.title(&root.ui_text), group.description(&root.ui_text))
+    };
+    let rows = if no_results {
+        div()
+            .debug_selector(|| "settings-no-results".to_string())
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(style.ui_style.spacing.md)
+            .size_full()
+            .text_center()
+            .child(
+                Icon::new(IconName::Search)
+                    .size_6()
+                    .text_color(theme.text_muted),
+            )
+            .child(
+                div()
+                    .text_base()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(title),
+            )
+            .child(
+                div()
+                    .max_w_96()
+                    .text_sm()
+                    .text_color(theme.text_muted)
+                    .child(description),
+            )
+    } else {
+        settings_rows(root, group, style, window, cx)
+    };
+    let virtualized_keybindings = !no_results && group == SettingsGroupId::Keybindings;
+    let rows = rows.px(style.content_padding_x).py(style.content_padding_y);
+    let rows = if virtualized_keybindings {
+        rows.overflow_hidden().into_any_element()
+    } else {
+        rows.overflow_y_scrollbar().into_any_element()
+    };
     div()
         .debug_selector(|| "settings-content".to_string())
         .flex()
@@ -140,8 +201,8 @@ fn settings_content(
                 .justify_between()
                 .border_b(style.ui_style.border.hairline)
                 .border_color(theme.border_variant)
-                .px(style.ui_style.settings.content_padding_x)
-                .py(style.ui_style.settings.content_padding_y)
+                .px(style.content_padding_x)
+                .py(style.content_padding_y)
                 .child(
                     div()
                         .flex()
@@ -151,13 +212,13 @@ fn settings_content(
                             div()
                                 .text_base()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child(group.title(&root.ui_text)),
+                                .child(title),
                         )
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(theme.text_subtle)
-                                .child(group.description(&root.ui_text)),
+                                .child(description),
                         ),
                 )
                 .child(yttt_icon_button(
@@ -172,14 +233,7 @@ fn settings_content(
                     }),
                 )),
         )
-        .child(
-            div().flex_1().min_h_0().child(
-                settings_rows(root, group, style, window, cx)
-                    .px(style.ui_style.settings.content_padding_x)
-                    .py(style.ui_style.spacing.md)
-                    .overflow_y_scrollbar(),
-            ),
-        )
+        .child(div().flex_1().min_h_0().child(rows))
 }
 
 fn settings_rows(
@@ -197,7 +251,7 @@ fn settings_rows(
         SettingsGroupId::Terminal => settings_terminal_rows(root, style, window, cx),
         SettingsGroupId::Agent => settings_agent_rows(root, style, cx),
         SettingsGroupId::DefaultLayout => settings_default_layout_rows(root, style, cx),
-        SettingsGroupId::Keybindings => settings_keybinding_rows(root, style, cx),
+        SettingsGroupId::Keybindings => settings_keybinding_rows(root, style, window, cx),
     }
 }
 
@@ -217,7 +271,8 @@ fn settings_general_rows(
         .flex()
         .items_center()
         .gap(style.ui_style.spacing.md)
-        .w(style.control_width)
+        .w_full()
+        .max_w(px(720.0))
         .child(
             div().flex_1().min_w_0().h(style.control_height).child(
                 yttt_input(
@@ -256,7 +311,8 @@ fn settings_general_rows(
                 .flex()
                 .flex_col()
                 .gap(style.ui_style.spacing.md)
-                .w(style.control_width)
+                .w_full()
+                .max_w(px(720.0))
                 .child(command_add_control),
             |list, (index, command)| {
                 list.child(
@@ -354,6 +410,12 @@ fn settings_general_rows(
     div()
         .flex()
         .flex_col()
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionApplicationInteraction),
+            true,
+        ))
         .child(setting_row(
             style,
             theme,
@@ -386,6 +448,12 @@ fn settings_general_rows(
             .id("settings-vim-mode-row")
             .debug_selector(|| "settings-vim-mode-row".to_string()),
         )
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionStartupNotifications),
+            false,
+        ))
         .child(setting_row(
             style,
             theme,
@@ -426,6 +494,12 @@ fn settings_general_rows(
             )
             .debug_selector(|| "settings-restore-last-session-row".to_string()),
         )
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionPerformance),
+            false,
+        ))
         .child(
             setting_row(
                 style,
@@ -474,6 +548,12 @@ fn settings_general_rows(
             )
             .debug_selector(|| "settings-system-performance-metrics-row".to_string()),
         )
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionNewTabs),
+            false,
+        ))
         .child(
             setting_row(
                 style,
@@ -498,7 +578,7 @@ fn settings_general_rows(
             .debug_selector(|| "settings-new-tab-command-picker-row".to_string()),
         )
         .child(
-            setting_row(
+            setting_block(
                 style,
                 theme,
                 text.get(UiTextKey::SettingsNewTabCommands),
@@ -507,6 +587,12 @@ fn settings_general_rows(
             )
             .debug_selector(|| "settings-new-tab-commands-row".to_string()),
         )
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionConnections),
+            false,
+        ))
         .child(
             setting_row(
                 style,
@@ -528,6 +614,12 @@ fn settings_general_rows(
             )
             .debug_selector(|| "settings-ssh-connections-row".to_string()),
         )
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionUpdates),
+            false,
+        ))
         .child(
             setting_row(
                 style,
@@ -589,6 +681,12 @@ fn settings_appearance_rows(
     div()
         .flex()
         .flex_col()
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionWindow),
+            true,
+        ))
         .child(
             setting_row(
                 style,
@@ -610,6 +708,12 @@ fn settings_appearance_rows(
             )
             .debug_selector(|| "settings-window-opacity-row".to_string()),
         )
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionInterface),
+            false,
+        ))
         .child(
             setting_row(
                 style,
@@ -647,6 +751,12 @@ fn settings_appearance_rows(
             )
             .debug_selector(|| "settings-ui-line-height-row".to_string()),
         )
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionThemes),
+            false,
+        ))
         .child(setting_row(
             style,
             theme,
@@ -696,6 +806,12 @@ fn settings_appearance_rows(
                 text.get(UiTextKey::SettingsSearchTheme),
             )
             .into_any_element(),
+        ))
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionAdvanced),
+            false,
         ))
         .child(setting_row(
             style,
@@ -778,6 +894,12 @@ fn settings_language_rows(
     div()
         .flex()
         .flex_col()
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionDetectionDefaults),
+            true,
+        ))
         .child(setting_row(
             style,
             theme,
@@ -816,6 +938,12 @@ fn settings_language_rows(
             text.get(UiTextKey::SettingsSupportedLanguagesDescription),
             settings_value(supported_language_count.to_string(), theme, style.ui_style)
                 .into_any_element(),
+        ))
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionLanguageServices),
+            false,
         ))
         .child(setting_row(
             style,
@@ -868,6 +996,12 @@ fn settings_editor_rows(
     div()
         .flex()
         .flex_col()
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionTypography),
+            true,
+        ))
         .child(
             setting_row(
                 style,
@@ -905,6 +1039,12 @@ fn settings_editor_rows(
             )
             .debug_selector(|| "settings-editor-line-height-row".to_string()),
         )
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionEditingBehavior),
+            false,
+        ))
         .child(
             setting_row(
                 style,
@@ -959,6 +1099,12 @@ fn settings_editor_rows(
             )
             .debug_selector(|| "settings-editor-line-numbers-row".to_string()),
         )
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionSaving),
+            false,
+        ))
         .child(
             setting_row(
                 style,
@@ -986,6 +1132,12 @@ fn settings_editor_rows(
             )
             .debug_selector(|| "settings-editor-autosave-delay-row".to_string()),
         )
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionProjectPanels),
+            false,
+        ))
         .child(
             setting_row(
                 style,
@@ -1075,7 +1227,8 @@ fn settings_terminal_rows(
         .flex()
         .items_center()
         .gap(style.ui_style.spacing.md)
-        .w(style.control_width)
+        .w_full()
+        .max_w(px(640.0))
         .child(
             div().flex_1().min_w_0().h(style.control_height).child(
                 yttt_input(
@@ -1109,7 +1262,8 @@ fn settings_terminal_rows(
         .flex()
         .items_center()
         .gap(style.ui_style.spacing.md)
-        .w(style.control_width)
+        .w_full()
+        .max_w(px(720.0))
         .child(
             div().flex_1().min_w_0().h(style.control_height).child(
                 yttt_input(
@@ -1157,7 +1311,8 @@ fn settings_terminal_rows(
             .flex()
             .flex_col()
             .gap(style.ui_style.spacing.md)
-            .w(style.control_width)
+            .w_full()
+            .max_w(px(720.0))
             .child(environment_set_control),
         |list, (index, (name, value))| {
             let name_for_remove = name.clone();
@@ -1199,6 +1354,12 @@ fn settings_terminal_rows(
     div()
         .flex()
         .flex_col()
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionShell),
+            true,
+        ))
         .child(setting_row(
             style,
             theme,
@@ -1213,15 +1374,21 @@ fn settings_terminal_rows(
             )
             .into_any_element(),
         ))
-        .child(setting_row(
+        .child(setting_block(
             style,
             theme,
             text.get(UiTextKey::SettingsCustomShell),
             text.get(UiTextKey::SettingsCustomShellDescription),
             custom_shell_control.into_any_element(),
         ))
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionEnvironment),
+            false,
+        ))
         .child(
-            setting_row(
+            setting_block(
                 style,
                 theme,
                 text.get(UiTextKey::SettingsEnvironmentVariables),
@@ -1230,6 +1397,12 @@ fn settings_terminal_rows(
             )
             .debug_selector(|| "settings-terminal-environment-row".to_string()),
         )
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionTypography),
+            false,
+        ))
         .child(setting_row(
             style,
             theme,
@@ -1265,6 +1438,12 @@ fn settings_terminal_rows(
             text.get(UiTextKey::SettingsPaddingDescription),
             settings_number_control(padding_input, theme, style).into_any_element(),
         ))
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionScrolling),
+            false,
+        ))
         .child(setting_row(
             style,
             theme,
@@ -1295,6 +1474,12 @@ fn settings_terminal_rows(
             )
             .debug_selector(|| "settings-terminal-scrollbar-row".to_string()),
         )
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionCursorMouse),
+            false,
+        ))
         .child(
             setting_row(
                 style,
@@ -1381,6 +1566,12 @@ fn settings_terminal_rows(
             )
             .debug_selector(|| "settings-terminal-copy-on-select-row".to_string()),
         )
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionCompatibility),
+            false,
+        ))
         .child(
             setting_row(
                 style,
@@ -1464,6 +1655,12 @@ fn settings_agent_rows(
     div()
         .flex()
         .flex_col()
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionAgentOverview),
+            true,
+        ))
         .child(
             setting_row(
                 style,
@@ -1500,7 +1697,14 @@ fn settings_agent_rows(
             .debug_selector(|| "settings-agent-sessions-row".to_string()),
         )
         .when(sessions_enabled, |settings| {
-            settings.children(additional_agent_rows)
+            settings
+                .child(settings_section_header(
+                    style,
+                    theme,
+                    text.get(UiTextKey::SettingsSectionProviders),
+                    false,
+                ))
+                .children(additional_agent_rows)
         })
 }
 
@@ -1516,12 +1720,24 @@ fn settings_default_layout_rows(
     div()
         .flex()
         .flex_col()
-        .child(setting_row(
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionCurrentLayout),
+            true,
+        ))
+        .child(setting_block(
             style,
             theme,
             text.get(UiTextKey::SettingsDefaultLayoutPath),
             text.get(UiTextKey::SettingsDefaultLayoutPathDescription),
             settings_value(path, theme, style.ui_style).into_any_element(),
+        ))
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionLayoutActions),
+            false,
         ))
         .child(setting_row(
             style,
@@ -1553,6 +1769,12 @@ fn settings_default_layout_rows(
             )
             .into_any_element(),
         ))
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionDangerZone),
+            false,
+        ))
         .child(setting_row(
             style,
             theme,
@@ -1573,21 +1795,110 @@ fn settings_default_layout_rows(
 fn settings_keybinding_rows(
     root: &mut WorkbenchView,
     style: YtttSettingsLayout,
+    window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
     let theme = root.theme_runtime().ui;
     let text = root.ui_text;
+    let profile = root.settings.keybinding_profile;
     let diagnostics = if root.settings.keybinding_warning_lines.is_empty() {
         text.get(UiTextKey::SettingsNoKeybindingConflicts)
             .to_string()
     } else {
         root.settings.keybinding_warning_lines.join("; ")
     };
+    let profile_description = match profile {
+        KeybindingProfile::Base => text.get(UiTextKey::SettingsKeybindingProfileBaseDescription),
+        KeybindingProfile::Vim => text.get(UiTextKey::SettingsKeybindingProfileVimDescription),
+    };
     let leader = root.keybinding_leader().to_string();
+    if root.settings.keybinding_rows_cache.is_none() {
+        root.settings.keybinding_rows_cache = Some(Rc::new(
+            root.settings
+                .keybindings_editor
+                .rows_for_profile(profile, &text),
+        ));
+    }
+    let keybinding_rows = root
+        .settings
+        .keybinding_rows_cache
+        .as_ref()
+        .expect("keybinding rows cache should be initialized")
+        .clone();
+    let row_height_rems =
+        style.ui_style.rows.settings_height.0 + if style.stack_rows { 2.5 } else { 0.0 };
+    let row_height = px(f32::from(window.rem_size()) * row_height_rems);
+    let item_sizes = Rc::new(vec![gpui::size(px(0.0), row_height); keybinding_rows.len()]);
+    let scroll_handle = root.settings.keybinding_scroll_handle.clone();
+    let list_rows = keybinding_rows.clone();
+    let virtual_list = v_virtual_list(
+        cx.entity(),
+        "settings-keybinding-virtual-list",
+        item_sizes,
+        move |_root, visible_range, _window, cx| {
+            visible_range
+                .filter_map(|index| list_rows.get(index))
+                .map(|row| settings_keybinding_row(row, profile, style, theme, text, cx))
+                .collect::<Vec<_>>()
+        },
+    );
+    let profile_selector = div()
+        .debug_selector(|| "settings-keybinding-profile-selector".to_string())
+        .flex()
+        .items_center()
+        .gap(style.ui_style.spacing.xs)
+        .px(style.ui_style.spacing.md)
+        .py(style.ui_style.spacing.sm)
+        .child(
+            div()
+                .debug_selector(|| "settings-keybinding-profile-base".to_string())
+                .child(settings_button(
+                    "settings-keybinding-profile-base-button",
+                    text.get(UiTextKey::SettingsKeybindingProfileBase),
+                    profile == KeybindingProfile::Base,
+                    theme,
+                    cx,
+                    cx.listener(|this, _, _window, cx| {
+                        this.select_keybinding_profile(KeybindingProfile::Base);
+                        cx.notify();
+                    }),
+                )),
+        )
+        .child(
+            div()
+                .debug_selector(|| "settings-keybinding-profile-vim".to_string())
+                .child(settings_button(
+                    "settings-keybinding-profile-vim-button",
+                    text.get(UiTextKey::SettingsKeybindingProfileVim),
+                    profile == KeybindingProfile::Vim,
+                    theme,
+                    cx,
+                    cx.listener(|this, _, _window, cx| {
+                        this.select_keybinding_profile(KeybindingProfile::Vim);
+                        cx.notify();
+                    }),
+                )),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .text_xs()
+                .text_color(theme.text_muted)
+                .child(profile_description),
+        );
 
     let mut rows = div()
         .flex()
         .flex_col()
+        .size_full()
+        .min_h_0()
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionConfiguration),
+            true,
+        ))
         .child(setting_row(
             style,
             theme,
@@ -1603,138 +1914,306 @@ fn settings_keybinding_rows(
             )
             .into_any_element(),
         ))
-        .child(
-            setting_row(
-                style,
-                theme,
-                text.get(UiTextKey::SettingsVimQuickStart),
-                text.get(UiTextKey::SettingsVimQuickStartDescription),
-                settings_value("Ctrl-W · gt · j/k · i/Esc", theme, style.ui_style)
-                    .into_any_element(),
-            )
-            .id("settings-vim-quick-start-row")
-            .debug_selector(|| "settings-vim-quick-start-row".to_string()),
-        )
-        .child(
-            setting_row(
-                style,
-                theme,
-                text.get(UiTextKey::SettingsVimLeader),
-                text.get(UiTextKey::SettingsVimLeaderDescription),
-                settings_keybinding_value(
-                    vec![leader],
-                    text.get(UiTextKey::SettingsUnbound),
-                    theme,
-                    style.ui_style,
-                )
-                .into_any_element(),
-            )
-            .id("settings-vim-leader-row")
-            .debug_selector(|| "settings-vim-leader-row".to_string()),
-        )
-        .child(setting_row(
+        .child(settings_section_header(
             style,
             theme,
-            text.get(UiTextKey::SettingsKeybindingDiagnostics),
-            text.get(UiTextKey::SettingsKeybindingDiagnosticsDescription),
-            settings_value(diagnostics, theme, style.ui_style).into_any_element(),
-        ));
+            text.get(UiTextKey::SettingsSectionKeymapProfile),
+            false,
+        ))
+        .child(profile_selector);
 
-    for row in root.visible_keybinding_rows() {
-        let command = row.command;
-        let keys = row.display_keys();
-        let title = row.title;
-        let description = row.description;
-        let title_text = if row.has_conflict {
-            format!("{title} ({})", text.get(UiTextKey::SettingsConflict))
-        } else {
-            title.to_string()
-        };
-
+    if profile == KeybindingProfile::Vim {
         rows = rows.child(
-            yttt_row(
-                YtttRowKind::Settings,
-                SelectableState::Inactive,
-                true,
-                theme,
-                style.ui_style,
-            )
+            div()
+                .debug_selector(|| "settings-vim-profile-summary".to_string())
+                .flex()
+                .flex_col()
+                .gap(style.ui_style.spacing.sm)
+                .mx(style.ui_style.spacing.xxs)
+                .mt(style.ui_style.spacing.sm)
+                .p(style.ui_style.spacing.md)
+                .rounded(style.ui_style.radius.compact)
+                .border(style.ui_style.border.hairline)
+                .border_color(theme.border_variant.alpha(0.65))
+                .bg(theme.surface.alpha(0.55))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.text)
+                        .child(text.get(UiTextKey::SettingsSectionVim)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(style.ui_style.spacing.sm)
+                        .child(settings_value(
+                            format!(
+                                "{}: {}",
+                                text.get(UiTextKey::SettingsVimModeScope),
+                                text.get(UiTextKey::SettingsVimModeScopeDescription)
+                            ),
+                            theme,
+                            style.ui_style,
+                        ))
+                        .child(settings_value(
+                            format!("{}: {}", text.get(UiTextKey::SettingsVimLeader), leader),
+                            theme,
+                            style.ui_style,
+                        ))
+                        .child(settings_value(
+                            format!(
+                                "{}: Ctrl-W · gt · j/k · i/Esc",
+                                text.get(UiTextKey::SettingsVimQuickStart)
+                            ),
+                            theme,
+                            style.ui_style,
+                        )),
+                ),
+        );
+    }
+
+    rows.child(
+        div()
+            .debug_selector(|| "settings-keybinding-diagnostics-summary".to_string())
             .flex()
             .items_center()
             .justify_between()
-            .gap(style.ui_style.spacing.xl)
+            .gap(style.ui_style.spacing.lg)
+            .mt(style.ui_style.spacing.md)
+            .px(style.ui_style.spacing.md)
+            .py(style.ui_style.spacing.sm)
+            .border_y(style.ui_style.border.hairline)
+            .border_color(theme.border_variant.alpha(0.65))
             .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .gap(style.ui_style.spacing.xs)
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.text)
+                    .child(text.get(UiTextKey::SettingsSectionDiagnostics)),
+            )
+            .child(
+                div()
                     .min_w_0()
-                    .flex_1()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.text)
-                            .child(title_text),
-                    )
+                    .text_xs()
+                    .text_color(theme.text_muted)
+                    .truncate()
+                    .child(diagnostics),
+            ),
+    )
+    .child(settings_section_header(
+        style,
+        theme,
+        text.get(UiTextKey::SettingsSectionBindings),
+        false,
+    ))
+    .child(
+        div()
+            .debug_selector(|| "settings-keybinding-virtual-list".to_string())
+            .flex_1()
+            .min_h_0()
+            .overflow_hidden()
+            .child(virtual_list.track_scroll(&scroll_handle)),
+    )
+}
+
+fn settings_keybinding_row(
+    row: &KeybindingRow,
+    profile: KeybindingProfile,
+    style: YtttSettingsLayout,
+    theme: WorkbenchTheme,
+    text: UiText,
+    cx: &mut Context<WorkbenchView>,
+) -> Div {
+    let command = row.command;
+    let row_id = row.command_id;
+    let mut diagnostic_labels = Vec::new();
+    if row
+        .diagnostics
+        .contains(&KeybindingDiagnosticKind::Conflict)
+    {
+        diagnostic_labels.push(text.get(UiTextKey::SettingsConflict));
+    }
+    if row
+        .diagnostics
+        .contains(&KeybindingDiagnosticKind::Shadowed)
+    {
+        diagnostic_labels.push(text.get(UiTextKey::SettingsKeybindingShadowed));
+    }
+    if row.diagnostics.contains(&KeybindingDiagnosticKind::Prefix) {
+        diagnostic_labels.push(text.get(UiTextKey::SettingsKeybindingPrefixConflict));
+    }
+    let title_text = if diagnostic_labels.is_empty() {
+        row.title.to_string()
+    } else {
+        format!("{} ({})", row.title, diagnostic_labels.join(" · "))
+    };
+    let label = div()
+        .flex()
+        .flex_col()
+        .gap(style.ui_style.spacing.xs)
+        .min_w_0()
+        .flex_1()
+        .child(
+            div()
+                .truncate()
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.text)
+                .child(title_text),
+        )
+        .child(
+            div()
+                .truncate()
+                .text_xs()
+                .text_color(theme.text_muted)
+                .child(row.description),
+        );
+    let assignments = settings_keybinding_assignments(
+        &row.assignments,
+        text.get(UiTextKey::SettingsUnbound),
+        theme,
+        style.ui_style,
+        text,
+    );
+    let buttons = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .justify_end()
+        .gap(style.ui_style.spacing.xs)
+        .child(settings_button(
+            format!("settings-keybinding-edit-{row_id}"),
+            text.get(UiTextKey::SettingsEdit),
+            false,
+            theme,
+            cx,
+            cx.listener(move |this, _, _window, cx| {
+                let _ = this.open_keybinding_action_edit_dialog(command);
+                cx.notify();
+            }),
+        ))
+        .child(settings_button(
+            format!("settings-keybinding-reset-{row_id}"),
+            text.get(UiTextKey::SettingsReset),
+            false,
+            theme,
+            cx,
+            cx.listener(move |this, _, _window, cx| {
+                let _ = this.reset_keybinding_action_keys_for_profile(command, profile);
+                cx.notify();
+            }),
+        ))
+        .child(settings_button(
+            format!("settings-keybinding-delete-{row_id}"),
+            text.get(UiTextKey::SettingsDelete),
+            false,
+            theme,
+            cx,
+            cx.listener(move |this, _, _window, cx| {
+                let _ = this.delete_keybinding_action_keys_for_profile(command, profile);
+                cx.notify();
+            }),
+        ));
+    let controls = div()
+        .flex()
+        .flex_col()
+        .items_end()
+        .gap(style.ui_style.spacing.xs)
+        .flex_none()
+        .child(assignments)
+        .child(buttons);
+    let binding_row = yttt_row(
+        YtttRowKind::Settings,
+        SelectableState::Inactive,
+        true,
+        theme,
+        style.ui_style,
+    )
+    .h_full()
+    .flex();
+    let binding_row = if style.stack_rows {
+        binding_row
+            .flex_col()
+            .items_start()
+            .gap(style.ui_style.spacing.lg)
+            .child(label)
+            .child(controls.w_full().items_start())
+    } else {
+        binding_row
+            .items_center()
+            .justify_between()
+            .gap(style.ui_style.spacing.xl)
+            .child(label)
+            .child(controls)
+    };
+
+    binding_row
+        .debug_selector(move || format!("settings-keybinding-row-{row_id}"))
+        .border_b(style.ui_style.border.hairline)
+        .border_color(theme.border_variant.alpha(0.65))
+}
+
+fn settings_keybinding_assignments(
+    assignments: &[KeybindingAssignment],
+    unbound_label: &str,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+    text: UiText,
+) -> Div {
+    if assignments.is_empty() {
+        return div().child(settings_keybinding_value(
+            Vec::new(),
+            unbound_label,
+            theme,
+            ui_style,
+        ));
+    }
+
+    assignments.iter().fold(
+        div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .justify_end()
+            .gap(ui_style.spacing.xs)
+            .max_w_96(),
+        |items, assignment| {
+            let origin = match assignment.origin {
+                KeybindingOrigin::Builtin => text.get(UiTextKey::SettingsKeybindingOriginBuiltin),
+                KeybindingOrigin::User => text.get(UiTextKey::SettingsKeybindingOriginUser),
+                KeybindingOrigin::Inherited => {
+                    text.get(UiTextKey::SettingsKeybindingOriginInherited)
+                }
+            };
+            let mut metadata = format!("{origin} · {}", assignment.scope_label());
+            if assignment.shadowed {
+                metadata.push_str(" · ");
+                metadata.push_str(text.get(UiTextKey::SettingsKeybindingShadowed));
+            }
+            items.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(ui_style.spacing.xs)
+                    .when(assignment.shadowed, |item| item.opacity(0.55))
+                    .child(settings_keybinding_value(
+                        assignment.display_keys(),
+                        unbound_label,
+                        theme,
+                        ui_style,
+                    ))
                     .child(
                         div()
                             .text_xs()
                             .text_color(theme.text_subtle)
-                            .child(description),
+                            .child(metadata),
                     ),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .gap(style.ui_style.spacing.xs)
-                    .flex_none()
-                    .child(settings_keybinding_value(
-                        keys,
-                        text.get(UiTextKey::SettingsUnbound),
-                        theme,
-                        style.ui_style,
-                    ))
-                    .child(settings_button(
-                        format!("settings-keybinding-edit-{}", row.command_id),
-                        text.get(UiTextKey::SettingsEdit),
-                        false,
-                        theme,
-                        cx,
-                        cx.listener(move |this, _, _window, cx| {
-                            let _ = this.open_keybinding_action_edit_dialog(command);
-                            cx.notify();
-                        }),
-                    ))
-                    .child(settings_button(
-                        format!("settings-keybinding-reset-{}", row.command_id),
-                        text.get(UiTextKey::SettingsReset),
-                        false,
-                        theme,
-                        cx,
-                        cx.listener(move |this, _, _window, cx| {
-                            let _ = this.reset_keybinding_action_keys(command);
-                            cx.notify();
-                        }),
-                    ))
-                    .child(settings_button(
-                        format!("settings-keybinding-delete-{}", row.command_id),
-                        text.get(UiTextKey::SettingsDelete),
-                        false,
-                        theme,
-                        cx,
-                        cx.listener(move |this, _, _window, cx| {
-                            let _ = this.delete_keybinding_action_keys(command);
-                            cx.notify();
-                        }),
-                    )),
-            ),
-        );
-    }
-
-    rows
+        },
+    )
 }
 
 fn setting_row(
@@ -1746,6 +2225,7 @@ fn setting_row(
 ) -> Div {
     yttt_settings_row(
         style.control_width,
+        style.stack_rows,
         theme,
         style.ui_style,
         title,
@@ -1754,6 +2234,49 @@ fn setting_row(
     )
     .border_b(style.ui_style.border.hairline)
     .border_color(theme.border_variant.alpha(0.65))
+}
+
+fn setting_block(
+    style: YtttSettingsLayout,
+    theme: WorkbenchTheme,
+    title: impl Into<String>,
+    description: impl Into<String>,
+    control: AnyElement,
+) -> Div {
+    yttt_settings_row(
+        style.control_width,
+        true,
+        theme,
+        style.ui_style,
+        title,
+        description,
+        control,
+    )
+    .border_b(style.ui_style.border.hairline)
+    .border_color(theme.border_variant.alpha(0.65))
+}
+
+fn settings_section_header(
+    style: YtttSettingsLayout,
+    theme: WorkbenchTheme,
+    title: impl Into<String>,
+    first: bool,
+) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(style.ui_style.spacing.md)
+        .when(!first, |this| this.pt(style.section_gap))
+        .pb(style.ui_style.spacing.sm)
+        .px(style.ui_style.spacing.xxs)
+        .child(div().w(px(3.0)).h_4().rounded_full().bg(theme.accent))
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.text)
+                .child(title.into()),
+        )
 }
 
 fn settings_select_control<D>(
@@ -1862,7 +2385,7 @@ where
 
 fn settings_value(value: impl Into<String>, theme: WorkbenchTheme, ui_style: UiStyle) -> Div {
     div()
-        .max_w_64()
+        .max_w(px(720.0))
         .rounded(ui_style.radius.compact)
         .border(ui_style.border.hairline)
         .border_color(theme.border_variant)

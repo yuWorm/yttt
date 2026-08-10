@@ -948,24 +948,26 @@ fn palette_surface_text_is_localized() {
 }
 
 #[test]
-fn settings_panel_style_uses_zed_like_sidebar_and_content_bounds() {
+fn settings_panel_layout_adapts_and_stops_growing_on_wide_windows() {
     let ui_style = UiStyle::default();
-    let panel = yttt_panel_style(
-        YtttPanelKind::Settings,
-        WorkbenchTheme::one_dark(),
-        ui_style,
-    );
-    let layout = yttt_settings_layout(ui_style);
+    let compact = yttt_settings_layout(ui_style, gpui::size(gpui::px(960.0), gpui::px(640.0)));
+    let wide = yttt_settings_layout(ui_style, gpui::size(gpui::px(1_568.0), gpui::px(813.0)));
+    let very_wide =
+        yttt_settings_layout(ui_style, gpui::size(gpui::px(1_920.0), gpui::px(1_080.0)));
 
-    assert_eq!(panel.width, gpui::px(900.0));
-    assert!(panel.max_width >= panel.width);
-    assert_eq!(panel.height, Some(gpui::px(560.0)));
-    assert!(panel.max_height < gpui::px(640.0));
-    assert_eq!(layout.sidebar_width, gpui::px(224.0));
-    assert_eq!(layout.control_width, gpui::px(200.0));
-    assert_eq!(layout.compact_control_width, gpui::px(128.0));
-    assert_eq!(layout.control_height, gpui::rems(1.75));
-    assert_eq!(layout.search_height, gpui::rems(1.75));
+    assert_eq!(compact.panel_width, gpui::px(883.2));
+    assert_eq!(compact.panel_height, gpui::px(576.0));
+    assert_eq!(compact.sidebar_width, gpui::px(192.0));
+    assert!(compact.stack_rows);
+    assert_eq!(wide.panel_width, gpui::px(1_240.0));
+    assert_eq!(wide.sidebar_width, gpui::px(224.0));
+    assert!(!wide.stack_rows);
+    assert_eq!(very_wide.panel_width, gpui::px(1_240.0));
+    assert_eq!(very_wide.panel_height, gpui::px(820.0));
+    assert_eq!(wide.control_width, gpui::px(200.0));
+    assert_eq!(wide.compact_control_width, gpui::px(128.0));
+    assert_eq!(wide.control_height, gpui::rems(1.75));
+    assert_eq!(wide.search_height, gpui::rems(1.75));
 }
 
 #[test]
