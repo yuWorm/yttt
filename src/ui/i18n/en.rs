@@ -791,5 +791,111 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SshConnected => "Connected",
         UiTextKey::SshReconnecting => "Reconnecting…",
         UiTextKey::SshFailed => "Failed",
+        UiTextKey::EditorVimMoveLeftTitle => "Editor Vim: Move Left",
+        UiTextKey::EditorVimMoveLeftDescription => "Move the Vim cursor left.",
+        UiTextKey::EditorVimMoveRightTitle => "Editor Vim: Move Right",
+        UiTextKey::EditorVimMoveRightDescription => "Move the Vim cursor right.",
+        UiTextKey::EditorVimMoveDownTitle => "Editor Vim: Move Down",
+        UiTextKey::EditorVimMoveDownDescription => "Move the Vim cursor down by logical lines.",
+        UiTextKey::EditorVimMoveUpTitle => "Editor Vim: Move Up",
+        UiTextKey::EditorVimMoveUpDescription => "Move the Vim cursor up by logical lines.",
+        UiTextKey::EditorVimMoveDisplayDownTitle => "Editor Vim: Move Display Line Down",
+        UiTextKey::EditorVimMoveDisplayDownDescription => {
+            "Move the Vim cursor down by display lines."
+        }
+        UiTextKey::EditorVimMoveDisplayUpTitle => "Editor Vim: Move Display Line Up",
+        UiTextKey::EditorVimMoveDisplayUpDescription => "Move the Vim cursor up by display lines.",
+        UiTextKey::EditorVimMoveNextWordStartTitle => "Editor Vim: Next Word",
+        UiTextKey::EditorVimMoveNextWordStartDescription => "Move to the start of the next word.",
+        UiTextKey::EditorVimMoveNextWordEndTitle => "Editor Vim: Next Word End",
+        UiTextKey::EditorVimMoveNextWordEndDescription => "Move to the end of the next word.",
+        UiTextKey::EditorVimMovePreviousWordStartTitle => "Editor Vim: Previous Word",
+        UiTextKey::EditorVimMovePreviousWordStartDescription => {
+            "Move to the start of the previous word."
+        }
+        UiTextKey::EditorVimMoveLineStartTitle => "Editor Vim: Line Start",
+        UiTextKey::EditorVimMoveLineStartDescription => "Move to the start of the current line.",
+        UiTextKey::EditorVimMoveFirstNonWhitespaceTitle => "Editor Vim: First Non-Whitespace",
+        UiTextKey::EditorVimMoveFirstNonWhitespaceDescription => {
+            "Move to the first non-whitespace character."
+        }
+        UiTextKey::EditorVimMoveLineEndTitle => "Editor Vim: Line End",
+        UiTextKey::EditorVimMoveLineEndDescription => "Move to the end of the current line.",
+        UiTextKey::EditorVimMoveDocumentStartTitle => "Editor Vim: Document Start",
+        UiTextKey::EditorVimMoveDocumentStartDescription => "Move to the start of the document.",
+        UiTextKey::EditorVimMoveDocumentEndTitle => "Editor Vim: Document End",
+        UiTextKey::EditorVimMoveDocumentEndDescription => "Move to the end of the document.",
+        UiTextKey::EditorVimCountZeroTitle => "Editor Vim: Zero",
+        UiTextKey::EditorVimCountZeroDescription => "Enter zero in a count or move to line start.",
+        UiTextKey::EditorVimCountOneTitle => "Editor Vim: Count 1",
+        UiTextKey::EditorVimCountOneDescription => "Append 1 to the Vim count.",
+        UiTextKey::EditorVimCountTwoTitle => "Editor Vim: Count 2",
+        UiTextKey::EditorVimCountTwoDescription => "Append 2 to the Vim count.",
+        UiTextKey::EditorVimCountThreeTitle => "Editor Vim: Count 3",
+        UiTextKey::EditorVimCountThreeDescription => "Append 3 to the Vim count.",
+        UiTextKey::EditorVimCountFourTitle => "Editor Vim: Count 4",
+        UiTextKey::EditorVimCountFourDescription => "Append 4 to the Vim count.",
+        UiTextKey::EditorVimCountFiveTitle => "Editor Vim: Count 5",
+        UiTextKey::EditorVimCountFiveDescription => "Append 5 to the Vim count.",
+        UiTextKey::EditorVimCountSixTitle => "Editor Vim: Count 6",
+        UiTextKey::EditorVimCountSixDescription => "Append 6 to the Vim count.",
+        UiTextKey::EditorVimCountSevenTitle => "Editor Vim: Count 7",
+        UiTextKey::EditorVimCountSevenDescription => "Append 7 to the Vim count.",
+        UiTextKey::EditorVimCountEightTitle => "Editor Vim: Count 8",
+        UiTextKey::EditorVimCountEightDescription => "Append 8 to the Vim count.",
+        UiTextKey::EditorVimCountNineTitle => "Editor Vim: Count 9",
+        UiTextKey::EditorVimCountNineDescription => "Append 9 to the Vim count.",
+        UiTextKey::EditorVimDeleteOperatorTitle => "Editor Vim: Delete Operator",
+        UiTextKey::EditorVimDeleteOperatorDescription => "Begin a Vim delete operation.",
+        UiTextKey::EditorVimChangeOperatorTitle => "Editor Vim: Change Operator",
+        UiTextKey::EditorVimChangeOperatorDescription => "Begin a Vim change operation.",
+        UiTextKey::EditorVimYankOperatorTitle => "Editor Vim: Yank Operator",
+        UiTextKey::EditorVimYankOperatorDescription => "Begin a Vim yank operation.",
+        UiTextKey::EditorVimInsertCurrentTitle => "Editor Vim: Insert",
+        UiTextKey::EditorVimInsertCurrentDescription => "Enter insert mode at the cursor.",
+        UiTextKey::EditorVimInsertAfterTitle => "Editor Vim: Append",
+        UiTextKey::EditorVimInsertAfterDescription => "Enter insert mode after the cursor.",
+        UiTextKey::EditorVimInsertFirstNonWhitespaceTitle => "Editor Vim: Insert at Indentation",
+        UiTextKey::EditorVimInsertFirstNonWhitespaceDescription => {
+            "Enter insert mode at the first non-whitespace character."
+        }
+        UiTextKey::EditorVimInsertLineEndTitle => "Editor Vim: Append at Line End",
+        UiTextKey::EditorVimInsertLineEndDescription => "Enter insert mode at the end of the line.",
+        UiTextKey::EditorVimInsertLineBelowTitle => "Editor Vim: Open Line Below",
+        UiTextKey::EditorVimInsertLineBelowDescription => {
+            "Open a new line below and enter insert mode."
+        }
+        UiTextKey::EditorVimInsertLineAboveTitle => "Editor Vim: Open Line Above",
+        UiTextKey::EditorVimInsertLineAboveDescription => {
+            "Open a new line above and enter insert mode."
+        }
+        UiTextKey::EditorVimToggleVisualTitle => "Editor Vim: Toggle Visual",
+        UiTextKey::EditorVimToggleVisualDescription => "Enter or leave character-wise visual mode.",
+        UiTextKey::EditorVimToggleVisualLineTitle => "Editor Vim: Toggle Visual Line",
+        UiTextKey::EditorVimToggleVisualLineDescription => "Enter or leave line-wise visual mode.",
+        UiTextKey::EditorVimDeleteCharactersTitle => "Editor Vim: Delete Characters",
+        UiTextKey::EditorVimDeleteCharactersDescription => "Delete characters under the cursor.",
+        UiTextKey::EditorVimSubstituteCharactersTitle => "Editor Vim: Substitute Characters",
+        UiTextKey::EditorVimSubstituteCharactersDescription => {
+            "Delete characters and enter insert mode."
+        }
+        UiTextKey::EditorVimReplaceCharactersTitle => "Editor Vim: Replace Characters",
+        UiTextKey::EditorVimReplaceCharactersDescription => "Replace characters under the cursor.",
+        UiTextKey::EditorVimPasteAfterTitle => "Editor Vim: Paste After",
+        UiTextKey::EditorVimPasteAfterDescription => "Paste after the cursor.",
+        UiTextKey::EditorVimPasteBeforeTitle => "Editor Vim: Paste Before",
+        UiTextKey::EditorVimPasteBeforeDescription => "Paste before the cursor.",
+        UiTextKey::EditorVimUndoTitle => "Editor Vim: Undo",
+        UiTextKey::EditorVimUndoDescription => "Undo the previous edit.",
+        UiTextKey::EditorVimRedoTitle => "Editor Vim: Redo",
+        UiTextKey::EditorVimRedoDescription => "Redo the previous edit.",
+        UiTextKey::EditorVimSearchForwardTitle => "Editor Vim: Search",
+        UiTextKey::EditorVimSearchForwardDescription => "Open forward search.",
+        UiTextKey::EditorVimSearchNextTitle => "Editor Vim: Next Search Match",
+        UiTextKey::EditorVimSearchNextDescription => "Move to the next search match.",
+        UiTextKey::EditorVimSearchPreviousTitle => "Editor Vim: Previous Search Match",
+        UiTextKey::EditorVimSearchPreviousDescription => "Move to the previous search match.",
+        UiTextKey::EditorVimEscapeTitle => "Editor Vim: Escape",
+        UiTextKey::EditorVimEscapeDescription => "Return to Vim normal mode.",
     }
 }

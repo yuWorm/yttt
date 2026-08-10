@@ -78,10 +78,7 @@ pub(super) fn keybinding_edit_dialog(
 ) -> Div {
     let ui_style = current_ui_style(cx);
     let dialog = yttt_dialog_style(theme, ui_style);
-    let action_title = match action.command() {
-        Some(command) => command_title_with_text(command, ui_text),
-        None => action.title().unwrap_or(action.as_str()),
-    };
+    let (action_title, _) = bindable_action_text_with_text(action, ui_text);
     let profile_label = match profile {
         KeybindingProfile::Base => ui_text.get(UiTextKey::SettingsKeybindingProfileBase),
         KeybindingProfile::Vim => ui_text.get(UiTextKey::SettingsKeybindingProfileVim),

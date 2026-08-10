@@ -151,11 +151,11 @@ use crate::{
     },
     palette::{
         ActivePalette, CommandPaletteContext, PaletteItem, PaletteKind, RecentProject,
-        TabPaletteSnapshot, command_palette_items_with_text, command_title_with_text,
-        decode_tab_palette_item_id, new_tab_command_palette_items,
-        opened_project_palette_items_with_text, pane_palette_items_with_text,
-        project_palette_items_with_text, recent_project_palette_items_with_text,
-        tab_palette_items_with_text, unified_tab_palette_items,
+        TabPaletteSnapshot, command_palette_items_with_text, decode_tab_palette_item_id,
+        new_tab_command_palette_items, opened_project_palette_items_with_text,
+        pane_palette_items_with_text, project_palette_items_with_text,
+        recent_project_palette_items_with_text, tab_palette_items_with_text,
+        unified_tab_palette_items,
     },
     runtime::{
         agent_manager::{AgentManager, AgentPaneAddress, AgentPaneExitOutcome},
@@ -266,6 +266,7 @@ use crate::{
         settings::keybindings::{
             KeybindingAssignment, KeybindingDiagnosticKind, KeybindingEditError, KeybindingOrigin,
             KeybindingProfile, KeybindingRow, KeybindingsEditorState,
+            bindable_action_text_with_text,
         },
         terminal::pane::{
             SshTerminalContext, TerminalPaneContext, TerminalPaneEvent, TerminalPaneExitedEvent,
