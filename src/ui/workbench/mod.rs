@@ -15,6 +15,7 @@ use gpui_component::{
     scroll::ScrollableElement as _,
     searchable_list::{SearchableListDelegate, SearchableListItem},
     select::{SearchableVec, Select, SelectEvent, SelectState},
+    tab::{Tab, TabBar},
     v_virtual_list,
 };
 use yttt_agent_core::{AgentExitReason, AgentProcessExit, AgentSnapshot, AgentViewState};

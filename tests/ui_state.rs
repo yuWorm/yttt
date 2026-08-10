@@ -768,13 +768,23 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
         .expect("the keybinding settings should render through a virtual list");
     assert!(keybinding_list.size.height > gpui::px(0.0));
     assert!(
-        cx.debug_bounds("settings-keybinding-profile-base")
+        cx.debug_bounds("settings-keybinding-profile-selector")
             .is_some(),
-        "keybinding settings should expose the base profile"
+        "keybinding settings should expose a Base/Vim segmented switch"
+    );
+    cx.read(|app| {
+        assert_eq!(
+            root.read(app).selected_keybinding_profile(),
+            yttt::ui::settings::keybindings::KeybindingProfile::Base
+        );
+    });
+    assert!(
+        cx.debug_bounds("settings-vim-profile-summary").is_none(),
+        "the Base profile should not expose Vim-only guidance"
     );
     let vim_profile = cx
         .debug_bounds("settings-keybinding-profile-vim")
-        .expect("keybinding settings should expose the Vim profile");
+        .expect("the segmented switch should expose the Vim option");
     cx.simulate_click(vim_profile.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     cx.read(|app| {
@@ -793,9 +803,29 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
             .is_some(),
         "the first keybinding row should initially be visible"
     );
-    let keybinding_list = cx
-        .debug_bounds("settings-keybinding-virtual-list")
-        .expect("the virtualized keybinding list should remain visible");
+    let first_keybinding_row = cx
+        .debug_bounds("settings-keybinding-row-project.create")
+        .unwrap();
+    assert!(
+        first_keybinding_row.size.width >= keybinding_list.size.width - gpui::px(1.0),
+        "keybinding rows should use the full list width"
+    );
+    let first_keybinding_bindings = cx
+        .debug_bounds("settings-keybinding-bindings-project.create")
+        .unwrap();
+    let first_keybinding_actions = cx
+        .debug_bounds("settings-keybinding-actions-project.create")
+        .unwrap();
+    assert_eq!(first_keybinding_bindings.size.width, gpui::px(300.0));
+    assert!(
+        first_keybinding_actions.origin.x
+            >= first_keybinding_bindings.origin.x + first_keybinding_bindings.size.width,
+        "row actions should stay in a stable column instead of wrapping through bindings"
+    );
+    assert!(
+        first_keybinding_actions.size.height <= gpui::px(32.0),
+        "row actions should stay on one compact line"
+    );
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: keybinding_list.center(),
         delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-640.0))),
