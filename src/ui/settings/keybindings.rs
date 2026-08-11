@@ -587,12 +587,180 @@ pub(crate) fn bindable_action_text_with_text(
             let (title_key, description_key) = editor_vim_action_text_keys(action);
             (text.get(title_key), text.get(description_key))
         }
-        _ => (
-            action.title().expect("non-command actions have a title"),
-            action
-                .description()
-                .expect("non-command actions have a description"),
-        ),
+        action => {
+            if let Some((title_key, description_key)) = static_vim_action_text_keys(action) {
+                (text.get(title_key), text.get(description_key))
+            } else {
+                (
+                    action.title().expect("non-command actions have a title"),
+                    action
+                        .description()
+                        .expect("non-command actions have a description"),
+                )
+            }
+        }
+    }
+}
+
+fn static_vim_action_text_keys(action: BindableActionId) -> Option<(UiTextKey, UiTextKey)> {
+    match action {
+        BindableActionId::SettingsVimPrevious => Some((
+            UiTextKey::KeybindingSettingsVimPreviousTitle,
+            UiTextKey::KeybindingSettingsVimPreviousDescription,
+        )),
+        BindableActionId::SettingsVimNext => Some((
+            UiTextKey::KeybindingSettingsVimNextTitle,
+            UiTextKey::KeybindingSettingsVimNextDescription,
+        )),
+        BindableActionId::SettingsVimFirst => Some((
+            UiTextKey::KeybindingSettingsVimFirstTitle,
+            UiTextKey::KeybindingSettingsVimFirstDescription,
+        )),
+        BindableActionId::SettingsVimLast => Some((
+            UiTextKey::KeybindingSettingsVimLastTitle,
+            UiTextKey::KeybindingSettingsVimLastDescription,
+        )),
+        BindableActionId::VimNormal => Some((
+            UiTextKey::KeybindingVimNormalTitle,
+            UiTextKey::KeybindingVimNormalDescription,
+        )),
+        BindableActionId::VimInsert => Some((
+            UiTextKey::KeybindingVimInsertTitle,
+            UiTextKey::KeybindingVimInsertDescription,
+        )),
+        BindableActionId::VimTerminal => Some((
+            UiTextKey::KeybindingVimTerminalTitle,
+            UiTextKey::KeybindingVimTerminalDescription,
+        )),
+        BindableActionId::ProjectsVimPrevious => Some((
+            UiTextKey::KeybindingProjectsVimPreviousTitle,
+            UiTextKey::KeybindingProjectsVimPreviousDescription,
+        )),
+        BindableActionId::ProjectsVimNext => Some((
+            UiTextKey::KeybindingProjectsVimNextTitle,
+            UiTextKey::KeybindingProjectsVimNextDescription,
+        )),
+        BindableActionId::ProjectsVimFirst => Some((
+            UiTextKey::KeybindingProjectsVimFirstTitle,
+            UiTextKey::KeybindingProjectsVimFirstDescription,
+        )),
+        BindableActionId::ProjectsVimLast => Some((
+            UiTextKey::KeybindingProjectsVimLastTitle,
+            UiTextKey::KeybindingProjectsVimLastDescription,
+        )),
+        BindableActionId::ProjectTreeVimUp => Some((
+            UiTextKey::KeybindingProjectTreeVimUpTitle,
+            UiTextKey::KeybindingProjectTreeVimUpDescription,
+        )),
+        BindableActionId::ProjectTreeVimDown => Some((
+            UiTextKey::KeybindingProjectTreeVimDownTitle,
+            UiTextKey::KeybindingProjectTreeVimDownDescription,
+        )),
+        BindableActionId::ProjectTreeVimLeft => Some((
+            UiTextKey::KeybindingProjectTreeVimLeftTitle,
+            UiTextKey::KeybindingProjectTreeVimLeftDescription,
+        )),
+        BindableActionId::ProjectTreeVimRight => Some((
+            UiTextKey::KeybindingProjectTreeVimRightTitle,
+            UiTextKey::KeybindingProjectTreeVimRightDescription,
+        )),
+        BindableActionId::ProjectTreeVimOpen => Some((
+            UiTextKey::KeybindingProjectTreeVimOpenTitle,
+            UiTextKey::KeybindingProjectTreeVimOpenDescription,
+        )),
+        BindableActionId::ProjectTreeVimToggle => Some((
+            UiTextKey::KeybindingProjectTreeVimToggleTitle,
+            UiTextKey::KeybindingProjectTreeVimToggleDescription,
+        )),
+        BindableActionId::ProjectTreeVimFirst => Some((
+            UiTextKey::KeybindingProjectTreeVimFirstTitle,
+            UiTextKey::KeybindingProjectTreeVimFirstDescription,
+        )),
+        BindableActionId::ProjectTreeVimLast => Some((
+            UiTextKey::KeybindingProjectTreeVimLastTitle,
+            UiTextKey::KeybindingProjectTreeVimLastDescription,
+        )),
+        BindableActionId::TerminalViToggle => Some((
+            UiTextKey::KeybindingTerminalViToggleTitle,
+            UiTextKey::KeybindingTerminalViToggleDescription,
+        )),
+        BindableActionId::TerminalViLeave => Some((
+            UiTextKey::KeybindingTerminalViLeaveTitle,
+            UiTextKey::KeybindingTerminalViLeaveDescription,
+        )),
+        BindableActionId::TerminalViSelection => Some((
+            UiTextKey::KeybindingTerminalViSelectionTitle,
+            UiTextKey::KeybindingTerminalViSelectionDescription,
+        )),
+        BindableActionId::TerminalViYank => Some((
+            UiTextKey::KeybindingTerminalViYankTitle,
+            UiTextKey::KeybindingTerminalViYankDescription,
+        )),
+        BindableActionId::TerminalViMoveLeft => Some((
+            UiTextKey::KeybindingTerminalViMoveLeftTitle,
+            UiTextKey::KeybindingTerminalViMoveLeftDescription,
+        )),
+        BindableActionId::TerminalViMoveDown => Some((
+            UiTextKey::KeybindingTerminalViMoveDownTitle,
+            UiTextKey::KeybindingTerminalViMoveDownDescription,
+        )),
+        BindableActionId::TerminalViMoveUp => Some((
+            UiTextKey::KeybindingTerminalViMoveUpTitle,
+            UiTextKey::KeybindingTerminalViMoveUpDescription,
+        )),
+        BindableActionId::TerminalViMoveRight => Some((
+            UiTextKey::KeybindingTerminalViMoveRightTitle,
+            UiTextKey::KeybindingTerminalViMoveRightDescription,
+        )),
+        BindableActionId::TerminalViMoveFirst => Some((
+            UiTextKey::KeybindingTerminalViMoveFirstTitle,
+            UiTextKey::KeybindingTerminalViMoveFirstDescription,
+        )),
+        BindableActionId::TerminalViMoveLast => Some((
+            UiTextKey::KeybindingTerminalViMoveLastTitle,
+            UiTextKey::KeybindingTerminalViMoveLastDescription,
+        )),
+        BindableActionId::TerminalViMoveFirstOccupied => Some((
+            UiTextKey::KeybindingTerminalViMoveFirstOccupiedTitle,
+            UiTextKey::KeybindingTerminalViMoveFirstOccupiedDescription,
+        )),
+        BindableActionId::TerminalViMoveHigh => Some((
+            UiTextKey::KeybindingTerminalViMoveHighTitle,
+            UiTextKey::KeybindingTerminalViMoveHighDescription,
+        )),
+        BindableActionId::TerminalViMoveMiddle => Some((
+            UiTextKey::KeybindingTerminalViMoveMiddleTitle,
+            UiTextKey::KeybindingTerminalViMoveMiddleDescription,
+        )),
+        BindableActionId::TerminalViMoveLow => Some((
+            UiTextKey::KeybindingTerminalViMoveLowTitle,
+            UiTextKey::KeybindingTerminalViMoveLowDescription,
+        )),
+        BindableActionId::TerminalViMoveWordLeft => Some((
+            UiTextKey::KeybindingTerminalViMoveWordLeftTitle,
+            UiTextKey::KeybindingTerminalViMoveWordLeftDescription,
+        )),
+        BindableActionId::TerminalViMoveWordRight => Some((
+            UiTextKey::KeybindingTerminalViMoveWordRightTitle,
+            UiTextKey::KeybindingTerminalViMoveWordRightDescription,
+        )),
+        BindableActionId::TerminalViMoveWordEnd => Some((
+            UiTextKey::KeybindingTerminalViMoveWordEndTitle,
+            UiTextKey::KeybindingTerminalViMoveWordEndDescription,
+        )),
+        BindableActionId::TerminalViMoveBracket => Some((
+            UiTextKey::KeybindingTerminalViMoveBracketTitle,
+            UiTextKey::KeybindingTerminalViMoveBracketDescription,
+        )),
+        BindableActionId::TerminalViMoveParagraphUp => Some((
+            UiTextKey::KeybindingTerminalViMoveParagraphUpTitle,
+            UiTextKey::KeybindingTerminalViMoveParagraphUpDescription,
+        )),
+        BindableActionId::TerminalViMoveParagraphDown => Some((
+            UiTextKey::KeybindingTerminalViMoveParagraphDownTitle,
+            UiTextKey::KeybindingTerminalViMoveParagraphDownDescription,
+        )),
+        _ => None,
     }
 }
 

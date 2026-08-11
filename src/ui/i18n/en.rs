@@ -714,6 +714,144 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::SettingsEditKeybindingsToml => "Edit keybindings TOML",
         UiTextKey::SettingsEditKeybindingsTomlDescription => "Open the user keybindings file.",
+        UiTextKey::KeybindingSettingsVimPreviousTitle => "Settings Vim: Previous Group",
+        UiTextKey::KeybindingSettingsVimPreviousDescription => {
+            "Select the previous visible settings group."
+        }
+        UiTextKey::KeybindingSettingsVimNextTitle => "Settings Vim: Next Group",
+        UiTextKey::KeybindingSettingsVimNextDescription => {
+            "Select the next visible settings group."
+        }
+        UiTextKey::KeybindingSettingsVimFirstTitle => "Settings Vim: First Group",
+        UiTextKey::KeybindingSettingsVimFirstDescription => {
+            "Select the first visible settings group."
+        }
+        UiTextKey::KeybindingSettingsVimLastTitle => "Settings Vim: Last Group",
+        UiTextKey::KeybindingSettingsVimLastDescription => {
+            "Select the last visible settings group."
+        }
+        UiTextKey::KeybindingVimNormalTitle => "Enter Vim Normal Mode",
+        UiTextKey::KeybindingVimNormalDescription => {
+            "Return the active yttt surface to Vim Normal mode."
+        }
+        UiTextKey::KeybindingVimInsertTitle => "Enter Vim Insert Mode",
+        UiTextKey::KeybindingVimInsertDescription => {
+            "Allow direct text input on the active yttt surface."
+        }
+        UiTextKey::KeybindingVimTerminalTitle => "Enter Vim Terminal Mode",
+        UiTextKey::KeybindingVimTerminalDescription => {
+            "Return the active terminal to direct process input."
+        }
+        UiTextKey::KeybindingProjectsVimPreviousTitle => "Projects Vim: Previous Project",
+        UiTextKey::KeybindingProjectsVimPreviousDescription => {
+            "Select the previous opened project."
+        }
+        UiTextKey::KeybindingProjectsVimNextTitle => "Projects Vim: Next Project",
+        UiTextKey::KeybindingProjectsVimNextDescription => "Select the next opened project.",
+        UiTextKey::KeybindingProjectsVimFirstTitle => "Projects Vim: First Project",
+        UiTextKey::KeybindingProjectsVimFirstDescription => "Select the first opened project.",
+        UiTextKey::KeybindingProjectsVimLastTitle => "Projects Vim: Last Project",
+        UiTextKey::KeybindingProjectsVimLastDescription => "Select the last opened project.",
+        UiTextKey::KeybindingProjectTreeVimUpTitle => "Project Tree Vim: Previous Entry",
+        UiTextKey::KeybindingProjectTreeVimUpDescription => {
+            "Move to the previous visible project-tree entry."
+        }
+        UiTextKey::KeybindingProjectTreeVimDownTitle => "Project Tree Vim: Next Entry",
+        UiTextKey::KeybindingProjectTreeVimDownDescription => {
+            "Move to the next visible project-tree entry."
+        }
+        UiTextKey::KeybindingProjectTreeVimLeftTitle => "Project Tree Vim: Collapse or Parent",
+        UiTextKey::KeybindingProjectTreeVimLeftDescription => {
+            "Collapse the current directory or select its parent."
+        }
+        UiTextKey::KeybindingProjectTreeVimRightTitle => "Project Tree Vim: Expand or Open",
+        UiTextKey::KeybindingProjectTreeVimRightDescription => {
+            "Expand a directory, select its first child, or open a file."
+        }
+        UiTextKey::KeybindingProjectTreeVimOpenTitle => "Project Tree Vim: Open",
+        UiTextKey::KeybindingProjectTreeVimOpenDescription => {
+            "Open a file or toggle the selected directory."
+        }
+        UiTextKey::KeybindingProjectTreeVimToggleTitle => "Project Tree Vim: Toggle Directory",
+        UiTextKey::KeybindingProjectTreeVimToggleDescription => {
+            "Expand or collapse the selected project-tree directory."
+        }
+        UiTextKey::KeybindingProjectTreeVimFirstTitle => "Project Tree Vim: First Entry",
+        UiTextKey::KeybindingProjectTreeVimFirstDescription => {
+            "Select the first visible project-tree entry."
+        }
+        UiTextKey::KeybindingProjectTreeVimLastTitle => "Project Tree Vim: Last Entry",
+        UiTextKey::KeybindingProjectTreeVimLastDescription => {
+            "Select the last visible project-tree entry."
+        }
+        UiTextKey::KeybindingTerminalViToggleTitle => "Toggle Terminal Vi Mode",
+        UiTextKey::KeybindingTerminalViToggleDescription => "Enter or leave terminal Vi mode.",
+        UiTextKey::KeybindingTerminalViLeaveTitle => "Exit Terminal Vi Mode",
+        UiTextKey::KeybindingTerminalViLeaveDescription => {
+            "Return the terminal to normal input mode."
+        }
+        UiTextKey::KeybindingTerminalViSelectionTitle => "Toggle Terminal Vi Selection",
+        UiTextKey::KeybindingTerminalViSelectionDescription => {
+            "Start or clear a terminal Vi selection."
+        }
+        UiTextKey::KeybindingTerminalViYankTitle => "Copy Terminal Vi Selection",
+        UiTextKey::KeybindingTerminalViYankDescription => {
+            "Copy and clear the terminal Vi selection."
+        }
+        UiTextKey::KeybindingTerminalViMoveLeftTitle => "Terminal Vi: Move Left",
+        UiTextKey::KeybindingTerminalViMoveLeftDescription => "Move the terminal Vi cursor left.",
+        UiTextKey::KeybindingTerminalViMoveDownTitle => "Terminal Vi: Move Down",
+        UiTextKey::KeybindingTerminalViMoveDownDescription => "Move the terminal Vi cursor down.",
+        UiTextKey::KeybindingTerminalViMoveUpTitle => "Terminal Vi: Move Up",
+        UiTextKey::KeybindingTerminalViMoveUpDescription => "Move the terminal Vi cursor up.",
+        UiTextKey::KeybindingTerminalViMoveRightTitle => "Terminal Vi: Move Right",
+        UiTextKey::KeybindingTerminalViMoveRightDescription => "Move the terminal Vi cursor right.",
+        UiTextKey::KeybindingTerminalViMoveFirstTitle => "Terminal Vi: First Column",
+        UiTextKey::KeybindingTerminalViMoveFirstDescription => "Move to the first terminal column.",
+        UiTextKey::KeybindingTerminalViMoveLastTitle => "Terminal Vi: Last Column",
+        UiTextKey::KeybindingTerminalViMoveLastDescription => "Move to the last terminal column.",
+        UiTextKey::KeybindingTerminalViMoveFirstOccupiedTitle => {
+            "Terminal Vi: First Occupied Column"
+        }
+        UiTextKey::KeybindingTerminalViMoveFirstOccupiedDescription => {
+            "Move to the first occupied terminal column."
+        }
+        UiTextKey::KeybindingTerminalViMoveHighTitle => "Terminal Vi: Viewport Top",
+        UiTextKey::KeybindingTerminalViMoveHighDescription => {
+            "Move to the top of the terminal viewport."
+        }
+        UiTextKey::KeybindingTerminalViMoveMiddleTitle => "Terminal Vi: Viewport Middle",
+        UiTextKey::KeybindingTerminalViMoveMiddleDescription => {
+            "Move to the middle of the terminal viewport."
+        }
+        UiTextKey::KeybindingTerminalViMoveLowTitle => "Terminal Vi: Viewport Bottom",
+        UiTextKey::KeybindingTerminalViMoveLowDescription => {
+            "Move to the bottom of the terminal viewport."
+        }
+        UiTextKey::KeybindingTerminalViMoveWordLeftTitle => "Terminal Vi: Previous Word",
+        UiTextKey::KeybindingTerminalViMoveWordLeftDescription => {
+            "Move to the previous terminal word."
+        }
+        UiTextKey::KeybindingTerminalViMoveWordRightTitle => "Terminal Vi: Next Word",
+        UiTextKey::KeybindingTerminalViMoveWordRightDescription => {
+            "Move to the next terminal word."
+        }
+        UiTextKey::KeybindingTerminalViMoveWordEndTitle => "Terminal Vi: Next Word End",
+        UiTextKey::KeybindingTerminalViMoveWordEndDescription => {
+            "Move to the end of the next terminal word."
+        }
+        UiTextKey::KeybindingTerminalViMoveBracketTitle => "Terminal Vi: Matching Bracket",
+        UiTextKey::KeybindingTerminalViMoveBracketDescription => {
+            "Move to the matching terminal bracket."
+        }
+        UiTextKey::KeybindingTerminalViMoveParagraphUpTitle => "Terminal Vi: Previous Paragraph",
+        UiTextKey::KeybindingTerminalViMoveParagraphUpDescription => {
+            "Move to the previous terminal paragraph."
+        }
+        UiTextKey::KeybindingTerminalViMoveParagraphDownTitle => "Terminal Vi: Next Paragraph",
+        UiTextKey::KeybindingTerminalViMoveParagraphDownDescription => {
+            "Move to the next terminal paragraph."
+        }
         UiTextKey::SettingsKeybindingDiagnostics => "Keybinding diagnostics",
         UiTextKey::SettingsKeybindingDiagnosticsDescription => {
             "Show invalid commands and shortcut conflicts."

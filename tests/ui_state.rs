@@ -5600,6 +5600,7 @@ fn root_view_language_setting_updates_settings_labels() {
             "编辑器",
             "终端",
             "Agent",
+            "权限",
             "默认布局",
             "快捷键"
         ]
