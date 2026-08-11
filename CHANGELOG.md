@@ -15,6 +15,9 @@
   manually from an existing shell tab or pane.
 - Added in-app and optional native desktop notifications when hook-backed agents need input,
   complete a task, or fail.
+- Added a cross-platform Permissions settings page for reviewing core and optional desktop access,
+  opening native macOS and Windows settings, and explaining Linux desktop/portal-managed
+  authorization.
 
 ### Changed
 

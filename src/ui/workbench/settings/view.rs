@@ -250,6 +250,7 @@ fn settings_rows(
         SettingsGroupId::Editor => settings_editor_rows(root, style, window, cx),
         SettingsGroupId::Terminal => settings_terminal_rows(root, style, window, cx),
         SettingsGroupId::Agent => settings_agent_rows(root, style, cx),
+        SettingsGroupId::Permissions => settings_permission_rows(root, style, cx),
         SettingsGroupId::DefaultLayout => settings_default_layout_rows(root, style, cx),
         SettingsGroupId::Keybindings => settings_keybinding_rows(root, style, window, cx),
     }
@@ -1706,6 +1707,133 @@ fn settings_agent_rows(
                 ))
                 .children(additional_agent_rows)
         })
+}
+
+fn settings_permission_rows(
+    root: &WorkbenchView,
+    style: YtttSettingsLayout,
+    cx: &mut Context<WorkbenchView>,
+) -> Div {
+    let theme = root.theme_runtime().ui;
+    let text = root.ui_text;
+    let permissions = platform::platform_permissions();
+    let core_rows = permissions
+        .iter()
+        .copied()
+        .filter(|permission| !permission.kind.is_optional())
+        .fold(div().flex().flex_col(), |rows, permission| {
+            rows.child(permission_setting_row(permission, text, theme, style, cx))
+        });
+    let optional_rows = permissions
+        .iter()
+        .copied()
+        .filter(|permission| permission.kind.is_optional())
+        .fold(div().flex().flex_col(), |rows, permission| {
+            rows.child(permission_setting_row(permission, text, theme, style, cx))
+        });
+
+    div()
+        .flex()
+        .flex_col()
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionCorePermissions),
+            true,
+        ))
+        .child(core_rows)
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionOptionalPermissions),
+            false,
+        ))
+        .child(optional_rows)
+}
+
+fn permission_setting_row(
+    permission: platform::PlatformPermission,
+    text: UiText,
+    theme: WorkbenchTheme,
+    style: YtttSettingsLayout,
+    cx: &mut Context<WorkbenchView>,
+) -> Div {
+    let (title_key, description_key) = permission_text_keys(permission.kind);
+    let title = text.get(title_key);
+    let control = match permission.control {
+        platform::PermissionControl::SystemSettings => settings_button(
+            format!("settings-permission-{}", permission.kind.as_str()),
+            text.get(UiTextKey::SettingsPermissionOpenSystemSettings),
+            false,
+            theme,
+            cx,
+            cx.listener(move |this, _, _window, cx| {
+                match platform::open_permission_settings(permission.kind) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        this.load_error =
+                            Some(format!("System settings are unavailable for {title}."));
+                    }
+                    Err(error) => {
+                        this.load_error = Some(format!(
+                            "Failed to open system settings for {title}: {error}"
+                        ));
+                    }
+                }
+                cx.notify();
+            }),
+        )
+        .into_any_element(),
+        control => settings_value(
+            text.get(permission_control_key(control)),
+            theme,
+            style.ui_style,
+        )
+        .into_any_element(),
+    };
+
+    setting_row(style, theme, title, text.get(description_key), control)
+        .debug_selector(move || format!("settings-permission-{}-row", permission.kind.as_str()))
+}
+
+fn permission_text_keys(kind: platform::PermissionKind) -> (UiTextKey, UiTextKey) {
+    match kind {
+        platform::PermissionKind::Notifications => (
+            UiTextKey::SettingsPermissionNotifications,
+            UiTextKey::SettingsPermissionNotificationsDescription,
+        ),
+        platform::PermissionKind::FileSystem => (
+            UiTextKey::SettingsPermissionFileSystem,
+            UiTextKey::SettingsPermissionFileSystemDescription,
+        ),
+        platform::PermissionKind::DeveloperTools => (
+            UiTextKey::SettingsPermissionDeveloperTools,
+            UiTextKey::SettingsPermissionDeveloperToolsDescription,
+        ),
+        platform::PermissionKind::Accessibility => (
+            UiTextKey::SettingsPermissionAccessibility,
+            UiTextKey::SettingsPermissionAccessibilityDescription,
+        ),
+        platform::PermissionKind::ScreenCapture => (
+            UiTextKey::SettingsPermissionScreenCapture,
+            UiTextKey::SettingsPermissionScreenCaptureDescription,
+        ),
+    }
+}
+
+fn permission_control_key(control: platform::PermissionControl) -> UiTextKey {
+    match control {
+        platform::PermissionControl::SystemSettings => {
+            UiTextKey::SettingsPermissionOpenSystemSettings
+        }
+        platform::PermissionControl::ManagedBySystem => {
+            UiTextKey::SettingsPermissionManagedBySystem
+        }
+        platform::PermissionControl::RequestedWhenNeeded => {
+            UiTextKey::SettingsPermissionRequestedWhenNeeded
+        }
+        platform::PermissionControl::NotRequired => UiTextKey::SettingsPermissionNotRequired,
+    }
 }
 
 fn settings_default_layout_rows(

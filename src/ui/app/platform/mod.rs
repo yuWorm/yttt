@@ -32,6 +32,126 @@ impl DesktopPlatform {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PermissionKind {
+    Notifications,
+    FileSystem,
+    DeveloperTools,
+    Accessibility,
+    ScreenCapture,
+}
+
+impl PermissionKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Notifications => "notifications",
+            Self::FileSystem => "file-system",
+            Self::DeveloperTools => "developer-tools",
+            Self::Accessibility => "accessibility",
+            Self::ScreenCapture => "screen-capture",
+        }
+    }
+
+    pub const fn is_optional(self) -> bool {
+        matches!(self, Self::Accessibility | Self::ScreenCapture)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PermissionControl {
+    SystemSettings,
+    ManagedBySystem,
+    RequestedWhenNeeded,
+    NotRequired,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlatformPermission {
+    pub kind: PermissionKind,
+    pub control: PermissionControl,
+}
+
+const MACOS_PERMISSIONS: &[PlatformPermission] = &[
+    PlatformPermission {
+        kind: PermissionKind::Notifications,
+        control: PermissionControl::SystemSettings,
+    },
+    PlatformPermission {
+        kind: PermissionKind::FileSystem,
+        control: PermissionControl::SystemSettings,
+    },
+    PlatformPermission {
+        kind: PermissionKind::DeveloperTools,
+        control: PermissionControl::SystemSettings,
+    },
+    PlatformPermission {
+        kind: PermissionKind::Accessibility,
+        control: PermissionControl::SystemSettings,
+    },
+    PlatformPermission {
+        kind: PermissionKind::ScreenCapture,
+        control: PermissionControl::SystemSettings,
+    },
+];
+
+const WINDOWS_PERMISSIONS: &[PlatformPermission] = &[
+    PlatformPermission {
+        kind: PermissionKind::Notifications,
+        control: PermissionControl::SystemSettings,
+    },
+    PlatformPermission {
+        kind: PermissionKind::FileSystem,
+        control: PermissionControl::SystemSettings,
+    },
+    PlatformPermission {
+        kind: PermissionKind::DeveloperTools,
+        control: PermissionControl::SystemSettings,
+    },
+    PlatformPermission {
+        kind: PermissionKind::Accessibility,
+        control: PermissionControl::NotRequired,
+    },
+    PlatformPermission {
+        kind: PermissionKind::ScreenCapture,
+        control: PermissionControl::SystemSettings,
+    },
+];
+
+const LINUX_PERMISSIONS: &[PlatformPermission] = &[
+    PlatformPermission {
+        kind: PermissionKind::Notifications,
+        control: PermissionControl::ManagedBySystem,
+    },
+    PlatformPermission {
+        kind: PermissionKind::FileSystem,
+        control: PermissionControl::NotRequired,
+    },
+    PlatformPermission {
+        kind: PermissionKind::DeveloperTools,
+        control: PermissionControl::NotRequired,
+    },
+    PlatformPermission {
+        kind: PermissionKind::Accessibility,
+        control: PermissionControl::RequestedWhenNeeded,
+    },
+    PlatformPermission {
+        kind: PermissionKind::ScreenCapture,
+        control: PermissionControl::RequestedWhenNeeded,
+    },
+];
+
+pub fn platform_permissions() -> &'static [PlatformPermission] {
+    permissions_for(DesktopPlatform::current())
+}
+
+fn permissions_for(platform: DesktopPlatform) -> &'static [PlatformPermission] {
+    match platform {
+        DesktopPlatform::MacOs => MACOS_PERMISSIONS,
+        DesktopPlatform::Windows => WINDOWS_PERMISSIONS,
+        DesktopPlatform::Linux => LINUX_PERMISSIONS,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RevealTargetKind {
     File,
     Directory,
@@ -39,6 +159,12 @@ enum RevealTargetKind {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RevealCommand {
+    program: &'static str,
+    args: Vec<OsString>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SystemSettingsCommand {
     program: &'static str,
     args: Vec<OsString>,
 }
@@ -54,6 +180,14 @@ pub fn reveal_path(path: &Path) -> io::Result<()> {
     let command = reveal_command(DesktopPlatform::current(), &target, kind);
     Command::new(command.program).args(command.args).spawn()?;
     Ok(())
+}
+
+pub fn open_permission_settings(kind: PermissionKind) -> io::Result<bool> {
+    let Some(command) = permission_settings_command(DesktopPlatform::current(), kind) else {
+        return Ok(false);
+    };
+    Command::new(command.program).args(command.args).spawn()?;
+    Ok(true)
 }
 
 fn absolute_path(path: &Path) -> io::Result<PathBuf> {
@@ -113,6 +247,63 @@ fn reveal_command(
             }
         }
     }
+}
+
+fn permission_settings_command(
+    platform: DesktopPlatform,
+    kind: PermissionKind,
+) -> Option<SystemSettingsCommand> {
+    let (program, target) = match (platform, kind) {
+        (DesktopPlatform::MacOs, PermissionKind::Notifications) => (
+            "open",
+            OsString::from(format!(
+                "x-apple.systempreferences:com.apple.Notifications-Settings.extension?bundleIdentifier={APP_ID}"
+            )),
+        ),
+        (DesktopPlatform::MacOs, PermissionKind::FileSystem) => (
+            "open",
+            OsString::from(
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+            ),
+        ),
+        (DesktopPlatform::MacOs, PermissionKind::DeveloperTools) => (
+            "open",
+            OsString::from(
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_DeveloperTools",
+            ),
+        ),
+        (DesktopPlatform::MacOs, PermissionKind::Accessibility) => (
+            "open",
+            OsString::from(
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            ),
+        ),
+        (DesktopPlatform::MacOs, PermissionKind::ScreenCapture) => (
+            "open",
+            OsString::from(
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+            ),
+        ),
+        (DesktopPlatform::Windows, PermissionKind::Notifications) => {
+            ("explorer.exe", OsString::from("ms-settings:notifications"))
+        }
+        (DesktopPlatform::Windows, PermissionKind::FileSystem) => (
+            "explorer.exe",
+            OsString::from("ms-settings:privacy-broadfilesystemaccess"),
+        ),
+        (DesktopPlatform::Windows, PermissionKind::DeveloperTools) => {
+            ("explorer.exe", OsString::from("ms-settings:developers"))
+        }
+        (DesktopPlatform::Windows, PermissionKind::ScreenCapture) => (
+            "explorer.exe",
+            OsString::from("ms-settings:privacy-graphicscaptureprogrammatic"),
+        ),
+        _ => return None,
+    };
+    Some(SystemSettingsCommand {
+        program,
+        args: vec![target],
+    })
 }
 
 pub fn resolved_window_background_effect(
@@ -234,6 +425,53 @@ mod tests {
                 program: "xdg-open",
                 args: vec![OsString::from("/tmp/project")],
             }
+        );
+    }
+
+    #[test]
+    fn permission_catalog_reflects_each_desktop_security_model() {
+        assert!(
+            permissions_for(DesktopPlatform::MacOs)
+                .iter()
+                .all(|permission| permission.control == PermissionControl::SystemSettings)
+        );
+        assert_eq!(
+            permissions_for(DesktopPlatform::Windows)
+                .iter()
+                .find(|permission| permission.kind == PermissionKind::Accessibility)
+                .map(|permission| permission.control),
+            Some(PermissionControl::NotRequired)
+        );
+        assert_eq!(
+            permissions_for(DesktopPlatform::Linux)
+                .iter()
+                .find(|permission| permission.kind == PermissionKind::ScreenCapture)
+                .map(|permission| permission.control),
+            Some(PermissionControl::RequestedWhenNeeded)
+        );
+    }
+
+    #[test]
+    fn permission_settings_commands_target_native_settings_pages() {
+        assert_eq!(
+            permission_settings_command(DesktopPlatform::MacOs, PermissionKind::Notifications),
+            Some(SystemSettingsCommand {
+                program: "open",
+                args: vec![OsString::from(
+                    "x-apple.systempreferences:com.apple.Notifications-Settings.extension?bundleIdentifier=com.yttt.app"
+                )],
+            })
+        );
+        assert_eq!(
+            permission_settings_command(DesktopPlatform::Windows, PermissionKind::FileSystem),
+            Some(SystemSettingsCommand {
+                program: "explorer.exe",
+                args: vec![OsString::from("ms-settings:privacy-broadfilesystemaccess")],
+            })
+        );
+        assert_eq!(
+            permission_settings_command(DesktopPlatform::Linux, PermissionKind::FileSystem),
+            None
         );
     }
 

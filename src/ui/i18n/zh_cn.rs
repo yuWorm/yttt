@@ -307,6 +307,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsGroupTerminalDescription => "Shell、字体和终端运行默认值",
         UiTextKey::SettingsGroupAgent => "Agent",
         UiTextKey::SettingsGroupAgentDescription => "主 Agent 与本地会话扫描",
+        UiTextKey::SettingsGroupPermissions => "权限",
+        UiTextKey::SettingsGroupPermissionsDescription => {
+            "管理文件、通知和开发工作流所需的系统访问权限"
+        }
         UiTextKey::SettingsGroupProjectLayout => "项目布局",
         UiTextKey::SettingsGroupProjectLayoutDescription => "项目布局文件和 TOML 编辑",
         UiTextKey::SettingsGroupDefaultLayout => "默认布局",
@@ -338,6 +342,32 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSectionCompatibility => "兼容性与剪贴板",
         UiTextKey::SettingsSectionAgentOverview => "Agent 概览",
         UiTextKey::SettingsSectionProviders => "会话提供方",
+        UiTextKey::SettingsSectionCorePermissions => "核心权限",
+        UiTextKey::SettingsSectionOptionalPermissions => "可选集成",
+        UiTextKey::SettingsPermissionNotifications => "系统通知",
+        UiTextKey::SettingsPermissionNotificationsDescription => {
+            "允许 yttt 在后台发送 Agent 任务完成或等待处理的提醒。"
+        }
+        UiTextKey::SettingsPermissionFileSystem => "受保护的文件访问",
+        UiTextKey::SettingsPermissionFileSystemDescription => {
+            "允许终端和 Agent 访问操作系统保护位置中的项目文件。"
+        }
+        UiTextKey::SettingsPermissionDeveloperTools => "开发者工具",
+        UiTextKey::SettingsPermissionDeveloperToolsDescription => {
+            "启用调试器和本地工具链所需的操作系统开发者控制。"
+        }
+        UiTextKey::SettingsPermissionAccessibility => "辅助功能",
+        UiTextKey::SettingsPermissionAccessibilityDescription => {
+            "仅在工作流需要控制其他应用或模拟输入时使用。"
+        }
+        UiTextKey::SettingsPermissionScreenCapture => "屏幕录制",
+        UiTextKey::SettingsPermissionScreenCaptureDescription => {
+            "仅在工作流需要捕获屏幕或应用窗口时使用。"
+        }
+        UiTextKey::SettingsPermissionOpenSystemSettings => "打开系统设置",
+        UiTextKey::SettingsPermissionManagedBySystem => "由桌面环境管理",
+        UiTextKey::SettingsPermissionRequestedWhenNeeded => "使用时申请",
+        UiTextKey::SettingsPermissionNotRequired => "无需单独授权",
         UiTextKey::SettingsSectionCurrentLayout => "当前布局",
         UiTextKey::SettingsSectionLayoutActions => "布局操作",
         UiTextKey::SettingsSectionDangerZone => "危险操作",

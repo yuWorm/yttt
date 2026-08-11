@@ -4016,6 +4016,7 @@ fn root_view_settings_open_command_opens_settings_page() {
             "Editor",
             "Terminal",
             "Agent",
+            "Permissions",
             "Default Layout",
             "Keybindings"
         ]
@@ -4046,6 +4047,9 @@ fn root_view_settings_search_matches_setting_titles_and_descriptions() {
     root.set_settings_search_query("UI style");
     assert_eq!(root.visible_settings_group_titles(), vec!["Appearance"]);
     assert_eq!(root.selected_settings_group_title(), Some("Appearance"));
+
+    root.set_settings_search_query("synthetic input");
+    assert_eq!(root.visible_settings_group_titles(), vec!["Permissions"]);
 
     root.set_settings_search_query("setting-that-does-not-exist");
     assert!(root.visible_settings_group_titles().is_empty());
@@ -5461,6 +5465,37 @@ fn terminal_settings_group_renders_protocol_and_interaction_controls(
         "settings-terminal-copy-on-select-row",
         "settings-terminal-osc52-policy-row",
         "settings-terminal-kitty-keyboard-row",
+    ] {
+        assert!(cx.debug_bounds(selector).is_some(), "missing {selector}");
+    }
+}
+
+#[gpui::test]
+fn permissions_settings_group_renders_cross_platform_access_controls(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.open_settings();
+        root.select_settings_group("permissions").unwrap();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+
+    for selector in [
+        "settings-permission-notifications-row",
+        "settings-permission-file-system-row",
+        "settings-permission-developer-tools-row",
+        "settings-permission-accessibility-row",
+        "settings-permission-screen-capture-row",
     ] {
         assert!(cx.debug_bounds(selector).is_some(), "missing {selector}");
     }

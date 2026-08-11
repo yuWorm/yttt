@@ -12,6 +12,7 @@ pub enum SettingsGroupId {
     Editor,
     Terminal,
     Agent,
+    Permissions,
     DefaultLayout,
     Keybindings,
 }
@@ -24,6 +25,7 @@ impl SettingsGroupId {
         Self::Editor,
         Self::Terminal,
         Self::Agent,
+        Self::Permissions,
         Self::DefaultLayout,
         Self::Keybindings,
     ];
@@ -36,6 +38,7 @@ impl SettingsGroupId {
             Self::Editor => "editor",
             Self::Terminal => "terminal",
             Self::Agent => "agent",
+            Self::Permissions => "permissions",
             Self::DefaultLayout => "default-layout",
             Self::Keybindings => "keybindings",
         }
@@ -49,6 +52,7 @@ impl SettingsGroupId {
             Self::Editor => UiTextKey::SettingsGroupEditor,
             Self::Terminal => UiTextKey::SettingsGroupTerminal,
             Self::Agent => UiTextKey::SettingsGroupAgent,
+            Self::Permissions => UiTextKey::SettingsGroupPermissions,
             Self::DefaultLayout => UiTextKey::SettingsGroupDefaultLayout,
             Self::Keybindings => UiTextKey::SettingsGroupKeybindings,
         }
@@ -62,6 +66,7 @@ impl SettingsGroupId {
             Self::Editor => UiTextKey::SettingsGroupEditorDescription,
             Self::Terminal => UiTextKey::SettingsGroupTerminalDescription,
             Self::Agent => UiTextKey::SettingsGroupAgentDescription,
+            Self::Permissions => UiTextKey::SettingsGroupPermissionsDescription,
             Self::DefaultLayout => UiTextKey::SettingsGroupDefaultLayoutDescription,
             Self::Keybindings => UiTextKey::SettingsGroupKeybindingsDescription,
         }
@@ -331,6 +336,28 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
             row(
                 UiTextKey::SettingsAgentSessions,
                 UiTextKey::SettingsAgentSessionsDescription,
+            ),
+        ],
+        SettingsGroupId::Permissions => vec![
+            row(
+                UiTextKey::SettingsPermissionNotifications,
+                UiTextKey::SettingsPermissionNotificationsDescription,
+            ),
+            row(
+                UiTextKey::SettingsPermissionFileSystem,
+                UiTextKey::SettingsPermissionFileSystemDescription,
+            ),
+            row(
+                UiTextKey::SettingsPermissionDeveloperTools,
+                UiTextKey::SettingsPermissionDeveloperToolsDescription,
+            ),
+            row(
+                UiTextKey::SettingsPermissionAccessibility,
+                UiTextKey::SettingsPermissionAccessibilityDescription,
+            ),
+            row(
+                UiTextKey::SettingsPermissionScreenCapture,
+                UiTextKey::SettingsPermissionScreenCaptureDescription,
             ),
         ],
         SettingsGroupId::DefaultLayout => vec![

@@ -152,6 +152,20 @@ Discard and Continue, or Cancel. A save failure leaves the file, project, or win
 - Create, rename, and delete work in local and SSH trees. Copy/move paste works only between local
   projects; operations involving an SSH project are rejected.
 
+
+## Desktop Permissions
+
+Open **Settings → Permissions** to review desktop access used by development workflows.
+Notifications, protected file access, and developer tools are listed as core access.
+Accessibility and screen capture are optional and should only be enabled for workflows that
+control another application, synthesize input, or capture a screen or window.
+
+On macOS, each grant action opens the corresponding Privacy & Security or Notifications pane.
+On Windows, yttt opens the matching Settings page when Windows exposes one and identifies access
+that native desktop applications do not need to request separately. Linux has no single permission
+center, so the page identifies access managed by the desktop environment, requested by an
+XDG Desktop Portal when used, or available without a separate approval.
+
 ## Settings TOML
 
 The settings file is `<app config>/settings.toml`. These are the complete defaults:

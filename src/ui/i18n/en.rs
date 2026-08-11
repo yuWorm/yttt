@@ -345,6 +345,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsGroupTerminalDescription => "Shell, font, and terminal runtime defaults",
         UiTextKey::SettingsGroupAgent => "Agent",
         UiTextKey::SettingsGroupAgentDescription => "Primary agent and local session discovery",
+        UiTextKey::SettingsGroupPermissions => "Permissions",
+        UiTextKey::SettingsGroupPermissionsDescription => {
+            "Desktop access for files, notifications, and developer workflows"
+        }
         UiTextKey::SettingsGroupProjectLayout => "Project Layout",
         UiTextKey::SettingsGroupProjectLayoutDescription => "Project layout files and TOML editing",
         UiTextKey::SettingsGroupDefaultLayout => "Default Layout",
@@ -382,6 +386,32 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSectionCompatibility => "Compatibility & clipboard",
         UiTextKey::SettingsSectionAgentOverview => "Agent overview",
         UiTextKey::SettingsSectionProviders => "Session providers",
+        UiTextKey::SettingsSectionCorePermissions => "Core access",
+        UiTextKey::SettingsSectionOptionalPermissions => "Optional integrations",
+        UiTextKey::SettingsPermissionNotifications => "System notifications",
+        UiTextKey::SettingsPermissionNotificationsDescription => {
+            "Allow agent completion and attention alerts when yttt is not focused."
+        }
+        UiTextKey::SettingsPermissionFileSystem => "Protected file access",
+        UiTextKey::SettingsPermissionFileSystemDescription => {
+            "Allow terminals and agents to work with projects in operating-system protected locations."
+        }
+        UiTextKey::SettingsPermissionDeveloperTools => "Developer tools",
+        UiTextKey::SettingsPermissionDeveloperToolsDescription => {
+            "Enable operating-system developer controls used by debugging and local toolchains."
+        }
+        UiTextKey::SettingsPermissionAccessibility => "Accessibility",
+        UiTextKey::SettingsPermissionAccessibilityDescription => {
+            "Only needed by workflows that control other applications or send synthetic input."
+        }
+        UiTextKey::SettingsPermissionScreenCapture => "Screen capture",
+        UiTextKey::SettingsPermissionScreenCaptureDescription => {
+            "Only needed by workflows that capture a screen or application window."
+        }
+        UiTextKey::SettingsPermissionOpenSystemSettings => "Open system settings",
+        UiTextKey::SettingsPermissionManagedBySystem => "Managed by desktop",
+        UiTextKey::SettingsPermissionRequestedWhenNeeded => "Requested when needed",
+        UiTextKey::SettingsPermissionNotRequired => "No approval required",
         UiTextKey::SettingsSectionCurrentLayout => "Current layout",
         UiTextKey::SettingsSectionLayoutActions => "Layout actions",
         UiTextKey::SettingsSectionDangerZone => "Danger zone",
