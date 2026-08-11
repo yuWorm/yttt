@@ -25,7 +25,7 @@ use crate::{
     model::layout::{PaneConfig, PaneKind, ProcessExitBehavior, TerminalExecutionMode},
     runtime::{
         agent::classify_agent,
-        agent_hooks::AgentHookClient,
+        agent_hooks::{AGENT_HOOK_ENVIRONMENT_VARIABLES, AgentHookClient},
         agent_manager::{AgentPaneAddress, AgentPaneLaunch},
         notification::{ExitNotificationInput, NotificationEvent, notification_for_exit},
     },
@@ -486,6 +486,7 @@ impl TerminalPaneView {
         };
         let environment = self.spawn_environment();
         request
+            .env_remove(AGENT_HOOK_ENVIRONMENT_VARIABLES)
             .envs(
                 environment
                     .iter()
@@ -519,6 +520,7 @@ impl TerminalPaneView {
         if let Some(agent_launch) = &self.agent_launch {
             environment.extend(agent_launch.environment(self.generation));
         }
+        remove_inherited_agent_hook_environment(&mut environment);
         if let Some(client) = &self.agent_hook_client {
             environment.extend(client.environment(&self.agent_pane_address(), self.generation));
         }
@@ -993,6 +995,12 @@ pub fn spawn_failure_lines(failure: &TerminalSpawnFailure) -> Vec<String> {
     ]
 }
 
+fn remove_inherited_agent_hook_environment(environment: &mut BTreeMap<String, String>) {
+    for name in AGENT_HOOK_ENVIRONMENT_VARIABLES {
+        environment.remove(name);
+    }
+}
+
 fn terminal_start_error(lifecycle: &PaneLifecycle, terminal_error: &Option<String>) -> String {
     match lifecycle {
         PaneLifecycle::SpawnFailed { message } => message.clone(),
@@ -1054,6 +1062,35 @@ mod tests {
             }
         );
     }
+    #[test]
+    fn inherited_agent_hook_credentials_are_removed_from_terminal_environment() {
+        let mut environment = BTreeMap::from([
+            ("PATH".to_string(), "/usr/bin".to_string()),
+            (
+                "YTTT_AGENT_HOOK_ENDPOINT".to_string(),
+                "http://outer-yttt".to_string(),
+            ),
+            (
+                "YTTT_AGENT_HOOK_TOKEN".to_string(),
+                "outer-token".to_string(),
+            ),
+            (
+                "YTTT_AGENT_HOOK_SCOPE".to_string(),
+                "outer-scope".to_string(),
+            ),
+        ]);
+
+        remove_inherited_agent_hook_environment(&mut environment);
+
+        assert_eq!(
+            environment.get("PATH").map(String::as_str),
+            Some("/usr/bin")
+        );
+        for name in AGENT_HOOK_ENVIRONMENT_VARIABLES {
+            assert!(!environment.contains_key(name));
+        }
+    }
+
     #[test]
     fn terminal_pane_io_error_lifecycle_is_single_shot() {
         let message = terminal_io_error_message(PtyIoOperation::Read, "broken pipe");

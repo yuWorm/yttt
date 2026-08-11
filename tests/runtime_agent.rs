@@ -13,6 +13,20 @@ use yttt::runtime::terminal::{
 };
 use yttt_agent_core::AgentViewState;
 
+fn process_record(
+    pid: u32,
+    parent_pid: Option<u32>,
+    agent: Option<BuiltinAgent>,
+    blocks_descendant_agent_discovery: bool,
+) -> AgentProcessRecord {
+    AgentProcessRecord {
+        pid,
+        parent_pid,
+        agent,
+        blocks_descendant_agent_discovery,
+    }
+}
+
 #[test]
 fn fake_runtime_marks_process_running_then_exited() {
     let mut runtime = FakeTerminalRuntime::default();
@@ -105,32 +119,31 @@ fn interpreter_backed_agent_processes_are_identified_by_script_path() {
 #[test]
 fn shell_pane_process_tree_detects_the_nearest_agent_descendant() {
     let processes = [
-        AgentProcessRecord {
-            pid: 10,
-            parent_pid: None,
-            agent: None,
-        },
-        AgentProcessRecord {
-            pid: 11,
-            parent_pid: Some(10),
-            agent: Some(BuiltinAgent::Codex),
-        },
-        AgentProcessRecord {
-            pid: 12,
-            parent_pid: Some(11),
-            agent: Some(BuiltinAgent::Claude),
-        },
-        AgentProcessRecord {
-            pid: 20,
-            parent_pid: None,
-            agent: None,
-        },
+        process_record(10, None, None, false),
+        process_record(11, Some(10), Some(BuiltinAgent::Codex), false),
+        process_record(12, Some(11), Some(BuiltinAgent::Claude), false),
+        process_record(20, None, None, false),
     ];
 
     let detected = detect_agent_processes_by_root(&[10, 20], &processes);
 
     assert_eq!(detected.get(&10), Some(&BuiltinAgent::Codex));
     assert!(!detected.contains_key(&20));
+}
+
+#[test]
+fn nested_yttt_process_blocks_its_agent_descendants_from_the_outer_pane() {
+    let processes = [
+        process_record(30, None, None, false),
+        process_record(31, Some(30), None, false),
+        process_record(32, Some(31), None, true),
+        process_record(33, Some(32), None, false),
+        process_record(34, Some(33), Some(BuiltinAgent::OhMyPi), false),
+    ];
+
+    let detected = detect_agent_processes_by_root(&[30], &processes);
+
+    assert!(!detected.contains_key(&30));
 }
 
 #[test]

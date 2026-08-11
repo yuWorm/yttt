@@ -29,6 +29,11 @@ const CLIENT_TIMEOUT: Duration = Duration::from_secs(1);
 const ACCEPT_IDLE: Duration = Duration::from_millis(10);
 const TOKEN_HEADER: &str = "x-yttt-agent-hook-token";
 const SCOPE_HEADER: &str = "x-yttt-agent-hook-scope";
+pub const AGENT_HOOK_ENVIRONMENT_VARIABLES: [&str; 3] = [
+    "YTTT_AGENT_HOOK_ENDPOINT",
+    "YTTT_AGENT_HOOK_TOKEN",
+    "YTTT_AGENT_HOOK_SCOPE",
+];
 
 #[derive(Clone)]
 pub struct AgentHookClient {
@@ -64,11 +69,11 @@ impl AgentHookClient {
         let token = scope_token(&self.secret, &scope);
         BTreeMap::from([
             (
-                "YTTT_AGENT_HOOK_ENDPOINT".to_string(),
+                AGENT_HOOK_ENVIRONMENT_VARIABLES[0].to_string(),
                 self.endpoint.to_string(),
             ),
-            ("YTTT_AGENT_HOOK_TOKEN".to_string(), token),
-            ("YTTT_AGENT_HOOK_SCOPE".to_string(), scope),
+            (AGENT_HOOK_ENVIRONMENT_VARIABLES[1].to_string(), token),
+            (AGENT_HOOK_ENVIRONMENT_VARIABLES[2].to_string(), scope),
         ])
     }
 }

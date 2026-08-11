@@ -59,6 +59,7 @@ pub struct TerminalSpawnRequest {
     pub execution: TerminalExecution,
     pub cwd: PathBuf,
     pub environment: BTreeMap<String, String>,
+    pub removed_environment: Vec<String>,
     pub cols: u16,
     pub rows: u16,
 }
@@ -76,6 +77,7 @@ impl TerminalSpawnRequest {
                 command: command.into(),
             },
             environment: BTreeMap::new(),
+            removed_environment: Vec::new(),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             cols: 80,
             rows: 24,
@@ -96,6 +98,7 @@ impl TerminalSpawnRequest {
                 args,
             },
             environment: BTreeMap::new(),
+            removed_environment: Vec::new(),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             cols: 80,
             rows: 24,
@@ -113,6 +116,16 @@ impl TerminalSpawnRequest {
                 .into_iter()
                 .map(|(name, value)| (name.into(), value.into())),
         );
+        self
+    }
+
+    pub fn env_remove<I, K>(mut self, names: I) -> Self
+    where
+        I: IntoIterator<Item = K>,
+        K: Into<String>,
+    {
+        self.removed_environment
+            .extend(names.into_iter().map(Into::into));
         self
     }
 
@@ -222,8 +235,12 @@ impl TerminalRuntime for PortablePtyRuntime {
             pixel_height: 0,
         })?;
         let portable_pty::PtyPair { slave, master } = pair;
-        let command_builder =
-            command_builder(&request.execution, &request.cwd, &request.environment)?;
+        let command_builder = command_builder(
+            &request.execution,
+            &request.cwd,
+            &request.environment,
+            &request.removed_environment,
+        )?;
         let mut child = slave.spawn_command(command_builder)?;
         drop(slave);
 
@@ -318,7 +335,12 @@ pub fn spawn_portable_pty_session(
         pixel_height: 0,
     })?;
     let portable_pty::PtyPair { slave, master } = pair;
-    let command_builder = command_builder(&request.execution, &request.cwd, &request.environment)?;
+    let command_builder = command_builder(
+        &request.execution,
+        &request.cwd,
+        &request.environment,
+        &request.removed_environment,
+    )?;
     let mut child = slave.spawn_command(command_builder)?;
     drop(slave);
 
@@ -494,6 +516,7 @@ fn command_builder(
     execution: &TerminalExecution,
     cwd: &Path,
     environment: &BTreeMap<String, String>,
+    removed_environment: &[String],
 ) -> anyhow::Result<CommandBuilder> {
     let mut builder = match execution {
         TerminalExecution::Shell { shell, .. } => {
@@ -524,6 +547,9 @@ fn command_builder(
         }
     };
     configure_terminal_environment(&mut builder);
+    for name in removed_environment {
+        builder.env_remove(name);
+    }
     for (name, value) in environment {
         builder.env(name, value);
     }
@@ -684,7 +710,7 @@ mod tests {
             vec!["npm", "run", "dev server"]
         };
         assert_eq!(
-            argv(command_builder(&execution, Path::new("/tmp"), &BTreeMap::new()).unwrap()),
+            argv(command_builder(&execution, Path::new("/tmp"), &BTreeMap::new(), &[],).unwrap(),),
             expected
         );
     }
@@ -755,13 +781,30 @@ mod tests {
             program: "printf".to_string(),
             args: vec!["ok".to_string()],
         };
+        let removed_environment = Vec::new();
 
         assert_eq!(
-            argv(command_builder(&sh, Path::new("/tmp"), &BTreeMap::new()).unwrap()),
+            argv(
+                command_builder(
+                    &sh,
+                    Path::new("/tmp"),
+                    &BTreeMap::new(),
+                    &removed_environment,
+                )
+                .unwrap(),
+            ),
             vec!["/bin/sh", "-li"]
         );
         assert_eq!(
-            argv(command_builder(&powershell, Path::new("/tmp"), &BTreeMap::new()).unwrap()),
+            argv(
+                command_builder(
+                    &powershell,
+                    Path::new("/tmp"),
+                    &BTreeMap::new(),
+                    &removed_environment,
+                )
+                .unwrap(),
+            ),
             vec![
                 "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
                 "-NoLogo",
@@ -785,9 +828,18 @@ mod tests {
             shell: "/bin/zsh".to_string(),
             command: String::new(),
         };
+        let removed_environment = Vec::new();
 
         assert_eq!(
-            argv(command_builder(&execution, Path::new("/tmp"), &BTreeMap::new()).unwrap()),
+            argv(
+                command_builder(
+                    &execution,
+                    Path::new("/tmp"),
+                    &BTreeMap::new(),
+                    &removed_environment,
+                )
+                .unwrap(),
+            ),
             vec!["/bin/zsh", "-li"]
         );
         let mut input = Vec::new();
@@ -801,7 +853,14 @@ mod tests {
             shell: "/bin/zsh".to_string(),
             command: String::new(),
         };
-        let builder = command_builder(&execution, Path::new("/tmp"), &BTreeMap::new()).unwrap();
+        let removed_environment = Vec::new();
+        let builder = command_builder(
+            &execution,
+            Path::new("/tmp"),
+            &BTreeMap::new(),
+            &removed_environment,
+        )
+        .unwrap();
 
         assert_eq!(
             builder.get_env("TERM"),
@@ -832,7 +891,7 @@ mod tests {
             ("NO_COLOR".to_string(), "1".to_string()),
         ]);
 
-        let builder = command_builder(&execution, Path::new("/tmp"), &environment).unwrap();
+        let builder = command_builder(&execution, Path::new("/tmp"), &environment, &[]).unwrap();
 
         assert_eq!(
             builder.get_env("TERM"),
@@ -840,6 +899,32 @@ mod tests {
         );
         assert_eq!(builder.get_env("NO_COLOR"), Some(std::ffi::OsStr::new("1")));
         assert_eq!(builder.get_env("CLICOLOR"), None);
+    }
+
+    #[test]
+    fn spawn_request_removes_parent_environment_before_applying_explicit_values() {
+        let removed_name = "YTTT_AGENT_HOOK_TOKEN";
+        let request = TerminalSpawnRequest::for_shell("shell", "/bin/sh", "")
+            .env_remove([removed_name])
+            .envs([(removed_name, "current-token")]);
+        assert!(
+            request
+                .removed_environment
+                .iter()
+                .any(|name| name == removed_name)
+        );
+
+        let builder = command_builder(
+            &request.execution,
+            &request.cwd,
+            &request.environment,
+            &request.removed_environment,
+        )
+        .unwrap();
+        assert_eq!(
+            builder.get_env(removed_name),
+            Some(std::ffi::OsStr::new("current-token"))
+        );
     }
 
     #[cfg(unix)]

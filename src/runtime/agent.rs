@@ -22,6 +22,7 @@ pub struct AgentProcessRecord {
     pub pid: u32,
     pub parent_pid: Option<u32>,
     pub agent: Option<BuiltinAgent>,
+    pub blocks_descendant_agent_discovery: bool,
 }
 
 pub fn classify_agent(kind: Option<PaneKind>, command: &str) -> AgentClassification {
@@ -67,6 +68,17 @@ where
         })
 }
 
+pub fn blocks_agent_process_discovery<N, S>(process_name: N, command: &[S]) -> bool
+where
+    N: AsRef<OsStr>,
+    S: AsRef<OsStr>,
+{
+    is_yttt_executable(&process_name.as_ref().to_string_lossy())
+        || command
+            .first()
+            .is_some_and(|executable| is_yttt_executable(&executable.as_ref().to_string_lossy()))
+}
+
 pub fn detect_agent_processes_by_root(
     root_pids: &[u32],
     processes: &[AgentProcessRecord],
@@ -103,7 +115,13 @@ fn nearest_agent_process(
         if !visited.insert(pid) {
             continue;
         }
-        if let Some(agent) = by_pid.get(&pid).and_then(|process| process.agent) {
+        let Some(process) = by_pid.get(&pid) else {
+            continue;
+        };
+        if process.blocks_descendant_agent_discovery {
+            continue;
+        }
+        if let Some(agent) = process.agent {
             return Some(agent);
         }
         if let Some(children) = children_by_parent.get(&pid) {
@@ -164,6 +182,11 @@ fn classify_agent_script_path(script: &str) -> Option<BuiltinAgent> {
     None
 }
 
+fn is_yttt_executable(executable: &str) -> bool {
+    let basename = executable.rsplit(['/', '\\']).next().unwrap_or(executable);
+    basename.eq_ignore_ascii_case("yttt") || basename.eq_ignore_ascii_case("yttt.exe")
+}
+
 fn command_basename(command: &str) -> Option<&str> {
     let program = command.split_whitespace().next()?;
     program.rsplit(['/', '\\']).next()
@@ -204,5 +227,18 @@ mod tests {
             ),
             Some(BuiltinAgent::Codex)
         );
+    }
+
+    #[test]
+    fn identifies_yttt_processes_as_agent_discovery_boundaries() {
+        assert!(blocks_agent_process_discovery(
+            "yttt",
+            &["/tmp/target/debug/yttt"]
+        ));
+        assert!(blocks_agent_process_discovery(
+            "yttt.exe",
+            &[r"C:\tools\yttt.exe"]
+        ));
+        assert!(!blocks_agent_process_discovery("cargo", &["cargo", "run"]));
     }
 }

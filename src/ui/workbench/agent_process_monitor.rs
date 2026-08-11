@@ -15,7 +15,10 @@ use crate::{
     config::default_layout::BuiltinAgent,
     model::ids::ProjectId,
     runtime::{
-        agent::{AgentProcessRecord, classify_agent_process, detect_agent_processes_by_root},
+        agent::{
+            AgentProcessRecord, blocks_agent_process_discovery, classify_agent_process,
+            detect_agent_processes_by_root,
+        },
         agent_hooks::AgentHookRequest,
         agent_manager::AgentPaneAddress,
     },
@@ -362,6 +365,10 @@ fn scan_agent_processes(system: &mut System, root_pids: &[u32]) -> HashMap<u32, 
             pid: pid.as_u32(),
             parent_pid: process.parent().map(|parent| parent.as_u32()),
             agent: classify_agent_process(process.name(), process.cmd()),
+            blocks_descendant_agent_discovery: blocks_agent_process_discovery(
+                process.name(),
+                process.cmd(),
+            ),
         })
         .collect::<Vec<_>>();
     detect_agent_processes_by_root(root_pids, &processes)
@@ -411,7 +418,7 @@ mod hook_ownership_tests {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use std::{os::unix::fs::symlink, process::Command, thread, time::Duration};
+    use std::{fs, os::unix::fs::symlink, process::Command, thread, time::Duration};
 
     use tempfile::tempdir;
 
@@ -440,5 +447,51 @@ mod tests {
         let _ = child.kill();
         let _ = child.wait();
         assert_eq!(detected, Some(BuiltinAgent::Codex));
+    }
+
+    #[test]
+    fn system_scan_stops_at_a_nested_yttt_process() {
+        let temp = tempdir().unwrap();
+        let nested_yttt = temp.path().join("yttt");
+        let inner_agent = temp.path().join("omp");
+        let inner_pid_path = temp.path().join("inner-agent.pid");
+        symlink("/bin/sh", &nested_yttt).unwrap();
+        symlink("/bin/sleep", &inner_agent).unwrap();
+        let command = format!(
+            "\"{}\" 1 & echo $! > \"{}\"; wait",
+            inner_agent.display(),
+            inner_pid_path.display()
+        );
+        let mut nested = Command::new(&nested_yttt)
+            .arg("-c")
+            .arg(command)
+            .spawn()
+            .unwrap();
+
+        let mut inner_pid = None;
+        for _ in 0..50 {
+            inner_pid = fs::read_to_string(&inner_pid_path)
+                .ok()
+                .and_then(|value| value.trim().parse::<u32>().ok());
+            if inner_pid.is_some() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let inner_pid = inner_pid.expect("nested yttt should start its inner agent");
+        let root_pid = nested.id();
+        let mut system = System::new();
+        let mut detected = HashMap::new();
+        for _ in 0..50 {
+            detected = scan_agent_processes(&mut system, &[root_pid, inner_pid]);
+            if detected.contains_key(&inner_pid) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        let _ = nested.wait();
+        assert_eq!(detected.get(&inner_pid), Some(&BuiltinAgent::OhMyPi));
+        assert!(!detected.contains_key(&root_pid));
     }
 }
