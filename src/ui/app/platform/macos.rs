@@ -1,4 +1,7 @@
 #[cfg(target_os = "macos")]
+mod permissions;
+pub(super) use permissions::{detect_permission_status, request_native_permission};
+
 pub fn prepare_macos_app_runtime() {
     use cocoa::{
         appkit::{NSApplication as _, NSApplicationActivationPolicyRegular, NSWindow},

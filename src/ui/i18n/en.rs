@@ -408,6 +408,19 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsPermissionScreenCaptureDescription => {
             "Only needed by workflows that capture a screen or application window."
         }
+        UiTextKey::SettingsPermissionStatus => "Authorization status",
+        UiTextKey::SettingsPermissionStatusDescription => {
+            "Checked when this page opens and when yttt regains focus after system settings."
+        }
+        UiTextKey::SettingsPermissionRefresh => "Refresh",
+        UiTextKey::SettingsPermissionChecking => "Checking...",
+        UiTextKey::SettingsPermissionGranted => "Granted",
+        UiTextKey::SettingsPermissionNotDetermined => "Not requested",
+        UiTextKey::SettingsPermissionDenied => "Not granted",
+        UiTextKey::SettingsPermissionUnavailable => "Status unavailable",
+        UiTextKey::SettingsPermissionRequest => "Request",
+        UiTextKey::SettingsPermissionRequesting => "Requesting...",
+        UiTextKey::SettingsPermissionManage => "Manage",
         UiTextKey::SettingsPermissionOpenSystemSettings => "Open system settings",
         UiTextKey::SettingsPermissionManagedBySystem => "Managed by desktop",
         UiTextKey::SettingsPermissionRequestedWhenNeeded => "Requested when needed",

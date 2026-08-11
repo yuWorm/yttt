@@ -30,6 +30,9 @@
 - Legacy workspace, settings, editor, and terminal Vim toggles now migrate to the least restrictive equivalent unified mode, and legacy `WorkspaceVim` keybinding contexts migrate to the Global scope.
 - Consolidated all built-in agent adapters and embedded hook sources into the extensible `yttt-agent-providers` crate instead of keeping Oh My Pi in a separate crate.
 - Restored running Claude, Codex, OpenCode, Pi, and Oh My Pi sessions with provider-specific resume commands after workspace restart; provider titles or stable first-prompt titles now persist with the session while custom pane titles remain authoritative.
+- The Permissions page now detects native authorization where the operating system supports it,
+  requests macOS Notifications, Accessibility, and Screen Recording access in place, refreshes
+  after returning from system settings, and reports unsupported status checks explicitly.
 
 ### Fixed
 

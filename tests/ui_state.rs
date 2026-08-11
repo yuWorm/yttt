@@ -5491,6 +5491,13 @@ fn permissions_settings_group_renders_cross_platform_access_controls(
     cx.refresh().unwrap();
 
     for selector in [
+        "settings-permissions-status-row",
+        "settings-permissions-refresh",
+        "settings-permission-notifications-status",
+        "settings-permission-file-system-status",
+        "settings-permission-developer-tools-status",
+        "settings-permission-accessibility-status",
+        "settings-permission-screen-capture-status",
         "settings-permission-notifications-row",
         "settings-permission-file-system-row",
         "settings-permission-developer-tools-row",

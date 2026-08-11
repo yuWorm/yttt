@@ -152,19 +152,25 @@ Discard and Continue, or Cancel. A save failure leaves the file, project, or win
 - Create, rename, and delete work in local and SSH trees. Copy/move paste works only between local
   projects; operations involving an SSH project are rejected.
 
-
 ## Desktop Permissions
 
-Open **Settings → Permissions** to review desktop access used by development workflows.
-Notifications, protected file access, and developer tools are listed as core access.
-Accessibility and screen capture are optional and should only be enabled for workflows that
-control another application, synthesize input, or capture a screen or window.
+Open **Settings → Permissions** to inspect and request desktop access used by development
+workflows. The page checks authorization when opened, refreshes after yttt regains focus from
+system settings, and provides a manual refresh action. Notifications, protected file access, and
+developer tools are listed as core access. Accessibility and screen capture are optional and
+should only be enabled for workflows that control another application, synthesize input, or
+capture a screen or window.
 
-On macOS, each grant action opens the corresponding Privacy & Security or Notifications pane.
+On macOS, yttt detects notification, Accessibility, and Screen Recording authorization through
+their native APIs. The first request uses the native system prompt; denied or already-granted
+access can be managed in the exact Privacy & Security or Notifications pane. macOS does not expose
+a supported status API for Full Disk Access or Developer Tools, so those rows report that the
+status is unavailable and open the corresponding pane directly.
+
 On Windows, yttt opens the matching Settings page when Windows exposes one and identifies access
 that native desktop applications do not need to request separately. Linux has no single permission
-center, so the page identifies access managed by the desktop environment, requested by an
-XDG Desktop Portal when used, or available without a separate approval.
+center, so the page identifies access managed by the desktop environment, requested by an XDG
+Desktop Portal when used, or available without separate approval.
 
 ## Settings TOML
 

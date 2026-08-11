@@ -41,6 +41,25 @@ pub enum PermissionKind {
 }
 
 impl PermissionKind {
+    pub const ALL: [Self; 5] = [
+        Self::Notifications,
+        Self::FileSystem,
+        Self::DeveloperTools,
+        Self::Accessibility,
+        Self::ScreenCapture,
+    ];
+    pub const COUNT: usize = Self::ALL.len();
+
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Notifications => 0,
+            Self::FileSystem => 1,
+            Self::DeveloperTools => 2,
+            Self::Accessibility => 3,
+            Self::ScreenCapture => 4,
+        }
+    }
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Notifications => "notifications",
@@ -62,6 +81,32 @@ pub enum PermissionControl {
     ManagedBySystem,
     RequestedWhenNeeded,
     NotRequired,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PermissionStatus {
+    Checking,
+    Unknown,
+    NotDetermined,
+    Granted,
+    Denied,
+    Unavailable,
+    ManagedBySystem,
+    RequestedWhenNeeded,
+    NotRequired,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PermissionAction {
+    Request,
+    OpenSettings,
+    None,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PermissionActionResult {
+    pub status: PermissionStatus,
+    pub opened_system_settings: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -151,6 +196,86 @@ fn permissions_for(platform: DesktopPlatform) -> &'static [PlatformPermission] {
     }
 }
 
+pub fn initial_permission_status(kind: PermissionKind) -> PermissionStatus {
+    initial_permission_status_for(DesktopPlatform::current(), kind)
+}
+
+fn initial_permission_status_for(
+    platform: DesktopPlatform,
+    kind: PermissionKind,
+) -> PermissionStatus {
+    let control = permissions_for(platform)
+        .iter()
+        .find(|permission| permission.kind == kind)
+        .map(|permission| permission.control)
+        .unwrap_or(PermissionControl::NotRequired);
+    match control {
+        PermissionControl::SystemSettings => PermissionStatus::Unknown,
+        PermissionControl::ManagedBySystem => PermissionStatus::ManagedBySystem,
+        PermissionControl::RequestedWhenNeeded => PermissionStatus::RequestedWhenNeeded,
+        PermissionControl::NotRequired => PermissionStatus::NotRequired,
+    }
+}
+
+pub fn detect_permission_status(kind: PermissionKind) -> io::Result<PermissionStatus> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::detect_permission_status(kind)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let status = initial_permission_status(kind);
+        Ok(if status == PermissionStatus::Unknown {
+            PermissionStatus::Unavailable
+        } else {
+            status
+        })
+    }
+}
+
+pub fn permission_action(
+    kind: PermissionKind,
+    status: PermissionStatus,
+    request_attempted: bool,
+) -> PermissionAction {
+    permission_action_for(DesktopPlatform::current(), kind, status, request_attempted)
+}
+
+fn permission_action_for(
+    platform: DesktopPlatform,
+    kind: PermissionKind,
+    status: PermissionStatus,
+    request_attempted: bool,
+) -> PermissionAction {
+    if status == PermissionStatus::Checking {
+        return PermissionAction::None;
+    }
+
+    if platform == DesktopPlatform::MacOs {
+        if kind == PermissionKind::Notifications && status == PermissionStatus::NotDetermined {
+            return PermissionAction::Request;
+        }
+        if matches!(
+            kind,
+            PermissionKind::Accessibility | PermissionKind::ScreenCapture
+        ) && status == PermissionStatus::Denied
+            && !request_attempted
+        {
+            return PermissionAction::Request;
+        }
+    }
+
+    let opens_settings = permissions_for(platform)
+        .iter()
+        .find(|permission| permission.kind == kind)
+        .is_some_and(|permission| permission.control == PermissionControl::SystemSettings);
+    if opens_settings {
+        PermissionAction::OpenSettings
+    } else {
+        PermissionAction::None
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RevealTargetKind {
     File,
@@ -188,6 +313,39 @@ pub fn open_permission_settings(kind: PermissionKind) -> io::Result<bool> {
     };
     Command::new(command.program).args(command.args).spawn()?;
     Ok(true)
+}
+
+pub fn perform_permission_action(
+    kind: PermissionKind,
+    status: PermissionStatus,
+    request_attempted: bool,
+) -> io::Result<PermissionActionResult> {
+    match permission_action(kind, status, request_attempted) {
+        PermissionAction::Request => {
+            #[cfg(target_os = "macos")]
+            {
+                Ok(PermissionActionResult {
+                    status: macos::request_native_permission(kind)?,
+                    opened_system_settings: false,
+                })
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                Ok(PermissionActionResult {
+                    status,
+                    opened_system_settings: false,
+                })
+            }
+        }
+        PermissionAction::OpenSettings => Ok(PermissionActionResult {
+            status,
+            opened_system_settings: open_permission_settings(kind)?,
+        }),
+        PermissionAction::None => Ok(PermissionActionResult {
+            status,
+            opened_system_settings: false,
+        }),
+    }
 }
 
 fn absolute_path(path: &Path) -> io::Result<PathBuf> {
@@ -472,6 +630,58 @@ mod tests {
         assert_eq!(
             permission_settings_command(DesktopPlatform::Linux, PermissionKind::FileSystem),
             None
+        );
+    }
+
+    #[test]
+    fn macos_requests_once_before_falling_back_to_system_settings() {
+        assert_eq!(
+            permission_action_for(
+                DesktopPlatform::MacOs,
+                PermissionKind::Notifications,
+                PermissionStatus::NotDetermined,
+                false,
+            ),
+            PermissionAction::Request
+        );
+        assert_eq!(
+            permission_action_for(
+                DesktopPlatform::MacOs,
+                PermissionKind::ScreenCapture,
+                PermissionStatus::Denied,
+                false,
+            ),
+            PermissionAction::Request
+        );
+        assert_eq!(
+            permission_action_for(
+                DesktopPlatform::MacOs,
+                PermissionKind::ScreenCapture,
+                PermissionStatus::Denied,
+                true,
+            ),
+            PermissionAction::OpenSettings
+        );
+    }
+
+    #[test]
+    fn non_requestable_permissions_explain_their_platform_status() {
+        assert_eq!(
+            initial_permission_status_for(DesktopPlatform::Linux, PermissionKind::ScreenCapture),
+            PermissionStatus::RequestedWhenNeeded
+        );
+        assert_eq!(
+            initial_permission_status_for(DesktopPlatform::Windows, PermissionKind::Accessibility),
+            PermissionStatus::NotRequired
+        );
+        assert_eq!(
+            permission_action_for(
+                DesktopPlatform::Linux,
+                PermissionKind::FileSystem,
+                PermissionStatus::NotRequired,
+                false,
+            ),
+            PermissionAction::None
         );
     }
 

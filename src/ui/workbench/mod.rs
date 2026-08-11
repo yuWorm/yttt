@@ -2984,7 +2984,14 @@ impl WorkbenchView {
     }
 
     fn on_window_activation_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if window.is_window_active() && self.queue_default_active_work_item_focus(cx) {
+        let is_active = window.is_window_active();
+        if is_active
+            && self.settings.settings_page.is_open
+            && self.settings.settings_page.selected_group == SettingsGroupId::Permissions
+        {
+            self.refresh_permission_statuses(cx);
+        }
+        if is_active && self.queue_default_active_work_item_focus(cx) {
             window.blur();
             cx.notify();
         }

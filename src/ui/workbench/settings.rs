@@ -955,6 +955,133 @@ impl WorkbenchView {
         )
     }
 
+    pub fn permission_status(&self, kind: platform::PermissionKind) -> platform::PermissionStatus {
+        self.settings.permission_statuses[kind.index()]
+    }
+
+    pub fn permission_refreshing(&self) -> bool {
+        self.settings.permission_refreshing
+    }
+
+    pub fn permission_request_in_progress(&self, kind: platform::PermissionKind) -> bool {
+        self.settings.permission_requesting == Some(kind)
+    }
+
+    pub fn permission_action_in_progress(&self) -> bool {
+        self.settings.permission_requesting.is_some()
+    }
+
+    pub fn permission_action(&self, kind: platform::PermissionKind) -> platform::PermissionAction {
+        platform::permission_action(
+            kind,
+            self.permission_status(kind),
+            self.settings.permission_request_attempted[kind.index()],
+        )
+    }
+
+    pub(super) fn ensure_permission_status_refresh(&mut self, cx: &mut Context<Self>) {
+        if !self.settings.permission_statuses_loaded && !self.settings.permission_refreshing {
+            self.refresh_permission_statuses(cx);
+        }
+    }
+
+    pub fn refresh_permission_statuses(&mut self, cx: &mut Context<Self>) {
+        if self.settings.permission_requesting.is_some() {
+            return;
+        }
+
+        self.settings.permission_refresh_generation =
+            self.settings.permission_refresh_generation.wrapping_add(1);
+        let generation = self.settings.permission_refresh_generation;
+        self.settings.permission_refreshing = true;
+        for permission in platform::platform_permissions() {
+            let initial = platform::initial_permission_status(permission.kind);
+            self.settings.permission_statuses[permission.kind.index()] =
+                if initial == platform::PermissionStatus::Unknown {
+                    platform::PermissionStatus::Checking
+                } else {
+                    initial
+                };
+        }
+
+        let task = cx.background_spawn(async move {
+            platform::PermissionKind::ALL.map(|kind| {
+                (
+                    kind,
+                    platform::detect_permission_status(kind).map_err(|error| error.to_string()),
+                )
+            })
+        });
+        cx.spawn(async move |this, cx| {
+            let statuses = task.await;
+            let _ = this.update(cx, |root, cx| {
+                if root.settings.permission_refresh_generation != generation {
+                    return;
+                }
+                for (kind, result) in statuses {
+                    root.settings.permission_statuses[kind.index()] =
+                        result.unwrap_or(platform::PermissionStatus::Unavailable);
+                }
+                root.settings.permission_refreshing = false;
+                root.settings.permission_statuses_loaded = true;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn request_or_open_permission(
+        &mut self,
+        kind: platform::PermissionKind,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings.permission_requesting.is_some() {
+            return;
+        }
+
+        let status = self.permission_status(kind);
+        let request_attempted = self.settings.permission_request_attempted[kind.index()];
+        let action = platform::permission_action(kind, status, request_attempted);
+        if action == platform::PermissionAction::None {
+            return;
+        }
+
+        self.settings.permission_refresh_generation =
+            self.settings.permission_refresh_generation.wrapping_add(1);
+        self.settings.permission_refreshing = false;
+        self.settings.permission_requesting = Some(kind);
+        if action == platform::PermissionAction::Request {
+            self.settings.permission_request_attempted[kind.index()] = true;
+        }
+
+        let task = cx.background_spawn(async move {
+            platform::perform_permission_action(kind, status, request_attempted)
+                .map_err(|error| error.to_string())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |root, cx| {
+                if root.settings.permission_requesting != Some(kind) {
+                    return;
+                }
+                root.settings.permission_requesting = None;
+                match result {
+                    Ok(result) => {
+                        root.settings.permission_statuses[kind.index()] = result.status;
+                        root.settings.permission_statuses_loaded = true;
+                    }
+                    Err(error) => {
+                        root.settings.permission_statuses[kind.index()] =
+                            platform::PermissionStatus::Unavailable;
+                        root.load_error = Some(error);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn refresh_theme_runtime_from_settings(&mut self) {
         match load_theme_store(&self.config_paths) {
             Ok(loaded) => {

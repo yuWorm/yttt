@@ -3,6 +3,7 @@ use std::{collections::HashMap, rc::Rc};
 use gpui::{Entity, Subscription};
 use gpui_component::{VirtualListScrollHandle, input::InputState};
 
+use crate::ui::app::platform::{self, PermissionKind, PermissionStatus};
 use crate::ui::settings::{
     SettingsPageState,
     keybindings::{KeybindingProfile, KeybindingRow, KeybindingsEditorState},
@@ -71,6 +72,12 @@ pub(in super::super) struct SettingsControllerState {
         HashMap<SettingsNumberField, Vec<Subscription>>,
     pub(in super::super) settings_page: SettingsPageState,
     pub(in super::super) zed_theme_import_dialog: Option<ZedThemeImportDialogState>,
+    pub(in super::super) permission_statuses: [PermissionStatus; PermissionKind::COUNT],
+    pub(in super::super) permission_request_attempted: [bool; PermissionKind::COUNT],
+    pub(in super::super) permission_refreshing: bool,
+    pub(in super::super) permission_statuses_loaded: bool,
+    pub(in super::super) permission_refresh_generation: u64,
+    pub(in super::super) permission_requesting: Option<PermissionKind>,
 }
 
 impl SettingsControllerState {
@@ -127,6 +134,14 @@ impl SettingsControllerState {
             settings_number_inputs: HashMap::new(),
             settings_number_input_subscriptions: HashMap::new(),
             settings_page: SettingsPageState::default(),
+            permission_statuses: std::array::from_fn(|index| {
+                platform::initial_permission_status(PermissionKind::ALL[index])
+            }),
+            permission_request_attempted: [false; PermissionKind::COUNT],
+            permission_refreshing: false,
+            permission_statuses_loaded: false,
+            permission_refresh_generation: 0,
+            permission_requesting: None,
             zed_theme_import_dialog: None,
         }
     }

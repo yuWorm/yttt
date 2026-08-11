@@ -1710,27 +1710,70 @@ fn settings_agent_rows(
 }
 
 fn settings_permission_rows(
-    root: &WorkbenchView,
+    root: &mut WorkbenchView,
     style: YtttSettingsLayout,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
+    root.ensure_permission_status_refresh(cx);
     let theme = root.theme_runtime().ui;
     let text = root.ui_text;
+    let refreshing = root.permission_refreshing();
+    let action_in_progress = root.permission_action_in_progress();
     let permissions = platform::platform_permissions();
     let core_rows = permissions
         .iter()
         .copied()
         .filter(|permission| !permission.kind.is_optional())
         .fold(div().flex().flex_col(), |rows, permission| {
-            rows.child(permission_setting_row(permission, text, theme, style, cx))
+            rows.child(permission_setting_row(
+                permission,
+                root.permission_status(permission.kind),
+                root.permission_action(permission.kind),
+                root.permission_request_in_progress(permission.kind),
+                action_in_progress,
+                text,
+                theme,
+                style,
+                cx,
+            ))
         });
     let optional_rows = permissions
         .iter()
         .copied()
         .filter(|permission| permission.kind.is_optional())
         .fold(div().flex().flex_col(), |rows, permission| {
-            rows.child(permission_setting_row(permission, text, theme, style, cx))
+            rows.child(permission_setting_row(
+                permission,
+                root.permission_status(permission.kind),
+                root.permission_action(permission.kind),
+                root.permission_request_in_progress(permission.kind),
+                action_in_progress,
+                text,
+                theme,
+                style,
+                cx,
+            ))
         });
+    let refresh_disabled = refreshing || action_in_progress;
+    let refresh_control = settings_button(
+        "settings-permissions-refresh",
+        text.get(if refreshing {
+            UiTextKey::SettingsPermissionChecking
+        } else {
+            UiTextKey::SettingsPermissionRefresh
+        }),
+        false,
+        theme,
+        cx,
+        cx.listener(|this, _, _window, cx| {
+            this.refresh_permission_statuses(cx);
+            cx.notify();
+        }),
+    )
+    .disabled(refresh_disabled)
+    .tab_stop(!refresh_disabled)
+    .debug_selector(|| "settings-permissions-refresh".to_string())
+    .into_any_element();
 
     div()
         .flex()
@@ -1741,6 +1784,16 @@ fn settings_permission_rows(
             text.get(UiTextKey::SettingsSectionCorePermissions),
             true,
         ))
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsPermissionStatus),
+                text.get(UiTextKey::SettingsPermissionStatusDescription),
+                refresh_control,
+            )
+            .debug_selector(|| "settings-permissions-status-row".to_string()),
+        )
         .child(core_rows)
         .child(settings_section_header(
             style,
@@ -1751,49 +1804,114 @@ fn settings_permission_rows(
         .child(optional_rows)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn permission_setting_row(
     permission: platform::PlatformPermission,
+    status: platform::PermissionStatus,
+    action: platform::PermissionAction,
+    requesting: bool,
+    action_in_progress: bool,
     text: UiText,
     theme: WorkbenchTheme,
     style: YtttSettingsLayout,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
     let (title_key, description_key) = permission_text_keys(permission.kind);
-    let title = text.get(title_key);
-    let control = match permission.control {
-        platform::PermissionControl::SystemSettings => settings_button(
-            format!("settings-permission-{}", permission.kind.as_str()),
-            text.get(UiTextKey::SettingsPermissionOpenSystemSettings),
-            false,
-            theme,
-            cx,
-            cx.listener(move |this, _, _window, cx| {
-                match platform::open_permission_settings(permission.kind) {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        this.load_error =
-                            Some(format!("System settings are unavailable for {title}."));
-                    }
-                    Err(error) => {
-                        this.load_error = Some(format!(
-                            "Failed to open system settings for {title}: {error}"
-                        ));
-                    }
-                }
-                cx.notify();
-            }),
-        )
-        .into_any_element(),
-        control => settings_value(
-            text.get(permission_control_key(control)),
+    let mut control = div()
+        .flex()
+        .items_center()
+        .justify_end()
+        .gap(style.ui_style.spacing.sm)
+        .child(permission_status_value(
+            permission.kind,
+            status,
+            text,
             theme,
             style.ui_style,
-        )
-        .into_any_element(),
-    };
+        ));
+    if requesting {
+        control = control.child(
+            settings_button(
+                format!("settings-permission-{}", permission.kind.as_str()),
+                text.get(UiTextKey::SettingsPermissionRequesting),
+                false,
+                theme,
+                cx,
+                cx.listener(|_, _, _, _| {}),
+            )
+            .disabled(true)
+            .tab_stop(false),
+        );
+    } else if action != platform::PermissionAction::None {
+        let kind = permission.kind;
+        let action_label = match action {
+            platform::PermissionAction::Request => UiTextKey::SettingsPermissionRequest,
+            platform::PermissionAction::OpenSettings
+                if status == platform::PermissionStatus::Granted =>
+            {
+                UiTextKey::SettingsPermissionManage
+            }
+            platform::PermissionAction::OpenSettings => {
+                UiTextKey::SettingsPermissionOpenSystemSettings
+            }
+            platform::PermissionAction::None => unreachable!(),
+        };
+        control = control.child(
+            settings_button(
+                format!("settings-permission-{}", permission.kind.as_str()),
+                text.get(action_label),
+                false,
+                theme,
+                cx,
+                cx.listener(move |this, _, _window, cx| {
+                    this.request_or_open_permission(kind, cx);
+                    cx.notify();
+                }),
+            )
+            .disabled(action_in_progress)
+            .tab_stop(!action_in_progress),
+        );
+    }
 
-    setting_row(style, theme, title, text.get(description_key), control)
-        .debug_selector(move || format!("settings-permission-{}-row", permission.kind.as_str()))
+    setting_row(
+        style,
+        theme,
+        text.get(title_key),
+        text.get(description_key),
+        control.into_any_element(),
+    )
+    .debug_selector(move || format!("settings-permission-{}-row", permission.kind.as_str()))
+}
+
+fn permission_status_value(
+    kind: platform::PermissionKind,
+    status: platform::PermissionStatus,
+    text: UiText,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Div {
+    let color = match status {
+        platform::PermissionStatus::Granted => theme.success,
+        platform::PermissionStatus::Denied => theme.warning,
+        platform::PermissionStatus::Checking => theme.accent,
+        platform::PermissionStatus::Unknown
+        | platform::PermissionStatus::NotDetermined
+        | platform::PermissionStatus::Unavailable
+        | platform::PermissionStatus::ManagedBySystem
+        | platform::PermissionStatus::RequestedWhenNeeded
+        | platform::PermissionStatus::NotRequired => theme.text_subtle,
+    };
+    div()
+        .debug_selector(move || format!("settings-permission-{}-status", kind.as_str()))
+        .rounded(ui_style.radius.compact)
+        .border(ui_style.border.hairline)
+        .border_color(color.alpha(0.5))
+        .bg(color.alpha(0.1))
+        .px(ui_style.spacing.md)
+        .py(ui_style.spacing.xs)
+        .text_xs()
+        .text_color(color)
+        .child(text.get(permission_status_key(status)))
 }
 
 fn permission_text_keys(kind: platform::PermissionKind) -> (UiTextKey, UiTextKey) {
@@ -1821,18 +1939,20 @@ fn permission_text_keys(kind: platform::PermissionKind) -> (UiTextKey, UiTextKey
     }
 }
 
-fn permission_control_key(control: platform::PermissionControl) -> UiTextKey {
-    match control {
-        platform::PermissionControl::SystemSettings => {
-            UiTextKey::SettingsPermissionOpenSystemSettings
+fn permission_status_key(status: platform::PermissionStatus) -> UiTextKey {
+    match status {
+        platform::PermissionStatus::Checking => UiTextKey::SettingsPermissionChecking,
+        platform::PermissionStatus::Unknown | platform::PermissionStatus::Unavailable => {
+            UiTextKey::SettingsPermissionUnavailable
         }
-        platform::PermissionControl::ManagedBySystem => {
-            UiTextKey::SettingsPermissionManagedBySystem
-        }
-        platform::PermissionControl::RequestedWhenNeeded => {
+        platform::PermissionStatus::NotDetermined => UiTextKey::SettingsPermissionNotDetermined,
+        platform::PermissionStatus::Granted => UiTextKey::SettingsPermissionGranted,
+        platform::PermissionStatus::Denied => UiTextKey::SettingsPermissionDenied,
+        platform::PermissionStatus::ManagedBySystem => UiTextKey::SettingsPermissionManagedBySystem,
+        platform::PermissionStatus::RequestedWhenNeeded => {
             UiTextKey::SettingsPermissionRequestedWhenNeeded
         }
-        platform::PermissionControl::NotRequired => UiTextKey::SettingsPermissionNotRequired,
+        platform::PermissionStatus::NotRequired => UiTextKey::SettingsPermissionNotRequired,
     }
 }
 

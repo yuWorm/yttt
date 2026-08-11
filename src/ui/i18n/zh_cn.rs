@@ -364,6 +364,19 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsPermissionScreenCaptureDescription => {
             "仅在工作流需要捕获屏幕或应用窗口时使用。"
         }
+        UiTextKey::SettingsPermissionStatus => "授权状态",
+        UiTextKey::SettingsPermissionStatusDescription => {
+            "打开本页以及从系统设置返回 yttt 时自动检测，也可以手动刷新。"
+        }
+        UiTextKey::SettingsPermissionRefresh => "刷新",
+        UiTextKey::SettingsPermissionChecking => "检测中...",
+        UiTextKey::SettingsPermissionGranted => "已授权",
+        UiTextKey::SettingsPermissionNotDetermined => "尚未申请",
+        UiTextKey::SettingsPermissionDenied => "未授权",
+        UiTextKey::SettingsPermissionUnavailable => "系统不支持检测",
+        UiTextKey::SettingsPermissionRequest => "申请",
+        UiTextKey::SettingsPermissionRequesting => "申请中...",
+        UiTextKey::SettingsPermissionManage => "管理",
         UiTextKey::SettingsPermissionOpenSystemSettings => "打开系统设置",
         UiTextKey::SettingsPermissionManagedBySystem => "由桌面环境管理",
         UiTextKey::SettingsPermissionRequestedWhenNeeded => "使用时申请",

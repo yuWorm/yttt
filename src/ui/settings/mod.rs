@@ -340,6 +340,10 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
         ],
         SettingsGroupId::Permissions => vec![
             row(
+                UiTextKey::SettingsPermissionStatus,
+                UiTextKey::SettingsPermissionStatusDescription,
+            ),
+            row(
                 UiTextKey::SettingsPermissionNotifications,
                 UiTextKey::SettingsPermissionNotificationsDescription,
             ),
