@@ -59,6 +59,10 @@ impl AppConfigPaths {
         self.config_dir.join("keybindings.toml")
     }
 
+    pub fn bars_file(&self) -> PathBuf {
+        self.config_dir.join("bars.toml")
+    }
+
     pub fn settings_file(&self) -> PathBuf {
         self.config_dir.join("settings.toml")
     }

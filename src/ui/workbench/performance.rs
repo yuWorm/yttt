@@ -4,16 +4,38 @@ use gpui::{Context, Task};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 use super::WorkbenchView;
-use crate::ui::{
-    i18n::UiTextKey,
-    workbench::shell::titlebar::{
-        TitlebarApplicationPerformanceInfo, TitlebarMetricInfo, TitlebarPerformanceInfo,
-        TitlebarSystemPerformanceInfo,
-    },
-};
+use crate::{config::bars::ShellBarModule, ui::i18n::UiTextKey};
 
 const PERFORMANCE_SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 const MEBIBYTE_BYTES: f64 = 1024.0 * 1024.0;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PerformanceMetricInfo {
+    pub value: String,
+    pub tooltip: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApplicationPerformanceInfo {
+    pub projects: PerformanceMetricInfo,
+    pub terminals: PerformanceMetricInfo,
+    pub tabs: PerformanceMetricInfo,
+    pub editors: PerformanceMetricInfo,
+    pub cpu: PerformanceMetricInfo,
+    pub memory: PerformanceMetricInfo,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SystemPerformanceInfo {
+    pub cpu: PerformanceMetricInfo,
+    pub memory: PerformanceMetricInfo,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PerformanceInfo {
+    pub application: Option<ApplicationPerformanceInfo>,
+    pub system: Option<SystemPerformanceInfo>,
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct PerformanceCollectionMode {
@@ -54,9 +76,17 @@ pub(super) struct PerformanceMonitorState {
 
 impl WorkbenchView {
     fn performance_collection_mode(&self) -> PerformanceCollectionMode {
+        let application_visible = self.app_settings.bars.contains(&ShellBarModule::AppCpu)
+            || self.app_settings.bars.contains(&ShellBarModule::AppMemory);
+        let system_visible = self.app_settings.bars.contains(&ShellBarModule::SystemCpu)
+            || self
+                .app_settings
+                .bars
+                .contains(&ShellBarModule::SystemMemory);
         PerformanceCollectionMode {
-            application: self.app_settings.general.performance_metrics_enabled,
-            system: self.app_settings.general.system_performance_metrics_enabled,
+            application: self.app_settings.general.performance_metrics_enabled
+                && application_visible,
+            system: self.app_settings.general.system_performance_metrics_enabled && system_visible,
         }
     }
 
@@ -124,7 +154,7 @@ impl WorkbenchView {
         }));
     }
 
-    pub fn visible_titlebar_performance(&self) -> Option<TitlebarPerformanceInfo> {
+    pub fn visible_performance_info(&self) -> Option<PerformanceInfo> {
         let application = self
             .app_settings
             .general
@@ -173,25 +203,28 @@ impl WorkbenchView {
                         |sample| format!("{:.1} MiB", sample.memory_bytes as f64 / MEBIBYTE_BYTES),
                     );
 
-                TitlebarApplicationPerformanceInfo {
-                    projects: titlebar_metric(
+                ApplicationPerformanceInfo {
+                    projects: performance_metric(
                         self.ui_text.get(UiTextKey::PerformanceProjects),
                         project_count.to_string(),
                     ),
-                    terminals: titlebar_metric(
+                    terminals: performance_metric(
                         self.ui_text.get(UiTextKey::PerformanceTerminals),
                         terminal_count.to_string(),
                     ),
-                    tabs: titlebar_metric(
+                    tabs: performance_metric(
                         self.ui_text.get(UiTextKey::PerformanceTabs),
                         (terminal_tab_count + editor_tab_count).to_string(),
                     ),
-                    editors: titlebar_metric(
+                    editors: performance_metric(
                         self.ui_text.get(UiTextKey::PerformanceEditors),
                         editor_count.to_string(),
                     ),
-                    cpu: titlebar_metric(self.ui_text.get(UiTextKey::PerformanceCpu), cpu),
-                    memory: titlebar_metric(self.ui_text.get(UiTextKey::PerformanceMemory), memory),
+                    cpu: performance_metric(self.ui_text.get(UiTextKey::PerformanceCpu), cpu),
+                    memory: performance_metric(
+                        self.ui_text.get(UiTextKey::PerformanceMemory),
+                        memory,
+                    ),
                 }
             });
         let system = self
@@ -216,9 +249,9 @@ impl WorkbenchView {
                         |sample| format!("{:.1}%", sample.memory_percent),
                     );
 
-                TitlebarSystemPerformanceInfo {
-                    cpu: titlebar_metric(self.ui_text.get(UiTextKey::PerformanceSystemCpu), cpu),
-                    memory: titlebar_metric(
+                SystemPerformanceInfo {
+                    cpu: performance_metric(self.ui_text.get(UiTextKey::PerformanceSystemCpu), cpu),
+                    memory: performance_metric(
                         self.ui_text.get(UiTextKey::PerformanceSystemMemory),
                         memory,
                     ),
@@ -228,7 +261,7 @@ impl WorkbenchView {
         if application.is_none() && system.is_none() {
             None
         } else {
-            Some(TitlebarPerformanceInfo {
+            Some(PerformanceInfo {
                 application,
                 system,
             })
@@ -236,8 +269,8 @@ impl WorkbenchView {
     }
 }
 
-fn titlebar_metric(label: &'static str, value: String) -> TitlebarMetricInfo {
-    TitlebarMetricInfo {
+fn performance_metric(label: &'static str, value: String) -> PerformanceMetricInfo {
+    PerformanceMetricInfo {
         tooltip: format!("{label}: {value}"),
         value,
     }

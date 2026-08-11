@@ -328,6 +328,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSectionWindow => "窗口",
         UiTextKey::SettingsSectionInterface => "界面",
         UiTextKey::SettingsSectionThemes => "主题",
+        UiTextKey::SettingsSectionBars => "窗口栏与状态栏",
         UiTextKey::SettingsSectionAdvanced => "高级",
         UiTextKey::SettingsSectionDetectionDefaults => "检测与默认值",
         UiTextKey::SettingsSectionLanguageServices => "语言服务",
@@ -485,8 +486,26 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsTerminalTheme => "终端主题",
         UiTextKey::SettingsTerminalThemeDescription => "可选的终端颜色覆盖。",
         UiTextKey::SettingsSearchTheme => "搜索主题...",
+        UiTextKey::SettingsWindowBarModules => "窗口栏模块",
+        UiTextKey::SettingsWindowBarModulesDescription => {
+            "分别填写左、中、右区域的模块 ID，并用英文逗号分隔。"
+        }
+        UiTextKey::SettingsStatusBarEnabled => "显示状态栏",
+        UiTextKey::SettingsStatusBarEnabledDescription => "在工作区底部显示紧凑的通用状态栏。",
+        UiTextKey::SettingsStatusBarModules => "状态栏模块",
+        UiTextKey::SettingsStatusBarModulesDescription => {
+            "模块可以在左、中、右三个区域之间自由移动。"
+        }
+        UiTextKey::SettingsBarLeft => "左侧",
+        UiTextKey::SettingsBarCenter => "中间",
+        UiTextKey::SettingsBarRight => "右侧",
+        UiTextKey::SettingsApplyBarLayout => "应用布局",
         UiTextKey::SettingsEditSettingsToml => "编辑设置 TOML",
         UiTextKey::SettingsEditSettingsTomlDescription => "打开应用设置文件进行高级编辑。",
+        UiTextKey::SettingsEditBarsToml => "编辑栏位 TOML",
+        UiTextKey::SettingsEditBarsTomlDescription => {
+            "打开独立的窗口栏与状态栏配置，便于编辑或分发。"
+        }
         UiTextKey::SettingsShowPath => "显示路径",
         UiTextKey::SettingsThemesDirectory => "主题目录",
         UiTextKey::SettingsThemesDirectoryDescription => "打开用户主题 TOML 文件所在目录。",
@@ -740,6 +759,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::StatusKeybindingsFile => "快捷键文件",
         UiTextKey::StatusLayoutFile => "布局文件",
         UiTextKey::StatusSettingsFile => "设置文件",
+        UiTextKey::StatusBarsFile => "栏位配置文件",
         UiTextKey::StatusThemesDirectory => "主题目录",
         UiTextKey::SshConnections => "SSH 连接",
         UiTextKey::SshConnectionsDescription => "管理 SSH 端点、凭据和远程项目根目录。",

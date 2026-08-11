@@ -49,12 +49,13 @@ use yttt::{
     ui::palette::visible_palette_rows,
     ui::primitives::sidebar::SidebarSide,
     ui::project_tree::{DirectorySnapshot, ProjectTreeEntry, ProjectTreeEntryKind},
+    ui::surface::WorkbenchSurface,
     ui::terminal::pane::{
         PaneLifecycle, TerminalPaneExitInput, TerminalPaneExitedEvent, TerminalPaneStartedEvent,
         TerminalSpawnFailure, notification_for_terminal_pane_exit, pane_lifecycle_label,
         spawn_failure_lines,
     },
-    ui::vim::{VimSurface, WorkbenchVimMode},
+    ui::vim::WorkbenchVimMode,
     ui::workbench::shell::sidebar::visible_project_items,
     ui::{
         app::{register_workbench_close_guard, register_workbench_keybinding_interceptor},
@@ -269,27 +270,6 @@ fn visible_work_item_tabs_merge_terminal_and_file_items() {
     assert_eq!(second.tooltip, "README.md");
     assert!(!second.dirty);
     assert_eq!(second.state, SelectableState::Active);
-}
-
-#[test]
-fn root_view_titlebar_info_describes_empty_workspace() {
-    let root = WorkbenchView::new();
-
-    let info = root.visible_titlebar_info();
-
-    assert_eq!(info.project_name, "yttt");
-    assert!(info.compact_path.is_none());
-    assert!(info.git_branch.is_none());
-}
-
-#[test]
-fn root_view_titlebar_info_describes_selected_project() {
-    let root = WorkbenchView::dev_fixture_for_test();
-
-    let info = root.visible_titlebar_info();
-
-    assert_eq!(info.project_name, "yttt");
-    assert_eq!(info.compact_path.as_deref(), Some("/tmp/yttt"));
 }
 
 #[test]
@@ -695,9 +675,9 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
     cx.run_until_parked();
 
     let command_button = cx
-        .debug_bounds("titlebar-command-palette")
+        .debug_bounds("window-bar-command-palette")
         .expect("titlebar should expose a command picker button");
-    assert!(cx.debug_bounds("titlebar-settings").is_some());
+    assert!(cx.debug_bounds("window-bar-settings").is_some());
     cx.simulate_click(command_button.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     cx.read(|app| {
@@ -713,7 +693,7 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
     });
     cx.run_until_parked();
     let settings_button = cx
-        .debug_bounds("titlebar-settings")
+        .debug_bounds("window-bar-settings")
         .expect("titlebar should expose a settings button");
     cx.simulate_click(settings_button.center(), gpui::Modifiers::none());
     cx.run_until_parked();
@@ -974,7 +954,7 @@ fn project_panel_uses_compact_local_tabs_without_legacy_actions(cx: &mut gpui::T
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
-    let root = root_slot.borrow_mut().take().unwrap();
+    let _root = root_slot.borrow_mut().take().unwrap();
     cx.run_until_parked();
     cx.refresh().unwrap();
 
@@ -4163,10 +4143,10 @@ fn global_vim_keymap_spans_terminal_tabs_and_settings(cx: &mut gpui::TestAppCont
     cx.read(|app| {
         let status = root.read(app).vim_status().expect("Global Vim status");
         assert_eq!(status.mode, WorkbenchVimMode::Normal);
-        assert_eq!(status.surface, VimSurface::Terminal);
+        assert_eq!(status.surface, WorkbenchSurface::Terminal);
     });
-    assert!(cx.debug_bounds("vim-status-bar").is_some());
-    assert!(cx.debug_bounds("vim-status-mode").is_some());
+    assert!(cx.debug_bounds("status-bar").is_some());
+    assert!(cx.debug_bounds("status-bar-vim-mode").is_some());
 
     cx.simulate_keystrokes("space p");
     cx.run_until_parked();
@@ -4177,7 +4157,7 @@ fn global_vim_keymap_spans_terminal_tabs_and_settings(cx: &mut gpui::TestAppCont
         assert_eq!(palette.selected_index, 0);
         let status = root.vim_status().expect("palette Vim status");
         assert_eq!(status.mode, WorkbenchVimMode::Normal);
-        assert_eq!(status.surface, VimSurface::Palette);
+        assert_eq!(status.surface, WorkbenchSurface::Palette);
         assert_eq!(status.key_feedback.len(), 2);
         assert_eq!(status.key_feedback.last().map(String::as_str), Some("p"));
     });
@@ -4207,7 +4187,7 @@ fn global_vim_keymap_spans_terminal_tabs_and_settings(cx: &mut gpui::TestAppCont
         assert_eq!(status.key_feedback.last().map(String::as_str), Some("j"));
     });
     cx.refresh().unwrap();
-    assert!(cx.debug_bounds("vim-status-keys").is_some());
+    assert!(cx.debug_bounds("status-bar-vim-keys").is_some());
     cx.background_executor
         .advance_clock(Duration::from_millis(1_300));
     cx.run_until_parked();
@@ -4221,7 +4201,7 @@ fn global_vim_keymap_spans_terminal_tabs_and_settings(cx: &mut gpui::TestAppCont
                 .is_empty()
         );
     });
-    assert!(cx.debug_bounds("vim-status-keys").is_none());
+    assert!(cx.debug_bounds("status-bar-vim-keys").is_none());
     cx.simulate_keystrokes("i");
     cx.run_until_parked();
     cx.read(|app| {
@@ -4323,7 +4303,7 @@ fn global_vim_keymap_spans_terminal_tabs_and_settings(cx: &mut gpui::TestAppCont
     cx.read(|app| {
         let status = root.read(app).vim_status().expect("terminal Vim status");
         assert_eq!(status.mode, WorkbenchVimMode::Terminal);
-        assert_eq!(status.surface, VimSurface::Terminal);
+        assert_eq!(status.surface, WorkbenchSurface::Terminal);
     });
     for keys in ["escape", "ctrl-["] {
         cx.read(|app| {
@@ -4376,7 +4356,7 @@ fn global_vim_keymap_spans_terminal_tabs_and_settings(cx: &mut gpui::TestAppCont
         assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Settings);
         let status = root.vim_status().expect("settings Vim status");
         assert_eq!(status.mode, WorkbenchVimMode::Normal);
-        assert_eq!(status.surface, VimSurface::Settings);
+        assert_eq!(status.surface, WorkbenchSurface::Settings);
     });
     cx.simulate_keystrokes("j");
     cx.run_until_parked();
@@ -4431,7 +4411,7 @@ fn global_vim_keymap_spans_terminal_tabs_and_settings(cx: &mut gpui::TestAppCont
             .vim_status()
             .expect("terminal search Vim status");
         assert_eq!(status.mode, WorkbenchVimMode::Insert);
-        assert_eq!(status.surface, VimSurface::Terminal);
+        assert_eq!(status.surface, WorkbenchSurface::Terminal);
     });
     cx.simulate_keystrokes("g t");
     cx.run_until_parked();
@@ -5240,14 +5220,29 @@ fn keybindings_settings_explains_vim_leader_and_sequence_recording(cx: &mut gpui
 #[gpui::test]
 fn appearance_settings_group_renders_window_and_theme_controls(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let view_paths = paths.clone();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    let window_bar = cx
+        .debug_bounds("window-bar")
+        .expect("Window Bar should always render");
+    let status_bar = cx
+        .debug_bounds("status-bar")
+        .expect("Status Bar should be enabled by default");
+    assert!(
+        status_bar.size.height < window_bar.size.height,
+        "Status Bar should stay more compact than the platform Window Bar"
+    );
     root.update(cx, |root, cx| {
         root.open_settings();
         root.select_settings_group("appearance").unwrap();
@@ -5274,11 +5269,53 @@ fn appearance_settings_group_renders_window_and_theme_controls(cx: &mut gpui::Te
         cx.debug_bounds("settings-ui-line-height-row").is_some(),
         "Appearance settings should expose the UI line-height control"
     );
+    assert!(
+        cx.debug_bounds("settings-window-bar-modules-row").is_some(),
+        "Appearance settings should expose Window Bar module regions"
+    );
+    assert!(
+        cx.debug_bounds("settings-status-bar-enabled-row").is_some(),
+        "Appearance settings should expose the Status Bar visibility switch"
+    );
+    assert!(
+        cx.debug_bounds("settings-status-bar-modules-row").is_some(),
+        "Appearance settings should expose Status Bar module regions"
+    );
+    assert!(cx.debug_bounds("settings-window-bar-left").is_some());
+    assert!(cx.debug_bounds("settings-window-bar-center").is_some());
+    assert!(cx.debug_bounds("settings-window-bar-right").is_some());
+    assert!(cx.debug_bounds("settings-status-bar-left").is_some());
+    assert!(cx.debug_bounds("settings-status-bar-center").is_some());
+    assert!(cx.debug_bounds("settings-status-bar-right").is_some());
+    assert!(cx.debug_bounds("settings-open-bars-file").is_some());
 
     assert!(
         cx.debug_bounds("settings-import-zed-themes").is_some(),
         "Appearance settings should expose the Zed theme import action"
     );
+    assert!(
+        cx.debug_bounds("settings-status-bar-enabled").is_some(),
+        "Status Bar switch should be interactive"
+    );
+    root.update(cx, |root, cx| {
+        root.set_status_bar_enabled(false, cx).unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    assert!(cx.debug_bounds("status-bar").is_none());
+    assert!(
+        !load_or_create_settings(&paths)
+            .unwrap()
+            .settings
+            .bars
+            .status
+            .enabled
+    );
+    let settings_source = std::fs::read_to_string(paths.settings_file()).unwrap();
+    assert!(!settings_source.contains("[bars"));
+    let bars_source = std::fs::read_to_string(paths.bars_file()).unwrap();
+    assert!(bars_source.contains("enabled = false"));
 }
 
 #[gpui::test]
@@ -7368,7 +7405,7 @@ fn global_vim_navigation_and_leader_work_while_editor_is_focused(cx: &mut gpui::
         let root = root.read(app);
         let status = root.vim_status().expect("editor search Vim status");
         assert_eq!(status.mode, WorkbenchVimMode::Insert);
-        assert_eq!(status.surface, VimSurface::Editor);
+        assert_eq!(status.surface, WorkbenchSurface::Editor);
     });
     cx.simulate_keystrokes("g t");
     cx.run_until_parked();
@@ -7446,7 +7483,7 @@ fn ctrl_w_moves_focus_between_terminal_and_project_tree(cx: &mut gpui::TestAppCo
             let root = root.read(cx);
             assert_eq!(
                 root.vim_status().map(|status| status.surface),
-                Some(VimSurface::ProjectTree)
+                Some(WorkbenchSurface::ProjectTree)
             );
             let project_id = root.workspace().selected_project_id().unwrap();
             let tree = root
@@ -7466,7 +7503,7 @@ fn ctrl_w_moves_focus_between_terminal_and_project_tree(cx: &mut gpui::TestAppCo
     cx.read(|app| {
         assert_eq!(
             root.read(app).vim_status().map(|status| status.surface),
-            Some(VimSurface::Terminal)
+            Some(WorkbenchSurface::Terminal)
         );
     });
     assert!(
@@ -7506,7 +7543,7 @@ fn ctrl_w_crosses_the_projects_list_at_the_left_workspace_edge(cx: &mut gpui::Te
     cx.read(|app| {
         assert_eq!(
             root.read(app).vim_status().map(|status| status.surface),
-            Some(VimSurface::Projects)
+            Some(WorkbenchSurface::Projects)
         );
     });
     assert!(
@@ -7524,7 +7561,7 @@ fn ctrl_w_crosses_the_projects_list_at_the_left_workspace_edge(cx: &mut gpui::Te
     cx.read(|app| {
         assert_eq!(
             root.read(app).vim_status().map(|status| status.surface),
-            Some(VimSurface::Terminal)
+            Some(WorkbenchSurface::Terminal)
         );
     });
     assert!(cx.debug_bounds("project-sidebar-focus-indicator").is_none());
@@ -7566,7 +7603,7 @@ fn projects_vim_navigation_selects_opened_projects(cx: &mut gpui::TestAppContext
         let root = root.read(app);
         assert_eq!(
             root.vim_status().map(|status| status.surface),
-            Some(VimSurface::Projects)
+            Some(WorkbenchSurface::Projects)
         );
         assert_eq!(
             root.workspace().selected_project_id(),

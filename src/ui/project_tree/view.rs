@@ -1812,7 +1812,7 @@ mod tests {
         let mut vim = crate::ui::vim::VimControllerState::new(
             crate::config::settings::VimModeSetting::Global,
         );
-        vim.sync_surface(crate::ui::vim::VimSurface::ProjectTree);
+        vim.sync_surface(crate::ui::surface::WorkbenchSurface::ProjectTree);
         let key_context = vim.current_key_context();
         let view_slot = Rc::new(RefCell::new(None));
         let view_slot_for_window = view_slot.clone();
@@ -1915,7 +1915,7 @@ mod tests {
         let mut vim = crate::ui::vim::VimControllerState::new(
             crate::config::settings::VimModeSetting::Global,
         );
-        vim.sync_surface(crate::ui::vim::VimSurface::ProjectTree);
+        vim.sync_surface(crate::ui::surface::WorkbenchSurface::ProjectTree);
         let key_context = vim.current_key_context();
         let view_slot = Rc::new(RefCell::new(None));
         let view_slot_for_window = view_slot.clone();

@@ -678,6 +678,49 @@ fn settings_appearance_rows(
     let ui_style_select = root.settings_ui_style_select(window, cx);
     let terminal_theme_select = root.settings_terminal_theme_select(window, cx);
     let icon_theme_select = root.settings_icon_theme_select(window, cx);
+    let window_bar_inputs = [
+        root.settings_bar_input(SettingsBarField::WindowLeft, window, cx),
+        root.settings_bar_input(SettingsBarField::WindowCenter, window, cx),
+        root.settings_bar_input(SettingsBarField::WindowRight, window, cx),
+    ];
+    let status_bar_inputs = [
+        root.settings_bar_input(SettingsBarField::StatusLeft, window, cx),
+        root.settings_bar_input(SettingsBarField::StatusCenter, window, cx),
+        root.settings_bar_input(SettingsBarField::StatusRight, window, cx),
+    ];
+    let window_bar_inputs_for_apply = window_bar_inputs.clone();
+    let status_bar_inputs_for_apply = status_bar_inputs.clone();
+    let status_bar_control = div()
+        .flex()
+        .flex_col()
+        .gap(style.ui_style.spacing.md)
+        .w_full()
+        .child(settings_bar_modules_control(
+            "settings-status-bar",
+            &status_bar_inputs,
+            text,
+            theme,
+            style,
+        ))
+        .child(div().flex().justify_end().child(settings_button(
+            "settings-apply-bar-layout",
+            text.get(UiTextKey::SettingsApplyBarLayout),
+            true,
+            theme,
+            cx,
+            cx.listener(move |this, _, _window, cx| {
+                let window_values = window_bar_inputs_for_apply
+                    .each_ref()
+                    .map(|input| input.read(cx).value().to_string());
+                let status_values = status_bar_inputs_for_apply
+                    .each_ref()
+                    .map(|input| input.read(cx).value().to_string());
+                if let Err(error) = this.apply_shell_bar_layout(window_values, status_values, cx) {
+                    this.load_error = Some(error);
+                }
+                cx.notify();
+            }),
+        )));
 
     div()
         .flex()
@@ -811,6 +854,62 @@ fn settings_appearance_rows(
         .child(settings_section_header(
             style,
             theme,
+            text.get(UiTextKey::SettingsSectionBars),
+            false,
+        ))
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsWindowBarModules),
+                text.get(UiTextKey::SettingsWindowBarModulesDescription),
+                settings_bar_modules_control(
+                    "settings-window-bar",
+                    &window_bar_inputs,
+                    text,
+                    theme,
+                    style,
+                )
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-window-bar-modules-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsStatusBarEnabled),
+                text.get(UiTextKey::SettingsStatusBarEnabledDescription),
+                settings_switch(
+                    "settings-status-bar-enabled",
+                    root.app_settings.bars.status.enabled,
+                    theme,
+                    style.ui_style,
+                    cx.listener(|this, checked: &bool, _window, cx| {
+                        if let Err(error) = this.set_status_bar_enabled(*checked, cx) {
+                            this.load_error = Some(error.to_string());
+                        }
+                        cx.notify();
+                    }),
+                )
+                .debug_selector(|| "settings-status-bar-enabled".to_string())
+                .into_any_element(),
+            )
+            .debug_selector(|| "settings-status-bar-enabled-row".to_string()),
+        )
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsStatusBarModules),
+                text.get(UiTextKey::SettingsStatusBarModulesDescription),
+                status_bar_control.into_any_element(),
+            )
+            .debug_selector(|| "settings-status-bar-modules-row".to_string()),
+        )
+        .child(settings_section_header(
+            style,
+            theme,
             text.get(UiTextKey::SettingsSectionAdvanced),
             false,
         ))
@@ -831,6 +930,26 @@ fn settings_appearance_rows(
                     cx.notify();
                 }),
             )
+            .into_any_element(),
+        ))
+        .child(setting_row(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsEditBarsToml),
+            text.get(UiTextKey::SettingsEditBarsTomlDescription),
+            settings_button(
+                "settings-open-bars-file",
+                text.get(UiTextKey::SettingsShowPath),
+                false,
+                theme,
+                cx,
+                cx.listener(move |this, _, window, cx| {
+                    this.show_bars_file_path_status();
+                    this.flush_pending_status_notifications(window, cx);
+                    cx.notify();
+                }),
+            )
+            .debug_selector(|| "settings-open-bars-file".to_string())
             .into_any_element(),
         ))
         .child(setting_row(
@@ -2516,6 +2635,57 @@ where
     yttt_select(&select, theme, ui_style)
         .search_placeholder(search_placeholder)
         .when(searchable, |select| select.cleanable(false))
+}
+
+fn settings_bar_modules_control(
+    prefix: &'static str,
+    inputs: &[Entity<InputState>; 3],
+    text: UiText,
+    theme: WorkbenchTheme,
+    style: YtttSettingsLayout,
+) -> Div {
+    let labels = [
+        text.get(UiTextKey::SettingsBarLeft),
+        text.get(UiTextKey::SettingsBarCenter),
+        text.get(UiTextKey::SettingsBarRight),
+    ];
+    let regions = ["left", "center", "right"];
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(style.ui_style.spacing.sm)
+        .w_full()
+        .max_w(px(720.0))
+        .children(
+            inputs
+                .iter()
+                .zip(labels)
+                .zip(regions)
+                .map(|((input, label), region)| {
+                    let selector = format!("{prefix}-{region}");
+                    div()
+                        .debug_selector(move || selector.clone())
+                        .flex()
+                        .items_center()
+                        .gap(style.ui_style.spacing.md)
+                        .w_full()
+                        .child(
+                            div()
+                                .w(px(56.0))
+                                .flex_none()
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(label),
+                        )
+                        .child(
+                            div().flex_1().min_w_0().h(style.control_height).child(
+                                yttt_input(input, YtttInputKind::Settings, theme, style.ui_style)
+                                    .small(),
+                            ),
+                        )
+                }),
+        )
 }
 
 fn settings_number_control(

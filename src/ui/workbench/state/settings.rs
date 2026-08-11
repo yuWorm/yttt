@@ -10,7 +10,9 @@ use crate::ui::settings::{
 };
 use crate::ui::theme::zed::{ZedThemeDetection, ZedThemeImportConflictPolicy};
 
-use super::super::{SettingsFontFamilySelectState, SettingsNumberField, SettingsStringSelectState};
+use super::super::{
+    SettingsBarField, SettingsFontFamilySelectState, SettingsNumberField, SettingsStringSelectState,
+};
 
 #[derive(Clone)]
 pub(in super::super) struct ZedThemeImportDialogState {
@@ -70,6 +72,7 @@ pub(in super::super) struct SettingsControllerState {
     pub(in super::super) settings_number_inputs: HashMap<SettingsNumberField, Entity<InputState>>,
     pub(in super::super) settings_number_input_subscriptions:
         HashMap<SettingsNumberField, Vec<Subscription>>,
+    pub(in super::super) settings_bar_inputs: HashMap<SettingsBarField, Entity<InputState>>,
     pub(in super::super) settings_page: SettingsPageState,
     pub(in super::super) zed_theme_import_dialog: Option<ZedThemeImportDialogState>,
     pub(in super::super) permission_statuses: [PermissionStatus; PermissionKind::COUNT],
@@ -133,6 +136,7 @@ impl SettingsControllerState {
             settings_editor_autosave_select_subscription: None,
             settings_number_inputs: HashMap::new(),
             settings_number_input_subscriptions: HashMap::new(),
+            settings_bar_inputs: HashMap::new(),
             settings_page: SettingsPageState::default(),
             permission_statuses: std::array::from_fn(|index| {
                 platform::initial_permission_status(PermissionKind::ALL[index])

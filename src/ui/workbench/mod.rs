@@ -25,6 +25,7 @@ use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
 mod action_handlers;
 mod agent_process_monitor;
 mod agent_sessions;
+mod bars;
 mod dialogs;
 mod document_lifecycle;
 mod file_finder;
@@ -108,12 +109,23 @@ enum SettingsNumberField {
     ProjectSidebarWidth,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum SettingsBarField {
+    WindowLeft,
+    WindowCenter,
+    WindowRight,
+    StatusLeft,
+    StatusCenter,
+    StatusRight,
+}
+
 use crate::{
     commands::{
         ActiveSurface, CommandContext, CommandDispatchError, CommandId, CommandRegistry,
         dispatch_workspace_command,
     },
     config::{
+        bars::{BarsSaveError, ShellBarModule, save_bars},
         default_layout::{
             BuiltinAgent, DefaultLayoutKind, DefaultLayoutState, DefaultLayoutTemplate,
             LayoutLoadWarning,
@@ -268,6 +280,7 @@ use crate::{
             KeybindingProfile, KeybindingRow, KeybindingsEditorState,
             bindable_action_text_with_text,
         },
+        surface::WorkbenchSurface,
         terminal::pane::{
             SshTerminalContext, TerminalPaneContext, TerminalPaneEvent, TerminalPaneExitedEvent,
             TerminalPaneStartedEvent, TerminalPaneView,
@@ -284,7 +297,7 @@ use crate::{
                 zed_icon_theme_output_path, zed_ui_theme_output_path,
             },
         },
-        vim::{VimControllerState, VimSurface, WorkbenchVimMode},
+        vim::{VimControllerState, WorkbenchVimMode},
         workbench::layout_editor::{
             LayoutEditorSession, LayoutEditorTarget, ProjectLayoutEditorFormat,
             write_layout_file_atomic,
@@ -296,7 +309,7 @@ use crate::{
             WorkbenchTabItem, project_tabs, tab_close_targets, visible_tab_items,
             visible_work_item_tabs as merge_work_item_tabs,
         },
-        workbench::shell::titlebar::{TitlebarInfo, compact_path_for_titlebar, workbench_titlebar},
+        workbench::shell::{status_bar::workbench_status_bar, titlebar::workbench_titlebar},
     },
 };
 
@@ -1731,6 +1744,18 @@ impl WorkbenchView {
         self.load_error = None;
     }
 
+    pub fn show_bars_file_path_status(&mut self) {
+        self.queue_status_notification(
+            format!(
+                "{}: {}",
+                self.ui_text.get(UiTextKey::StatusBarsFile),
+                self.config_paths.bars_file().display()
+            ),
+            self.ui_text.get(UiTextKey::SettingsGroupAppearance),
+        );
+        self.load_error = None;
+    }
+
     pub fn show_themes_directory_status(&mut self) {
         self.queue_status_notification(
             format!(
@@ -1812,7 +1837,7 @@ impl WorkbenchView {
         self.terminal_input_allowed()
             && self.selected_focused_pane_id().is_some()
             && (self.vim.support() != VimModeSetting::Global
-                || self.vim.surface() != VimSurface::Terminal
+                || self.vim.surface() != WorkbenchSurface::Terminal
                 || self.vim.mode() == WorkbenchVimMode::Terminal)
             && !keystroke.modifiers.platform
             && TerminalKeyEvent::from_gpui_keystroke(keystroke, KeyState::Pressed, false).is_some()
@@ -1938,33 +1963,6 @@ impl WorkbenchView {
             .collect::<Vec<_>>();
         actions.insert(2, self.ui_text.get(UiTextKey::RestoreLastSession));
         actions
-    }
-
-    pub fn visible_titlebar_info(&self) -> TitlebarInfo {
-        let Some(selected_project_id) = self.workspace.selected_project_id() else {
-            return TitlebarInfo {
-                project_name: self.ui_text.get(UiTextKey::AppName).to_string(),
-                compact_path: None,
-                git_branch: None,
-                git_counters: None,
-            };
-        };
-        let Some(project) = self.workspace.project(selected_project_id) else {
-            return TitlebarInfo {
-                project_name: self.ui_text.get(UiTextKey::AppName).to_string(),
-                compact_path: None,
-                git_branch: None,
-                git_counters: None,
-            };
-        };
-        let git_status = self.project.project_git_statuses.get(selected_project_id);
-
-        TitlebarInfo {
-            project_name: project.layout.project.name.clone(),
-            compact_path: Some(compact_path_for_titlebar(&project.location.display_path())),
-            git_branch: git_status.and_then(|status| status.branch.clone()),
-            git_counters: git_status.and_then(|status| status.summary.compact_counters()),
-        }
     }
 
     pub fn visible_terminal_pane_contexts(&self) -> Vec<TerminalPaneContext> {
@@ -2304,7 +2302,7 @@ impl WorkbenchView {
             _ => unreachable!("only pane focus commands reach this helper"),
         };
 
-        if self.vim.surface() == VimSurface::Projects {
+        if self.vim.surface() == WorkbenchSurface::Projects {
             if edge == WorkAreaDropEdge::Right
                 && let Some(item) = self.active_work_item()
             {
@@ -2313,7 +2311,7 @@ impl WorkbenchView {
             return Ok(());
         }
 
-        if self.vim.surface() == VimSurface::ProjectTree {
+        if self.vim.surface() == WorkbenchSurface::ProjectTree {
             if edge == WorkAreaDropEdge::Left
                 && let Some(item) = self.active_work_item()
             {
@@ -3042,6 +3040,7 @@ impl WorkbenchView {
         self.settings.settings_editor_autosave_select_subscription = None;
         self.settings.settings_number_inputs.clear();
         self.settings.settings_number_input_subscriptions.clear();
+        self.settings.settings_bar_inputs.clear();
     }
 
     fn reset_layout_toml_input(&mut self) {
@@ -3456,6 +3455,8 @@ pub enum WorkbenchError {
     #[error("{0}")]
     SettingsSave(Box<SettingsSaveError>),
     #[error("{0}")]
+    BarsSave(Box<BarsSaveError>),
+    #[error("{0}")]
     KeybindingEdit(Box<KeybindingEditError>),
     #[error("{0}")]
     LayoutTomlEditor(String),
@@ -3482,6 +3483,12 @@ impl From<KeybindingsLoadError> for WorkbenchError {
 impl From<SettingsSaveError> for WorkbenchError {
     fn from(error: SettingsSaveError) -> Self {
         Self::SettingsSave(Box::new(error))
+    }
+}
+
+impl From<BarsSaveError> for WorkbenchError {
+    fn from(error: BarsSaveError) -> Self {
+        Self::BarsSave(Box::new(error))
     }
 }
 

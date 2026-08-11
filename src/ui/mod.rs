@@ -8,6 +8,7 @@ pub mod palette;
 pub use yttt_ui::primitives;
 pub mod project_tree;
 pub mod settings;
+pub mod surface;
 pub mod terminal;
 pub mod theme;
 pub mod vim;

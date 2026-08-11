@@ -229,6 +229,29 @@ width = 280.0
 project_sidebar_width = 216.0
 ```
 
+## Bars TOML
+
+Window Bar and Status Bar configuration lives in the standalone `<app config>/bars.toml` file.
+This file is independent of `settings.toml`, so a complete bar layout can be copied, versioned, or
+shared without carrying unrelated application preferences. These are the complete defaults:
+
+```toml
+[window]
+left = ["project-name", "project-path"]
+center = []
+right = ["projects-count", "terminals-count", "tabs-count", "editors-count", "app-cpu", "app-memory", "system-cpu", "system-memory", "git-branch", "git-changes", "command-palette", "settings"]
+
+[status]
+enabled = true
+left = ["vim-mode", "surface", "vim-detail", "active-item"]
+center = ["vim-keys"]
+right = ["editor-language", "editor-position", "editor-dirty", "editor-diagnostics", "git-branch", "git-changes", "agent-state", "ssh", "update"]
+```
+
+On first launch after upgrading, a legacy `[bars]` section in `settings.toml` is moved to
+`bars.toml`. If `bars.toml` already exists, it remains authoritative and the legacy section is
+removed without overwriting the standalone file.
+
 Editor font family, font size, line height, soft wrap, and line numbers update all open files
 without replacing their text or saved baseline. `vim.mode` accepts `"global"`, `"editor"`, or
 `"disabled"`. Global mode uses one window-level Vim state across project editors, terminals,
@@ -239,13 +262,41 @@ delayed saves. `default_open` affects new project sessions. Editing `width` upda
 project and the default for future projects, while other open projects retain their own widths.
 Valid width ranges are 200–520 px for the right tree and 160–420 px for the left sidebar.
 
+Window Bar and Status Bar module order can be edited under **Settings → Appearance → Window &
+status bars** or directly in `bars.toml`. Both bars use independent `left`, `center`, and `right`
+arrays. The same Settings page shows the standalone file path.
+Available module IDs are:
+
+- Workspace: `project-name`, `project-path`, `active-item`, `surface`
+- Vim: `vim-mode`, `vim-detail`, `vim-keys`
+- Editor and terminal: `editor-language`, `editor-position`, `editor-dirty`,
+  `editor-diagnostics`, `terminal-title`, `terminal-state`
+- Repository and runtime: `git-branch`, `git-changes`, `agent-state`, `ssh`, `update`
+- Performance: `projects-count`, `terminals-count`, `tabs-count`, `editors-count`, `app-cpu`,
+  `app-memory`, `system-cpu`, `system-memory`
+- Actions: `command-palette`, `settings`
+
+Modules without data for the active surface are omitted. Per-module width and empty-state behavior
+can be overridden with a module table; width accepts 24–640 px:
+
+```toml
+[status.modules.active-item]
+max_width = 320
+hide_when_empty = true
+
+[window.modules.git-branch]
+max_width = 180
+hide_when_empty = true
+```
+
 The editor surface supports Normal, Insert, Visual, and Visual Line modes; counts; `h/j/k/l`,
 word, line, document, and `gj`/`gk` display-line motions; `i/a/I/A/o/O`; `d/c/y` with motions or
 doubled linewise operators; `x/s/r/p/P/u/Ctrl-R`; and `/`, `n`, and `N` search navigation.
 Global mode additionally maps modal navigation and actions onto the opened-project list, terminals,
-project trees, settings, panes, tabs, palettes, and dialogs. The full-width status bar shows the
-active mode, surface, and pending key sequence. The unnamed editor register is shared across
-documents and mirrored to the system clipboard.
+project trees, settings, panes, tabs, palettes, and dialogs. The compact shared Status Bar can show
+the active mode, current surface, pending key sequence, editor position and diagnostics, Git,
+agent, SSH, update, and performance state according to the configured module layout. The unnamed
+editor register is shared across documents and mirrored to the system clipboard.
 
 On a terminal surface, `i/a/I/A` enter Terminal mode and restore direct process input. `Escape`
 and `Ctrl-[` are sent to the terminal process for shells and TUI applications; use

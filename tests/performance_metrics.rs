@@ -44,26 +44,23 @@ fn performance_metrics_render_sample_and_toggle_from_settings(cx: &mut gpui::Tes
     cx.run_until_parked();
 
     for selector in [
-        "titlebar-performance-projects",
-        "titlebar-performance-terminals",
-        "titlebar-performance-tabs",
-        "titlebar-performance-editors",
-        "titlebar-performance-cpu",
-        "titlebar-performance-memory",
+        "window-bar-projects-count",
+        "window-bar-terminals-count",
+        "window-bar-tabs-count",
+        "window-bar-editors-count",
+        "window-bar-app-cpu",
+        "window-bar-app-memory",
     ] {
         assert!(
             cx.debug_bounds(selector).is_some(),
             "{selector} should be visible"
         );
     }
-    assert!(
-        cx.debug_bounds("titlebar-system-performance-metrics")
-            .is_none()
-    );
+    assert!(cx.debug_bounds("window-bar-system-cpu").is_none());
     cx.read(|app| {
         let metrics = root
             .read(app)
-            .visible_titlebar_performance()
+            .visible_performance_info()
             .expect("enabled application metrics should be visible");
         let application = metrics
             .application
@@ -99,7 +96,7 @@ fn performance_metrics_render_sample_and_toggle_from_settings(cx: &mut gpui::Tes
         let root = root.read(app);
         assert!(root.system_performance_metrics_enabled());
         let metrics = root
-            .visible_titlebar_performance()
+            .visible_performance_info()
             .expect("system metrics should be visible after enabling");
         let system = metrics.system.expect("system metrics should have a sample");
         assert_ne!(system.cpu.value, "—");
@@ -109,8 +106,8 @@ fn performance_metrics_render_sample_and_toggle_from_settings(cx: &mut gpui::Tes
         assert!(system.cpu.tooltip.starts_with("System CPU: "));
         assert!(system.memory.tooltip.starts_with("System memory: "));
     });
-    assert!(cx.debug_bounds("titlebar-system-cpu").is_some());
-    assert!(cx.debug_bounds("titlebar-system-memory").is_some());
+    assert!(cx.debug_bounds("window-bar-system-cpu").is_some());
+    assert!(cx.debug_bounds("window-bar-system-memory").is_some());
     assert!(
         load_or_create_settings(&paths)
             .unwrap()
@@ -128,19 +125,13 @@ fn performance_metrics_render_sample_and_toggle_from_settings(cx: &mut gpui::Tes
         let root = root.read(app);
         assert!(!root.performance_metrics_enabled());
         let metrics = root
-            .visible_titlebar_performance()
+            .visible_performance_info()
             .expect("system metrics should remain independently visible");
         assert!(metrics.application.is_none());
         assert!(metrics.system.is_some());
     });
-    assert!(
-        cx.debug_bounds("titlebar-application-performance-metrics")
-            .is_none()
-    );
-    assert!(
-        cx.debug_bounds("titlebar-system-performance-metrics")
-            .is_some()
-    );
+    assert!(cx.debug_bounds("window-bar-app-cpu").is_none());
+    assert!(cx.debug_bounds("window-bar-system-cpu").is_some());
 
     let system_toggle = cx
         .debug_bounds("settings-system-performance-metrics")
@@ -150,9 +141,9 @@ fn performance_metrics_render_sample_and_toggle_from_settings(cx: &mut gpui::Tes
     cx.read(|app| {
         let root = root.read(app);
         assert!(!root.system_performance_metrics_enabled());
-        assert!(root.visible_titlebar_performance().is_none());
+        assert!(root.visible_performance_info().is_none());
     });
-    assert!(cx.debug_bounds("titlebar-performance-metrics").is_none());
+    assert!(cx.debug_bounds("window-bar-app-cpu").is_none());
     assert!(
         !load_or_create_settings(&paths)
             .unwrap()
@@ -170,7 +161,7 @@ fn performance_metrics_render_sample_and_toggle_from_settings(cx: &mut gpui::Tes
         let root = root.read(app);
         assert!(root.performance_metrics_enabled());
         let metrics = root
-            .visible_titlebar_performance()
+            .visible_performance_info()
             .expect("re-enabled application metrics should be visible");
         let application = metrics
             .application
@@ -180,10 +171,7 @@ fn performance_metrics_render_sample_and_toggle_from_settings(cx: &mut gpui::Tes
         assert_ne!(application.memory.value, "—");
         assert!(application.memory.value.ends_with(" MiB"));
     });
-    assert!(
-        cx.debug_bounds("titlebar-application-performance-metrics")
-            .is_some()
-    );
+    assert!(cx.debug_bounds("window-bar-app-cpu").is_some());
 }
 
 fn english_test_config_paths(temp: &tempfile::TempDir) -> AppConfigPaths {
