@@ -155,26 +155,38 @@ impl WorkbenchView {
         data: &ShellBarData,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        FIXED_WINDOW_IDENTITY_MODULES
-            .iter()
-            .enumerate()
-            .filter_map(|(index, module)| {
-                let settings = BarModuleSettings {
-                    max_width: (module == &ShellBarModule::ProjectPath).then_some(480.0),
-                    hide_when_empty: true,
-                };
-                let view = bar_module_view(module, data, settings)?;
-                Some(render_bar_module(
-                    BarHost::Window,
-                    "identity",
-                    index,
-                    module,
-                    settings,
-                    view,
-                    cx,
-                ))
-            })
-            .collect()
+        let theme = current_workbench_theme(cx);
+        let mut elements = Vec::with_capacity(FIXED_WINDOW_IDENTITY_MODULES.len() * 2 - 1);
+        for (index, module) in FIXED_WINDOW_IDENTITY_MODULES.iter().enumerate() {
+            let settings = BarModuleSettings {
+                max_width: (module == &ShellBarModule::ProjectPath).then_some(480.0),
+                hide_when_empty: true,
+            };
+            let Some(view) = bar_module_view(module, data, settings) else {
+                continue;
+            };
+            if !elements.is_empty() {
+                elements.push(
+                    div()
+                        .debug_selector(|| "window-bar-identity-separator".to_string())
+                        .flex_none()
+                        .text_xs()
+                        .text_color(theme.text_subtle)
+                        .child("—")
+                        .into_any_element(),
+                );
+            }
+            elements.push(render_bar_module(
+                BarHost::Window,
+                "identity",
+                index,
+                module,
+                settings,
+                view,
+                cx,
+            ));
+        }
+        elements
     }
 
     fn render_bar_section(
@@ -597,6 +609,9 @@ fn render_bar_module(
     let id = format!("{selector}-{section}-{index}");
     let theme = current_workbench_theme(cx);
     let ui_style = current_ui_style(cx);
+    let fixed_identity_meta = section == "identity" && module != &ShellBarModule::ProjectName;
+    let fixed_identity_branch = section == "identity" && module == &ShellBarModule::GitBranch;
+    let fixed_identity_changes = section == "identity" && module == &ShellBarModule::GitChanges;
 
     if view.text.as_deref().is_none_or(str::is_empty)
         && let (Some(icon), Some(command)) = (view.icon.clone(), view.action)
@@ -628,6 +643,11 @@ fn render_bar_module(
         .or_else(|| default_module_max_width(host, module));
     let text = view.text.unwrap_or_default();
     let action = view.action;
+    let icon = if fixed_identity_branch {
+        None
+    } else {
+        view.icon
+    };
     let mut element = div()
         .id(id)
         .debug_selector(move || debug_selector.clone())
@@ -643,10 +663,19 @@ fn render_bar_module(
         .when(view.highlighted, |element| {
             element.px(ui_style.spacing.xs).bg(color.alpha(0.18))
         })
+        .when(fixed_identity_meta, |element| {
+            element.text_xs().text_color(theme.text_muted)
+        })
+        .when(fixed_identity_changes, |element| {
+            element
+                .rounded(ui_style.radius.compact)
+                .border(ui_style.border.hairline)
+                .border_color(theme.border)
+        })
         .when_some(max_width, |element, width| {
             element.max_w(px(width)).overflow_hidden()
         })
-        .when_some(view.icon, |element, icon| {
+        .when_some(icon, |element, icon| {
             element.child(Icon::new(icon).size_3().text_color(color))
         })
         .child(div().min_w_0().truncate().child(text));

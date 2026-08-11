@@ -581,6 +581,7 @@ fn window_bar_keeps_project_identity_and_git_fixed_outside_configured_modules(
 
     assert!(cx.debug_bounds("window-bar-project-name").is_some());
     assert!(cx.debug_bounds("window-bar-project-path").is_some());
+    assert!(cx.debug_bounds("window-bar-identity-separator").is_some());
     assert!(cx.debug_bounds("window-bar-git-branch").is_some());
     assert!(cx.debug_bounds("window-bar-git-changes").is_some());
 }
