@@ -1,8 +1,11 @@
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use gpui::{App, Context, Window};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-use yttt_agent_core::AgentExitReason;
+use yttt_agent_core::{AGENT_ACTIVITY_STALE_AFTER_MILLIS, AgentExitReason};
 
 use super::{
     WorkbenchView, combine_load_messages, helpers::terminal_pane_key,
@@ -34,10 +37,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.terminal.agent_process_monitor_task.is_some()
-            || !self.terminal.start_processes
-            || !sysinfo::IS_SUPPORTED_SYSTEM
-        {
+        if self.terminal.agent_process_monitor_task.is_some() || !self.terminal.start_processes {
             return;
         }
 
@@ -56,7 +56,11 @@ impl WorkbenchView {
                         .map(|probe| probe.root_pid)
                         .collect::<Vec<_>>();
                     let scan = cx.background_executor().spawn(async move {
-                        let detected = scan_agent_processes(&mut system, &root_pids);
+                        let detected = if sysinfo::IS_SUPPORTED_SYSTEM {
+                            scan_agent_processes(&mut system, &root_pids)
+                        } else {
+                            HashMap::new()
+                        };
                         (system, detected)
                     });
                     let (refreshed_system, detected) = scan.await;
@@ -65,6 +69,13 @@ impl WorkbenchView {
                         .update_in(cx, |view, window, cx| {
                             view.apply_agent_process_scan(&detected, window, cx);
                             view.apply_agent_hook_requests(window, cx);
+                            if view.workspace.decay_stale_agent_activity(
+                                unix_timestamp_millis(),
+                                AGENT_ACTIVITY_STALE_AFTER_MILLIS,
+                            ) > 0
+                            {
+                                cx.notify();
+                            }
                         })
                         .is_err()
                     {
@@ -113,10 +124,6 @@ impl WorkbenchView {
             pane.matches_agent_pane_address(&request.address),
             pane.generation(),
             pane.is_running(),
-            pane.agent_instance_id().is_some(),
-            self.terminal
-                .agent_process_observations
-                .get(&request.address),
         )
     }
 
@@ -305,11 +312,16 @@ impl WorkbenchView {
             .then(|| self.agent_transition_notification(address, &snapshot))
             .flatten();
         self.update_terminal_agent_title(address, snapshot.provider_id.as_str(), None, cx);
-        if let Err(error) = self.workspace.clear_agent_snapshot(
-            &ProjectId::new(&address.project_id),
-            &address.tab_id,
-            &address.pane_id,
-        ) {
+        let result = if snapshot.view_state() == yttt_agent_core::AgentViewState::Completed {
+            self.record_agent_runtime_snapshot(address.clone(), snapshot)
+        } else {
+            self.workspace.clear_agent_snapshot(
+                &ProjectId::new(&address.project_id),
+                &address.tab_id,
+                &address.pane_id,
+            )
+        };
+        if let Err(error) = result {
             self.load_error = Some(error.to_string());
         }
         if let Some(error) = self.agent_manager.take_error() {
@@ -327,16 +339,8 @@ fn hook_request_belongs_to_pane(
     pane_address_matches: bool,
     pane_generation: u64,
     pane_running: bool,
-    managed_agent: bool,
-    observation: Option<&AgentProcessObservation>,
 ) -> bool {
-    if !pane_running || !pane_address_matches || pane_generation != request.generation {
-        return false;
-    }
-    managed_agent
-        || observation.is_some_and(|observation| {
-            observation.agent == request.source && observation.generation == request.generation
-        })
+    pane_running && pane_address_matches && pane_generation == request.generation
 }
 
 fn scan_agent_processes(system: &mut System, root_pids: &[u32]) -> HashMap<u32, BuiltinAgent> {
@@ -350,6 +354,7 @@ fn scan_agent_processes(system: &mut System, root_pids: &[u32]) -> HashMap<u32, 
             .with_cmd(UpdateKind::Always)
             .with_exe(UpdateKind::Always),
     );
+
     let processes = system
         .processes()
         .iter()
@@ -360,6 +365,14 @@ fn scan_agent_processes(system: &mut System, root_pids: &[u32]) -> HashMap<u32, 
         })
         .collect::<Vec<_>>();
     detect_agent_processes_by_root(root_pids, &processes)
+}
+fn unix_timestamp_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
@@ -381,69 +394,18 @@ mod hook_ownership_tests {
     #[test]
     fn hook_request_requires_the_live_pane_generation() {
         let request = request(7, BuiltinAgent::Codex);
-        let observation = AgentProcessObservation {
-            agent: BuiltinAgent::Codex,
-            generation: 7,
-            missed_samples: 0,
-        };
 
-        assert!(hook_request_belongs_to_pane(
-            &request,
-            true,
-            7,
-            true,
-            false,
-            Some(&observation),
-        ));
-        assert!(!hook_request_belongs_to_pane(
-            &request,
-            true,
-            8,
-            true,
-            false,
-            Some(&observation),
-        ));
-        assert!(!hook_request_belongs_to_pane(
-            &request,
-            false,
-            7,
-            true,
-            false,
-            Some(&observation),
-        ));
-        assert!(!hook_request_belongs_to_pane(
-            &request,
-            true,
-            7,
-            false,
-            false,
-            Some(&observation),
-        ));
+        assert!(hook_request_belongs_to_pane(&request, true, 7, true));
+        assert!(!hook_request_belongs_to_pane(&request, true, 8, true));
+        assert!(!hook_request_belongs_to_pane(&request, false, 7, true));
+        assert!(!hook_request_belongs_to_pane(&request, true, 7, false));
     }
 
     #[test]
-    fn shell_hook_requires_a_matching_detected_process() {
-        let request = request(7, BuiltinAgent::Codex);
-        let wrong_provider = AgentProcessObservation {
-            agent: BuiltinAgent::Claude,
-            generation: 7,
-            missed_samples: 0,
-        };
+    fn live_shell_pane_hook_does_not_require_process_recognition() {
+        let request = request(7, BuiltinAgent::OhMyPi);
 
-        assert!(!hook_request_belongs_to_pane(
-            &request, true, 7, true, false, None,
-        ));
-        assert!(!hook_request_belongs_to_pane(
-            &request,
-            true,
-            7,
-            true,
-            false,
-            Some(&wrong_provider),
-        ));
-        assert!(hook_request_belongs_to_pane(
-            &request, true, 7, true, true, None,
-        ));
+        assert!(hook_request_belongs_to_pane(&request, true, 7, true));
     }
 }
 

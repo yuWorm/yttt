@@ -1460,6 +1460,82 @@ fn killed_detected_agent_clears_sidebar_snapshot_without_notification(cx: &mut T
         assert!(root.visible_toast_titles().is_empty());
     });
 }
+
+#[gpui::test]
+fn completed_detected_agent_is_retained_until_the_next_generation(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir_all(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(local_project(project_path), dev_fixture_layout())
+        .unwrap();
+    let address = AgentPaneAddress::new(project_id.as_str(), "dev", "shell");
+    let view_project_id = project_id.clone();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| {
+            WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
+        });
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        ComponentRoot::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+
+    root.update_in(cx, |root, window, cx| {
+        let running = root
+            .agent_manager
+            .detected_process_started(address.clone(), BuiltinAgent::Codex, 7)
+            .unwrap();
+        root.record_agent_runtime_snapshot(address.clone(), running)
+            .unwrap();
+        assert!(root.finish_detected_agent(&address, 7, AgentExitReason::Completed, window, cx,));
+        let completed = root
+            .workspace
+            .project(&view_project_id)
+            .unwrap()
+            .tab_state("dev")
+            .unwrap()
+            .pane_states
+            .iter()
+            .find(|pane| pane.pane_id == "shell")
+            .unwrap()
+            .agent_snapshot
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            completed.view_state(),
+            yttt_agent_core::AgentViewState::Completed
+        );
+        assert!(root.agent_manager.retained_snapshots().is_empty());
+
+        let next = root
+            .agent_manager
+            .detected_process_started(address.clone(), BuiltinAgent::Codex, 7)
+            .unwrap();
+        root.record_agent_runtime_snapshot(address, next).unwrap();
+        let restarted = root
+            .workspace
+            .project(&view_project_id)
+            .unwrap()
+            .tab_state("dev")
+            .unwrap()
+            .pane_states
+            .iter()
+            .find(|pane| pane.pane_id == "shell")
+            .unwrap()
+            .agent_snapshot
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            restarted.view_state(),
+            yttt_agent_core::AgentViewState::Idle
+        );
+    });
+}
 fn persist_codex_shell_session(
     config_paths: &AppConfigPaths,
     project_path: &Path,

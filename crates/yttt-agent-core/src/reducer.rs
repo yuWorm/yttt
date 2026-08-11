@@ -9,6 +9,8 @@ use crate::{
 
 const MAX_CHILD_AGENTS: usize = 64;
 
+pub const AGENT_ACTIVITY_STALE_AFTER_MILLIS: u64 = 30 * 60 * 1_000;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSnapshot {
     pub instance_id: AgentInstanceId,
@@ -54,6 +56,39 @@ impl AgentSnapshot {
         }
     }
 
+    pub fn decay_stale_activity(&mut self, now: u64, stale_after_millis: u64) -> bool {
+        if self.process_state != AgentProcessState::Running
+            || now.saturating_sub(self.updated_at) <= stale_after_millis
+        {
+            return false;
+        }
+
+        let mut changed = false;
+        if matches!(
+            self.turn_state,
+            AgentTurnState::Working | AgentTurnState::Waiting
+        ) {
+            self.turn_state = AgentTurnState::Idle;
+            self.current_action = None;
+            self.waiting_reason = None;
+            self.waiting_message = None;
+            self.state_started_at = now;
+            changed = true;
+        }
+        for child in &mut self.children {
+            if matches!(
+                child.turn_state,
+                AgentTurnState::Working | AgentTurnState::Waiting
+            ) {
+                child.turn_state = AgentTurnState::Idle;
+                child.current_action = None;
+                child.updated_at = now;
+                changed = true;
+            }
+        }
+        changed
+    }
+
     pub fn primary_text(&self) -> String {
         self.session
             .as_ref()
@@ -81,6 +116,7 @@ impl AgentSnapshot {
 #[derive(Clone, Debug)]
 pub struct AgentReducer {
     snapshot: AgentSnapshot,
+    lead_turn_state: AgentTurnState,
 }
 
 impl AgentReducer {
@@ -103,6 +139,7 @@ impl AgentReducer {
                 state_started_at: now,
                 updated_at: now,
             },
+            lead_turn_state: AgentTurnState::Idle,
         }
     }
     pub fn from_restored(
@@ -125,11 +162,11 @@ impl AgentReducer {
         self.snapshot.generation = generation;
         self.snapshot.process_exit = None;
         self.set_process_state(AgentProcessState::Starting, now);
-        self.set_turn_state(AgentTurnState::Idle, now);
         self.snapshot.current_action = None;
         self.snapshot.children.clear();
         self.snapshot.waiting_reason = None;
         self.snapshot.waiting_message = None;
+        self.set_lead_turn_state(AgentTurnState::Idle, now);
         self.snapshot.updated_at = now;
     }
 
@@ -156,11 +193,11 @@ impl AgentReducer {
             }
             AgentExitReason::Completed => AgentTurnState::Failed,
         };
-        self.set_turn_state(outcome, now);
         self.snapshot.current_action = None;
         self.snapshot.waiting_reason = None;
         self.snapshot.waiting_message = None;
         self.snapshot.children.clear();
+        self.set_lead_turn_state(outcome, now);
         self.snapshot.updated_at = now;
         true
     }
@@ -188,21 +225,20 @@ impl AgentReducer {
                     }
                     self.snapshot.task = Some(task);
                 }
-                self.snapshot.children.clear();
                 self.snapshot.current_action = None;
                 self.snapshot.last_action_failed = false;
                 self.clear_waiting();
-                self.set_turn_state(AgentTurnState::Working, now);
+                self.set_lead_turn_state(AgentTurnState::Working, now);
             }
             AgentEventKind::Working => {
                 self.clear_waiting();
-                self.set_turn_state(AgentTurnState::Working, now);
+                self.set_lead_turn_state(AgentTurnState::Working, now);
             }
             AgentEventKind::ActionStarted { action } => {
                 self.snapshot.current_action = Some(action);
                 self.snapshot.last_action_failed = false;
                 self.clear_waiting();
-                self.set_turn_state(AgentTurnState::Working, now);
+                self.set_lead_turn_state(AgentTurnState::Working, now);
             }
             AgentEventKind::ActionFinished { action_id, failed } => {
                 if action_id.is_none()
@@ -217,32 +253,34 @@ impl AgentReducer {
                 }
                 self.snapshot.last_action_failed = failed;
                 self.clear_waiting();
-                self.set_turn_state(AgentTurnState::Working, now);
+                self.set_lead_turn_state(AgentTurnState::Working, now);
             }
             AgentEventKind::Waiting { reason, message } => {
                 self.snapshot.waiting_reason = Some(reason);
                 self.snapshot.waiting_message = message;
-                self.set_turn_state(AgentTurnState::Waiting, now);
+                self.set_lead_turn_state(AgentTurnState::Waiting, now);
             }
             AgentEventKind::TurnFinished { outcome } => {
                 self.snapshot.current_action = None;
                 self.clear_waiting();
-                self.snapshot.children.clear();
                 let state = match outcome {
                     TurnOutcome::Completed => AgentTurnState::Completed,
                     TurnOutcome::Failed => AgentTurnState::Failed,
                     TurnOutcome::Interrupted => AgentTurnState::Interrupted,
                 };
-                self.set_turn_state(state, now);
+                self.set_lead_turn_state(state, now);
             }
             AgentEventKind::ChildStarted { child } => {
                 self.child_started(child, now);
+                self.refresh_turn_state(now);
             }
             AgentEventKind::ChildUpdated { child_id, update } => {
                 self.child_updated(&child_id, update, now);
+                self.refresh_turn_state(now);
             }
             AgentEventKind::ChildFinished { child_id, .. } => {
                 self.child_finished(&child_id);
+                self.refresh_turn_state(now);
             }
         }
         self.snapshot.updated_at = now;
@@ -265,7 +303,7 @@ impl AgentReducer {
             self.snapshot.children.clear();
             self.snapshot.last_action_failed = false;
             self.clear_waiting();
-            self.set_turn_state(AgentTurnState::Idle, now);
+            self.set_lead_turn_state(AgentTurnState::Idle, now);
             self.snapshot.session = Some(metadata);
             return;
         }
@@ -350,6 +388,30 @@ impl AgentReducer {
         self.snapshot
             .children
             .retain(|candidate| candidate.id != child_id);
+    }
+
+    fn set_lead_turn_state(&mut self, state: AgentTurnState, now: u64) {
+        self.lead_turn_state = state;
+        self.refresh_turn_state(now);
+    }
+
+    fn refresh_turn_state(&mut self, now: u64) {
+        let child_is_active = self.snapshot.children.iter().any(|child| {
+            matches!(
+                child.turn_state,
+                AgentTurnState::Working | AgentTurnState::Waiting
+            )
+        });
+        let state = if child_is_active
+            && !matches!(
+                self.lead_turn_state,
+                AgentTurnState::Working | AgentTurnState::Waiting
+            ) {
+            AgentTurnState::Working
+        } else {
+            self.lead_turn_state
+        };
+        self.set_turn_state(state, now);
     }
 
     fn clear_waiting(&mut self) {

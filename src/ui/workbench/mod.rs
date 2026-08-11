@@ -1577,7 +1577,12 @@ impl WorkbenchView {
         file_ids: &[crate::ui::editor::DocumentId],
     ) -> Result<(), WorkbenchError> {
         if !terminal_ids.is_empty() {
+            let project_id = self.workspace.selected_project_id().cloned();
             self.workspace.close_tabs(terminal_ids)?;
+            if let Some(project_id) = project_id {
+                self.agent_manager
+                    .forget_tabs(project_id.as_str(), terminal_ids);
+            }
             if let Some((project_id, remaining_terminal_ids)) =
                 self.selected_project_work_item_ids()
                 && let Some(session) = self

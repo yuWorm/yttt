@@ -15,7 +15,7 @@ pub use model::{
 pub use provider::{
     AgentProvider, ProviderDescriptor, ProviderError, ProviderHookEvent, ProviderResumeCommand,
 };
-pub use reducer::{AgentReducer, AgentSnapshot};
+pub use reducer::{AGENT_ACTIVITY_STALE_AFTER_MILLIS, AgentReducer, AgentSnapshot};
 
 #[cfg(test)]
 mod tests {
@@ -171,7 +171,47 @@ mod tests {
             },
             8,
         ));
+        assert_eq!(reducer.snapshot().children.len(), 1);
+        assert_eq!(reducer.snapshot().view_state(), AgentViewState::Working);
+
+        assert!(reducer.apply(
+            1,
+            AgentEventKind::ChildFinished {
+                child_id: "child-2".to_string(),
+                outcome: TurnOutcome::Completed,
+            },
+            9,
+        ));
         assert!(reducer.snapshot().children.is_empty());
+        assert_eq!(reducer.snapshot().view_state(), AgentViewState::Completed);
+    }
+
+    #[test]
+    fn stale_activity_decays_to_idle_without_losing_history() {
+        let mut reducer = reducer();
+        reducer.process_starting(1, 2);
+        reducer.process_started(1, 3);
+        reducer.apply(1, AgentEventKind::Working, 4);
+        reducer.apply(
+            1,
+            AgentEventKind::ChildStarted {
+                child: ChildAgentDescriptor {
+                    id: "child-stale".to_string(),
+                    name: Some("Reviewer".to_string()),
+                    task: None,
+                },
+            },
+            5,
+        );
+
+        let mut snapshot = reducer.snapshot().clone();
+        assert!(!snapshot.decay_stale_activity(105, 100));
+        assert!(snapshot.decay_stale_activity(106, 100));
+        assert_eq!(snapshot.view_state(), AgentViewState::Idle);
+        assert_eq!(snapshot.children[0].turn_state, AgentTurnState::Idle);
+        assert_eq!(snapshot.state_started_at, 106);
+        assert_eq!(snapshot.children[0].updated_at, 106);
+        assert_eq!(snapshot.updated_at, 5);
     }
     #[test]
     fn reducer_generates_updates_and_restores_session_titles() {

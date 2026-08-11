@@ -694,6 +694,22 @@ impl Workspace {
         Ok(())
     }
 
+    pub fn decay_stale_agent_activity(&mut self, now: u64, stale_after_millis: u64) -> usize {
+        let mut changed = 0;
+        for project in &mut self.opened_projects {
+            for tab in &mut project.tab_states {
+                for pane in &mut tab.pane_states {
+                    if pane.agent_snapshot.as_mut().is_some_and(|snapshot| {
+                        snapshot.decay_stale_activity(now, stale_after_millis)
+                    }) {
+                        changed += 1;
+                    }
+                }
+            }
+        }
+        changed
+    }
+
     pub fn record_pane_exited(
         &mut self,
         project_id: &ProjectId,

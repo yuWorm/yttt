@@ -62,7 +62,9 @@ where
         .skip(1)
         .map(|argument| argument.as_ref().to_string_lossy())
         .find(|argument| !argument.starts_with('-'))
-        .and_then(|script| classify_agent_script_path(&script))
+        .and_then(|script| {
+            classify_agent_executable(&script).or_else(|| classify_agent_script_path(&script))
+        })
 }
 
 pub fn detect_agent_processes_by_root(
@@ -165,4 +167,42 @@ fn classify_agent_script_path(script: &str) -> Option<BuiltinAgent> {
 fn command_basename(command: &str) -> Option<&str> {
     let program = command.split_whitespace().next()?;
     program.rsplit(['/', '\\']).next()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_agent_interpreter_shims_by_entrypoint_name() {
+        assert_eq!(
+            classify_agent_process("bun", &["bun", "/Users/test/.bun/bin/omp"]),
+            Some(BuiltinAgent::OhMyPi)
+        );
+        assert_eq!(
+            classify_agent_process("node", &["node", "/usr/local/bin/claude"]),
+            Some(BuiltinAgent::Claude)
+        );
+    }
+
+    #[test]
+    fn classifies_known_package_entrypoints_behind_interpreters() {
+        assert_eq!(
+            classify_agent_process(
+                "bun",
+                &[
+                    "bun",
+                    "/tmp/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js",
+                ],
+            ),
+            Some(BuiltinAgent::OhMyPi)
+        );
+        assert_eq!(
+            classify_agent_process(
+                "node",
+                &["node", "/tmp/node_modules/@openai/codex/bin/codex.js"],
+            ),
+            Some(BuiltinAgent::Codex)
+        );
+    }
 }

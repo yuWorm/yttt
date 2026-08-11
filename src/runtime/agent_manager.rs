@@ -255,18 +255,33 @@ impl AgentManager {
 
     pub fn reset_project_sessions(&mut self, project_id: &str) {
         self.restorable_projects.remove(project_id);
+        self.forget_matching(|address| address.project_id == project_id);
+    }
+
+    pub fn forget_tabs(&mut self, project_id: &str, tab_ids: &[String]) {
+        self.forget_matching(|address| {
+            address.project_id == project_id
+                && tab_ids.iter().any(|tab_id| tab_id == &address.tab_id)
+        });
+    }
+
+    pub fn forget_pane(&mut self, address: &AgentPaneAddress) {
+        self.forget_matching(|candidate| candidate == address);
+    }
+
+    fn forget_matching(&mut self, mut matches: impl FnMut(&AgentPaneAddress) -> bool) {
         self.fresh_program_overrides
-            .retain(|address, _| address.project_id != project_id);
+            .retain(|address, _| !matches(address));
         self.launches_by_address
-            .retain(|address, _| address.project_id != project_id);
+            .retain(|address, _| !matches(address));
         self.detected_by_address
-            .retain(|address, _| address.project_id != project_id);
+            .retain(|address, _| !matches(address));
         self.finished_detected_generations
-            .retain(|address, _| address.project_id != project_id);
+            .retain(|address, _| !matches(address));
 
         let mut removed_instances = Vec::new();
         self.addresses_by_instance.retain(|instance_id, address| {
-            if address.project_id == project_id {
+            if matches(address) {
                 removed_instances.push(instance_id.clone());
                 false
             } else {
@@ -279,7 +294,7 @@ impl AgentManager {
 
         let retained_count = self.retained_snapshots.len();
         self.retained_snapshots
-            .retain(|address, _| address.project_id != project_id);
+            .retain(|address, _| !matches(address));
         if self.retained_snapshots.len() != retained_count
             && let Err(error) = write_agent_state(&self.state_path, &self.retained_snapshots)
         {
@@ -326,6 +341,7 @@ impl AgentManager {
             .finished_detected_generations
             .get(&request.address)
             .is_some_and(|generation| *generation == request.generation)
+            && !is_session_start_event(&request.event)
         {
             return Ok(None);
         }
@@ -577,6 +593,15 @@ impl AgentManager {
             .insert(address.clone(), generation);
 
         let mut reducer = detected.reducer;
+        let reason = if reason == AgentExitReason::Completed {
+            match reducer.snapshot().view_state() {
+                yttt_agent_core::AgentViewState::Failed => AgentExitReason::Failed,
+                yttt_agent_core::AgentViewState::Interrupted => AgentExitReason::KilledByUser,
+                _ => AgentExitReason::Completed,
+            }
+        } else {
+            reason
+        };
         reducer.process_exited(
             generation,
             AgentProcessExit {
@@ -869,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    fn late_omp_hook_does_not_restore_an_exited_shell_session() {
+    fn late_hook_is_ignored_but_a_new_shell_session_can_start() {
         let temp = TempDir::new().unwrap();
         let paths = AppConfigPaths::from_config_dir(temp.path());
         let mut manager = AgentManager::new(&paths);
@@ -894,9 +919,6 @@ mod tests {
         assert!(late_hook.is_none());
         assert!(manager.retained_snapshots().is_empty());
 
-        manager
-            .detected_process_started(address.clone(), BuiltinAgent::OhMyPi, 7)
-            .unwrap();
         assert!(
             manager
                 .ingest_hook_request(AgentHookRequest {
@@ -1331,5 +1353,68 @@ mod tests {
         let command = launch.remote_command("omp", &[]).unwrap();
         assert!(command.contains("'--resume' 'omp-session-1'"));
         assert!(command.contains("--extension \"$yttt_agent_path\""));
+    }
+
+    #[test]
+    fn inferred_detected_exit_preserves_a_hook_reported_failure() {
+        let temp = TempDir::new().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path());
+        let mut manager = AgentManager::new(&paths);
+        let address = AgentPaneAddress::new("project", "shell", "terminal");
+        manager
+            .detected_process_started(address.clone(), BuiltinAgent::Codex, 7)
+            .unwrap();
+        assert!(
+            manager
+                .detected_by_address
+                .get_mut(&address)
+                .unwrap()
+                .reducer
+                .apply(
+                    7,
+                    yttt_agent_core::AgentEventKind::TurnFinished {
+                        outcome: yttt_agent_core::TurnOutcome::Failed,
+                    },
+                    1,
+                )
+        );
+
+        let snapshot = manager
+            .detected_process_exited(&address, 7, AgentExitReason::Completed)
+            .unwrap();
+        assert_eq!(
+            snapshot.view_state(),
+            yttt_agent_core::AgentViewState::Failed
+        );
+    }
+
+    #[test]
+    fn closing_tabs_and_panes_forgets_their_agent_history() {
+        let temp = TempDir::new().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path());
+        let mut manager = AgentManager::new(&paths);
+        let first_address = AgentPaneAddress::new("project", "first", "agent");
+        let second_address = AgentPaneAddress::new("project", "second", "agent");
+        let (first_launch, _) = manager
+            .prepare_pane(first_address.clone(), "codex", false)
+            .unwrap();
+        let first_instance = first_launch.instance_id().clone();
+        manager
+            .prepare_pane(second_address.clone(), "claude", false)
+            .unwrap();
+
+        manager.forget_tabs("project", &["first".to_string()]);
+        assert_eq!(manager.retained_snapshots().len(), 1);
+        assert_eq!(manager.retained_snapshots()[0].0, second_address);
+
+        let (replacement, _) = manager.prepare_pane(first_address, "codex", false).unwrap();
+        assert_ne!(replacement.instance_id(), &first_instance);
+
+        manager.forget_pane(&second_address);
+        assert_eq!(manager.retained_snapshots().len(), 1);
+        assert_eq!(
+            manager.retained_snapshots()[0].0,
+            AgentPaneAddress::new("project", "first", "agent")
+        );
     }
 }

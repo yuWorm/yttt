@@ -1837,9 +1837,6 @@ impl WorkbenchView {
                 cx.notify();
             }
             TerminalPaneEvent::Exited(event) => {
-                if let Err(error) = self.handle_terminal_pane_exit(event.clone()) {
-                    self.load_error = Some(error.to_string());
-                }
                 let reason = match event.exit_reason {
                     yttt_terminal::ExitReason::Completed => AgentExitReason::Completed,
                     yttt_terminal::ExitReason::Failed => AgentExitReason::Failed,
@@ -1900,6 +1897,18 @@ impl WorkbenchView {
                     {
                         self.terminal.agent_process_observations.remove(&address);
                         self.finish_detected_agent(&address, event.generation, reason, window, cx);
+                    }
+                }
+                match self.handle_terminal_pane_exit(event.clone()) {
+                    Ok(PaneExitCloseOutcome::PaneKept) => {}
+                    Ok(_) => {
+                        let address =
+                            AgentPaneAddress::new(&event.project_id, &event.tab_id, &event.pane_id);
+                        self.terminal.agent_process_observations.remove(&address);
+                        self.agent_manager.forget_pane(&address);
+                    }
+                    Err(error) => {
+                        self.load_error = Some(error.to_string());
                     }
                 }
                 cx.notify();
