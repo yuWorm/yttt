@@ -1634,6 +1634,7 @@ impl WorkbenchView {
     pub fn visible_error_notification_item(&self) -> Option<ToastItem> {
         self.load_error.as_ref().map(|message| ToastItem {
             title: self.ui_text.get(UiTextKey::StatusErrorContext).to_string(),
+            status: None,
             context: message.clone(),
             tone: ToastTone::Error,
         })
@@ -2461,6 +2462,7 @@ impl WorkbenchView {
         let root = cx.entity();
         let item = ToastItem {
             title: self.ui_text.get(UiTextKey::StatusErrorContext).to_string(),
+            status: None,
             context: message.clone(),
             tone: ToastTone::Error,
         };
@@ -2493,6 +2495,7 @@ impl WorkbenchView {
     fn queue_status_notification(&mut self, title: impl Into<String>, context: impl Into<String>) {
         self.pending_status_notifications.push(ToastItem {
             title: title.into(),
+            status: None,
             context: context.into(),
             tone: ToastTone::Success,
         });

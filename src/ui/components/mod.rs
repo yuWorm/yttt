@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 mod notification;
 mod palette_item;
 
@@ -12,7 +14,12 @@ use gpui::{
     ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _, Window, div,
     prelude::*,
 };
-use gpui_component::{Icon, IconName, kbd::Kbd, notification::Notification};
+use gpui_component::{
+    Icon, IconName, Sizable as _,
+    button::{Button, ButtonVariants as _},
+    kbd::Kbd,
+    notification::Notification,
+};
 
 use crate::ui::{
     notifications::{ToastItem, ToastTone},

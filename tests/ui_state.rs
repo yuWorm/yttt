@@ -8048,32 +8048,35 @@ fn visible_toast_items_show_three_recent_events_with_tone() {
         NotificationKind::AgentFailed,
     ));
 
-    let items = visible_toast_items(root.toast_queue());
+    let items = visible_toast_items(root.toast_queue(), &UiText::english());
 
     assert_eq!(items.len(), 3);
-    assert_eq!(items[0].title, "fourth failed");
+    assert_eq!(items[0].title, "fourth");
+    assert_eq!(items[0].status.as_deref(), Some("agent failed"));
     assert_eq!(items[0].tone, ToastTone::Error);
-    assert_eq!(items[1].title, "third completed");
+    assert_eq!(items[1].title, "third");
+    assert_eq!(items[1].status.as_deref(), Some("agent completed"));
     assert_eq!(items[1].tone, ToastTone::Success);
-    assert_eq!(items[2].title, "second failed");
+    assert_eq!(items[2].title, "second");
 }
 
 #[test]
-fn toast_item_for_event_maps_agent_result_to_component_ready_item() {
-    let completed = toast_item_for_event(&notification_event_for(
-        "Codex",
-        NotificationKind::AgentCompleted,
-    ));
-    let failed = toast_item_for_event(&notification_event_for(
-        "Claude",
-        NotificationKind::AgentFailed,
-    ));
+fn toast_item_for_event_maps_agent_result_to_semantic_localized_item() {
+    let mut completed_event = notification_event_for("Codex", NotificationKind::AgentCompleted);
+    completed_event.summary = Some("Refine agent notifications".to_string());
+    let completed = toast_item_for_event(&completed_event, &UiText::new(Locale::Chinese));
+    let failed = toast_item_for_event(
+        &notification_event_for("Claude", NotificationKind::AgentFailed),
+        &UiText::english(),
+    );
 
-    assert_eq!(completed.title, "Codex completed");
-    assert_eq!(completed.context, "yttt / Agent");
+    assert_eq!(completed.title, "Refine agent notifications");
+    assert_eq!(completed.status.as_deref(), Some("Agent 已完成"));
+    assert_eq!(completed.context, "yttt › Agent › Codex");
     assert_eq!(completed.tone, ToastTone::Success);
-    assert_eq!(failed.title, "Claude failed");
-    assert_eq!(failed.context, "yttt / Agent");
+    assert_eq!(failed.title, "Claude");
+    assert_eq!(failed.status.as_deref(), Some("agent failed"));
+    assert_eq!(failed.context, "yttt › Agent › Claude");
     assert_eq!(failed.tone, ToastTone::Error);
 }
 
@@ -8221,6 +8224,7 @@ fn notification_event_for(pane_title: &str, kind: NotificationKind) -> Notificat
         project_title: "yttt".to_string(),
         tab_title: "Agent".to_string(),
         pane_title: pane_title.to_string(),
+        summary: None,
     }
 }
 

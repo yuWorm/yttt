@@ -518,6 +518,7 @@ fn agent_exit_notification_does_not_reenter_workbench_entity(cx: &mut TestAppCon
         project_title: "yttt-agent-exit".to_string(),
         tab_title: "Agent".to_string(),
         pane_title: "Codex".to_string(),
+        summary: None,
     };
 
     let root_slot = Rc::new(RefCell::new(None));

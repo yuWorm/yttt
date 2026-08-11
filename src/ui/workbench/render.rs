@@ -691,19 +691,22 @@ fn layout_toml_editor_overlay(
 pub(super) fn push_component_notification(
     root: Entity<WorkbenchView>,
     event: NotificationEvent,
+    item: ToastItem,
     action_label: &'static str,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) {
-    let item = toast_item_for_event(&event);
-    let focus_event = event.clone();
     window.push_notification(
-        workbench_agent_notification(item, action_label, theme, ui_style).on_click(
+        workbench_agent_notification(
+            item,
+            action_label,
+            theme,
+            ui_style,
             move |_, _window, cx| {
                 root.update(cx, |root, cx| {
-                    let _ = root.focus_notification_target(&focus_event);
+                    let _ = root.focus_notification_target(&event);
                     cx.notify();
                 });
             },

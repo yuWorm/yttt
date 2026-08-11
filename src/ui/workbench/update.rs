@@ -117,6 +117,7 @@ impl WorkbenchView {
                     self.push_update_notification(
                         ToastItem {
                             title: self.ui_text.get(UiTextKey::SettingsUpToDate).to_string(),
+                            status: None,
                             context: format!("v{APP_VERSION}"),
                             tone: ToastTone::Success,
                         },
@@ -148,6 +149,7 @@ impl WorkbenchView {
                                 self.ui_text.get(UiTextKey::SettingsUpdateAvailable),
                                 update.version
                             ),
+                            status: None,
                             context: self
                                 .ui_text
                                 .get(UiTextKey::SettingsUpdateAvailableDescription)
@@ -178,6 +180,7 @@ impl WorkbenchView {
                                 .ui_text
                                 .get(UiTextKey::SettingsUpdateCheckFailed)
                                 .to_string(),
+                            status: None,
                             context: message,
                             tone: ToastTone::Error,
                         },
@@ -202,8 +205,9 @@ impl WorkbenchView {
         let theme = appearance.ui;
         let ui_style = appearance.style;
         let notification = if let Some((label, url)) = action {
-            workbench_agent_notification(item, label, theme, ui_style)
-                .on_click(move |_, _window, cx| cx.open_url(&url))
+            workbench_agent_notification(item, label, theme, ui_style, move |_, _window, cx| {
+                cx.open_url(&url);
+            })
         } else {
             workbench_status_notification(item, theme, ui_style)
         };
