@@ -169,6 +169,12 @@ Project layout:
 native location on first launch when the native location does not already exist. `./.yttt` is
 used only when no platform user directory is available.
 
+Shareable Window Bar and Status Bar layout:
+
+```text
+<app-config>/bars.toml
+```
+
 Global default layout:
 
 ```text

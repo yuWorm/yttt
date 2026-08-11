@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use tempfile::tempdir;
 use yttt::config::{
+    bars::{BarModuleSettings, ShellBarModule, ShellBarsSettings, save_bars},
     default_layout::BuiltinAgent,
     paths::AppConfigPaths,
     settings::{
@@ -43,6 +44,7 @@ fn app_config_paths_expose_settings_and_theme_dir() {
         paths.settings_file(),
         Path::new("/tmp/yttt-config/settings.toml")
     );
+    assert_eq!(paths.bars_file(), Path::new("/tmp/yttt-config/bars.toml"));
     assert_eq!(paths.themes_dir(), Path::new("/tmp/yttt-config/themes"));
 }
 
@@ -114,6 +116,7 @@ fn missing_settings_file_writes_defaults() {
     assert!(!loaded.settings.editor.lsp.enabled);
     assert_eq!(loaded.settings.editor.lsp.command, "");
     assert!(paths.settings_file().exists());
+    assert!(paths.bars_file().exists());
     assert!(loaded.warnings.is_empty());
 }
 
@@ -684,4 +687,209 @@ fn resolve_default_shell_uses_auto_or_manual_choice() {
         "/usr/local/bin/fish"
     );
     assert_eq!(resolve_default_shell(AUTO_SHELL, &[]), "sh");
+}
+
+#[test]
+fn shell_bar_layout_and_module_options_round_trip_in_standalone_file() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    let settings = AppSettings::default();
+    let mut bars = ShellBarsSettings::default();
+    bars.window.layout.left = vec![ShellBarModule::ProjectName, ShellBarModule::ActiveItem];
+    bars.window.layout.center = vec![ShellBarModule::GitBranch];
+    bars.window.layout.right = vec![ShellBarModule::Settings];
+    bars.status.enabled = false;
+    bars.status.layout.modules.insert(
+        "active-item".to_string(),
+        BarModuleSettings {
+            max_width: Some(280.0),
+            hide_when_empty: false,
+        },
+    );
+
+    save_settings(&paths, &settings).unwrap();
+    save_bars(&paths, &bars).unwrap();
+    let loaded = load_or_create_settings(&paths).unwrap();
+
+    assert_eq!(loaded.settings.bars, bars);
+    assert!(loaded.warnings.is_empty());
+    let settings_source = std::fs::read_to_string(paths.settings_file()).unwrap();
+    assert!(!settings_source.contains("[bars"));
+    let bars_source = std::fs::read_to_string(paths.bars_file()).unwrap();
+    assert!(bars_source.contains("[status]"));
+    assert!(bars_source.contains("[status.modules.active-item]"));
+}
+
+#[test]
+fn invalid_shell_bar_modules_are_removed_and_aliases_are_canonicalized() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(
+        paths.bars_file(),
+        r#"
+[window]
+left = ["project-name", "missing-module", "project-name"]
+center = ["project-name", "active_item"]
+right = ["settings"]
+
+[window.modules.project_path]
+max_width = 12.0
+hide_when_empty = false
+
+[window.modules.missing-module]
+max_width = 120.0
+"#,
+    )
+    .unwrap();
+
+    let loaded = load_or_create_settings(&paths).unwrap();
+
+    assert_eq!(
+        loaded.settings.bars.window.layout.left,
+        vec![ShellBarModule::ProjectName]
+    );
+    assert_eq!(
+        loaded.settings.bars.window.layout.center,
+        vec![ShellBarModule::ActiveItem]
+    );
+    assert_eq!(
+        loaded.settings.bars.window.layout.right,
+        vec![ShellBarModule::Settings]
+    );
+    assert_eq!(
+        loaded
+            .settings
+            .bars
+            .window
+            .layout
+            .modules
+            .get("project-path"),
+        Some(&BarModuleSettings {
+            max_width: None,
+            hide_when_empty: false,
+        })
+    );
+    assert!(
+        loaded
+            .settings
+            .bars
+            .window
+            .layout
+            .modules
+            .get("missing-module")
+            .is_none()
+    );
+    assert!(loaded.warnings.iter().any(|warning| matches!(
+        warning,
+        SettingsLoadWarning::InvalidBarsValue {
+            field: "window.left",
+            value,
+        } if value == "missing-module"
+    )));
+    assert!(loaded.warnings.iter().any(|warning| matches!(
+        warning,
+        SettingsLoadWarning::InvalidBarsValue {
+            field: "window.center",
+            value,
+        } if value == "project-name"
+    )));
+}
+
+#[test]
+fn legacy_bars_in_settings_are_migrated_to_standalone_file() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(
+        paths.settings_file(),
+        r#"
+[general]
+language = "en"
+
+[bars.window]
+left = ["project-name", "active-item"]
+center = []
+right = ["settings"]
+
+[bars.status]
+enabled = false
+left = ["surface"]
+center = []
+right = ["git-branch"]
+
+[bars.status.modules.active_item]
+max_width = 280.0
+hide_when_empty = false
+"#,
+    )
+    .unwrap();
+
+    let loaded = load_or_create_settings(&paths).unwrap();
+
+    assert!(!loaded.settings.bars.status.enabled);
+    assert_eq!(
+        loaded.settings.bars.window.layout.left,
+        vec![ShellBarModule::ProjectName, ShellBarModule::ActiveItem]
+    );
+    assert!(loaded.warnings.is_empty());
+    let settings_source = std::fs::read_to_string(paths.settings_file()).unwrap();
+    assert!(!settings_source.contains("[bars"));
+    let bars_source = std::fs::read_to_string(paths.bars_file()).unwrap();
+    assert!(bars_source.contains("[status]"));
+    assert!(bars_source.contains("[status.modules.active-item]"));
+}
+
+#[test]
+fn existing_standalone_bars_win_over_legacy_settings_section() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(
+        paths.settings_file(),
+        r#"
+[bars.status]
+enabled = false
+left = ["vim-mode"]
+center = []
+right = []
+"#,
+    )
+    .unwrap();
+    let mut standalone = ShellBarsSettings::default();
+    standalone.status.enabled = true;
+    standalone.status.layout.left = vec![ShellBarModule::Surface];
+    save_bars(&paths, &standalone).unwrap();
+
+    let loaded = load_or_create_settings(&paths).unwrap();
+
+    assert_eq!(loaded.settings.bars, standalone);
+    assert!(
+        !std::fs::read_to_string(paths.settings_file())
+            .unwrap()
+            .contains("[bars")
+    );
+}
+
+#[test]
+fn invalid_standalone_bars_fall_back_without_rewriting_source() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    save_settings(&paths, &AppSettings::default()).unwrap();
+    let invalid_source = "[status";
+    std::fs::write(paths.bars_file(), invalid_source).unwrap();
+
+    let loaded = load_or_create_settings(&paths).unwrap();
+
+    assert_eq!(loaded.settings.bars, ShellBarsSettings::default());
+    assert!(loaded.warnings.iter().any(|warning| matches!(
+        warning,
+        SettingsLoadWarning::InvalidToml { path, message }
+            if path == &paths.bars_file() && !message.is_empty()
+    )));
+    assert_eq!(
+        std::fs::read_to_string(paths.bars_file()).unwrap(),
+        invalid_source
+    );
 }

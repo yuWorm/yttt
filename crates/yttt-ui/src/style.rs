@@ -83,6 +83,7 @@ pub struct UiControlMetrics {
     pub palette_input_height: Rems,
     pub search_height: Rems,
     pub palette_footer_height: Rems,
+    pub status_bar_height: Rems,
     pub status_footer_height: Rems,
 }
 
@@ -298,6 +299,7 @@ impl UiStyle {
                 palette_input_height: rems(2.5),
                 search_height: rems(1.75),
                 palette_footer_height: rems(2.5),
+                status_bar_height: rems(1.375),
                 status_footer_height: rems(2.875),
             },
             rows: UiRowMetrics {
@@ -445,6 +447,7 @@ impl UiStyle {
                 palette_input_height: rems(2.875),
                 search_height: rems(2.5),
                 palette_footer_height: rems(3.25),
+                status_bar_height: rems(1.5),
                 status_footer_height: rems(3.25),
             },
             rows: UiRowMetrics {

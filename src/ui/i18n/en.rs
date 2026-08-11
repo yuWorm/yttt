@@ -372,6 +372,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSectionWindow => "Window",
         UiTextKey::SettingsSectionInterface => "Interface",
         UiTextKey::SettingsSectionThemes => "Themes",
+        UiTextKey::SettingsSectionBars => "Window & status bars",
         UiTextKey::SettingsSectionAdvanced => "Advanced",
         UiTextKey::SettingsSectionDetectionDefaults => "Detection & defaults",
         UiTextKey::SettingsSectionLanguageServices => "Language services",
@@ -545,9 +546,29 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsTerminalTheme => "Terminal theme",
         UiTextKey::SettingsTerminalThemeDescription => "Optional terminal colors override.",
         UiTextKey::SettingsSearchTheme => "Search theme...",
+        UiTextKey::SettingsWindowBarModules => "Window Bar modules",
+        UiTextKey::SettingsWindowBarModulesDescription => {
+            "Comma-separated module IDs for the left, center, and right regions."
+        }
+        UiTextKey::SettingsStatusBarEnabled => "Show Status Bar",
+        UiTextKey::SettingsStatusBarEnabledDescription => {
+            "Show the compact shared status surface below the workspace."
+        }
+        UiTextKey::SettingsStatusBarModules => "Status Bar modules",
+        UiTextKey::SettingsStatusBarModulesDescription => {
+            "Modules can move independently between the three regions."
+        }
+        UiTextKey::SettingsBarLeft => "Left",
+        UiTextKey::SettingsBarCenter => "Center",
+        UiTextKey::SettingsBarRight => "Right",
+        UiTextKey::SettingsApplyBarLayout => "Apply layout",
         UiTextKey::SettingsEditSettingsToml => "Edit settings TOML",
         UiTextKey::SettingsEditSettingsTomlDescription => {
             "Open the app settings file for advanced edits."
+        }
+        UiTextKey::SettingsEditBarsToml => "Edit bars TOML",
+        UiTextKey::SettingsEditBarsTomlDescription => {
+            "Open the standalone Window Bar and Status Bar configuration for editing or sharing."
         }
         UiTextKey::SettingsShowPath => "Show Path",
         UiTextKey::SettingsThemesDirectory => "Themes directory",
@@ -900,6 +921,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::StatusKeybindingsFile => "Keybindings file",
         UiTextKey::StatusLayoutFile => "Layout file",
         UiTextKey::StatusSettingsFile => "Settings file",
+        UiTextKey::StatusBarsFile => "Bars file",
         UiTextKey::StatusThemesDirectory => "Themes directory",
         UiTextKey::SshConnections => "SSH connections",
         UiTextKey::SshConnectionsDescription => {

@@ -1,7 +1,9 @@
 use gpui::KeyContext;
 
-use crate::config::settings::VimModeSetting;
-use crate::ui::editor::VimMode as EditorVimMode;
+use crate::{
+    config::settings::VimModeSetting,
+    ui::{editor::VimMode as EditorVimMode, surface::WorkbenchSurface},
+};
 
 const MAX_KEY_FEEDBACK_ITEMS: usize = 6;
 
@@ -69,36 +71,6 @@ impl From<EditorVimMode> for WorkbenchVimMode {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum VimSurface {
-    #[default]
-    Workspace,
-    Editor,
-    Terminal,
-    Projects,
-    ProjectTree,
-    Settings,
-    Palette,
-    GitDiff,
-    Dialog,
-}
-
-impl VimSurface {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Workspace => "workspace",
-            Self::Editor => "editor",
-            Self::Terminal => "terminal",
-            Self::Projects => "projects",
-            Self::ProjectTree => "tree",
-            Self::Settings => "settings",
-            Self::Palette => "palette",
-            Self::GitDiff => "git-diff",
-            Self::Dialog => "dialog",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum VimCapture {
     #[default]
     Inherit,
@@ -109,7 +81,7 @@ pub enum VimCapture {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VimStatus {
     pub mode: WorkbenchVimMode,
-    pub surface: VimSurface,
+    pub surface: WorkbenchSurface,
     pub detail: Option<String>,
     pub key_feedback: Vec<String>,
 }
@@ -118,7 +90,7 @@ pub struct VimStatus {
 pub struct VimControllerState {
     support: VimModeSetting,
     mode: WorkbenchVimMode,
-    surface: VimSurface,
+    surface: WorkbenchSurface,
     surface_initialized: bool,
     capture: VimCapture,
     detail: Option<String>,
@@ -131,7 +103,7 @@ impl VimControllerState {
         Self {
             support,
             mode: WorkbenchVimMode::Normal,
-            surface: VimSurface::Workspace,
+            surface: WorkbenchSurface::Workspace,
             capture: VimCapture::Inherit,
             surface_initialized: false,
             detail: None,
@@ -153,7 +125,7 @@ impl VimControllerState {
         self.surface_initialized = false;
     }
 
-    pub fn surface(&self) -> VimSurface {
+    pub fn surface(&self) -> WorkbenchSurface {
         self.surface
     }
 
@@ -161,7 +133,7 @@ impl VimControllerState {
         self.mode
     }
 
-    pub fn sync_surface(&mut self, surface: VimSurface) {
+    pub fn sync_surface(&mut self, surface: WorkbenchSurface) {
         let previous = self.surface;
         self.surface = surface;
         if !self.surface_initialized {
@@ -175,22 +147,22 @@ impl VimControllerState {
             return;
         }
         self.mode = match surface {
-            VimSurface::Terminal => match self.mode {
+            WorkbenchSurface::Terminal => match self.mode {
                 WorkbenchVimMode::Insert | WorkbenchVimMode::Terminal => WorkbenchVimMode::Terminal,
                 WorkbenchVimMode::Visual | WorkbenchVimMode::VisualLine => WorkbenchVimMode::Normal,
                 WorkbenchVimMode::Normal => WorkbenchVimMode::Normal,
             },
-            VimSurface::Editor => match self.mode {
+            WorkbenchSurface::Editor => match self.mode {
                 WorkbenchVimMode::Terminal => WorkbenchVimMode::Insert,
                 mode => mode,
             },
-            VimSurface::Workspace
-            | VimSurface::Projects
-            | VimSurface::ProjectTree
-            | VimSurface::Settings
-            | VimSurface::Palette
-            | VimSurface::GitDiff
-            | VimSurface::Dialog => match self.mode {
+            WorkbenchSurface::Workspace
+            | WorkbenchSurface::Projects
+            | WorkbenchSurface::ProjectTree
+            | WorkbenchSurface::Settings
+            | WorkbenchSurface::Palette
+            | WorkbenchSurface::GitDiff
+            | WorkbenchSurface::Dialog => match self.mode {
                 WorkbenchVimMode::Terminal => WorkbenchVimMode::Insert,
                 WorkbenchVimMode::Visual | WorkbenchVimMode::VisualLine => WorkbenchVimMode::Normal,
                 mode => mode,
@@ -199,7 +171,7 @@ impl VimControllerState {
     }
 
     pub fn sync_editor(&mut self, mode: EditorVimMode, detail: Option<String>) {
-        if self.surface != VimSurface::Editor {
+        if self.surface != WorkbenchSurface::Editor {
             return;
         }
         self.mode = mode.into();
@@ -227,7 +199,7 @@ impl VimControllerState {
     }
 
     pub fn enter_terminal(&mut self) -> bool {
-        if self.support != VimModeSetting::Global || self.surface != VimSurface::Terminal {
+        if self.support != VimModeSetting::Global || self.surface != WorkbenchSurface::Terminal {
             return false;
         }
         let changed = self.mode != WorkbenchVimMode::Terminal || self.detail.is_some();
@@ -243,7 +215,7 @@ impl VimControllerState {
     pub fn enabled_for_surface(&self) -> bool {
         match self.support {
             VimModeSetting::Global => true,
-            VimModeSetting::Editor => self.surface == VimSurface::Editor,
+            VimModeSetting::Editor => self.surface == WorkbenchSurface::Editor,
             VimModeSetting::Disabled => false,
         }
     }
@@ -277,7 +249,7 @@ impl VimControllerState {
         context.set("yttt_vim_surface", self.surface.label());
         context.set(
             "yttt_vim_project_panel",
-            if self.surface == VimSurface::ProjectTree {
+            if self.surface == WorkbenchSurface::ProjectTree {
                 "true"
             } else {
                 "false"
@@ -381,28 +353,28 @@ mod tests {
     #[test]
     fn global_controller_tracks_one_mode_across_surfaces() {
         let mut vim = VimControllerState::new(VimModeSetting::Global);
-        vim.sync_surface(VimSurface::Editor);
+        vim.sync_surface(WorkbenchSurface::Editor);
         vim.sync_editor(EditorVimMode::VisualLine, Some("2 lines".to_string()));
         assert_eq!(vim.mode(), WorkbenchVimMode::VisualLine);
 
-        vim.sync_surface(VimSurface::Terminal);
+        vim.sync_surface(WorkbenchSurface::Terminal);
         assert_eq!(vim.mode(), WorkbenchVimMode::Normal);
         assert!(vim.enter_terminal());
         assert_eq!(vim.mode(), WorkbenchVimMode::Terminal);
 
-        vim.sync_surface(VimSurface::Settings);
+        vim.sync_surface(WorkbenchSurface::Settings);
         assert_eq!(vim.mode(), WorkbenchVimMode::Insert);
         assert!(vim.enter_normal());
-        vim.sync_surface(VimSurface::Palette);
+        vim.sync_surface(WorkbenchSurface::Palette);
         assert!(vim.enter_insert());
-        vim.sync_surface(VimSurface::Terminal);
+        vim.sync_surface(WorkbenchSurface::Terminal);
         assert_eq!(vim.mode(), WorkbenchVimMode::Terminal);
     }
 
     #[test]
     fn capture_overrides_are_transient_and_can_suspend_vim() {
         let mut vim = VimControllerState::new(VimModeSetting::Global);
-        vim.sync_surface(VimSurface::Settings);
+        vim.sync_surface(WorkbenchSurface::Settings);
         assert_eq!(
             vim.effective_mode(VimCapture::ForceInsert),
             Some(WorkbenchVimMode::Insert)
@@ -418,7 +390,7 @@ mod tests {
     #[test]
     fn project_panel_context_tracks_tree_surface_and_effective_mode() {
         let mut vim = VimControllerState::new(VimModeSetting::Global);
-        vim.sync_surface(VimSurface::ProjectTree);
+        vim.sync_surface(WorkbenchSurface::ProjectTree);
         let normal_context = vim.current_key_context();
         assert_eq!(
             normal_context
@@ -443,7 +415,7 @@ mod tests {
             Some("insert")
         );
 
-        vim.sync_surface(VimSurface::Editor);
+        vim.sync_surface(WorkbenchSurface::Editor);
         assert_eq!(
             vim.current_key_context()
                 .get("yttt_vim_project_panel")
@@ -455,9 +427,9 @@ mod tests {
     #[test]
     fn editor_only_and_disabled_scopes_do_not_leak_to_workspace() {
         let mut editor = VimControllerState::new(VimModeSetting::Editor);
-        editor.sync_surface(VimSurface::Workspace);
+        editor.sync_surface(WorkbenchSurface::Workspace);
         assert_eq!(editor.current_status(), None);
-        editor.sync_surface(VimSurface::Editor);
+        editor.sync_surface(WorkbenchSurface::Editor);
         assert_eq!(
             editor.current_status().map(|status| status.mode),
             Some(WorkbenchVimMode::Normal)
@@ -467,14 +439,14 @@ mod tests {
         assert!(!editor_context.contains(VIM_CONTROL_CONTEXT));
 
         let mut disabled = VimControllerState::new(VimModeSetting::Disabled);
-        disabled.sync_surface(VimSurface::Editor);
+        disabled.sync_surface(WorkbenchSurface::Editor);
         assert_eq!(disabled.current_status(), None);
     }
 
     #[test]
     fn key_feedback_tracks_command_sequences_without_echoing_insert_input() {
         let mut vim = VimControllerState::new(VimModeSetting::Global);
-        vim.sync_surface(VimSurface::Settings);
+        vim.sync_surface(WorkbenchSurface::Settings);
 
         let first = vim.record_key_feedback("G".to_string()).unwrap();
         let latest = vim.record_key_feedback("G".to_string()).unwrap();

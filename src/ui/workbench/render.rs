@@ -194,7 +194,7 @@ impl Render for WorkbenchView {
                 None => false,
             };
 
-        let vim_status = self.vim.current_status();
+        let (window_bar_sections, status_bar_sections) = self.shell_bar_sections(cx);
         let mut root = div()
             .debug_selector(|| "workbench-surface".to_string())
             .flex()
@@ -205,32 +205,17 @@ impl Render for WorkbenchView {
             .text_color(appearance.ui.text)
             .line_height(relative(appearance.typography.line_height))
             .child(workbench_titlebar(
-                self.visible_titlebar_info(),
-                self.visible_titlebar_performance(),
+                window_bar_sections,
                 appearance.ui,
                 appearance.style,
-                self.ui_text.get(UiTextKey::CommandPaletteOpenTitle),
-                self.ui_text.get(UiTextKey::CommandSettingsOpenTitle),
-                cx.listener(|this, _, _window, cx| {
-                    let _ = this.run_command(CommandId::GitBranchSwitch);
-                    cx.notify();
-                }),
-                cx.listener(|this, _, _window, cx| {
-                    let _ = this.run_command(CommandId::GitDiffOpen);
-                    cx.notify();
-                }),
-                cx.listener(|this, _, _window, cx| {
-                    let _ = this.run_command(CommandId::CommandPaletteOpen);
-                    cx.notify();
-                }),
-                cx.listener(|this, _, _window, cx| {
-                    let _ = this.run_command(CommandId::SettingsOpen);
-                    cx.notify();
-                }),
             ))
             .child(body)
-            .when_some(vim_status, |root, status| {
-                root.child(vim_status_bar(status, appearance.ui, appearance.style))
+            .when_some(status_bar_sections, |root, sections| {
+                root.child(workbench_status_bar(
+                    sections,
+                    appearance.ui,
+                    appearance.style,
+                ))
             });
         root = root.font_family(appearance.typography.font_family.clone());
         if let Some(active_palette) = self.palette.active_palette.clone() {
@@ -493,60 +478,6 @@ pub(super) fn split_child(child: Div, basis: f32) -> Div {
         .flex_shrink(1.0)
         .overflow_hidden()
         .child(child)
-}
-
-fn vim_status_bar(
-    status: crate::ui::vim::VimStatus,
-    theme: WorkbenchTheme,
-    ui_style: UiStyle,
-) -> Div {
-    let mode_color = match status.mode {
-        WorkbenchVimMode::Normal => theme.accent,
-        WorkbenchVimMode::Insert => theme.success,
-        WorkbenchVimMode::Visual | WorkbenchVimMode::VisualLine => theme.warning,
-        WorkbenchVimMode::Terminal => theme.danger,
-    };
-    let key_feedback = (!status.key_feedback.is_empty()).then(|| status.key_feedback.join(" "));
-    let detail = status
-        .detail
-        .filter(|detail| !detail.eq_ignore_ascii_case(status.mode.label()));
-    div()
-        .debug_selector(|| "vim-status-bar".to_string())
-        .flex()
-        .flex_none()
-        .items_center()
-        .gap(ui_style.spacing.md)
-        .h(ui_style.controls.status_footer_height)
-        .px(ui_style.spacing.lg)
-        .border_t(ui_style.border.hairline)
-        .border_color(theme.border)
-        .bg(theme.tabbar_background)
-        .text_xs()
-        .text_color(theme.text_muted)
-        .child(
-            div()
-                .debug_selector(|| "vim-status-mode".to_string())
-                .rounded(ui_style.radius.compact)
-                .px(ui_style.spacing.md)
-                .bg(mode_color.alpha(0.2))
-                .text_color(mode_color)
-                .child(status.mode.label()),
-        )
-        .child(status.surface.label())
-        .when_some(detail, |bar, detail| {
-            bar.child(div().text_color(theme.text).child(detail))
-        })
-        .when_some(key_feedback, |bar, keys| {
-            bar.child(div().flex_1()).child(
-                div()
-                    .debug_selector(|| "vim-status-keys".to_string())
-                    .rounded(ui_style.radius.compact)
-                    .px(ui_style.spacing.md)
-                    .bg(theme.surface_elevated)
-                    .text_color(theme.text)
-                    .child(keys),
-            )
-        })
 }
 
 fn layout_toml_editor_overlay(

@@ -369,6 +369,9 @@ pub(super) fn format_settings_warning_line(warning: &SettingsLoadWarning) -> Str
         SettingsLoadWarning::InvalidVimValue { field } => {
             format!("Settings vim.{field} is invalid; using default")
         }
+        SettingsLoadWarning::InvalidBarsValue { field, value } => {
+            format!("Bars {field} contains invalid module {value:?}; ignoring it")
+        }
         SettingsLoadWarning::InvalidProjectPanelValue { field } => {
             format!("Settings project_panel.{field} is invalid; using default")
         }

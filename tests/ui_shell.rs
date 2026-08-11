@@ -51,7 +51,7 @@ use yttt::ui::workbench::shell::tabs::{
     WorkbenchTabItem, WorkbenchTabKind, project_tabs, project_tree_toggle_icon,
     project_tree_toggle_tooltip, tab_close_targets, tab_toolbar_icon,
 };
-use yttt::ui::workbench::shell::titlebar::{TitlebarInfo, compact_path_for_titlebar};
+use yttt::ui::workbench::shell::titlebar::compact_path_for_titlebar;
 use yttt::{
     commands::CommandId,
     model::{ids::ProjectId, layout::SplitDirection},
@@ -165,17 +165,27 @@ fn app_window_options_apply_configured_background_effect() {
 }
 
 #[test]
-fn titlebar_info_parts_use_compact_project_metadata() {
-    let info = TitlebarInfo {
-        project_name: "yttt".to_string(),
-        compact_path: Some("/Volumes/.../yttt".to_string()),
-        git_branch: Some("main".to_string()),
-        git_counters: Some("+2 ~4 -1".to_string()),
-    };
+fn shell_bar_defaults_keep_window_identity_and_global_actions_separate() {
+    use yttt::config::bars::{ShellBarModule, ShellBarsSettings};
+
+    let bars = ShellBarsSettings::default();
 
     assert_eq!(
-        info.parts(),
-        vec!["yttt", "/Volumes/.../yttt", "main", "+2 ~4 -1"]
+        bars.window.layout.left,
+        vec![ShellBarModule::ProjectName, ShellBarModule::ProjectPath]
+    );
+    assert!(bars.window.layout.center.is_empty());
+    assert_eq!(
+        &bars.window.layout.right[bars.window.layout.right.len() - 2..],
+        &[ShellBarModule::CommandPalette, ShellBarModule::Settings]
+    );
+    assert!(bars.status.enabled);
+    assert!(bars.status.layout.left.contains(&ShellBarModule::VimMode));
+    assert!(
+        bars.status
+            .layout
+            .right
+            .contains(&ShellBarModule::EditorPosition)
     );
 }
 

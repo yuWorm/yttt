@@ -12,8 +12,9 @@ use crate::{
             input_owner::InputOwnerKind,
         },
         settings::keybinding_display::recorded_keybinding,
+        surface::WorkbenchSurface,
         terminal::pane::TerminalPaneView,
-        vim::{VimCapture, VimSurface, WorkbenchVimMode},
+        vim::{VimCapture, WorkbenchVimMode},
     },
 };
 
@@ -23,12 +24,12 @@ const VIM_KEY_FEEDBACK_TIMEOUT: Duration = Duration::from_millis(1_200);
 
 impl WorkbenchView {
     pub(super) fn sync_vim_controller(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let surface = self.detect_vim_surface(window, cx);
+        let surface = self.detect_workbench_surface(window, cx);
         let capture = self.detect_vim_capture(surface, window, cx);
         self.vim.sync_surface(surface);
         self.vim.set_capture(capture);
 
-        if surface == VimSurface::Editor
+        if surface == WorkbenchSurface::Editor
             && let Some(document) = self.active_editor_document()
         {
             let document = document.read(cx);
@@ -37,7 +38,7 @@ impl WorkbenchView {
             }
         }
 
-        if self.vim.support() == VimModeSetting::Global && surface == VimSurface::Terminal {
+        if self.vim.support() == VimModeSetting::Global && surface == WorkbenchSurface::Terminal {
             let enabled = self.vim.mode() == WorkbenchVimMode::Normal;
             if let Some(pane) = self.active_terminal_pane() {
                 pane.update(cx, |pane, pane_cx| {
@@ -158,32 +159,34 @@ impl WorkbenchView {
         }));
     }
 
-    fn detect_vim_surface(&self, window: &Window, cx: &App) -> VimSurface {
+    fn detect_workbench_surface(&self, window: &Window, cx: &App) -> WorkbenchSurface {
         match self.current_input_owner_registration().kind() {
-            InputOwnerKind::Palette => return VimSurface::Palette,
-            InputOwnerKind::Settings => return VimSurface::Settings,
+            InputOwnerKind::Palette => return WorkbenchSurface::Palette,
+            InputOwnerKind::Settings => return WorkbenchSurface::Settings,
             InputOwnerKind::Dialog | InputOwnerKind::KeybindingRecorder => {
                 return if self.overlays.git_diff_panel.is_some() {
-                    VimSurface::GitDiff
+                    WorkbenchSurface::GitDiff
                 } else {
-                    VimSurface::Dialog
+                    WorkbenchSurface::Dialog
                 };
             }
-            InputOwnerKind::ContextMenu | InputOwnerKind::Popover => return VimSurface::Dialog,
+            InputOwnerKind::ContextMenu | InputOwnerKind::Popover => {
+                return WorkbenchSurface::Dialog;
+            }
             InputOwnerKind::Workspace | InputOwnerKind::Editor => {}
         }
 
         if self.pending_projects_focus {
-            return VimSurface::Projects;
+            return WorkbenchSurface::Projects;
         }
         if self.project.pending_project_tree_focus {
-            return VimSurface::ProjectTree;
+            return WorkbenchSurface::ProjectTree;
         }
         if self.terminal.pending_terminal_focus.is_some() {
-            return VimSurface::Terminal;
+            return WorkbenchSurface::Terminal;
         }
         if self.project.pending_editor_focus_document_id.is_some() {
-            return VimSurface::Editor;
+            return WorkbenchSurface::Editor;
         }
 
         if self.projects_focus_active
@@ -193,33 +196,38 @@ impl WorkbenchView {
                 .as_ref()
                 .is_some_and(|focus_handle| focus_handle.is_focused(window))
         {
-            return VimSurface::Projects;
+            return WorkbenchSurface::Projects;
         }
         if let Some(project_id) = self.workspace.selected_project_id()
             && let Some(tree) = self.project.project_editor_runtime.tree(project_id)
             && tree.read(cx).is_focused(window, cx)
         {
-            return VimSurface::ProjectTree;
+            return WorkbenchSurface::ProjectTree;
         }
         if let Some(pane) = self.active_terminal_pane()
             && pane.read(cx).terminal_is_focused(window, cx)
         {
-            return VimSurface::Terminal;
+            return WorkbenchSurface::Terminal;
         }
         if let Some(document) = self.active_editor_document()
             && document.read(cx).is_focused(window, cx)
         {
-            return VimSurface::Editor;
+            return WorkbenchSurface::Editor;
         }
 
         match self.active_work_item() {
-            Some(WorkItemId::Terminal(_)) => VimSurface::Terminal,
-            Some(WorkItemId::File(_)) => VimSurface::Editor,
-            None => VimSurface::Workspace,
+            Some(WorkItemId::Terminal(_)) => WorkbenchSurface::Terminal,
+            Some(WorkItemId::File(_)) => WorkbenchSurface::Editor,
+            None => WorkbenchSurface::Workspace,
         }
     }
 
-    fn detect_vim_capture(&self, surface: VimSurface, window: &Window, cx: &App) -> VimCapture {
+    fn detect_vim_capture(
+        &self,
+        surface: WorkbenchSurface,
+        window: &Window,
+        cx: &App,
+    ) -> VimCapture {
         match self.current_input_owner_registration().kind() {
             InputOwnerKind::KeybindingRecorder
             | InputOwnerKind::ContextMenu
@@ -230,7 +238,7 @@ impl WorkbenchView {
             }
             _ => {}
         }
-        if surface == VimSurface::Editor
+        if surface == WorkbenchSurface::Editor
             && let Some(document) = self.active_editor_document()
         {
             let document = document.read(cx);
@@ -243,7 +251,7 @@ impl WorkbenchView {
             }
         }
 
-        if surface == VimSurface::Terminal
+        if surface == WorkbenchSurface::Terminal
             && self
                 .active_terminal_pane()
                 .is_some_and(|pane| pane.read(cx).terminal_search_is_active(cx))
@@ -251,7 +259,7 @@ impl WorkbenchView {
             return VimCapture::ForceInsert;
         }
 
-        if surface == VimSurface::ProjectTree
+        if surface == WorkbenchSurface::ProjectTree
             && self
                 .workspace
                 .selected_project_id()
@@ -279,7 +287,7 @@ impl WorkbenchView {
             .any(|input| focused(input, window, cx))
     }
 
-    fn active_editor_document(&self) -> Option<Entity<ProjectEditorDocument>> {
+    pub(super) fn active_editor_document(&self) -> Option<Entity<ProjectEditorDocument>> {
         let WorkItemId::File(document_id) = self.active_work_item()? else {
             return None;
         };
@@ -289,7 +297,7 @@ impl WorkbenchView {
             .cloned()
     }
 
-    fn active_terminal_pane(&self) -> Option<Entity<TerminalPaneView>> {
+    pub(super) fn active_terminal_pane(&self) -> Option<Entity<TerminalPaneView>> {
         let project_id = self.workspace.selected_project_id()?;
         let project = self.workspace.project(project_id)?;
         let pane_id = project
@@ -310,7 +318,7 @@ impl WorkbenchView {
             cx.propagate();
             return;
         }
-        if self.vim.surface() == VimSurface::Terminal
+        if self.vim.surface() == WorkbenchSurface::Terminal
             && let Some(pane) = self.active_terminal_pane()
         {
             pane.update(cx, |pane, pane_cx| {

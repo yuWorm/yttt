@@ -516,6 +516,74 @@ impl WorkbenchView {
         self.save_app_settings_and_refresh_runtime()
     }
 
+    pub fn set_status_bar_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<(), WorkbenchError> {
+        let mut bars = self.app_settings.bars.clone();
+        bars.status.enabled = enabled;
+        save_bars(&self.config_paths, &bars)?;
+        self.app_settings.bars = bars;
+        self.sync_performance_monitoring(cx);
+        Ok(())
+    }
+
+    pub(super) fn settings_bar_input(
+        &mut self,
+        field: SettingsBarField,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(input) = self.settings.settings_bar_inputs.get(&field) {
+            return input.clone();
+        }
+        let modules = match field {
+            SettingsBarField::WindowLeft => &self.app_settings.bars.window.layout.left,
+            SettingsBarField::WindowCenter => &self.app_settings.bars.window.layout.center,
+            SettingsBarField::WindowRight => &self.app_settings.bars.window.layout.right,
+            SettingsBarField::StatusLeft => &self.app_settings.bars.status.layout.left,
+            SettingsBarField::StatusCenter => &self.app_settings.bars.status.layout.center,
+            SettingsBarField::StatusRight => &self.app_settings.bars.status.layout.right,
+        };
+        let value = modules
+            .iter()
+            .map(ShellBarModule::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(value));
+        self.settings
+            .settings_bar_inputs
+            .insert(field, input.clone());
+        input
+    }
+
+    pub(super) fn apply_shell_bar_layout(
+        &mut self,
+        window_values: [String; 3],
+        status_values: [String; 3],
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let mut bars = self.app_settings.bars.clone();
+        bars.window.layout.left = parse_shell_bar_modules(&window_values[0])?;
+        bars.window.layout.center = parse_shell_bar_modules(&window_values[1])?;
+        bars.window.layout.right = parse_shell_bar_modules(&window_values[2])?;
+        bars.status.layout.left = parse_shell_bar_modules(&status_values[0])?;
+        bars.status.layout.center = parse_shell_bar_modules(&status_values[1])?;
+        bars.status.layout.right = parse_shell_bar_modules(&status_values[2])?;
+        if let Some(issue) = bars.validate().into_iter().next() {
+            return Err(format!(
+                "bars.{} contains an invalid or duplicate module '{}'",
+                issue.field, issue.value
+            ));
+        }
+
+        save_bars(&self.config_paths, &bars).map_err(|error| error.to_string())?;
+        self.app_settings.bars = bars;
+        self.sync_performance_monitoring(cx);
+        Ok(())
+    }
+
     pub fn set_terminal_theme_name(
         &mut self,
         theme_name: Option<&str>,
@@ -1147,7 +1215,7 @@ impl WorkbenchView {
 
     fn settings_vim_navigation_active(&self) -> bool {
         self.vim.support() == VimModeSetting::Global
-            && self.vim.surface() == VimSurface::Settings
+            && self.vim.surface() == WorkbenchSurface::Settings
             && self.vim.mode() == WorkbenchVimMode::Normal
     }
 
@@ -2422,6 +2490,22 @@ impl WorkbenchView {
         }
         self.apply_appearance_change(window, cx);
     }
+}
+
+fn parse_shell_bar_modules(value: &str) -> Result<Vec<ShellBarModule>, String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| {
+            let module = ShellBarModule::from_name(name.to_string());
+            if module.is_known() {
+                Ok(module)
+            } else {
+                Err(format!("unknown bar module '{name}'"))
+            }
+        })
+        .collect()
 }
 
 fn window_effect_text_key(effect: WindowBackgroundEffect) -> UiTextKey {

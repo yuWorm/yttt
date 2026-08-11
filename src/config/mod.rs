@@ -16,6 +16,7 @@ pub(crate) fn atomic_write(path: &Path, source: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+pub mod bars;
 pub mod default_layout;
 pub mod keybindings;
 pub mod layout_loader;

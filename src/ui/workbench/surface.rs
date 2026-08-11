@@ -1531,7 +1531,7 @@ impl WorkbenchView {
         {
             self.terminal.pending_terminal_focus = None;
         }
-        let terminal_has_keyboard_focus = self.vim.surface() == VimSurface::Terminal
+        let terminal_has_keyboard_focus = self.vim.surface() == WorkbenchSurface::Terminal
             && pane_view.read(cx).terminal_is_focused(window, cx);
 
         let appearance = self.theme_runtime();

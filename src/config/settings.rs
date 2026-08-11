@@ -5,7 +5,14 @@ use std::{
 };
 
 use super::atomic_write;
-use crate::config::{default_layout::BuiltinAgent, paths::AppConfigPaths};
+use crate::config::{
+    bars::{
+        BarsLoadError, BarsLoadWarning, BarsSaveError, ShellBarsSettings, load_or_create_bars,
+        save_bars,
+    },
+    default_layout::BuiltinAgent,
+    paths::AppConfigPaths,
+};
 use crate::ui::theme::DEFAULT_THEME_NAME;
 
 use yttt_ui::style::UiStyleId;
@@ -25,6 +32,8 @@ pub struct AppSettings {
     pub terminal: TerminalSettings,
     pub editor: EditorSettings,
     pub vim: VimSettings,
+    #[serde(skip)]
+    pub bars: ShellBarsSettings,
     pub project_panel: ProjectPanelSettings,
 }
 
@@ -39,6 +48,7 @@ impl Default for AppSettings {
             terminal: TerminalSettings::default(),
             editor: EditorSettings::default(),
             vim: VimSettings::default(),
+            bars: ShellBarsSettings::default(),
             project_panel: ProjectPanelSettings::default(),
         }
     }
@@ -395,6 +405,7 @@ pub enum SettingsLoadWarning {
     InvalidTerminalValue { field: &'static str },
     InvalidEditorValue { field: &'static str },
     InvalidVimValue { field: &'static str },
+    InvalidBarsValue { field: &'static str, value: String },
     InvalidProjectPanelValue { field: &'static str },
 }
 
@@ -425,6 +436,14 @@ pub enum SettingsLoadError {
         path: PathBuf,
         #[source]
         source: SettingsSaveError,
+    },
+    #[error("{0}")]
+    LoadBars(#[from] BarsLoadError),
+    #[error("failed to persist migrated bars at {path}: {source}")]
+    PersistBarsMigration {
+        path: PathBuf,
+        #[source]
+        source: BarsSaveError,
     },
 }
 
@@ -457,7 +476,39 @@ pub fn load_or_create_settings(
     })?;
 
     let mut warnings = Vec::new();
-    let (settings, migrated) = parse_settings_source(&source, &path, &mut warnings);
+    let (mut settings, migrated, legacy_bars) =
+        parse_settings_source(&source, &path, &mut warnings);
+    if !paths.bars_file().exists()
+        && let Some(mut legacy_bars) = legacy_bars
+    {
+        warnings.extend(legacy_bars.validate().into_iter().map(|issue| {
+            SettingsLoadWarning::InvalidBarsValue {
+                field: issue.field,
+                value: issue.value,
+            }
+        }));
+        save_bars(paths, &legacy_bars).map_err(|source| {
+            SettingsLoadError::PersistBarsMigration {
+                path: paths.bars_file(),
+                source,
+            }
+        })?;
+    }
+    let loaded_bars = load_or_create_bars(paths)?;
+    warnings.extend(
+        loaded_bars
+            .warnings
+            .into_iter()
+            .map(|warning| match warning {
+                BarsLoadWarning::InvalidToml { path, message } => {
+                    SettingsLoadWarning::InvalidToml { path, message }
+                }
+                BarsLoadWarning::InvalidValue { field, value } => {
+                    SettingsLoadWarning::InvalidBarsValue { field, value }
+                }
+            }),
+    );
+    settings.bars = loaded_bars.settings;
     let settings = validate_settings(settings, &mut warnings);
     if migrated {
         save_settings(paths, &settings).map_err(|source| SettingsLoadError::PersistMigration {
@@ -473,7 +524,7 @@ fn parse_settings_source(
     source: &str,
     path: &Path,
     warnings: &mut Vec<SettingsLoadWarning>,
-) -> (AppSettings, bool) {
+) -> (AppSettings, bool, Option<ShellBarsSettings>) {
     let mut value = match toml::from_str::<toml::Value>(source) {
         Ok(value) => value,
         Err(error) => {
@@ -481,24 +532,38 @@ fn parse_settings_source(
                 path: path.to_path_buf(),
                 message: error.to_string(),
             });
-            return (AppSettings::default(), false);
+            return (AppSettings::default(), false, None);
         }
     };
 
-    let migrated = normalize_vim_settings(&mut value, warnings);
+    let legacy_bars_value = value
+        .as_table_mut()
+        .and_then(|settings| settings.remove("bars"));
+    let legacy_bars_present = legacy_bars_value.is_some();
+    let legacy_bars = legacy_bars_value.and_then(|value| match value.try_into() {
+        Ok(settings) => Some(settings),
+        Err(error) => {
+            warnings.push(SettingsLoadWarning::InvalidToml {
+                path: path.to_path_buf(),
+                message: format!("invalid legacy bars configuration: {error}"),
+            });
+            None
+        }
+    });
+    let migrated = normalize_vim_settings(&mut value, warnings) || legacy_bars_present;
     normalize_general_settings(&mut value, warnings);
     normalize_window_settings(&mut value, warnings);
     normalize_theme_settings(&mut value, warnings);
     normalize_editor_settings(&mut value, warnings);
 
     match value.try_into::<AppSettings>() {
-        Ok(settings) => (settings, migrated),
+        Ok(settings) => (settings, migrated, legacy_bars),
         Err(error) => {
             warnings.push(SettingsLoadWarning::InvalidToml {
                 path: path.to_path_buf(),
                 message: error.to_string(),
             });
-            (AppSettings::default(), false)
+            (AppSettings::default(), false, legacy_bars)
         }
     }
 }
