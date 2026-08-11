@@ -18,6 +18,13 @@ use crate::{
     },
 };
 
+const FIXED_WINDOW_IDENTITY_MODULES: &[ShellBarModule] = &[
+    ShellBarModule::ProjectName,
+    ShellBarModule::ProjectPath,
+    ShellBarModule::GitBranch,
+    ShellBarModule::GitChanges,
+];
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum BarTone {
     #[default]
@@ -89,7 +96,7 @@ struct UpdateBarInfo {
 
 struct ShellBarData {
     project_name: String,
-    project_path: Option<(String, String)>,
+    project_path: Option<String>,
     active_item: Option<ActiveItemBarInfo>,
     editor: Option<EditorBarInfo>,
     terminal: Option<TerminalBarInfo>,
@@ -109,12 +116,15 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) -> (BarSections, Option<BarSections>) {
         let data = self.shell_bar_data(cx);
-        let window = self.render_bar_sections(
+        let mut window = self.render_bar_sections(
             BarHost::Window,
             &self.app_settings.bars.window.layout,
             &data,
             cx,
         );
+        let mut identity = self.render_fixed_window_identity(&data, cx);
+        identity.append(&mut window.left);
+        window.left = identity;
         let status = self.app_settings.bars.status.enabled.then(|| {
             self.render_bar_sections(
                 BarHost::Status,
@@ -140,6 +150,33 @@ impl WorkbenchView {
         }
     }
 
+    fn render_fixed_window_identity(
+        &self,
+        data: &ShellBarData,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        FIXED_WINDOW_IDENTITY_MODULES
+            .iter()
+            .enumerate()
+            .filter_map(|(index, module)| {
+                let settings = BarModuleSettings {
+                    max_width: (module == &ShellBarModule::ProjectPath).then_some(480.0),
+                    hide_when_empty: true,
+                };
+                let view = bar_module_view(module, data, settings)?;
+                Some(render_bar_module(
+                    BarHost::Window,
+                    "identity",
+                    index,
+                    module,
+                    settings,
+                    view,
+                    cx,
+                ))
+            })
+            .collect()
+    }
+
     fn render_bar_section(
         &self,
         host: BarHost,
@@ -152,6 +189,7 @@ impl WorkbenchView {
         modules
             .iter()
             .enumerate()
+            .filter(|(_, module)| host != BarHost::Window || !module.is_fixed_window_identity())
             .filter_map(|(index, module)| {
                 let settings = layout.module_settings(module);
                 let view = bar_module_view(module, data, settings)?;
@@ -175,11 +213,7 @@ impl WorkbenchView {
                     .to_string()
             });
         let project_path = selected_project.map(|project| {
-            let full = project.location.display_path();
-            (
-                super::shell::titlebar::compact_path_for_titlebar(&full),
-                full,
-            )
+            super::shell::titlebar::display_path_for_titlebar(&project.location.display_path())
         });
         let git_status = self
             .workspace
@@ -314,9 +348,9 @@ fn bar_module_view(
             view
         }
         ShellBarModule::ProjectPath => {
-            let (compact, full) = data.project_path.as_ref()?;
-            let mut view = BarModuleView::text(compact.clone());
-            view.tooltip = Some(full.clone());
+            let path = data.project_path.as_ref()?;
+            let mut view = BarModuleView::text(path.clone());
+            view.tooltip = Some(path.clone());
             view
         }
         ShellBarModule::ActiveItem => {

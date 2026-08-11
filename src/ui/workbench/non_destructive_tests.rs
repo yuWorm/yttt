@@ -554,7 +554,9 @@ fn agent_exit_notification_does_not_reenter_workbench_entity(cx: &mut TestAppCon
 }
 
 #[gpui::test]
-fn window_bar_renders_branch_and_changes_actions(cx: &mut TestAppContext) {
+fn window_bar_keeps_project_identity_and_git_fixed_outside_configured_modules(
+    cx: &mut TestAppContext,
+) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
@@ -568,6 +570,7 @@ fn window_bar_renders_branch_and_changes_actions(cx: &mut TestAppContext) {
     let (_root, cx) = cx.add_window_view(|_, _| {
         let mut root =
             WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths);
+        root.app_settings.bars.window.layout = Default::default();
         root.project.project_git_statuses.insert(
             project_id,
             crate::runtime::git_status::parse_git_status_porcelain("## main\n M src/main.rs\n"),
@@ -576,6 +579,8 @@ fn window_bar_renders_branch_and_changes_actions(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
 
+    assert!(cx.debug_bounds("window-bar-project-name").is_some());
+    assert!(cx.debug_bounds("window-bar-project-path").is_some());
     assert!(cx.debug_bounds("window-bar-git-branch").is_some());
     assert!(cx.debug_bounds("window-bar-git-changes").is_some());
 }

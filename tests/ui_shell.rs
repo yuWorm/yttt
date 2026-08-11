@@ -51,7 +51,7 @@ use yttt::ui::workbench::shell::tabs::{
     WorkbenchTabItem, WorkbenchTabKind, project_tabs, project_tree_toggle_icon,
     project_tree_toggle_tooltip, tab_close_targets, tab_toolbar_icon,
 };
-use yttt::ui::workbench::shell::titlebar::compact_path_for_titlebar;
+use yttt::ui::workbench::shell::titlebar::display_path_for_titlebar;
 use yttt::{
     commands::CommandId,
     model::{ids::ProjectId, layout::SplitDirection},
@@ -165,16 +165,29 @@ fn app_window_options_apply_configured_background_effect() {
 }
 
 #[test]
-fn shell_bar_defaults_keep_window_identity_and_global_actions_separate() {
+fn shell_bar_defaults_keep_fixed_identity_out_of_configurable_window_modules() {
     use yttt::config::bars::{ShellBarModule, ShellBarsSettings};
 
     let bars = ShellBarsSettings::default();
+    let configured_window_modules = bars
+        .window
+        .layout
+        .left
+        .iter()
+        .chain(&bars.window.layout.center)
+        .chain(&bars.window.layout.right)
+        .collect::<Vec<_>>();
 
-    assert_eq!(
-        bars.window.layout.left,
-        vec![ShellBarModule::ProjectName, ShellBarModule::ProjectPath]
-    );
+    assert!(bars.window.layout.left.is_empty());
     assert!(bars.window.layout.center.is_empty());
+    for fixed in [
+        ShellBarModule::ProjectName,
+        ShellBarModule::ProjectPath,
+        ShellBarModule::GitBranch,
+        ShellBarModule::GitChanges,
+    ] {
+        assert!(!configured_window_modules.contains(&&fixed));
+    }
     assert_eq!(
         &bars.window.layout.right[bars.window.layout.right.len() - 2..],
         &[ShellBarModule::CommandPalette, ShellBarModule::Settings]
@@ -190,16 +203,20 @@ fn shell_bar_defaults_keep_window_identity_and_global_actions_separate() {
 }
 
 #[test]
-fn titlebar_compacts_windows_paths_without_verbatim_prefixes() {
+fn titlebar_preserves_complete_windows_paths_without_verbatim_prefixes() {
     assert_eq!(
-        compact_path_for_titlebar(r"\\?\D:\work\yttt"),
+        display_path_for_titlebar(r"\\?\D:\work\yttt"),
         r"D:\work\yttt"
     );
     assert_eq!(
-        compact_path_for_titlebar(
+        display_path_for_titlebar(
             r"\\?\C:\Users\example\Projects\Idea\very-long-project-directory"
         ),
-        r"...\Idea\very-long-project-directory"
+        r"C:\Users\example\Projects\Idea\very-long-project-directory"
+    );
+    assert_eq!(
+        display_path_for_titlebar(r"\\?\UNC\server\share\project"),
+        r"\\server\share\project"
     );
 }
 

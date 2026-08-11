@@ -548,7 +548,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSearchTheme => "Search theme...",
         UiTextKey::SettingsWindowBarModules => "Window Bar modules",
         UiTextKey::SettingsWindowBarModulesDescription => {
-            "Comma-separated module IDs for the left, center, and right regions."
+            "Additional modules for the left, center, and right regions. Project identity and Git status stay fixed."
         }
         UiTextKey::SettingsStatusBarEnabled => "Show Status Bar",
         UiTextKey::SettingsStatusBarEnabledDescription => {

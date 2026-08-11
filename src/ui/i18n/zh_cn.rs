@@ -488,7 +488,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSearchTheme => "搜索主题...",
         UiTextKey::SettingsWindowBarModules => "窗口栏模块",
         UiTextKey::SettingsWindowBarModulesDescription => {
-            "分别填写左、中、右区域的模块 ID，并用英文逗号分隔。"
+            "配置左、中、右区域的附加模块；项目标识和 Git 状态固定显示。"
         }
         UiTextKey::SettingsStatusBarEnabled => "显示状态栏",
         UiTextKey::SettingsStatusBarEnabledDescription => "在工作区底部显示紧凑的通用状态栏。",

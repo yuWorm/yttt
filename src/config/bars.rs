@@ -89,6 +89,17 @@ impl ShellBarsSettings {
     }
 
     pub fn validate(&mut self) -> Vec<BarSettingsIssue> {
+        for section in [
+            &mut self.window.layout.left,
+            &mut self.window.layout.center,
+            &mut self.window.layout.right,
+        ] {
+            section.retain(|module| !module.is_fixed_window_identity());
+        }
+        self.window
+            .layout
+            .modules
+            .retain(|name, _| !ShellBarModule::from_name(name.clone()).is_fixed_window_identity());
         let mut issues = Vec::new();
         validate_layout(&mut self.window.layout, "window", &mut issues);
         validate_layout(&mut self.status.layout, "status", &mut issues);
@@ -185,7 +196,7 @@ impl Default for WindowBarSettings {
     fn default() -> Self {
         Self {
             layout: BarLayoutSettings {
-                left: vec![ShellBarModule::ProjectName, ShellBarModule::ProjectPath],
+                left: Vec::new(),
                 center: Vec::new(),
                 right: vec![
                     ShellBarModule::ProjectsCount,
@@ -196,8 +207,6 @@ impl Default for WindowBarSettings {
                     ShellBarModule::AppMemory,
                     ShellBarModule::SystemCpu,
                     ShellBarModule::SystemMemory,
-                    ShellBarModule::GitBranch,
-                    ShellBarModule::GitChanges,
                     ShellBarModule::CommandPalette,
                     ShellBarModule::Settings,
                 ],
@@ -392,6 +401,13 @@ impl ShellBarModule {
 
     pub fn is_known(&self) -> bool {
         !matches!(self, Self::Unknown(_))
+    }
+
+    pub fn is_fixed_window_identity(&self) -> bool {
+        matches!(
+            self,
+            Self::ProjectName | Self::ProjectPath | Self::GitBranch | Self::GitChanges
+        )
     }
 }
 

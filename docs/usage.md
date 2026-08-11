@@ -237,9 +237,9 @@ shared without carrying unrelated application preferences. These are the complet
 
 ```toml
 [window]
-left = ["project-name", "project-path"]
+left = []
 center = []
-right = ["projects-count", "terminals-count", "tabs-count", "editors-count", "app-cpu", "app-memory", "system-cpu", "system-memory", "git-branch", "git-changes", "command-palette", "settings"]
+right = ["projects-count", "terminals-count", "tabs-count", "editors-count", "app-cpu", "app-memory", "system-cpu", "system-memory", "command-palette", "settings"]
 
 [status]
 enabled = true
@@ -265,6 +265,11 @@ Valid width ranges are 200–520 px for the right tree and 160–420 px for the 
 Window Bar and Status Bar module order can be edited under **Settings → Appearance → Window &
 status bars** or directly in `bars.toml`. Both bars use independent `left`, `center`, and `right`
 arrays. The same Settings page shows the standalone file path.
+
+The Window Bar always keeps the project name, complete project path, Git branch, and Git change
+summary together on the left. These identity modules cannot be hidden, moved, duplicated, or
+restyled by the Window Bar arrays; entries for `project-name`, `project-path`, `git-branch`, and
+`git-changes` in `[window]` are ignored. The same module IDs remain configurable in the Status Bar.
 Available module IDs are:
 
 - Workspace: `project-name`, `project-path`, `active-item`, `surface`
@@ -284,7 +289,7 @@ can be overridden with a module table; width accepts 24–640 px:
 max_width = 320
 hide_when_empty = true
 
-[window.modules.git-branch]
+[window.modules.app-memory]
 max_width = 180
 hide_when_empty = true
 ```

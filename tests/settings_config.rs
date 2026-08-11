@@ -695,8 +695,8 @@ fn shell_bar_layout_and_module_options_round_trip_in_standalone_file() {
     let paths = AppConfigPaths::from_config_dir(dir.path());
     let settings = AppSettings::default();
     let mut bars = ShellBarsSettings::default();
-    bars.window.layout.left = vec![ShellBarModule::ProjectName, ShellBarModule::ActiveItem];
-    bars.window.layout.center = vec![ShellBarModule::GitBranch];
+    bars.window.layout.left = vec![ShellBarModule::ActiveItem];
+    bars.window.layout.center = vec![ShellBarModule::Surface];
     bars.window.layout.right = vec![ShellBarModule::Settings];
     bars.status.enabled = false;
     bars.status.layout.modules.insert(
@@ -721,7 +721,7 @@ fn shell_bar_layout_and_module_options_round_trip_in_standalone_file() {
 }
 
 #[test]
-fn invalid_shell_bar_modules_are_removed_and_aliases_are_canonicalized() {
+fn invalid_fixed_and_unknown_window_modules_are_removed_and_aliases_are_canonicalized() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
     std::fs::create_dir_all(paths.config_dir()).unwrap();
@@ -745,10 +745,7 @@ max_width = 120.0
 
     let loaded = load_or_create_settings(&paths).unwrap();
 
-    assert_eq!(
-        loaded.settings.bars.window.layout.left,
-        vec![ShellBarModule::ProjectName]
-    );
+    assert!(loaded.settings.bars.window.layout.left.is_empty());
     assert_eq!(
         loaded.settings.bars.window.layout.center,
         vec![ShellBarModule::ActiveItem]
@@ -757,18 +754,15 @@ max_width = 120.0
         loaded.settings.bars.window.layout.right,
         vec![ShellBarModule::Settings]
     );
-    assert_eq!(
+    assert!(
         loaded
             .settings
             .bars
             .window
             .layout
             .modules
-            .get("project-path"),
-        Some(&BarModuleSettings {
-            max_width: None,
-            hide_when_empty: false,
-        })
+            .get("project-path")
+            .is_none()
     );
     assert!(
         loaded
@@ -786,13 +780,6 @@ max_width = 120.0
             field: "window.left",
             value,
         } if value == "missing-module"
-    )));
-    assert!(loaded.warnings.iter().any(|warning| matches!(
-        warning,
-        SettingsLoadWarning::InvalidBarsValue {
-            field: "window.center",
-            value,
-        } if value == "project-name"
     )));
 }
 
@@ -830,7 +817,7 @@ hide_when_empty = false
     assert!(!loaded.settings.bars.status.enabled);
     assert_eq!(
         loaded.settings.bars.window.layout.left,
-        vec![ShellBarModule::ProjectName, ShellBarModule::ActiveItem]
+        vec![ShellBarModule::ActiveItem]
     );
     assert!(loaded.warnings.is_empty());
     let settings_source = std::fs::read_to_string(paths.settings_file()).unwrap();
