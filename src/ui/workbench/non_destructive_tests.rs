@@ -1314,6 +1314,87 @@ fn agent_state_transitions_enqueue_attention_and_completion_notifications(cx: &m
 }
 
 #[gpui::test]
+fn failed_agent_start_does_not_leave_a_running_snapshot(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir_all(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut layout = dev_fixture_layout();
+    layout.project.default_tab = Some("agent".to_string());
+    let pane = layout
+        .tabs
+        .iter_mut()
+        .find(|tab| tab.id == "agent")
+        .unwrap()
+        .layout
+        .find_pane_mut("codex")
+        .unwrap();
+    pane.command = "/definitely/not/a/real/path/codex".to_string();
+    pane.execution_mode = crate::model::layout::TerminalExecutionMode::Command;
+    pane.exit_behavior = ProcessExitBehavior::ManualRestart;
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(local_project(project_path), layout)
+        .unwrap();
+    workspace.select_tab("agent").unwrap();
+    let view_project_id = project_id.clone();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| {
+            let mut root =
+                WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths);
+            root.terminal.start_processes = true;
+            root
+        });
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        ComponentRoot::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    cx.run_until_parked();
+
+    cx.update(|_, app| {
+        let root = root.read(app);
+        let pane_state = root
+            .workspace
+            .project(&view_project_id)
+            .unwrap()
+            .tab_state("agent")
+            .unwrap()
+            .pane_states
+            .iter()
+            .find(|pane| pane.pane_id == "codex")
+            .unwrap();
+        assert_ne!(pane_state.process_state, PaneProcessState::Running);
+        assert!(pane_state.agent_snapshot.is_none());
+        assert!(
+            root.agent_manager
+                .retained_snapshots()
+                .iter()
+                .all(|(_, snapshot)| !matches!(
+                    snapshot.process_state,
+                    yttt_agent_core::AgentProcessState::Starting
+                        | yttt_agent_core::AgentProcessState::Running
+                ))
+        );
+        assert!(
+            !root
+                .terminal
+                .terminal_panes
+                .get(&terminal_pane_key(
+                    view_project_id.as_str(),
+                    "agent",
+                    "codex",
+                ))
+                .unwrap()
+                .read(app)
+                .is_running()
+        );
+    });
+}
+
+#[gpui::test]
 fn killed_detected_agent_clears_sidebar_snapshot_without_notification(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();

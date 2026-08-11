@@ -4,12 +4,16 @@ use gpui::{App, Context, Window};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use yttt_agent_core::AgentExitReason;
 
-use super::{WorkbenchView, combine_load_messages, state::terminal::AgentProcessObservation};
+use super::{
+    WorkbenchView, combine_load_messages, helpers::terminal_pane_key,
+    state::terminal::AgentProcessObservation,
+};
 use crate::{
     config::default_layout::BuiltinAgent,
     model::ids::ProjectId,
     runtime::{
         agent::{AgentProcessRecord, classify_agent_process, detect_agent_processes_by_root},
+        agent_hooks::AgentHookRequest,
         agent_manager::AgentPaneAddress,
     },
 };
@@ -41,10 +45,9 @@ impl WorkbenchView {
             Some(cx.spawn_in(window, async move |this, cx| {
                 let mut system = System::new();
                 loop {
-                    let probes = match this.update_in(cx, |view, window, cx| {
-                        view.apply_agent_hook_requests(window, cx);
-                        view.agent_process_probes(cx)
-                    }) {
+                    let probes = match this
+                        .update_in(cx, |view, _window, cx| view.agent_process_probes(cx))
+                    {
                         Ok(probes) => probes,
                         Err(_) => break,
                     };
@@ -61,6 +64,7 @@ impl WorkbenchView {
                     if this
                         .update_in(cx, |view, window, cx| {
                             view.apply_agent_process_scan(&detected, window, cx);
+                            view.apply_agent_hook_requests(window, cx);
                         })
                         .is_err()
                     {
@@ -90,10 +94,39 @@ impl WorkbenchView {
             })
             .collect()
     }
+    fn agent_hook_request_belongs_to_live_pane(
+        &self,
+        request: &AgentHookRequest,
+        cx: &App,
+    ) -> bool {
+        let key = terminal_pane_key(
+            &request.address.project_id,
+            &request.address.tab_id,
+            &request.address.pane_id,
+        );
+        let Some(pane) = self.terminal.terminal_panes.get(&key) else {
+            return false;
+        };
+        let pane = pane.read(cx);
+        hook_request_belongs_to_pane(
+            request,
+            pane.matches_agent_pane_address(&request.address),
+            pane.generation(),
+            pane.is_running(),
+            pane.agent_instance_id().is_some(),
+            self.terminal
+                .agent_process_observations
+                .get(&request.address),
+        )
+    }
+
     fn apply_agent_hook_requests(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let requests = self.agent_manager.drain_hook_requests();
         let mut changed = false;
         for request in requests {
+            if !self.agent_hook_request_belongs_to_live_pane(&request, cx) {
+                continue;
+            }
             match self.agent_manager.ingest_hook_request(request) {
                 Ok(Some((address, snapshot))) => {
                     if let Err(error) =
@@ -289,6 +322,23 @@ impl WorkbenchView {
     }
 }
 
+fn hook_request_belongs_to_pane(
+    request: &AgentHookRequest,
+    pane_address_matches: bool,
+    pane_generation: u64,
+    pane_running: bool,
+    managed_agent: bool,
+    observation: Option<&AgentProcessObservation>,
+) -> bool {
+    if !pane_running || !pane_address_matches || pane_generation != request.generation {
+        return false;
+    }
+    managed_agent
+        || observation.is_some_and(|observation| {
+            observation.agent == request.source && observation.generation == request.generation
+        })
+}
+
 fn scan_agent_processes(system: &mut System, root_pids: &[u32]) -> HashMap<u32, BuiltinAgent> {
     if root_pids.is_empty() {
         return HashMap::new();
@@ -310,6 +360,91 @@ fn scan_agent_processes(system: &mut System, root_pids: &[u32]) -> HashMap<u32, 
         })
         .collect::<Vec<_>>();
     detect_agent_processes_by_root(root_pids, &processes)
+}
+
+#[cfg(test)]
+mod hook_ownership_tests {
+    use serde_json::Value;
+
+    use super::*;
+
+    fn request(generation: u64, source: BuiltinAgent) -> AgentHookRequest {
+        AgentHookRequest {
+            address: AgentPaneAddress::new("project", "tab", "pane"),
+            generation,
+            source,
+            event: "event".to_string(),
+            payload: Value::Null,
+        }
+    }
+
+    #[test]
+    fn hook_request_requires_the_live_pane_generation() {
+        let request = request(7, BuiltinAgent::Codex);
+        let observation = AgentProcessObservation {
+            agent: BuiltinAgent::Codex,
+            generation: 7,
+            missed_samples: 0,
+        };
+
+        assert!(hook_request_belongs_to_pane(
+            &request,
+            true,
+            7,
+            true,
+            false,
+            Some(&observation),
+        ));
+        assert!(!hook_request_belongs_to_pane(
+            &request,
+            true,
+            8,
+            true,
+            false,
+            Some(&observation),
+        ));
+        assert!(!hook_request_belongs_to_pane(
+            &request,
+            false,
+            7,
+            true,
+            false,
+            Some(&observation),
+        ));
+        assert!(!hook_request_belongs_to_pane(
+            &request,
+            true,
+            7,
+            false,
+            false,
+            Some(&observation),
+        ));
+    }
+
+    #[test]
+    fn shell_hook_requires_a_matching_detected_process() {
+        let request = request(7, BuiltinAgent::Codex);
+        let wrong_provider = AgentProcessObservation {
+            agent: BuiltinAgent::Claude,
+            generation: 7,
+            missed_samples: 0,
+        };
+
+        assert!(!hook_request_belongs_to_pane(
+            &request, true, 7, true, false, None,
+        ));
+        assert!(!hook_request_belongs_to_pane(
+            &request,
+            true,
+            7,
+            true,
+            false,
+            Some(&wrong_provider),
+        ));
+        assert!(hook_request_belongs_to_pane(
+            &request, true, 7, true, true, None,
+        ));
+    }
 }
 
 #[cfg(all(test, unix))]

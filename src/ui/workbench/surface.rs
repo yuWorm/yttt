@@ -1405,6 +1405,10 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<TerminalPaneView> {
+        let key = terminal_pane_key(&context.project_id, &context.tab_id, &context.pane.id);
+        if let Some(pane_view) = self.terminal.terminal_panes.get(&key) {
+            return pane_view.clone();
+        }
         let project_id = ProjectId::new(&context.project_id);
         context.ssh =
             self.workspace
@@ -1442,10 +1446,6 @@ impl WorkbenchView {
         {
             self.load_error = Some(error.to_string());
         }
-        let key = terminal_pane_key(&context.project_id, &context.tab_id, &context.pane.id);
-        if let Some(pane_view) = self.terminal.terminal_panes.get(&key) {
-            return pane_view.clone();
-        }
 
         let project_id = context.project_id.clone();
         let tab_id = context.tab_id.clone();
@@ -1453,38 +1453,41 @@ impl WorkbenchView {
         let terminal_config = self.theme_runtime().to_terminal_config();
         let theme = self.theme_runtime().ui;
         let start_processes = self.terminal.start_processes;
-        let pane_view = cx.new(|cx| {
-            if start_processes {
-                TerminalPaneView::new(context, terminal_config, theme, cx)
-            } else {
+        let pane_view = if start_processes {
+            cx.new(|_| TerminalPaneView::new_deferred(context, terminal_config, theme))
+        } else {
+            cx.new(|cx| {
                 TerminalPaneView::new_without_processes(context, terminal_config, theme, cx)
-            }
-        });
-        if pane_view.read(cx).is_running()
-            && let Err(error) =
-                self.workspace
-                    .mark_pane_running(&ProjectId::new(&project_id), &tab_id, &pane_id)
-        {
-            self.load_error = Some(error.to_string());
-        }
-        let running_agent = pane_view.read(cx).is_running().then(|| {
-            (
-                pane_view.read(cx).agent_instance_id().cloned(),
-                pane_view.read(cx).generation(),
-            )
-        });
-        if let Some((Some(instance_id), generation)) = running_agent
-            && let Some((address, snapshot)) =
-                self.agent_manager.process_started(&instance_id, generation)
-            && let Err(error) = self.record_agent_runtime_snapshot(address, snapshot)
-        {
-            self.load_error = Some(error.to_string());
-        }
+            })
+        };
         let subscription = cx.subscribe_in(&pane_view, window, Self::on_terminal_pane_event);
         self.terminal
             .terminal_pane_subscriptions
             .insert(key.clone(), subscription);
         self.terminal.terminal_panes.insert(key, pane_view.clone());
+        if start_processes {
+            pane_view.update(cx, |pane, cx| {
+                pane.start_terminal(cx);
+            });
+        } else {
+            if let Err(error) =
+                self.workspace
+                    .mark_pane_running(&ProjectId::new(&project_id), &tab_id, &pane_id)
+            {
+                self.load_error = Some(error.to_string());
+            }
+            let running_agent = (
+                pane_view.read(cx).agent_instance_id().cloned(),
+                pane_view.read(cx).generation(),
+            );
+            if let (Some(instance_id), generation) = running_agent
+                && let Some((address, snapshot)) =
+                    self.agent_manager.process_started(&instance_id, generation)
+                && let Err(error) = self.record_agent_runtime_snapshot(address, snapshot)
+            {
+                self.load_error = Some(error.to_string());
+            }
+        }
         self.sync_agent_process_monitoring(window, cx);
         pane_view
     }
@@ -1758,7 +1761,7 @@ impl WorkbenchView {
 
     pub(super) fn on_terminal_pane_event(
         &mut self,
-        _pane: &Entity<TerminalPaneView>,
+        pane: &Entity<TerminalPaneView>,
         event: &TerminalPaneEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1783,8 +1786,36 @@ impl WorkbenchView {
                 }
                 cx.notify();
             }
-            TerminalPaneEvent::IoError { message, .. } => {
+            TerminalPaneEvent::StartFailed(event) => {
+                self.load_error = Some(event.message.clone());
+                if let Some(instance_id) = &event.agent_instance_id
+                    && let Some(address) = self
+                        .agent_manager
+                        .process_start_failed(instance_id, event.generation)
+                    && let Err(error) = self.workspace.clear_agent_snapshot(
+                        &ProjectId::new(&address.project_id),
+                        &address.tab_id,
+                        &address.pane_id,
+                    )
+                {
+                    self.load_error =
+                        combine_load_messages(self.load_error.take(), Some(error.to_string()));
+                }
+                if let Some(error) = self.agent_manager.take_error() {
+                    self.load_error = combine_load_messages(self.load_error.take(), Some(error));
+                }
+                cx.notify();
+            }
+            TerminalPaneEvent::IoError { message, fatal, .. } => {
                 self.load_error = Some(message.clone());
+                if *fatal {
+                    let pane = pane.clone();
+                    cx.defer_in(window, move |_, _window, cx| {
+                        pane.update(cx, |pane, cx| {
+                            pane.terminate_after_fatal_io(cx);
+                        });
+                    });
+                }
                 cx.notify();
             }
             TerminalPaneEvent::AgentStatusFrame { frame, .. } => {
@@ -1819,9 +1850,16 @@ impl WorkbenchView {
                         .process_exited(instance_id, event.generation, exit)
                     {
                         Some(AgentPaneExitOutcome::Snapshot { address, snapshot }) => {
-                            if let Err(error) =
+                            let result = if snapshot.view_state() == AgentViewState::Failed {
+                                self.workspace.clear_agent_snapshot(
+                                    &ProjectId::new(&address.project_id),
+                                    &address.tab_id,
+                                    &address.pane_id,
+                                )
+                            } else {
                                 self.record_agent_runtime_snapshot(address, snapshot)
-                            {
+                            };
+                            if let Err(error) = result {
                                 self.load_error = Some(error.to_string());
                             }
                         }

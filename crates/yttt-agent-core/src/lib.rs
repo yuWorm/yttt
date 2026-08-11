@@ -139,6 +139,10 @@ mod tests {
             },
             5,
         ));
+        let child = &reducer.snapshot().children[0];
+        assert_eq!(child.name.as_deref(), Some("Reviewer"));
+        assert_eq!(child.primary_text(), "Review event mapping");
+        assert_eq!(child.turn_state, AgentTurnState::Working);
         assert!(reducer.apply(
             1,
             AgentEventKind::ChildFinished {
@@ -147,12 +151,27 @@ mod tests {
             },
             6,
         ));
+        assert!(reducer.snapshot().children.is_empty());
 
-        let child = &reducer.snapshot().children[0];
-        assert_eq!(child.name.as_deref(), Some("Reviewer"));
-        assert_eq!(child.primary_text(), "Review event mapping");
-        assert_eq!(child.turn_state, AgentTurnState::Completed);
-        assert!(child.current_action.is_none());
+        assert!(reducer.apply(
+            1,
+            AgentEventKind::ChildStarted {
+                child: ChildAgentDescriptor {
+                    id: "child-2".to_string(),
+                    name: None,
+                    task: None,
+                },
+            },
+            7,
+        ));
+        assert!(reducer.apply(
+            1,
+            AgentEventKind::TurnFinished {
+                outcome: TurnOutcome::Completed,
+            },
+            8,
+        ));
+        assert!(reducer.snapshot().children.is_empty());
     }
     #[test]
     fn reducer_generates_updates_and_restores_session_titles() {

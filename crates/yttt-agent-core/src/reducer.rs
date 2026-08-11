@@ -160,16 +160,7 @@ impl AgentReducer {
         self.snapshot.current_action = None;
         self.snapshot.waiting_reason = None;
         self.snapshot.waiting_message = None;
-        for child in &mut self.snapshot.children {
-            if !matches!(
-                child.turn_state,
-                AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
-            ) {
-                child.turn_state = outcome;
-                child.current_action = None;
-                child.updated_at = now;
-            }
-        }
+        self.snapshot.children.clear();
         self.snapshot.updated_at = now;
         true
     }
@@ -197,6 +188,7 @@ impl AgentReducer {
                     }
                     self.snapshot.task = Some(task);
                 }
+                self.snapshot.children.clear();
                 self.snapshot.current_action = None;
                 self.snapshot.last_action_failed = false;
                 self.clear_waiting();
@@ -235,6 +227,7 @@ impl AgentReducer {
             AgentEventKind::TurnFinished { outcome } => {
                 self.snapshot.current_action = None;
                 self.clear_waiting();
+                self.snapshot.children.clear();
                 let state = match outcome {
                     TurnOutcome::Completed => AgentTurnState::Completed,
                     TurnOutcome::Failed => AgentTurnState::Failed,
@@ -248,8 +241,8 @@ impl AgentReducer {
             AgentEventKind::ChildUpdated { child_id, update } => {
                 self.child_updated(&child_id, update, now);
             }
-            AgentEventKind::ChildFinished { child_id, outcome } => {
-                self.child_finished(&child_id, outcome, now);
+            AgentEventKind::ChildFinished { child_id, .. } => {
+                self.child_finished(&child_id);
             }
         }
         self.snapshot.updated_at = now;
@@ -353,22 +346,10 @@ impl AgentReducer {
         child.updated_at = now;
     }
 
-    fn child_finished(&mut self, child_id: &str, outcome: TurnOutcome, now: u64) {
-        let Some(child) = self
-            .snapshot
+    fn child_finished(&mut self, child_id: &str) {
+        self.snapshot
             .children
-            .iter_mut()
-            .find(|candidate| candidate.id == child_id)
-        else {
-            return;
-        };
-        child.current_action = None;
-        child.turn_state = match outcome {
-            TurnOutcome::Completed => AgentTurnState::Completed,
-            TurnOutcome::Failed => AgentTurnState::Failed,
-            TurnOutcome::Interrupted => AgentTurnState::Interrupted,
-        };
-        child.updated_at = now;
+            .retain(|candidate| candidate.id != child_id);
     }
 
     fn clear_waiting(&mut self) {

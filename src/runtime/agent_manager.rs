@@ -429,6 +429,40 @@ impl AgentManager {
         self.resolve_update(update)
     }
 
+    pub fn process_start_failed(
+        &mut self,
+        instance_id: &AgentInstanceId,
+        generation: u64,
+    ) -> Option<AgentPaneAddress> {
+        let update = self.runtime.process_exited(
+            instance_id,
+            generation,
+            AgentProcessExit {
+                code: None,
+                reason: AgentExitReason::Failed,
+            },
+        )?;
+        if update.snapshot.generation != generation {
+            return None;
+        }
+        let address = self
+            .addresses_by_instance
+            .get(&update.snapshot.instance_id)?
+            .clone();
+        if !self
+            .launches_by_address
+            .get(&address)
+            .is_some_and(|launch| launch.instance_id() == instance_id)
+        {
+            return None;
+        }
+        self.retained_snapshots.remove(&address);
+        if let Err(error) = write_agent_state(&self.state_path, &self.retained_snapshots) {
+            self.last_error = Some(error.to_string());
+        }
+        Some(address)
+    }
+
     pub fn process_exited(
         &mut self,
         instance_id: &AgentInstanceId,
@@ -739,6 +773,30 @@ mod tests {
         assert!(PathBuf::from(&first.additional_args()[1]).is_file());
         let (second, _) = manager.prepare_pane(address, "omp", false).unwrap();
         assert_eq!(first.instance_id(), second.instance_id());
+    }
+
+    #[test]
+    fn failed_pane_start_is_not_retained_and_can_retry() {
+        let temp = TempDir::new().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path());
+        let mut manager = AgentManager::new(&paths);
+        let address = AgentPaneAddress::new("project", "agent", "codex");
+        let (launch, starting) = manager
+            .prepare_pane(address.clone(), "codex", false)
+            .unwrap();
+        let instance_id = launch.instance_id().clone();
+        assert_eq!(starting.process_state, AgentProcessState::Starting);
+        assert_eq!(manager.retained_snapshots().len(), 1);
+
+        assert_eq!(
+            manager.process_start_failed(&instance_id, 1),
+            Some(address.clone())
+        );
+        assert!(manager.retained_snapshots().is_empty());
+
+        let (retried_address, running) = manager.process_started(&instance_id, 2).unwrap();
+        assert_eq!(retried_address, address);
+        assert_eq!(running.process_state, AgentProcessState::Running);
     }
 
     #[test]

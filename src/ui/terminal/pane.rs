@@ -134,6 +134,7 @@ pub struct TerminalPaneContext {
 pub enum TerminalPaneEvent {
     Notification(NotificationEvent),
     Started(TerminalPaneStartedEvent),
+    StartFailed(TerminalPaneStartFailedEvent),
     Exited(TerminalPaneExitedEvent),
     AgentStatusFrame {
         pane_id: String,
@@ -157,6 +158,16 @@ pub struct TerminalPaneStartedEvent {
     pub pane_id: String,
     pub generation: u64,
     pub agent_instance_id: Option<AgentInstanceId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalPaneStartFailedEvent {
+    pub project_id: String,
+    pub tab_id: String,
+    pub pane_id: String,
+    pub generation: u64,
+    pub agent_instance_id: Option<AgentInstanceId>,
+    pub message: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -287,7 +298,9 @@ impl TerminalPaneView {
         theme: WorkbenchTheme,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::new_with_processes(context, terminal_config, theme, true, cx)
+        let mut view = Self::new_deferred(context, terminal_config, theme);
+        view.start_terminal(cx);
+        view
     }
 
     pub(crate) fn new_without_processes(
@@ -296,15 +309,15 @@ impl TerminalPaneView {
         theme: WorkbenchTheme,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::new_with_processes(context, terminal_config, theme, false, cx)
+        let mut view = Self::new_deferred(context, terminal_config, theme);
+        view.start_idle_terminal(cx);
+        view
     }
 
-    fn new_with_processes(
+    pub(crate) fn new_deferred(
         context: TerminalPaneContext,
         terminal_config: TerminalConfig,
         theme: WorkbenchTheme,
-        start_processes: bool,
-        cx: &mut Context<Self>,
     ) -> Self {
         let TerminalPaneContext {
             project_id,
@@ -328,7 +341,7 @@ impl TerminalPaneView {
         let initial_title = agent_session_title
             .clone()
             .unwrap_or_else(|| pane.title.clone());
-        let mut view = Self {
+        Self {
             project_id,
             project_path,
             project_title,
@@ -359,13 +372,7 @@ impl TerminalPaneView {
             terminal_input_gate,
             generation: 0,
             idle_reader_release: None,
-        };
-        if start_processes {
-            view.start_terminal(cx);
-        } else {
-            view.start_idle_terminal(cx);
         }
-        view
     }
 
     fn start_idle_terminal(&mut self, cx: &mut Context<Self>) {
@@ -444,6 +451,12 @@ impl TerminalPaneView {
 
     pub fn agent_pane_address(&self) -> AgentPaneAddress {
         AgentPaneAddress::new(&self.project_id, &self.tab_id, &self.pane_id)
+    }
+
+    pub fn matches_agent_pane_address(&self, address: &AgentPaneAddress) -> bool {
+        self.project_id == address.project_id
+            && self.tab_id == address.tab_id
+            && self.pane_id == address.pane_id
     }
 
     fn spawn_request(&self) -> TerminalSpawnRequest {
@@ -574,7 +587,7 @@ impl TerminalPaneView {
             .map_err(Into::into)
     }
 
-    fn start_terminal(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn start_terminal(&mut self, cx: &mut Context<Self>) -> bool {
         let initial_title = self
             .agent_session_title
             .clone()
@@ -675,9 +688,19 @@ impl TerminalPaneView {
         self.lifecycle = PaneLifecycle::SpawnFailed {
             message: message.clone(),
         };
-        self.terminal_error = Some(message);
+        self.terminal_error = Some(message.clone());
         self.session = None;
         self.terminal = None;
+        cx.emit(TerminalPaneEvent::StartFailed(
+            TerminalPaneStartFailedEvent {
+                project_id: self.project_id.clone(),
+                tab_id: self.tab_id.clone(),
+                pane_id: self.pane_id.clone(),
+                generation: self.generation,
+                agent_instance_id: self.agent_instance_id().cloned(),
+                message,
+            },
+        ));
         cx.notify();
     }
 
@@ -790,6 +813,15 @@ impl TerminalPaneView {
             });
         })
         .detach();
+    }
+
+    pub(crate) fn terminate_after_fatal_io(&mut self, cx: &mut Context<Self>) {
+        if matches!(
+            self.lifecycle,
+            PaneLifecycle::Starting | PaneLifecycle::Running
+        ) {
+            self.handle_process_exit(self.generation, ExitReason::Failed, cx);
+        }
     }
 
     pub fn is_running(&self) -> bool {
