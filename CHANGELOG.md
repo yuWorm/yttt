@@ -18,6 +18,7 @@
 - Added a cross-platform Permissions settings page for reviewing core and optional desktop access,
   opening native macOS and Windows settings, and explaining Linux desktop/portal-managed
   authorization.
+- Added an authenticated, profile-isolated headless Host process with versioned local IPC, resource catalogs, terminal checkpoints, lease-controlled input, reconnect recovery, and semantic terminal mirrors.
 
 ### Changed
 
@@ -33,6 +34,8 @@
 - The Permissions page now detects native authorization where the operating system supports it,
   requests macOS Notifications, Accessibility, and Screen Recording access in place, refreshes
   after returning from system settings, and reports unsupported status checks explicitly.
+- Moved local and SSH terminal processes, project file trees and writes, Git execution, project watchers, Agent hook ingress, SSH connections, and SSH credential access out of the GPUI process and into the Host; closing a window now detaches without terminating Host-owned resources.
+- Release packages keep one executable with separate desktop and headless Host process roles on macOS, Windows, and Linux.
 
 ### Fixed
 

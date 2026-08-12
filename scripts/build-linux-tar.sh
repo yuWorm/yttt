@@ -54,13 +54,15 @@ manifest="$repo_root/Cargo.toml"
 desktop_file="$repo_root/packaging/linux/com.yttt.app.desktop"
 
 version="$(/usr/bin/awk '
-  /^\[package\]$/ { in_package = 1; next }
-  /^\[/ { if (in_package) exit }
-  in_package && $1 == "version" {
-    value = $3
-    gsub(/\"/, "", value)
+  /^\[workspace\.package\]$/ { section = "workspace"; next }
+  /^\[package\]$/ { section = "package"; next }
+  /^\[/ { section = ""; next }
+  section == "workspace" && $1 == "version" { workspace_version = $3 }
+  section == "package" && $1 == "version" { package_version = $3 }
+  END {
+    value = package_version != "" ? package_version : workspace_version
+    gsub(/"/, "", value)
     print value
-    exit
   }
 ' "$manifest")"
 [[ -n "$version" ]] || { echo "Unable to read package version from $manifest" >&2; exit 1; }

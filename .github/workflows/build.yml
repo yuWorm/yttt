@@ -70,6 +70,27 @@ jobs:
       - name: Build workspace
         run: cargo build --workspace --locked --target "${{ matrix.target }}"
 
+      - name: Test Host process role and profile isolation
+        run: cargo test --locked --target "${{ matrix.target }}" -p yttt --test app_profile --test process_roles
+
+      - name: Smoke-package macOS app
+        if: runner.os == 'macOS'
+        run: |
+          scripts/build-macos-bundle.sh \
+            --no-build \
+            --no-sign \
+            --binary "target/${{ matrix.target }}/debug/yttt" \
+            --output "target/package-smoke/yttt.app"
+
+      - name: Smoke-package Linux archive
+        if: runner.os == 'Linux'
+        run: |
+          scripts/build-linux-tar.sh \
+            --no-build \
+            --binary "target/${{ matrix.target }}/debug/yttt" \
+            --target "${{ matrix.target }}" \
+            --output "target/package-smoke/yttt-linux.tar.gz"
+
       - name: Test Windows library contracts
         if: runner.os == 'Windows'
         run: cargo test --locked --target "${{ matrix.target }}" -p yttt --lib
