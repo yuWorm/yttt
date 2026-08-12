@@ -1,11 +1,70 @@
-use std::{fs, path::Path, process::Command};
+use std::{
+    ffi::OsString,
+    fs,
+    path::Path,
+    process::{Command, Stdio},
+};
 
 use tempfile::tempdir;
 use yttt::runtime::git_status::{
-    GitBranch, GitBranchKind, GitDiffLineKind, GitDiffMode, GitFileStatus,
-    read_project_git_branches, read_project_git_diff, read_project_git_diff_result,
-    read_project_git_status, switch_project_git_branch,
+    GitBranch, GitBranchKind, GitCommandOutput, GitDiffLineKind, GitDiffMode, GitDiffResult,
+    GitFileStatus, ProjectGitExecutor, ProjectGitStatus, read_project_git_branches_with,
+    read_project_git_diff_result_with, read_project_git_status_with,
+    switch_project_git_branch_with,
 };
+
+struct LocalGit<'a> {
+    project_path: &'a Path,
+}
+
+impl ProjectGitExecutor for LocalGit<'_> {
+    fn execute_git(
+        &self,
+        args: &[OsString],
+        optional_locks: bool,
+    ) -> Result<GitCommandOutput, String> {
+        let mut command = Command::new("git");
+        command
+            .args(args)
+            .current_dir(self.project_path)
+            .stdin(Stdio::null())
+            .stderr(Stdio::piped());
+        if optional_locks {
+            command.env("GIT_OPTIONAL_LOCKS", "0");
+        }
+        let output = command.output().map_err(|error| error.to_string())?;
+        Ok(GitCommandOutput {
+            success: output.status.success(),
+            exit_code: output.status.code(),
+            stdout: output.stdout,
+            stderr: output.stderr,
+        })
+    }
+
+    fn null_device_path(&self) -> &'static str {
+        if cfg!(windows) { "NUL" } else { "/dev/null" }
+    }
+}
+
+fn read_project_git_branches(project_path: &Path) -> Result<Vec<GitBranch>, String> {
+    read_project_git_branches_with(&LocalGit { project_path })
+}
+
+fn switch_project_git_branch(project_path: &Path, branch: &GitBranch) -> Result<(), String> {
+    switch_project_git_branch_with(&LocalGit { project_path }, branch)
+}
+
+fn read_project_git_status(project_path: &Path) -> Option<ProjectGitStatus> {
+    read_project_git_status_with(&LocalGit { project_path })
+}
+
+fn read_project_git_diff_result(
+    project_path: &Path,
+    mode: GitDiffMode,
+    ignore_whitespace: bool,
+) -> Result<GitDiffResult, String> {
+    read_project_git_diff_result_with(&LocalGit { project_path }, mode, ignore_whitespace)
+}
 
 fn git(project_path: &Path, args: &[&str]) {
     let output = Command::new("git")
@@ -112,12 +171,23 @@ fn working_tree_diff_includes_tracked_and_nested_untracked_files() {
     fs::create_dir(project_path.join("newdir")).unwrap();
     fs::write(project_path.join("newdir/new.txt"), "new\n").unwrap();
 
-    let diff = read_project_git_diff(&project_path).unwrap();
+    let diff = read_project_git_diff_result(&project_path, GitDiffMode::Unstaged, false).unwrap();
+    let text = diff
+        .files
+        .iter()
+        .flat_map(|file| file.hunks.iter())
+        .flat_map(|hunk| hunk.lines.iter())
+        .map(|line| line.content.as_str())
+        .collect::<Vec<_>>();
 
-    assert!(diff.contains("-base"));
-    assert!(diff.contains("+changed"));
-    assert!(diff.contains("newdir/new.txt"));
-    assert!(diff.contains("+new"));
+    assert!(text.contains(&"base"));
+    assert!(text.contains(&"changed"));
+    assert!(
+        diff.files
+            .iter()
+            .any(|file| file.path() == Path::new("newdir/new.txt"))
+    );
+    assert!(text.contains(&"new"));
 }
 
 #[test]

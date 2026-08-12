@@ -273,6 +273,25 @@ fn visible_work_item_tabs_merge_terminal_and_file_items() {
 }
 
 #[test]
+fn app_paths_are_injected_from_the_selected_profile() {
+    let temp = tempdir().unwrap();
+    let profile = yttt::config::profile::AppProfile::scoped(
+        yttt::model::ids::ProfileId::new("ui-test"),
+        yttt::config::profile::EnvironmentKind::Test,
+        yttt::config::profile::ProfilePersistence::Ephemeral,
+        temp.path().join("profile"),
+        yttt::config::profile::ProjectConfigPolicy::Overlay,
+        yttt::config::profile::HostConnectPolicy::ExplicitEndpoint(temp.path().join("host.sock")),
+    );
+    let expected_layout = profile.paths().config.join("default-layout.toml");
+
+    let _root = WorkbenchView::with_config_paths_for_test(profile.config_paths());
+
+    assert!(expected_layout.is_file());
+    assert!(!temp.path().join("default-layout.toml").exists());
+}
+
+#[test]
 fn root_view_starts_with_empty_workspace() {
     let root = WorkbenchView::new();
 
@@ -3387,6 +3406,23 @@ fn closing_window_with_dirty_file_is_blocked_by_the_workbench_guard(cx: &mut gpu
     cx.read(|app| assert!(!root.read(app).has_pending_dirty_close()));
 }
 
+#[gpui::test]
+fn closing_window_with_running_terminal_does_not_request_process_termination(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let (_temp, _project_dir, root, _document, cx) = project_file_terminal_fixture(cx, "off", 50);
+    let allowed = root.update(cx, |root, cx| {
+        let project_id = root.workspace().selected_project_id().unwrap().clone();
+        root.workspace_mut()
+            .mark_pane_running(&project_id, "dev", "server")
+            .unwrap();
+        root.request_window_close(cx)
+    });
+
+    assert!(allowed);
+    cx.read(|app| assert!(!root.read(app).has_pending_dirty_close()));
+}
 #[test]
 fn root_view_file_surface_blocks_terminal_only_commands() {
     let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());

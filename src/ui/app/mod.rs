@@ -14,9 +14,11 @@ use reqwest_client::ReqwestClient;
 use crate::{
     config::{
         paths::AppConfigPaths,
+        profile::AppProfile,
         settings::{AppSettings, WindowBackgroundEffect, load_or_create_settings},
         theme::{ThemeStore, load_theme_store},
     },
+    host_runtime::{DesktopHostRuntime, HostRuntimeGlobal},
     ui::{
         app::startup::{
             FORCE_ONBOARDING_ENV, StartupMode, force_onboarding_from_env, startup_mode_from_fixture,
@@ -41,24 +43,34 @@ pub(crate) fn rebind_application_keybindings(
     cx.bind_keys(compiled_app_keybindings(config, &registry));
 }
 
-pub fn run() {
-    let config_paths = AppConfigPaths::for_app();
+pub fn run(profile: AppProfile) {
+    let config_paths = profile.config_paths();
+    let startup_mode = startup_mode_from_fixture(std::env::var("YTTT_DEV_FIXTURE").ok().as_deref());
+    let host_runtime = if startup_mode == StartupMode::Normal {
+        HostRuntimeGlobal::ready(
+            DesktopHostRuntime::start(profile.clone())
+                .expect("failed to start the authoritative Host runtime"),
+        )
+    } else {
+        HostRuntimeGlobal::unavailable("Host runtime is disabled for the selected UI fixture")
+    };
     let http_client = ReqwestClient::user_agent(concat!("yttt/", env!("CARGO_PKG_VERSION")))
         .expect("failed to initialize HTTP client");
     gpui_platform::application()
         .with_http_client(Arc::new(http_client))
         .with_assets(assets::app_assets(&config_paths))
         .with_quit_mode(QuitMode::LastWindowClosed)
-        .run(|cx: &mut App| {
+        .run(move |cx: &mut App| {
             #[cfg(target_os = "macos")]
             platform::macos::prepare_macos_app_runtime();
 
             gpui_component::init(cx);
+            cx.set_global(host_runtime.clone());
             cx.bind_keys(gpui_markdown_editor::default_key_bindings());
             yttt_terminal::init(cx);
             crate::ui::editor::register_builtin_editor_languages();
             crate::ui::editor::init_vim_mode(cx);
-            let config_paths = AppConfigPaths::for_app();
+            let config_paths = config_paths.clone();
             let (app_settings, theme_runtime) = load_app_runtime(&config_paths);
             let appearance = AppearanceState::new(theme_runtime);
             Theme::global_mut(cx).apply_config(&Rc::new(
@@ -73,9 +85,7 @@ pub fn run() {
                 workbench_window_options(bounds, app_settings.window.effect),
                 move |window, cx| {
                     let appearance = appearance.clone();
-                    let startup_mode = startup_mode_from_fixture(
-                        std::env::var("YTTT_DEV_FIXTURE").ok().as_deref(),
-                    );
+                    let startup_mode = startup_mode;
                     let should_check_for_updates = startup_mode == StartupMode::Normal;
                     let view = cx.new(|_| {
                         let force_onboarding = force_onboarding_from_env(
@@ -84,9 +94,15 @@ pub fn run() {
                         let view = match startup_mode {
                             StartupMode::DevFixture => WorkbenchView::dev_fixture(),
                             StartupMode::AgentExitFixture => WorkbenchView::agent_exit_fixture(),
-                            StartupMode::Normal => WorkbenchView::from_startup(force_onboarding),
+                            StartupMode::Normal => {
+                                WorkbenchView::from_startup(config_paths.clone(), force_onboarding)
+                            }
                         };
                         view.with_appearance_state(appearance)
+                    });
+                    let desktop_host_runtime = cx.global::<HostRuntimeGlobal>().runtime().cloned();
+                    view.update(cx, |view, _cx| {
+                        view.set_host_runtime(desktop_host_runtime);
                     });
                     view.update(cx, |view, cx| view.sync_performance_monitoring(cx));
                     view.update(cx, |view, cx| view.start_ssh_event_listener(cx));

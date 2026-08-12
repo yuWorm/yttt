@@ -479,6 +479,7 @@ pub fn command_description_with_text(command_id: CommandId, ui_text: &UiText) ->
 
 fn command_title_key(command_id: CommandId) -> UiTextKey {
     match command_id {
+        CommandId::ApplicationQuit => UiTextKey::CommandApplicationQuitTitle,
         CommandId::ProjectCreate => UiTextKey::CommandProjectCreateTitle,
         CommandId::ProjectOpen => UiTextKey::CommandProjectOpenTitle,
         CommandId::ProjectOpenSsh => UiTextKey::CommandProjectOpenSshTitle,
@@ -528,6 +529,7 @@ fn command_title_key(command_id: CommandId) -> UiTextKey {
 
 fn command_description_key(command_id: CommandId) -> UiTextKey {
     match command_id {
+        CommandId::ApplicationQuit => UiTextKey::CommandApplicationQuitDescription,
         CommandId::ProjectCreate => UiTextKey::CommandProjectCreateDescription,
         CommandId::ProjectOpen => UiTextKey::CommandProjectOpenDescription,
         CommandId::ProjectOpenSsh => UiTextKey::CommandProjectOpenSshDescription,

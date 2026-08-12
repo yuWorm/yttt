@@ -250,6 +250,8 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandSettingsKeybindingsDescription => "打开或创建可编辑的快捷键 TOML",
         UiTextKey::CommandSettingsNotificationsTitle => "切换通知",
         UiTextKey::CommandSettingsNotificationsDescription => "切换 Agent 退出的系统通知",
+        UiTextKey::CommandApplicationQuitTitle => "退出 yttt",
+        UiTextKey::CommandApplicationQuitDescription => "停止所有 Host 资源并退出应用",
         UiTextKey::GitBranchesLoading => "正在加载 Git 分支…",
         UiTextKey::GitBranchSwitchFailed => "无法切换 Git 分支",
         UiTextKey::GitBranchLocal => "本地分支",

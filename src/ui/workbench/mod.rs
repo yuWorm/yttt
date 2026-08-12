@@ -19,6 +19,8 @@ use gpui_component::{
     v_virtual_list,
 };
 use yttt_agent_core::{AgentExitReason, AgentProcessExit, AgentSnapshot, AgentViewState};
+use yttt_core::model::ids::TerminalSessionId;
+use yttt_protocol::{Request, ServerEvent, project::ProjectChange};
 use yttt_terminal::input::{KeyState, TerminalKeyEvent};
 use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
 
@@ -121,8 +123,8 @@ enum SettingsBarField {
 
 use crate::{
     commands::{
-        ActiveSurface, CommandContext, CommandDispatchError, CommandId, CommandRegistry,
-        dispatch_workspace_command,
+        ActiveSurface, CommandContext, CommandDispatchError, CommandId, CommandOutcome,
+        CommandRegistry, dispatch_workspace_command,
     },
     config::{
         bars::{BarsSaveError, ShellBarModule, save_bars},
@@ -179,7 +181,7 @@ use crate::{
         git_status::{
             GitDiffLine, GitDiffLineKind, GitDiffMode, GitDiffResult, GitFileChangeKind,
             GitFileDiff, read_project_git_branches_with, read_project_git_diff_result_with,
-            read_project_git_status, read_project_git_status_with, switch_project_git_branch_with,
+            read_project_git_status_with, switch_project_git_branch_with,
         },
         notification::{
             AgentTransitionNotificationInput, DesktopSystemNotifier, NoopSystemNotifier,
@@ -207,25 +209,25 @@ use crate::{
         },
         i18n::{Locale, UiText, UiTextKey},
         interaction::actions::{
-            BindableActionId, CreateProject, FileSave, FocusProjects, GIT_DIFF_CONTEXT,
-            GitBranchSwitch, GitDiffClose, GitDiffCopySelected, GitDiffOpen, GitDiffSelectNextFile,
-            GitDiffSelectPreviousFile, GitDiffToggleStageMode, GitDiffToggleViewMode,
-            GitDiffToggleWhitespace, LayoutDefaultEdit, LayoutDefaultReload, LayoutDefaultReset,
-            LayoutExportProjectConfig, LayoutOpenFile, LayoutProjectEdit, LayoutResetLocalOverride,
-            LayoutSaveCurrent, OpenCommandPalette, OpenFileFinder, OpenOpenedProjectPalette,
-            OpenPanePalette, OpenProject, OpenProjectPalette, OpenRecentProjectPalette,
-            OpenSshProject, OpenTabPalette, PALETTE_CONTEXT, PaletteCancel, PaletteConfirm,
-            PaletteSelectNext, PaletteSelectPrev, PaneClose, PaneFocusDown, PaneFocusLeft,
-            PaneFocusRight, PaneFocusUp, PaneRename, PaneResizeDown, PaneResizeLeft,
-            PaneResizeRight, PaneResizeUp, PaneSplitHorizontal, PaneSplitVertical, ProjectClose,
-            ProjectPanelRefresh, ProjectPanelSelectFilesPage, ProjectPanelSelectNextPage,
-            ProjectPanelSelectPreviousPage, ProjectPanelToggle, ProjectsSelectFirst,
-            ProjectsSelectLast, ProjectsSelectNext, ProjectsSelectPrevious, SettingsKeybindings,
-            SettingsNotifications, SettingsOpen, SettingsVimFirstGroup, SettingsVimLastGroup,
-            SettingsVimNextGroup, SettingsVimPreviousGroup, TabClose, TabCloseAfter, TabCloseAll,
-            TabCloseAllFiles, TabCloseAllTerminals, TabCloseBefore, TabNew, TabNext, TabPrev,
-            TabRename, UiKeybindingSpec, WORKSPACE_CONTEXT, bindable_registry,
-            layered_ui_keybinding_specs, runtime_command_for_keystroke,
+            ApplicationQuit, BindableActionId, CreateProject, FileSave, FocusProjects,
+            GIT_DIFF_CONTEXT, GitBranchSwitch, GitDiffClose, GitDiffCopySelected, GitDiffOpen,
+            GitDiffSelectNextFile, GitDiffSelectPreviousFile, GitDiffToggleStageMode,
+            GitDiffToggleViewMode, GitDiffToggleWhitespace, LayoutDefaultEdit, LayoutDefaultReload,
+            LayoutDefaultReset, LayoutExportProjectConfig, LayoutOpenFile, LayoutProjectEdit,
+            LayoutResetLocalOverride, LayoutSaveCurrent, OpenCommandPalette, OpenFileFinder,
+            OpenOpenedProjectPalette, OpenPanePalette, OpenProject, OpenProjectPalette,
+            OpenRecentProjectPalette, OpenSshProject, OpenTabPalette, PALETTE_CONTEXT,
+            PaletteCancel, PaletteConfirm, PaletteSelectNext, PaletteSelectPrev, PaneClose,
+            PaneFocusDown, PaneFocusLeft, PaneFocusRight, PaneFocusUp, PaneRename, PaneResizeDown,
+            PaneResizeLeft, PaneResizeRight, PaneResizeUp, PaneSplitHorizontal, PaneSplitVertical,
+            ProjectClose, ProjectPanelRefresh, ProjectPanelSelectFilesPage,
+            ProjectPanelSelectNextPage, ProjectPanelSelectPreviousPage, ProjectPanelToggle,
+            ProjectsSelectFirst, ProjectsSelectLast, ProjectsSelectNext, ProjectsSelectPrevious,
+            SettingsKeybindings, SettingsNotifications, SettingsOpen, SettingsVimFirstGroup,
+            SettingsVimLastGroup, SettingsVimNextGroup, SettingsVimPreviousGroup, TabClose,
+            TabCloseAfter, TabCloseAll, TabCloseAllFiles, TabCloseAllTerminals, TabCloseBefore,
+            TabNew, TabNext, TabPrev, TabRename, UiKeybindingSpec, WORKSPACE_CONTEXT,
+            bindable_registry, layered_ui_keybinding_specs, runtime_command_for_keystroke,
         },
         interaction::input_owner::{
             InputOwnerKind, InputOwnerRegistration, InputScopeId, TerminalInputGate,
@@ -530,15 +532,102 @@ impl WorkbenchView {
         root
     }
 
-    pub fn from_startup(force_onboarding: bool) -> Self {
-        let mut root = Self::with_config_paths_and_force_onboarding(
-            AppConfigPaths::for_app(),
-            force_onboarding,
-        );
+    pub fn from_startup(config_paths: AppConfigPaths, force_onboarding: bool) -> Self {
+        let mut root = Self::with_config_paths_and_force_onboarding(config_paths, force_onboarding);
         for project_path in startup_project_paths() {
             let _ = root.open_project_path(project_path);
         }
         root
+    }
+
+    pub(crate) fn set_host_runtime(
+        &mut self,
+        runtime: Option<Arc<crate::host_runtime::DesktopHostRuntime>>,
+    ) {
+        let local_projects = self
+            .workspace
+            .opened_projects()
+            .iter()
+            .filter_map(|project| {
+                project
+                    .location
+                    .local_path()
+                    .cloned()
+                    .map(|path| (project.id.clone(), path))
+            })
+            .collect::<Vec<_>>();
+        for (project_id, _) in &local_projects {
+            self.project.services.remove(project_id);
+        }
+        if let Some(runtime) = runtime.as_ref() {
+            for (project_id, path) in local_projects {
+                match ProjectServices::host(runtime.clone(), project_id.clone(), path) {
+                    Ok(services) => {
+                        if let Some(error) = services.watch_error() {
+                            self.load_error = combine_load_messages(
+                                self.load_error.take(),
+                                Some(error.to_string()),
+                            );
+                        }
+                        self.project.services.insert(project_id, services);
+                    }
+                    Err(error) => {
+                        self.load_error = combine_load_messages(
+                            self.load_error.take(),
+                            Some(format!("Host project registration failed: {error}")),
+                        );
+                    }
+                }
+            }
+        }
+        self.terminal.host_runtime = runtime.clone();
+        self.agent_manager.set_hook_client(
+            runtime
+                .clone()
+                .map(crate::runtime::agent_hooks::AgentHookClient::new),
+        );
+        self.ssh.transport = match runtime {
+            Some(runtime) => match yttt_ssh::TransportService::from_host(runtime) {
+                Ok(transport) => Some(transport),
+                Err(error) => {
+                    self.ssh.error = Some(error.to_string());
+                    None
+                }
+            },
+            None => None,
+        };
+    }
+
+    fn terminate_host_sessions_matching(&self, mut matches: impl FnMut(&str) -> bool) {
+        let Some(runtime) = &self.terminal.host_runtime else {
+            return;
+        };
+        let session_ids = self
+            .terminal
+            .terminal_panes
+            .keys()
+            .filter(|key| matches(key))
+            .cloned()
+            .map(TerminalSessionId::new)
+            .collect::<Vec<_>>();
+        if !session_ids.is_empty() {
+            let _ = runtime.request(Request::TerminateMany { session_ids });
+        }
+    }
+
+    fn terminate_host_tab(&self, project_id: &str, tab_id: &str) {
+        let prefix = format!("{project_id}:{tab_id}:");
+        self.terminate_host_sessions_matching(|key| key.starts_with(&prefix));
+    }
+
+    fn terminate_host_pane(&self, project_id: &str, tab_id: &str, pane_id: &str) {
+        let key = terminal_pane_key(project_id, tab_id, pane_id);
+        self.terminate_host_sessions_matching(|candidate| candidate == key);
+    }
+
+    fn terminate_host_project(&self, project_id: &str) {
+        let prefix = format!("{project_id}:");
+        self.terminate_host_sessions_matching(|key| key.starts_with(&prefix));
     }
     pub fn has_last_opened_projects(&self) -> bool {
         !self.recent_projects_config.last_opened_projects.is_empty()
@@ -705,7 +794,10 @@ impl WorkbenchView {
         .then(|| {
             OnboardingState::new(detect_installed_zed_themes(), app_settings.general.language)
         });
+        #[cfg(test)]
         let mut project_services = HashMap::new();
+        #[cfg(not(test))]
+        let project_services = HashMap::new();
         let mut project_editor_runtime = ProjectEditorRuntime::default();
         for project in workspace.opened_projects() {
             let selected_terminal_id = project
@@ -720,6 +812,7 @@ impl WorkbenchView {
                     app_settings.project_panel.default_open,
                     app_settings.project_panel.width,
                 );
+                #[cfg(test)]
                 project_services.insert(
                     project.id.clone(),
                     ProjectServices::local(project_path.clone()),
@@ -1593,6 +1686,9 @@ impl WorkbenchView {
             let project_id = self.workspace.selected_project_id().cloned();
             self.workspace.close_tabs(terminal_ids)?;
             if let Some(project_id) = project_id {
+                for tab_id in terminal_ids {
+                    self.terminate_host_tab(project_id.as_str(), tab_id);
+                }
                 self.agent_manager
                     .forget_tabs(project_id.as_str(), terminal_ids);
             }
@@ -2091,6 +2187,7 @@ impl WorkbenchView {
         }
 
         match command_id {
+            CommandId::ApplicationQuit => Ok(()),
             CommandId::ProjectCreate => {
                 self.request_create_project();
                 Ok(())
@@ -2282,6 +2379,32 @@ impl WorkbenchView {
             | CommandId::PaneFocusRight
             | CommandId::PaneFocusUp
             | CommandId::PaneFocusDown => self.focus_pane_or_work_area(command_id),
+            CommandId::PaneClose => {
+                let context = self.workspace.selected_project_id().and_then(|project_id| {
+                    let project = self.workspace.project(project_id)?;
+                    let tab_id = project.selected_tab_id.clone();
+                    project
+                        .tab_state(&tab_id)
+                        .and_then(|tab| tab.focused_pane_id.clone())
+                        .map(|pane_id| (project.id.as_str().to_string(), tab_id, pane_id))
+                });
+                let outcome =
+                    dispatch_workspace_command(&mut self.workspace, CommandId::PaneClose)?;
+                if let Some((project_id, tab_id, pane_id)) = context {
+                    match outcome {
+                        CommandOutcome::PaneClosed(closed_pane_id) => {
+                            debug_assert_eq!(closed_pane_id, pane_id);
+                            self.terminate_host_pane(&project_id, &tab_id, &closed_pane_id);
+                        }
+                        CommandOutcome::TabClosed(closed_tab_id) => {
+                            self.terminate_host_tab(&project_id, &closed_tab_id);
+                        }
+                        _ => {}
+                    }
+                }
+                self.reconcile_active_terminal_with_workspace()?;
+                Ok(())
+            }
             _ => {
                 dispatch_workspace_command(&mut self.workspace, command_id)?;
                 self.reconcile_active_terminal_with_workspace()?;
@@ -2561,6 +2684,22 @@ impl WorkbenchView {
                     .local_path()
                     .cloned()
                     .ok_or(WorkbenchError::UnsupportedRemoteProject)?;
+                #[cfg(test)]
+                let project_services = Some(ProjectServices::local(opened_path.clone()));
+                #[cfg(not(test))]
+                let project_services = self
+                    .terminal
+                    .host_runtime
+                    .as_ref()
+                    .map(|runtime| {
+                        ProjectServices::host(
+                            runtime.clone(),
+                            opened.descriptor.id.clone(),
+                            opened_path.clone(),
+                        )
+                    })
+                    .transpose()
+                    .map_err(WorkbenchError::HostProject)?;
                 let already_open = self.workspace.project(&opened.descriptor.id).is_some();
                 let project_id = self
                     .workspace
@@ -2575,10 +2714,15 @@ impl WorkbenchView {
                         }
                     }
                 }
-                self.project.services.insert(
-                    project_id.clone(),
-                    ProjectServices::local(opened_path.clone()),
-                );
+                if let Some(project_services) = project_services {
+                    if let Some(error) = project_services.watch_error() {
+                        self.load_error =
+                            combine_load_messages(self.load_error.take(), Some(error.to_string()));
+                    }
+                    self.project
+                        .services
+                        .insert(project_id.clone(), project_services);
+                }
                 let selected_terminal_id =
                     self.workspace.project(&project_id).and_then(|project| {
                         project
@@ -2784,6 +2928,7 @@ impl WorkbenchView {
             self.overlays.git_diff_panel = None;
             self.overlays.pending_git_diff_load = None;
         }
+        self.terminate_host_project(project_id.as_str());
         self.remove_terminal_panes_for_project(project_id.as_str());
         self.agent_manager
             .reset_project_sessions(project_id.as_str());
@@ -2828,7 +2973,11 @@ impl WorkbenchView {
             }
             WorkItemId::Terminal(tab_id) => {
                 self.workspace.select_tab(&tab_id)?;
+                let project_id = self.workspace.selected_project_id().cloned();
                 dispatch_workspace_command(&mut self.workspace, CommandId::TabClose)?;
+                if let Some(project_id) = project_id {
+                    self.terminate_host_tab(project_id.as_str(), &tab_id);
+                }
                 let next = if let Some((project_id, terminal_ids)) =
                     self.selected_project_work_item_ids()
                 {
@@ -3464,6 +3613,8 @@ pub enum WorkbenchError {
     SystemIntegration(String),
     #[error("{0}")]
     RemoteProject(String),
+    #[error("Host project service failed: {0}")]
+    HostProject(String),
     #[error("remote projects are not available in this operation")]
     UnsupportedRemoteProject,
 }

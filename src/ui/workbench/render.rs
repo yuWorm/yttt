@@ -393,6 +393,7 @@ impl Render for WorkbenchView {
             .on_mouse_move(cx.listener(Self::on_resize_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_resize_mouse_up))
             .on_action(cx.listener(Self::on_create_project))
+            .on_action(cx.listener(Self::on_application_quit))
             .on_action(cx.listener(Self::on_open_project))
             .on_action(cx.listener(Self::on_open_ssh_project))
             .on_action(cx.listener(Self::on_open_command_palette))

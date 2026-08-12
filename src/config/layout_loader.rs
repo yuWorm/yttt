@@ -382,6 +382,8 @@ pub enum ProjectOpenError {
         path: PathBuf,
         source: std::io::Error,
     },
+    #[error("project config is read-only for {project_path}")]
+    ProjectConfigReadOnly { project_path: PathBuf },
 }
 
 pub fn parse_personal_layout(
@@ -556,7 +558,11 @@ pub fn create_project_layout_scaffold(
     project_path: &Path,
     layout: &ProjectLayout,
 ) -> Result<ProjectLayoutScaffold, ProjectOpenError> {
-    let layout_file = paths.project_layout_file(project_path);
+    let layout_file = paths
+        .project_layout_write_file(project_path)
+        .ok_or_else(|| ProjectOpenError::ProjectConfigReadOnly {
+            project_path: project_path.to_path_buf(),
+        })?;
     let project_config_dir = layout_file
         .parent()
         .expect("project layout path must have a parent");
@@ -627,7 +633,17 @@ pub fn export_project_layout(
     project_path: &Path,
     layout: &ProjectLayout,
 ) -> Result<PathBuf, ProjectOpenError> {
-    let path = paths.project_layout_file(project_path);
+    let path = paths
+        .project_layout_write_file(project_path)
+        .ok_or_else(|| ProjectOpenError::ProjectConfigReadOnly {
+            project_path: project_path.to_path_buf(),
+        })?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| ProjectOpenError::CreateConfigDirectory {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
     write_project_layout(&path, layout)?;
     Ok(path)
 }

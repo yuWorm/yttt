@@ -238,6 +238,8 @@ pub enum UiTextKey {
     CommandSettingsKeybindingsDescription,
     CommandSettingsNotificationsTitle,
     CommandSettingsNotificationsDescription,
+    CommandApplicationQuitTitle,
+    CommandApplicationQuitDescription,
     GitBranchesLoading,
     GitBranchSwitchFailed,
     GitBranchLocal,

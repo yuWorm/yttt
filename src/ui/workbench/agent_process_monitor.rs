@@ -91,22 +91,11 @@ impl WorkbenchView {
             }));
     }
 
-    fn agent_process_probes(&self, cx: &App) -> Vec<AgentProcessProbe> {
-        self.terminal
-            .terminal_panes
-            .values()
-            .filter_map(|pane| {
-                let pane = pane.read(cx);
-                if !pane.is_running() || pane.agent_instance_id().is_some() {
-                    return None;
-                }
-                Some(AgentProcessProbe {
-                    address: pane.agent_pane_address(),
-                    generation: pane.generation(),
-                    root_pid: pane.local_process_id()?,
-                })
-            })
-            .collect()
+    fn agent_process_probes(&self, _cx: &App) -> Vec<AgentProcessProbe> {
+        // Terminal children are Host-owned. The desktop intentionally has no
+        // process ID with which to scan descendants; Agent hooks are the
+        // authoritative desktop update path.
+        Vec::new()
     }
     fn agent_hook_request_belongs_to_live_pane(
         &self,

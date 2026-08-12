@@ -3,28 +3,107 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use super::profile::{AgentSessionAccess, AppProfile, EnvironmentKind, ProjectConfigPolicy};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectConfigStore {
+    policy: ProjectConfigPolicy,
+    overlay_root: PathBuf,
+}
+
+impl ProjectConfigStore {
+    fn new(policy: ProjectConfigPolicy, overlay_root: PathBuf) -> Self {
+        Self {
+            policy,
+            overlay_root,
+        }
+    }
+
+    pub fn policy(&self) -> ProjectConfigPolicy {
+        self.policy
+    }
+
+    fn project_layout_file(&self, project_path: &Path) -> PathBuf {
+        match self.policy {
+            ProjectConfigPolicy::Normal | ProjectConfigPolicy::ReadOnly => {
+                project_path.join(".yttt").join("layout.toml")
+            }
+            ProjectConfigPolicy::Overlay => {
+                let project_path =
+                    canonicalize_path(project_path).unwrap_or_else(|_| project_path.to_path_buf());
+                self.overlay_root
+                    .join(encode_path(&project_path))
+                    .join("layout.toml")
+            }
+        }
+    }
+
+    fn project_layout_write_file(&self, project_path: &Path) -> Option<PathBuf> {
+        (self.policy != ProjectConfigPolicy::ReadOnly)
+            .then(|| self.project_layout_file(project_path))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppConfigPaths {
     config_dir: PathBuf,
+    environment: EnvironmentKind,
+    project_config: ProjectConfigStore,
+    agent_sessions: AgentSessionAccess,
 }
 
 impl AppConfigPaths {
     pub fn from_config_dir(config_dir: impl Into<PathBuf>) -> Self {
+        let config_dir = config_dir.into();
         Self {
-            config_dir: config_dir.into(),
+            project_config: ProjectConfigStore::new(
+                ProjectConfigPolicy::Normal,
+                config_dir.join("project-config-overlay"),
+            ),
+            config_dir,
+            environment: EnvironmentKind::Test,
+            agent_sessions: AgentSessionAccess::disabled(),
         }
     }
 
     pub fn for_app() -> Self {
-        Self::from_config_dir(default_config_dir())
+        AppProfile::production().config_paths()
+    }
+
+    pub fn from_profile(profile: &AppProfile) -> Self {
+        Self {
+            config_dir: profile.paths().config.clone(),
+            environment: profile.environment(),
+            project_config: ProjectConfigStore::new(
+                profile.project_config_policy(),
+                profile.paths().state.join("project-config-overlay"),
+            ),
+            agent_sessions: profile.agent_sessions().clone(),
+        }
     }
 
     pub fn config_dir(&self) -> &Path {
         &self.config_dir
     }
 
+    pub fn environment(&self) -> EnvironmentKind {
+        self.environment
+    }
+
+    pub fn project_config_policy(&self) -> ProjectConfigPolicy {
+        self.project_config.policy()
+    }
+
+    pub fn agent_session_access(&self) -> &AgentSessionAccess {
+        &self.agent_sessions
+    }
+
     pub fn project_layout_file(&self, project_path: &Path) -> PathBuf {
-        project_path.join(".yttt").join("layout.toml")
+        self.project_config.project_layout_file(project_path)
+    }
+
+    pub fn project_layout_write_file(&self, project_path: &Path) -> Option<PathBuf> {
+        self.project_config.project_layout_write_file(project_path)
     }
 
     pub fn default_layout_file(&self) -> PathBuf {
@@ -123,7 +202,7 @@ impl ConfigPlatform {
     }
 }
 
-fn default_config_dir() -> PathBuf {
+pub(crate) fn native_config_dir() -> PathBuf {
     let xdg_config_home = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let user_profile = std::env::var_os("USERPROFILE").map(PathBuf::from);

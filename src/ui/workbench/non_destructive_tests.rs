@@ -57,7 +57,7 @@ fn runtime_snapshot(root: &WorkbenchView) -> RuntimeSnapshot {
 }
 
 #[gpui::test]
-fn remote_project_open_preserves_ssh_location_and_terminal_root(cx: &mut TestAppContext) {
+fn remote_project_open_fails_closed_without_the_host_runtime(cx: &mut TestAppContext) {
     use crate::{
         config::ssh::{SshConnectionConfig, SshConnectionsConfig, save_ssh_connections},
         model::{ids::ConnectionId, project::RemotePathBuf},
@@ -78,30 +78,18 @@ fn remote_project_open_preserves_ssh_location_and_terminal_root(cx: &mut TestApp
     )
     .unwrap();
     let remote_root = RemotePathBuf::new("/srv/remote-app").unwrap();
-    let expected_root = PathBuf::from(remote_root.as_str());
+    let expected_error = "SSH runtime is unavailable.";
 
     let (root, cx) = cx.add_window_view(|_, _| WorkbenchView::with_config_paths(config_paths));
     cx.update(|_, app| {
         root.update(app, |root, _cx| {
-            root.open_ssh_project_location(connection_id.clone(), remote_root.clone(), false)
-                .unwrap();
+            let error = root
+                .open_ssh_project_location(connection_id, remote_root, false)
+                .unwrap_err();
+            assert!(error.to_string().contains(expected_error));
+            assert!(root.workspace.selected_project_id().is_none());
+            assert!(root.project.services.is_empty());
         });
-    });
-
-    cx.update(|_, app| {
-        let root = root.read(app);
-        let project_id = root.workspace.selected_project_id().unwrap();
-        let project = root.workspace.project(project_id).unwrap();
-        assert_eq!(
-            project.location,
-            ProjectLocation::Ssh {
-                connection_id,
-                root: remote_root,
-            }
-        );
-        assert!(root.project.services.contains_key(project_id));
-        let (_, terminal_root, _, _, _, _) = root.selected_tab_layout_clone().unwrap();
-        assert_eq!(terminal_root, expected_root);
     });
 }
 
@@ -587,153 +575,24 @@ fn window_bar_keeps_project_identity_and_git_fixed_outside_configured_modules(
 }
 
 #[gpui::test]
-fn active_project_file_watcher_refreshes_tree_and_git_status(cx: &mut TestAppContext) {
+fn local_project_does_not_start_a_gui_owned_file_watcher(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir(&project_path).unwrap();
-    git(&project_path, &["init"]);
-    let other_project_path = temp.path().join("other-project");
-    fs::create_dir(&other_project_path).unwrap();
-    git(&other_project_path, &["init"]);
-    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut workspace = Workspace::new();
-    let project_id = workspace
-        .open_project(local_project(project_path.clone()), dev_fixture_layout())
+    workspace
+        .open_project(local_project(project_path), dev_fixture_layout())
         .unwrap();
-    let other_project_id = workspace
-        .open_project(
-            local_project(other_project_path.clone()),
-            dev_fixture_layout(),
-        )
-        .unwrap();
-    workspace.select_project(&project_id).unwrap();
 
     let (root, cx) = cx.add_window_view(|_, _| {
-        let mut root =
-            WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths);
+        let mut root = WorkbenchView::with_workspace_for_test(workspace);
         root.project_file_watching_enabled = true;
         root
     });
     cx.run_until_parked();
-    assert!(cx.read(|app| {
-        root.read(app)
-            .active_project_file_watcher
-            .as_ref()
-            .is_some_and(|watcher| {
-                watcher.project_id == project_id && watcher.project_path == project_path
-            })
-    }));
 
-    cx.background_executor
-        .advance_clock(Duration::from_millis(200));
-    cx.run_until_parked();
-    cx.refresh().unwrap();
-    cx.run_until_parked();
-
-    fs::write(project_path.join("external.txt"), "created outside yttt\n").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(3);
-    loop {
-        std::thread::sleep(Duration::from_millis(25));
-        cx.background_executor
-            .advance_clock(Duration::from_millis(200));
-        cx.run_until_parked();
-        cx.refresh().unwrap();
-        cx.run_until_parked();
-
-        let refreshed = cx.read(|app| {
-            let root = root.read(app);
-            let tree_refreshed = root
-                .project
-                .project_editor_runtime
-                .workspace()
-                .session(&project_id)
-                .is_some_and(|session| {
-                    session
-                        .file_tree()
-                        .visible_rows()
-                        .iter()
-                        .any(|row| row.relative_path == Path::new("external.txt"))
-                });
-            let git_refreshed = root
-                .project
-                .project_git_statuses
-                .get(&project_id)
-                .and_then(|status| status.file_status(Path::new("external.txt")))
-                == Some(crate::runtime::git_status::GitFileStatus::Untracked);
-            tree_refreshed && git_refreshed
-        });
-        if refreshed {
-            break;
-        }
-        if Instant::now() >= deadline {
-            let (rows, git_status) = cx.read(|app| {
-                let root = root.read(app);
-                let rows = root
-                    .project
-                    .project_editor_runtime
-                    .workspace()
-                    .session(&project_id)
-                    .map(|session| session.file_tree().visible_rows())
-                    .unwrap_or_default();
-                let git_status = root.project.project_git_statuses.get(&project_id).cloned();
-                (rows, git_status)
-            });
-            panic!(
-                "active project watcher did not refresh in time; rows={rows:?}, git_status={git_status:?}"
-            );
-        }
-    }
-
-    let inactive_tree_generation = cx.read(|app| {
-        root.read(app)
-            .project
-            .project_editor_runtime
-            .workspace()
-            .session(&project_id)
-            .unwrap()
-            .file_tree()
-            .generation()
-    });
-    root.update(cx, |root, cx| {
-        root.select_project(&other_project_id).unwrap();
-        cx.notify();
-    });
-    cx.refresh().unwrap();
-    cx.run_until_parked();
-    assert!(cx.read(|app| {
-        root.read(app)
-            .active_project_file_watcher
-            .as_ref()
-            .is_some_and(|watcher| {
-                watcher.project_id == other_project_id && watcher.project_path == other_project_path
-            })
-    }));
-
-    fs::write(
-        project_path.join("inactive.txt"),
-        "changed while project is inactive\n",
-    )
-    .unwrap();
-    std::thread::sleep(Duration::from_millis(50));
-    cx.background_executor
-        .advance_clock(Duration::from_millis(400));
-    cx.run_until_parked();
-    cx.refresh().unwrap();
-    cx.run_until_parked();
-    assert_eq!(
-        cx.read(|app| {
-            root.read(app)
-                .project
-                .project_editor_runtime
-                .workspace()
-                .session(&project_id)
-                .unwrap()
-                .file_tree()
-                .generation()
-        }),
-        inactive_tree_generation
-    );
+    assert!(cx.read(|app| root.read(app).active_project_file_watcher.is_none()));
 }
 
 #[gpui::test]

@@ -313,3 +313,33 @@ fn exit_input(
         pane_title: "Codex".to_string(),
     }
 }
+
+#[test]
+fn profile_roots_do_not_scan_production_agent_sessions() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let production_sessions = temp
+        .path()
+        .join("production-home/.codex/sessions/2026/08/12");
+    std::fs::create_dir_all(&production_sessions).unwrap();
+    std::fs::write(
+        production_sessions.join("rollout.jsonl"),
+        format!(
+            "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"production-session\",\"cwd\":{:?}}}}}\n",
+            project.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    let access = yttt::config::profile::AgentSessionAccess::explicit(
+        yttt::config::profile::AgentSessionRoots::scoped(temp.path().join("isolated-agent-roots")),
+    );
+
+    let sessions = yttt::runtime::agent_sessions::scan_agent_sessions(
+        &[BuiltinAgent::Codex],
+        &project,
+        &access,
+    )
+    .unwrap();
+
+    assert!(sessions.is_empty());
+}

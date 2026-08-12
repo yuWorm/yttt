@@ -1416,7 +1416,6 @@ impl WorkbenchView {
                 .and_then(|project| match &project.location {
                     ProjectLocation::Ssh { connection_id, .. } => Some(SshTerminalContext {
                         connection_id: connection_id.clone(),
-                        transport: self.ssh.transport.clone(),
                     }),
                     ProjectLocation::Local { .. } => None,
                 });

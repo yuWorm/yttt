@@ -1,7 +1,7 @@
 use std::{
     cmp::Reverse,
     collections::HashSet,
-    env, fs,
+    fs,
     fs::File,
     io::{self, BufRead as _, BufReader, Read as _},
     path::{Path, PathBuf},
@@ -13,7 +13,10 @@ use serde::Deserialize;
 use serde_json::Value;
 use yttt_agent_core::AgentSessionMetadata;
 
-use crate::config::default_layout::BuiltinAgent;
+use crate::config::{
+    default_layout::BuiltinAgent,
+    profile::{AgentSessionAccess, AgentSessionReadPolicy, AgentSessionRoots},
+};
 
 const MAX_SESSION_FILES: usize = 5_000;
 const MAX_SESSION_RESULTS: usize = 100;
@@ -66,47 +69,30 @@ pub enum AgentSessionScanError {
     },
 }
 
-#[derive(Clone, Debug)]
-struct AgentSessionRoots {
-    codex: PathBuf,
-    claude: PathBuf,
-    pi: PathBuf,
-    omp: PathBuf,
-}
-
-impl AgentSessionRoots {
-    fn from_environment() -> Result<Self, AgentSessionScanError> {
-        let home = env::var_os("HOME")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .ok_or(AgentSessionScanError::HomeDirectoryUnavailable)?;
-        let pi_override = env_path("PI_CODING_AGENT_SESSION_DIR");
-        let pi_root = env_path("PI_CODING_AGENT_DIR").unwrap_or_else(|| home.join(".pi/agent"));
-        let omp_root = env_path("PI_CODING_AGENT_DIR").unwrap_or_else(|| home.join(".omp/agent"));
-
-        Ok(Self {
-            codex: env_path("CODEX_HOME").unwrap_or_else(|| home.join(".codex")),
-            claude: env_path("CLAUDE_CONFIG_DIR").unwrap_or_else(|| home.join(".claude")),
-            pi: pi_override
-                .clone()
-                .unwrap_or_else(|| pi_root.join("sessions")),
-            omp: pi_override.unwrap_or_else(|| omp_root.join("sessions")),
-        })
-    }
-}
-
 pub fn scan_agent_sessions(
     agents: &[BuiltinAgent],
     project_path: &Path,
+    access: &AgentSessionAccess,
 ) -> Result<Vec<AgentSession>, AgentSessionScanError> {
-    let roots = AgentSessionRoots::from_environment()?;
-    scan_agent_sessions_for_agents_with_roots(agents, project_path, &roots)
+    if access.policy() == AgentSessionReadPolicy::Disabled {
+        return Ok(Vec::new());
+    }
+    let Some(roots) = access.roots() else {
+        return Ok(Vec::new());
+    };
+    scan_agent_sessions_for_agents_with_roots(
+        agents,
+        project_path,
+        roots,
+        access.allows_native_commands(),
+    )
 }
 
 fn scan_agent_sessions_for_agents_with_roots(
     agents: &[BuiltinAgent],
     project_path: &Path,
     roots: &AgentSessionRoots,
+    allow_native_commands: bool,
 ) -> Result<Vec<AgentSession>, AgentSessionScanError> {
     let mut sessions = Vec::new();
     let mut scanned_agents = HashSet::new();
@@ -117,7 +103,8 @@ fn scan_agent_sessions_for_agents_with_roots(
         sessions.extend(match agent {
             BuiltinAgent::Codex => scan_codex(&roots.codex.join("sessions"), project_path)?,
             BuiltinAgent::Claude => scan_claude(&roots.claude.join("projects"), project_path)?,
-            BuiltinAgent::OpenCode => scan_opencode(project_path)?,
+            BuiltinAgent::OpenCode if allow_native_commands => scan_opencode(project_path)?,
+            BuiltinAgent::OpenCode => Vec::new(),
             BuiltinAgent::Pi => scan_pi_family(&roots.pi, project_path, BuiltinAgent::Pi)?,
             BuiltinAgent::OhMyPi => scan_pi_family(&roots.omp, project_path, BuiltinAgent::OhMyPi)?,
         });
@@ -131,7 +118,7 @@ fn scan_agent_sessions_with_roots(
     project_path: &Path,
     roots: &AgentSessionRoots,
 ) -> Result<Vec<AgentSession>, AgentSessionScanError> {
-    scan_agent_sessions_for_agents_with_roots(&[agent], project_path, roots)
+    scan_agent_sessions_for_agents_with_roots(&[agent], project_path, roots, false)
 }
 
 fn scan_codex(
@@ -608,12 +595,6 @@ fn system_time_millis(time: SystemTime) -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-fn env_path(name: &str) -> Option<PathBuf> {
-    env::var_os(name)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -689,6 +670,7 @@ mod tests {
             ],
             &project,
             &roots,
+            false,
         )
         .unwrap();
 

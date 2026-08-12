@@ -284,6 +284,10 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandSettingsNotificationsDescription => {
             "Toggle system notifications for agent exits"
         }
+        UiTextKey::CommandApplicationQuitTitle => "Quit yttt",
+        UiTextKey::CommandApplicationQuitDescription => {
+            "Stop all host resources and quit the application"
+        }
         UiTextKey::GitBranchesLoading => "Loading Git branches…",
         UiTextKey::GitBranchSwitchFailed => "Could not switch Git branch",
         UiTextKey::GitBranchLocal => "Local branch",

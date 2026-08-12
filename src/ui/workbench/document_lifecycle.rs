@@ -117,18 +117,14 @@ impl WorkbenchView {
                     .map(|(document_id, _)| document_id.clone())
             })
             .collect::<Vec<_>>();
-        let running_pane_count = project_ids
-            .iter()
-            .map(|project_id| self.project_running_pane_count(project_id))
-            .sum();
-        if dirty_documents.is_empty() && running_pane_count == 0 {
+        if dirty_documents.is_empty() {
             return true;
         }
         self.overlays.pending_close_project_id = None;
         self.documents.pending_dirty_close = Some(PendingDirtyClose {
             intent: DirtyCloseIntent::Window,
             dirty_documents,
-            running_pane_count,
+            running_pane_count: 0,
             saving_documents: HashSet::new(),
         });
         self.sync_input_owner_state();

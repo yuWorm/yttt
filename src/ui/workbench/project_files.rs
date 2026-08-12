@@ -19,29 +19,23 @@ impl ProjectFileRefreshBatch {
         }
     }
 
-    fn record_event(&mut self, project_path: &Path, event: notify::Event) -> bool {
-        if event.need_rescan() {
-            self.refresh_all_expanded = true;
-            self.refresh_status = true;
-            self.tree_directories.clear();
-            return true;
-        }
-        if !project_file_event_requires_status_refresh(&event.kind) {
+    fn record_change(&mut self, change: ProjectChange) -> bool {
+        if !change.refresh_status {
             return false;
         }
         self.refresh_status = true;
-        if !project_file_event_requires_tree_refresh(&event.kind) || self.refresh_all_expanded {
+        if !change.refresh_tree || self.refresh_all_expanded {
             return true;
         }
-        if project_file_event_requires_full_tree_refresh(&event.kind) {
+        if change.refresh_all {
             self.refresh_all_expanded = true;
             self.tree_directories.clear();
             return true;
         }
 
         let mut found_project_path = false;
-        for event_path in event.paths {
-            let Ok(relative_path) = event_path.strip_prefix(project_path) else {
+        for relative_path in change.relative_paths {
+            let Ok(relative_path) = crate::runtime::project::platform_path(relative_path) else {
                 continue;
             };
             let relative_directory = relative_path.parent().unwrap_or_else(|| Path::new(""));
@@ -64,48 +58,6 @@ impl ProjectFileRefreshBatch {
     fn has_tree_refresh(&self) -> bool {
         self.refresh_all_expanded || !self.tree_directories.is_empty()
     }
-}
-
-fn project_file_event_requires_status_refresh(kind: &notify::EventKind) -> bool {
-    matches!(
-        kind,
-        notify::EventKind::Any
-            | notify::EventKind::Create(_)
-            | notify::EventKind::Modify(_)
-            | notify::EventKind::Remove(_)
-    )
-}
-
-fn project_file_event_requires_tree_refresh(kind: &notify::EventKind) -> bool {
-    matches!(
-        kind,
-        notify::EventKind::Any
-            | notify::EventKind::Create(_)
-            | notify::EventKind::Modify(
-                notify::event::ModifyKind::Any
-                    | notify::event::ModifyKind::Name(_)
-                    | notify::event::ModifyKind::Other
-            )
-            | notify::EventKind::Remove(_)
-    )
-}
-
-fn project_file_event_requires_full_tree_refresh(kind: &notify::EventKind) -> bool {
-    matches!(
-        kind,
-        notify::EventKind::Any
-            | notify::EventKind::Modify(
-                notify::event::ModifyKind::Any | notify::event::ModifyKind::Other
-            )
-    )
-}
-
-fn drain_project_file_refresh_signal(receiver: &std::sync::mpsc::Receiver<()>) -> bool {
-    if receiver.try_recv().is_err() {
-        return false;
-    }
-    while receiver.try_recv().is_ok() {}
-    true
 }
 
 impl WorkbenchView {
@@ -198,52 +150,64 @@ impl WorkbenchView {
         }
 
         self.active_project_file_watcher = None;
-        let pending_refresh = Arc::new(std::sync::Mutex::new(ProjectFileRefreshBatch::initial()));
-        let callback_refresh = pending_refresh.clone();
-        let watched_project_root = project_path.clone();
-        let (refresh_tx, refresh_rx) = std::sync::mpsc::sync_channel(1);
-        let _ = refresh_tx.try_send(());
-        let mut watcher =
-            match notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
-                let Ok(event) = result else {
-                    return;
-                };
-                let recorded = callback_refresh
-                    .lock()
-                    .expect("project file refresh batch mutex poisoned")
-                    .record_event(&watched_project_root, event);
-                if recorded {
-                    let _ = refresh_tx.try_send(());
-                }
-            }) {
-                Ok(watcher) => watcher,
-                Err(error) => {
-                    self.load_error = Some(format!(
-                        "Failed to watch project files at {}: {error}",
-                        project_path.display()
-                    ));
-                    return;
-                }
-            };
-        use notify::Watcher as _;
-        if let Err(error) = watcher.watch(&project_path, notify::RecursiveMode::Recursive) {
-            self.load_error = Some(format!(
-                "Failed to watch project files at {}: {error}",
-                project_path.display()
-            ));
+        let Some(services) = self.project.services.get(&project_id).cloned() else {
+            return;
+        };
+        if services.host_registration_epoch().is_none() {
             return;
         }
-
+        let Some(runtime) = self.terminal.host_runtime.as_ref() else {
+            return;
+        };
+        let events = runtime.events();
+        let pending_refresh = Arc::new(std::sync::Mutex::new(ProjectFileRefreshBatch::initial()));
         let watched_project_id = project_id.clone();
         let watched_project_path = project_path.clone();
         let task = cx.spawn_in(window, async move |this, cx| {
-            let _watcher = watcher;
+            let mut initial = true;
             loop {
+                if !initial {
+                    let change = loop {
+                        let Ok(event) = events.recv_async().await else {
+                            return;
+                        };
+                        let yttt_client_core::ClientEvent::Server(event) = event else {
+                            continue;
+                        };
+                        let ServerEvent::ProjectChanged(change) = event.body else {
+                            continue;
+                        };
+                        if change.project_id == watched_project_id
+                            && services.host_registration_epoch() == Some(change.registration_epoch)
+                        {
+                            break change;
+                        }
+                    };
+                    pending_refresh
+                        .lock()
+                        .expect("project file refresh batch mutex poisoned")
+                        .record_change(change);
+                }
+                initial = false;
+
                 cx.background_executor()
                     .timer(ACTIVE_PROJECT_FILE_WATCH_DEBOUNCE)
                     .await;
-                if !drain_project_file_refresh_signal(&refresh_rx) {
-                    continue;
+                while let Ok(event) = events.try_recv() {
+                    let yttt_client_core::ClientEvent::Server(event) = event else {
+                        continue;
+                    };
+                    let ServerEvent::ProjectChanged(change) = event.body else {
+                        continue;
+                    };
+                    if change.project_id == watched_project_id
+                        && services.host_registration_epoch() == Some(change.registration_epoch)
+                    {
+                        pending_refresh
+                            .lock()
+                            .expect("project file refresh batch mutex poisoned")
+                            .record_change(change);
+                    }
                 }
                 let refresh = {
                     let mut pending = pending_refresh
@@ -289,10 +253,10 @@ impl WorkbenchView {
                     continue;
                 }
 
-                let status_project_path = watched_project_path.clone();
+                let status_services = services.clone();
                 let status_task = cx
                     .background_executor()
-                    .spawn(async move { read_project_git_status(&status_project_path) });
+                    .spawn(async move { read_project_git_status_with(&status_services) });
                 let status = status_task.await;
                 let _ = this.update_in(cx, |root, _window, cx| {
                     if !root.active_project_file_watcher_matches(
@@ -618,28 +582,12 @@ impl WorkbenchView {
         else {
             return;
         };
-        let source_base = if let Some(source_root) = source_services.local_root() {
-            let Ok(canonical_source_root) = fs::canonicalize(source_root) else {
-                return;
-            };
-            canonical_source_root.join(source_relative_path)
-        } else {
-            let Some(path) = source_services.document_path(source_relative_path) else {
-                return;
-            };
-            path
+        let Some(source_base) = source_services.document_path(source_relative_path) else {
+            return;
         };
-        let destination_base = if let Some(destination_root) = destination_services.local_root() {
-            let Ok(path) = fs::canonicalize(destination_root.join(destination_relative_path))
-            else {
-                return;
-            };
-            path
-        } else {
-            let Some(path) = destination_services.document_path(destination_relative_path) else {
-                return;
-            };
-            path
+        let Some(destination_base) = destination_services.document_path(destination_relative_path)
+        else {
+            return;
         };
         let migrations = self
             .project
@@ -1503,55 +1451,35 @@ impl WorkbenchView {
 mod tests {
     use super::*;
 
-    #[test]
-    fn content_changes_refresh_status_without_rescanning_tree() {
-        let kind = notify::EventKind::Modify(notify::event::ModifyKind::Data(
-            notify::event::DataChange::Any,
-        ));
-
-        assert!(project_file_event_requires_status_refresh(&kind));
-        assert!(!project_file_event_requires_tree_refresh(&kind));
-    }
-
-    #[test]
-    fn structural_changes_refresh_tree_and_status() {
-        let kinds = [
-            notify::EventKind::Any,
-            notify::EventKind::Create(notify::event::CreateKind::Any),
-            notify::EventKind::Modify(notify::event::ModifyKind::Name(
-                notify::event::RenameMode::Any,
-            )),
-            notify::EventKind::Remove(notify::event::RemoveKind::Any),
-        ];
-
-        for kind in kinds {
-            assert!(project_file_event_requires_status_refresh(&kind));
-            assert!(project_file_event_requires_tree_refresh(&kind));
+    fn change(paths: &[&str], refresh_tree: bool, refresh_all: bool) -> ProjectChange {
+        ProjectChange {
+            project_id: ProjectId::new("project"),
+            registration_epoch: 1,
+            relative_paths: paths
+                .iter()
+                .map(|path| crate::runtime::project::path_to_platform(Path::new(path)))
+                .collect(),
+            refresh_status: true,
+            refresh_tree,
+            refresh_all,
         }
     }
 
     #[test]
-    fn structural_events_coalesce_affected_parent_directories() {
-        let project_path = Path::new("/project");
+    fn content_changes_refresh_status_without_rescanning_tree() {
         let mut batch = ProjectFileRefreshBatch::default();
 
-        assert!(
-            batch.record_event(
-                project_path,
-                notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::Any))
-                    .add_path(project_path.join("src/new.rs"))
-            )
-        );
-        assert!(
-            batch.record_event(
-                project_path,
-                notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Name(
-                    notify::event::RenameMode::Any
-                )))
-                .add_path(project_path.join("src/old.rs"))
-                .add_path(project_path.join("tests/new.rs"))
-            )
-        );
+        assert!(batch.record_change(change(&["src/lib.rs"], false, false)));
+        assert!(batch.refresh_status);
+        assert!(!batch.has_tree_refresh());
+    }
+
+    #[test]
+    fn structural_changes_coalesce_affected_parent_directories() {
+        let mut batch = ProjectFileRefreshBatch::default();
+
+        assert!(batch.record_change(change(&["src/new.rs", "src/old.rs"], true, false)));
+        assert!(batch.record_change(change(&["tests/new.rs"], true, false)));
 
         assert_eq!(
             batch.tree_directories,
@@ -1564,10 +1492,8 @@ mod tests {
     #[test]
     fn watcher_rescan_signal_falls_back_to_all_expanded_directories() {
         let mut batch = ProjectFileRefreshBatch::default();
-        let event =
-            notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan);
 
-        assert!(batch.record_event(Path::new("/project"), event));
+        assert!(batch.record_change(change(&[], true, true)));
         assert!(batch.refresh_all_expanded);
         assert!(batch.tree_directories.is_empty());
         assert!(batch.refresh_status);
@@ -1575,18 +1501,11 @@ mod tests {
 
     #[test]
     fn excessive_affected_directories_fall_back_to_bounded_full_refresh() {
-        let project_path = Path::new("/project");
         let mut batch = ProjectFileRefreshBatch::default();
 
         for index in 0..=MAX_INCREMENTAL_PROJECT_TREE_DIRECTORIES {
-            let event =
-                notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::Any))
-                    .add_path(
-                        project_path
-                            .join(format!("directory-{index}"))
-                            .join("file.rs"),
-                    );
-            assert!(batch.record_event(project_path, event));
+            let path = format!("directory-{index}/file.rs");
+            assert!(batch.record_change(change(&[&path], true, false)));
         }
 
         assert!(batch.refresh_all_expanded);

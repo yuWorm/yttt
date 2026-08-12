@@ -1,11 +1,12 @@
+#[cfg(test)]
+use std::process::{Command, Stdio};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
 };
 
-#[cfg(windows)]
+#[cfg(all(test, windows))]
 fn git_command() -> Command {
     use std::os::windows::process::CommandExt as _;
 
@@ -16,7 +17,7 @@ fn git_command() -> Command {
     command
 }
 
-#[cfg(not(windows))]
+#[cfg(all(test, not(windows)))]
 fn git_command() -> Command {
     Command::new("git")
 }
@@ -38,10 +39,12 @@ pub trait ProjectGitExecutor {
     fn null_device_path(&self) -> &'static str;
 }
 
+#[cfg(test)]
 struct LocalGitExecutor<'a> {
     project_path: &'a Path,
 }
 
+#[cfg(test)]
 impl ProjectGitExecutor for LocalGitExecutor<'_> {
     fn execute_git(
         &self,
@@ -55,6 +58,7 @@ impl ProjectGitExecutor for LocalGitExecutor<'_> {
         null_device_path()
     }
 }
+#[cfg(test)]
 pub(crate) fn execute_local_git(
     project_path: &Path,
     args: &[OsString],
@@ -280,6 +284,7 @@ impl ProjectGitStatus {
     }
 }
 
+#[cfg(test)]
 pub fn read_project_git_branches(project_path: &Path) -> Result<Vec<GitBranch>, String> {
     read_project_git_branches_with(&LocalGitExecutor { project_path })
 }
@@ -311,6 +316,7 @@ pub fn read_project_git_branches_with(
     Ok(branches)
 }
 
+#[cfg(test)]
 pub fn switch_project_git_branch(project_path: &Path, branch: &GitBranch) -> Result<(), String> {
     switch_project_git_branch_with(&LocalGitExecutor { project_path }, branch)
 }
@@ -343,6 +349,7 @@ pub fn switch_project_git_branch_with(
     }
 }
 
+#[cfg(test)]
 pub fn read_project_git_diff(project_path: &Path) -> Result<String, String> {
     read_project_git_diff_output(
         &LocalGitExecutor { project_path },
@@ -351,6 +358,7 @@ pub fn read_project_git_diff(project_path: &Path) -> Result<String, String> {
     )
 }
 
+#[cfg(test)]
 pub fn read_project_git_diff_result(
     project_path: &Path,
     mode: GitDiffMode,
@@ -433,6 +441,7 @@ fn read_project_git_diff_output(
     Ok(diff)
 }
 
+#[cfg(test)]
 pub fn read_project_git_status(project_path: &Path) -> Option<ProjectGitStatus> {
     read_project_git_status_with(&LocalGitExecutor { project_path })
 }
@@ -819,12 +828,12 @@ fn read_untracked_paths(executor: &impl ProjectGitExecutor) -> Result<Vec<PathBu
         .collect()
 }
 
-#[cfg(not(windows))]
+#[cfg(all(test, not(windows)))]
 fn null_device_path() -> &'static str {
     "/dev/null"
 }
 
-#[cfg(windows)]
+#[cfg(all(test, windows))]
 fn null_device_path() -> &'static str {
     "NUL"
 }

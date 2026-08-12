@@ -164,8 +164,10 @@ impl WorkbenchView {
         };
         let generation = self.agent_sessions.generation;
         let agents = key.agents.clone();
+        let agent_session_access = self.config_paths.agent_session_access().clone();
         let task = cx.background_spawn(async move {
-            scan_agent_sessions(&agents, &project_path).map_err(|error| error.to_string())
+            scan_agent_sessions(&agents, &project_path, &agent_session_access)
+                .map_err(|error| error.to_string())
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;

@@ -425,6 +425,7 @@ pub fn default_keybindings() -> KeybindingsConfig {
         schema_version: KEYBINDINGS_SCHEMA_VERSION,
         leader: default_keybinding_leader(),
         bindings: vec![
+            binding("cmd-q", "application.quit"),
             binding("cmd-o", "project.open"),
             binding("ctrl-o", "project.open"),
             binding("cmd-p", "file.find"),

@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 use yttt_agent_providers::{OMP_EXTENSION_SOURCE, OPENCODE_PLUGIN_SOURCE, PI_EXTENSION_SOURCE};
 
-use crate::config::{atomic_write, paths::AppConfigPaths};
+use crate::config::{atomic_write, paths::AppConfigPaths, profile::EnvironmentKind};
 
 const MANAGED_HOOK_FILE_NAME: &str = "yttt-agent-hook";
 const MANAGED_MARKER: &str = "yttt-agent-hook";
@@ -36,7 +36,7 @@ const CODEX_EVENTS: &[(&str, &str)] = &[
 ];
 
 pub fn install_managed_hooks(config_paths: &AppConfigPaths) -> io::Result<()> {
-    if cfg!(test) || config_paths.config_dir() != AppConfigPaths::for_app().config_dir() {
+    if cfg!(test) || config_paths.environment() != EnvironmentKind::Production {
         return Ok(());
     }
     let home = home_dir()?;

@@ -1,6 +1,28 @@
 use super::*;
 
 impl WorkbenchView {
+    pub(super) fn on_application_quit(
+        &mut self,
+        _: &ApplicationQuit,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.begin_application_quit(cx);
+    }
+
+    pub(super) fn begin_application_quit(&mut self, cx: &mut Context<Self>) {
+        let Some(host_runtime) = self.terminal.host_runtime.clone() else {
+            cx.quit();
+            return;
+        };
+        let response = host_runtime.request(Request::DrainAndStop);
+        cx.spawn(async move |_, cx| {
+            let _ = response.recv_async().await;
+            let _ = cx.update(|cx| cx.quit());
+        })
+        .detach();
+    }
+
     pub(super) fn on_open_command_palette(
         &mut self,
         _: &OpenCommandPalette,
@@ -823,6 +845,10 @@ impl WorkbenchView {
         command_id: CommandId,
         cx: &mut Context<Self>,
     ) {
+        if command_id == CommandId::ApplicationQuit {
+            self.begin_application_quit(cx);
+            return;
+        }
         if self.palette.active_palette.is_some()
             || self.overlays.pending_tab_rename.is_some()
             || self.overlays.pending_keybinding_edit.is_some()

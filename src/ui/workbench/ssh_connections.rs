@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, path::PathBuf};
+use std::{collections::VecDeque, path::PathBuf, sync::Arc};
 
 use gpui_component::{
     list::{List, ListEvent, ListState},
@@ -21,6 +21,27 @@ use crate::config::ssh::{
 use crate::config::ssh_command::{format_ssh_command, parse_ssh_command};
 
 use super::*;
+
+async fn delete_host_credential(
+    runtime: Option<Arc<crate::host_runtime::DesktopHostRuntime>>,
+    credential_id: CredentialId,
+) -> Result<(), String> {
+    let runtime = runtime.ok_or_else(|| "Host runtime is unavailable".to_string())?;
+    let response = runtime
+        .request(yttt_protocol::Request::DeleteSshCredential {
+            credential_id: credential_id.to_string(),
+        })
+        .recv_async()
+        .await
+        .map_err(|_| "Host request channel closed".to_string())?
+        .map_err(|error| error.to_string())?;
+    match response {
+        yttt_protocol::Response::CredentialDeleted => Ok(()),
+        response => Err(format!(
+            "Host returned an unexpected credential response: {response:?}"
+        )),
+    }
+}
 
 impl WorkbenchView {
     pub fn start_ssh_event_listener(&mut self, cx: &mut Context<Self>) {
@@ -120,9 +141,9 @@ impl WorkbenchView {
                     .get(&connection_id)
                     .is_some_and(|status| status.epoch == epoch);
                 if !current_epoch_matches {
-                    let store = self.ssh.credential_store.clone();
+                    let runtime = self.terminal.host_runtime.clone();
                     cx.background_spawn(async move {
-                        let _ = store.delete(&credential.id);
+                        let _ = delete_host_credential(runtime, credential.id).await;
                     })
                     .detach();
                     return;
@@ -164,10 +185,10 @@ impl WorkbenchView {
                     }
                     Err(error) => {
                         self.ssh.error = Some(error.to_string());
-                        let store = self.ssh.credential_store.clone();
+                        let runtime = self.terminal.host_runtime.clone();
                         let credential_id = credential.id;
                         cx.background_spawn(async move {
-                            let _ = store.delete(&credential_id);
+                            let _ = delete_host_credential(runtime, credential_id).await;
                         })
                         .detach();
                     }
@@ -498,8 +519,11 @@ impl WorkbenchView {
             }
         }
         if let Some(credential_id) = stale_credential_id {
-            let store = self.ssh.credential_store.clone();
-            let delete_task = cx.background_spawn(async move { store.delete(&credential_id) });
+            let runtime = self.terminal.host_runtime.clone();
+            let delete_task =
+                cx.background_spawn(
+                    async move { delete_host_credential(runtime, credential_id).await },
+                );
             cx.spawn(async move |this, cx| {
                 let result = delete_task.await;
                 if let Err(error) = result {
@@ -724,10 +748,10 @@ impl WorkbenchView {
         self.ssh.statuses.remove(&connection_id);
         let transport = self.ssh.transport.clone();
         let disconnect_id = connection_id.clone();
-        let store = self.ssh.credential_store.clone();
+        let runtime = self.terminal.host_runtime.clone();
         let delete_task = cx.background_spawn(async move {
             match credential_id {
-                Some(credential_id) => store.delete(&credential_id),
+                Some(credential_id) => delete_host_credential(runtime, credential_id).await,
                 None => Ok(()),
             }
         });

@@ -50,6 +50,7 @@ pub const WORKSPACE_VIM_CONTEXT: &str = "WorkspaceVim";
 actions!(
     yttt,
     [
+        ApplicationQuit,
         OpenCommandPalette,
         OpenFileFinder,
         CreateProject,
@@ -260,6 +261,7 @@ macro_rules! define_bindable_actions {
 
 define_bindable_actions! {
     commands {
+        CommandId::ApplicationQuit => ApplicationQuit,
         CommandId::ProjectCreate => CreateProject,
         CommandId::ProjectOpen => OpenProject,
         CommandId::ProjectOpenSsh => OpenSshProject,

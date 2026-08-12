@@ -13,9 +13,7 @@ use yttt_core::model::{
     ids::{ConnectionId, CredentialId},
     project::RemotePathBuf,
 };
-use yttt_ssh::{
-    ConnectionEpoch, ConnectionStatus, CredentialStore, HostKeyChallenge, TransportService,
-};
+use yttt_ssh::{ConnectionEpoch, ConnectionStatus, HostKeyChallenge, TransportService};
 
 use crate::{
     config::{
@@ -85,7 +83,6 @@ impl SshProjectPickerState {
 pub(in super::super) struct SshControllerState {
     pub(in super::super) connections: SshConnectionsConfig,
     pub(in super::super) transport: Option<TransportService>,
-    pub(in super::super) credential_store: CredentialStore,
     pub(in super::super) statuses: HashMap<ConnectionId, ConnectionStatus>,
     pub(in super::super) manager_open: bool,
     pub(in super::super) form: Option<SshConnectionForm>,
@@ -104,17 +101,12 @@ impl SshControllerState {
             Ok(config) => (config, None),
             Err(error) => (SshConnectionsConfig::default(), Some(error.to_string())),
         };
-        let (transport, transport_error) = match TransportService::start(paths.ssh_host_keys_file())
-        {
-            Ok(service) => (Some(service), None),
-            Err(error) => (None, Some(error.to_string())),
-        };
-        let load_error = config_error.or(transport_error);
+        let transport = None;
+        let load_error = config_error;
         (
             Self {
                 connections,
                 transport,
-                credential_store: CredentialStore,
                 statuses: HashMap::new(),
                 manager_open: false,
                 form: None,

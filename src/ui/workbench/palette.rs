@@ -104,6 +104,12 @@ impl WorkbenchView {
 
         match active_palette.kind {
             PaletteKind::Command => {
+                if item.command == CommandId::ApplicationQuit {
+                    if let Some(cx) = cx.as_deref_mut() {
+                        self.begin_application_quit(cx);
+                    }
+                    return Ok(());
+                }
                 let opens_palette = opens_palette_command(item.command);
                 self.run_command(item.command)?;
                 if opens_palette {

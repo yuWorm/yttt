@@ -22,9 +22,7 @@ use yttt_agent_runtime::{
 
 use crate::{
     config::{atomic_write, default_layout::BuiltinAgent, paths::AppConfigPaths},
-    runtime::agent_hooks::{
-        AgentHookClient, AgentHookRequest, AgentHookServer, installer::install_managed_hooks,
-    },
+    runtime::agent_hooks::{AgentHookClient, AgentHookRequest, installer::install_managed_hooks},
 };
 
 const AGENT_STATE_VERSION: u32 = 1;
@@ -161,7 +159,7 @@ pub struct AgentManager {
     detected_by_address: HashMap<AgentPaneAddress, DetectedAgentProcess>,
     finished_detected_generations: HashMap<AgentPaneAddress, u64>,
     hook_providers: HashMap<String, Arc<dyn AgentProvider>>,
-    hook_server: Option<AgentHookServer>,
+    hook_client: Option<AgentHookClient>,
     omp_extension_path: Option<PathBuf>,
     state_path: PathBuf,
     retained_snapshots: HashMap<AgentPaneAddress, AgentSnapshot>,
@@ -183,10 +181,6 @@ impl AgentManager {
         for provider in providers {
             runtime.register_provider(provider);
         }
-        let (hook_server, hook_error) = match AgentHookServer::start() {
-            Ok(server) => (Some(server), None),
-            Err(error) => (None, Some(format!("agent hook listener: {error}"))),
-        };
         let adapter_error = install_managed_hooks(config_paths)
             .err()
             .map(|error| format!("agent hook adapters: {error}"));
@@ -199,10 +193,8 @@ impl AgentManager {
             Ok(state) => (state, None),
             Err(error) => (HashMap::new(), Some(error.to_string())),
         };
-        let setup_error = combine_errors(
-            combine_errors(combine_errors(extension_error, state_error), hook_error),
-            adapter_error,
-        );
+        let setup_error =
+            combine_errors(combine_errors(extension_error, state_error), adapter_error);
         let omp_extension_base64 = Arc::<str>::from(STANDARD.encode(OMP_EXTENSION_SOURCE));
         Self {
             runtime,
@@ -211,7 +203,7 @@ impl AgentManager {
             detected_by_address: HashMap::new(),
             finished_detected_generations: HashMap::new(),
             hook_providers,
-            hook_server,
+            hook_client: None,
             omp_extension_path,
             state_path,
             retained_snapshots,
@@ -305,14 +297,18 @@ impl AgentManager {
     pub fn take_error(&mut self) -> Option<String> {
         self.last_error.take()
     }
+    pub fn set_hook_client(&mut self, client: Option<AgentHookClient>) {
+        self.hook_client = client;
+    }
+
     pub fn hook_client(&self) -> Option<AgentHookClient> {
-        self.hook_server.as_ref().map(AgentHookServer::client)
+        self.hook_client.clone()
     }
 
     pub fn drain_hook_requests(&self) -> Vec<AgentHookRequest> {
-        self.hook_server
+        self.hook_client
             .as_ref()
-            .map(AgentHookServer::drain)
+            .map(AgentHookClient::drain)
             .unwrap_or_default()
     }
 
