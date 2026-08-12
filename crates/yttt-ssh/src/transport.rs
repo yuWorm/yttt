@@ -28,8 +28,9 @@ use zeroize::Zeroizing;
 use crate::credential::CredentialStore;
 use crate::host_keys::{HostKeyStore, HostKeyVerification};
 use crate::sftp::{
-    RemoteDirectorySnapshot, RemoteEntryMutation, RemoteFingerprint, RemoteLoadedFile,
-    RemoteSaveOutcome, SftpError, SftpOperation, SftpResponse,
+    RemoteDirectoryEntry, RemoteDirectorySnapshot, RemoteEntryKind, RemoteEntryMutation,
+    RemoteFileState, RemoteFingerprint, RemoteLoadedFile, RemoteSaveOutcome, SftpError,
+    SftpOperation, SftpResponse,
 };
 use crate::terminal::{
     RemoteCommandOutput, RemoteCommandRequest, RemoteTerminalCommand, RemoteTerminalEndpoint,
@@ -205,19 +206,59 @@ impl ConnectAttempt {
     }
 }
 
+pub trait HostTransportProxy: Send + Sync {
+    fn request(&self, request: yttt_protocol::Request) -> Result<yttt_protocol::Response, String>;
+    fn events(&self) -> flume::Receiver<yttt_protocol::ServerEvent>;
+}
+
 #[derive(Clone)]
 pub struct TransportService {
     inner: Arc<TransportServiceInner>,
 }
 
-struct TransportServiceInner {
-    commands: mpsc::UnboundedSender<RuntimeCommand>,
-    events: EventReceiver<TransportEvent>,
-    thread: Mutex<Option<thread::JoinHandle<()>>>,
+enum TransportServiceInner {
+    Direct {
+        commands: mpsc::UnboundedSender<RuntimeCommand>,
+        events: EventReceiver<TransportEvent>,
+        thread: Mutex<Option<thread::JoinHandle<()>>>,
+    },
+    Host {
+        proxy: Arc<dyn HostTransportProxy>,
+        events: EventReceiver<TransportEvent>,
+        state: Arc<Mutex<HostProxyState>>,
+        shutdown: Arc<std::sync::atomic::AtomicBool>,
+        thread: Mutex<Option<thread::JoinHandle<()>>>,
+    },
+}
+
+#[derive(Default)]
+struct HostProxyState {
+    attempts: HashMap<
+        (ConnectionId, ConnectionEpoch),
+        oneshot::Sender<Result<ConnectionEpoch, TransportError>>,
+    >,
+    statuses: HashMap<(ConnectionId, ConnectionEpoch), ConnectionStatus>,
 }
 
 impl TransportService {
     pub fn start(host_keys_path: impl Into<PathBuf>) -> Result<Self, TransportError> {
+        Self::start_with_credential_store(host_keys_path, CredentialStore::default())
+    }
+
+    pub fn start_with_credential_namespace(
+        host_keys_path: impl Into<PathBuf>,
+        credential_namespace: impl Into<Arc<str>>,
+    ) -> Result<Self, TransportError> {
+        Self::start_with_credential_store(
+            host_keys_path,
+            CredentialStore::new(credential_namespace),
+        )
+    }
+
+    pub fn start_with_credential_store(
+        host_keys_path: impl Into<PathBuf>,
+        credential_store: CredentialStore,
+    ) -> Result<Self, TransportError> {
         let host_keys = Arc::new(Mutex::new(
             HostKeyStore::load(host_keys_path)
                 .map_err(|error| TransportError::HostKeyStore(error.to_string()))?,
@@ -237,11 +278,12 @@ impl TransportService {
                     runtime_commands,
                     events_tx,
                     host_keys,
+                    credential_store,
                 ));
             })
             .map_err(|source| TransportError::RuntimeStart(source.to_string()))?;
         Ok(Self {
-            inner: Arc::new(TransportServiceInner {
+            inner: Arc::new(TransportServiceInner::Direct {
                 commands,
                 events,
                 thread: Mutex::new(Some(thread)),
@@ -249,26 +291,94 @@ impl TransportService {
         })
     }
 
+    pub fn from_host(proxy: Arc<dyn HostTransportProxy>) -> Result<Self, TransportError> {
+        let source = proxy.events();
+        let (events_tx, events) = async_channel::unbounded();
+        let state = Arc::new(Mutex::new(HostProxyState::default()));
+        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let bridge_proxy = Arc::downgrade(&proxy);
+        let bridge_state = state.clone();
+        let bridge_shutdown = shutdown.clone();
+        let thread = thread::Builder::new()
+            .name("yttt-ssh-host-events".to_string())
+            .spawn(move || {
+                while !bridge_shutdown.load(std::sync::atomic::Ordering::Acquire) {
+                    let event = match source.recv_timeout(Duration::from_millis(100)) {
+                        Ok(event) => event,
+                        Err(flume::RecvTimeoutError::Timeout) => continue,
+                        Err(flume::RecvTimeoutError::Disconnected) => break,
+                    };
+                    let Some(proxy) = bridge_proxy.upgrade() else {
+                        break;
+                    };
+                    bridge_host_event(event, &proxy, &bridge_state, &events_tx);
+                }
+            })
+            .map_err(|source| TransportError::RuntimeStart(source.to_string()))?;
+        Ok(Self {
+            inner: Arc::new(TransportServiceInner::Host {
+                proxy,
+                events,
+                state,
+                shutdown,
+                thread: Mutex::new(Some(thread)),
+            }),
+        })
+    }
+
     pub fn events(&self) -> EventReceiver<TransportEvent> {
-        self.inner.events.clone()
+        match self.inner.as_ref() {
+            TransportServiceInner::Direct { events, .. }
+            | TransportServiceInner::Host { events, .. } => events.clone(),
+        }
     }
 
     pub async fn start_connect(
         &self,
         request: ConnectRequest,
     ) -> Result<ConnectAttempt, TransportError> {
-        let (started_reply, started) = oneshot::channel();
-        let (completion_reply, completion) = oneshot::channel();
-        self.inner
-            .commands
-            .send(RuntimeCommand::Connect {
-                request,
-                started_reply,
-                completion_reply,
-            })
-            .map_err(|_| TransportError::RuntimeStopped)?;
-        let epoch = started.await.map_err(|_| TransportError::RuntimeStopped)?;
-        Ok(ConnectAttempt { epoch, completion })
+        match self.inner.as_ref() {
+            TransportServiceInner::Direct { commands, .. } => {
+                let (started_reply, started) = oneshot::channel();
+                let (completion_reply, completion) = oneshot::channel();
+                commands
+                    .send(RuntimeCommand::Connect {
+                        request,
+                        started_reply,
+                        completion_reply,
+                    })
+                    .map_err(|_| TransportError::RuntimeStopped)?;
+                let epoch = started.await.map_err(|_| TransportError::RuntimeStopped)?;
+                Ok(ConnectAttempt { epoch, completion })
+            }
+            TransportServiceInner::Host { proxy, state, .. } => {
+                let connection_id = request.connection_id.clone();
+                let response = proxy
+                    .request(yttt_protocol::Request::SshConnect(wire_connect_request(
+                        request,
+                    )?))
+                    .map_err(TransportError::Connection)?;
+                let yttt_protocol::Response::SshConnected { epoch, .. } = response else {
+                    return Err(TransportError::Connection(
+                        "Host returned an unexpected SSH connect response".to_string(),
+                    ));
+                };
+                let epoch = ConnectionEpoch(epoch);
+                let (completion_reply, completion) = oneshot::channel();
+                let key = (connection_id, epoch);
+                let mut state = state.lock().map_err(|_| TransportError::RuntimeStopped)?;
+                if let Some(status) = state.statuses.get(&key) {
+                    if let Some(result) = completion_for_status(status) {
+                        let _ = completion_reply.send(result);
+                    } else {
+                        state.attempts.insert(key, completion_reply);
+                    }
+                } else {
+                    state.attempts.insert(key, completion_reply);
+                }
+                Ok(ConnectAttempt { epoch, completion })
+            }
+        }
     }
 
     pub async fn connect(
@@ -295,16 +405,45 @@ impl TransportService {
         connection_id: ConnectionId,
         expected_epoch: Option<ConnectionEpoch>,
     ) -> Result<(), TransportError> {
-        let (reply, result) = oneshot::channel();
-        self.inner
-            .commands
-            .send(RuntimeCommand::Disconnect {
-                connection_id,
-                expected_epoch,
-                reply,
-            })
-            .map_err(|_| TransportError::RuntimeStopped)?;
-        result.await.map_err(|_| TransportError::RuntimeStopped)?
+        match self.inner.as_ref() {
+            TransportServiceInner::Direct { commands, .. } => {
+                let (reply, result) = oneshot::channel();
+                commands
+                    .send(RuntimeCommand::Disconnect {
+                        connection_id,
+                        expected_epoch,
+                        reply,
+                    })
+                    .map_err(|_| TransportError::RuntimeStopped)?;
+                result.await.map_err(|_| TransportError::RuntimeStopped)?
+            }
+            TransportServiceInner::Host { proxy, state, .. } => {
+                if let Some(expected_epoch) = expected_epoch {
+                    let state = state.lock().map_err(|_| TransportError::RuntimeStopped)?;
+                    let latest = state
+                        .statuses
+                        .keys()
+                        .filter(|(id, _)| id == &connection_id)
+                        .map(|(_, epoch)| *epoch)
+                        .max_by_key(|epoch| epoch.get());
+                    if latest.is_some_and(|latest| latest != expected_epoch) {
+                        return Err(TransportError::Superseded);
+                    }
+                }
+                let response = proxy
+                    .request(yttt_protocol::Request::SshDisconnect {
+                        connection_id: connection_id.as_str().to_string(),
+                    })
+                    .map_err(TransportError::Connection)?;
+                if matches!(response, yttt_protocol::Response::SshDisconnected) {
+                    Ok(())
+                } else {
+                    Err(TransportError::Connection(
+                        "Host returned an unexpected SSH disconnect response".to_string(),
+                    ))
+                }
+            }
+        }
     }
 
     pub fn sftp_project(&self, connection_id: ConnectionId, root: RemotePathBuf) -> SftpProject {
@@ -319,10 +458,15 @@ impl TransportService {
         &self,
         request: RemoteTerminalRequest,
     ) -> Result<RemoteTerminalSession, TransportError> {
+        let TransportServiceInner::Direct { commands, .. } = self.inner.as_ref() else {
+            return Err(TransportError::Connection(
+                "Host-backed SSH terminals must be spawned through the Host terminal API"
+                    .to_string(),
+            ));
+        };
         let connection_id = request.connection_id.clone();
         let (session, endpoint) = RemoteTerminalSession::channel();
-        self.inner
-            .commands
+        commands
             .send(RuntimeCommand::Terminal {
                 connection_id,
                 request,
@@ -330,6 +474,210 @@ impl TransportService {
             })
             .map_err(|_| TransportError::RuntimeStopped)?;
         Ok(session)
+    }
+}
+
+fn wire_connect_request(
+    request: ConnectRequest,
+) -> Result<yttt_protocol::ssh::SshConnectSpec, TransportError> {
+    Ok(yttt_protocol::ssh::SshConnectSpec {
+        connection_id: request.connection_id.as_str().to_string(),
+        endpoint: yttt_protocol::ssh::SshEndpoint {
+            host: request.endpoint.host,
+            port: request.endpoint.port,
+            username: request.endpoint.user,
+        },
+        authentication: match request.authentication {
+            Authentication::Auto {
+                identity_file,
+                passphrase,
+                credential,
+            } => yttt_protocol::ssh::SshAuthentication::Auto {
+                identity_file: identity_file.map(|path| path.to_string_lossy().into_owned()),
+                passphrase: passphrase.map(|secret| {
+                    yttt_protocol::ssh::SensitiveBytes::new(secret.as_bytes().to_vec())
+                }),
+                credential: credential.map(wire_stored_credential),
+            },
+            Authentication::Agent => yttt_protocol::ssh::SshAuthentication::Agent,
+            Authentication::Password { secret, save_as } => {
+                yttt_protocol::ssh::SshAuthentication::Password {
+                    secret: yttt_protocol::ssh::SensitiveBytes::new(secret.as_bytes().to_vec()),
+                    save_as: save_as.map(|id| id.as_str().to_string()),
+                }
+            }
+            Authentication::StoredPassword(credential) => {
+                yttt_protocol::ssh::SshAuthentication::StoredPassword(wire_stored_credential(
+                    credential,
+                ))
+            }
+            Authentication::PrivateKey { path, passphrase } => {
+                yttt_protocol::ssh::SshAuthentication::PrivateKey {
+                    path: path.to_string_lossy().into_owned(),
+                    passphrase: passphrase.map(|secret| {
+                        yttt_protocol::ssh::SensitiveBytes::new(secret.as_bytes().to_vec())
+                    }),
+                }
+            }
+        },
+        reconnect: request.reconnect,
+    })
+}
+
+fn wire_stored_credential(credential: StoredCredential) -> yttt_protocol::ssh::StoredSshCredential {
+    yttt_protocol::ssh::StoredSshCredential {
+        id: credential.id.as_str().to_string(),
+        effective_user: credential.effective_user,
+        resolved_host: credential.resolved_host,
+        port: credential.port,
+        host_key_sha256: credential.host_key_sha256,
+        private_key_identity: credential.private_key_identity,
+    }
+}
+
+fn stored_credential(credential: yttt_protocol::ssh::StoredSshCredential) -> StoredCredential {
+    StoredCredential {
+        id: CredentialId::new(credential.id),
+        effective_user: credential.effective_user,
+        resolved_host: credential.resolved_host,
+        port: credential.port,
+        host_key_sha256: credential.host_key_sha256,
+        private_key_identity: credential.private_key_identity,
+    }
+}
+
+fn bridge_host_event(
+    event: yttt_protocol::ServerEvent,
+    proxy: &Arc<dyn HostTransportProxy>,
+    state: &Arc<Mutex<HostProxyState>>,
+    events: &EventSender<TransportEvent>,
+) {
+    match event {
+        yttt_protocol::ServerEvent::SshStateChanged(status) => {
+            let status = ConnectionStatus {
+                connection_id: ConnectionId::new(status.connection_id),
+                epoch: ConnectionEpoch(status.epoch),
+                state: connection_state(status.state),
+                error: status.error,
+            };
+            let key = (status.connection_id.clone(), status.epoch);
+            let completion = state.lock().ok().and_then(|mut state| {
+                state.statuses.insert(key.clone(), status.clone());
+                state.attempts.remove(&key)
+            });
+            if let Some(completion) = completion
+                && let Some(result) = completion_for_status(&status)
+            {
+                let _ = completion.send(result);
+            }
+            let _ = events.try_send(TransportEvent::StateChanged(status));
+        }
+        yttt_protocol::ServerEvent::CredentialChallenge(challenge) => {
+            let yttt_protocol::ssh::CredentialChallengeKind::HostKey {
+                host,
+                port,
+                algorithm,
+                fingerprint,
+                previous_fingerprint,
+            } = challenge.kind
+            else {
+                return;
+            };
+            let (response, decision) = oneshot::channel();
+            let epoch = current_epoch(state, challenge.connection_id.as_str());
+            let event = TransportEvent::HostKeyChallenge(HostKeyChallenge {
+                connection_id: ConnectionId::new(challenge.connection_id),
+                epoch,
+                host,
+                port,
+                algorithm,
+                fingerprint,
+                previous_fingerprint,
+                response: Some(response),
+            });
+            let _ = events.try_send(event);
+            let proxy = Arc::downgrade(proxy);
+            thread::spawn(move || {
+                let Ok(decision) = decision.blocking_recv() else {
+                    return;
+                };
+                let Some(proxy) = proxy.upgrade() else {
+                    return;
+                };
+                let answer = if !decision.accept {
+                    yttt_protocol::ssh::HostKeyDecision::Reject
+                } else if decision.remember {
+                    yttt_protocol::ssh::HostKeyDecision::AcceptAndStore
+                } else {
+                    yttt_protocol::ssh::HostKeyDecision::AcceptOnce
+                };
+                let _ = proxy.request(yttt_protocol::Request::CredentialAnswer {
+                    challenge_id: challenge.challenge_id,
+                    answer: yttt_protocol::ssh::CredentialAnswer::HostKey(answer),
+                });
+            });
+        }
+        yttt_protocol::ServerEvent::SshCredentialSaved {
+            connection_id,
+            epoch,
+            credential,
+        } => {
+            let _ = events.try_send(TransportEvent::CredentialSaved {
+                connection_id: ConnectionId::new(connection_id),
+                epoch: ConnectionEpoch(epoch),
+                credential: stored_credential(credential),
+            });
+        }
+        _ => {}
+    }
+}
+
+fn current_epoch(state: &Arc<Mutex<HostProxyState>>, connection_id: &str) -> ConnectionEpoch {
+    state
+        .lock()
+        .ok()
+        .and_then(|state| {
+            state
+                .statuses
+                .keys()
+                .filter(|(id, _)| id.as_str() == connection_id)
+                .map(|(_, epoch)| *epoch)
+                .max_by_key(|epoch| epoch.get())
+        })
+        .unwrap_or(ConnectionEpoch(0))
+}
+
+fn completion_for_status(
+    status: &ConnectionStatus,
+) -> Option<Result<ConnectionEpoch, TransportError>> {
+    match status.state {
+        ConnectionState::Connected => Some(Ok(status.epoch)),
+        ConnectionState::Disconnected | ConnectionState::Failed => {
+            Some(Err(TransportError::Connection(
+                status
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "SSH connection closed".to_string()),
+            )))
+        }
+        ConnectionState::Connecting
+        | ConnectionState::VerifyingHostKey
+        | ConnectionState::Authenticating
+        | ConnectionState::Reconnecting => None,
+    }
+}
+
+fn connection_state(state: yttt_protocol::ssh::SshConnectionState) -> ConnectionState {
+    match state {
+        yttt_protocol::ssh::SshConnectionState::Disconnected => ConnectionState::Disconnected,
+        yttt_protocol::ssh::SshConnectionState::Connecting => ConnectionState::Connecting,
+        yttt_protocol::ssh::SshConnectionState::VerifyingHostKey => {
+            ConnectionState::VerifyingHostKey
+        }
+        yttt_protocol::ssh::SshConnectionState::Authenticating => ConnectionState::Authenticating,
+        yttt_protocol::ssh::SshConnectionState::Connected => ConnectionState::Connected,
+        yttt_protocol::ssh::SshConnectionState::Reconnecting => ConnectionState::Reconnecting,
+        yttt_protocol::ssh::SshConnectionState::Failed => ConnectionState::Failed,
     }
 }
 
@@ -356,25 +704,53 @@ impl SftpProject {
         program: impl Into<String>,
         args: Vec<String>,
     ) -> Result<RemoteCommandOutput, TransportError> {
-        let (reply, result) = blocking_mpsc::channel();
-        self.inner
-            .commands
-            .send(RuntimeCommand::Execute {
-                connection_id: self.connection_id.clone(),
-                request: RemoteCommandRequest {
-                    cwd: self.root.clone(),
-                    program: program.into(),
-                    args,
-                },
-                reply,
-            })
-            .map_err(|_| TransportError::RuntimeStopped)?;
-        result
-            .recv_timeout(Duration::from_secs(120))
-            .map_err(|error| match error {
-                blocking_mpsc::RecvTimeoutError::Timeout => TransportError::RequestTimedOut,
-                blocking_mpsc::RecvTimeoutError::Disconnected => TransportError::RuntimeStopped,
-            })?
+        match self.inner.as_ref() {
+            TransportServiceInner::Direct { commands, .. } => {
+                let (reply, result) = blocking_mpsc::channel();
+                commands
+                    .send(RuntimeCommand::Execute {
+                        connection_id: self.connection_id.clone(),
+                        request: RemoteCommandRequest {
+                            cwd: self.root.clone(),
+                            program: program.into(),
+                            args,
+                        },
+                        reply,
+                    })
+                    .map_err(|_| TransportError::RuntimeStopped)?;
+                result
+                    .recv_timeout(Duration::from_secs(120))
+                    .map_err(|error| match error {
+                        blocking_mpsc::RecvTimeoutError::Timeout => TransportError::RequestTimedOut,
+                        blocking_mpsc::RecvTimeoutError::Disconnected => {
+                            TransportError::RuntimeStopped
+                        }
+                    })?
+            }
+            TransportServiceInner::Host { proxy, .. } => {
+                let response = proxy
+                    .request(yttt_protocol::Request::RemoteCommand(
+                        yttt_protocol::ssh::RemoteCommandRequest {
+                            connection_id: self.connection_id.as_str().to_string(),
+                            root: self.root.as_str().to_string(),
+                            program: program.into(),
+                            args,
+                        },
+                    ))
+                    .map_err(TransportError::Connection)?;
+                let yttt_protocol::Response::RemoteCommand(output) = response else {
+                    return Err(TransportError::Connection(
+                        "Host returned an unexpected remote command response".to_string(),
+                    ));
+                };
+                Ok(RemoteCommandOutput {
+                    stdout: output.stdout,
+                    stderr: output.stderr,
+                    exit_status: (output.exit_status != u32::MAX)
+                        .then_some(output.exit_status as i32),
+                })
+            }
+        }
     }
 
     pub fn scan_directory(
@@ -461,30 +837,213 @@ impl SftpProject {
     }
 
     fn request(&self, operation: SftpOperation) -> Result<SftpResponse, SftpError> {
-        let (reply, result) = blocking_mpsc::channel();
-        self.inner
-            .commands
-            .send(RuntimeCommand::Sftp {
-                connection_id: self.connection_id.clone(),
-                root: self.root.clone(),
-                operation,
-                reply,
-            })
-            .map_err(|_| SftpError::RuntimeStopped)?;
-        result
-            .recv_timeout(Duration::from_secs(120))
-            .map_err(|error| match error {
-                blocking_mpsc::RecvTimeoutError::Timeout => SftpError::TimedOut,
-                blocking_mpsc::RecvTimeoutError::Disconnected => SftpError::RuntimeStopped,
-            })?
+        match self.inner.as_ref() {
+            TransportServiceInner::Direct { commands, .. } => {
+                let (reply, result) = blocking_mpsc::channel();
+                commands
+                    .send(RuntimeCommand::Sftp {
+                        connection_id: self.connection_id.clone(),
+                        root: self.root.clone(),
+                        operation,
+                        reply,
+                    })
+                    .map_err(|_| SftpError::RuntimeStopped)?;
+                result
+                    .recv_timeout(Duration::from_secs(120))
+                    .map_err(|error| match error {
+                        blocking_mpsc::RecvTimeoutError::Timeout => SftpError::TimedOut,
+                        blocking_mpsc::RecvTimeoutError::Disconnected => SftpError::RuntimeStopped,
+                    })?
+            }
+            TransportServiceInner::Host { proxy, .. } => {
+                host_sftp_request(proxy, &self.connection_id, &self.root, operation)
+            }
+        }
+    }
+}
+
+fn host_sftp_request(
+    proxy: &Arc<dyn HostTransportProxy>,
+    connection_id: &ConnectionId,
+    root: &RemotePathBuf,
+    operation: SftpOperation,
+) -> Result<SftpResponse, SftpError> {
+    let connection_id = connection_id.as_str().to_string();
+    let root = root.as_str().to_string();
+    let request = match operation {
+        SftpOperation::ResolveHome => {
+            yttt_protocol::ssh::RemoteFileRequest::ResolveHome { connection_id }
+        }
+        SftpOperation::ScanDirectory {
+            relative_directory,
+            show_hidden,
+        } => yttt_protocol::ssh::RemoteFileRequest::ScanDirectory {
+            connection_id,
+            root,
+            relative_directory: relative_directory.as_str().to_string(),
+            show_hidden,
+        },
+        SftpOperation::ReadFile {
+            relative_path,
+            max_bytes,
+        } => yttt_protocol::ssh::RemoteFileRequest::Read {
+            connection_id,
+            root,
+            relative_path: relative_path.as_str().to_string(),
+            maximum_bytes: max_bytes,
+        },
+        SftpOperation::SaveFile {
+            relative_path,
+            bytes,
+            expected,
+            force,
+            max_bytes,
+        } => yttt_protocol::ssh::RemoteFileRequest::Save {
+            connection_id,
+            root,
+            relative_path: relative_path.as_str().to_string(),
+            expected: expected.map(wire_fingerprint),
+            force,
+            maximum_bytes: max_bytes,
+            bytes,
+        },
+        SftpOperation::CreateEntry {
+            relative_path,
+            directory,
+        } => yttt_protocol::ssh::RemoteFileRequest::Create {
+            connection_id,
+            root,
+            relative_path: relative_path.as_str().to_string(),
+            directory,
+        },
+        SftpOperation::RenameEntry {
+            relative_path,
+            new_name,
+        } => yttt_protocol::ssh::RemoteFileRequest::Rename {
+            connection_id,
+            root,
+            relative_path: relative_path.as_str().to_string(),
+            new_name,
+        },
+        SftpOperation::DeleteEntry { relative_path } => {
+            yttt_protocol::ssh::RemoteFileRequest::Delete {
+                connection_id,
+                root,
+                relative_path: relative_path.as_str().to_string(),
+            }
+        }
+    };
+    let response = proxy
+        .request(yttt_protocol::Request::RemoteFile(request))
+        .map_err(SftpError::Protocol)?;
+    let yttt_protocol::Response::RemoteFile(response) = response else {
+        return Err(SftpError::UnexpectedResponse);
+    };
+    match response {
+        yttt_protocol::ssh::RemoteFileResponse::Home(path) => RemotePathBuf::new(path)
+            .map(SftpResponse::Path)
+            .map_err(|error| SftpError::InvalidPath(error.to_string())),
+        yttt_protocol::ssh::RemoteFileResponse::Directory(directory) => {
+            let relative_directory = RemoteRelativePathBuf::new(directory.relative_directory)
+                .map_err(|error| SftpError::InvalidPath(error.to_string()))?;
+            let entries = directory
+                .entries
+                .into_iter()
+                .map(|entry| {
+                    Ok(RemoteDirectoryEntry {
+                        name: entry.name,
+                        relative_path: RemoteRelativePathBuf::new(entry.relative_path)
+                            .map_err(|error| SftpError::InvalidPath(error.to_string()))?,
+                        kind: remote_entry_kind(entry.kind),
+                    })
+                })
+                .collect::<Result<Vec<_>, SftpError>>()?;
+            Ok(SftpResponse::Directory(RemoteDirectorySnapshot {
+                relative_directory,
+                entries,
+            }))
+        }
+        yttt_protocol::ssh::RemoteFileResponse::File(file) => {
+            Ok(SftpResponse::File(RemoteLoadedFile {
+                canonical_path: RemotePathBuf::new(file.canonical_path)
+                    .map_err(|error| SftpError::InvalidPath(error.to_string()))?,
+                relative_path: RemoteRelativePathBuf::new(file.relative_path)
+                    .map_err(|error| SftpError::InvalidPath(error.to_string()))?,
+                bytes: file.bytes,
+                fingerprint: remote_fingerprint(file.fingerprint),
+            }))
+        }
+        yttt_protocol::ssh::RemoteFileResponse::Save(outcome) => {
+            let outcome = match outcome {
+                yttt_protocol::ssh::RemoteSaveResult::Saved(value) => {
+                    RemoteSaveOutcome::Saved(remote_fingerprint(value))
+                }
+                yttt_protocol::ssh::RemoteSaveResult::Conflict(
+                    yttt_protocol::ssh::RemoteFileState::Missing,
+                ) => RemoteSaveOutcome::Conflict(RemoteFileState::Missing),
+                yttt_protocol::ssh::RemoteSaveResult::Conflict(
+                    yttt_protocol::ssh::RemoteFileState::Present(value),
+                ) => {
+                    RemoteSaveOutcome::Conflict(RemoteFileState::Present(remote_fingerprint(value)))
+                }
+            };
+            Ok(SftpResponse::Save(outcome))
+        }
+        yttt_protocol::ssh::RemoteFileResponse::Mutation(mutation) => {
+            Ok(SftpResponse::Mutation(RemoteEntryMutation {
+                relative_path: RemoteRelativePathBuf::new(mutation.relative_path)
+                    .map_err(|error| SftpError::InvalidPath(error.to_string()))?,
+                kind: remote_entry_kind(mutation.kind),
+            }))
+        }
+        yttt_protocol::ssh::RemoteFileResponse::Deleted => Ok(SftpResponse::Deleted),
+    }
+}
+
+fn wire_fingerprint(value: RemoteFingerprint) -> yttt_protocol::ssh::RemoteFileFingerprint {
+    yttt_protocol::ssh::RemoteFileFingerprint {
+        byte_len: value.byte_len,
+        modified_seconds: value.modified_seconds,
+        content_hash: value.content_hash,
+    }
+}
+
+fn remote_fingerprint(value: yttt_protocol::ssh::RemoteFileFingerprint) -> RemoteFingerprint {
+    RemoteFingerprint {
+        byte_len: value.byte_len,
+        modified_seconds: value.modified_seconds,
+        content_hash: value.content_hash,
+    }
+}
+
+fn remote_entry_kind(kind: yttt_protocol::ssh::RemoteFileKind) -> RemoteEntryKind {
+    match kind {
+        yttt_protocol::ssh::RemoteFileKind::File => RemoteEntryKind::File,
+        yttt_protocol::ssh::RemoteFileKind::Directory => RemoteEntryKind::Directory,
+        yttt_protocol::ssh::RemoteFileKind::SymlinkFile => RemoteEntryKind::SymlinkFile,
+        yttt_protocol::ssh::RemoteFileKind::SymlinkDirectory => RemoteEntryKind::SymlinkDirectory,
     }
 }
 
 impl Drop for TransportServiceInner {
     fn drop(&mut self) {
-        let _ = self.commands.send(RuntimeCommand::Shutdown);
-        if let Some(thread) = self.thread.lock().ok().and_then(|mut thread| thread.take()) {
-            let _ = thread.join();
+        match self {
+            Self::Direct {
+                commands, thread, ..
+            } => {
+                let _ = commands.send(RuntimeCommand::Shutdown);
+                if let Some(thread) = thread.get_mut().ok().and_then(|thread| thread.take()) {
+                    let _ = thread.join();
+                }
+            }
+            Self::Host {
+                shutdown, thread, ..
+            } => {
+                shutdown.store(true, std::sync::atomic::Ordering::Release);
+                if let Some(thread) = thread.get_mut().ok().and_then(|thread| thread.take()) {
+                    let _ = thread.join();
+                }
+            }
         }
     }
 }
@@ -552,11 +1111,18 @@ enum ConnectionCommand {
     Disconnect,
 }
 
+#[derive(Clone)]
+struct AuthenticationRuntime {
+    credential_store: CredentialStore,
+    events: EventSender<TransportEvent>,
+}
+
 async fn runtime_loop(
     mut commands: mpsc::UnboundedReceiver<RuntimeCommand>,
     runtime_commands: mpsc::UnboundedSender<RuntimeCommand>,
     events: EventSender<TransportEvent>,
     host_keys: Arc<Mutex<HostKeyStore>>,
+    credential_store: CredentialStore,
 ) {
     let mut slots = HashMap::<ConnectionId, ConnectionSlot>::new();
     while let Some(command) = commands.recv().await {
@@ -592,8 +1158,11 @@ async fn runtime_loop(
                     None,
                 );
                 let runtime_commands = runtime_commands.clone();
-                let events = events.clone();
                 let host_keys = host_keys.clone();
+                let authentication_runtime = AuthenticationRuntime {
+                    credential_store: credential_store.clone(),
+                    events: events.clone(),
+                };
                 tokio::spawn(async move {
                     let outcome = connect_one(
                         connection_id.clone(),
@@ -602,7 +1171,7 @@ async fn runtime_loop(
                         request.authentication,
                         host_keys,
                         runtime_commands.clone(),
-                        events,
+                        authentication_runtime,
                     )
                     .await;
                     let _ = runtime_commands.send(RuntimeCommand::ConnectCompleted {
@@ -787,10 +1356,10 @@ async fn connect_one(
     authentication: Authentication,
     host_keys: Arc<Mutex<HostKeyStore>>,
     runtime_commands: mpsc::UnboundedSender<RuntimeCommand>,
-    events: EventSender<TransportEvent>,
+    authentication_runtime: AuthenticationRuntime,
 ) -> Result<mpsc::UnboundedSender<ConnectionCommand>, TransportError> {
     send_state(
-        &events,
+        &authentication_runtime.events,
         &connection_id,
         epoch,
         ConnectionState::VerifyingHostKey,
@@ -808,7 +1377,7 @@ async fn connect_one(
         connection_id: connection_id.clone(),
         epoch,
         endpoint: endpoint.clone(),
-        events: events.clone(),
+        events: authentication_runtime.events.clone(),
         host_keys,
         verified_host_key: verified_host_key.clone(),
     };
@@ -816,7 +1385,7 @@ async fn connect_one(
         .await
         .map_err(normalize_connect_error)?;
     send_state(
-        &events,
+        &authentication_runtime.events,
         &connection_id,
         epoch,
         ConnectionState::Authenticating,
@@ -834,7 +1403,7 @@ async fn connect_one(
         &endpoint,
         &host_key_sha256,
         authentication,
-        &events,
+        &authentication_runtime,
     )
     .await?;
 
@@ -866,7 +1435,7 @@ async fn authenticate(
     endpoint: &SshEndpoint,
     host_key_sha256: &str,
     authentication: Authentication,
-    events: &EventSender<TransportEvent>,
+    runtime: &AuthenticationRuntime,
 ) -> Result<(), TransportError> {
     let authenticated = match authentication {
         Authentication::Auto {
@@ -890,6 +1459,7 @@ async fn authenticate(
                     credential,
                     endpoint,
                     host_key_sha256,
+                    &runtime.credential_store,
                 )
                 .await?;
             }
@@ -902,10 +1472,12 @@ async fn authenticate(
                 .map_err(TransportError::from)?
                 .success();
             if authenticated && let Some(credential_id) = save_as {
-                CredentialStore
+                runtime
+                    .credential_store
                     .save(&credential_id, secret.as_str())
                     .map_err(|source| TransportError::Credential(source.to_string()))?;
-                events
+                runtime
+                    .events
                     .send(TransportEvent::CredentialSaved {
                         connection_id: connection_id.clone(),
                         epoch,
@@ -930,6 +1502,7 @@ async fn authenticate(
                 credential,
                 endpoint,
                 host_key_sha256,
+                &runtime.credential_store,
             )
             .await?
         }
@@ -951,6 +1524,7 @@ async fn authenticate_with_stored_password(
     credential: StoredCredential,
     endpoint: &SshEndpoint,
     host_key_sha256: &str,
+    credential_store: &CredentialStore,
 ) -> Result<bool, TransportError> {
     if credential.effective_user != endpoint.user
         || credential.resolved_host != endpoint.host
@@ -959,7 +1533,7 @@ async fn authenticate_with_stored_password(
     {
         return Err(TransportError::CredentialBindingMismatch(credential.id));
     }
-    let password = CredentialStore
+    let password = credential_store
         .load(&credential.id)
         .map_err(|source| TransportError::Credential(source.to_string()))?
         .ok_or_else(|| TransportError::CredentialMissing(credential.id.clone()))?;

@@ -15,6 +15,6 @@ pub use terminal::{
 };
 pub use transport::{
     Authentication, ConnectRequest, ConnectionEpoch, ConnectionState, ConnectionStatus,
-    HostKeyChallenge, HostKeyDecision, SftpProject, SshEndpoint, StoredCredential, TransportError,
-    TransportEvent, TransportService,
+    HostKeyChallenge, HostKeyDecision, HostTransportProxy, SftpProject, SshEndpoint,
+    StoredCredential, TransportError, TransportEvent, TransportService,
 };

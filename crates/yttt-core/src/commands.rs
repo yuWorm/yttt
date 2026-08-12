@@ -23,6 +23,7 @@ pub struct CommandContext {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CommandId {
+    ApplicationQuit,
     ProjectCreate,
     ProjectOpen,
     ProjectOpenSsh,
@@ -71,6 +72,7 @@ pub enum CommandId {
 
 impl CommandId {
     pub const ALL: &'static [Self] = &[
+        Self::ApplicationQuit,
         Self::ProjectCreate,
         Self::ProjectOpen,
         Self::ProjectOpenSsh,
@@ -119,6 +121,7 @@ impl CommandId {
 
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::ApplicationQuit => "application.quit",
             Self::ProjectCreate => "project.create",
             Self::ProjectOpen => "project.open",
             Self::ProjectOpenSsh => "project.open_ssh",
@@ -175,6 +178,10 @@ impl CommandId {
 
     pub fn presentation(self) -> CommandPresentation {
         match self {
+            Self::ApplicationQuit => presentation(
+                "Quit yttt",
+                "Stop all host resources and quit the application",
+            ),
             Self::ProjectCreate => {
                 presentation("Create Project", "Create and open a new project directory")
             }
@@ -316,7 +323,8 @@ impl CommandId {
 
     pub fn availability_for_context(self, context: CommandContext) -> CommandAvailability {
         match self {
-            Self::CommandPaletteOpen
+            Self::ApplicationQuit
+            | Self::CommandPaletteOpen
             | Self::ProjectCreate
             | Self::ProjectOpen
             | Self::ProjectOpenSsh

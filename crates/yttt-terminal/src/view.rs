@@ -64,7 +64,7 @@ use crate::render::TerminalDiagnosticsSnapshot;
 use crate::render::{
     RenderOverlayState, TerminalRenderCache, TerminalRenderSnapshot, TerminalRenderer,
 };
-use crate::terminal::TerminalState;
+use crate::terminal::{TerminalScrollbarMetrics, TerminalState};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point as AlacPoint, Side};
 use alacritty_terminal::selection::{Selection, SelectionType as AlacSelectionType};
@@ -704,6 +704,9 @@ pub struct TerminalView {
     /// The renderer for drawing terminal content
     renderer: TerminalRenderer,
     render_cache: Arc<parking_lot::Mutex<TerminalRenderCache>>,
+    semantic_viewport: Arc<parking_lot::Mutex<Option<yttt_protocol::terminal::SemanticViewport>>>,
+    semantic_scroll_callback: Option<Arc<dyn Fn(u64) + Send + Sync>>,
+    semantic_scroll_offset: Option<u64>,
     performance: TerminalPerformanceHandle,
 
     /// Focus handle for keyboard event handling
@@ -886,6 +889,31 @@ impl TerminalView {
         W: Write + Send + 'static,
         R: Read + Send + 'static,
     {
+        Self::new_with_optional_reader(stdin_writer, Some(stdout_reader), config, cx)
+    }
+
+    /// Creates a terminal view whose authoritative grid is supplied through
+    /// [`Self::set_semantic_viewport`].
+    ///
+    /// Only the input writer worker is started; no idle PTY reader, parser
+    /// worker, or read-buffer pool is allocated.
+    pub fn new_semantic<W>(stdin_writer: W, config: TerminalConfig, cx: &mut Context<Self>) -> Self
+    where
+        W: Write + Send + 'static,
+    {
+        Self::new_with_optional_reader::<W, std::io::Empty>(stdin_writer, None, config, cx)
+    }
+
+    fn new_with_optional_reader<W, R>(
+        stdin_writer: W,
+        stdout_reader: Option<R>,
+        config: TerminalConfig,
+        cx: &mut Context<Self>,
+    ) -> Self
+    where
+        W: Write + Send + 'static,
+        R: Read + Send + 'static,
+    {
         let config = config.normalized();
         let performance = TerminalPerformanceHandle::new();
         let (event_mailbox, event_signal) =
@@ -901,13 +929,17 @@ impl TerminalView {
         if config.start_in_vi_mode {
             state.with_term_mut(|term| term.toggle_vi_mode());
         }
-        let io_driver = PtyIoDriver::start_with_performance(
-            stdin_writer,
-            stdout_reader,
-            state.term_arc(),
-            event_mailbox.clone(),
-            performance.clone(),
-        );
+        let io_driver = if let Some(stdout_reader) = stdout_reader {
+            PtyIoDriver::start_with_performance(
+                stdin_writer,
+                stdout_reader,
+                state.term_arc(),
+                event_mailbox.clone(),
+                performance.clone(),
+            )
+        } else {
+            PtyIoDriver::start_writer_only(stdin_writer, event_mailbox.clone(), performance.clone())
+        };
 
         let io = io_driver.handle();
 
@@ -937,6 +969,9 @@ impl TerminalView {
             state,
             renderer,
             render_cache: Arc::new(parking_lot::Mutex::new(TerminalRenderCache::default())),
+            semantic_viewport: Arc::new(parking_lot::Mutex::new(None)),
+            semantic_scroll_callback: None,
+            semantic_scroll_offset: None,
             performance,
 
             focus_handle,
@@ -975,6 +1010,78 @@ impl TerminalView {
             cursor_blink_generation: 0,
             cursor_visible: true,
             last_focused: false,
+        }
+    }
+
+    pub fn set_semantic_viewport(
+        &mut self,
+        viewport: yttt_protocol::terminal::SemanticViewport,
+        cx: &mut Context<Self>,
+    ) {
+        self.semantic_scroll_offset = Some(viewport.display_offset);
+        *self.semantic_viewport.lock() = Some(viewport);
+        self.render_cache.lock().clear();
+        self.render_generation = self.render_generation.wrapping_add(1);
+        cx.notify();
+    }
+
+    pub fn with_semantic_scroll_callback(
+        mut self,
+        callback: impl Fn(u64) + Send + Sync + 'static,
+    ) -> Self {
+        self.semantic_scroll_callback = Some(Arc::new(callback));
+        self
+    }
+
+    fn mode(&self) -> TermMode {
+        let local_mode = self.state.mode();
+        let Some(bits) = self
+            .semantic_viewport
+            .lock()
+            .as_ref()
+            .map(|viewport| viewport.modes.bits)
+        else {
+            return local_mode;
+        };
+        TermMode::from_bits_truncate(bits) | (local_mode & TermMode::VI)
+    }
+
+    fn display_offset(&self) -> usize {
+        self.semantic_viewport
+            .lock()
+            .as_ref()
+            .map(|viewport| viewport.display_offset.min(usize::MAX as u64) as usize)
+            .unwrap_or_else(|| self.state.display_offset())
+    }
+
+    fn scroll_display(&mut self, scroll: Scroll) {
+        let semantic = self.semantic_viewport.lock().as_ref().map(|viewport| {
+            (
+                viewport.history_size,
+                viewport.geometry.rows as u64,
+                viewport.display_offset,
+            )
+        });
+        let Some((history_size, page_rows, viewport_offset)) = semantic else {
+            self.state.scroll_display(scroll);
+            return;
+        };
+        let current = self.semantic_scroll_offset.unwrap_or(viewport_offset);
+        let target = match scroll {
+            Scroll::Delta(lines) if lines >= 0 => {
+                current.saturating_add(lines as u64).min(history_size)
+            }
+            Scroll::Delta(lines) => current.saturating_sub(lines.unsigned_abs() as u64),
+            Scroll::PageUp => current.saturating_add(page_rows).min(history_size),
+            Scroll::PageDown => current.saturating_sub(page_rows),
+            Scroll::Top => history_size,
+            Scroll::Bottom => 0,
+        };
+        self.semantic_scroll_offset = Some(target);
+        if target != current
+            && let Some(callback) = &self.semantic_scroll_callback
+        {
+            callback(target);
         }
     }
 
@@ -1156,7 +1263,7 @@ impl TerminalView {
         if self.last_focused == focused {
             return;
         }
-        let mode = self.state.mode();
+        let mode = self.mode();
         cx.set_cursor_hide_mode(if focused && self.config.hide_mouse_when_typing {
             CursorHideMode::OnTypingAndAction
         } else {
@@ -1199,9 +1306,9 @@ impl TerminalView {
         }
         let blinking = self.state.with_term_mut(|term| {
             term.selection = None;
-            term.scroll_display(Scroll::Bottom);
             term.cursor_style().blinking
         });
+        self.scroll_display(Scroll::Bottom);
         self.selection_anchor = None;
         self.selecting = false;
         self.stop_selection_scroll();
@@ -1285,7 +1392,7 @@ impl TerminalView {
         else {
             return false;
         };
-        self.enqueue_input(paste(&text, true, self.state.mode()), cx)
+        self.enqueue_input(paste(&text, true, self.mode()), cx)
     }
 
     fn set_search_query(&mut self, query: String, cx: &mut Context<Self>) {
@@ -1811,7 +1918,7 @@ impl TerminalView {
             viewport.bounds.origin.x + viewport.padding.left,
             viewport.bounds.origin.y + viewport.padding.top,
         );
-        let display_offset = self.state.display_offset() as i32;
+        let display_offset = self.display_offset() as i32;
         let raw = pixel_to_cell(position, origin, viewport.cell_width, viewport.cell_height);
         let row = raw.line.0.clamp(0, viewport.rows.saturating_sub(1) as i32);
         let column = raw.column.0.min(viewport.cols.saturating_sub(1));
@@ -1832,23 +1939,38 @@ impl TerminalView {
             return None;
         }
         let viewport = (*self.viewport.lock())?;
-        let metrics = self.state.scrollbar_metrics()?;
         let track_top: f32 = (viewport.bounds.origin.y + viewport.padding.top).into();
         let track_height: f32 =
             (viewport.bounds.size.height - viewport.padding.top - viewport.padding.bottom).into();
         if track_height <= 12.0 {
             return None;
         }
+        let semantic_metrics = self.semantic_viewport.lock().as_ref().and_then(|semantic| {
+            let history_size = semantic.history_size.min(usize::MAX as u64) as usize;
+            let display_offset = semantic.display_offset.min(usize::MAX as u64) as usize;
+            TerminalScrollbarMetrics::from_rows(
+                history_size,
+                semantic.geometry.rows as usize,
+                display_offset,
+            )
+            .map(|metrics| (metrics, history_size, display_offset))
+        });
+        let (metrics, history_size, display_offset) = if let Some(metrics) = semantic_metrics {
+            metrics
+        } else {
+            let metrics = self.state.scrollbar_metrics()?;
+            let (history_size, display_offset) = self.state.with_term(|term| {
+                (
+                    term.grid()
+                        .total_lines()
+                        .saturating_sub(term.screen_lines()),
+                    term.grid().display_offset(),
+                )
+            });
+            (metrics, history_size, display_offset)
+        };
         let thumb_height = track_height * metrics.thumb_height_fraction;
         let thumb_top = track_top + track_height * metrics.thumb_top_fraction;
-        let (history_size, display_offset) = self.state.with_term(|term| {
-            (
-                term.grid()
-                    .total_lines()
-                    .saturating_sub(term.screen_lines()),
-                term.grid().display_offset(),
-            )
-        });
         Some((
             track_top,
             track_height,
@@ -1888,7 +2010,7 @@ impl TerminalView {
         } else {
             self.scrollbar_captured = false;
             self.scrollbar_drag = None;
-            self.state.scroll_display(if y < thumb_top {
+            self.scroll_display(if y < thumb_top {
                 Scroll::PageUp
             } else {
                 Scroll::PageDown
@@ -1916,7 +2038,7 @@ impl TerminalView {
         let progress_from_top = thumb_top / travel;
         let desired_offset = ((1.0 - progress_from_top) * history_size as f32).round() as usize;
         let delta = desired_offset as i64 - display_offset as i64;
-        self.state.scroll_display(Scroll::Delta(
+        self.scroll_display(Scroll::Delta(
             delta.clamp(i32::MIN as i64, i32::MAX as i64) as i32
         ));
         self.search.visible_cache_key = None;
@@ -2000,8 +2122,7 @@ impl TerminalView {
                         {
                             return false;
                         }
-                        view.state
-                            .scroll_display(Scroll::Delta(view.selection_scroll_delta));
+                        view.scroll_display(Scroll::Delta(view.selection_scroll_delta));
                         if let Some(position) = view.selection_scroll_position
                             && let Some((point, side)) = view.point_and_side_for_position(position)
                         {
@@ -2148,7 +2269,7 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.state.mode().contains(TermMode::VI) {
+        if !self.mode().contains(TermMode::VI) {
             cx.propagate();
             return;
         }
@@ -2164,7 +2285,7 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.state.mode().contains(TermMode::VI) {
+        if !self.mode().contains(TermMode::VI) {
             cx.propagate();
             return;
         }
@@ -2189,7 +2310,7 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.state.mode().contains(TermMode::VI) {
+        if !self.mode().contains(TermMode::VI) {
             cx.propagate();
             return;
         }
@@ -2205,7 +2326,7 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.state.mode().contains(TermMode::VI) {
+        if !self.mode().contains(TermMode::VI) {
             cx.propagate();
             return;
         }
@@ -2273,7 +2394,7 @@ impl TerminalView {
             cx.stop_propagation();
             return;
         }
-        let mode = self.state.mode();
+        let mode = self.mode();
         if self.handle_vi_key(&key_event, mode, cx) {
             cx.stop_propagation();
             return;
@@ -2306,7 +2427,7 @@ impl TerminalView {
         if self.search.active
             || self.hint.active
             || self.ime_state.is_active()
-            || self.state.mode().contains(TermMode::VI)
+            || self.mode().contains(TermMode::VI)
         {
             self.pressed_keys.remove(&identity);
             cx.stop_propagation();
@@ -2322,7 +2443,7 @@ impl TerminalView {
         if !self.pressed_keys.remove(&identity) {
             return;
         }
-        if let Some(bytes) = encode_key(&key_event, self.state.mode()) {
+        if let Some(bytes) = encode_key(&key_event, self.mode()) {
             let _ = self.enqueue_protocol(Bytes::copy_from_slice(&bytes));
         }
         cx.stop_propagation();
@@ -2357,7 +2478,7 @@ impl TerminalView {
         self.pointer_side = side;
         self.hovered_link = self.hyperlink_at_point(point);
 
-        let mode = self.state.mode();
+        let mode = self.mode();
         let modifiers = Self::terminal_modifiers(event.modifiers);
         if button == TerminalMouseButton::Left
             && event.modifiers.secondary()
@@ -2437,7 +2558,7 @@ impl TerminalView {
         self.pointer_point = Some(point);
         self.pointer_side = side;
 
-        let mode = self.state.mode();
+        let mode = self.mode();
         let modifiers = Self::terminal_modifiers(event.modifiers);
         let local_left_gesture =
             button == TerminalMouseButton::Left && self.selection_anchor.is_some();
@@ -2503,7 +2624,7 @@ impl TerminalView {
         self.pointer_point = Some(point);
         self.pointer_side = side;
 
-        let mode = self.state.mode();
+        let mode = self.mode();
         let modifiers = Self::terminal_modifiers(event.modifiers);
         if !modifiers.shift && self.selection_anchor.is_none() && Self::mouse_reporting(mode) {
             if point_changed
@@ -2566,7 +2687,7 @@ impl TerminalView {
             return;
         }
 
-        let mode = self.state.mode();
+        let mode = self.mode();
         let modifiers = Self::terminal_modifiers(event.modifiers);
         if !modifiers.shift && Self::mouse_reporting(mode) {
             let mut reports = BytesMut::with_capacity(
@@ -2627,7 +2748,7 @@ impl TerminalView {
         }
 
         if lines != 0 {
-            self.state.scroll_display(Scroll::Delta(lines));
+            self.scroll_display(Scroll::Delta(lines));
             cx.notify();
         }
     }
@@ -2872,7 +2993,7 @@ impl TerminalView {
 
     /// Whether terminal scrollback is currently controlled by the Vi cursor.
     pub fn is_vi_mode(&self) -> bool {
-        self.state.mode().contains(TermMode::VI)
+        self.mode().contains(TermMode::VI)
     }
 
     pub fn search_is_active(&self) -> bool {
@@ -3173,7 +3294,7 @@ impl EntityInputHandler for TerminalView {
             cx.notify();
         } else {
             let enqueued = if let Some(text) = committed {
-                let mode = self.state.mode();
+                let mode = self.mode();
                 encode_text_input(&text, mode).is_some_and(|bytes| self.enqueue_input(bytes, cx))
             } else {
                 false
@@ -3250,6 +3371,7 @@ impl Render for TerminalView {
         let state_arc = self.state.term_arc();
         let renderer = self.renderer.clone();
         let render_cache = self.render_cache.clone();
+        let semantic_viewport = self.semantic_viewport.clone();
         let event_mailbox = self.event_mailbox.clone();
         let event_mailbox_for_paint = event_mailbox.clone();
 
@@ -3276,7 +3398,7 @@ impl Render for TerminalView {
             "YtttTerminal YtttTerminalSearch"
         } else if self.hint.active {
             "YtttTerminal YtttTerminalHint"
-        } else if self.state.mode().contains(TermMode::VI) {
+        } else if self.mode().contains(TermMode::VI) {
             "YtttTerminal YtttTerminalVi"
         } else {
             TERMINAL_KEY_CONTEXT
@@ -3297,7 +3419,7 @@ impl Render for TerminalView {
         let scrollbar_gutter = px(6.0);
         let pointer_style = if self.hovered_link.is_some() {
             CursorStyle::PointingHand
-        } else if Self::mouse_reporting(self.state.mode()) && self.selection_anchor.is_none() {
+        } else if Self::mouse_reporting(self.mode()) && self.selection_anchor.is_none() {
             CursorStyle::Arrow
         } else {
             CursorStyle::IBeam
@@ -3388,7 +3510,22 @@ impl Render for TerminalView {
                         }
 
                         let lock_started = Instant::now();
-                        let (snapshot, parser_generation) = {
+                        let (snapshot, parser_generation) = if let Some(semantic) =
+                            semantic_viewport.lock().clone()
+                        {
+                            (
+                                TerminalRenderSnapshot::from_semantic(
+                                    &semantic,
+                                    &measured_renderer.palette,
+                                    &render_overlays,
+                                    focused,
+                                    cursor_unfocused_hollow,
+                                    cursor_visible,
+                                    render_generation,
+                                ),
+                                semantic.sequence,
+                            )
+                        } else {
                             let mut term = state_arc.lock();
                             let (selection, cursor_row, display_offset, screen_lines) = {
                                 let content = term.renderable_content();
@@ -3592,6 +3729,11 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
+    use yttt_core::model::ids::TerminalSessionId;
+    use yttt_protocol::terminal::{
+        CursorShape, SemanticCursor, SemanticViewport, TerminalGeometry, TerminalModes,
+        TerminalPalette, TerminalProcessState,
+    };
     fn wait_for_bytes(recorded: &RecordingWriter, expected: &[u8]) {
         let deadline = Instant::now() + Duration::from_secs(1);
         while recorded.bytes() != expected && Instant::now() < deadline {
@@ -3660,6 +3802,59 @@ mod tests {
         });
 
         assert!(cx.read(|cx| terminal.read(cx).state.mode().contains(TermMode::VI)));
+    }
+
+    #[gpui::test]
+    fn semantic_viewport_drives_input_modes_and_absolute_scroll_requests(cx: &mut TestAppContext) {
+        let requested_offsets = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let captured_offsets = requested_offsets.clone();
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new_semantic(RecordingWriter::default(), TerminalConfig::default(), cx)
+                .with_semantic_scroll_callback(move |offset| captured_offsets.lock().push(offset))
+        });
+        terminal.update(cx, |terminal, cx| {
+            terminal.set_semantic_viewport(
+                SemanticViewport {
+                    session_id: TerminalSessionId::new("semantic-interaction"),
+                    session_epoch: 1,
+                    sequence: 1,
+                    geometry: TerminalGeometry {
+                        cols: 80,
+                        rows: 24,
+                        cell_width: 0,
+                        cell_height: 0,
+                    },
+                    geometry_epoch: 1,
+                    scrollback_epoch: 1,
+                    history_size: 100,
+                    display_offset: 0,
+                    rows: Vec::new(),
+                    cursor: SemanticCursor {
+                        row: 0,
+                        column: 0,
+                        shape: CursorShape::Block,
+                        visible: true,
+                        blinking: false,
+                    },
+                    modes: TerminalModes {
+                        bits: TermMode::BRACKETED_PASTE.bits(),
+                        title: None,
+                        cwd: None,
+                    },
+                    palette: TerminalPalette {
+                        colors: Vec::new(),
+                        revision: 0,
+                    },
+                    process_state: TerminalProcessState::Running,
+                },
+                cx,
+            );
+            assert!(terminal.mode().contains(TermMode::BRACKETED_PASTE));
+            terminal.scroll_display(Scroll::Delta(3));
+            terminal.scroll_display(Scroll::PageUp);
+        });
+
+        assert_eq!(&*requested_offsets.lock(), &[3, 27]);
     }
 
     #[gpui::test]

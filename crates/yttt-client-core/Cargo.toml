@@ -1,0 +1,18 @@
+[package]
+name = "yttt-client-core"
+version.workspace = true
+edition.workspace = true
+license = "MIT OR Apache-2.0"
+description = "Headless YTTT Host client supervisor and terminal mirrors"
+
+[dependencies]
+parking_lot = "0.12"
+thiserror = "2"
+tokio = { version = "1", features = ["io-util", "macros", "rt", "sync", "time"] }
+yttt-core = { path = "../yttt-core" }
+yttt-protocol = { path = "../yttt-protocol" }
+yttt-transport-local = { path = "../yttt-transport-local" }
+
+[dev-dependencies]
+tempfile = "3"
+yttt-host = { path = "../yttt-host" }

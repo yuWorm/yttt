@@ -3,12 +3,21 @@ use crate::event::GpuiEventProxy;
 use alacritty_terminal::grid::{Dimensions, Indexed};
 use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
 use alacritty_terminal::term::cell::{Cell, Flags, Hyperlink};
+use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::{self, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 use gpui::Hsla;
 use smallvec::SmallVec;
 use std::num::NonZeroU32;
 use std::ops::RangeInclusive;
+use unicode_width::UnicodeWidthChar as _;
+use yttt_protocol::terminal::{
+    CursorShape as SemanticCursorShape, SemanticColor, SemanticStyle, SemanticViewport,
+};
+use yttt_terminal_core::semantic::{
+    STYLE_BOLD, STYLE_DASHED_UNDERLINE, STYLE_DIM, STYLE_DOTTED_UNDERLINE, STYLE_DOUBLE_UNDERLINE,
+    STYLE_HIDDEN, STYLE_INVERSE, STYLE_ITALIC, STYLE_STRIKEOUT, STYLE_UNDERCURL, STYLE_UNDERLINE,
+};
 
 const DIM_FACTOR: f32 = 0.66;
 
@@ -345,6 +354,347 @@ impl TerminalRenderSnapshot {
             history_size,
         }
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_semantic(
+        viewport: &SemanticViewport,
+        palette: &ColorPalette,
+        overlays: &RenderOverlayState,
+        focused: bool,
+        cursor_unfocused_hollow: bool,
+        cursor_visible: bool,
+        generation: u64,
+    ) -> Self {
+        let cols = viewport.geometry.cols as usize;
+        let screen_lines = viewport.geometry.rows as usize;
+        let display_offset = viewport.display_offset as usize;
+        let mut colors = Colors::default();
+        for dynamic in &viewport.palette.colors {
+            if dynamic.index <= NamedColor::DimForeground as u16 {
+                colors[dynamic.index as usize] = Some(alacritty_terminal::vte::ansi::Rgb {
+                    r: dynamic.red,
+                    g: dynamic.green,
+                    b: dynamic.blue,
+                });
+            }
+        }
+        let default_background = palette.resolve(Color::Named(NamedColor::Background), &colors);
+        let default_foreground = palette.resolve(Color::Named(NamedColor::Foreground), &colors);
+        let default_style = SemanticStyle {
+            foreground: SemanticColor::Named(NamedColor::Foreground as u16),
+            background: SemanticColor::Named(NamedColor::Background as u16),
+            flags: 0,
+            underline_color: SemanticColor::Named(NamedColor::Foreground as u16),
+        };
+        let mut rows = Vec::with_capacity(viewport.rows.len());
+        for semantic_row in &viewport.rows {
+            let line = Line(semantic_row.viewport_row as i32 - display_offset as i32);
+            let mut row = RenderableRow {
+                line,
+                cells: (0..cols)
+                    .map(|column| {
+                        semantic_render_cell(
+                            AlacPoint::new(line, Column(column)),
+                            None,
+                            TerminalCellWidth::Single,
+                            default_style,
+                            None,
+                            &colors,
+                            palette,
+                            overlays,
+                            default_foreground,
+                            default_background,
+                        )
+                    })
+                    .collect(),
+                generation,
+            };
+            for span in &semantic_row.spans {
+                let hyperlink = span
+                    .hyperlink
+                    .as_ref()
+                    .map(|uri| Hyperlink::new(None::<String>, uri.clone()));
+                let mut column = span.start_column as usize;
+                let mut consumed_width = 0usize;
+                let mut previous_column: Option<usize> = None;
+                for character in span.text.chars() {
+                    let width = character.width().unwrap_or(0);
+                    if width == 0 {
+                        if let Some(previous_column) = previous_column
+                            && let Some(cell) = row.cells.get_mut(previous_column)
+                        {
+                            cell.text.push(character);
+                        }
+                        continue;
+                    }
+                    if column >= cols {
+                        break;
+                    }
+                    let cell_width = if width >= 2 {
+                        TerminalCellWidth::Wide
+                    } else {
+                        TerminalCellWidth::Single
+                    };
+                    row.cells[column] = semantic_render_cell(
+                        AlacPoint::new(line, Column(column)),
+                        Some(character),
+                        cell_width,
+                        span.style,
+                        hyperlink.clone(),
+                        &colors,
+                        palette,
+                        overlays,
+                        default_foreground,
+                        default_background,
+                    );
+                    previous_column = Some(column);
+                    if width >= 2 && column + 1 < cols {
+                        row.cells[column + 1] = semantic_render_cell(
+                            AlacPoint::new(line, Column(column + 1)),
+                            None,
+                            TerminalCellWidth::Spacer,
+                            span.style,
+                            hyperlink.clone(),
+                            &colors,
+                            palette,
+                            overlays,
+                            default_foreground,
+                            default_background,
+                        );
+                    }
+                    column = column.saturating_add(width);
+                    consumed_width = consumed_width.saturating_add(width);
+                }
+                while consumed_width < span.width as usize && column < cols {
+                    row.cells[column] = semantic_render_cell(
+                        AlacPoint::new(line, Column(column)),
+                        None,
+                        TerminalCellWidth::Single,
+                        span.style,
+                        hyperlink.clone(),
+                        &colors,
+                        palette,
+                        overlays,
+                        default_foreground,
+                        default_background,
+                    );
+                    column += 1;
+                    consumed_width += 1;
+                }
+            }
+            rows.push(row);
+        }
+
+        let cursor_point = AlacPoint::new(
+            viewport.cursor.row as usize,
+            Column(viewport.cursor.column as usize),
+        );
+        let mut cursor_shape = semantic_cursor_shape(viewport.cursor.shape);
+        if !viewport.cursor.visible || !cursor_visible {
+            cursor_shape = CursorShape::Hidden;
+        } else if !focused && cursor_unfocused_hollow && cursor_shape == CursorShape::Block {
+            cursor_shape = CursorShape::HollowBlock;
+        }
+        let cursor_cell = rows
+            .get_mut(cursor_point.line)
+            .and_then(|row| row.cells.get_mut(cursor_point.column.0));
+        let (cursor_color, text_color, cursor_width) = if let Some(cell) = cursor_cell {
+            let mut cursor_color = palette.resolve(Color::Named(NamedColor::Cursor), &colors);
+            let mut text_color = palette.cursor_text().unwrap_or(cell.background);
+            if contrast(cursor_color, cell.background) < 1.5 {
+                cursor_color = default_foreground;
+                text_color = default_background;
+            }
+            let width = NonZeroU32::new(cell.width.columns() as u32).unwrap();
+            if cursor_shape == CursorShape::Block {
+                cell.foreground = text_color;
+                cell.background = cursor_color;
+            }
+            (cursor_color, text_color, width)
+        } else {
+            (
+                palette.resolve(Color::Named(NamedColor::Cursor), &colors),
+                default_background,
+                NonZeroU32::new(1).unwrap(),
+            )
+        };
+
+        Self {
+            rows,
+            cursor: RenderableCursor {
+                point: cursor_point,
+                shape: cursor_shape,
+                cursor_color,
+                text_color,
+                width: cursor_width,
+            },
+            display_offset,
+            cols,
+            screen_lines,
+            default_background,
+            default_foreground,
+            damage: RenderDamage::Full,
+            history_size: viewport.history_size as usize,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn semantic_render_cell(
+    point: AlacPoint,
+    character: Option<char>,
+    width: TerminalCellWidth,
+    style: SemanticStyle,
+    hyperlink: Option<Hyperlink>,
+    colors: &Colors,
+    palette: &ColorPalette,
+    overlays: &RenderOverlayState,
+    default_foreground: Hsla,
+    default_background: Hsla,
+) -> RenderableCell {
+    let flags = alacritty_flags(style.flags);
+    let mut foreground =
+        resolve_foreground(alacritty_color(style.foreground), flags, colors, palette);
+    let mut background = palette.resolve(alacritty_color(style.background), colors);
+    if flags.contains(Flags::INVERSE) {
+        std::mem::swap(&mut foreground, &mut background);
+    }
+    let underline_color = resolve_foreground(
+        alacritty_color(style.underline_color),
+        flags,
+        colors,
+        palette,
+    );
+    let mut text = SmallVec::new();
+    if !flags.contains(Flags::HIDDEN)
+        && !matches!(
+            width,
+            TerminalCellWidth::Spacer | TerminalCellWidth::LeadingSpacer
+        )
+        && let Some(character) = character
+        && character != '\0'
+        && character != ' '
+    {
+        text.push(character);
+    }
+    let mut decorations = RenderDecorationFlags::from_cell_flags(flags);
+    if let Some(hint) = overlays.hint_at(point) {
+        let (hint_foreground, hint_background) = if hint.is_start {
+            palette.hint_start_colors()
+        } else {
+            palette.hint_end_colors()
+        };
+        foreground = hint_foreground;
+        background = hint_background;
+        if let Some(label) = hint.label {
+            text.clear();
+            text.push(label);
+        }
+    } else if let Some(focused) = overlays.search_at(point) {
+        (foreground, background) = if focused {
+            palette.focused_search_colors()
+        } else {
+            palette.search_colors()
+        };
+    }
+    if overlays.hyperlink_hovered(point) {
+        decorations.0 |= RenderDecorationFlags::UNDERLINE.0;
+    }
+    if foreground == background && !flags.contains(Flags::HIDDEN) {
+        foreground = default_background;
+        background = default_foreground;
+    }
+    RenderableCell {
+        point,
+        text,
+        width,
+        foreground,
+        background,
+        underline_color,
+        font_style: TerminalFontStyle {
+            bold: flags.contains(Flags::BOLD),
+            italic: flags.contains(Flags::ITALIC),
+            dim: flags.contains(Flags::DIM),
+        },
+        decorations,
+        selected: false,
+        hyperlink,
+    }
+}
+
+fn alacritty_flags(semantic: u16) -> Flags {
+    let mut flags = Flags::empty();
+    for (wire, flag) in [
+        (STYLE_INVERSE, Flags::INVERSE),
+        (STYLE_BOLD, Flags::BOLD),
+        (STYLE_ITALIC, Flags::ITALIC),
+        (STYLE_UNDERLINE, Flags::UNDERLINE),
+        (STYLE_DIM, Flags::DIM),
+        (STYLE_HIDDEN, Flags::HIDDEN),
+        (STYLE_STRIKEOUT, Flags::STRIKEOUT),
+        (STYLE_DOUBLE_UNDERLINE, Flags::DOUBLE_UNDERLINE),
+        (STYLE_UNDERCURL, Flags::UNDERCURL),
+        (STYLE_DOTTED_UNDERLINE, Flags::DOTTED_UNDERLINE),
+        (STYLE_DASHED_UNDERLINE, Flags::DASHED_UNDERLINE),
+    ] {
+        if semantic & wire != 0 {
+            flags.insert(flag);
+        }
+    }
+    flags
+}
+
+fn alacritty_color(color: SemanticColor) -> Color {
+    match color {
+        SemanticColor::Indexed(index) => Color::Indexed(index),
+        SemanticColor::Rgb { red, green, blue } => {
+            Color::Spec(alacritty_terminal::vte::ansi::Rgb {
+                r: red,
+                g: green,
+                b: blue,
+            })
+        }
+        SemanticColor::Named(index) => Color::Named(match index {
+            0 => NamedColor::Black,
+            1 => NamedColor::Red,
+            2 => NamedColor::Green,
+            3 => NamedColor::Yellow,
+            4 => NamedColor::Blue,
+            5 => NamedColor::Magenta,
+            6 => NamedColor::Cyan,
+            7 => NamedColor::White,
+            8 => NamedColor::BrightBlack,
+            9 => NamedColor::BrightRed,
+            10 => NamedColor::BrightGreen,
+            11 => NamedColor::BrightYellow,
+            12 => NamedColor::BrightBlue,
+            13 => NamedColor::BrightMagenta,
+            14 => NamedColor::BrightCyan,
+            15 => NamedColor::BrightWhite,
+            value if value == NamedColor::Background as u16 => NamedColor::Background,
+            value if value == NamedColor::Cursor as u16 => NamedColor::Cursor,
+            value if value == NamedColor::DimBlack as u16 => NamedColor::DimBlack,
+            value if value == NamedColor::DimRed as u16 => NamedColor::DimRed,
+            value if value == NamedColor::DimGreen as u16 => NamedColor::DimGreen,
+            value if value == NamedColor::DimYellow as u16 => NamedColor::DimYellow,
+            value if value == NamedColor::DimBlue as u16 => NamedColor::DimBlue,
+            value if value == NamedColor::DimMagenta as u16 => NamedColor::DimMagenta,
+            value if value == NamedColor::DimCyan as u16 => NamedColor::DimCyan,
+            value if value == NamedColor::DimWhite as u16 => NamedColor::DimWhite,
+            value if value == NamedColor::BrightForeground as u16 => NamedColor::BrightForeground,
+            value if value == NamedColor::DimForeground as u16 => NamedColor::DimForeground,
+            _ => NamedColor::Foreground,
+        }),
+    }
+}
+
+fn semantic_cursor_shape(shape: SemanticCursorShape) -> CursorShape {
+    match shape {
+        SemanticCursorShape::Block => CursorShape::Block,
+        SemanticCursorShape::Underline => CursorShape::Underline,
+        SemanticCursorShape::Beam => CursorShape::Beam,
+        SemanticCursorShape::HollowBlock => CursorShape::HollowBlock,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -503,4 +853,90 @@ fn contrast(left: Hsla, right: Hsla) -> f64 {
     let left = luminance(left);
     let right = luminance(right);
     (left.max(right) + 0.05) / (left.min(right) + 0.05)
+}
+
+#[cfg(test)]
+mod semantic_tests {
+    use yttt_core::model::ids::TerminalSessionId;
+    use yttt_protocol::terminal::{
+        CursorShape as SemanticCursorShape, SemanticCursor, SemanticRow, SemanticSpan,
+        TerminalGeometry, TerminalModes, TerminalPalette, TerminalProcessState,
+    };
+
+    use super::*;
+
+    #[test]
+    fn semantic_adapter_preserves_wide_cells_and_style_runs() {
+        let viewport = SemanticViewport {
+            session_id: TerminalSessionId::new("semantic-render"),
+            session_epoch: 1,
+            sequence: 1,
+            geometry: TerminalGeometry {
+                cols: 4,
+                rows: 1,
+                cell_width: 8,
+                cell_height: 16,
+            },
+            geometry_epoch: 1,
+            scrollback_epoch: 1,
+            history_size: 0,
+            display_offset: 0,
+            rows: vec![SemanticRow {
+                line_id: 1,
+                viewport_row: 0,
+                spans: vec![SemanticSpan {
+                    start_column: 0,
+                    text: "A界".to_string(),
+                    width: 3,
+                    style: SemanticStyle {
+                        foreground: SemanticColor::Named(NamedColor::Foreground as u16),
+                        background: SemanticColor::Named(NamedColor::Background as u16),
+                        flags: STYLE_BOLD,
+                        underline_color: SemanticColor::Named(NamedColor::Foreground as u16),
+                    },
+                    hyperlink: Some("https://example.test".to_string()),
+                }],
+            }],
+            cursor: SemanticCursor {
+                row: 0,
+                column: 0,
+                shape: SemanticCursorShape::Block,
+                visible: true,
+                blinking: false,
+            },
+            modes: TerminalModes {
+                bits: 0,
+                title: None,
+                cwd: None,
+            },
+            palette: TerminalPalette {
+                colors: Vec::new(),
+                revision: 0,
+            },
+            process_state: TerminalProcessState::Running,
+        };
+
+        let frame = TerminalRenderSnapshot::from_semantic(
+            &viewport,
+            &ColorPalette::default(),
+            &RenderOverlayState::default(),
+            true,
+            true,
+            true,
+            1,
+        );
+
+        assert_eq!(frame.rows.len(), 1);
+        assert_eq!(frame.rows[0].cells[1].text.as_slice(), &['界']);
+        assert_eq!(frame.rows[0].cells[1].width, TerminalCellWidth::Wide);
+        assert_eq!(frame.rows[0].cells[2].width, TerminalCellWidth::Spacer);
+        assert!(frame.rows[0].cells[0].font_style.bold);
+        assert_eq!(
+            frame.rows[0].cells[0]
+                .hyperlink
+                .as_ref()
+                .map(Hyperlink::uri),
+            Some("https://example.test")
+        );
+    }
 }

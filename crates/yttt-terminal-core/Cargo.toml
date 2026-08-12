@@ -1,0 +1,12 @@
+[package]
+name = "yttt-terminal-core"
+version.workspace = true
+edition.workspace = true
+license = "MIT OR Apache-2.0"
+description = "Framework-neutral YTTT terminal emulator state"
+
+[dependencies]
+alacritty_terminal = "0.25.1"
+parking_lot = "0.12"
+yttt-protocol = { path = "../yttt-protocol" }
+yttt-core = { path = "../yttt-core" }

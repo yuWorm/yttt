@@ -4,7 +4,13 @@ members = [
     "crates/yttt-agent-core",
     "crates/yttt-agent-providers",
     "crates/yttt-agent-runtime",
+    "crates/yttt-client-core",
+    "crates/yttt-host",
+    "crates/yttt-protocol",
+    "crates/yttt-project-core",
+    "crates/yttt-transport-local",
     "crates/yttt-core",
+    "crates/yttt-terminal-core",
     "crates/yttt-ssh",
     "crates/yttt-terminal",
     "crates/yttt-ui",
@@ -66,6 +72,12 @@ tree-sitter-xml = "0.7.0"
 tree-sitter-zig = "1.1.2"
 tree-sitter-toml-ng = "0.7"
 yttt-core = { path = "crates/yttt-core" }
+flume = "0.12"
+yttt-host = { path = "crates/yttt-host" }
+yttt-client-core = { path = "crates/yttt-client-core" }
+yttt-protocol = { path = "crates/yttt-protocol" }
+yttt-project-core = { path = "crates/yttt-project-core" }
+yttt-transport-local = { path = "crates/yttt-transport-local" }
 yttt-terminal = { path = "crates/yttt-terminal" }
 yttt-ui = { path = "crates/yttt-ui" }
 serde = { version = "1", features = ["derive"] }
@@ -75,6 +87,7 @@ shell-words = "1.1"
 sysinfo = "0.31.4"
 sys-locale = "0.3.2"
 thiserror = "2"
+tokio = { version = "1", features = ["process", "rt-multi-thread", "time"] }
 tempfile = "3"
 toml = "0.8"
 uuid = { version = "1", features = ["v4", "serde"] }

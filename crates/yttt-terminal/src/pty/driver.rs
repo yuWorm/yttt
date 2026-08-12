@@ -3,7 +3,6 @@ use crate::perf::{InputPerformanceSample, TerminalPerformanceHandle};
 
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
-use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use bytes::Bytes;
 use parking_lot::{Condvar, Mutex, RwLock};
 use std::collections::VecDeque;
@@ -12,6 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(any(test, debug_assertions))]
 use std::sync::atomic::{AtomicU64, AtomicUsize};
+use yttt_terminal_core::TerminalParser;
 
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -491,6 +491,37 @@ impl PtyIoDriver {
         }
     }
 
+    pub(crate) fn start_writer_only<W>(
+        writer: W,
+        mailbox: Arc<TerminalEventMailbox>,
+        performance: TerminalPerformanceHandle,
+    ) -> Self
+    where
+        W: Write + Send + 'static,
+    {
+        let diagnostics = Arc::new(PtyDiagnostics::default());
+        let queue = Arc::new(PtyCommandQueue::new(diagnostics.clone()));
+        let resize_callback = Arc::new(RwLock::new(None));
+        let handle = PtyIoHandle {
+            queue: queue.clone(),
+            mailbox: mailbox.clone(),
+            resize_callback: resize_callback.clone(),
+            performance: performance.clone(),
+        };
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let (read_tx, _read_rx) = flume::bounded(1);
+        let writer_thread = spawn_writer(writer, queue, resize_callback, mailbox, performance);
+
+        Self {
+            handle,
+            cancelled,
+            read_tx,
+            #[cfg(any(test, debug_assertions))]
+            diagnostics,
+            _threads: vec![writer_thread],
+        }
+    }
+
     pub(crate) fn handle(&self) -> PtyIoHandle {
         self.handle.clone()
     }
@@ -583,12 +614,12 @@ fn spawn_parser(
     thread::Builder::new()
         .name("yttt-pty-parser".to_string())
         .spawn(move || {
-            let mut processor: Processor<StdSyncHandler> = Processor::new();
+            let mut processor = TerminalParser::new(term);
             loop {
                 if cancelled.load(Ordering::Acquire) {
                     break;
                 }
-                let message = if let Some(deadline) = processor.sync_timeout().sync_timeout() {
+                let message = if let Some(deadline) = processor.sync_deadline() {
                     read_rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
                 } else {
                     read_rx
@@ -608,26 +639,19 @@ fn spawn_parser(
                         diagnostics.record_parser_batch();
 
                         let batch_started = Instant::now();
-                        let lock_started = Instant::now();
-                        {
-                            let mut term = term.lock();
-                            let lock_wait = lock_started.elapsed();
-                            let advance_started = Instant::now();
-                            processor.advance(&mut *term, &batch.buffer[..batch.len]);
-                            let advance = advance_started.elapsed();
-                            let completed_at = Instant::now();
-                            performance.record_parser_batch(
-                                batch_started.elapsed(),
-                                lock_wait,
-                                advance,
-                                completed_at,
-                                &batch.buffer[..batch.len],
-                            );
-                        }
+                        let stats = processor.advance(&batch.buffer[..batch.len]);
+                        let completed_at = Instant::now();
+                        performance.record_parser_batch(
+                            batch_started.elapsed(),
+                            stats.lock_wait,
+                            stats.advance,
+                            completed_at,
+                            &batch.buffer[..batch.len],
+                        );
                         // Match Alacritty's event loop: unsynchronized parser output must wake
                         // the UI. Waiting only for a synchronized-update timeout starves redraws
                         // indefinitely while a TUI continuously fills the read queue.
-                        if batch.len > 0 && processor.sync_bytes_count() < batch.len {
+                        if batch.len > 0 && stats.unsynchronized_output {
                             mailbox.request_redraw();
                         }
                         let _ = buffer_tx.send(batch.buffer);
@@ -649,9 +673,7 @@ fn spawn_parser(
                         break;
                     }
                     Err(flume::RecvTimeoutError::Timeout) => {
-                        let mut term = term.lock();
-                        processor.stop_sync(&mut *term);
-                        drop(term);
+                        processor.stop_sync();
                         mailbox.request_redraw();
                     }
                 }

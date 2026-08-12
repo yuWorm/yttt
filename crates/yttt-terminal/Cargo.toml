@@ -24,6 +24,9 @@ unicode-width = "0.2"
 serde = { version = "1", features = ["derive"] }
 hdrhistogram = { version = "7", optional = true }
 serde_json = { version = "1", optional = true }
+yttt-terminal-core = { path = "../yttt-terminal-core" }
+yttt-protocol = { path = "../yttt-protocol" }
+yttt-core = { path = "../yttt-core" }
 
 
 [dev-dependencies]

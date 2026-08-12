@@ -1,0 +1,31 @@
+[package]
+name = "yttt-host"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+alacritty_terminal = "0.25.1"
+anyhow = "1"
+base64 = "0.22"
+flume = "0.12"
+notify = "7.0.0"
+parking_lot = "0.12"
+portable-pty = "0.9"
+fs2 = "0.4"
+shell-words = "1.1"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+yttt-core = { path = "../yttt-core" }
+yttt-protocol = { path = "../yttt-protocol" }
+yttt-project-core = { path = "../yttt-project-core" }
+yttt-transport-local = { path = "../yttt-transport-local" }
+yttt-terminal-core = { path = "../yttt-terminal-core" }
+yttt-ssh = { path = "../yttt-ssh" }
+uuid = { version = "1", features = ["v4"] }
+zeroize = "1"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }

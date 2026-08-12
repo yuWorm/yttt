@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 async-channel = "2.5"
+flume = "0.12"
 keyring = "4.1.5"
 russh = "0.62.2"
 serde = { version = "1", features = ["derive"] }
@@ -13,6 +14,7 @@ thiserror = "2"
 toml = "0.9"
 tokio = { version = "1", features = ["io-util", "net", "rt", "sync", "time"] }
 yttt-core = { path = "../yttt-core" }
+yttt-protocol = { path = "../yttt-protocol" }
 zeroize = "1"
 
 [dev-dependencies]

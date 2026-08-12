@@ -1,0 +1,12 @@
+[package]
+name = "yttt-protocol"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+crc32fast = "1"
+postcard = { version = "1", features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+yttt-core = { path = "../yttt-core" }
+zeroize = "1"

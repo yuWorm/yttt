@@ -1,0 +1,30 @@
+[package]
+name = "yttt-transport-local"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+crc32fast = "1"
+hmac = "0.12"
+rand = "0.8"
+sha2 = "0.10"
+serde = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["io-util", "net", "rt", "sync", "time"] }
+yttt-core = { path = "../yttt-core" }
+yttt-protocol = { path = "../yttt-protocol" }
+zeroize = "1"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
