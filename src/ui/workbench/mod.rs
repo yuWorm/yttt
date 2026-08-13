@@ -20,7 +20,7 @@ use gpui_component::{
 };
 use yttt_agent_core::{AgentSnapshot, AgentViewState};
 use yttt_core::model::ids::TerminalSessionId;
-use yttt_protocol::{Request, Response, ServerEvent, project::ProjectChange};
+use yttt_protocol::{LifecycleRequest, LifecycleResponse, ServerEvent, project::ProjectChange};
 use yttt_terminal::input::{KeyState, TerminalKeyEvent};
 use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
 
@@ -544,10 +544,28 @@ impl WorkbenchView {
         root
     }
 
-    pub(crate) fn set_host_runtime(
+    pub fn from_project_paths(
+        config_paths: AppConfigPaths,
+        force_onboarding: bool,
+        project_paths: impl IntoIterator<Item = PathBuf>,
+    ) -> Self {
+        let mut root =
+            Self::with_workspace_and_config_paths(Workspace::new(), config_paths, force_onboarding);
+        for project_path in project_paths {
+            let _ = root.open_project_path(project_path);
+        }
+        root
+    }
+
+    pub(crate) fn set_host_runtime_status(
         &mut self,
-        runtime: Option<Arc<crate::host_runtime::DesktopHostRuntime>>,
+        status: &crate::host_runtime::HostRuntimeGlobal,
     ) {
+        let runtime = status.runtime().cloned();
+        if let Some(error) = status.error() {
+            self.load_error =
+                combine_load_messages(self.load_error.take(), Some(error.to_string()));
+        }
         let local_projects = self
             .workspace
             .opened_projects()

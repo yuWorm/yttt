@@ -24,6 +24,13 @@ impl ProtocolRange {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct BuildIdentity {
+    pub product_version: String,
+    pub build_fingerprint: String,
+    pub resource_compatibility: String,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Nonce(pub [u8; 32]);
 
@@ -45,7 +52,7 @@ impl fmt::Debug for AuthMac {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
     pub supported: ProtocolRange,
-    pub build_id: String,
+    pub build: BuildIdentity,
     pub profile_id: ProfileId,
     pub client_instance_id: ClientInstanceId,
     pub host_epoch_hint: Option<u64>,
@@ -69,7 +76,7 @@ pub enum ConnectionChannel {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostChallenge {
     pub selected_version: u16,
-    pub build_id: String,
+    pub build: BuildIdentity,
     pub profile_id: ProfileId,
     pub host_id: HostId,
     pub host_epoch: u64,

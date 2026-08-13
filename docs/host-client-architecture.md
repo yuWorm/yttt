@@ -291,21 +291,25 @@ Host 以 profile lock 保证单实例。陈旧 socket/ready/PID 只能在 owner�
 
 ### 9.2 普通窗口关闭与 Client 崩溃
 
-`QuitMode::LastWindowClosed` 只结束 Desktop Client。`TerminalPaneView::drop` 对 Host terminal 发送 `DetachTerminal`，不发送 terminate；如果 Client 直接崩溃，Host 在连接清理时释放 lease。两种路径都保留 PTY child、scrollback 和 checkpoint。
+Production desktop 使用 `QuitMode::Explicit`。关闭最后一个窗口只销毁本地 placement 并
+detach Host terminal；desktop shell 和 tray/menu-bar 继续运行。tray 的 **Open yttt** 或
+**New Window** 会在同一个 desktop 进程中创建窗口并通过 catalog + checkpoint 恢复 terminal
+mirror。Desktop Client 崩溃或被强制结束时，Host 在连接清理中释放 lease，但继续持有 PTY
+child、scrollback 和 checkpoint；再次启动 desktop 会 attach 同一个 Host。
 
-重新打开 Desktop 后，launcher attach 同一个 Host，Client 通过 catalog + checkpoint 恢复 terminal mirror。
+### 9.3 显式生命周期操作
 
-### 9.3 显式 Quit
+- **Quit Desktop** 关闭 GPUI/tray 和 Client 连接，不终止 Host。
+- **Stop Host If Idle** 发送 `StopIfIdle`；存在 terminal、project、SSH、Agent 或其他 blocker
+  时返回 typed `Busy`，不终止任何资源。
+- **Restart Host If Idle** 仅在安全停止成功后启动新 Host，不能绕过 blocker。
+- **Quit All** 通过具备 capability 的 lifecycle channel 发送 `ForceStop`，Host 进入 draining
+  后 Desktop 才退出。
+- `--host-status`、`--start-host`、`--stop-host`、`--restart-host` 和
+  `--force-stop-host` 提供不依赖 tray 的等价恢复入口。
 
-`application.quit` 是唯一的“退出全部”用户命令，macOS 默认绑定 `cmd-q`，也可从 command palette 执行：
-
-1. Desktop 发 `DrainAndStop`。
-2. Host `terminate_all`，广播 `HostDraining` / `HostStopping`。
-3. Host 回复 `Draining` 并停止 listener。
-4. Desktop 收到响应后调用 `cx.quit()`。
-5. Host 最多等待 5 s；launcher 的显式 stop 路径超时后才强制 kill 自己 spawn 的 child。
-
-关闭一个 pane/tab/project 使用 `TerminateTerminal` / `TerminateMany`，只影响被关闭资源；关闭 window 不走这些请求。
+关闭一个 pane/tab/project 使用 `TerminateTerminal` / `TerminateMany`，只影响被关闭资源；
+关闭 window 不走这些请求。
 
 ## 10. 断线、Host 重启与恢复
 

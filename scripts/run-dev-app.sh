@@ -160,6 +160,7 @@ set -euo pipefail
 repo_root="$repo_root"
 bundle_rel="$bundle_rel"
 cd "\$repo_root"
+export YTTT_PROFILE_ROOT="\$repo_root/target/dev-app/profile"
 $fixture_env
 exec "\$repo_root/$bundle_rel/Contents/MacOS/yttt-bin"
 EOF

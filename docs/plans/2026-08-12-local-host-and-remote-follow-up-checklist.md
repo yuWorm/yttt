@@ -173,13 +173,13 @@
 
 ## P2-1：完整 tray/menu-bar 生命周期
 
-- [ ] desktop shell 使用 `QuitMode::Explicit`；关闭最后窗口后 desktop 可无窗口驻留。
-- [ ] 引入独立 tray adapter；tray 归 desktop shell，Host 保持纯 headless，不依赖 AppKit/Win32/GTK event loop。
-- [ ] 支持 Open/New Window、Host 状态、active terminal/client/job 计数、Open Logs。
-- [ ] 支持 Start Host、`StopIfIdle`、Restart Host、Quit Desktop、Quit All；所有动作只调用 Host protocol/lifecycle supervisor，不直接 kill PID。
-- [ ] tray crash 或 desktop force-exit 后 Host 和资源继续运行。
-- [ ] Linux 无 tray/AppIndicator 环境提供 Settings/CLI fallback，不把 tray 作为唯一控制入口。
-- [ ] 测量 Host-only、Host + no-window GPUI/tray、reopened window 的 RSS 和重开延迟；只有数据证明必要时才评估第三个轻量 tray 进程。
+- [x] desktop shell 使用 `QuitMode::Explicit`；关闭最后窗口后 desktop 可无窗口驻留。
+- [x] 引入独立 tray adapter；tray 归 desktop shell，Host 保持纯 headless，不依赖 AppKit/Win32/GTK event loop。
+- [x] 支持 Open/New Window、Host 状态、active terminal/client/job 计数、Open Logs。
+- [x] 支持 Start Host、`StopIfIdle`、Restart Host、Quit Desktop、Quit All；所有动作只调用 Host protocol/lifecycle supervisor，不直接 kill PID。
+- [x] tray crash 或 desktop force-exit 后 Host 和资源继续运行。
+- [x] Linux 无 tray/AppIndicator 环境提供 Settings/CLI fallback，不把 tray 作为唯一控制入口。
+- [x] 测量 Host-only、Host + no-window GPUI/tray、reopened window 的资源占用和重开延迟；macOS release physical footprint 分别为 4.55 MiB、≤59.91 MiB 和 111.10 MiB，重开窗口 171.2 ms，当前不引入第三个轻量 tray 进程。
 
 ## P2-2：登录启动和平台后台注册
 

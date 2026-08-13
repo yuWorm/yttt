@@ -82,6 +82,27 @@ fn production_development_and_isolated_profiles_have_disjoint_namespaces() {
 }
 
 #[test]
+fn development_builds_use_stable_executable_scoped_runtime_namespaces() {
+    let temp = tempdir().unwrap();
+    let first = AppProfile::development_for_executable(&temp.path().join("worktree-a/yttt"));
+    let first_again = AppProfile::development_for_executable(&temp.path().join("worktree-a/yttt"));
+    let second = AppProfile::development_for_executable(&temp.path().join("worktree-b/yttt"));
+    let production = AppProfile::production();
+
+    assert_eq!(first.id(), first_again.id());
+    assert_eq!(first.paths(), first_again.paths());
+    assert_eq!(first.environment(), EnvironmentKind::Development);
+    assert_eq!(first.persistence(), ProfilePersistence::Persistent);
+    assert_ne!(first.id(), second.id());
+    assert_ne!(first.paths().runtime, second.paths().runtime);
+    assert_ne!(first.paths().runtime, production.paths().runtime);
+    assert_ne!(
+        first.credential_namespace(),
+        production.credential_namespace()
+    );
+}
+
+#[test]
 fn explicit_endpoint_never_discovers_or_spawns_a_profile_host() {
     let discovery = HostConnectPolicy::ProfileDiscovery;
     let explicit = HostConnectPolicy::ExplicitEndpoint("/tmp/yttt-test.sock".into());

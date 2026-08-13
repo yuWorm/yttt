@@ -33,6 +33,21 @@ impl LocalEndpoint {
             address,
         }
     }
+    pub fn for_desktop_shell(profile_id: ProfileId, runtime_root: impl Into<PathBuf>) -> Self {
+        let runtime_root = runtime_root.into();
+        #[cfg(unix)]
+        let address = EndpointAddress::Unix(runtime_root.join("desktop.sock"));
+        #[cfg(windows)]
+        let address = {
+            let profile_hash = crc32fast::hash(profile_id.as_str().as_bytes());
+            EndpointAddress::WindowsPipe(format!(r"\\.\pipe\yttt-{profile_hash:08x}-desktop"))
+        };
+        Self {
+            profile_id,
+            runtime_root,
+            address,
+        }
+    }
 
     pub fn profile_id(&self) -> &ProfileId {
         &self.profile_id

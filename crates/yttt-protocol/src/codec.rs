@@ -3,15 +3,15 @@ use std::io::{self, Read, Write};
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
-use crate::{
-    DEFAULT_COMPATIBILITY_WINDOW, HEADER_LEN, MAX_FRAME_BYTES, PROTOCOL_MAGIC, PROTOCOL_VERSION,
-};
+use crate::{FRAME_FORMAT_VERSION, HEADER_LEN, MAX_FRAME_BYTES, PROTOCOL_MAGIC};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u16)]
 pub enum FrameKind {
     Handshake = 1,
     Control = 2,
+    Lifecycle = 3,
+    DesktopShell = 4,
 }
 
 impl TryFrom<u16> for FrameKind {
@@ -21,6 +21,8 @@ impl TryFrom<u16> for FrameKind {
         match value {
             1 => Ok(Self::Handshake),
             2 => Ok(Self::Control),
+            3 => Ok(Self::Lifecycle),
+            4 => Ok(Self::DesktopShell),
             other => Err(ProtocolCodecError::UnknownFrameKind(other)),
         }
     }
@@ -89,7 +91,7 @@ pub fn encode_frame(kind: FrameKind, payload: &[u8]) -> Result<Vec<u8>, Protocol
     let checksum = crc32fast::hash(payload);
     let mut frame = Vec::with_capacity(HEADER_LEN + payload.len());
     frame.extend_from_slice(&PROTOCOL_MAGIC);
-    frame.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
+    frame.extend_from_slice(&FRAME_FORMAT_VERSION.to_be_bytes());
     frame.extend_from_slice(&(kind as u16).to_be_bytes());
     frame.extend_from_slice(&payload_len.to_be_bytes());
     frame.extend_from_slice(&checksum.to_be_bytes());
@@ -102,12 +104,10 @@ pub fn decode_header(bytes: &[u8; HEADER_LEN]) -> Result<FrameHeader, ProtocolCo
         return Err(ProtocolCodecError::InvalidMagic);
     }
     let version = u16::from_be_bytes([bytes[4], bytes[5]]);
-    let minimum = PROTOCOL_VERSION.saturating_sub(DEFAULT_COMPATIBILITY_WINDOW);
-    let maximum = PROTOCOL_VERSION.saturating_add(DEFAULT_COMPATIBILITY_WINDOW);
-    if !(minimum..=maximum).contains(&version) {
+    if version != FRAME_FORMAT_VERSION {
         return Err(ProtocolCodecError::VersionMismatch {
             received: version,
-            expected: PROTOCOL_VERSION,
+            expected: FRAME_FORMAT_VERSION,
         });
     }
     let kind = FrameKind::try_from(u16::from_be_bytes([bytes[6], bytes[7]]))?;

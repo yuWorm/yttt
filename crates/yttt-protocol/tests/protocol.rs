@@ -1,15 +1,28 @@
 use yttt_core::model::ids::{ClientInstanceId, HostId, ProfileId};
 use yttt_protocol::{
-    AuthMac, ClientHello, ConnectionChannel, ControlMessage, DEFAULT_COMPATIBILITY_WINDOW,
-    FrameKind, HEADER_LEN, HandshakeMessage, HostChallenge, MAX_FRAME_BYTES, Nonce, PROTOCOL_MAGIC,
-    PROTOCOL_VERSION, ProtocolCodecError, ProtocolRange, RejectReason, decode_frame,
-    decode_message, encode_frame, encode_message,
+    AuthMac, BuildIdentity, ClientHello, ConnectionChannel, ControlMessage,
+    DESKTOP_SHELL_PROTOCOL_VERSION, DesktopShellMessage, DesktopShellRequest,
+    DesktopShellRequestEnvelope, DesktopShellResponse, DesktopShellResponseEnvelope,
+    FRAME_FORMAT_VERSION, FrameKind, HEADER_LEN, HandshakeMessage, HostChallenge,
+    HostLifecycleState, HostLifecycleStatus, LIFECYCLE_PROTOCOL_VERSION, LifecycleMessage,
+    LifecycleRequest, LifecycleRequestEnvelope, LifecycleResponse, LifecycleResponseEnvelope,
+    MAX_FRAME_BYTES, Nonce, PROTOCOL_MAGIC, ProtocolCodecError, ProtocolRange,
+    RESOURCE_PROTOCOL_VERSION, RejectReason, decode_frame, decode_message, encode_frame,
+    encode_message, project::PlatformPath,
 };
+
+fn build_identity(fingerprint: &str) -> BuildIdentity {
+    BuildIdentity {
+        product_version: "0.2.0".to_string(),
+        build_fingerprint: fingerprint.to_string(),
+        resource_compatibility: "resource-v1".to_string(),
+    }
+}
 
 fn client_hello() -> ClientHello {
     ClientHello {
-        supported: ProtocolRange::exact(PROTOCOL_VERSION),
-        build_id: "test-build".to_string(),
+        supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
+        build: build_identity("test-build"),
         profile_id: ProfileId::new("test"),
         client_instance_id: ClientInstanceId::new("client"),
         host_epoch_hint: Some(3),
@@ -28,7 +41,7 @@ fn protocol_header_is_fixed_width_and_round_trips_typed_messages() {
     assert!(encoded.len() >= HEADER_LEN);
     assert_eq!(&encoded[..4], &PROTOCOL_MAGIC);
     let frame = decode_frame(&encoded).unwrap();
-    assert_eq!(frame.header.version, PROTOCOL_VERSION);
+    assert_eq!(frame.header.version, FRAME_FORMAT_VERSION);
     assert_eq!(frame.header.kind, FrameKind::Handshake);
     assert_eq!(decode_message::<HandshakeMessage>(&frame).unwrap(), message);
 }
@@ -59,23 +72,18 @@ fn protocol_rejects_oversized_truncated_and_checksum_corrupt_frames() {
 fn protocol_rejects_unknown_kind_and_version_before_allocating_payload() {
     let mut unknown_kind = [0_u8; HEADER_LEN];
     unknown_kind[..4].copy_from_slice(&PROTOCOL_MAGIC);
-    unknown_kind[4..6].copy_from_slice(&PROTOCOL_VERSION.to_be_bytes());
+    unknown_kind[4..6].copy_from_slice(&FRAME_FORMAT_VERSION.to_be_bytes());
     unknown_kind[6..8].copy_from_slice(&999_u16.to_be_bytes());
     assert!(matches!(
         yttt_protocol::decode_header(&unknown_kind),
         Err(ProtocolCodecError::UnknownFrameKind(999))
     ));
 
-    let mut adjacent_version = unknown_kind;
-    adjacent_version[6..8].copy_from_slice(&(FrameKind::Control as u16).to_be_bytes());
-    adjacent_version[4..6].copy_from_slice(&(PROTOCOL_VERSION + 1).to_be_bytes());
-    assert!(yttt_protocol::decode_header(&adjacent_version).is_ok());
-
-    let mut future_version = adjacent_version;
-    future_version[4..6]
-        .copy_from_slice(&(PROTOCOL_VERSION + DEFAULT_COMPATIBILITY_WINDOW + 1).to_be_bytes());
+    let mut incompatible_version = unknown_kind;
+    incompatible_version[6..8].copy_from_slice(&(FrameKind::Control as u16).to_be_bytes());
+    incompatible_version[4..6].copy_from_slice(&(FRAME_FORMAT_VERSION + 1).to_be_bytes());
     assert!(matches!(
-        yttt_protocol::decode_header(&future_version),
+        yttt_protocol::decode_header(&incompatible_version),
         Err(ProtocolCodecError::VersionMismatch { .. })
     ));
 
@@ -118,8 +126,8 @@ fn protocol_range_selects_newest_shared_version() {
 #[test]
 fn auth_proofs_are_redacted_from_debug_output() {
     let challenge = HostChallenge {
-        selected_version: PROTOCOL_VERSION,
-        build_id: "test-build".to_string(),
+        selected_version: RESOURCE_PROTOCOL_VERSION,
+        build: build_identity("test-build"),
         profile_id: ProfileId::new("test"),
         host_id: HostId::new("host"),
         host_epoch: 9,
@@ -161,6 +169,60 @@ fn every_top_level_variant_has_a_typed_binary_payload() {
     });
     let frame = decode_frame(&encode_message(FrameKind::Control, &control).unwrap()).unwrap();
     assert_eq!(decode_message::<ControlMessage>(&frame).unwrap(), control);
+
+    let lifecycle = LifecycleMessage::Request(LifecycleRequestEnvelope {
+        request_id: 7,
+        body: LifecycleRequest::Status,
+    });
+    let frame = decode_frame(&encode_message(FrameKind::Lifecycle, &lifecycle).unwrap()).unwrap();
+    assert_eq!(
+        decode_message::<LifecycleMessage>(&frame).unwrap(),
+        lifecycle
+    );
+
+    let lifecycle = LifecycleMessage::Response(LifecycleResponseEnvelope {
+        request_id: 7,
+        result: LifecycleResponse::Status(HostLifecycleStatus {
+            lifecycle_protocol: LIFECYCLE_PROTOCOL_VERSION,
+            resource_protocol: RESOURCE_PROTOCOL_VERSION,
+            build: build_identity("host-build"),
+            state: HostLifecycleState::Running,
+            terminal_count: 2,
+            client_count: 1,
+            project_count: 1,
+            ssh_connection_count: 0,
+            agent_count: 1,
+            blockers: Vec::new(),
+        }),
+    });
+    let frame = decode_frame(&encode_message(FrameKind::Lifecycle, &lifecycle).unwrap()).unwrap();
+    assert_eq!(
+        decode_message::<LifecycleMessage>(&frame).unwrap(),
+        lifecycle
+    );
+    let desktop = DesktopShellMessage::Request(DesktopShellRequestEnvelope {
+        protocol_version: DESKTOP_SHELL_PROTOCOL_VERSION,
+        profile_id: ProfileId::new("test"),
+        request_id: 11,
+        body: DesktopShellRequest::OpenWindow {
+            project_paths: vec![PlatformPath::Unix(b"/tmp/project".to_vec())],
+        },
+    });
+    let frame = decode_frame(&encode_message(FrameKind::DesktopShell, &desktop).unwrap()).unwrap();
+    assert_eq!(
+        decode_message::<DesktopShellMessage>(&frame).unwrap(),
+        desktop
+    );
+
+    let desktop = DesktopShellMessage::Response(DesktopShellResponseEnvelope {
+        request_id: 11,
+        result: DesktopShellResponse::Accepted,
+    });
+    let frame = decode_frame(&encode_message(FrameKind::DesktopShell, &desktop).unwrap()).unwrap();
+    assert_eq!(
+        decode_message::<DesktopShellMessage>(&frame).unwrap(),
+        desktop
+    );
 }
 
 #[test]
@@ -174,7 +236,7 @@ fn decoder_rejects_malformed_oversized_and_incomplete_frames() {
 
     let mut oversized_header = [0_u8; HEADER_LEN];
     oversized_header[..4].copy_from_slice(&PROTOCOL_MAGIC);
-    oversized_header[4..6].copy_from_slice(&PROTOCOL_VERSION.to_be_bytes());
+    oversized_header[4..6].copy_from_slice(&FRAME_FORMAT_VERSION.to_be_bytes());
     oversized_header[6..8].copy_from_slice(&(FrameKind::Control as u16).to_be_bytes());
     oversized_header[8..12].copy_from_slice(&((MAX_FRAME_BYTES as u32) + 1).to_be_bytes());
     assert!(matches!(

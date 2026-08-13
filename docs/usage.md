@@ -42,6 +42,34 @@ YTTT_FORCE_ONBOARDING=1 cargo run
 not clear the persisted completion marker; every normal launch remains forced only while the
 environment variable is enabled.
 
+## Desktop and Host Lifecycle
+
+The desktop UI and the headless Host are separate processes. Closing the last production window
+keeps the desktop tray/menu-bar control plane available; it detaches views but does not terminate
+Host-owned terminals, projects, SSH connections, or Agent jobs. A second invocation for the same
+profile forwards its open request to the existing desktop shell instead of creating another tray.
+
+On macOS and Windows, the tray menu exposes **Open yttt**, **New Window**, **Open Logs**, current
+Host terminal/client/job counts, **Start Host**, **Stop Host If Idle**, **Restart Host If Idle**,
+**Quit Desktop**, and **Quit All**. Safe stop and restart return `Busy` while resources are active;
+they never kill those resources. **Quit Desktop** leaves the Host running, while **Quit All**
+explicitly force-stops the Host before exiting the desktop.
+
+Linux and environments without a usable tray retain the same control path through CLI commands:
+
+```sh
+yttt --host-status
+yttt --start-host
+yttt --stop-host
+yttt --restart-host
+yttt --force-stop-host
+yttt --open-logs
+```
+
+These commands are profile-scoped and use the authenticated lifecycle protocol; only the explicit
+force-stop command may terminate a busy Host. Development builds use executable-scoped runtime and
+credential namespaces, preventing them from attaching to an installed production Host.
+
 ## Project Files and Editor
 
 Terminal tabs and project files share one tab strip. Opening a file creates a file tab;

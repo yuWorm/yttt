@@ -127,9 +127,6 @@ pub enum Request {
     ReadAgentSnapshots {
         acknowledged: Vec<AgentSnapshotCursor>,
     },
-    StopIfIdle,
-    ForceStop,
-    DrainAndStop,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,11 +175,6 @@ pub enum Response {
     RemoteCommand(RemoteCommandResponse),
     Project(ProjectResponse),
     AgentSnapshots(Vec<AgentSnapshotUpdate>),
-    HostIdle,
-    HostBusy {
-        blockers: Vec<HostBlocker>,
-    },
-    Draining,
     Applied,
 }
 

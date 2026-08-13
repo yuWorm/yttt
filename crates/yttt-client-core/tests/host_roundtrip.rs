@@ -18,7 +18,9 @@ use yttt_core::model::ids::{
 };
 use yttt_host::{HostBootstrap, diagnostics::HostDiagnosticsSnapshot, run};
 use yttt_protocol::{
-    ClientRequest, ControlMessage, FailureCode, PROTOCOL_VERSION, ProtocolRange, Request, Response,
+    BuildIdentity, ClientRequest, ControlMessage, FailureCode, LIFECYCLE_PROTOCOL_VERSION,
+    LifecycleMessage, LifecycleRequest, LifecycleRequestEnvelope, LifecycleResponse,
+    LifecycleResponseEnvelope, ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request, Response,
     agent::AgentSnapshotCursor,
     project::{
         PlatformPath, ProjectFileState, ProjectRequest, ProjectResponse, ProjectSaveMode,
@@ -37,7 +39,8 @@ use yttt_protocol::{
     },
 };
 use yttt_transport_local::{
-    AuthToken, ClientIdentity, client_handshake, connect, receive_control, send_control,
+    AuthToken, ClientIdentity, client_handshake, connect, receive_control, receive_lifecycle,
+    send_control, send_lifecycle,
 };
 
 struct RunningHost {
@@ -63,7 +66,11 @@ impl RunningHost {
             auth_token_file,
             ssh_host_keys_file: temp.path().join("ssh-host-keys.toml"),
             credential_namespace: "dev.yttt.ssh.integration-test".to_string(),
-            build_id: "integration-build".to_string(),
+            build: BuildIdentity {
+                product_version: "0.2.0".to_string(),
+                build_fingerprint: "integration-build".to_string(),
+                resource_compatibility: "integration-resource-v1".to_string(),
+            },
         };
         let task = tokio::spawn(run(bootstrap.clone()));
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -82,23 +89,15 @@ impl RunningHost {
     }
 
     async fn client(&self, id: &str) -> ClientCore {
-        self.client_with_capabilities(id, false).await
-    }
-
-    async fn force_stop_client(&self, id: &str) -> ClientCore {
-        self.client_with_capabilities(id, true).await
-    }
-
-    async fn client_with_capabilities(&self, id: &str, can_force_stop: bool) -> ClientCore {
         ClientCore::connect(
             self.bootstrap.endpoint(),
             ClientIdentity {
-                supported: ProtocolRange::exact(PROTOCOL_VERSION),
-                build_id: self.bootstrap.build_id.clone(),
+                supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
+                build: self.bootstrap.build.clone(),
                 profile_id: self.bootstrap.profile_id.clone(),
                 client_instance_id: ClientInstanceId::new(id),
                 host_epoch_hint: None,
-                can_force_stop,
+                can_force_stop: false,
                 channel: yttt_protocol::ConnectionChannel::Control,
                 terminal_session_id: None,
             },
@@ -107,6 +106,15 @@ impl RunningHost {
         .await
         .unwrap()
     }
+
+    async fn lifecycle_request(
+        &self,
+        body: LifecycleRequest,
+        can_force_stop: bool,
+    ) -> LifecycleResponse {
+        let mut client = raw_lifecycle_client(self, "lifecycle-client", can_force_stop).await;
+        raw_lifecycle_request(&mut client, 1, body).await
+    }
 }
 
 async fn raw_client(host: &RunningHost, id: &str) -> yttt_transport_local::LocalStream {
@@ -114,8 +122,8 @@ async fn raw_client(host: &RunningHost, id: &str) -> yttt_transport_local::Local
     client_handshake(
         &mut stream,
         &ClientIdentity {
-            supported: ProtocolRange::exact(PROTOCOL_VERSION),
-            build_id: host.bootstrap.build_id.clone(),
+            supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
+            build: host.bootstrap.build.clone(),
             profile_id: host.bootstrap.profile_id.clone(),
             client_instance_id: ClientInstanceId::new(id),
             host_epoch_hint: None,
@@ -130,21 +138,38 @@ async fn raw_client(host: &RunningHost, id: &str) -> yttt_transport_local::Local
     stream
 }
 
-async fn raw_lifecycle_client(host: &RunningHost, id: &str) -> yttt_transport_local::LocalStream {
-    let mut stream = connect(&host.bootstrap.endpoint()).await.unwrap();
+async fn raw_lifecycle_client(
+    host: &RunningHost,
+    id: &str,
+    can_force_stop: bool,
+) -> yttt_transport_local::LocalStream {
+    raw_lifecycle_client_for(&host.bootstrap, host.token, id, can_force_stop).await
+}
+
+async fn raw_lifecycle_client_for(
+    bootstrap: &HostBootstrap,
+    token: [u8; 32],
+    id: &str,
+    can_force_stop: bool,
+) -> yttt_transport_local::LocalStream {
+    let mut stream = connect(&bootstrap.endpoint()).await.unwrap();
     client_handshake(
         &mut stream,
         &ClientIdentity {
-            supported: ProtocolRange::exact(PROTOCOL_VERSION),
-            build_id: "next-build".to_string(),
-            profile_id: host.bootstrap.profile_id.clone(),
+            supported: ProtocolRange::exact(LIFECYCLE_PROTOCOL_VERSION),
+            build: BuildIdentity {
+                product_version: "0.3.0".to_string(),
+                build_fingerprint: "next-build".to_string(),
+                resource_compatibility: "next-resource".to_string(),
+            },
+            profile_id: bootstrap.profile_id.clone(),
             client_instance_id: ClientInstanceId::new(id),
             host_epoch_hint: None,
-            can_force_stop: false,
+            can_force_stop,
             channel: yttt_protocol::ConnectionChannel::Lifecycle,
             terminal_session_id: None,
         },
-        &AuthToken::from_bytes(host.token),
+        &AuthToken::from_bytes(token),
     )
     .await
     .unwrap();
@@ -160,8 +185,8 @@ async fn raw_terminal_data_client(
     client_handshake(
         &mut stream,
         &ClientIdentity {
-            supported: ProtocolRange::exact(PROTOCOL_VERSION),
-            build_id: host.bootstrap.build_id.clone(),
+            supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
+            build: host.bootstrap.build.clone(),
             profile_id: host.bootstrap.profile_id.clone(),
             client_instance_id: ClientInstanceId::new(id),
             host_epoch_hint: None,
@@ -195,6 +220,26 @@ async fn raw_request(
             ControlMessage::Event(_) => {}
             message => panic!("unexpected raw client message: {message:?}"),
         }
+    }
+}
+
+async fn raw_lifecycle_request(
+    stream: &mut yttt_transport_local::LocalStream,
+    request_id: u64,
+    body: LifecycleRequest,
+) -> LifecycleResponse {
+    send_lifecycle(
+        stream,
+        &LifecycleMessage::Request(LifecycleRequestEnvelope { request_id, body }),
+    )
+    .await
+    .unwrap();
+    match receive_lifecycle(stream).await.unwrap() {
+        LifecycleMessage::Response(LifecycleResponseEnvelope {
+            request_id: response_id,
+            result,
+        }) if response_id == request_id => result,
+        message => panic!("unexpected lifecycle message: {message:?}"),
     }
 }
 
@@ -388,10 +433,9 @@ async fn terminal_output_uses_a_dedicated_data_connection() {
         Response::TerminalExitAcknowledged
     );
     assert_eq!(
-        raw_request(&mut control, 6, Request::DrainAndStop)
-            .await
-            .unwrap(),
-        Response::Draining
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
     );
     tokio::time::timeout(Duration::from_secs(5), host.task)
         .await
@@ -419,7 +463,7 @@ async fn wait_for_mirror(client: &ClientCore, expected: &str) {
 #[tokio::test]
 async fn force_capable_control_client_uses_restricted_terminal_data_channel_and_reattaches() {
     let host = RunningHost::start().await;
-    let first = host.force_stop_client("first-client").await;
+    let first = host.client("first-client").await;
     let spawned = first
         .request(Request::SpawnTerminal(spawn_spec()))
         .await
@@ -510,8 +554,9 @@ async fn force_capable_control_client_uses_restricted_terminal_data_channel_and_
         Response::TerminalExitAcknowledged
     );
     assert_eq!(
-        second.request(Request::DrainAndStop).await.unwrap(),
-        Response::Draining
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
     );
     tokio::time::timeout(Duration::from_secs(5), host.task)
         .await
@@ -606,10 +651,9 @@ async fn request_journal_replays_mutations_without_repeating_side_effects() {
     );
 
     assert_eq!(
-        raw_request(&mut client, 44, Request::DrainAndStop)
-            .await
-            .unwrap(),
-        Response::Draining
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
     );
     tokio::time::timeout(Duration::from_secs(5), host.task)
         .await
@@ -695,8 +739,9 @@ async fn exited_terminal_reconnects_with_its_final_checkpoint_until_acknowledged
         Response::TerminalExitAcknowledged
     );
     assert_eq!(
-        second.request(Request::StopIfIdle).await.unwrap(),
-        Response::HostIdle
+        host.lifecycle_request(LifecycleRequest::StopIfIdle, false)
+            .await,
+        LifecycleResponse::Stopping
     );
     tokio::time::timeout(Duration::from_secs(5), host.task)
         .await
@@ -741,10 +786,12 @@ async fn stop_if_idle_is_atomic_and_drain_waits_for_terminal_ack() {
     .expect("terminal exit timeout");
     let final_sequence = client.terminal_snapshot(&session_id).unwrap().sequence;
 
-    let busy = client.request(Request::StopIfIdle).await.unwrap();
+    let busy = host
+        .lifecycle_request(LifecycleRequest::StopIfIdle, false)
+        .await;
     assert!(matches!(
         busy,
-        Response::HostBusy { blockers }
+        LifecycleResponse::Busy { blockers }
             if blockers.iter().any(|blocker| matches!(
                 blocker,
                 yttt_protocol::HostBlocker::ExitedTerminalAwaitingAck {
@@ -759,8 +806,9 @@ async fn stop_if_idle_is_atomic_and_drain_waits_for_terminal_ack() {
     assert!(!host.task.is_finished());
 
     assert_eq!(
-        client.request(Request::DrainAndStop).await.unwrap(),
-        Response::Draining
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
     );
     assert!(!host.task.is_finished());
     assert_eq!(
@@ -782,24 +830,20 @@ async fn stop_if_idle_is_atomic_and_drain_waits_for_terminal_ack() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn force_stop_requires_an_authenticated_client_capability() {
+async fn force_stop_requires_an_authenticated_lifecycle_capability() {
     let host = RunningHost::start().await;
-    let ordinary = host.client("ordinary-lifecycle-client").await;
-    let error = ordinary.request(Request::ForceStop).await.unwrap_err();
-    assert!(matches!(
-        error,
-        ClientCoreError::Protocol(failure)
-            if failure.code == FailureCode::PermissionDenied && !failure.retryable
-    ));
+    let mut ordinary = raw_lifecycle_client(&host, "ordinary-lifecycle-client", false).await;
+    assert_eq!(
+        raw_lifecycle_request(&mut ordinary, 1, LifecycleRequest::ForceStop).await,
+        LifecycleResponse::PermissionDenied
+    );
     assert!(!host.task.is_finished());
 
-    let privileged = host.force_stop_client("desktop-lifecycle-client").await;
+    let mut privileged = raw_lifecycle_client(&host, "desktop-lifecycle-client", true).await;
     assert_eq!(
-        privileged.request(Request::ForceStop).await.unwrap(),
-        Response::Draining
+        raw_lifecycle_request(&mut privileged, 1, LifecycleRequest::ForceStop).await,
+        LifecycleResponse::Draining
     );
-    privileged.shutdown().await;
-    ordinary.shutdown().await;
     tokio::time::timeout(Duration::from_secs(5), host.task)
         .await
         .expect("force-stopped Host shutdown timeout")
@@ -808,23 +852,21 @@ async fn force_stop_requires_an_authenticated_client_capability() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn compatibility_lifecycle_channel_cannot_force_stop_or_create_resources() {
+async fn lifecycle_channel_survives_resource_build_mismatch_and_is_lifecycle_only() {
     let host = RunningHost::start().await;
-    let mut client = raw_lifecycle_client(&host, "compatibility-lifecycle").await;
-    let force_stop = raw_request(&mut client, 1, Request::ForceStop)
-        .await
-        .unwrap_err();
-    assert_eq!(force_stop.code, FailureCode::PermissionDenied);
-    let spawn = raw_request(&mut client, 2, Request::SpawnTerminal(spawn_spec()))
-        .await
-        .unwrap_err();
-    assert_eq!(spawn.code, FailureCode::PermissionDenied);
+    let mut client = raw_lifecycle_client(&host, "compatibility-lifecycle", false).await;
+    let LifecycleResponse::Status(status) =
+        raw_lifecycle_request(&mut client, 1, LifecycleRequest::Status).await
+    else {
+        panic!("lifecycle status response was not typed");
+    };
+    assert_eq!(status.build, host.bootstrap.build);
+    assert_eq!(status.lifecycle_protocol, LIFECYCLE_PROTOCOL_VERSION);
+    assert_eq!(status.resource_protocol, RESOURCE_PROTOCOL_VERSION);
     assert!(!host.task.is_finished());
     assert_eq!(
-        raw_request(&mut client, 3, Request::StopIfIdle)
-            .await
-            .unwrap(),
-        Response::HostIdle
+        raw_lifecycle_request(&mut client, 2, LifecycleRequest::StopIfIdle).await,
+        LifecycleResponse::Stopping
     );
     tokio::time::timeout(Duration::from_secs(5), host.task)
         .await
@@ -915,8 +957,9 @@ async fn host_rejects_terminal_session_address_collisions() {
         Response::TerminalExitAcknowledged
     );
     assert_eq!(
-        client.request(Request::DrainAndStop).await.unwrap(),
-        Response::Draining
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
     );
     tokio::time::timeout(Duration::from_secs(5), host.task)
         .await
@@ -1121,8 +1164,9 @@ async fn host_roundtrip_preserves_input_resize_scroll_environment_and_title() {
             .all(|terminal| terminal.session_id != session_id)
     );
     assert_eq!(
-        client.request(Request::DrainAndStop).await.unwrap(),
-        Response::Draining
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
     );
     tokio::time::timeout(Duration::from_secs(5), host.task)
         .await
@@ -1462,8 +1506,9 @@ async fn multiple_clients_keep_independent_viewports_and_a_single_input_owner() 
         .await
         .unwrap();
     assert_eq!(
-        observer.request(Request::DrainAndStop).await.unwrap(),
-        Response::Draining
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
     );
     tokio::time::timeout(Duration::from_secs(5), host.task)
         .await
@@ -1617,8 +1662,9 @@ async fn slow_observer_does_not_block_the_owner_or_change_canonical_geometry() {
         .await
         .unwrap();
     assert_eq!(
-        owner.request(Request::DrainAndStop).await.unwrap(),
-        Response::Draining
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
     );
     tokio::time::timeout(Duration::from_secs(5), host.task)
         .await
@@ -1647,13 +1693,13 @@ async fn client_reconciles_stale_terminal_after_host_restart() {
     wait_for_mirror(&client, "client-core-ready").await;
     assert!(client.known_terminal_ids().contains(&session_id));
 
-    let stopper = host.force_stop_client("restart-stopper").await;
     assert_eq!(
-        stopper.request(Request::ForceStop).await.unwrap(),
-        Response::Draining
+        host.lifecycle_request(LifecycleRequest::ForceStop, true)
+            .await,
+        LifecycleResponse::Draining
     );
-    stopper.shutdown().await;
     let bootstrap = host.bootstrap.clone();
+    let token = host.token;
     tokio::time::timeout(Duration::from_secs(5), host.task)
         .await
         .expect("first Host shutdown timeout")
@@ -1701,9 +1747,11 @@ async fn client_reconciles_stale_terminal_after_host_restart() {
     assert!(client.terminal_snapshot(&session_id).is_none());
     assert!(!client.known_terminal_ids().contains(&session_id));
 
+    let mut lifecycle =
+        raw_lifecycle_client_for(&bootstrap, token, "restart-lifecycle", false).await;
     assert_eq!(
-        client.request(Request::StopIfIdle).await.unwrap(),
-        Response::HostIdle
+        raw_lifecycle_request(&mut lifecycle, 1, LifecycleRequest::StopIfIdle).await,
+        LifecycleResponse::Stopping
     );
     tokio::time::timeout(Duration::from_secs(5), restarted)
         .await
@@ -1887,8 +1935,9 @@ async fn host_owns_authenticated_agent_state_and_resyncs_snapshots() {
     );
     let diagnostics_path = host.bootstrap.runtime_root.join("host-diagnostics.jsonl");
     assert_eq!(
-        observer.request(Request::DrainAndStop).await.unwrap(),
-        Response::Draining
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
     );
     tokio::time::timeout(Duration::from_secs(5), host.task)
         .await
@@ -1945,8 +1994,9 @@ async fn host_owns_project_files_and_publishes_watcher_events() {
     };
     assert_eq!(watch_error, None);
     assert_eq!(
-        client.request(Request::StopIfIdle).await.unwrap(),
-        Response::HostBusy {
+        host.lifecycle_request(LifecycleRequest::StopIfIdle, false)
+            .await,
+        LifecycleResponse::Busy {
             blockers: vec![yttt_protocol::HostBlocker::Project(project_id.clone())],
         }
     );
@@ -2042,8 +2092,9 @@ async fn host_owns_project_files_and_publishes_watcher_events() {
         ClientCoreError::Protocol(failure) if failure.code == FailureCode::NotFound
     ));
     assert_eq!(
-        client.request(Request::DrainAndStop).await.unwrap(),
-        Response::Draining
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
     );
     tokio::time::timeout(Duration::from_secs(5), host.task)
         .await
@@ -2111,8 +2162,9 @@ async fn remote_project_operations_require_a_host_registration() {
     assert!(!resources.projects.contains(&project_id));
 
     assert_eq!(
-        client.request(Request::DrainAndStop).await.unwrap(),
-        Response::Draining
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
     );
     tokio::time::timeout(Duration::from_secs(5), host.task)
         .await
@@ -2171,8 +2223,9 @@ async fn terminate_many_reports_each_terminal_result_without_rolling_back_succes
     ));
 
     assert_eq!(
-        client.request(Request::DrainAndStop).await.unwrap(),
-        Response::Draining
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
     );
     tokio::time::timeout(Duration::from_secs(5), host.task)
         .await
@@ -2483,8 +2536,9 @@ async fn host_ssh_product_smoke_covers_host_key_sftp_git_and_terminal() {
         Response::SshDisconnected
     );
     assert_eq!(
-        client.request(Request::DrainAndStop).await.unwrap(),
-        Response::Draining
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
     );
     tokio::time::timeout(Duration::from_secs(15), host.task)
         .await
@@ -2571,8 +2625,9 @@ async fn host_terminal_performance_probe() {
         })
         .await;
     assert_eq!(
-        client.request(Request::DrainAndStop).await.unwrap(),
-        Response::Draining
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
     );
     tokio::time::timeout(Duration::from_secs(5), host.task)
         .await

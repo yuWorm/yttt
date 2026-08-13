@@ -4,6 +4,8 @@
 
 pub use yttt_core::commands;
 pub mod config;
+pub mod desktop_shell;
+pub mod desktop_tray;
 pub use yttt_core::model;
 pub mod host_launcher;
 pub mod host_runtime;

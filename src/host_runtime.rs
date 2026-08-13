@@ -6,7 +6,8 @@ use std::{
 use yttt_client_core::{ClientCore, ClientCoreError, ClientEvent, ConnectionState};
 use yttt_core::model::ids::{ClientInstanceId, TerminalSessionId};
 use yttt_protocol::{
-    Request, ResourceCatalog, Response, TerminalPlacement, TerminalTerminationResult,
+    LifecycleRequest, LifecycleResponse, Request, ResourceCatalog, Response, TerminalPlacement,
+    TerminalTerminationResult,
     terminal::{AttachTerminal, SemanticViewport, TerminalSpawnSpec, TerminateTerminalRequest},
 };
 
@@ -41,11 +42,28 @@ pub struct DesktopHostRuntime {
     client: Arc<ClientCore>,
     runtime: tokio::runtime::Runtime,
     _managed_process: Arc<Mutex<ManagedHostProcess>>,
+    launcher: HostLauncher,
     placement_store: Arc<TerminalPlacementStore>,
 }
 
 impl DesktopHostRuntime {
     pub fn start(profile: AppProfile) -> Result<Arc<Self>, DesktopHostRuntimeError> {
+        let launcher = HostLauncher::for_current_executable(profile.clone())?;
+        Self::start_with_launcher(profile, launcher)
+    }
+
+    pub fn start_with_executable(
+        profile: AppProfile,
+        executable: impl Into<std::path::PathBuf>,
+    ) -> Result<Arc<Self>, DesktopHostRuntimeError> {
+        let launcher = HostLauncher::new(profile.clone(), executable);
+        Self::start_with_launcher(profile, launcher)
+    }
+
+    fn start_with_launcher(
+        profile: AppProfile,
+        launcher: HostLauncher,
+    ) -> Result<Arc<Self>, DesktopHostRuntimeError> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
@@ -54,14 +72,13 @@ impl DesktopHostRuntime {
         let placement_store = Arc::new(TerminalPlacementStore::load(
             profile.config_paths().terminal_placements_file(),
         )?);
-        let launcher = HostLauncher::for_current_executable(profile)?;
         let managed_process = Arc::new(Mutex::new(runtime.block_on(launcher.launch_or_attach())?));
         let (endpoint, identity, token) = launcher.client_core_config(ClientInstanceId::new(
             format!("desktop-{}", uuid::Uuid::new_v4()),
         ))?;
         let client = Arc::new(runtime.block_on(ClientCore::connect(endpoint, identity, token))?);
         let mut state = client.subscribe_state();
-        let recovery_launcher = launcher;
+        let recovery_launcher = launcher.clone();
         let recovered_process = managed_process.clone();
         runtime.spawn(async move {
             while state.changed().await.is_ok() {
@@ -77,6 +94,7 @@ impl DesktopHostRuntime {
             client,
             runtime,
             _managed_process: managed_process,
+            launcher,
             placement_store,
         }))
     }
@@ -101,6 +119,24 @@ impl DesktopHostRuntime {
                 let _ = sender.send(Err(error));
             }
         }
+        receiver
+    }
+
+    pub fn request_lifecycle(
+        &self,
+        request: LifecycleRequest,
+        can_force_stop: bool,
+    ) -> flume::Receiver<Result<LifecycleResponse, HostLaunchError>> {
+        let (sender, receiver) = flume::bounded(1);
+        let launcher = self.launcher.clone();
+        self.runtime.spawn(async move {
+            let result = async {
+                let mut client = launcher.connect_lifecycle(can_force_stop).await?;
+                client.request(request).await
+            }
+            .await;
+            let _ = sender.send_async(result).await;
+        });
         receiver
     }
 
@@ -459,9 +495,22 @@ pub struct HostRuntimeGlobal {
 }
 
 impl HostRuntimeGlobal {
+    pub fn start(profile: AppProfile) -> Self {
+        match DesktopHostRuntime::start(profile) {
+            Ok(runtime) => Self::ready(runtime),
+            Err(error) => Self::unavailable(format!("Host runtime unavailable: {error}")),
+        }
+    }
+
     pub fn ready(runtime: Arc<DesktopHostRuntime>) -> Self {
         Self {
             runtime: Some(runtime),
+            error: None,
+        }
+    }
+    pub fn disabled() -> Self {
+        Self {
+            runtime: None,
             error: None,
         }
     }
@@ -499,6 +548,9 @@ pub enum DesktopHostRuntimeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::profile::{
+        EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
+    };
     use yttt_core::model::ids::{HostId, PaneId, ProfileId, ProjectId, TabId};
     use yttt_protocol::terminal::{TerminalExecutionSpec, TerminalGeometry};
 
@@ -668,6 +720,30 @@ mod tests {
             reconcile_terminal_start(&close_store, requested, &catalog(vec![live_placement])),
             Err(TerminalRecoveryError::ClosePending(_))
         ));
+    }
+
+    #[test]
+    fn host_start_failure_becomes_an_unavailable_recovery_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let occupied_root = temp.path().join("not-a-directory");
+        std::fs::write(&occupied_root, b"occupied").unwrap();
+        let profile = AppProfile::scoped(
+            ProfileId::new("unavailable-host"),
+            EnvironmentKind::Test,
+            ProfilePersistence::Ephemeral,
+            &occupied_root,
+            ProjectConfigPolicy::Overlay,
+            HostConnectPolicy::ExplicitEndpoint(occupied_root.join("runtime/host.sock")),
+        );
+
+        let status = HostRuntimeGlobal::start(profile);
+
+        assert!(status.runtime().is_none());
+        assert!(
+            status
+                .error()
+                .is_some_and(|error| error.starts_with("Host runtime unavailable:"))
+        );
     }
 
     #[test]

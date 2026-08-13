@@ -16,8 +16,12 @@ editing built into the same workbench:
 - Export shareable project layouts explicitly.
 - Track process-level agent CLI exits for tools such as Codex and Claude Code.
 
-It is not a client/server tmux clone or a full file manager. The editor is intentionally
-focused on project text files and keeps terminal work as the primary workflow.
+The desktop is a client of a profile-isolated headless Host that owns terminal, project, SSH, and
+Agent resources. Closing the last window keeps the native tray/menu-bar control plane available
+without terminating those resources; the tray can reopen windows, show resource counts, manage
+the Host lifecycle, and exit the desktop independently. Environments without a tray can use the
+equivalent `--host-status`, `--start-host`, `--stop-host`, `--restart-host`, and
+`--force-stop-host` commands. See [Usage](docs/usage.md#desktop-and-host-lifecycle).
 
 ## Project Files and Editor
 

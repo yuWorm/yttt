@@ -7,25 +7,36 @@ use std::{
     time::Duration,
 };
 
+use sha2::{Digest as _, Sha256};
 use yttt_core::model::ids::{ClientInstanceId, ProfileId};
 use yttt_protocol::{
-    ClientRequest, ConnectionChannel, ControlMessage, DEFAULT_COMPATIBILITY_WINDOW, HostBlocker,
-    HostResponse, PROTOCOL_VERSION, ProtocolRange, Request, Response,
+    BuildIdentity, ClientRequest, ConnectionChannel, ControlMessage, HostBlocker, HostResponse,
+    LIFECYCLE_PROTOCOL_VERSION, LifecycleMessage, LifecycleRequest, LifecycleRequestEnvelope,
+    LifecycleResponse, LifecycleResponseEnvelope, ProtocolRange, RESOURCE_PROTOCOL_VERSION,
+    Request, Response,
 };
 use yttt_transport_local::{
-    AuthToken, ClientIdentity, LocalEndpoint, LocalStream, client_handshake, connect,
-    receive_control, send_control,
+    AuthToken, AuthenticatedHost, ClientIdentity, LocalEndpoint, LocalStream, client_handshake,
+    connect, receive_control, receive_lifecycle, send_control, send_lifecycle,
 };
 
 use crate::config::profile::AppProfile;
 
 const HOST_READY_TIMEOUT: Duration = Duration::from_secs(8);
 const HOST_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+const RESOURCE_COMPATIBILITY: &str = "yttt-resource-v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProcessRole {
     Desktop,
     Host,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExistingHostAction {
+    Attach,
+    Replace,
+    Spawn,
 }
 
 pub fn process_role(args: impl IntoIterator<Item = impl AsRef<OsStr>>) -> ProcessRole {
@@ -53,6 +64,8 @@ pub enum HostLaunchError {
     UnexpectedMessage,
     #[error("an incompatible Host is still busy: {0:?}")]
     HostBusy(Vec<HostBlocker>),
+    #[error("a live Host owns the profile lock but is unreachable (pid: {pid:?})")]
+    UnreachableLiveHost { pid: Option<u32> },
     #[error("Host request failed: {0}")]
     RequestFailed(String),
     #[error("Host I/O failed: {0}")]
@@ -71,15 +84,16 @@ pub enum HostLaunchError {
 pub struct HostLauncher {
     profile: AppProfile,
     executable: PathBuf,
-    build_id: String,
+    build: BuildIdentity,
 }
 
 impl HostLauncher {
     pub fn new(profile: AppProfile, executable: impl Into<PathBuf>) -> Self {
+        let executable = executable.into();
         Self {
             profile,
-            executable: executable.into(),
-            build_id: env!("CARGO_PKG_VERSION").to_string(),
+            build: build_identity(&executable),
+            executable,
         }
     }
 
@@ -94,34 +108,32 @@ impl HostLauncher {
         )
     }
 
+    pub fn build_identity(&self) -> &BuildIdentity {
+        &self.build
+    }
+
     pub async fn launch_or_attach(&self) -> Result<ManagedHostProcess, HostLaunchError> {
         let token_file = self.ensure_auth_token_file()?;
         let token = read_token(&token_file)?;
-        let connection_error = match self.connect_with_token(&token).await {
-            Ok(_) => {
+        match self.existing_host_action(&token).await? {
+            ExistingHostAction::Attach => {
                 return Ok(ManagedHostProcess {
                     launcher: self.clone(),
                     token_file,
                     child: None,
                 });
             }
-            Err(error) => error,
-        };
-        if matches!(
-            &connection_error,
-            HostLaunchError::Handshake(yttt_transport_local::HandshakeError::Rejected(
-                yttt_protocol::RejectReason::BuildMismatch
-                    | yttt_protocol::RejectReason::VersionMismatch { .. }
-            ))
-        ) {
-            let mut lifecycle = self.connect_lifecycle_with_token(&token).await?;
-            match lifecycle.request(Request::StopIfIdle).await? {
-                Response::HostIdle => self.wait_for_existing_host_exit().await?,
-                Response::HostBusy { blockers } => {
-                    return Err(HostLaunchError::HostBusy(blockers));
+            ExistingHostAction::Replace => {
+                let mut lifecycle = self.connect_lifecycle_with_token(&token, false).await?;
+                match lifecycle.request(LifecycleRequest::StopIfIdle).await? {
+                    LifecycleResponse::Stopping => self.wait_for_existing_host_exit().await?,
+                    LifecycleResponse::Busy { blockers } => {
+                        return Err(HostLaunchError::HostBusy(blockers));
+                    }
+                    _ => return Err(HostLaunchError::UnexpectedMessage),
                 }
-                _ => return Err(HostLaunchError::UnexpectedMessage),
             }
+            ExistingHostAction::Spawn => {}
         }
 
         fs::create_dir_all(&self.profile.paths().logs)?;
@@ -140,8 +152,12 @@ impl HostLauncher {
             .arg(self.profile.paths().config.join("ssh-host-keys.toml"))
             .arg("--credential-namespace")
             .arg(self.profile.credential_namespace())
-            .arg("--build-id")
-            .arg(&self.build_id)
+            .arg("--product-version")
+            .arg(&self.build.product_version)
+            .arg("--build-fingerprint")
+            .arg(&self.build.build_fingerprint)
+            .arg("--resource-compatibility")
+            .arg(&self.build.resource_compatibility)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log_file))
             .stderr(Stdio::from(error_log));
@@ -170,8 +186,8 @@ impl HostLauncher {
         Ok((
             self.endpoint(),
             ClientIdentity {
-                supported: ProtocolRange::exact(PROTOCOL_VERSION),
-                build_id: self.build_id.clone(),
+                supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
+                build: self.build.clone(),
                 profile_id: self.profile.id().clone(),
                 client_instance_id,
                 host_epoch_hint: None,
@@ -205,29 +221,48 @@ impl HostLauncher {
         &self,
         token: &AuthToken,
     ) -> Result<HostControlClient, HostLaunchError> {
-        self.connect_channel_with_token(
-            token,
-            ConnectionChannel::Control,
-            ProtocolRange::exact(PROTOCOL_VERSION),
-            true,
-        )
-        .await
+        let (stream, authenticated) = self
+            .connect_channel_with_token(
+                token,
+                ConnectionChannel::Control,
+                ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
+                true,
+            )
+            .await?;
+        Ok(HostControlClient {
+            stream,
+            host_epoch: authenticated.host_epoch,
+            next_request_id: 1,
+        })
+    }
+
+    pub async fn connect_lifecycle(
+        &self,
+        can_force_stop: bool,
+    ) -> Result<HostLifecycleClient, HostLaunchError> {
+        let token = read_token(&self.auth_token_file())?;
+        self.connect_lifecycle_with_token(&token, can_force_stop)
+            .await
     }
 
     async fn connect_lifecycle_with_token(
         &self,
         token: &AuthToken,
-    ) -> Result<HostControlClient, HostLaunchError> {
-        self.connect_channel_with_token(
-            token,
-            ConnectionChannel::Lifecycle,
-            ProtocolRange {
-                minimum: PROTOCOL_VERSION.saturating_sub(DEFAULT_COMPATIBILITY_WINDOW),
-                maximum: PROTOCOL_VERSION,
-            },
-            false,
-        )
-        .await
+        can_force_stop: bool,
+    ) -> Result<HostLifecycleClient, HostLaunchError> {
+        let (stream, authenticated) = self
+            .connect_channel_with_token(
+                token,
+                ConnectionChannel::Lifecycle,
+                ProtocolRange::exact(LIFECYCLE_PROTOCOL_VERSION),
+                can_force_stop,
+            )
+            .await?;
+        Ok(HostLifecycleClient {
+            stream,
+            host_epoch: authenticated.host_epoch,
+            next_request_id: 1,
+        })
     }
 
     async fn connect_channel_with_token(
@@ -236,13 +271,13 @@ impl HostLauncher {
         channel: ConnectionChannel,
         supported: ProtocolRange,
         can_force_stop: bool,
-    ) -> Result<HostControlClient, HostLaunchError> {
+    ) -> Result<(LocalStream, AuthenticatedHost), HostLaunchError> {
         let mut stream = connect(&self.endpoint()).await?;
         let authenticated = client_handshake(
             &mut stream,
             &ClientIdentity {
                 supported,
-                build_id: self.build_id.clone(),
+                build: self.build.clone(),
                 profile_id: self.profile.id().clone(),
                 client_instance_id: ClientInstanceId::new(format!(
                     "desktop-{}",
@@ -256,11 +291,53 @@ impl HostLauncher {
             token,
         )
         .await?;
-        Ok(HostControlClient {
-            stream,
-            host_epoch: authenticated.host_epoch,
-            next_request_id: 1,
-        })
+        Ok((stream, authenticated))
+    }
+
+    async fn existing_host_action(
+        &self,
+        token: &AuthToken,
+    ) -> Result<ExistingHostAction, HostLaunchError> {
+        let deadline = tokio::time::Instant::now() + HOST_READY_TIMEOUT;
+        loop {
+            match self.connect_with_token(token).await {
+                Ok(_) => return Ok(ExistingHostAction::Attach),
+                Err(error) if is_resource_incompatibility(&error) => {
+                    return Ok(ExistingHostAction::Replace);
+                }
+                Err(_) => {}
+            }
+
+            if !yttt_host::profile_lock_is_held(&self.profile.paths().runtime)? {
+                return Ok(ExistingHostAction::Spawn);
+            }
+            if self
+                .profile
+                .paths()
+                .runtime
+                .join("host-ready.json")
+                .exists()
+                || tokio::time::Instant::now() >= deadline
+            {
+                return Err(HostLaunchError::UnreachableLiveHost {
+                    pid: self.live_host_pid(),
+                });
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    fn live_host_pid(&self) -> Option<u32> {
+        yttt_host::read_ready_metadata(&self.profile.paths().runtime.join("host-ready.json"))
+            .ok()
+            .map(|ready| ready.pid)
+            .or_else(|| {
+                fs::read_to_string(self.profile.paths().runtime.join("host.pid"))
+                    .ok()?
+                    .trim()
+                    .parse()
+                    .ok()
+            })
     }
 
     async fn wait_for_existing_host_exit(&self) -> Result<(), HostLaunchError> {
@@ -274,6 +351,15 @@ impl HostLauncher {
         }
         Err(HostLaunchError::ReadyTimeout)
     }
+}
+fn is_resource_incompatibility(error: &HostLaunchError) -> bool {
+    matches!(
+        error,
+        HostLaunchError::Handshake(yttt_transport_local::HandshakeError::Rejected(
+            yttt_protocol::RejectReason::BuildMismatch
+                | yttt_protocol::RejectReason::VersionMismatch { .. }
+        ))
+    )
 }
 
 pub struct ManagedHostProcess {
@@ -297,9 +383,13 @@ impl ManagedHostProcess {
     }
 
     pub async fn drain_and_stop(mut self) -> Result<(), HostLaunchError> {
-        let mut client = self.connect().await?;
-        match client.request(Request::ForceStop).await? {
-            Response::Draining => {}
+        let token = read_token(&self.token_file)?;
+        let mut client = self
+            .launcher
+            .connect_lifecycle_with_token(&token, true)
+            .await?;
+        match client.request(LifecycleRequest::ForceStop).await? {
+            LifecycleResponse::Draining => {}
             _ => return Err(HostLaunchError::UnexpectedMessage),
         }
         let deadline = tokio::time::Instant::now() + HOST_STOP_TIMEOUT;
@@ -407,6 +497,38 @@ impl HostControlClient {
     }
 }
 
+pub struct HostLifecycleClient {
+    stream: LocalStream,
+    host_epoch: u64,
+    next_request_id: u64,
+}
+
+impl HostLifecycleClient {
+    pub fn host_epoch(&self) -> u64 {
+        self.host_epoch
+    }
+
+    pub async fn request(
+        &mut self,
+        body: LifecycleRequest,
+    ) -> Result<LifecycleResponse, HostLaunchError> {
+        let request_id = self.next_request_id;
+        self.next_request_id = self.next_request_id.saturating_add(1);
+        send_lifecycle(
+            &mut self.stream,
+            &LifecycleMessage::Request(LifecycleRequestEnvelope { request_id, body }),
+        )
+        .await?;
+        match receive_lifecycle(&mut self.stream).await? {
+            LifecycleMessage::Response(LifecycleResponseEnvelope {
+                request_id: response_id,
+                result,
+            }) if response_id == request_id => Ok(result),
+            _ => Err(HostLaunchError::UnexpectedMessage),
+        }
+    }
+}
+
 pub async fn run_host_process(
     args: impl IntoIterator<Item = OsString>,
 ) -> Result<(), HostLaunchError> {
@@ -417,7 +539,7 @@ pub async fn run_host_process(
         auth_token_file: parsed.auth_token_file,
         ssh_host_keys_file: parsed.ssh_host_keys_file,
         credential_namespace: parsed.credential_namespace,
-        build_id: parsed.build_id,
+        build: parsed.build,
     })
     .await?;
     Ok(())
@@ -429,7 +551,7 @@ struct ParsedHostArgs {
     auth_token_file: PathBuf,
     ssh_host_keys_file: PathBuf,
     credential_namespace: String,
-    build_id: String,
+    build: BuildIdentity,
 }
 
 impl ParsedHostArgs {
@@ -442,23 +564,50 @@ impl ParsedHostArgs {
                 .map(|pair| pair[1].clone())
                 .ok_or(HostLaunchError::MissingArgument(name))
         };
-        let profile_id = value("--profile-id")?
-            .into_string()
-            .map_err(|_| HostLaunchError::InvalidArgument("--profile-id"))?;
-        let build_id = value("--build-id")?
-            .into_string()
-            .map_err(|_| HostLaunchError::InvalidArgument("--build-id"))?;
-        let credential_namespace = value("--credential-namespace")?
-            .into_string()
-            .map_err(|_| HostLaunchError::InvalidArgument("--credential-namespace"))?;
+        let string_value = |name: &'static str| -> Result<String, HostLaunchError> {
+            value(name)?
+                .into_string()
+                .map_err(|_| HostLaunchError::InvalidArgument(name))
+        };
+        let profile_id = string_value("--profile-id")?;
+        let credential_namespace = string_value("--credential-namespace")?;
+        let build = BuildIdentity {
+            product_version: string_value("--product-version")?,
+            build_fingerprint: string_value("--build-fingerprint")?,
+            resource_compatibility: string_value("--resource-compatibility")?,
+        };
         Ok(Self {
             profile_id: ProfileId::new(profile_id),
             runtime_root: PathBuf::from(value("--runtime-root")?),
             ssh_host_keys_file: PathBuf::from(value("--ssh-host-keys-file")?),
             auth_token_file: PathBuf::from(value("--auth-token-file")?),
             credential_namespace,
-            build_id,
+            build,
         })
+    }
+}
+
+fn build_identity(executable: &Path) -> BuildIdentity {
+    let build_fingerprint = option_env!("YTTT_BUILD_FINGERPRINT")
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| {
+            let mut digest = Sha256::new();
+            digest.update(executable.to_string_lossy().as_bytes());
+            if let Ok(metadata) = fs::metadata(executable) {
+                digest.update(metadata.len().to_le_bytes());
+                if let Ok(modified) = metadata.modified()
+                    && let Ok(elapsed) = modified.duration_since(std::time::UNIX_EPOCH)
+                {
+                    digest.update(elapsed.as_nanos().to_le_bytes());
+                }
+            }
+            format!("{:x}", digest.finalize())
+        });
+    BuildIdentity {
+        product_version: env!("CARGO_PKG_VERSION").to_string(),
+        build_fingerprint,
+        resource_compatibility: RESOURCE_COMPATIBILITY.to_string(),
     }
 }
 

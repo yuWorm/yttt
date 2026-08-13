@@ -8,7 +8,7 @@ use std::{
 
 use parking_lot::Mutex;
 use tokio::sync::{Notify, watch};
-use yttt_protocol::HostBlocker;
+use yttt_protocol::{HostBlocker, HostLifecycleState};
 
 use crate::{project::HostProjectRuntime, runtime::HostRuntime, ssh_runtime::HostSshRuntime};
 
@@ -70,6 +70,30 @@ impl HostLifecycle {
 
     pub(crate) fn client_count(&self) -> usize {
         self.clients.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn state(&self) -> HostLifecycleState {
+        match self.state.lock().mode {
+            StopMode::Running => HostLifecycleState::Running,
+            StopMode::Draining => HostLifecycleState::Draining,
+            StopMode::ForceStopping => HostLifecycleState::ForceStopping,
+        }
+    }
+
+    pub(crate) fn blockers(
+        &self,
+        runtime: &HostRuntime,
+        ssh_connections: Vec<String>,
+        projects: Vec<yttt_core::model::ids::ProjectId>,
+    ) -> Vec<HostBlocker> {
+        let state = *self.state.lock();
+        collect_blockers(
+            runtime,
+            ssh_connections,
+            projects,
+            state.pending_resources,
+            0,
+        )
     }
 
     pub(crate) fn resource_changed(&self) {

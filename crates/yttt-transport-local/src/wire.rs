@@ -1,7 +1,8 @@
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use yttt_protocol::{
-    ControlMessage, DecodedFrame, FrameKind, HEADER_LEN, HandshakeMessage, ProtocolCodecError,
+    ControlMessage, DecodedFrame, DesktopShellMessage, FrameKind, HEADER_LEN, HandshakeMessage,
+    LifecycleMessage, MAX_DESKTOP_SHELL_FRAME_BYTES, MAX_FRAME_BYTES, ProtocolCodecError,
     decode_frame, decode_header, decode_message, encode_message,
 };
 
@@ -66,6 +67,7 @@ async fn send_bounded<T: serde::Serialize>(
 async fn receive(
     stream: &mut (impl AsyncRead + Unpin),
     expected_kind: FrameKind,
+    max_encoded_bytes: usize,
 ) -> Result<(DecodedFrame, Duration), WireError> {
     let mut header_bytes = [0_u8; HEADER_LEN];
     stream
@@ -79,10 +81,17 @@ async fn receive(
             received: header.kind,
         });
     }
+    let encoded_bytes = HEADER_LEN + header.payload_len as usize;
+    if encoded_bytes > max_encoded_bytes {
+        return Err(WireError::FrameTooLarge {
+            encoded_bytes,
+            max_bytes: max_encoded_bytes,
+        });
+    }
     let started_at = Instant::now();
-    let mut bytes = Vec::with_capacity(HEADER_LEN + header.payload_len as usize);
+    let mut bytes = Vec::with_capacity(encoded_bytes);
     bytes.extend_from_slice(&header_bytes);
-    bytes.resize(HEADER_LEN + header.payload_len as usize, 0);
+    bytes.resize(encoded_bytes, 0);
     stream
         .read_exact(&mut bytes[HEADER_LEN..])
         .await
@@ -101,7 +110,46 @@ pub async fn send_handshake(
 pub async fn receive_handshake(
     stream: &mut (impl AsyncRead + Unpin),
 ) -> Result<HandshakeMessage, WireError> {
-    let (frame, _) = receive(stream, FrameKind::Handshake).await?;
+    let (frame, _) = receive(stream, FrameKind::Handshake, MAX_FRAME_BYTES + HEADER_LEN).await?;
+    Ok(decode_message(&frame)?)
+}
+
+pub async fn send_lifecycle(
+    stream: &mut (impl AsyncWrite + Unpin),
+    message: &LifecycleMessage,
+) -> Result<(), WireError> {
+    send(stream, FrameKind::Lifecycle, message).await
+}
+
+pub async fn receive_lifecycle(
+    stream: &mut (impl AsyncRead + Unpin),
+) -> Result<LifecycleMessage, WireError> {
+    let (frame, _) = receive(stream, FrameKind::Lifecycle, MAX_FRAME_BYTES + HEADER_LEN).await?;
+    Ok(decode_message(&frame)?)
+}
+
+pub async fn send_desktop_shell(
+    stream: &mut (impl AsyncWrite + Unpin),
+    message: &DesktopShellMessage,
+) -> Result<(), WireError> {
+    send_bounded(
+        stream,
+        FrameKind::DesktopShell,
+        message,
+        MAX_DESKTOP_SHELL_FRAME_BYTES,
+    )
+    .await
+}
+
+pub async fn receive_desktop_shell(
+    stream: &mut (impl AsyncRead + Unpin),
+) -> Result<DesktopShellMessage, WireError> {
+    let (frame, _) = receive(
+        stream,
+        FrameKind::DesktopShell,
+        MAX_DESKTOP_SHELL_FRAME_BYTES,
+    )
+    .await?;
     Ok(decode_message(&frame)?)
 }
 
@@ -131,7 +179,8 @@ pub async fn receive_control(
 pub async fn receive_control_observed(
     stream: &mut (impl AsyncRead + Unpin),
 ) -> Result<(ControlMessage, WireReceiveDiagnostics), WireError> {
-    let (frame, payload_read_and_check) = receive(stream, FrameKind::Control).await?;
+    let (frame, payload_read_and_check) =
+        receive(stream, FrameKind::Control, MAX_FRAME_BYTES + HEADER_LEN).await?;
     let payload_bytes = frame.payload.len();
     let started_at = Instant::now();
     let message = decode_message(&frame)?;

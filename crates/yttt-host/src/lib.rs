@@ -42,9 +42,11 @@ use sha2::{Digest as _, Sha256};
 use tokio::sync::{broadcast, watch};
 use yttt_core::model::ids::{ClientInstanceId, HostId, ProfileId, TerminalSessionId};
 use yttt_protocol::{
-    ClientRequest, ControlMessage, DEFAULT_COMPATIBILITY_WINDOW, FailureCode, HostEvent,
-    HostResponse, PROTOCOL_VERSION, ProtocolFailure, ProtocolRange, Request, ResourceCatalog,
-    Response, ServerEvent, TerminalTerminationResult,
+    BuildIdentity, ClientRequest, ControlMessage, FailureCode, HostEvent, HostLifecycleStatus,
+    HostResponse, LIFECYCLE_PROTOCOL_VERSION, LifecycleMessage, LifecycleRequest,
+    LifecycleResponse, LifecycleResponseEnvelope, ProtocolFailure, ProtocolRange,
+    RESOURCE_PROTOCOL_VERSION, Request, ResourceCatalog, Response, ServerEvent,
+    TerminalTerminationResult,
     terminal::{
         AttachTerminal, TerminalLeaseMode, TerminalStreamUpdate, TerminalViewportAnchor,
         TerminalViewportRead, TerminationMode,
@@ -52,7 +54,7 @@ use yttt_protocol::{
 };
 use yttt_transport_local::{
     AuthToken, HostIdentity, LocalEndpoint, LocalListener, LocalStream, receive_control,
-    send_control, server_handshake,
+    receive_lifecycle, send_control, send_lifecycle, server_handshake,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,7 +64,7 @@ pub struct HostBootstrap {
     pub auth_token_file: PathBuf,
     pub ssh_host_keys_file: PathBuf,
     pub credential_namespace: String,
-    pub build_id: String,
+    pub build: BuildIdentity,
 }
 
 impl HostBootstrap {
@@ -89,7 +91,10 @@ pub struct ReadyMetadata {
     pub host_id: HostId,
     pub host_epoch: u64,
     pub pid: u32,
-    pub build_id: String,
+    pub build: BuildIdentity,
+    pub resource_protocol: u16,
+    pub lifecycle_protocol: u16,
+    pub executable: PathBuf,
     pub started_millis: u64,
 }
 
@@ -124,16 +129,17 @@ pub async fn run(bootstrap: HostBootstrap) -> Result<(), HostError> {
         host_id: host_id.clone(),
         host_epoch,
         pid: std::process::id(),
-        build_id: bootstrap.build_id.clone(),
+        build: bootstrap.build.clone(),
+        resource_protocol: RESOURCE_PROTOCOL_VERSION,
+        lifecycle_protocol: LIFECYCLE_PROTOCOL_VERSION,
+        executable: std::env::current_exe()?,
         started_millis: now_millis(),
     };
 
     let identity = Arc::new(HostIdentity {
-        supported: ProtocolRange {
-            minimum: PROTOCOL_VERSION.saturating_sub(DEFAULT_COMPATIBILITY_WINDOW),
-            maximum: PROTOCOL_VERSION,
-        },
-        build_id: bootstrap.build_id,
+        resource_supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
+        lifecycle_supported: ProtocolRange::exact(LIFECYCLE_PROTOCOL_VERSION),
+        build: bootstrap.build,
         profile_id: bootstrap.profile_id.clone(),
         host_id,
         host_epoch,
@@ -475,9 +481,14 @@ async fn serve_connection(
         .await
         .map_err(|_| ())?;
     lifecycle.client_connected();
+    if authenticated.channel == yttt_protocol::ConnectionChannel::Lifecycle {
+        let result =
+            serve_lifecycle_connection(stream, authenticated.can_force_stop, &context).await;
+        lifecycle.client_disconnected();
+        lifecycle.resource_changed();
+        return result;
+    }
     let client_id = authenticated.client_instance_id;
-    let can_force_stop = authenticated.can_force_stop;
-    let lifecycle_only = authenticated.channel == yttt_protocol::ConnectionChannel::Lifecycle;
     if authenticated.channel == yttt_protocol::ConnectionChannel::TerminalData {
         let session_id = authenticated.terminal_session_id.ok_or(())?;
         let result = serve_terminal_data_connection(
@@ -513,24 +524,6 @@ async fn serve_connection(
                 let ControlMessage::Request(request) = message.map_err(|_| ())? else {
                     return Err(());
                 };
-                if lifecycle_only
-                    && !matches!(&request.body, Request::Ping { .. } | Request::StopIfIdle)
-                {
-                    send_control(
-                        &mut stream,
-                        &ControlMessage::Response(HostResponse {
-                            request_id: request.request_id,
-                            result: Err(ProtocolFailure::new(
-                                FailureCode::PermissionDenied,
-                                "lifecycle compatibility channels only allow Ping and StopIfIdle",
-                                false,
-                            )),
-                        }),
-                    )
-                    .await
-                    .map_err(|_| ())?;
-                    continue;
-                }
                 let subscription = match &request.body {
                     Request::SpawnTerminal(spec) => Some((
                         spec.session_id.clone(),
@@ -562,7 +555,6 @@ async fn serve_connection(
                     } => Some(session_id.clone()),
                     _ => None,
                 };
-                let stop_behavior = matches!(&request.body, Request::ForceStop).then_some(true);
                 let (response, apply_effects) = if request_is_journalable(&request.body) {
                     let fingerprint = request_fingerprint(&request.body);
                     let mut journal = request_journal.lock().await;
@@ -584,7 +576,6 @@ async fn serve_connection(
                                 request,
                                 &context,
                                 &client_id,
-                                can_force_stop,
                                 &mut subscriptions,
                                 host_sequence.fetch_add(1, Ordering::Relaxed),
                             )
@@ -599,7 +590,6 @@ async fn serve_connection(
                             request,
                             &context,
                             &client_id,
-                            can_force_stop,
                             &mut subscriptions,
                             host_sequence.fetch_add(1, Ordering::Relaxed),
                         )
@@ -666,22 +656,9 @@ async fn serve_connection(
                     }
                     lifecycle.resource_changed();
                 }
-                let should_stop =
-                    stop_behavior == Some(true) && apply_effects && response.result.is_ok();
                 send_control(&mut stream, &ControlMessage::Response(response))
                     .await
                     .map_err(|_| ())?;
-                if should_stop {
-                    let _ = send_control(
-                        &mut stream,
-                        &ControlMessage::Event(HostEvent {
-                            host_sequence: host_sequence.fetch_add(1, Ordering::Relaxed),
-                            body: ServerEvent::HostStopping,
-                        }),
-                    )
-                    .await;
-                    return Ok(());
-                }
             }
             event = runtime_events.recv() => {
                 let server_event = match event {
@@ -833,6 +810,107 @@ async fn serve_connection(
     result
 }
 
+async fn serve_lifecycle_connection(
+    mut stream: LocalStream,
+    can_force_stop: bool,
+    context: &ConnectionContext,
+) -> Result<(), ()> {
+    let ConnectionContext {
+        identity,
+        runtime,
+        lifecycle,
+        ssh,
+        projects,
+        agent_hooks,
+        stop,
+        ..
+    } = context;
+    let mut stop = stop.clone();
+    loop {
+        tokio::select! {
+            message = receive_lifecycle(&mut stream) => {
+                let LifecycleMessage::Request(request) = message.map_err(|_| ())? else {
+                    return Err(());
+                };
+                let result = match request.body {
+                    LifecycleRequest::Probe => LifecycleResponse::Pong,
+                    LifecycleRequest::Status => {
+                        let ssh_connections = ssh.connections();
+                        let project_ids = projects.projects();
+                        let blockers = lifecycle.blockers(
+                            runtime,
+                            ssh_connections.clone(),
+                            project_ids.clone(),
+                        );
+                        let terminal_count = blockers
+                            .iter()
+                            .filter(|blocker| {
+                                matches!(
+                                    blocker,
+                                    yttt_protocol::HostBlocker::RunningTerminal(_)
+                                        | yttt_protocol::HostBlocker::ExitedTerminalAwaitingAck { .. }
+                                )
+                            })
+                            .count()
+                            .min(u32::MAX as usize) as u32;
+                        LifecycleResponse::Status(HostLifecycleStatus {
+                            lifecycle_protocol: LIFECYCLE_PROTOCOL_VERSION,
+                            resource_protocol: RESOURCE_PROTOCOL_VERSION,
+                            build: identity.build.clone(),
+                            state: lifecycle.state(),
+                            terminal_count,
+                            client_count: lifecycle
+                                .client_count()
+                                .saturating_sub(1)
+                                .min(u32::MAX as usize) as u32,
+                            project_count: project_ids.len().min(u32::MAX as usize) as u32,
+                            ssh_connection_count: ssh_connections.len().min(u32::MAX as usize)
+                                as u32,
+                            agent_count: agent_hooks
+                                .active_agent_count()
+                                .min(u32::MAX as usize) as u32,
+                            blockers,
+                        })
+                    }
+                    LifecycleRequest::StopIfIdle => {
+                        match lifecycle.stop_if_idle(
+                            runtime,
+                            ssh.connections(),
+                            projects.projects(),
+                        ) {
+                            Ok(()) => LifecycleResponse::Stopping,
+                            Err(blockers) => LifecycleResponse::Busy { blockers },
+                        }
+                    }
+                    LifecycleRequest::BeginDrain => {
+                        lifecycle.begin_drain();
+                        LifecycleResponse::Draining
+                    }
+                    LifecycleRequest::ForceStop if can_force_stop => {
+                        lifecycle.force_stop();
+                        LifecycleResponse::Draining
+                    }
+                    LifecycleRequest::ForceStop => LifecycleResponse::PermissionDenied,
+                };
+                send_lifecycle(
+                    &mut stream,
+                    &LifecycleMessage::Response(LifecycleResponseEnvelope {
+                        request_id: request.request_id,
+                        result,
+                    }),
+                )
+                .await
+                .map_err(|_| ())?;
+            }
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow() {
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
 async fn serve_terminal_data_connection(
     stream: LocalStream,
     client_id: ClientInstanceId,
@@ -957,7 +1035,6 @@ async fn handle_request(
     request: ClientRequest,
     context: &ConnectionContext,
     client_id: &ClientInstanceId,
-    can_force_stop: bool,
     attachments: &mut HashMap<yttt_core::model::ids::TerminalSessionId, TerminalAttachment>,
     host_sequence: u64,
 ) -> HostResponse {
@@ -1293,25 +1370,6 @@ async fn handle_request(
         Request::ReadAgentSnapshots { acknowledged } => Ok(Response::AgentSnapshots(
             agent_hooks.snapshots_after(&acknowledged),
         )),
-        Request::StopIfIdle => {
-            match lifecycle.stop_if_idle(runtime, ssh.connections(), projects.projects()) {
-                Ok(()) => Ok(Response::HostIdle),
-                Err(blockers) => Ok(Response::HostBusy { blockers }),
-            }
-        }
-        Request::DrainAndStop => {
-            lifecycle.begin_drain();
-            Ok(Response::Draining)
-        }
-        Request::ForceStop if can_force_stop => {
-            lifecycle.force_stop();
-            Ok(Response::Draining)
-        }
-        Request::ForceStop => Err(ProtocolFailure::new(
-            FailureCode::PermissionDenied,
-            "this authenticated client is not authorized to force-stop the Host",
-            false,
-        )),
     };
     HostResponse { request_id, result }
 }
@@ -1530,6 +1588,24 @@ pub fn read_ready_metadata(path: &Path) -> Result<ReadyMetadata, HostError> {
     let bytes = fs::read(path)?;
     Ok(serde_json::from_slice(&bytes)?)
 }
+pub fn profile_lock_is_held(runtime_root: &Path) -> Result<bool, HostError> {
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let lock = options.open(runtime_root.join("host.lock"))?;
+    match lock.try_lock_exclusive() {
+        Ok(()) => {
+            lock.unlock()?;
+            Ok(false)
+        }
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(true),
+        Err(error) => Err(error.into()),
+    }
+}
 
 fn read_auth_token(path: &Path) -> Result<AuthToken, HostError> {
     validate_user_only_file(path)?;
@@ -1562,6 +1638,7 @@ impl HostInstanceGuard {
         let mut lock = options.open(bootstrap.lock_file())?;
         lock.try_lock_exclusive()
             .map_err(|_| HostError::AlreadyRunning)?;
+        let _ = fs::remove_file(bootstrap.ready_file());
         lock.set_len(0)?;
         lock.seek(SeekFrom::Start(0))?;
         writeln!(lock, "{}", std::process::id())?;

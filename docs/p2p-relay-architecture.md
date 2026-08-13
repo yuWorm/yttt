@@ -36,6 +36,8 @@
 - 本地/SSH 项目与 Agent hook 通过 Host 请求/事件路径工作；Host 是 SSH keyring 凭据唯一访问者。
 - 开发、测试和 production profile 的 endpoint、token、runtime root、credential namespace 隔离；构建产物包含 Host 进程所需的同一可执行文件。
 - 项目注册进入 Host resource catalog；Host 重启丢失注册状态时，客户端按类型化 `NotFound` 自动重新注册并更新 watcher epoch。
+- Desktop 使用 `QuitMode::Explicit`、single-owner desktop-shell endpoint 和 native
+  tray/menu-bar adapter；关闭最后窗口后可重开，Host lifecycle 也可通过 tray 或 CLI 独立控制。
 
 Phase 1 验收已完成：
 
@@ -48,7 +50,7 @@ Phase 1 验收已完成：
 
 - 公网 P2P、NAT 穿透、Relay 和端到端加密远程传输。
 - 移动端/浏览器客户端、多用户授权、跨设备配对。
-- 完整 tray 菜单、登录启动和所有平台的后台服务注册。
+- 登录启动和所有平台的后台服务注册；desktop tray/menu-bar 控制面已经落地。
 - 文档多人协作、跨端 writer handoff 和 CRDT；当前实现提供单机多客户端基础。
 
 ## 2. 目标与非目标
@@ -250,6 +252,23 @@ SSH connection ID、凭据、远端绝对 root 和 host-key policy 必须留在 
 
 该吞吐探针包含 shell/PTY、Host parser、语义 delta、协议编解码和客户端 mirror 应用，不能与上表只测独立终端稳态 parser/render 的 90.7 MiB/s 直接相除；它仍是现有 11.3 MiB/s 高负载生成器负载的约 2.2 倍。Host 输出捕获按 16 ms 合并，空闲后的首个更新立即发布，持续输出最多生成约 60 次语义更新/秒，因此不会按 PTY read 次数放大 IPC 和绘制工作。
 
+Phase 2 tray 控制面完成后，于 2026-08-12 在同一台 Apple M4 上测量 release 构建。
+macOS 沿用性能 runner 的 acceptance metric，使用 `footprint` 的 physical footprint，而不以
+共享映射和压缩页影响较大的 RSS 作为进程间比较依据：
+
+| 状态 | Desktop footprint | Host footprint | 合计 |
+|---|---:|---:|---:|
+| Host only | — | 4.55 MiB | 4.55 MiB |
+| Host + GPUI/tray，无窗口 | ≤55.03 MiB | 4.88 MiB | ≤59.91 MiB |
+| Host + 重开窗口 | 106.42 MiB | 4.67 MiB | 111.10 MiB |
+
+同 profile 的第二次 desktop invocation 在 9.3 ms 内完成 single-owner 转发；从启动 invocation
+到 WindowServer 观测到重开窗口为 171.2 ms。无窗口值通过 release 进程内关闭 GPUI window
+后采集；关闭动作需要调试器辅助，因此该值作为包含测量扰动的保守上界。当前数据没有证明
+需要增加第三个 `yttt-tray` 进程：两进程方案在无窗口时已经比重开窗口减少约 51 MiB
+physical footprint，且窗口恢复低于 0.2 s；后续只有明确的常驻内存预算要求低于该上界时才
+重新评估三进程方案。
+
 
 作为参考，本机编译后的 tty7 daemon 测量结果为：
 
@@ -420,35 +439,33 @@ Host lock 与 desktop-shell lock 必须分离：同一 profile 只有一个 Host
 
 ### 5.7 托盘菜单
 
-固定在当前 GPUI revision 的 `QuitMode` 已支持 `Explicit`，而 GPUI 本身没有 tray/status-item API。桌面 C/S 后应把 `QuitMode::LastWindowClosed` 改为 `QuitMode::Explicit`，再接入独立的 tray adapter。
+Production desktop 已切换到 `QuitMode::Explicit`，并通过独立的 `tray-icon` adapter 持有
+profile-scoped tray/menu-bar。Host role 不初始化 GPUI、AppKit、Win32 或 GTK event loop。
+macOS/Windows 使用 native adapter；Linux 或没有可用 tray/AppIndicator 的环境继续通过
+Settings/CLI lifecycle path 工作，不把 tray 当作唯一控制入口。
 
-`tray-icon` 是可用于 Spike 的第一候选，但不是架构依赖：
-
-- Windows、macOS、Linux 均支持；Linux 仅支持 GTK/AppIndicator 路径。
-- macOS 必须在主线程且 event loop 已运行后创建。
-- Windows 和 Linux 必须在各自 Win32/GTK event-loop thread 创建和使用。
-- `TrayIcon` 不是 `Send`/`Sync`；Host 状态通过 channel 投递到 tray thread，menu event 再转发到 GPUI foreground executor。
-- Linux 不应依赖点击图标行为；只依赖 menu action，并提供 Settings/CLI fallback。
-
-建议菜单：
+当前菜单：
 
 ```text
+Host: <state> · <terminal> terminals · <client> clients · <job> jobs
 Open yttt
-Host: Running / Starting / Busy / Failed
-Active: <terminal> terminals, <client> clients, <job> jobs
-Remote Access: On / Off
-Start Host
-Stop Host...
-Restart Host...
-Start Host at Login        [check]
-Keep Host Running          [check]
-Pair Device...
+New Window
 Open Logs
+Start Host
+Stop Host If Idle
+Restart Host If Idle
 Quit Desktop
-Quit yttt and Stop Host...
+Quit All
 ```
 
-menu action 只调用 Host control protocol 或 lifecycle supervisor，不能直接 kill PID。托盘崩溃或 desktop 被强制退出时，独立 Host 仍继续运行。
+`TrayIcon` 由 desktop event-loop thread 创建和使用；Host 状态经有界 channel 更新，
+menu event 再转发到 GPUI foreground executor。同一 profile 的 desktop-shell endpoint
+保证只有一个 tray owner，后续 invocation 只转发 Activate/OpenWindow。所有 menu action
+只调用 desktop-shell 或 Host lifecycle protocol，不直接 kill PID。托盘崩溃或 desktop
+被强制退出时，独立 Host 仍继续运行。
+
+`Remote Access`、`Start Host at Login`、`Pair Device` 和真实平台后台注册属于 Phase 2
+后续项，不能在尚未实现时显示伪状态。
 
 托盘进程归属有明确资源权衡：
 

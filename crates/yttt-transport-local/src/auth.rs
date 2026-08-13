@@ -6,8 +6,8 @@ use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncWrite};
 use yttt_core::model::ids::{ClientInstanceId, HostId, ProfileId};
 use yttt_protocol::{
-    AuthMac, ClientAuthenticate, ClientHello, ConnectionChannel, HandshakeMessage, HostChallenge,
-    HostReady, Nonce, ProtocolRange, RejectReason,
+    AuthMac, BuildIdentity, ClientAuthenticate, ClientHello, ConnectionChannel, HandshakeMessage,
+    HostChallenge, HostReady, Nonce, ProtocolRange, RejectReason,
 };
 use zeroize::Zeroize;
 
@@ -55,7 +55,7 @@ impl Drop for AuthToken {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClientIdentity {
     pub supported: ProtocolRange,
-    pub build_id: String,
+    pub build: BuildIdentity,
     pub profile_id: ProfileId,
     pub client_instance_id: ClientInstanceId,
     pub host_epoch_hint: Option<u64>,
@@ -66,8 +66,9 @@ pub struct ClientIdentity {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostIdentity {
-    pub supported: ProtocolRange,
-    pub build_id: String,
+    pub resource_supported: ProtocolRange,
+    pub lifecycle_supported: ProtocolRange,
+    pub build: BuildIdentity,
     pub profile_id: ProfileId,
     pub host_id: HostId,
     pub host_epoch: u64,
@@ -134,7 +135,7 @@ where
     let client_nonce = random_nonce();
     let hello = ClientHello {
         supported: identity.supported,
-        build_id: identity.build_id.clone(),
+        build: identity.build.clone(),
         profile_id: identity.profile_id.clone(),
         client_instance_id: identity.client_instance_id.clone(),
         host_epoch_hint: identity.host_epoch_hint,
@@ -151,7 +152,7 @@ where
     };
     if challenge.profile_id != identity.profile_id
         || (identity.channel != ConnectionChannel::Lifecycle
-            && challenge.build_id != identity.build_id)
+            && challenge.build.resource_compatibility != identity.build.resource_compatibility)
         || identity
             .supported
             .negotiate(ProtocolRange::exact(challenge.selected_version))
@@ -230,28 +231,34 @@ where
         ),
         (ConnectionChannel::Control, None, _)
             | (ConnectionChannel::TerminalData, Some(_), false)
-            | (ConnectionChannel::Lifecycle, None, false)
+            | (ConnectionChannel::Lifecycle, None, _)
     ) {
         reject(stream, RejectReason::InvalidMessage).await;
         return Err(HandshakeError::Rejected(RejectReason::InvalidMessage));
     }
-    let Some(selected_version) = identity.supported.negotiate(hello.supported) else {
+    let host_supported = match hello.channel {
+        ConnectionChannel::Lifecycle => identity.lifecycle_supported,
+        ConnectionChannel::Control | ConnectionChannel::TerminalData => identity.resource_supported,
+    };
+    let Some(selected_version) = host_supported.negotiate(hello.supported) else {
         reject(
             stream,
             RejectReason::VersionMismatch {
-                supported: identity.supported,
+                supported: host_supported,
             },
         )
         .await;
         return Err(HandshakeError::Rejected(RejectReason::VersionMismatch {
-            supported: identity.supported,
+            supported: host_supported,
         }));
     };
     if hello.profile_id != identity.profile_id {
         reject(stream, RejectReason::ProfileMismatch).await;
         return Err(HandshakeError::IdentityMismatch);
     }
-    if hello.channel != ConnectionChannel::Lifecycle && hello.build_id != identity.build_id {
+    if hello.channel != ConnectionChannel::Lifecycle
+        && hello.build.resource_compatibility != identity.build.resource_compatibility
+    {
         reject(stream, RejectReason::BuildMismatch).await;
         return Err(HandshakeError::IdentityMismatch);
     }
@@ -263,7 +270,7 @@ where
     }
     let mut challenge = HostChallenge {
         selected_version,
-        build_id: identity.build_id.clone(),
+        build: identity.build.clone(),
         profile_id: identity.profile_id.clone(),
         host_id: identity.host_id.clone(),
         host_epoch: identity.host_epoch,
@@ -353,10 +360,16 @@ fn transcript(label: &[u8], hello: &ClientHello, challenge: &HostChallenge) -> V
     push_field(&mut bytes, challenge.host_id.as_str().as_bytes());
     bytes.extend_from_slice(&challenge.host_epoch.to_be_bytes());
     bytes.extend_from_slice(&challenge.selected_version.to_be_bytes());
-    push_field(&mut bytes, hello.build_id.as_bytes());
+    push_build_identity(&mut bytes, &hello.build);
     bytes.extend_from_slice(&hello.nonce.0);
     bytes.extend_from_slice(&challenge.host_nonce.0);
     bytes
+}
+
+fn push_build_identity(bytes: &mut Vec<u8>, build: &BuildIdentity) {
+    push_field(bytes, build.product_version.as_bytes());
+    push_field(bytes, build.build_fingerprint.as_bytes());
+    push_field(bytes, build.resource_compatibility.as_bytes());
 }
 
 fn push_field(bytes: &mut Vec<u8>, field: &[u8]) {

@@ -98,11 +98,15 @@ uuid = { version = "1", features = ["v4", "serde"] }
 block = "0.1"
 cocoa = "0.26"
 objc = "0.2"
+tray-icon = { version = "0.24.2", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies.gpui_platform]
 git = "https://github.com/zed-industries/zed"
 rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe"
 features = ["font-kit", "runtime_shaders"]
+
+[target.'cfg(target_os = "windows")'.dependencies]
+tray-icon = { version = "0.24.2", default-features = false }
 
 [target.'cfg(target_os = "windows")'.dependencies.gpui_platform]
 git = "https://github.com/zed-industries/zed"

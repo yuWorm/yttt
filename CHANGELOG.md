@@ -19,6 +19,11 @@
   opening native macOS and Windows settings, and explaining Linux desktop/portal-managed
   authorization.
 - Added an authenticated, profile-isolated headless Host process with versioned local IPC, resource catalogs, terminal checkpoints, lease-controlled input, reconnect recovery, and semantic terminal mirrors.
+- Added one desktop shell and native tray/menu-bar owner per profile, with window reopening, Host
+  status and resource counts, safe start/stop/restart controls, log access, and separate desktop
+  versus all-process quit actions.
+- Added tray-independent Host lifecycle CLI commands for status, start, safe stop, restart, force
+  stop, and opening profile logs.
 
 ### Changed
 
@@ -36,6 +41,12 @@
   after returning from system settings, and reports unsupported status checks explicitly.
 - Moved local and SSH terminal processes, project file trees and writes, Git execution, project watchers, Agent hook ingress, SSH connections, and SSH credential access out of the GPUI process and into the Host; closing a window now detaches without terminating Host-owned resources.
 - Release packages keep one executable with separate desktop and headless Host process roles on macOS, Windows, and Linux.
+- Desktop startup now detects Host build/resource incompatibility before using the resource
+  protocol, isolates development builds into executable-scoped profile runtimes, and reports
+  unrecoverable live-Host lock states instead of spawning a duplicate Host or panicking.
+- Production desktop shells use explicit quit semantics: closing the last window keeps the
+  desktop control plane available while Host-owned terminals, projects, SSH sessions, and Agent
+  jobs continue independently.
 
 ### Fixed
 

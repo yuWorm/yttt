@@ -70,10 +70,10 @@ impl WorkbenchView {
             cx.quit();
             return;
         };
-        let response = host_runtime.request(Request::ForceStop);
+        let response = host_runtime.request_lifecycle(LifecycleRequest::ForceStop, true);
         cx.spawn(async move |_, cx| {
             let result = response.recv_async().await;
-            if matches!(result, Ok(Ok(Response::Draining))) {
+            if matches!(result, Ok(Ok(LifecycleResponse::Draining))) {
                 host_runtime.shutdown_client();
                 cx.update(|cx| cx.quit());
             }

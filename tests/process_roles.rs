@@ -10,7 +10,8 @@ use yttt::{
 };
 use yttt_client_core::{ClientCore, ConnectionState};
 use yttt_protocol::{
-    ConnectionChannel, PROTOCOL_VERSION, ProtocolRange, Request, Response,
+    BuildIdentity, ConnectionChannel, LIFECYCLE_PROTOCOL_VERSION, ProtocolRange,
+    RESOURCE_PROTOCOL_VERSION, Request, Response,
     project::{PlatformPath, ProjectRequest, ProjectResponse},
 };
 use yttt_transport_local::{AuthToken, ClientIdentity};
@@ -83,8 +84,12 @@ async fn start_incompatible_host(
             .into_os_string(),
         OsString::from("--credential-namespace"),
         OsString::from(profile.credential_namespace()),
-        OsString::from("--build-id"),
+        OsString::from("--product-version"),
+        OsString::from("0.1.0"),
+        OsString::from("--build-fingerprint"),
         OsString::from("previous-build"),
+        OsString::from("--resource-compatibility"),
+        OsString::from("previous-resource"),
     ]));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -113,6 +118,57 @@ fn process_role_defaults_to_desktop_and_recognizes_host() {
             OsString::from("--process-role=host"),
         ]),
         ProcessRole::Host
+    );
+}
+
+#[test]
+fn desktop_host_cli_starts_reports_reuses_and_stops_the_profile_host() {
+    let temporary = tempdir().unwrap();
+    let profile_root = temporary.path().join("profile");
+    let profile = installer_profile(&profile_root);
+    let executable = test_executable();
+    let invoke = |argument: &str| {
+        Command::new(&executable)
+            .arg(argument)
+            .env("YTTT_PROFILE_ROOT", &profile_root)
+            .output()
+            .unwrap()
+    };
+
+    let started = invoke("--start-host");
+    assert!(started.status.success(), "{started:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&started.stdout).trim(),
+        "Host started"
+    );
+
+    let status = invoke("--host-status");
+    assert!(status.status.success(), "{status:?}");
+    let status_text = String::from_utf8_lossy(&status.stdout);
+    assert!(status_text.contains("Host Running"));
+    assert!(status_text.contains("0 terminals"));
+
+    let reused = invoke("--start-host");
+    assert!(reused.status.success(), "{reused:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&reused.stdout).trim(),
+        "Host already running"
+    );
+
+    let stopped = invoke("--stop-host");
+    assert!(stopped.status.success(), "{stopped:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&stopped.stdout).trim(),
+        "Host stopped"
+    );
+    assert!(!profile.paths().runtime.join("host-ready.json").exists());
+    assert!(!profile.paths().runtime.join("host.pid").exists());
+
+    let stopped_status = invoke("--host-status");
+    assert!(stopped_status.status.success(), "{stopped_status:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&stopped_status.stdout).trim(),
+        "Host stopped"
     );
 }
 
@@ -197,6 +253,12 @@ async fn host_role_starts_headless_enforces_single_instance_and_stops_cleanly() 
     drop(processes);
     assert!(process.spawned());
     assert!(process.child_id().is_some());
+    let ready =
+        yttt_host::read_ready_metadata(&profile.paths().runtime.join("host-ready.json")).unwrap();
+    assert_eq!(ready.profile_id, *profile.id());
+    assert_eq!(ready.build, *launcher.build_identity());
+    assert_eq!(ready.resource_protocol, RESOURCE_PROTOCOL_VERSION);
+    assert_eq!(ready.lifecycle_protocol, LIFECYCLE_PROTOCOL_VERSION);
 
     let mut client = process.connect().await.unwrap();
     assert!(matches!(
@@ -233,8 +295,12 @@ async fn host_role_starts_headless_enforces_single_instance_and_stops_cleanly() 
         .arg(profile.paths().config.join("ssh-host-keys.toml"))
         .arg("--credential-namespace")
         .arg(profile.credential_namespace())
-        .arg("--build-id")
+        .arg("--product-version")
         .arg(env!("CARGO_PKG_VERSION"))
+        .arg("--build-fingerprint")
+        .arg(launcher.build_identity().build_fingerprint.as_str())
+        .arg("--resource-compatibility")
+        .arg(launcher.build_identity().resource_compatibility.as_str())
         .status()
         .unwrap();
     assert!(!duplicate.success());
@@ -247,6 +313,30 @@ async fn host_role_starts_headless_enforces_single_instance_and_stops_cleanly() 
     assert!(!profile.paths().runtime.join("host.pid").exists());
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn unreachable_live_host_lock_prevents_duplicate_spawn() {
+    let temp = tempdir().unwrap();
+    let profile = isolated_profile(temp.path());
+    let launcher = HostLauncher::new(profile.clone(), test_executable());
+    let mut process = launcher.launch_or_attach().await.unwrap();
+    let pid = process.child_id().unwrap();
+    fs::remove_file(launcher.endpoint().unix_path()).unwrap();
+
+    let Err(error) = launcher.launch_or_attach().await else {
+        panic!("an unreachable live Host must not be replaced");
+    };
+    assert!(matches!(
+        error,
+        HostLaunchError::UnreachableLiveHost {
+            pid: Some(actual_pid)
+        } if actual_pid == pid
+    ));
+    assert!(yttt_host::profile_lock_is_held(&profile.paths().runtime).unwrap());
+
+    process.force_stop().unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn incompatible_busy_host_is_preserved_then_idle_host_is_safely_replaced() {
     let temp = tempdir().unwrap();
@@ -257,8 +347,12 @@ async fn incompatible_busy_host_is_preserved_then_idle_host_is_safely_replaced()
     let client = ClientCore::connect(
         launcher.endpoint(),
         ClientIdentity {
-            supported: ProtocolRange::exact(PROTOCOL_VERSION),
-            build_id: "previous-build".to_string(),
+            supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
+            build: BuildIdentity {
+                product_version: "0.1.0".to_string(),
+                build_fingerprint: "previous-build".to_string(),
+                resource_compatibility: "previous-resource".to_string(),
+            },
             profile_id: profile.id().clone(),
             client_instance_id: ClientInstanceId::new("previous-build-client"),
             host_epoch_hint: None,

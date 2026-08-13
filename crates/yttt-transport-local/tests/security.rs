@@ -2,7 +2,10 @@ use yttt_core::model::ids::ProfileId;
 #[cfg(unix)]
 use yttt_core::model::ids::{ClientInstanceId, HostId};
 #[cfg(unix)]
-use yttt_protocol::{ConnectionChannel, PROTOCOL_VERSION, ProtocolRange};
+use yttt_protocol::{
+    BuildIdentity, ConnectionChannel, LIFECYCLE_PROTOCOL_VERSION, ProtocolRange,
+    RESOURCE_PROTOCOL_VERSION,
+};
 #[cfg(unix)]
 use yttt_transport_local::{
     AuthToken, ClientIdentity, HandshakeError, HostIdentity, client_handshake, server_handshake,
@@ -12,12 +15,20 @@ use yttt_transport_local::{
 };
 
 #[cfg(unix)]
+fn build_identity(fingerprint: &str, compatibility: &str) -> BuildIdentity {
+    BuildIdentity {
+        product_version: "0.2.0".to_string(),
+        build_fingerprint: fingerprint.to_string(),
+        resource_compatibility: compatibility.to_string(),
+    }
+}
+#[cfg(unix)]
 fn identities() -> (ClientIdentity, HostIdentity) {
     let profile_id = ProfileId::new("security-test");
     (
         ClientIdentity {
-            supported: ProtocolRange::exact(PROTOCOL_VERSION),
-            build_id: "test-build".to_string(),
+            supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
+            build: build_identity("test-build", "resource-v1"),
             profile_id: profile_id.clone(),
             client_instance_id: ClientInstanceId::new("client-1"),
             host_epoch_hint: None,
@@ -26,8 +37,9 @@ fn identities() -> (ClientIdentity, HostIdentity) {
             terminal_session_id: None,
         },
         HostIdentity {
-            supported: ProtocolRange::exact(PROTOCOL_VERSION),
-            build_id: "test-build".to_string(),
+            resource_supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
+            lifecycle_supported: ProtocolRange::exact(LIFECYCLE_PROTOCOL_VERSION),
+            build: build_identity("test-build", "resource-v1"),
             profile_id,
             host_id: HostId::new("host-1"),
             host_epoch: 7,
@@ -142,7 +154,8 @@ async fn matching_token_completes_mutually_authenticated_handshake() {
 async fn lifecycle_channel_authenticates_across_a_build_mismatch() {
     let (mut client_identity, host_identity) = identities();
     client_identity.channel = ConnectionChannel::Lifecycle;
-    client_identity.build_id = "next-build".to_string();
+    client_identity.supported = ProtocolRange::exact(LIFECYCLE_PROTOCOL_VERSION);
+    client_identity.build = build_identity("next-build", "resource-v2");
     let token = AuthToken::from_bytes([31; 32]);
     let (mut client_stream, mut server_stream) = tokio::net::UnixStream::pair().unwrap();
     let (client_result, server_result) = tokio::join!(
@@ -169,14 +182,10 @@ async fn channel_and_terminal_session_identity_must_match() {
     lifecycle_with_session.channel = ConnectionChannel::Lifecycle;
     lifecycle_with_session.terminal_session_id =
         Some(yttt_core::model::ids::TerminalSessionId::new("unexpected"));
-    let mut privileged_lifecycle = control_identity;
-    privileged_lifecycle.channel = ConnectionChannel::Lifecycle;
-    privileged_lifecycle.can_force_stop = true;
     for client_identity in [
         control_with_session,
         data_without_session,
         lifecycle_with_session,
-        privileged_lifecycle,
     ] {
         let token = AuthToken::from_bytes([29; 32]);
         let (mut client_stream, mut server_stream) = tokio::net::UnixStream::pair().unwrap();
@@ -208,7 +217,7 @@ async fn invalid_client_proof_is_rejected_without_exposing_secret() {
     let attacker = async {
         let hello = yttt_protocol::ClientHello {
             supported: client_identity.supported,
-            build_id: client_identity.build_id.clone(),
+            build: client_identity.build.clone(),
             profile_id: client_identity.profile_id.clone(),
             client_instance_id: client_identity.client_instance_id.clone(),
             host_epoch_hint: None,
@@ -268,9 +277,9 @@ async fn invalid_client_proof_is_rejected_without_exposing_secret() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn build_and_profile_mismatches_fail_closed() {
+async fn resource_compatibility_and_profile_mismatches_fail_closed() {
     let (mut client_identity, host_identity) = identities();
-    client_identity.build_id = "other-build".to_string();
+    client_identity.build.resource_compatibility = "resource-v2".to_string();
     let token = AuthToken::from_bytes([5; 32]);
     let (mut client_stream, mut server_stream) = tokio::net::UnixStream::pair().unwrap();
 
@@ -284,4 +293,21 @@ async fn build_and_profile_mismatches_fail_closed() {
         server_result,
         Err(HandshakeError::IdentityMismatch)
     ));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn compatible_resource_builds_can_have_different_fingerprints() {
+    let (mut client_identity, host_identity) = identities();
+    client_identity.build.build_fingerprint = "next-build".to_string();
+    let token = AuthToken::from_bytes([6; 32]);
+    let (mut client_stream, mut server_stream) = tokio::net::UnixStream::pair().unwrap();
+
+    let (client_result, server_result) = tokio::join!(
+        client_handshake(&mut client_stream, &client_identity, &token),
+        server_handshake(&mut server_stream, &host_identity, &token),
+    );
+
+    assert!(client_result.is_ok());
+    assert!(server_result.is_ok());
 }

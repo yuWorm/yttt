@@ -1,3 +1,4 @@
+use sha2::{Digest as _, Sha256};
 use std::{
     fmt,
     path::{Path, PathBuf},
@@ -210,6 +211,20 @@ impl AppProfile {
             ProjectConfigPolicy::Normal,
             HostConnectPolicy::ProfileDiscovery,
             AgentSessionAccess::native(),
+        )
+    }
+    pub fn development_for_executable(executable: &Path) -> Self {
+        let canonical = std::fs::canonicalize(executable).unwrap_or_else(|_| executable.to_owned());
+        let digest = Sha256::digest(canonical.to_string_lossy().as_bytes());
+        let fingerprint = format!("{digest:x}");
+        let namespace = &fingerprint[..12];
+        Self::scoped(
+            ProfileId::new(format!("development-{namespace}")),
+            EnvironmentKind::Development,
+            ProfilePersistence::Persistent,
+            native_config_dir().join("development").join(namespace),
+            ProjectConfigPolicy::Overlay,
+            HostConnectPolicy::ProfileDiscovery,
         )
     }
 

@@ -17,7 +17,7 @@ use sha2::{Digest as _, Sha256};
 use tokio::sync::broadcast;
 use yttt_agent_core::{
     AGENT_ACTIVITY_STALE_AFTER_MILLIS, AgentExitReason, AgentInstanceId, AgentProcessExit,
-    AgentProvider, AgentReducer,
+    AgentProcessState, AgentProvider, AgentReducer,
 };
 use yttt_agent_providers::builtin_providers;
 use yttt_core::model::ids::TerminalSessionId;
@@ -244,6 +244,15 @@ impl HostAgentHookRuntime {
                 ))
         });
         snapshots
+    }
+
+    pub fn active_agent_count(&self) -> usize {
+        self.state
+            .records
+            .lock()
+            .values()
+            .filter(|record| record.reducer.snapshot().process_state != AgentProcessState::Exited)
+            .count()
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<AgentSnapshotUpdate> {

@@ -2,11 +2,11 @@ pub mod assets;
 pub mod platform;
 pub mod startup;
 
-use std::{rc::Rc, sync::Arc};
+use std::{cell::RefCell, path::PathBuf, rc::Rc, sync::Arc, time::Duration};
 
 use gpui::{
-    App, AppContext, Bounds, Entity, Pixels, QuitMode, Styled, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowOptions, px, size, transparent_black,
+    App, AppContext, Bounds, Entity, Global, Pixels, QuitMode, Styled, WeakEntity, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowOptions, px, size, transparent_black,
 };
 #[cfg(feature = "perf-metrics")]
 use gpui::{IntoElement, ParentElement, Render, WindowKind, div, point};
@@ -20,7 +20,9 @@ use crate::{
         settings::{AppSettings, WindowBackgroundEffect, load_or_create_settings},
         theme::{ThemeStore, load_theme_store},
     },
-    host_runtime::{DesktopHostRuntime, HostRuntimeGlobal},
+    desktop_shell::{DesktopShellCommand, DesktopShellRuntime},
+    desktop_tray::{DesktopTrayAction, DesktopTrayAdapter, DesktopTrayStatus, create_desktop_tray},
+    host_runtime::HostRuntimeGlobal,
     ui::{
         app::startup::{
             FORCE_ONBOARDING_ENV, StartupMode, force_onboarding_from_env, startup_mode_from_fixture,
@@ -33,6 +35,7 @@ use crate::{
         workbench::WorkbenchView,
     },
 };
+use yttt_protocol::{LifecycleRequest, LifecycleResponse};
 
 pub(crate) fn rebind_application_keybindings(
     cx: &mut App,
@@ -45,20 +48,22 @@ pub(crate) fn rebind_application_keybindings(
     cx.bind_keys(compiled_app_keybindings(config, &registry));
 }
 
-pub fn run(profile: AppProfile) {
+pub fn run(
+    profile: AppProfile,
+    desktop_shell: Arc<DesktopShellRuntime>,
+    initial_command: DesktopShellCommand,
+) {
     let config_paths = profile.config_paths();
     let startup_mode = startup_mode_from_fixture(std::env::var("YTTT_DEV_FIXTURE").ok().as_deref());
     let terminal_performance_mode =
         cfg!(feature = "perf-metrics") && std::env::var_os("YTTT_TERMINAL_PERF_OUTPUT").is_some();
     let host_runtime = if startup_mode == StartupMode::Normal {
-        HostRuntimeGlobal::ready(
-            DesktopHostRuntime::start(profile.clone())
-                .expect("failed to start the authoritative Host runtime"),
-        )
+        HostRuntimeGlobal::start(profile.clone())
     } else {
-        HostRuntimeGlobal::unavailable("Host runtime is disabled for the selected UI fixture")
+        HostRuntimeGlobal::disabled()
     };
-    let mut application = gpui_platform::application().with_quit_mode(QuitMode::LastWindowClosed);
+    let mut application =
+        gpui_platform::application().with_quit_mode(desktop_quit_mode(terminal_performance_mode));
     if !terminal_performance_mode {
         let http_client = ReqwestClient::user_agent(concat!("yttt/", env!("CARGO_PKG_VERSION")))
             .expect("failed to initialize HTTP client");
@@ -82,7 +87,6 @@ pub fn run(profile: AppProfile) {
         cx.bind_keys(gpui_markdown_editor::default_key_bindings());
         crate::ui::editor::register_builtin_editor_languages();
         crate::ui::editor::init_vim_mode(cx);
-        let config_paths = config_paths.clone();
         let (app_settings, theme_runtime) = load_app_runtime(&config_paths);
         let appearance = AppearanceState::new(theme_runtime);
         Theme::global_mut(cx).apply_config(&Rc::new(
@@ -92,47 +96,350 @@ pub fn run(profile: AppProfile) {
         let command_registry = bindable_registry();
         cx.bind_keys(load_app_keybindings(&config_paths, &command_registry));
 
-        let bounds = Bounds::centered(None, size(px(960.0), px(640.0)), cx);
-        cx.open_window(
-            workbench_window_options(bounds, app_settings.window.effect),
-            move |window, cx| {
-                let appearance = appearance.clone();
-                let startup_mode = startup_mode;
-                let should_check_for_updates = startup_mode == StartupMode::Normal;
-                let view = cx.new(|_| {
-                    let force_onboarding = force_onboarding_from_env(
-                        std::env::var(FORCE_ONBOARDING_ENV).ok().as_deref(),
-                    );
-                    let view = match startup_mode {
-                        StartupMode::DevFixture => WorkbenchView::dev_fixture(),
-                        StartupMode::AgentExitFixture => WorkbenchView::agent_exit_fixture(),
-                        StartupMode::Normal => {
-                            WorkbenchView::from_startup(config_paths.clone(), force_onboarding)
-                        }
-                    };
-                    view.with_appearance_state(appearance)
-                });
-                let desktop_host_runtime = cx.global::<HostRuntimeGlobal>().runtime().cloned();
-                view.update(cx, |view, _cx| {
-                    view.set_host_runtime(desktop_host_runtime);
-                });
-                view.update(cx, |view, cx| view.sync_performance_monitoring(cx));
-                view.update(cx, |view, cx| view.start_ssh_event_listener(cx));
-                if should_check_for_updates {
-                    view.update(cx, |view, cx| view.start_update_check(window, cx));
-                }
-                register_workbench_keybinding_interceptor(cx, &view);
-                register_workbench_focus_restore(window, cx, &view);
-                register_workbench_close_guard(window, cx, &view);
-                if std::env::var_os("YTTT_TERMINAL_PERF_OUTPUT").is_some() {
-                    cx.activate(true);
-                    window.activate_window();
-                }
-                cx.new(|cx| ComponentRoot::new(view, window, cx).bg(transparent_black()))
-            },
-        )
-        .expect("failed to open yttt window");
+        let window_context = DesktopWindowContext {
+            profile,
+            config_paths,
+            app_settings,
+            appearance,
+            startup_mode,
+            workbenches: Rc::new(RefCell::new(Vec::new())),
+        };
+        install_desktop_tray(window_context.clone(), cx);
+        if let Err(error) = handle_desktop_shell_command(initial_command, &window_context, cx) {
+            eprintln!("failed to open initial yttt window: {error}");
+        }
+        start_desktop_shell_listener(desktop_shell, window_context, cx);
     });
+}
+
+#[derive(Clone)]
+struct DesktopWindowContext {
+    profile: AppProfile,
+
+    config_paths: AppConfigPaths,
+    app_settings: AppSettings,
+    appearance: AppearanceState,
+    startup_mode: StartupMode,
+    workbenches: Rc<RefCell<Vec<WeakEntity<WorkbenchView>>>>,
+}
+fn desktop_quit_mode(terminal_performance_mode: bool) -> QuitMode {
+    if terminal_performance_mode {
+        QuitMode::LastWindowClosed
+    } else {
+        QuitMode::Explicit
+    }
+}
+
+fn start_desktop_shell_listener(
+    desktop_shell: Arc<DesktopShellRuntime>,
+    window_context: DesktopWindowContext,
+    cx: &mut App,
+) {
+    let commands = desktop_shell.commands();
+    cx.spawn(async move |cx| {
+        let _desktop_shell = desktop_shell;
+        while let Ok(command) = commands.recv_async().await {
+            let result = cx.update(|cx| handle_desktop_shell_command(command, &window_context, cx));
+            if let Err(error) = result {
+                eprintln!("failed to handle desktop shell command: {error}");
+            }
+        }
+    })
+    .detach();
+}
+
+fn handle_desktop_shell_command(
+    command: DesktopShellCommand,
+    window_context: &DesktopWindowContext,
+    cx: &mut App,
+) -> anyhow::Result<()> {
+    match command {
+        DesktopShellCommand::Activate => {
+            if !activate_workbench_window(cx) {
+                open_workbench_window(window_context, None, cx)?;
+            }
+        }
+        DesktopShellCommand::OpenWindow { project_paths } => {
+            open_workbench_window(window_context, Some(project_paths), cx)?;
+        }
+    }
+    Ok(())
+}
+
+fn activate_workbench_window(cx: &mut App) -> bool {
+    let window = cx
+        .window_stack()
+        .and_then(|windows| windows.into_iter().next())
+        .or_else(|| cx.windows().into_iter().next());
+    let Some(window) = window else {
+        return false;
+    };
+    cx.activate(true);
+    window
+        .update(cx, |_, window, _| window.activate_window())
+        .is_ok()
+}
+
+fn open_workbench_window(
+    window_context: &DesktopWindowContext,
+    project_paths: Option<Vec<PathBuf>>,
+    cx: &mut App,
+) -> anyhow::Result<()> {
+    let bounds = Bounds::centered(None, size(px(960.0), px(640.0)), cx);
+    let config_paths = window_context.config_paths.clone();
+    let appearance = window_context.appearance.clone();
+    let startup_mode = window_context.startup_mode;
+    let workbenches = window_context.workbenches.clone();
+    let should_check_for_updates = startup_mode == StartupMode::Normal;
+    cx.open_window(
+        workbench_window_options(bounds, window_context.app_settings.window.effect),
+        move |window, cx| {
+            let view = cx.new(|_| {
+                let force_onboarding =
+                    force_onboarding_from_env(std::env::var(FORCE_ONBOARDING_ENV).ok().as_deref());
+                let view = match startup_mode {
+                    StartupMode::DevFixture => WorkbenchView::dev_fixture(),
+                    StartupMode::AgentExitFixture => WorkbenchView::agent_exit_fixture(),
+                    StartupMode::Normal => match project_paths {
+                        Some(project_paths) => WorkbenchView::from_project_paths(
+                            config_paths.clone(),
+                            force_onboarding,
+                            project_paths,
+                        ),
+                        None => WorkbenchView::from_startup(config_paths.clone(), force_onboarding),
+                    },
+                };
+                view.with_appearance_state(appearance)
+            });
+            workbenches.borrow_mut().push(view.downgrade());
+            let host_runtime = cx.global::<HostRuntimeGlobal>().clone();
+            view.update(cx, |view, _cx| {
+                view.set_host_runtime_status(&host_runtime);
+            });
+            view.update(cx, |view, cx| view.sync_performance_monitoring(cx));
+            view.update(cx, |view, cx| view.start_ssh_event_listener(cx));
+            if should_check_for_updates {
+                view.update(cx, |view, cx| view.start_update_check(window, cx));
+            }
+            register_workbench_keybinding_interceptor(cx, &view);
+            register_workbench_focus_restore(window, cx, &view);
+            register_workbench_close_guard(window, cx, &view);
+            cx.activate(true);
+            window.activate_window();
+            cx.new(|cx| ComponentRoot::new(view, window, cx).bg(transparent_black()))
+        },
+    )?;
+    Ok(())
+}
+
+struct DesktopTrayGlobal {
+    adapter: Box<dyn DesktopTrayAdapter>,
+}
+
+impl Global for DesktopTrayGlobal {}
+
+fn install_desktop_tray(window_context: DesktopWindowContext, cx: &mut App) {
+    let tray = match create_desktop_tray() {
+        Ok(tray) => tray,
+        Err(error) => {
+            eprintln!("{error}; use the Host lifecycle CLI commands instead");
+            return;
+        }
+    };
+    if !tray.is_available() {
+        return;
+    }
+    tray.update(&DesktopTrayStatus::unavailable("Connecting"));
+    let actions = tray.actions();
+    cx.set_global(DesktopTrayGlobal { adapter: tray });
+    start_desktop_tray_actions(actions, window_context, cx);
+    start_desktop_tray_status_monitor(cx);
+}
+
+fn start_desktop_tray_actions(
+    actions: flume::Receiver<DesktopTrayAction>,
+    window_context: DesktopWindowContext,
+    cx: &mut App,
+) {
+    cx.spawn(async move |cx| {
+        while let Ok(action) = actions.recv_async().await {
+            let result = cx.update(|cx| handle_desktop_tray_action(action, &window_context, cx));
+            if let Err(error) = result {
+                eprintln!("desktop tray action failed: {error}");
+            }
+        }
+    })
+    .detach();
+}
+
+fn handle_desktop_tray_action(
+    action: DesktopTrayAction,
+    window_context: &DesktopWindowContext,
+    cx: &mut App,
+) -> anyhow::Result<()> {
+    match action {
+        DesktopTrayAction::Open => {
+            handle_desktop_shell_command(DesktopShellCommand::Activate, window_context, cx)?;
+        }
+        DesktopTrayAction::NewWindow => {
+            handle_desktop_shell_command(
+                DesktopShellCommand::OpenWindow {
+                    project_paths: Vec::new(),
+                },
+                window_context,
+                cx,
+            )?;
+        }
+        DesktopTrayAction::OpenLogs => {
+            std::fs::create_dir_all(&window_context.profile.paths().logs)?;
+            platform::reveal_path(&window_context.profile.paths().logs)?;
+        }
+        DesktopTrayAction::StartHost => {
+            start_host_runtime(window_context.clone(), cx);
+        }
+        DesktopTrayAction::StopHost => {
+            request_host_stop(false, window_context.clone(), cx);
+        }
+        DesktopTrayAction::RestartHost => {
+            request_host_stop(true, window_context.clone(), cx);
+        }
+        DesktopTrayAction::QuitDesktop => quit_desktop(cx),
+        DesktopTrayAction::QuitAll => quit_all(cx),
+    }
+    Ok(())
+}
+
+fn start_host_runtime(window_context: DesktopWindowContext, cx: &mut App) {
+    let profile = window_context.profile.clone();
+    let start = cx
+        .background_executor()
+        .spawn(async move { HostRuntimeGlobal::start(profile) });
+    cx.spawn(async move |cx| {
+        let status = start.await;
+        cx.update(|cx| replace_host_runtime(status, &window_context, cx));
+    })
+    .detach();
+}
+
+fn request_host_stop(restart: bool, window_context: DesktopWindowContext, cx: &mut App) {
+    let Some(runtime) = cx.global::<HostRuntimeGlobal>().runtime().cloned() else {
+        if restart {
+            start_host_runtime(window_context, cx);
+        }
+        return;
+    };
+    let response = runtime.request_lifecycle(LifecycleRequest::StopIfIdle, false);
+    cx.spawn(async move |cx| match response.recv_async().await {
+        Ok(Ok(LifecycleResponse::Stopping)) => {
+            runtime.shutdown_client();
+            if restart {
+                let profile = window_context.profile.clone();
+                let start = cx
+                    .background_executor()
+                    .spawn(async move { HostRuntimeGlobal::start(profile) });
+                let status = start.await;
+                cx.update(|cx| replace_host_runtime(status, &window_context, cx));
+            } else {
+                cx.update(|cx| {
+                    replace_host_runtime(
+                        HostRuntimeGlobal::unavailable("Host stopped"),
+                        &window_context,
+                        cx,
+                    )
+                });
+            }
+        }
+        Ok(Ok(LifecycleResponse::Busy { blockers })) => {
+            eprintln!(
+                "Host remains running because {} lifecycle blockers are active",
+                blockers.len()
+            );
+        }
+        Ok(Ok(other)) => eprintln!("unexpected Host lifecycle response: {other:?}"),
+        Ok(Err(error)) => eprintln!("Host lifecycle request failed: {error}"),
+        Err(error) => eprintln!("Host lifecycle response channel failed: {error}"),
+    })
+    .detach();
+}
+
+fn quit_desktop(cx: &mut App) {
+    if let Some(runtime) = cx.global::<HostRuntimeGlobal>().runtime().cloned() {
+        runtime.shutdown_client();
+    }
+    cx.quit();
+}
+
+fn quit_all(cx: &mut App) {
+    let Some(runtime) = cx.global::<HostRuntimeGlobal>().runtime().cloned() else {
+        cx.quit();
+        return;
+    };
+    let response = runtime.request_lifecycle(LifecycleRequest::ForceStop, true);
+    cx.spawn(async move |cx| match response.recv_async().await {
+        Ok(Ok(LifecycleResponse::Draining)) => {
+            runtime.shutdown_client();
+            cx.update(|cx| cx.quit());
+        }
+        Ok(Ok(other)) => eprintln!("unexpected Host force-stop response: {other:?}"),
+        Ok(Err(error)) => eprintln!("Host force-stop failed: {error}"),
+        Err(error) => eprintln!("Host force-stop response channel failed: {error}"),
+    })
+    .detach();
+}
+
+fn replace_host_runtime(
+    status: HostRuntimeGlobal,
+    window_context: &DesktopWindowContext,
+    cx: &mut App,
+) {
+    cx.set_global(status.clone());
+    let workbenches = window_context
+        .workbenches
+        .borrow()
+        .iter()
+        .filter_map(WeakEntity::upgrade)
+        .collect::<Vec<_>>();
+    window_context
+        .workbenches
+        .borrow_mut()
+        .retain(|workbench| workbench.upgrade().is_some());
+    for workbench in workbenches {
+        workbench.update(cx, |workbench, cx| {
+            workbench.set_host_runtime_status(&status);
+            workbench.start_ssh_event_listener(cx);
+            workbench.sync_performance_monitoring(cx);
+        });
+    }
+}
+
+fn start_desktop_tray_status_monitor(cx: &mut App) {
+    cx.spawn(async move |cx| {
+        loop {
+            let response = cx.update(|cx| {
+                cx.global::<HostRuntimeGlobal>()
+                    .runtime()
+                    .map(|runtime| runtime.request_lifecycle(LifecycleRequest::Status, false))
+            });
+            let status = match response {
+                Some(response) => match response.recv_async().await {
+                    Ok(Ok(LifecycleResponse::Status(status))) => {
+                        DesktopTrayStatus::from_lifecycle(&status)
+                    }
+                    Ok(Ok(other)) => {
+                        DesktopTrayStatus::unavailable(format!("Unexpected response: {other:?}"))
+                    }
+                    Ok(Err(error)) => DesktopTrayStatus::unavailable(error.to_string()),
+                    Err(error) => DesktopTrayStatus::unavailable(error.to_string()),
+                },
+                None => DesktopTrayStatus::unavailable("Stopped"),
+            };
+            cx.update(|cx| {
+                cx.global::<DesktopTrayGlobal>().adapter.update(&status);
+            });
+            cx.background_executor().timer(Duration::from_secs(2)).await;
+        }
+    })
+    .detach();
 }
 
 #[cfg(feature = "perf-metrics")]
@@ -338,5 +645,16 @@ pub fn window_background_appearance(effect: WindowBackgroundEffect) -> WindowBac
         WindowBackgroundEffect::None => WindowBackgroundAppearance::Opaque,
         WindowBackgroundEffect::Transparent => WindowBackgroundAppearance::Transparent,
         WindowBackgroundEffect::Blurred => WindowBackgroundAppearance::Blurred,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn production_desktop_remains_running_after_the_last_window_closes() {
+        assert_eq!(desktop_quit_mode(false), QuitMode::Explicit);
+        assert_eq!(desktop_quit_mode(true), QuitMode::LastWindowClosed);
     }
 }
