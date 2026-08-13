@@ -11,7 +11,7 @@ pub(crate) use cache::TerminalRenderCache;
 pub(crate) use content::TerminalCellWidth;
 pub(crate) use content::{
     HintCellOverlay, RenderDecorationFlags, RenderOverlayState, RenderableCell, RenderableCursor,
-    RenderableRow, TerminalFontStyle, TerminalRenderSnapshot,
+    RenderableRow, TerminalFontStyle, TerminalRenderOptions, TerminalRenderSnapshot,
 };
 
 use crate::colors::ColorPalette;
@@ -1129,12 +1129,14 @@ mod tests {
             TerminalRenderSnapshot::build(
                 term,
                 &ColorPalette::default(),
-                &RenderOverlayState::default(),
-                true,
-                true,
-                true,
-                &[],
-                1,
+                TerminalRenderOptions {
+                    overlays: &RenderOverlayState::default(),
+                    focused: true,
+                    cursor_unfocused_hollow: true,
+                    cursor_visible: true,
+                    forced_rows: &[],
+                    generation: 1,
+                },
             )
         })
     }

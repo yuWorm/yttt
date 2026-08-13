@@ -12,8 +12,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
 use yttt_agent_core::{
-    AgentExitReason, AgentInstanceId, AgentProcessExit, AgentProvider, AgentReducer, AgentSnapshot,
-    ProviderHookEvent, ProviderId,
+    AgentExitReason, AgentInstanceId, AgentProcessExit, AgentProvider, AgentReducer,
+    AgentSessionMetadata, AgentSnapshot, ProviderHookEvent, ProviderId, ProviderResumeCommand,
 };
 
 pub const AGENT_TITLE_PREFIX: &str = "yttt-agent-v1:";
@@ -129,6 +129,17 @@ impl AgentRuntime {
         self.providers
             .retain(|existing| existing.descriptor().id != provider_id);
         self.providers.push(provider);
+    }
+
+    pub fn resume_command(
+        &self,
+        provider_id: &str,
+        session: &AgentSessionMetadata,
+    ) -> Option<ProviderResumeCommand> {
+        self.providers
+            .iter()
+            .find(|provider| provider.descriptor().id.as_str() == provider_id)?
+            .resume_command(session)
     }
 
     pub fn prepare_launch(

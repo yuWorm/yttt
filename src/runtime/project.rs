@@ -1,4 +1,3 @@
-#[cfg(test)]
 use std::fs;
 use std::{
     ffi::{OsStr, OsString},
@@ -10,16 +9,15 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-#[cfg(test)]
 use ignore::WalkBuilder;
 use ignore::{
     Match,
     gitignore::{Gitignore, GitignoreBuilder},
 };
 use yttt_client_core::ClientCoreError;
-use yttt_core::{
-    model::ids::ProjectId,
-    model::project::{RemotePathError, RemoteRelativePathBuf},
+use yttt_core::model::{
+    ids::{ConnectionId, ProjectId},
+    project::{RemotePathBuf, RemotePathError, RemoteRelativePathBuf},
 };
 use yttt_protocol::{
     FailureCode, Request, Response,
@@ -29,13 +27,13 @@ use yttt_protocol::{
         ProjectFileState, ProjectPasteMode as HostPasteMode, ProjectRequest, ProjectResponse,
         ProjectSaveMode, ProjectSaveResult,
     },
-};
-use yttt_ssh::{
-    RemoteDirectorySnapshot, RemoteEntryKind, RemoteEntryMutation, RemoteFileState,
-    RemoteFingerprint, RemoteLoadedFile, RemoteSaveOutcome, SftpError, SftpProject,
+    ssh::{
+        RemoteCommandRequest, RemoteCommandResponse, RemoteDirectory, RemoteEntryMutation,
+        RemoteFileContent, RemoteFileFingerprint, RemoteFileKind, RemoteFileRequest,
+        RemoteFileResponse, RemoteFileState, RemoteSaveResult,
+    },
 };
 
-#[cfg(test)]
 use super::git_status::execute_local_git;
 use super::git_status::{GitCommandOutput, ProjectGitExecutor};
 use crate::host_runtime::DesktopHostRuntime;
@@ -50,7 +48,6 @@ use crate::ui::{
         ProjectTreeEntry, ProjectTreeEntryKind, ProjectTreeFsError,
     },
 };
-#[cfg(test)]
 use crate::ui::{
     editor::{project_relative_path, read_project_file, save_project_file},
     project_tree::{
@@ -76,12 +73,10 @@ pub struct ProjectServices {
 
 enum ProjectBackend {
     Host(HostProjectServices),
-    #[cfg(test)]
     Local(LocalProjectServices),
-    Ssh(SftpProject),
+    Ssh(HostSshProject),
 }
 
-#[cfg(test)]
 struct LocalProjectServices {
     root: PathBuf,
 }
@@ -93,6 +88,100 @@ struct HostProjectServices {
     watch_error: Option<String>,
     root: PathBuf,
     registration_lock: Mutex<()>,
+}
+
+struct HostSshProject {
+    runtime: Arc<dyn ProjectHostTransport>,
+    project_id: ProjectId,
+    registration_epoch: AtomicU64,
+    connection_id: ConnectionId,
+    root: RemotePathBuf,
+    registration_lock: Mutex<()>,
+}
+
+impl HostSshProject {
+    fn send(&self, request: Request) -> Result<Response, ClientCoreError> {
+        self.runtime.request(request)
+    }
+
+    fn register(&self) -> Result<(), String> {
+        let response = self
+            .send(Request::Project(ProjectRequest::RegisterSsh {
+                project_id: self.project_id.clone(),
+                connection_id: self.connection_id.as_str().to_string(),
+                root: self.root.as_str().to_string(),
+            }))
+            .map_err(|error| error.to_string())?;
+        let Response::Project(ProjectResponse::Registered {
+            registration_epoch, ..
+        }) = response
+        else {
+            return Err(
+                "Host returned an unexpected SSH project registration response".to_string(),
+            );
+        };
+        self.registration_epoch
+            .store(registration_epoch, Ordering::Release);
+        Ok(())
+    }
+
+    fn request(&self, request: Request) -> Result<Response, String> {
+        match self.send(request.clone()) {
+            Ok(response) => Ok(response),
+            Err(error) if HostProjectServices::registration_missing(&error) => {
+                let _registration = self
+                    .registration_lock
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                match self.send(request.clone()) {
+                    Ok(response) => Ok(response),
+                    Err(error) if HostProjectServices::registration_missing(&error) => {
+                        self.register()?;
+                        self.send(request).map_err(|error| error.to_string())
+                    }
+                    Err(error) => Err(error.to_string()),
+                }
+            }
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn remote_file(&self, request: RemoteFileRequest) -> Result<RemoteFileResponse, String> {
+        match self.request(Request::RemoteFile(request))? {
+            Response::RemoteFile(response) => Ok(response),
+            _ => Err("Host returned an unexpected remote-file response".to_string()),
+        }
+    }
+
+    fn remote_command(
+        &self,
+        program: impl Into<String>,
+        args: Vec<String>,
+    ) -> Result<RemoteCommandResponse, String> {
+        match self.request(Request::RemoteCommand(RemoteCommandRequest {
+            project_id: self.project_id.clone(),
+            program: program.into(),
+            args,
+        }))? {
+            Response::RemoteCommand(response) => Ok(response),
+            _ => Err("Host returned an unexpected remote-command response".to_string()),
+        }
+    }
+}
+
+pub fn resolve_ssh_home(
+    runtime: Arc<DesktopHostRuntime>,
+    connection_id: ConnectionId,
+) -> Result<RemotePathBuf, String> {
+    let response = runtime
+        .request_blocking_typed(Request::RemoteFile(RemoteFileRequest::ResolveHome {
+            connection_id: connection_id.as_str().to_string(),
+        }))
+        .map_err(|error| error.to_string())?;
+    let Response::RemoteFile(RemoteFileResponse::Home(home)) = response else {
+        return Err("Host returned an unexpected remote-home response".to_string());
+    };
+    RemotePathBuf::new(home).map_err(|error| error.to_string())
 }
 
 impl HostProjectServices {
@@ -157,18 +246,8 @@ impl HostProjectServices {
     }
 }
 
-impl Drop for HostProjectServices {
-    fn drop(&mut self) {
-        let _ = self.request(ProjectRequest::Close {
-            project_id: self.project_id.clone(),
-            registration_epoch: self.registration_epoch.load(Ordering::Acquire),
-        });
-    }
-}
-
 impl ProjectServices {
-    #[cfg(test)]
-    pub fn local(root: impl Into<PathBuf>) -> Self {
+    pub(crate) fn local_for_test(root: impl Into<PathBuf>) -> Self {
         Self {
             backend: Arc::new(ProjectBackend::Local(LocalProjectServices {
                 root: root.into(),
@@ -176,10 +255,33 @@ impl ProjectServices {
         }
     }
 
-    pub fn ssh(project: SftpProject) -> Self {
-        Self {
+    pub fn ssh(
+        runtime: Arc<DesktopHostRuntime>,
+        project_id: ProjectId,
+        connection_id: ConnectionId,
+        root: RemotePathBuf,
+    ) -> Result<Self, String> {
+        Self::ssh_with_transport(runtime, project_id, connection_id, root)
+    }
+
+    fn ssh_with_transport(
+        runtime: Arc<dyn ProjectHostTransport>,
+        project_id: ProjectId,
+        connection_id: ConnectionId,
+        root: RemotePathBuf,
+    ) -> Result<Self, String> {
+        let project = HostSshProject {
+            runtime,
+            project_id,
+            registration_epoch: AtomicU64::new(0),
+            connection_id,
+            root,
+            registration_lock: Mutex::new(()),
+        };
+        project.register()?;
+        Ok(Self {
             backend: Arc::new(ProjectBackend::Ssh(project)),
-        }
+        })
     }
 
     pub fn host(
@@ -225,16 +327,43 @@ impl ProjectServices {
     pub fn host_registration_epoch(&self) -> Option<u64> {
         match self.backend.as_ref() {
             ProjectBackend::Host(host) => Some(host.registration_epoch.load(Ordering::Acquire)),
-            #[cfg(test)]
             ProjectBackend::Local(_) => None,
-            ProjectBackend::Ssh(_) => None,
+            ProjectBackend::Ssh(project) => {
+                Some(project.registration_epoch.load(Ordering::Acquire))
+            }
+        }
+    }
+
+    pub fn close_host_registration(&self) -> Result<(), String> {
+        let (response, expected) = match self.backend.as_ref() {
+            ProjectBackend::Host(host) => (
+                host.send(ProjectRequest::Close {
+                    project_id: host.project_id.clone(),
+                    registration_epoch: host.registration_epoch.load(Ordering::Acquire),
+                })
+                .map_err(|error| error.to_string())?,
+                "project",
+            ),
+            ProjectBackend::Ssh(project) => (
+                project.request(Request::Project(ProjectRequest::Close {
+                    project_id: project.project_id.clone(),
+                    registration_epoch: project.registration_epoch.load(Ordering::Acquire),
+                }))?,
+                "SSH project",
+            ),
+            ProjectBackend::Local(_) => return Ok(()),
+        };
+        match response {
+            Response::Project(ProjectResponse::Closed) => Ok(()),
+            _ => Err(format!(
+                "Host returned an unexpected {expected} close response"
+            )),
         }
     }
 
     pub fn watch_error(&self) -> Option<&str> {
         match self.backend.as_ref() {
             ProjectBackend::Host(host) => host.watch_error.as_deref(),
-            #[cfg(test)]
             ProjectBackend::Local(_) => None,
             ProjectBackend::Ssh(_) => None,
         }
@@ -243,7 +372,6 @@ impl ProjectServices {
     pub fn document_path(&self, relative_path: &Path) -> Option<PathBuf> {
         match self.backend.as_ref() {
             ProjectBackend::Host(host) => Some(host.root.join(relative_path)),
-            #[cfg(test)]
             ProjectBackend::Local(local) => Some(local.root.join(relative_path)),
             ProjectBackend::Ssh(project) => {
                 let relative = remote_relative(relative_path).ok()?;
@@ -258,10 +386,9 @@ impl ProjectServices {
     ) -> Result<PathBuf, ProjectFileIoError> {
         match self.backend.as_ref() {
             ProjectBackend::Host(host) => host_relative_path(&host.root, document_path),
-            #[cfg(test)]
             ProjectBackend::Local(local) => project_relative_path(&local.root, document_path),
             ProjectBackend::Ssh(project) => {
-                let root = PathBuf::from(project.root().as_str());
+                let root = PathBuf::from(project.root.as_str());
                 let relative = document_path.strip_prefix(&root).map_err(|_| {
                     ProjectFileIoError::PathOutsideProject {
                         path: document_path.to_path_buf(),
@@ -300,17 +427,27 @@ impl ProjectServices {
                 })
                 .and_then(host_directory_snapshot)
                 .map_err(|message| tree_remote_error(relative_directory, message)),
-            #[cfg(test)]
             ProjectBackend::Local(local) => {
                 scan_project_directory(&local.root, relative_directory, show_hidden)
             }
             ProjectBackend::Ssh(project) => {
                 let relative = remote_relative(relative_directory)
                     .map_err(|message| tree_remote_error(relative_directory, message))?;
-                project
-                    .scan_directory(relative, show_hidden)
-                    .map(remote_directory_snapshot)
-                    .map_err(|error| map_tree_error(relative_directory, error))
+                let response = project
+                    .remote_file(RemoteFileRequest::ScanDirectory {
+                        project_id: project.project_id.clone(),
+                        relative_directory: relative.as_str().to_string(),
+                        show_hidden,
+                    })
+                    .map_err(|message| tree_remote_error(relative_directory, message))?;
+                let RemoteFileResponse::Directory(snapshot) = response else {
+                    return Err(tree_remote_error(
+                        relative_directory,
+                        "Host returned an unexpected remote directory response".to_string(),
+                    ));
+                };
+                remote_directory_snapshot(snapshot)
+                    .map_err(|message| tree_remote_error(relative_directory, message))
             }
         }
     }
@@ -321,7 +458,6 @@ impl ProjectServices {
         }
 
         match self.backend.as_ref() {
-            #[cfg(test)]
             ProjectBackend::Local(local) => searchable_local_files(&local.root, show_hidden),
             ProjectBackend::Host(_) => searchable_remote_files(self, show_hidden),
             ProjectBackend::Ssh(_) => searchable_remote_files(self, show_hidden),
@@ -340,14 +476,23 @@ impl ProjectServices {
                     _ => Err("Host returned an unexpected file response".to_string()),
                 })
                 .map_err(|message| file_remote_error(relative_path, message)),
-            #[cfg(test)]
             ProjectBackend::Local(local) => read_project_file(&local.root, relative_path),
             ProjectBackend::Ssh(project) => {
                 let relative = remote_relative(relative_path)
                     .map_err(|message| file_remote_error(relative_path, message))?;
-                let file = project
-                    .read_file(relative, MAX_PROJECT_FILE_BYTES)
-                    .map_err(|error| map_file_error(relative_path, error))?;
+                let response = project
+                    .remote_file(RemoteFileRequest::Read {
+                        project_id: project.project_id.clone(),
+                        relative_path: relative.as_str().to_string(),
+                        maximum_bytes: MAX_PROJECT_FILE_BYTES,
+                    })
+                    .map_err(|message| file_remote_error(relative_path, message))?;
+                let RemoteFileResponse::File(file) = response else {
+                    return Err(file_remote_error(
+                        relative_path,
+                        "Host returned an unexpected remote file response".to_string(),
+                    ));
+                };
                 remote_loaded_file(project, file)
             }
         }
@@ -385,7 +530,6 @@ impl ProjectServices {
                 })
                 .map_err(|message| file_remote_error(relative_path, message))
             }
-            #[cfg(test)]
             ProjectBackend::Local(local) => {
                 save_project_file(&local.root, relative_path, text, mode)
             }
@@ -398,16 +542,23 @@ impl ProjectServices {
                     }
                     SaveMode::Check(_) | SaveMode::Force => None,
                 };
-                project
-                    .save_file(
-                        relative,
-                        text.as_bytes().to_vec(),
+                let response = project
+                    .remote_file(RemoteFileRequest::Save {
+                        project_id: project.project_id.clone(),
+                        relative_path: relative.as_str().to_string(),
                         expected,
                         force,
-                        MAX_PROJECT_FILE_BYTES,
-                    )
-                    .map(remote_save_outcome)
-                    .map_err(|error| map_file_error(relative_path, error))
+                        maximum_bytes: MAX_PROJECT_FILE_BYTES,
+                        bytes: text.as_bytes().to_vec(),
+                    })
+                    .map_err(|message| file_remote_error(relative_path, message))?;
+                let RemoteFileResponse::Save(outcome) = response else {
+                    return Err(file_remote_error(
+                        relative_path,
+                        "Host returned an unexpected remote save response".to_string(),
+                    ));
+                };
+                Ok(remote_save_outcome(outcome))
             }
         }
     }
@@ -429,7 +580,6 @@ impl ProjectServices {
                     _ => Err("Host returned an unexpected create response".to_string()),
                 })
                 .map_err(|message| entry_remote_error(relative_directory, message)),
-            #[cfg(test)]
             ProjectBackend::Local(local) => {
                 create_project_entry(&local.root, relative_directory, input)
             }
@@ -461,10 +611,20 @@ impl ProjectServices {
                         input: input.to_string(),
                     }
                 })?;
-                project
-                    .create_entry(relative_path, directory)
-                    .map(remote_entry_mutation)
-                    .map_err(|error| map_entry_error(relative_directory, error))
+                let response = project
+                    .remote_file(RemoteFileRequest::Create {
+                        project_id: project.project_id.clone(),
+                        relative_path: relative_path.as_str().to_string(),
+                        directory,
+                    })
+                    .map_err(|message| entry_remote_error(relative_directory, message))?;
+                let RemoteFileResponse::Mutation(mutation) = response else {
+                    return Err(entry_remote_error(
+                        relative_directory,
+                        "Host returned an unexpected remote create response".to_string(),
+                    ));
+                };
+                Ok(remote_entry_mutation(mutation))
             }
         }
     }
@@ -486,7 +646,6 @@ impl ProjectServices {
                     _ => Err("Host returned an unexpected rename response".to_string()),
                 })
                 .map_err(|message| entry_remote_error(relative_path, message)),
-            #[cfg(test)]
             ProjectBackend::Local(local) => {
                 rename_project_entry(&local.root, relative_path, new_name)
             }
@@ -496,10 +655,20 @@ impl ProjectServices {
                         input: new_name.to_string(),
                     }
                 })?;
-                project
-                    .rename_entry(relative, new_name.to_string())
-                    .map(remote_entry_mutation)
-                    .map_err(|error| map_entry_error(relative_path, error))
+                let response = project
+                    .remote_file(RemoteFileRequest::Rename {
+                        project_id: project.project_id.clone(),
+                        relative_path: relative.as_str().to_string(),
+                        new_name: new_name.to_string(),
+                    })
+                    .map_err(|message| entry_remote_error(relative_path, message))?;
+                let RemoteFileResponse::Mutation(mutation) = response else {
+                    return Err(entry_remote_error(
+                        relative_path,
+                        "Host returned an unexpected remote rename response".to_string(),
+                    ));
+                };
+                Ok(remote_entry_mutation(mutation))
             }
         }
     }
@@ -516,14 +685,24 @@ impl ProjectServices {
                     _ => Err("Host returned an unexpected delete response".to_string()),
                 })
                 .map_err(|message| entry_remote_error(relative_path, message)),
-            #[cfg(test)]
             ProjectBackend::Local(local) => delete_project_entry(&local.root, relative_path),
             ProjectBackend::Ssh(project) => {
                 let relative = remote_relative(relative_path)
                     .map_err(|message| entry_remote_error(relative_path, message))?;
-                project
-                    .delete_entry(relative)
-                    .map_err(|error| map_entry_error(relative_path, error))
+                let response = project
+                    .remote_file(RemoteFileRequest::Delete {
+                        project_id: project.project_id.clone(),
+                        relative_path: relative.as_str().to_string(),
+                    })
+                    .map_err(|message| entry_remote_error(relative_path, message))?;
+                if matches!(response, RemoteFileResponse::Deleted) {
+                    Ok(())
+                } else {
+                    Err(entry_remote_error(
+                        relative_path,
+                        "Host returned an unexpected remote delete response".to_string(),
+                    ))
+                }
             }
         }
     }
@@ -559,7 +738,6 @@ impl ProjectServices {
                     })
                     .map_err(|message| entry_remote_error(source_relative_path, message))
             }
-            #[cfg(test)]
             (ProjectBackend::Local(source), ProjectBackend::Local(destination)) => {
                 paste_project_entry(
                     &source.root,
@@ -598,7 +776,6 @@ impl ProjectGitExecutor for ProjectServices {
                     stderr: output.stderr,
                 })
             }
-            #[cfg(test)]
             ProjectBackend::Local(local) => execute_local_git(&local.root, args, optional_locks),
             ProjectBackend::Ssh(project) => {
                 let args = args
@@ -609,12 +786,10 @@ impl ProjectGitExecutor for ProjectServices {
                             .ok_or_else(|| "remote Git arguments must be valid UTF-8".to_string())
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let output = project
-                    .run_command("git", args)
-                    .map_err(|error| error.to_string())?;
+                let output = project.remote_command("git", args)?;
                 Ok(GitCommandOutput {
-                    success: output.success(),
-                    exit_code: output.exit_status,
+                    success: output.exit_status == 0,
+                    exit_code: i32::try_from(output.exit_status).ok(),
                     stdout: output.stdout,
                     stderr: output.stderr,
                 })
@@ -626,9 +801,7 @@ impl ProjectGitExecutor for ProjectServices {
         match self.backend.as_ref() {
             ProjectBackend::Host(_) if cfg!(windows) => "NUL",
             ProjectBackend::Host(_) => "/dev/null",
-            #[cfg(test)]
             ProjectBackend::Local(_) if cfg!(windows) => "NUL",
-            #[cfg(test)]
             ProjectBackend::Local(_) => "/dev/null",
             ProjectBackend::Ssh(_) => "/dev/null",
         }
@@ -856,7 +1029,6 @@ fn searchable_git_files(services: &ProjectServices, show_hidden: bool) -> Option
     Some(paths)
 }
 
-#[cfg(test)]
 fn searchable_local_files(root: &Path, show_hidden: bool) -> Result<Vec<PathBuf>, String> {
     let mut builder = WalkBuilder::new(root);
     builder
@@ -1022,8 +1194,8 @@ fn pathbuf_from_remote(path: &RemoteRelativePathBuf) -> PathBuf {
     result
 }
 
-fn remote_document_path(project: &SftpProject, relative: &RemoteRelativePathBuf) -> PathBuf {
-    let mut path = PathBuf::from(project.root().as_str());
+fn remote_document_path(project: &HostSshProject, relative: &RemoteRelativePathBuf) -> PathBuf {
+    let mut path = PathBuf::from(project.root.as_str());
     for component in relative
         .as_str()
         .split('/')
@@ -1034,27 +1206,37 @@ fn remote_document_path(project: &SftpProject, relative: &RemoteRelativePathBuf)
     path
 }
 
-fn remote_directory_snapshot(snapshot: RemoteDirectorySnapshot) -> DirectorySnapshot {
-    DirectorySnapshot {
-        relative_directory: pathbuf_from_remote(&snapshot.relative_directory),
+fn pathbuf_from_wire(path: &str) -> PathBuf {
+    let mut result = PathBuf::new();
+    for component in path.split('/').filter(|component| !component.is_empty()) {
+        result.push(component);
+    }
+    result
+}
+
+fn remote_directory_snapshot(snapshot: RemoteDirectory) -> Result<DirectorySnapshot, String> {
+    Ok(DirectorySnapshot {
+        relative_directory: pathbuf_from_wire(&snapshot.relative_directory),
         entries: snapshot
             .entries
             .into_iter()
             .map(|entry| ProjectTreeEntry {
                 name: OsString::from(entry.name),
-                relative_path: pathbuf_from_remote(&entry.relative_path),
+                relative_path: pathbuf_from_wire(&entry.relative_path),
                 kind: project_entry_kind(entry.kind),
             })
             .collect(),
-    }
+    })
 }
 
 fn remote_loaded_file(
-    project: &SftpProject,
-    file: RemoteLoadedFile,
+    project: &HostSshProject,
+    file: RemoteFileContent,
 ) -> Result<LoadedProjectFile, ProjectFileIoError> {
-    let relative_path = pathbuf_from_remote(&file.relative_path);
-    let canonical_path = remote_document_path(project, &file.relative_path);
+    let relative = RemoteRelativePathBuf::new(file.relative_path.clone())
+        .map_err(|error| file_remote_error(Path::new(&file.relative_path), error.to_string()))?;
+    let relative_path = pathbuf_from_remote(&relative);
+    let canonical_path = remote_document_path(project, &relative);
     let fingerprint = disk_fingerprint(file.fingerprint);
     if file.bytes.contains(&0) {
         return Err(ProjectFileIoError::BinaryContent {
@@ -1074,29 +1256,29 @@ fn remote_loaded_file(
 
 fn remote_entry_mutation(mutation: RemoteEntryMutation) -> ProjectEntryMutation {
     ProjectEntryMutation {
-        relative_path: pathbuf_from_remote(&mutation.relative_path),
+        relative_path: pathbuf_from_wire(&mutation.relative_path),
         kind: project_entry_kind(mutation.kind),
     }
 }
 
-fn project_entry_kind(kind: RemoteEntryKind) -> ProjectTreeEntryKind {
+fn project_entry_kind(kind: RemoteFileKind) -> ProjectTreeEntryKind {
     match kind {
-        RemoteEntryKind::Directory => ProjectTreeEntryKind::Directory,
-        RemoteEntryKind::File => ProjectTreeEntryKind::File,
-        RemoteEntryKind::SymlinkFile => ProjectTreeEntryKind::SymlinkFile,
-        RemoteEntryKind::SymlinkDirectory => ProjectTreeEntryKind::SymlinkDirectory,
+        RemoteFileKind::Directory => ProjectTreeEntryKind::Directory,
+        RemoteFileKind::File => ProjectTreeEntryKind::File,
+        RemoteFileKind::SymlinkFile => ProjectTreeEntryKind::SymlinkFile,
+        RemoteFileKind::SymlinkDirectory => ProjectTreeEntryKind::SymlinkDirectory,
     }
 }
 
-fn remote_save_outcome(outcome: RemoteSaveOutcome) -> SaveProjectFileOutcome {
+fn remote_save_outcome(outcome: RemoteSaveResult) -> SaveProjectFileOutcome {
     match outcome {
-        RemoteSaveOutcome::Saved(fingerprint) => {
+        RemoteSaveResult::Saved(fingerprint) => {
             SaveProjectFileOutcome::Saved(disk_fingerprint(fingerprint))
         }
-        RemoteSaveOutcome::Conflict(RemoteFileState::Missing) => {
+        RemoteSaveResult::Conflict(RemoteFileState::Missing) => {
             SaveProjectFileOutcome::Conflict(CurrentDiskState::Missing)
         }
-        RemoteSaveOutcome::Conflict(RemoteFileState::Present(fingerprint)) => {
+        RemoteSaveResult::Conflict(RemoteFileState::Present(fingerprint)) => {
             SaveProjectFileOutcome::Conflict(CurrentDiskState::Present(disk_fingerprint(
                 fingerprint,
             )))
@@ -1104,21 +1286,21 @@ fn remote_save_outcome(outcome: RemoteSaveOutcome) -> SaveProjectFileOutcome {
     }
 }
 
-fn remote_fingerprint(fingerprint: &DiskFingerprint) -> RemoteFingerprint {
+fn remote_fingerprint(fingerprint: &DiskFingerprint) -> RemoteFileFingerprint {
     let modified_seconds = fingerprint.modified.and_then(|modified| {
         modified
             .duration_since(UNIX_EPOCH)
             .ok()
             .and_then(|duration| u32::try_from(duration.as_secs()).ok())
     });
-    RemoteFingerprint {
+    RemoteFileFingerprint {
         byte_len: fingerprint.byte_len,
         modified_seconds,
         content_hash: fingerprint.content_hash,
     }
 }
 
-fn disk_fingerprint(fingerprint: RemoteFingerprint) -> DiskFingerprint {
+fn disk_fingerprint(fingerprint: RemoteFileFingerprint) -> DiskFingerprint {
     DiskFingerprint {
         exists: true,
         byte_len: fingerprint.byte_len,
@@ -1126,54 +1308,6 @@ fn disk_fingerprint(fingerprint: RemoteFingerprint) -> DiskFingerprint {
             .modified_seconds
             .map(|seconds| UNIX_EPOCH + Duration::from_secs(u64::from(seconds))),
         content_hash: fingerprint.content_hash,
-    }
-}
-
-fn map_file_error(path: &Path, error: SftpError) -> ProjectFileIoError {
-    match error {
-        SftpError::PathOutsideRoot(_) => ProjectFileIoError::PathOutsideProject {
-            path: path.to_path_buf(),
-        },
-        SftpError::NotFile(_) => ProjectFileIoError::NotAFile {
-            path: path.to_path_buf(),
-        },
-        SftpError::FileTooLarge { size, limit, .. } => ProjectFileIoError::FileTooLarge {
-            path: path.to_path_buf(),
-            size,
-            limit,
-        },
-        error => file_remote_error(path, error.to_string()),
-    }
-}
-
-fn map_tree_error(path: &Path, error: SftpError) -> ProjectTreeFsError {
-    match error {
-        SftpError::PathOutsideRoot(_) => ProjectTreeFsError::PathOutsideProject {
-            path: path.to_path_buf(),
-        },
-        SftpError::NotDirectory(_) => ProjectTreeFsError::NotDirectory {
-            path: path.to_path_buf(),
-        },
-        SftpError::SymlinkDirectory(_) => ProjectTreeFsError::SymlinkDirectory {
-            path: path.to_path_buf(),
-        },
-        error => tree_remote_error(path, error.to_string()),
-    }
-}
-
-fn map_entry_error(path: &Path, error: SftpError) -> ProjectEntryFsError {
-    match error {
-        SftpError::ProjectRootMutation => ProjectEntryFsError::ProjectRootMutation,
-        SftpError::PathOutsideRoot(_) => ProjectEntryFsError::PathOutsideProject {
-            path: path.to_path_buf(),
-        },
-        SftpError::NotDirectory(_) => ProjectEntryFsError::NotDirectory {
-            path: path.to_path_buf(),
-        },
-        SftpError::AlreadyExists(_) => ProjectEntryFsError::AlreadyExists {
-            path: path.to_path_buf(),
-        },
-        error => entry_remote_error(path, error.to_string()),
     }
 }
 
@@ -1231,7 +1365,7 @@ mod tests {
             "theme = 'dark'\n",
         )
         .unwrap();
-        let services = ProjectServices::local(temp.path());
+        let services = ProjectServices::local_for_test(temp.path());
 
         let visible = services.searchable_files(false).unwrap();
         assert_eq!(
@@ -1248,7 +1382,7 @@ mod tests {
 
     #[test]
     fn remote_fingerprint_round_trips() {
-        let remote = RemoteFingerprint {
+        let remote = RemoteFileFingerprint {
             byte_len: 42,
             modified_seconds: Some(123),
             content_hash: 99,
@@ -1262,6 +1396,7 @@ mod tests {
     struct RecoveringProjectHost {
         registrations: AtomicU64,
         reads: AtomicU64,
+        closes: AtomicU64,
     }
 
     impl ProjectHostTransport for RecoveringProjectHost {
@@ -1304,7 +1439,10 @@ mod tests {
                         },
                     )))
                 }
-                ProjectRequest::Close { .. } => Ok(Response::Project(ProjectResponse::Closed)),
+                ProjectRequest::Close { .. } => {
+                    self.closes.fetch_add(1, Ordering::Relaxed);
+                    Ok(Response::Project(ProjectResponse::Closed))
+                }
                 request => panic!("unexpected project request: {request:?}"),
             }
         }
@@ -1315,6 +1453,7 @@ mod tests {
         let transport = Arc::new(RecoveringProjectHost {
             registrations: AtomicU64::new(0),
             reads: AtomicU64::new(0),
+            closes: AtomicU64::new(0),
         });
         let services = ProjectServices::host_with_transport(
             transport.clone(),
@@ -1329,5 +1468,129 @@ mod tests {
         assert_eq!(services.host_registration_epoch(), Some(2));
         assert_eq!(transport.registrations.load(Ordering::Relaxed), 2);
         assert_eq!(transport.reads.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn host_project_registration_closes_only_on_explicit_request() {
+        let transport = Arc::new(RecoveringProjectHost {
+            registrations: AtomicU64::new(0),
+            reads: AtomicU64::new(0),
+            closes: AtomicU64::new(0),
+        });
+        let services = ProjectServices::host_with_transport(
+            transport.clone(),
+            ProjectId::new("project"),
+            PathBuf::from("/project"),
+        )
+        .unwrap();
+
+        drop(services);
+        assert_eq!(transport.closes.load(Ordering::Relaxed), 0);
+
+        let services = ProjectServices::host_with_transport(
+            transport.clone(),
+            ProjectId::new("project"),
+            PathBuf::from("/project"),
+        )
+        .unwrap();
+        services.close_host_registration().unwrap();
+        assert_eq!(transport.closes.load(Ordering::Relaxed), 1);
+    }
+
+    struct RecoveringSshProjectHost {
+        registrations: AtomicU64,
+        reads: AtomicU64,
+        closes: AtomicU64,
+    }
+
+    impl ProjectHostTransport for RecoveringSshProjectHost {
+        fn request(&self, request: Request) -> Result<Response, ClientCoreError> {
+            match request {
+                Request::Project(ProjectRequest::RegisterSsh {
+                    project_id,
+                    connection_id,
+                    root,
+                }) => {
+                    assert_eq!(project_id, ProjectId::new("project"));
+                    assert_eq!(connection_id, "connection");
+                    assert_eq!(root, "/remote");
+                    let registration_epoch = self.registrations.fetch_add(1, Ordering::Relaxed) + 1;
+                    Ok(Response::Project(ProjectResponse::Registered {
+                        canonical_root: PlatformPath::Unix(root.into_bytes()),
+                        registration_epoch,
+                        watch_error: None,
+                        null_device: "/dev/null".to_string(),
+                    }))
+                }
+                Request::RemoteFile(RemoteFileRequest::Read {
+                    project_id,
+                    relative_path,
+                    maximum_bytes,
+                }) => {
+                    assert_eq!(project_id, ProjectId::new("project"));
+                    assert_eq!(relative_path, "notes.txt");
+                    assert_eq!(maximum_bytes, MAX_PROJECT_FILE_BYTES);
+                    let attempt = self.reads.fetch_add(1, Ordering::Relaxed) + 1;
+                    if attempt <= 2 {
+                        return Err(ClientCoreError::Protocol(
+                            yttt_protocol::ProtocolFailure::new(
+                                FailureCode::NotFound,
+                                "project is not registered with Host: project",
+                                false,
+                            ),
+                        ));
+                    }
+                    Ok(Response::RemoteFile(RemoteFileResponse::File(
+                        RemoteFileContent {
+                            relative_path,
+                            bytes: b"recovered".to_vec(),
+                            fingerprint: RemoteFileFingerprint {
+                                byte_len: 9,
+                                modified_seconds: Some(1),
+                                content_hash: 1,
+                            },
+                        },
+                    )))
+                }
+                Request::Project(ProjectRequest::Close {
+                    project_id,
+                    registration_epoch,
+                }) => {
+                    assert_eq!(project_id, ProjectId::new("project"));
+                    assert_eq!(
+                        registration_epoch,
+                        self.registrations.load(Ordering::Relaxed)
+                    );
+                    self.closes.fetch_add(1, Ordering::Relaxed);
+                    Ok(Response::Project(ProjectResponse::Closed))
+                }
+                request => panic!("unexpected request: {request:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn ssh_project_service_reregisters_and_closes_through_host() {
+        let transport = Arc::new(RecoveringSshProjectHost {
+            registrations: AtomicU64::new(0),
+            reads: AtomicU64::new(0),
+            closes: AtomicU64::new(0),
+        });
+        let services = ProjectServices::ssh_with_transport(
+            transport.clone(),
+            ProjectId::new("project"),
+            ConnectionId::new("connection"),
+            RemotePathBuf::new("/remote").unwrap(),
+        )
+        .unwrap();
+
+        let loaded = services.read_file(Path::new("notes.txt")).unwrap();
+
+        assert_eq!(loaded.text, "recovered");
+        assert_eq!(services.host_registration_epoch(), Some(2));
+        assert_eq!(transport.registrations.load(Ordering::Relaxed), 2);
+        assert_eq!(transport.reads.load(Ordering::Relaxed), 3);
+        services.close_host_registration().unwrap();
+        assert_eq!(transport.closes.load(Ordering::Relaxed), 1);
     }
 }

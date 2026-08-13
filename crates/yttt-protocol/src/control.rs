@@ -4,7 +4,7 @@ use yttt_core::model::ids::{
 };
 
 use crate::{
-    agent::{AgentHookEnvironment, AgentHookEvent, AgentHookScope},
+    agent::{AgentSnapshotCursor, AgentSnapshotUpdate},
     project::{ProjectChange, ProjectRequest, ProjectResponse},
     ssh::{
         CredentialAnswer, CredentialChallenge, RemoteCommandRequest, RemoteCommandResponse,
@@ -12,8 +12,11 @@ use crate::{
         StoredSshCredential,
     },
     terminal::{
-        AttachTerminal, SemanticViewport, TerminalCheckpoint, TerminalGeometry, TerminalInput,
-        TerminalLeaseMode, TerminalSpawnSpec, TerminalStreamUpdate, TerminationMode,
+        AttachTerminal, ReadTerminalViewport, ResizeTerminal, ScrollTerminal, SearchTerminal,
+        SemanticViewport, SetTerminalQueryPalette, TerminalCheckpoint, TerminalGeometry,
+        TerminalInput, TerminalLeaseMode, TerminalSearchResults, TerminalSpawnSpec,
+        TerminalStreamUpdate, TerminalViewportRead, TerminateTerminalRequest, TerminatedTerminal,
+        TerminationMode,
     },
 };
 
@@ -27,6 +30,31 @@ pub struct ClientRequest {
 pub struct HostResponse {
     pub request_id: u64,
     pub result: Result<Response, ProtocolFailure>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalTerminationResult {
+    pub request_id: u64,
+    pub session_id: TerminalSessionId,
+    pub result: Result<TerminatedTerminal, ProtocolFailure>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HostBlocker {
+    RunningTerminal(TerminalSessionId),
+    ExitedTerminalAwaitingAck {
+        session_id: TerminalSessionId,
+        session_epoch: u64,
+        final_sequence: u64,
+    },
+    SshConnection(String),
+    Project(ProjectId),
+    ConnectedClients {
+        count: u32,
+    },
+    PendingResourceOperations {
+        count: u32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,20 +89,11 @@ pub enum Request {
         session_id: TerminalSessionId,
     },
     TerminalInput(TerminalInput),
-    ResizeTerminal {
-        session_id: TerminalSessionId,
-        geometry: TerminalGeometry,
-        geometry_epoch: u64,
-    },
-    ScrollTerminal {
-        session_id: TerminalSessionId,
-        display_offset: u64,
-    },
-    SetTerminalQueryPalette {
-        session_id: TerminalSessionId,
-        colors: Vec<u32>,
-        revision: u64,
-    },
+    ResizeTerminal(ResizeTerminal),
+    ScrollTerminal(ScrollTerminal),
+    ReadTerminalViewport(ReadTerminalViewport),
+    SearchTerminal(SearchTerminal),
+    SetTerminalQueryPalette(SetTerminalQueryPalette),
     RequestCheckpoint {
         session_id: TerminalSessionId,
         after_sequence: Option<u64>,
@@ -82,13 +101,14 @@ pub enum Request {
     AcknowledgeTerminalExit {
         session_id: TerminalSessionId,
         session_epoch: u64,
+        final_sequence: u64,
     },
     TerminateTerminal {
         session_id: TerminalSessionId,
         mode: TerminationMode,
     },
     TerminateMany {
-        session_ids: Vec<TerminalSessionId>,
+        requests: Vec<TerminateTerminalRequest>,
     },
     SshConnect(SshConnectSpec),
     SshDisconnect {
@@ -104,7 +124,11 @@ pub enum Request {
     RemoteFile(RemoteFileRequest),
     RemoteCommand(RemoteCommandRequest),
     Project(ProjectRequest),
-    AgentHookEnvironment(AgentHookScope),
+    ReadAgentSnapshots {
+        acknowledged: Vec<AgentSnapshotCursor>,
+    },
+    StopIfIdle,
+    ForceStop,
     DrainAndStop,
 }
 
@@ -116,7 +140,7 @@ pub enum Response {
     },
     Resources(ResourceCatalog),
     TerminalSpawned {
-        session_id: TerminalSessionId,
+        lease: TerminalLease,
         session_epoch: u64,
     },
     TerminalAttached {
@@ -131,17 +155,17 @@ pub enum Response {
     TerminalResized {
         geometry_epoch: u64,
     },
-    TerminalScrolled {
-        display_offset: u64,
-    },
+    TerminalScrolled(TerminalViewportRead),
+    TerminalViewport(TerminalViewportRead),
+    TerminalSearch(TerminalSearchResults),
     TerminalPaletteAccepted {
         revision: u64,
     },
     TerminalCheckpoint(TerminalCheckpoint),
     TerminalExitAcknowledged,
-    TerminalTerminated,
+    TerminalTerminated(TerminatedTerminal),
     TerminalsTerminated {
-        terminated: usize,
+        results: Vec<TerminalTerminationResult>,
     },
     SshConnected {
         connection_id: String,
@@ -153,7 +177,11 @@ pub enum Response {
     RemoteFile(RemoteFileResponse),
     RemoteCommand(RemoteCommandResponse),
     Project(ProjectResponse),
-    AgentHookEnvironment(AgentHookEnvironment),
+    AgentSnapshots(Vec<AgentSnapshotUpdate>),
+    HostIdle,
+    HostBusy {
+        blockers: Vec<HostBlocker>,
+    },
     Draining,
     Applied,
 }
@@ -169,6 +197,7 @@ pub enum ServerEvent {
         session_id: TerminalSessionId,
         session_epoch: u64,
         code: Option<i32>,
+        final_sequence: u64,
     },
     SshStateChanged(SshConnectionStatus),
     CredentialChallenge(CredentialChallenge),
@@ -178,7 +207,7 @@ pub enum ServerEvent {
         credential: StoredSshCredential,
     },
     ProjectChanged(ProjectChange),
-    AgentHook(AgentHookEvent),
+    AgentSnapshot(Box<AgentSnapshotUpdate>),
     HostDraining,
     HostStopping,
 }
@@ -211,6 +240,7 @@ pub struct TerminalPlacement {
     pub pane_id: PaneId,
     pub geometry: TerminalGeometry,
     pub last_sequence: u64,
+    pub spawn_fingerprint: u64,
     pub owner: Option<ClientInstanceId>,
     pub viewport: Option<SemanticViewport>,
 }
@@ -220,6 +250,7 @@ pub enum FailureCode {
     InvalidRequest,
     NotFound,
     AlreadyExists,
+    AddressConflict,
     Conflict,
     PermissionDenied,
     AuthenticationFailed,

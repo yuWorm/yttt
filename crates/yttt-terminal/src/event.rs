@@ -228,13 +228,12 @@ impl TerminalEventMailbox {
                     return;
                 }
             }
-            TerminalEvent::MouseCursorDirty => {
+            TerminalEvent::MouseCursorDirty
                 if queue
                     .iter()
-                    .any(|queued| matches!(queued, TerminalEvent::MouseCursorDirty))
-                {
-                    return;
-                }
+                    .any(|queued| matches!(queued, TerminalEvent::MouseCursorDirty)) =>
+            {
+                return;
             }
             _ => {}
         }
@@ -288,7 +287,6 @@ impl TerminalEventMailbox {
     }
 
     #[cfg(any(test, debug_assertions))]
-
     pub(crate) fn gpui_wakeups(&self) -> u64 {
         self.gpui_wakeups.load(Ordering::Relaxed)
     }

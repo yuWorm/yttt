@@ -3161,7 +3161,7 @@ mod tests {
 
     #[gpui::test]
     async fn code_language_input_docks_to_right_edge(cx: &mut TestAppContext) {
-        cx.update(|cx| {});
+        cx.update(|_cx| {});
         let (block, cx) = cx.add_window_view(|_window, cx| {
             Block::with_record(
                 cx,
@@ -3175,8 +3175,8 @@ mod tests {
         });
 
         cx.update(|window, cx| {
-            block.update(cx, |block, _cx| {
-                block.focus_handle.focus(window, cx);
+            block.update(cx, |block, block_cx| {
+                block.focus_handle.focus(window, block_cx);
             });
             window.draw(cx).clear();
         });

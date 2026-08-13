@@ -1,7 +1,7 @@
 use gpui::{AnyElement, Context, IntoElement as _, div, prelude::*, px};
 use gpui_component::{Icon, IconName, StyledExt, tooltip::Tooltip};
 use yttt_agent_core::AgentViewState;
-use yttt_ssh::ConnectionState;
+use yttt_protocol::ssh::SshConnectionState as ConnectionState;
 
 use super::{WorkbenchView, performance::PerformanceInfo, state::update::UpdateStatus};
 use crate::{

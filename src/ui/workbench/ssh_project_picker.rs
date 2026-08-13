@@ -10,18 +10,21 @@ use gpui_component::{
 
 use yttt_core::model::{
     ids::{ConnectionId, CredentialId},
-    project::{ProjectLocation, RemotePathBuf, RemoteRelativePathBuf},
+    project::{ProjectLocation, RemotePathBuf},
 };
-use yttt_ssh::{
-    Authentication, ConnectRequest, ConnectionState, ConnectionStatus, HostKeyDecision,
-    RemoteEntryKind, SshEndpoint, TransportError,
+use yttt_protocol::{
+    Request, Response,
+    ssh::{
+        RemoteFileEntry, RemoteFileKind, RemoteFileRequest, RemoteFileResponse, SensitiveBytes,
+        SshAuthentication, SshConnectSpec, SshEndpoint,
+    },
 };
 use zeroize::Zeroizing;
 
 use super::{
     ssh_connections::{
-        ssh_connection_state_text, ssh_connection_status, ssh_form_field,
-        stored_credential_from_ref,
+        disconnect_host_ssh, request_host, ssh_connection_state_text, ssh_connection_status,
+        ssh_form_field, stored_credential_from_ref,
     },
     *,
 };
@@ -66,26 +69,18 @@ impl WorkbenchView {
             return;
         };
         let pending = std::mem::take(&mut self.ssh.pending_host_keys);
-        self.ssh.pending_host_keys = pending
-            .into_iter()
-            .filter_map(|challenge| {
-                if challenge.connection_id == connection_id && challenge.epoch == epoch {
-                    let _ = challenge.respond(HostKeyDecision {
-                        accept: false,
-                        remember: false,
-                    });
-                    None
-                } else {
-                    Some(challenge)
-                }
-            })
-            .collect();
-        if let Some(transport) = self.ssh.transport.clone() {
-            cx.background_spawn(async move {
-                let _ = transport.disconnect_attempt(connection_id, epoch).await;
-            })
-            .detach();
+        for challenge in pending {
+            if challenge.connection_id == connection_id && challenge.epoch == epoch {
+                self.send_ssh_host_key_answer(challenge, false, false);
+            } else {
+                self.ssh.pending_host_keys.push_back(challenge);
+            }
         }
+        let runtime = self.terminal.host_runtime.clone();
+        cx.background_spawn(async move {
+            let _ = disconnect_host_ssh(runtime, connection_id).await;
+        })
+        .detach();
     }
 
     pub fn new_ssh_project_connection(&mut self) {
@@ -243,7 +238,7 @@ impl WorkbenchView {
                 return;
             }
         };
-        let Some(transport) = self.ssh.transport.clone() else {
+        if self.terminal.host_runtime.is_none() {
             self.ssh.project_picker.error = Some(
                 self.ui_text
                     .get(UiTextKey::SshRuntimeUnavailable)
@@ -251,7 +246,7 @@ impl WorkbenchView {
             );
             cx.notify();
             return;
-        };
+        }
 
         self.ssh.error = None;
         self.ssh.project_picker.connection_generation = self
@@ -269,89 +264,63 @@ impl WorkbenchView {
         self.ssh.project_picker.error = None;
         self.sync_input_owner_state();
 
+        let runtime = self.terminal.host_runtime.clone();
         let request_id = connection_id.clone();
         cx.spawn(async move |this, cx| {
-            let attempt = match transport
-                .start_connect(ConnectRequest {
-                    connection_id: request_id.clone(),
+            let result = request_host(
+                runtime,
+                Request::SshConnect(SshConnectSpec {
+                    connection_id: request_id.as_str().to_string(),
                     endpoint: SshEndpoint {
                         host: connection.host,
                         port: connection.port,
-                        user: connection.user,
+                        username: connection.user,
                     },
                     authentication,
                     reconnect: false,
-                })
-                .await
-            {
-                Ok(attempt) => attempt,
-                Err(error) => {
-                    let _ = this.update(cx, |root, cx| {
-                        if root.ssh.project_picker.open
-                            && root.ssh.project_picker.connection_id.as_ref() == Some(&request_id)
-                            && root.ssh.project_picker.connection_generation
-                                == connection_generation
-                        {
-                            root.ssh.project_picker.view = SshProjectPickerView::Connecting;
-                            root.ssh.project_picker.error = Some(error.to_string());
-                        }
-                        cx.notify();
-                    });
+                }),
+            )
+            .await;
+            let _ = this.update(cx, |root, cx| {
+                if !root.ssh.project_picker.open
+                    || root.ssh.project_picker.connection_id.as_ref() != Some(&request_id)
+                    || root.ssh.project_picker.connection_generation != connection_generation
+                {
                     return;
                 }
-            };
-            let epoch = attempt.epoch();
-            let active = this
-                .update(cx, |root, cx| {
-                    if !root.ssh.project_picker.open
-                        || root.ssh.project_picker.connection_id.as_ref() != Some(&request_id)
-                        || root.ssh.project_picker.connection_generation != connection_generation
-                    {
-                        return false;
+                match result {
+                    Ok(Response::SshConnected { epoch, .. }) => {
+                        root.ssh.project_picker.connection_epoch = Some(epoch);
+                        root.reject_stale_ssh_host_key_challenges(&request_id, epoch);
+                        root.continue_ssh_project_after_connection(cx);
                     }
-                    root.ssh.project_picker.connection_epoch = Some(epoch);
-                    root.reject_stale_ssh_host_key_challenges(&request_id, epoch);
-                    if let Some(status) = root.ssh.statuses.get(&request_id).cloned() {
-                        root.apply_ssh_project_connection_status(&status, cx);
-                    }
-                    cx.notify();
-                    true
-                })
-                .unwrap_or(false);
-            if !active {
-                let _ = transport
-                    .disconnect_attempt(request_id.clone(), epoch)
-                    .await;
-                return;
-            }
-
-            let result = attempt.wait().await;
-            let _ = this.update(cx, |root, cx| {
-                if let Err(error) = result
-                    && root.ssh.project_picker.open
-                    && root.ssh.project_picker.connection_id.as_ref() == Some(&request_id)
-                    && root.ssh.project_picker.connection_generation == connection_generation
-                    && root.ssh.project_picker.connection_epoch == Some(epoch)
-                {
-                    let prompt_message = password_retry_allowed
-                        .then(|| {
-                            ssh_password_prompt_message(
-                                &error,
-                                password_was_attempted,
-                                &root.ui_text,
-                            )
-                        })
-                        .flatten();
-                    if let Some(message) = prompt_message {
-                        root.show_ssh_password_prompt(
-                            request_id.clone(),
-                            retry_continuation.clone(),
-                            message,
-                            cx,
-                        );
-                    } else {
+                    Ok(response) => {
                         root.ssh.project_picker.view = SshProjectPickerView::Connecting;
-                        root.ssh.project_picker.error = Some(error.to_string());
+                        root.ssh.project_picker.error = Some(format!(
+                            "Host returned an unexpected SSH connect response: {response:?}"
+                        ));
+                    }
+                    Err(error) => {
+                        let prompt_message = password_retry_allowed
+                            .then(|| {
+                                ssh_password_prompt_message(
+                                    &error,
+                                    password_was_attempted,
+                                    &root.ui_text,
+                                )
+                            })
+                            .flatten();
+                        if let Some(message) = prompt_message {
+                            root.show_ssh_password_prompt(
+                                request_id.clone(),
+                                retry_continuation.clone(),
+                                message,
+                                cx,
+                            );
+                        } else {
+                            root.ssh.project_picker.view = SshProjectPickerView::Connecting;
+                            root.ssh.project_picker.error = Some(error);
+                        }
                     }
                 }
                 cx.notify();
@@ -387,9 +356,15 @@ impl WorkbenchView {
     ) {
         if !self.ssh.project_picker.open
             || self.ssh.project_picker.connection_id.as_ref() != Some(&status.connection_id)
-            || self.ssh.project_picker.connection_epoch != Some(status.epoch)
         {
             return;
+        }
+        if let Some(epoch) = self.ssh.project_picker.connection_epoch {
+            if epoch != status.epoch {
+                return;
+            }
+        } else {
+            self.ssh.project_picker.connection_epoch = Some(status.epoch);
         }
         match status.state {
             ConnectionState::Connected => {
@@ -457,7 +432,7 @@ impl WorkbenchView {
         root: RemotePathBuf,
         cx: &mut Context<Self>,
     ) {
-        let Some(transport) = self.ssh.transport.clone() else {
+        let Some(runtime) = self.terminal.host_runtime.clone() else {
             self.ssh.project_picker.error = Some(
                 self.ui_text
                     .get(UiTextKey::SshRuntimeUnavailable)
@@ -468,16 +443,16 @@ impl WorkbenchView {
         let Some(epoch) = self.ssh.project_picker.connection_epoch else {
             return;
         };
-        let sftp = transport.sftp_project(connection_id.clone(), root.clone());
         self.ssh.project_picker.view = SshProjectPickerView::Opening;
         self.ssh.project_picker.loading = true;
         self.ssh.project_picker.error = None;
         self.ssh.project_picker.generation = self.ssh.project_picker.generation.wrapping_add(1);
         let generation = self.ssh.project_picker.generation;
-        let task =
-            cx.background_spawn(
-                async move { sftp.scan_directory(RemoteRelativePathBuf::root(), true) },
-            );
+        let task = cx.background_spawn(scan_ssh_directory(
+            runtime,
+            connection_id.clone(),
+            root.clone(),
+        ));
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |workbench, cx| {
@@ -525,7 +500,7 @@ impl WorkbenchView {
             self.load_ssh_project_directory(connection_id, root, cx);
             return;
         }
-        let Some(transport) = self.ssh.transport.clone() else {
+        let Some(runtime) = self.terminal.host_runtime.clone() else {
             self.ssh.project_picker.error = Some(
                 self.ui_text
                     .get(UiTextKey::SshRuntimeUnavailable)
@@ -533,14 +508,12 @@ impl WorkbenchView {
             );
             return;
         };
-        let root = RemotePathBuf::new("/").expect("remote filesystem root is valid");
-        let sftp = transport.sftp_project(connection_id.clone(), root);
         self.ssh.project_picker.view = SshProjectPickerView::Browsing;
         self.ssh.project_picker.loading = true;
         self.ssh.project_picker.error = None;
         self.ssh.project_picker.generation = self.ssh.project_picker.generation.wrapping_add(1);
         let generation = self.ssh.project_picker.generation;
-        let task = cx.background_spawn(async move { sftp.resolve_home() });
+        let task = cx.background_spawn(resolve_ssh_home(runtime, connection_id.clone()));
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |root, cx| {
@@ -569,7 +542,7 @@ impl WorkbenchView {
         path: RemotePathBuf,
         cx: &mut Context<Self>,
     ) {
-        let Some(transport) = self.ssh.transport.clone() else {
+        let Some(runtime) = self.terminal.host_runtime.clone() else {
             self.ssh.project_picker.error = Some(
                 self.ui_text
                     .get(UiTextKey::SshRuntimeUnavailable)
@@ -577,7 +550,6 @@ impl WorkbenchView {
             );
             return;
         };
-        let sftp = transport.sftp_project(connection_id.clone(), path.clone());
         self.ssh.project_picker.open = true;
         self.ssh.project_picker.view = SshProjectPickerView::Browsing;
         self.ssh.project_picker.connection_id = Some(connection_id.clone());
@@ -592,10 +564,11 @@ impl WorkbenchView {
         self.ssh.project_picker.path_input_subscription = None;
         self.ssh.project_picker.generation = self.ssh.project_picker.generation.wrapping_add(1);
         let generation = self.ssh.project_picker.generation;
-        let task =
-            cx.background_spawn(
-                async move { sftp.scan_directory(RemoteRelativePathBuf::root(), true) },
-            );
+        let task = cx.background_spawn(scan_ssh_directory(
+            runtime,
+            connection_id.clone(),
+            path.clone(),
+        ));
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |root, cx| {
@@ -610,9 +583,8 @@ impl WorkbenchView {
                 match result {
                     Ok(snapshot) => {
                         root.ssh.project_picker.directories = snapshot
-                            .entries
                             .into_iter()
-                            .filter(|entry| entry.kind == RemoteEntryKind::Directory)
+                            .filter(|entry| entry.kind == RemoteFileKind::Directory)
                             .filter_map(|entry| {
                                 remote_child_path(&path, &entry.name).map(|child| {
                                     SshProjectDirectory {
@@ -1055,43 +1027,90 @@ impl WorkbenchView {
     }
 }
 
+async fn resolve_ssh_home(
+    runtime: Arc<crate::host_runtime::DesktopHostRuntime>,
+    connection_id: ConnectionId,
+) -> Result<RemotePathBuf, String> {
+    match request_host(
+        Some(runtime),
+        Request::RemoteFile(RemoteFileRequest::ResolveHome {
+            connection_id: connection_id.as_str().to_string(),
+        }),
+    )
+    .await?
+    {
+        Response::RemoteFile(RemoteFileResponse::Home(home)) => {
+            RemotePathBuf::new(home).map_err(|error| error.to_string())
+        }
+        response => Err(format!(
+            "Host returned an unexpected SSH home response: {response:?}"
+        )),
+    }
+}
+
+async fn scan_ssh_directory(
+    runtime: Arc<crate::host_runtime::DesktopHostRuntime>,
+    connection_id: ConnectionId,
+    root: RemotePathBuf,
+) -> Result<Vec<RemoteFileEntry>, String> {
+    match request_host(
+        Some(runtime),
+        Request::RemoteFile(RemoteFileRequest::BrowseDirectory {
+            connection_id: connection_id.as_str().to_string(),
+            root: root.as_str().to_string(),
+            relative_directory: String::new(),
+            show_hidden: true,
+        }),
+    )
+    .await?
+    {
+        Response::RemoteFile(RemoteFileResponse::Directory(snapshot)) => Ok(snapshot.entries),
+        response => Err(format!(
+            "Host returned an unexpected SSH directory response: {response:?}"
+        )),
+    }
+}
+
 fn ssh_project_authentication(
     connection: &SshConnectionConfig,
     password: Option<SshPasswordAttempt>,
     key_passphrase: Option<String>,
-) -> Result<Authentication, SshProjectAuthenticationError> {
+) -> Result<SshAuthentication, SshProjectAuthenticationError> {
     if matches!(
         connection.auth,
         SshAuthPreference::Auto | SshAuthPreference::Password
     ) && let Some(password) = password
     {
-        return Ok(Authentication::Password {
-            secret: password.secret,
-            save_as: password.save_as,
+        return Ok(SshAuthentication::Password {
+            secret: SensitiveBytes::new(password.secret.as_bytes().to_vec()),
+            save_as: password.save_as.map(|id| id.to_string()),
         });
     }
     match connection.auth {
-        SshAuthPreference::Auto => Ok(Authentication::Auto {
-            identity_file: connection.identity_file.clone(),
-            passphrase: key_passphrase.map(Zeroizing::new),
+        SshAuthPreference::Auto => Ok(SshAuthentication::Auto {
+            identity_file: connection
+                .identity_file
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
+            passphrase: key_passphrase.map(|secret| SensitiveBytes::new(secret.into_bytes())),
             credential: connection
                 .credential
                 .as_ref()
                 .map(stored_credential_from_ref),
         }),
-        SshAuthPreference::Agent => Ok(Authentication::Agent),
+        SshAuthPreference::Agent => Ok(SshAuthentication::Agent),
         SshAuthPreference::Password => connection
             .credential
             .as_ref()
             .map(stored_credential_from_ref)
-            .map(Authentication::StoredPassword)
+            .map(SshAuthentication::StoredPassword)
             .ok_or(SshProjectAuthenticationError::PasswordRequired),
         SshAuthPreference::PublicKey => connection
             .identity_file
-            .clone()
-            .map(|path| Authentication::PrivateKey {
-                path,
-                passphrase: key_passphrase.map(Zeroizing::new),
+            .as_ref()
+            .map(|path| SshAuthentication::PrivateKey {
+                path: path.to_string_lossy().into_owned(),
+                passphrase: key_passphrase.map(|secret| SensitiveBytes::new(secret.into_bytes())),
             })
             .ok_or_else(|| {
                 SshProjectAuthenticationError::Other(
@@ -1102,20 +1121,21 @@ fn ssh_project_authentication(
 }
 
 fn ssh_password_prompt_message(
-    error: &TransportError,
+    error: &str,
     password_was_attempted: bool,
     text: &UiText,
 ) -> Option<Option<String>> {
-    match error {
-        TransportError::AuthenticationRejected => Some(
-            password_was_attempted.then(|| text.get(UiTextKey::SshPasswordRejected).to_string()),
-        ),
-        TransportError::CredentialMissing(_) | TransportError::CredentialBindingMismatch(_) => {
-            Some(Some(
-                text.get(UiTextKey::SshPasswordUnavailable).to_string(),
-            ))
-        }
-        _ => None,
+    let error = error.to_ascii_lowercase();
+    if error.contains("authentication") && error.contains("reject") {
+        Some(password_was_attempted.then(|| text.get(UiTextKey::SshPasswordRejected).to_string()))
+    } else if error.contains("credential")
+        && (error.contains("missing") || error.contains("binding"))
+    {
+        Some(Some(
+            text.get(UiTextKey::SshPasswordUnavailable).to_string(),
+        ))
+    } else {
+        None
     }
 }
 
@@ -1992,7 +2012,7 @@ mod tests {
         ui::i18n::UiText,
     };
     use yttt_core::model::{ids::CredentialId, project::RemotePathBuf};
-    use yttt_ssh::{Authentication, TransportError};
+    use yttt_protocol::ssh::SshAuthentication;
     use zeroize::Zeroizing;
 
     #[test]
@@ -2010,31 +2030,23 @@ mod tests {
     fn password_errors_only_reprompt_for_password_recoverable_failures() {
         let text = UiText::english();
         assert_eq!(
-            ssh_password_prompt_message(&TransportError::AuthenticationRejected, false, &text,),
+            ssh_password_prompt_message("SSH authentication was rejected", false, &text),
             Some(None)
         );
         assert_eq!(
-            ssh_password_prompt_message(&TransportError::AuthenticationRejected, true, &text,),
+            ssh_password_prompt_message("SSH authentication was rejected", true, &text),
             Some(Some(
                 "The server rejected the password. Check it and try again.".to_string()
             ))
         );
         assert_eq!(
-            ssh_password_prompt_message(
-                &TransportError::CredentialMissing(CredentialId::new("missing")),
-                false,
-                &text,
-            ),
+            ssh_password_prompt_message("stored credential is missing", false, &text),
             Some(Some(
                 "The saved password is unavailable. Enter it again.".to_string()
             ))
         );
         assert_eq!(
-            ssh_password_prompt_message(
-                &TransportError::Connection("offline".to_string()),
-                true,
-                &text,
-            ),
+            ssh_password_prompt_message("SSH connection is offline", true, &text),
             None
         );
     }
@@ -2056,10 +2068,10 @@ mod tests {
         )
         .unwrap();
 
-        let Authentication::Password { secret, save_as } = authentication else {
+        let SshAuthentication::Password { secret, save_as } = authentication else {
             panic!("entered password must override automatic authentication");
         };
-        assert_eq!(secret.as_str(), "secret");
-        assert_eq!(save_as, Some(credential_id));
+        assert_eq!(secret.expose(), b"secret");
+        assert_eq!(save_as, Some(credential_id.to_string()));
     }
 }

@@ -1,8 +1,3 @@
-use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    ffi::OsStr,
-};
-
 use crate::{config::default_layout::BuiltinAgent, model::layout::PaneKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,14 +10,6 @@ impl AgentClassification {
     pub fn is_agent(self) -> bool {
         self == Self::Agent
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AgentProcessRecord {
-    pub pid: u32,
-    pub parent_pid: Option<u32>,
-    pub agent: Option<BuiltinAgent>,
-    pub blocks_descendant_agent_discovery: bool,
 }
 
 pub fn classify_agent(kind: Option<PaneKind>, command: &str) -> AgentClassification {
@@ -38,97 +25,6 @@ pub fn classify_agent(kind: Option<PaneKind>, command: &str) -> AgentClassificat
     } else {
         AgentClassification::Shell
     }
-}
-
-pub fn classify_agent_process<N, S>(process_name: N, command: &[S]) -> Option<BuiltinAgent>
-where
-    N: AsRef<OsStr>,
-    S: AsRef<OsStr>,
-{
-    let process_name = process_name.as_ref().to_string_lossy();
-    if let Some(agent) = classify_agent_executable(&process_name) {
-        return Some(agent);
-    }
-
-    let executable = command.first()?.as_ref().to_string_lossy();
-    if let Some(agent) = classify_agent_executable(&executable) {
-        return Some(agent);
-    }
-    if !is_script_interpreter(&executable) {
-        return None;
-    }
-
-    command
-        .iter()
-        .skip(1)
-        .map(|argument| argument.as_ref().to_string_lossy())
-        .find(|argument| !argument.starts_with('-'))
-        .and_then(|script| {
-            classify_agent_executable(&script).or_else(|| classify_agent_script_path(&script))
-        })
-}
-
-pub fn blocks_agent_process_discovery<N, S>(process_name: N, command: &[S]) -> bool
-where
-    N: AsRef<OsStr>,
-    S: AsRef<OsStr>,
-{
-    is_yttt_executable(&process_name.as_ref().to_string_lossy())
-        || command
-            .first()
-            .is_some_and(|executable| is_yttt_executable(&executable.as_ref().to_string_lossy()))
-}
-
-pub fn detect_agent_processes_by_root(
-    root_pids: &[u32],
-    processes: &[AgentProcessRecord],
-) -> HashMap<u32, BuiltinAgent> {
-    let mut by_pid = HashMap::with_capacity(processes.len());
-    let mut children_by_parent = HashMap::<u32, Vec<u32>>::new();
-    for process in processes {
-        by_pid.insert(process.pid, *process);
-        if let Some(parent_pid) = process.parent_pid {
-            children_by_parent
-                .entry(parent_pid)
-                .or_default()
-                .push(process.pid);
-        }
-    }
-
-    root_pids
-        .iter()
-        .filter_map(|root_pid| {
-            nearest_agent_process(*root_pid, &by_pid, &children_by_parent)
-                .map(|agent| (*root_pid, agent))
-        })
-        .collect()
-}
-
-fn nearest_agent_process(
-    root_pid: u32,
-    by_pid: &HashMap<u32, AgentProcessRecord>,
-    children_by_parent: &HashMap<u32, Vec<u32>>,
-) -> Option<BuiltinAgent> {
-    let mut pending = VecDeque::from([root_pid]);
-    let mut visited = HashSet::new();
-    while let Some(pid) = pending.pop_front() {
-        if !visited.insert(pid) {
-            continue;
-        }
-        let Some(process) = by_pid.get(&pid) else {
-            continue;
-        };
-        if process.blocks_descendant_agent_discovery {
-            continue;
-        }
-        if let Some(agent) = process.agent {
-            return Some(agent);
-        }
-        if let Some(children) = children_by_parent.get(&pid) {
-            pending.extend(children);
-        }
-    }
-    None
 }
 
 fn classify_agent_executable(executable: &str) -> Option<BuiltinAgent> {
@@ -150,95 +46,7 @@ fn classify_agent_executable(executable: &str) -> Option<BuiltinAgent> {
     }
 }
 
-fn is_script_interpreter(executable: &str) -> bool {
-    matches!(
-        executable
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or(executable)
-            .to_ascii_lowercase()
-            .as_str(),
-        "node" | "node.exe" | "bun" | "bun.exe" | "deno" | "deno.exe"
-    )
-}
-
-fn classify_agent_script_path(script: &str) -> Option<BuiltinAgent> {
-    let normalized = script.replace('\\', "/").to_ascii_lowercase();
-    if normalized.contains("/@oh-my-pi/pi-coding-agent/") {
-        return Some(BuiltinAgent::OhMyPi);
-    }
-    if normalized.contains("/@mariozechner/pi-coding-agent/") {
-        return Some(BuiltinAgent::Pi);
-    }
-    if normalized.contains("/@openai/codex/") || normalized.ends_with("/codex/bin/codex.js") {
-        return Some(BuiltinAgent::Codex);
-    }
-    if normalized.contains("/@anthropic-ai/claude-code/") {
-        return Some(BuiltinAgent::Claude);
-    }
-    if normalized.contains("/opencode-ai/") || normalized.contains("/opencode/bin/") {
-        return Some(BuiltinAgent::OpenCode);
-    }
-    None
-}
-
-fn is_yttt_executable(executable: &str) -> bool {
-    let basename = executable.rsplit(['/', '\\']).next().unwrap_or(executable);
-    basename.eq_ignore_ascii_case("yttt") || basename.eq_ignore_ascii_case("yttt.exe")
-}
-
 fn command_basename(command: &str) -> Option<&str> {
     let program = command.split_whitespace().next()?;
     program.rsplit(['/', '\\']).next()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn classifies_agent_interpreter_shims_by_entrypoint_name() {
-        assert_eq!(
-            classify_agent_process("bun", &["bun", "/Users/test/.bun/bin/omp"]),
-            Some(BuiltinAgent::OhMyPi)
-        );
-        assert_eq!(
-            classify_agent_process("node", &["node", "/usr/local/bin/claude"]),
-            Some(BuiltinAgent::Claude)
-        );
-    }
-
-    #[test]
-    fn classifies_known_package_entrypoints_behind_interpreters() {
-        assert_eq!(
-            classify_agent_process(
-                "bun",
-                &[
-                    "bun",
-                    "/tmp/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js",
-                ],
-            ),
-            Some(BuiltinAgent::OhMyPi)
-        );
-        assert_eq!(
-            classify_agent_process(
-                "node",
-                &["node", "/tmp/node_modules/@openai/codex/bin/codex.js"],
-            ),
-            Some(BuiltinAgent::Codex)
-        );
-    }
-
-    #[test]
-    fn identifies_yttt_processes_as_agent_discovery_boundaries() {
-        assert!(blocks_agent_process_discovery(
-            "yttt",
-            &["/tmp/target/debug/yttt"]
-        ));
-        assert!(blocks_agent_process_discovery(
-            "yttt.exe",
-            &[r"C:\tools\yttt.exe"]
-        ));
-        assert!(!blocks_agent_process_discovery("cargo", &["cargo", "run"]));
-    }
 }

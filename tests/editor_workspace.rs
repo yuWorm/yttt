@@ -24,7 +24,7 @@ fn opening_the_same_file_twice_reuses_one_work_item() {
     let second = session.open_file("/project-a/src/main.rs");
 
     assert_eq!(first, second);
-    assert_eq!(session.file_ids(), &[first.clone()]);
+    assert_eq!(session.file_ids(), std::slice::from_ref(&first));
     assert_eq!(
         session.ordered_items(&terminals),
         vec![
@@ -261,7 +261,7 @@ fn relocating_file_between_projects_moves_session_ownership() {
             .is_empty()
     );
     let destination = workspace.session(&destination_project_id).unwrap();
-    assert_eq!(destination.file_ids(), &[new.clone()]);
+    assert_eq!(destination.file_ids(), std::slice::from_ref(&new));
     assert_eq!(destination.active_work_item(), Some(&WorkItemId::File(new)));
 }
 

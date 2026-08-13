@@ -75,16 +75,8 @@ impl WorkbenchView {
                         saving_documents: HashSet::new(),
                     });
                 }
-            } else {
-                match self.workspace.request_close_project(&project_id) {
-                    Ok(CloseProjectDecision::Closed(closed)) => {
-                        self.cleanup_closed_project(&closed.project_id)
-                    }
-                    Ok(CloseProjectDecision::NeedsConfirmation { project_id, .. }) => {
-                        self.overlays.pending_close_project_id = Some(project_id);
-                    }
-                    Err(error) => self.load_error = Some(error.to_string()),
-                }
+            } else if let Err(error) = self.confirm_project_close_transaction(&project_id) {
+                self.load_error = Some(error.to_string());
             }
         }
         self.sync_input_owner_state();
@@ -272,9 +264,8 @@ impl WorkbenchView {
                 }
             }
             DirtyCloseIntent::Project(project_id) => {
-                match self.workspace.confirm_close_project(&project_id) {
-                    Ok(closed) => self.cleanup_closed_project(&closed.project_id),
-                    Err(error) => self.load_error = Some(error.to_string()),
+                if let Err(error) = self.confirm_project_close_transaction(&project_id) {
+                    self.load_error = Some(error.to_string());
                 }
             }
             DirtyCloseIntent::Window => {
@@ -305,9 +296,8 @@ impl WorkbenchView {
                 }
             }
             DirtyCloseIntent::Project(project_id) => {
-                match self.workspace.confirm_close_project(&project_id) {
-                    Ok(closed) => self.cleanup_closed_project(&closed.project_id),
-                    Err(error) => self.load_error = Some(error.to_string()),
+                if let Err(error) = self.confirm_project_close_transaction(&project_id) {
+                    self.load_error = Some(error.to_string());
                 }
             }
             DirtyCloseIntent::Window => {

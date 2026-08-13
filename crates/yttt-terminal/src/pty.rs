@@ -574,7 +574,7 @@ pub fn configure_terminal_environment(builder: &mut CommandBuilder) {
     #[cfg(unix)]
     if ["LC_ALL", "LC_CTYPE", "LANG"]
         .iter()
-        .all(|name| builder.get_env(name).map_or(true, |value| value.is_empty()))
+        .all(|name| builder.get_env(name).is_none_or(|value| value.is_empty()))
     {
         builder.env("LANG", DEFAULT_UTF8_LOCALE);
     }

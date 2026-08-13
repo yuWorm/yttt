@@ -18,9 +18,9 @@ use gpui_component::{
     tab::{Tab, TabBar},
     v_virtual_list,
 };
-use yttt_agent_core::{AgentExitReason, AgentProcessExit, AgentSnapshot, AgentViewState};
+use yttt_agent_core::{AgentSnapshot, AgentViewState};
 use yttt_core::model::ids::TerminalSessionId;
-use yttt_protocol::{Request, ServerEvent, project::ProjectChange};
+use yttt_protocol::{Request, Response, ServerEvent, project::ProjectChange};
 use yttt_terminal::input::{KeyState, TerminalKeyEvent};
 use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
 
@@ -69,7 +69,8 @@ use state::{
     project::{ProjectControllerState, ProjectPanelPage, ProjectTreeClipboard},
     settings::{SettingsControllerState, ZedThemeImportDialogState},
     ssh::{
-        SshConnectionForm, SshConnectionFormInputs, SshConnectionFormMode, SshConnectionListAction,
+        ConnectionState, ConnectionStatus, HostKeyChallenge, SshConnectionForm,
+        SshConnectionFormInputs, SshConnectionFormMode, SshConnectionListAction,
         SshConnectionListDelegate, SshConnectionListEntry, SshConnectionListSection,
         SshConnectionListTone, SshControllerState, SshProjectConnectContinuation,
         SshProjectDirectory, SshProjectPickerView,
@@ -172,7 +173,7 @@ use crate::{
         unified_tab_palette_items,
     },
     runtime::{
-        agent_manager::{AgentManager, AgentPaneAddress, AgentPaneExitOutcome},
+        agent_manager::{AgentManager, AgentPaneAddress},
         agent_sessions::{AgentSession, scan_agent_sessions},
         file_search::{
             FileSearchCandidate, FileSearchCollection, FileSearchProject,
@@ -364,6 +365,7 @@ pub struct WorkbenchView {
     active_keybindings_watcher: Option<ActiveKeybindingsWatcher>,
     keybindings_reload_requested: bool,
     project_file_watching_enabled: bool,
+    local_project_services_for_test: bool,
 }
 
 struct WorkbenchErrorNotification;
@@ -514,6 +516,8 @@ impl WorkbenchView {
     }
     pub fn with_config_paths_for_test(config_paths: AppConfigPaths) -> Self {
         let mut root = Self::with_config_paths(config_paths);
+        root.local_project_services_for_test = true;
+        root.install_local_project_services_for_test();
         root.terminal.start_processes = false;
         root.project_file_watching_enabled = false;
         root.system_notifier = Arc::new(NoopSystemNotifier);
@@ -581,26 +585,20 @@ impl WorkbenchView {
             }
         }
         self.terminal.host_runtime = runtime.clone();
-        self.agent_manager.set_hook_client(
+        self.agent_manager.set_snapshot_client(
             runtime
                 .clone()
-                .map(crate::runtime::agent_hooks::AgentHookClient::new),
+                .map(crate::runtime::agent_hooks::AgentSnapshotClient::new),
         );
-        self.ssh.transport = match runtime {
-            Some(runtime) => match yttt_ssh::TransportService::from_host(runtime) {
-                Ok(transport) => Some(transport),
-                Err(error) => {
-                    self.ssh.error = Some(error.to_string());
-                    None
-                }
-            },
-            None => None,
-        };
+        self.ssh.event_task = None;
     }
 
-    fn terminate_host_sessions_matching(&self, mut matches: impl FnMut(&str) -> bool) {
+    fn terminate_host_sessions_matching(
+        &self,
+        mut matches: impl FnMut(&str) -> bool,
+    ) -> Result<(), WorkbenchError> {
         let Some(runtime) = &self.terminal.host_runtime else {
-            return;
+            return Ok(());
         };
         let session_ids = self
             .terminal
@@ -610,24 +608,55 @@ impl WorkbenchView {
             .cloned()
             .map(TerminalSessionId::new)
             .collect::<Vec<_>>();
-        if !session_ids.is_empty() {
-            let _ = runtime.request(Request::TerminateMany { session_ids });
+        if session_ids.is_empty() {
+            return Ok(());
+        }
+        let results = runtime
+            .terminate_many_confirmed(session_ids)
+            .map_err(WorkbenchError::HostTerminal)?;
+        let failures = results
+            .into_iter()
+            .filter_map(|result| {
+                result
+                    .result
+                    .err()
+                    .map(|error| format!("{}: {}", result.session_id, error.message))
+            })
+            .collect::<Vec<_>>();
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(WorkbenchError::HostTerminal(format!(
+                "Host rejected terminal close: {}",
+                failures.join("; ")
+            )))
         }
     }
 
-    fn terminate_host_tab(&self, project_id: &str, tab_id: &str) {
+    fn terminate_host_tab(&self, project_id: &str, tab_id: &str) -> Result<(), WorkbenchError> {
         let prefix = format!("{project_id}:{tab_id}:");
-        self.terminate_host_sessions_matching(|key| key.starts_with(&prefix));
+        self.terminate_host_sessions_matching(|key| key.starts_with(&prefix))
     }
 
-    fn terminate_host_pane(&self, project_id: &str, tab_id: &str, pane_id: &str) {
+    fn terminate_host_pane(
+        &self,
+        project_id: &str,
+        tab_id: &str,
+        pane_id: &str,
+    ) -> Result<(), WorkbenchError> {
         let key = terminal_pane_key(project_id, tab_id, pane_id);
-        self.terminate_host_sessions_matching(|candidate| candidate == key);
+        self.terminate_host_sessions_matching(|candidate| candidate == key)
     }
 
-    fn terminate_host_project(&self, project_id: &str) {
+    fn terminate_host_project(&self, project_id: &str) -> Result<(), WorkbenchError> {
         let prefix = format!("{project_id}:");
-        self.terminate_host_sessions_matching(|key| key.starts_with(&prefix));
+        self.terminate_host_sessions_matching(|key| key.starts_with(&prefix))?;
+        if let Some(services) = self.project.services.get(&ProjectId::new(project_id)) {
+            services
+                .close_host_registration()
+                .map_err(WorkbenchError::HostProject)?;
+        }
+        Ok(())
     }
     pub fn has_last_opened_projects(&self) -> bool {
         !self.recent_projects_config.last_opened_projects.is_empty()
@@ -815,7 +844,7 @@ impl WorkbenchView {
                 #[cfg(test)]
                 project_services.insert(
                     project.id.clone(),
-                    ProjectServices::local(project_path.clone()),
+                    ProjectServices::local_for_test(project_path.clone()),
                 );
             }
         }
@@ -842,6 +871,7 @@ impl WorkbenchView {
             active_keybindings_watcher: None,
             keybindings_reload_requested: false,
             project_file_watching_enabled: true,
+            local_project_services_for_test: false,
             settings: SettingsControllerState::new(
                 keybinding_warning_lines,
                 keybindings_editor,
@@ -1684,11 +1714,13 @@ impl WorkbenchView {
     ) -> Result<(), WorkbenchError> {
         if !terminal_ids.is_empty() {
             let project_id = self.workspace.selected_project_id().cloned();
+            if let Some(project_id) = &project_id {
+                for tab_id in terminal_ids {
+                    self.terminate_host_tab(project_id.as_str(), tab_id)?;
+                }
+            }
             self.workspace.close_tabs(terminal_ids)?;
             if let Some(project_id) = project_id {
-                for tab_id in terminal_ids {
-                    self.terminate_host_tab(project_id.as_str(), tab_id);
-                }
                 self.agent_manager
                     .forget_tabs(project_id.as_str(), terminal_ids);
             }
@@ -2388,19 +2420,15 @@ impl WorkbenchView {
                         .and_then(|tab| tab.focused_pane_id.clone())
                         .map(|pane_id| (project.id.as_str().to_string(), tab_id, pane_id))
                 });
+                if let Some((project_id, tab_id, pane_id)) = &context {
+                    self.terminate_host_pane(project_id, tab_id, pane_id)?;
+                }
                 let outcome =
                     dispatch_workspace_command(&mut self.workspace, CommandId::PaneClose)?;
-                if let Some((project_id, tab_id, pane_id)) = context {
-                    match outcome {
-                        CommandOutcome::PaneClosed(closed_pane_id) => {
-                            debug_assert_eq!(closed_pane_id, pane_id);
-                            self.terminate_host_pane(&project_id, &tab_id, &closed_pane_id);
-                        }
-                        CommandOutcome::TabClosed(closed_tab_id) => {
-                            self.terminate_host_tab(&project_id, &closed_tab_id);
-                        }
-                        _ => {}
-                    }
+                if let Some((_project_id, _tab_id, pane_id)) = context
+                    && let CommandOutcome::PaneClosed(closed_pane_id) = outcome
+                {
+                    debug_assert_eq!(closed_pane_id, pane_id);
                 }
                 self.reconcile_active_terminal_with_workspace()?;
                 Ok(())
@@ -2642,10 +2670,19 @@ impl WorkbenchView {
             .pending_close_project_id
             .clone()
             .ok_or(WorkspaceError::NoSelectedProject)?;
-        let closed = self.workspace.confirm_close_project(&project_id)?;
+        self.confirm_project_close_transaction(&project_id)?;
         self.overlays.pending_close_project_id = None;
-        self.cleanup_closed_project(&closed.project_id);
         self.sync_input_owner_state();
+        Ok(())
+    }
+
+    fn confirm_project_close_transaction(
+        &mut self,
+        project_id: &ProjectId,
+    ) -> Result<(), WorkbenchError> {
+        self.terminate_host_project(project_id.as_str())?;
+        let closed = self.workspace.confirm_close_project(project_id)?;
+        self.cleanup_closed_project(&closed.project_id);
         Ok(())
     }
 
@@ -2685,21 +2722,24 @@ impl WorkbenchView {
                     .cloned()
                     .ok_or(WorkbenchError::UnsupportedRemoteProject)?;
                 #[cfg(test)]
-                let project_services = Some(ProjectServices::local(opened_path.clone()));
+                let project_services = Some(ProjectServices::local_for_test(opened_path.clone()));
                 #[cfg(not(test))]
-                let project_services = self
-                    .terminal
-                    .host_runtime
-                    .as_ref()
-                    .map(|runtime| {
-                        ProjectServices::host(
-                            runtime.clone(),
-                            opened.descriptor.id.clone(),
-                            opened_path.clone(),
-                        )
-                    })
-                    .transpose()
-                    .map_err(WorkbenchError::HostProject)?;
+                let project_services = if self.local_project_services_for_test {
+                    Some(ProjectServices::local_for_test(opened_path.clone()))
+                } else {
+                    self.terminal
+                        .host_runtime
+                        .as_ref()
+                        .map(|runtime| {
+                            ProjectServices::host(
+                                runtime.clone(),
+                                opened.descriptor.id.clone(),
+                                opened_path.clone(),
+                            )
+                        })
+                        .transpose()
+                        .map_err(WorkbenchError::HostProject)?
+                };
                 let already_open = self.workspace.project(&opened.descriptor.id).is_some();
                 let project_id = self
                     .workspace
@@ -2797,6 +2837,8 @@ impl WorkbenchView {
 
     pub fn with_workspace_for_test(workspace: Workspace) -> Self {
         let mut root = Self::with_workspace(workspace);
+        root.local_project_services_for_test = true;
+        root.install_local_project_services_for_test();
         root.terminal.start_processes = false;
         root.project_file_watching_enabled = false;
         root.system_notifier = Arc::new(NoopSystemNotifier);
@@ -2808,10 +2850,23 @@ impl WorkbenchView {
         config_paths: AppConfigPaths,
     ) -> Self {
         let mut root = Self::with_workspace_and_config_paths(workspace, config_paths, false);
+        root.local_project_services_for_test = true;
+        root.install_local_project_services_for_test();
         root.terminal.start_processes = false;
         root.project_file_watching_enabled = false;
         root.system_notifier = Arc::new(NoopSystemNotifier);
         root
+    }
+
+    fn install_local_project_services_for_test(&mut self) {
+        for project in self.workspace.opened_projects() {
+            if let Some(project_path) = project.location.local_path() {
+                self.project.services.insert(
+                    project.id.clone(),
+                    ProjectServices::local_for_test(project_path.clone()),
+                );
+            }
+        }
     }
 
     fn with_workspace(workspace: Workspace) -> Self {
@@ -2844,6 +2899,9 @@ impl WorkbenchView {
                 project_id: project_id.clone(),
                 running_pane_count: self.project_running_pane_count(&project_id),
             });
+        }
+        if self.project_running_pane_count(&project_id) == 0 {
+            self.terminate_host_project(project_id.as_str())?;
         }
         let decision = self.workspace.request_close_project(&project_id)?;
         match &decision {
@@ -2928,7 +2986,6 @@ impl WorkbenchView {
             self.overlays.git_diff_panel = None;
             self.overlays.pending_git_diff_load = None;
         }
-        self.terminate_host_project(project_id.as_str());
         self.remove_terminal_panes_for_project(project_id.as_str());
         self.agent_manager
             .reset_project_sessions(project_id.as_str());
@@ -2974,10 +3031,10 @@ impl WorkbenchView {
             WorkItemId::Terminal(tab_id) => {
                 self.workspace.select_tab(&tab_id)?;
                 let project_id = self.workspace.selected_project_id().cloned();
-                dispatch_workspace_command(&mut self.workspace, CommandId::TabClose)?;
-                if let Some(project_id) = project_id {
-                    self.terminate_host_tab(project_id.as_str(), &tab_id);
+                if let Some(project_id) = &project_id {
+                    self.terminate_host_tab(project_id.as_str(), &tab_id)?;
                 }
+                dispatch_workspace_command(&mut self.workspace, CommandId::TabClose)?;
                 let next = if let Some((project_id, terminal_ids)) =
                     self.selected_project_work_item_ids()
                 {
@@ -3615,6 +3672,8 @@ pub enum WorkbenchError {
     RemoteProject(String),
     #[error("Host project service failed: {0}")]
     HostProject(String),
+    #[error("Host terminal operation failed: {0}")]
+    HostTerminal(String),
     #[error("remote projects are not available in this operation")]
     UnsupportedRemoteProject,
 }

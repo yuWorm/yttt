@@ -35,7 +35,6 @@ use yttt::{
     palette::{ActivePalette, PaletteItem, PaletteKind},
     runtime::git_status::{GitFileStatus, GitStatusSummary, parse_git_status_porcelain},
     runtime::notification::{NotificationEvent, NotificationKind},
-    runtime::terminal::{ExitReason, ProcessStatus},
     runtime::update::UPDATE_MANIFEST_URL,
     ui::components::SelectableState,
     ui::editor::{
@@ -90,6 +89,7 @@ use yttt_agent_core::{
     AgentAction, AgentInstanceId, AgentProcessState, AgentSnapshot, AgentTask, AgentTaskSource,
     AgentTurnState, AgentViewState, ChildAgentSnapshot, ProviderId,
 };
+use yttt_terminal::{ExitReason, ProcessStatus};
 use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
 
 fn local_project(path: PathBuf) -> ProjectDescriptor {
@@ -3411,17 +3411,42 @@ fn closing_window_with_running_terminal_does_not_request_process_termination(
     cx: &mut gpui::TestAppContext,
 ) {
     cx.update(gpui_component::init);
-    let (_temp, _project_dir, root, _document, cx) = project_file_terminal_fixture(cx, "off", 50);
-    let allowed = root.update(cx, |root, cx| {
-        let project_id = root.workspace().selected_project_id().unwrap().clone();
-        root.workspace_mut()
-            .mark_pane_running(&project_id, "dev", "server")
-            .unwrap();
-        root.request_window_close(cx)
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut workspace = workspace_with_sample_project();
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    workspace
+        .mark_pane_running(&project_id, "dev", "server")
+        .unwrap();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root =
+            cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
     });
+    let root = root_slot.borrow_mut().take().unwrap();
+    let allowed = root.update(cx, |root, cx| root.request_window_close(cx));
 
     assert!(allowed);
-    cx.read(|app| assert!(!root.read(app).has_pending_dirty_close()));
+    cx.read(|app| {
+        let root = root.read(app);
+        assert!(!root.has_pending_dirty_close());
+        assert_eq!(
+            root.workspace()
+                .project(&project_id)
+                .unwrap()
+                .tab_state("dev")
+                .unwrap()
+                .pane_states
+                .iter()
+                .find(|pane| pane.pane_id == "server")
+                .unwrap()
+                .process_state,
+            PaneProcessState::Running
+        );
+    });
 }
 #[test]
 fn root_view_file_surface_blocks_terminal_only_commands() {
@@ -6898,7 +6923,7 @@ fn root_view_terminal_pane_contexts_include_project_path() {
     assert!(
         contexts
             .iter()
-            .all(|context| context.project_path == PathBuf::from("/tmp/yttt"))
+            .all(|context| context.project_path == *"/tmp/yttt")
     );
 }
 
@@ -6928,7 +6953,7 @@ fn root_view_terminal_pane_contexts_use_tab_cwd() {
     assert!(
         contexts
             .iter()
-            .all(|context| context.project_path == PathBuf::from("/tmp/yttt/services/api"))
+            .all(|context| context.project_path == *"/tmp/yttt/services/api")
     );
 }
 

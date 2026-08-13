@@ -728,8 +728,8 @@ Run these before marking a product phase complete:
 - The project tree and text editor are not a general-purpose file manager or full IDE.
 - File editing is limited to regular UTF-8 files up to 10 MiB. Continuous filesystem watching is
   limited to the active project; inactive projects refresh when selected.
-- No client/server terminal runtime.
-- No live process restore after restart.
+- Host/Client transport is local IPC only; remote-network clients are not implemented.
+- A desktop restart reattaches to a surviving Host, but a Host or machine restart cannot resurrect an existing PTY child process.
 - Provider-level task and tool progress currently has a first-party adapter only for Oh My Pi;
   other Agent commands retain process-level fallback status.
 - No GUI layout editor.

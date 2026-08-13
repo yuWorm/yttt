@@ -205,7 +205,6 @@ fn main() -> Result<()> {
                             terminal.start_performance_input_probe(
                                 std::time::Duration::from_millis(delay_ms),
                                 performance_start_file,
-                                window,
                                 cx,
                             );
                         });

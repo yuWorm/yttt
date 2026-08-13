@@ -1,3 +1,5 @@
+#![allow(clippy::items_after_test_module)]
+
 use gpui::{
     AnyElement, App, ClickEvent, FocusHandle, InteractiveElement as _, IntoElement, MouseButton,
     MouseDownEvent, SharedString, StatefulInteractiveElement as _, Window, div, prelude::*,
@@ -308,9 +310,11 @@ where
 
     for (index, item) in visible_project_items(workspace).into_iter().enumerate() {
         let compacted_path = compact_path(&item.path);
-        let suffix = (compacted_path != item.title)
-            .then_some(compacted_path)
-            .unwrap_or_default();
+        let suffix = if compacted_path != item.title {
+            compacted_path
+        } else {
+            Default::default()
+        };
         let expanded = !collapsed_agent_projects.contains(&item.id);
         let agents = item.agents.clone();
         let on_click = on_select_project(item.id.clone());

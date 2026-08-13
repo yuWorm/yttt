@@ -40,7 +40,10 @@ pub(super) enum GitDiffPanelContent {
     Error(String),
 }
 
+type SyntaxHighlightRows = Vec<Vec<(Range<usize>, HighlightStyle)>>;
+
 #[derive(Clone, Debug)]
+
 pub(super) struct GitDiffPanel {
     pub(super) project_id: ProjectId,
     pub(super) project_location: ProjectLocation,
@@ -55,7 +58,7 @@ pub(super) struct GitDiffPanel {
     pub(super) focus_handle: Option<FocusHandle>,
     pub(super) sidebar_rows: Arc<Vec<GitDiffSidebarRow>>,
     pub(super) split_rows: Arc<Vec<GitSplitRow>>,
-    pub(super) syntax_highlights: Arc<Vec<Vec<(Range<usize>, HighlightStyle)>>>,
+    pub(super) syntax_highlights: Arc<SyntaxHighlightRows>,
     pub(super) unified_view_rows: Arc<Vec<ReadonlyCodeRow>>,
     pub(super) split_left_view_rows: Arc<Vec<ReadonlyCodeRow>>,
     pub(super) split_right_view_rows: Arc<Vec<ReadonlyCodeRow>>,

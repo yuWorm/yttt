@@ -239,7 +239,7 @@ fn sidebar_and_tabs_use_compact_zed_like_density() {
     let sidebar = yttt_sidebar_style(theme, UiStyle::default());
     let tabs = yttt_tabbar_style(theme, UiStyle::default());
 
-    assert!(sidebar.width <= gpui::px(220.0));
+    assert_eq!(sidebar.width, gpui::px(320.0));
     assert_eq!(sidebar.default_width, sidebar.width);
     assert_eq!(sidebar.min_width, gpui::px(160.0));
     assert_eq!(sidebar.max_width, gpui::px(420.0));

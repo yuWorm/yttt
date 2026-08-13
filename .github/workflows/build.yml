@@ -69,9 +69,22 @@ jobs:
 
       - name: Build workspace
         run: cargo build --workspace --locked --target "${{ matrix.target }}"
+      - name: Test local IPC security
+        run: cargo test --locked --target "${{ matrix.target }}" -p yttt-transport-local --test security
+      - name: Test terminal performance acceptance rules
+        if: runner.os == 'Linux'
+        run: python3 scripts/test_terminal_perf_summary.py
 
-      - name: Test Host process role and profile isolation
+
+      - name: Test headless Host process role, upgrade safety, and profile isolation
+        env:
+          DISPLAY: ""
+          WAYLAND_DISPLAY: ""
+          DBUS_SESSION_BUS_ADDRESS: ""
         run: cargo test --locked --target "${{ matrix.target }}" -p yttt --test app_profile --test process_roles
+      - name: Smoke Host-owned SSH, SFTP, Git, and terminal
+        if: runner.os == 'Linux'
+        run: scripts/run-host-ssh-smoke.sh
 
       - name: Smoke-package macOS app
         if: runner.os == 'macOS'
@@ -81,6 +94,34 @@ jobs:
             --no-sign \
             --binary "target/${{ matrix.target }}/debug/yttt" \
             --output "target/package-smoke/yttt.app"
+      - name: Smoke bundled executable Host lifecycle
+        if: runner.os == 'macOS'
+        env:
+          YTTT_TEST_EXECUTABLE: ${{ github.workspace }}/target/package-smoke/yttt.app/Contents/MacOS/yttt
+        run: cargo test --locked --target "${{ matrix.target }}" -p yttt --test process_roles host_role_starts_headless_enforces_single_instance_and_stops_cleanly
+      - name: Smoke bundled desktop reopen and Host terminal reattach
+        if: runner.os == 'macOS'
+        run: |
+          cargo build --locked --target "${{ matrix.target }}" -p yttt --features perf-metrics
+          scripts/build-macos-bundle.sh \
+            --no-build \
+            --no-sign \
+            --binary "target/${{ matrix.target }}/debug/yttt" \
+            --output "target/package-smoke/yttt-perf.app"
+          scripts/run-terminal-perf.sh \
+            --backend host \
+            --scenario damage \
+            --runs 1 \
+            --duration 5 \
+            --warmup 1 \
+            --catch-up 2 \
+            --lifecycle reopened \
+            --trace none \
+            --allow-incomplete \
+            --no-build \
+            --host-binary "target/package-smoke/yttt-perf.app/Contents/MacOS/yttt" \
+            --output-dir "target/package-smoke/reopen-smoke"
+
 
       - name: Smoke-package Linux archive
         if: runner.os == 'Linux'
@@ -91,6 +132,18 @@ jobs:
             --target "${{ matrix.target }}" \
             --output "target/package-smoke/yttt-linux.tar.gz"
 
+      - name: Smoke extracted Linux executable headlessly
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p target/package-smoke/extracted
+          tar -xzf target/package-smoke/yttt-linux.tar.gz -C target/package-smoke/extracted
+          packaged_binary="$(find target/package-smoke/extracted -type f -path '*/bin/yttt' -print -quit)"
+          test -n "$packaged_binary"
+          env -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS \
+            YTTT_TEST_EXECUTABLE="$PWD/$packaged_binary" \
+            cargo test --locked --target "${{ matrix.target }}" -p yttt --test process_roles \
+              host_role_starts_headless_enforces_single_instance_and_stops_cleanly
+
       - name: Test Windows library contracts
         if: runner.os == 'Windows'
         run: cargo test --locked --target "${{ matrix.target }}" -p yttt --lib
@@ -99,8 +152,48 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test --locked --target "${{ matrix.target }}" -p yttt --test ui_state titlebar_action_buttons_open_command_picker_and_settings
 
+      - name: Install Inno Setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+
       - name: Verify Windows executable resources
         if: runner.os == 'Windows'
         shell: pwsh
         run: scripts/verify-windows-binary.ps1 -Binary "target/${{ matrix.target }}/debug/yttt.exe"
+      - name: Smoke-package single-executable Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: scripts/build-windows-installer.ps1 -NoBuild -Binary "target/${{ matrix.target }}/debug/yttt.exe" -Output "target/package-smoke/yttt-setup.exe"
+      - name: Smoke installed Windows executable and named-pipe lifecycle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $PWD "target/package-smoke/installed"
+          $installer = Join-Path $PWD "target/package-smoke/yttt-setup.exe"
+          $install = Start-Process `
+            -FilePath $installer `
+            -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$installDir") `
+            -Wait `
+            -PassThru
+          if ($install.ExitCode -ne 0) {
+            throw "Inno Setup smoke install failed with exit code $($install.ExitCode)"
+          }
+          $env:YTTT_TEST_EXECUTABLE = Join-Path $installDir "yttt.exe"
+          cargo test --locked --target "${{ matrix.target }}" -p yttt --test process_roles
+          if ($LASTEXITCODE -ne 0) {
+            throw "Installed executable lifecycle smoke failed with exit code $LASTEXITCODE"
+          }
+          $uninstaller = Join-Path $installDir "unins000.exe"
+          if (Test-Path -LiteralPath $uninstaller -PathType Leaf) {
+            $uninstall = Start-Process `
+              -FilePath $uninstaller `
+              -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") `
+              -Wait `
+              -PassThru
+            if ($uninstall.ExitCode -ne 0) {
+              throw "Inno Setup smoke uninstall failed with exit code $($uninstall.ExitCode)"
+            }
+          }
+
 

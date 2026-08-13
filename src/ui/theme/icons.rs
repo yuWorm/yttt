@@ -419,7 +419,7 @@ impl IconTheme {
             .and_then(|icons| self.resolve_directory_icon(icons, expanded))
             .or_else(|| self.resolve_directory_icon(&self.directory_icons, expanded));
 
-        icon.unwrap_or_else(|| {
+        icon.unwrap_or({
             IconVisual::Component(if expanded {
                 IconName::FolderOpen
             } else {

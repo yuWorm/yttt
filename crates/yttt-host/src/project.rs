@@ -13,7 +13,7 @@ use std::{
 };
 use tokio::sync::broadcast;
 
-use yttt_core::model::ids::ProjectId;
+use yttt_core::model::{ids::ProjectId, project::RemotePathBuf};
 use yttt_project_core::{
     file::{
         CurrentDiskState, DiskFingerprint, SaveMode, SaveProjectFileOutcome, read_project_file,
@@ -59,8 +59,19 @@ impl From<String> for HostProjectError {
     }
 }
 
+enum RegisteredProjectRoot {
+    Local(PathBuf),
+    Ssh(RegisteredSshProject),
+}
+
+#[derive(Clone)]
+pub struct RegisteredSshProject {
+    pub connection_id: String,
+    pub root: RemotePathBuf,
+}
+
 struct RegisteredProject {
-    root: PathBuf,
+    root: RegisteredProjectRoot,
     registration_epoch: u64,
     _watcher: Option<notify::RecommendedWatcher>,
 }
@@ -144,7 +155,7 @@ impl HostProjectRuntime {
                     .insert(
                         project_id,
                         RegisteredProject {
-                            root: root.clone(),
+                            root: RegisteredProjectRoot::Local(root.clone()),
                             registration_epoch,
                             _watcher: watcher,
                         },
@@ -154,6 +165,37 @@ impl HostProjectRuntime {
                     registration_epoch,
                     watch_error,
                     null_device: null_device_path().to_string(),
+                })
+            }
+            ProjectRequest::RegisterSsh {
+                project_id,
+                connection_id,
+                root,
+            } => {
+                let root = RemotePathBuf::new(root).map_err(|error| error.to_string())?;
+                let registration_epoch = self
+                    .next_registration_epoch
+                    .fetch_add(1, Ordering::Relaxed)
+                    .saturating_add(1);
+                self.roots
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .insert(
+                        project_id,
+                        RegisteredProject {
+                            root: RegisteredProjectRoot::Ssh(RegisteredSshProject {
+                                connection_id,
+                                root: root.clone(),
+                            }),
+                            registration_epoch,
+                            _watcher: None,
+                        },
+                    );
+                Ok(ProjectResponse::Registered {
+                    canonical_root: PlatformPath::Unix(root.as_str().as_bytes().to_vec()),
+                    registration_epoch,
+                    watch_error: None,
+                    null_device: "/dev/null".to_string(),
                 })
             }
             ProjectRequest::Close {
@@ -177,7 +219,7 @@ impl HostProjectRuntime {
                 relative_directory,
                 show_hidden,
             } => {
-                let root = self.root(&project_id)?;
+                let root = self.local_root(&project_id)?;
                 let relative_directory = platform_path(relative_directory)?;
                 let snapshot = scan_project_directory(&root, &relative_directory, show_hidden)
                     .map_err(|error| error.to_string())?;
@@ -198,7 +240,7 @@ impl HostProjectRuntime {
                 project_id,
                 relative_path,
             } => {
-                let root = self.root(&project_id)?;
+                let root = self.local_root(&project_id)?;
                 let relative_path = platform_path(relative_path)?;
                 let loaded =
                     read_project_file(&root, &relative_path).map_err(|error| error.to_string())?;
@@ -215,7 +257,7 @@ impl HostProjectRuntime {
                 text,
                 mode,
             } => {
-                let root = self.root(&project_id)?;
+                let root = self.local_root(&project_id)?;
                 let relative_path = platform_path(relative_path)?;
                 let expected;
                 let mode = match mode {
@@ -241,7 +283,7 @@ impl HostProjectRuntime {
                 relative_parent,
                 input,
             } => {
-                let root = self.root(&project_id)?;
+                let root = self.local_root(&project_id)?;
                 let relative_parent = platform_path(relative_parent)?;
                 let mutation = create_project_entry(&root, &relative_parent, &input)
                     .map_err(|error| error.to_string())?;
@@ -252,7 +294,7 @@ impl HostProjectRuntime {
                 relative_path,
                 new_name,
             } => {
-                let root = self.root(&project_id)?;
+                let root = self.local_root(&project_id)?;
                 let relative_path = platform_path(relative_path)?;
                 let mutation = rename_project_entry(&root, &relative_path, &new_name)
                     .map_err(|error| error.to_string())?;
@@ -262,7 +304,7 @@ impl HostProjectRuntime {
                 project_id,
                 relative_path,
             } => {
-                let root = self.root(&project_id)?;
+                let root = self.local_root(&project_id)?;
                 let relative_path = platform_path(relative_path)?;
                 delete_project_entry(&root, &relative_path).map_err(|error| error.to_string())?;
                 Ok(ProjectResponse::Deleted)
@@ -274,8 +316,8 @@ impl HostProjectRuntime {
                 destination_relative_directory,
                 mode,
             } => {
-                let source_root = self.root(&source_project_id)?;
-                let destination_root = self.root(&destination_project_id)?;
+                let source_root = self.local_root(&source_project_id)?;
+                let destination_root = self.local_root(&destination_project_id)?;
                 let source_relative_path = platform_path(source_relative_path)?;
                 let destination_relative_directory = platform_path(destination_relative_directory)?;
                 let mode = match mode {
@@ -297,7 +339,7 @@ impl HostProjectRuntime {
                 args,
                 optional_locks,
             } => {
-                let root = self.root(&project_id)?;
+                let root = self.local_root(&project_id)?;
                 let args = args
                     .into_iter()
                     .map(platform_argument)
@@ -322,12 +364,34 @@ impl HostProjectRuntime {
         }
     }
 
-    fn root(&self, project_id: &ProjectId) -> Result<PathBuf, HostProjectError> {
+    fn local_root(&self, project_id: &ProjectId) -> Result<PathBuf, HostProjectError> {
         self.roots
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(project_id)
-            .map(|project| project.root.clone())
+            .and_then(|project| match &project.root {
+                RegisteredProjectRoot::Local(root) => Some(root.clone()),
+                RegisteredProjectRoot::Ssh(_) => None,
+            })
+            .ok_or_else(|| {
+                HostProjectError::not_found(format!(
+                    "project is not registered with Host: {project_id}"
+                ))
+            })
+    }
+
+    pub fn ssh_project(
+        &self,
+        project_id: &ProjectId,
+    ) -> Result<RegisteredSshProject, HostProjectError> {
+        self.roots
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(project_id)
+            .and_then(|project| match &project.root {
+                RegisteredProjectRoot::Local(_) => None,
+                RegisteredProjectRoot::Ssh(project) => Some(project.clone()),
+            })
             .ok_or_else(|| {
                 HostProjectError::not_found(format!(
                     "project is not registered with Host: {project_id}"
@@ -580,4 +644,65 @@ fn null_device_path() -> &'static str {
 #[cfg(not(windows))]
 fn null_device_path() -> &'static str {
     "/dev/null"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ssh_registration_is_epoch_guarded_and_host_owned() {
+        let runtime = HostProjectRuntime::new();
+        let project_id = ProjectId::new("remote");
+        let ProjectResponse::Registered {
+            registration_epoch: first_epoch,
+            ..
+        } = runtime
+            .handle(ProjectRequest::RegisterSsh {
+                project_id: project_id.clone(),
+                connection_id: "first".to_string(),
+                root: "/first".to_string(),
+            })
+            .unwrap()
+        else {
+            panic!("unexpected first SSH registration response");
+        };
+        let ProjectResponse::Registered {
+            registration_epoch: second_epoch,
+            ..
+        } = runtime
+            .handle(ProjectRequest::RegisterSsh {
+                project_id: project_id.clone(),
+                connection_id: "second".to_string(),
+                root: "/second".to_string(),
+            })
+            .unwrap()
+        else {
+            panic!("unexpected second SSH registration response");
+        };
+        assert!(second_epoch > first_epoch);
+
+        runtime
+            .handle(ProjectRequest::Close {
+                project_id: project_id.clone(),
+                registration_epoch: first_epoch,
+            })
+            .unwrap();
+        let registered = runtime.ssh_project(&project_id).unwrap();
+        assert_eq!(registered.connection_id, "second");
+        assert_eq!(registered.root.as_str(), "/second");
+
+        runtime
+            .handle(ProjectRequest::Close {
+                project_id: project_id.clone(),
+                registration_epoch: second_epoch,
+            })
+            .unwrap();
+        let error = runtime.ssh_project(&project_id).err().unwrap();
+        assert_eq!(error.code, yttt_protocol::FailureCode::NotFound);
+        assert_eq!(
+            error.to_string(),
+            "project is not registered with Host: remote"
+        );
+    }
 }

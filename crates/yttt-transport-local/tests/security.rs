@@ -1,10 +1,17 @@
-use yttt_core::model::ids::{ClientInstanceId, HostId, ProfileId};
-use yttt_protocol::{PROTOCOL_VERSION, ProtocolRange};
+use yttt_core::model::ids::ProfileId;
+#[cfg(unix)]
+use yttt_core::model::ids::{ClientInstanceId, HostId};
+#[cfg(unix)]
+use yttt_protocol::{ConnectionChannel, PROTOCOL_VERSION, ProtocolRange};
+#[cfg(unix)]
 use yttt_transport_local::{
-    AuthToken, ClientIdentity, HandshakeError, HostIdentity, LocalEndpoint, LocalListener,
-    TransportError, client_handshake, connect, server_handshake,
+    AuthToken, ClientIdentity, HandshakeError, HostIdentity, client_handshake, server_handshake,
+};
+use yttt_transport_local::{
+    LocalEndpoint, LocalListener, TransportError, WireError, connect, send_control_bounded,
 };
 
+#[cfg(unix)]
 fn identities() -> (ClientIdentity, HostIdentity) {
     let profile_id = ProfileId::new("security-test");
     (
@@ -14,6 +21,9 @@ fn identities() -> (ClientIdentity, HostIdentity) {
             profile_id: profile_id.clone(),
             client_instance_id: ClientInstanceId::new("client-1"),
             host_epoch_hint: None,
+            can_force_stop: false,
+            channel: ConnectionChannel::Control,
+            terminal_session_id: None,
         },
         HostIdentity {
             supported: ProtocolRange::exact(PROTOCOL_VERSION),
@@ -58,6 +68,51 @@ async fn local_endpoint_is_user_only_and_single_instance() {
     drop(listener);
     assert!(!endpoint.unix_path().exists());
 }
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_named_pipe_is_single_instance_and_connects_same_user() {
+    let temp = tempfile::tempdir().unwrap();
+    let endpoint = LocalEndpoint::for_profile(
+        ProfileId::new(format!("security-test-{}", std::process::id())),
+        temp.path().join("runtime"),
+    );
+    let listener = LocalListener::bind(endpoint.clone()).await.unwrap();
+    assert!(matches!(
+        LocalListener::bind(endpoint.clone()).await,
+        Err(TransportError::EndpointInUse)
+    ));
+
+    let (client, server) = tokio::join!(connect(&endpoint), listener.accept());
+    drop(client.unwrap());
+    drop(server.unwrap());
+}
+
+#[tokio::test]
+async fn bounded_control_send_rejects_the_frame_before_writing() {
+    use tokio::io::AsyncReadExt as _;
+
+    let (mut sender, mut receiver) = tokio::io::duplex(1024);
+    let message = yttt_protocol::ControlMessage::Request(yttt_protocol::ClientRequest {
+        request_id: 1,
+        body: yttt_protocol::Request::Ping { sent_millis: 1 },
+    });
+    assert!(matches!(
+        send_control_bounded(&mut sender, &message, 1).await,
+        Err(WireError::FrameTooLarge {
+            encoded_bytes,
+            max_bytes: 1,
+        }) if encoded_bytes > 1
+    ));
+    let mut byte = [0_u8; 1];
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            receiver.read_exact(&mut byte),
+        )
+        .await
+        .is_err()
+    );
+}
 
 #[cfg(unix)]
 #[tokio::test]
@@ -84,6 +139,68 @@ async fn matching_token_completes_mutually_authenticated_handshake() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn lifecycle_channel_authenticates_across_a_build_mismatch() {
+    let (mut client_identity, host_identity) = identities();
+    client_identity.channel = ConnectionChannel::Lifecycle;
+    client_identity.build_id = "next-build".to_string();
+    let token = AuthToken::from_bytes([31; 32]);
+    let (mut client_stream, mut server_stream) = tokio::net::UnixStream::pair().unwrap();
+    let (client_result, server_result) = tokio::join!(
+        client_handshake(&mut client_stream, &client_identity, &token),
+        server_handshake(&mut server_stream, &host_identity, &token),
+    );
+
+    assert!(client_result.is_ok());
+    let authenticated = server_result.unwrap();
+    assert_eq!(authenticated.channel, ConnectionChannel::Lifecycle);
+    assert!(!authenticated.can_force_stop);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn channel_and_terminal_session_identity_must_match() {
+    let (control_identity, host_identity) = identities();
+    let mut control_with_session = control_identity.clone();
+    control_with_session.terminal_session_id =
+        Some(yttt_core::model::ids::TerminalSessionId::new("unexpected"));
+    let mut data_without_session = control_identity.clone();
+    data_without_session.channel = ConnectionChannel::TerminalData;
+    let mut lifecycle_with_session = control_identity.clone();
+    lifecycle_with_session.channel = ConnectionChannel::Lifecycle;
+    lifecycle_with_session.terminal_session_id =
+        Some(yttt_core::model::ids::TerminalSessionId::new("unexpected"));
+    let mut privileged_lifecycle = control_identity;
+    privileged_lifecycle.channel = ConnectionChannel::Lifecycle;
+    privileged_lifecycle.can_force_stop = true;
+    for client_identity in [
+        control_with_session,
+        data_without_session,
+        lifecycle_with_session,
+        privileged_lifecycle,
+    ] {
+        let token = AuthToken::from_bytes([29; 32]);
+        let (mut client_stream, mut server_stream) = tokio::net::UnixStream::pair().unwrap();
+        let (client_result, server_result) = tokio::join!(
+            client_handshake(&mut client_stream, &client_identity, &token),
+            server_handshake(&mut server_stream, &host_identity, &token),
+        );
+        assert!(matches!(
+            client_result,
+            Err(HandshakeError::Rejected(
+                yttt_protocol::RejectReason::InvalidMessage
+            ))
+        ));
+        assert!(matches!(
+            server_result,
+            Err(HandshakeError::Rejected(
+                yttt_protocol::RejectReason::InvalidMessage
+            ))
+        ));
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn invalid_client_proof_is_rejected_without_exposing_secret() {
     let (client_identity, host_identity) = identities();
     let host_token = AuthToken::from_bytes([2; 32]);
@@ -95,7 +212,10 @@ async fn invalid_client_proof_is_rejected_without_exposing_secret() {
             profile_id: client_identity.profile_id.clone(),
             client_instance_id: client_identity.client_instance_id.clone(),
             host_epoch_hint: None,
+            can_force_stop: false,
             nonce: yttt_protocol::Nonce([8; 32]),
+            channel: ConnectionChannel::Control,
+            terminal_session_id: None,
         };
         yttt_transport_local::send_handshake(
             &mut client_stream,

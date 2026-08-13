@@ -105,8 +105,8 @@ impl WorkbenchView {
         match active_palette.kind {
             PaletteKind::Command => {
                 if item.command == CommandId::ApplicationQuit {
-                    if let Some(cx) = cx.as_deref_mut() {
-                        self.begin_application_quit(cx);
+                    if let (Some(window), Some(cx)) = (window.as_deref_mut(), cx.as_deref_mut()) {
+                        self.confirm_application_force_stop(window, cx);
                     }
                     return Ok(());
                 }
@@ -121,7 +121,7 @@ impl WorkbenchView {
                 self.select_work_item(WorkItemId::Terminal(tab_id))?;
             }
             PaletteKind::File => {
-                let Some(window) = window.as_deref_mut() else {
+                let Some(window) = window else {
                     return Ok(());
                 };
                 let Some(cx) = cx.as_deref_mut() else {
@@ -158,7 +158,7 @@ impl WorkbenchView {
                             connection_id,
                             root,
                         } => {
-                            let cx = cx.as_deref_mut().ok_or_else(|| {
+                            let cx = cx.ok_or_else(|| {
                                 WorkbenchError::RemoteProject(
                                     "Opening a recent SSH project requires an application context."
                                         .to_string(),

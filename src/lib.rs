@@ -1,5 +1,6 @@
 #![deny(clippy::disallowed_methods)]
 #![deny(clippy::disallowed_types)]
+#![allow(clippy::too_many_arguments)]
 
 pub use yttt_core::commands;
 pub mod config;

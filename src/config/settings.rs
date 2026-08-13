@@ -23,6 +23,7 @@ use yttt_terminal::{
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct AppSettings {
     pub general: GeneralSettings,
     pub window: WindowSettings,
@@ -35,23 +36,6 @@ pub struct AppSettings {
     #[serde(skip)]
     pub bars: ShellBarsSettings,
     pub project_panel: ProjectPanelSettings,
-}
-
-impl Default for AppSettings {
-    fn default() -> Self {
-        Self {
-            general: GeneralSettings::default(),
-            window: WindowSettings::default(),
-            theme: ThemeSettings::default(),
-            notifications: NotificationSettings::default(),
-            agent: AgentSettings::default(),
-            terminal: TerminalSettings::default(),
-            editor: EditorSettings::default(),
-            vim: VimSettings::default(),
-            bars: ShellBarsSettings::default(),
-            project_panel: ProjectPanelSettings::default(),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -157,16 +141,12 @@ pub const MAX_WINDOW_OPACITY: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum WindowBackgroundEffect {
     None,
     Transparent,
+    #[default]
     Blurred,
-}
-
-impl Default for WindowBackgroundEffect {
-    fn default() -> Self {
-        Self::Blurred
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -217,14 +197,9 @@ impl Default for ThemeSettings {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct NotificationSettings {
     pub system: bool,
-}
-
-impl Default for NotificationSettings {
-    fn default() -> Self {
-        Self { system: false }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -354,18 +329,10 @@ impl Default for EditorSettings {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct EditorLspSettings {
     pub enabled: bool,
     pub command: String,
-}
-
-impl Default for EditorLspSettings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            command: String::new(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

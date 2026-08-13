@@ -46,6 +46,7 @@
 - Fixed active and selected states losing contrast on translucent backgrounds by deriving interaction overlays from backdrop visibility and using focused foreground colors for keyboard-owned rows.
 - Fixed project-file hover feedback to match the focused-row background and removed the focused-row side marker from the workbench file tree.
 - Fixed platform text and IME composition reaching palette inputs or terminal panes while Global Vim is in Normal mode; Insert and Terminal modes continue to accept composed text.
+- Fixed long Agent session titles expanding the project panel beyond its layout and preventing metadata tooltips from receiving hover input.
 - Fixed Global Vim Terminal mode intercepting `Escape` and `Ctrl-[`; both now reach the terminal process, while `Ctrl-\ Ctrl-N` returns to yttt Normal mode.
 - Fixed Zed-compatible icon themes falling back to the generic file icon for common extensions, including TypeScript, when the theme relies on Zed's built-in file associations.
 - Open files deleted outside yttt now stay editable with a struck-through tab title and are recreated directly on save instead of blocking on a confirmation dialog.

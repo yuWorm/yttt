@@ -405,7 +405,7 @@ impl ProjectEditorDocument {
         };
         if enabled {
             if self.vim.is_none() {
-                self.vim = Some(input.update(cx, |input, input_cx| VimState::new(input, input_cx)));
+                self.vim = Some(input.update(cx, VimState::new));
             }
         } else if let Some(mut vim) = self.vim.take() {
             input.update(cx, |input, input_cx| vim.disable(input, input_cx));
@@ -565,11 +565,10 @@ impl ProjectEditorDocument {
                 window,
                 cx,
             );
-            if self.vim_enabled {
-                if let Some(input) = self.code_input().cloned() {
-                    self.vim =
-                        Some(input.update(cx, |input, input_cx| VimState::new(input, input_cx)));
-                }
+            if self.vim_enabled
+                && let Some(input) = self.code_input().cloned()
+            {
+                self.vim = Some(input.update(cx, VimState::new));
             }
         } else if let ProjectEditorSurface::Code { input, .. } = &self.surface {
             let language = self.model.editor().language().to_string();

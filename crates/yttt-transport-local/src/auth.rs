@@ -6,8 +6,8 @@ use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncWrite};
 use yttt_core::model::ids::{ClientInstanceId, HostId, ProfileId};
 use yttt_protocol::{
-    AuthMac, ClientAuthenticate, ClientHello, HandshakeMessage, HostChallenge, HostReady, Nonce,
-    ProtocolRange, RejectReason,
+    AuthMac, ClientAuthenticate, ClientHello, ConnectionChannel, HandshakeMessage, HostChallenge,
+    HostReady, Nonce, ProtocolRange, RejectReason,
 };
 use zeroize::Zeroize;
 
@@ -59,6 +59,9 @@ pub struct ClientIdentity {
     pub profile_id: ProfileId,
     pub client_instance_id: ClientInstanceId,
     pub host_epoch_hint: Option<u64>,
+    pub can_force_stop: bool,
+    pub channel: ConnectionChannel,
+    pub terminal_session_id: Option<yttt_core::model::ids::TerminalSessionId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,6 +78,9 @@ pub struct HostIdentity {
 pub struct AuthenticatedClient {
     pub client_instance_id: ClientInstanceId,
     pub selected_version: u16,
+    pub can_force_stop: bool,
+    pub channel: ConnectionChannel,
+    pub terminal_session_id: Option<yttt_core::model::ids::TerminalSessionId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -132,7 +138,10 @@ where
         profile_id: identity.profile_id.clone(),
         client_instance_id: identity.client_instance_id.clone(),
         host_epoch_hint: identity.host_epoch_hint,
+        can_force_stop: identity.can_force_stop,
         nonce: client_nonce,
+        channel: identity.channel,
+        terminal_session_id: identity.terminal_session_id.clone(),
     };
     send_handshake(stream, &HandshakeMessage::ClientHello(hello.clone())).await?;
     let challenge = match receive_handshake(stream).await? {
@@ -141,8 +150,8 @@ where
         _ => return Err(HandshakeError::UnexpectedMessage),
     };
     if challenge.profile_id != identity.profile_id
-        || challenge.build_id != identity.build_id
-        || challenge.client_nonce != client_nonce
+        || (identity.channel != ConnectionChannel::Lifecycle
+            && challenge.build_id != identity.build_id)
         || identity
             .supported
             .negotiate(ProtocolRange::exact(challenge.selected_version))
@@ -213,6 +222,19 @@ where
             return Err(HandshakeError::UnexpectedMessage);
         }
     };
+    if !matches!(
+        (
+            hello.channel,
+            hello.terminal_session_id.as_ref(),
+            hello.can_force_stop
+        ),
+        (ConnectionChannel::Control, None, _)
+            | (ConnectionChannel::TerminalData, Some(_), false)
+            | (ConnectionChannel::Lifecycle, None, false)
+    ) {
+        reject(stream, RejectReason::InvalidMessage).await;
+        return Err(HandshakeError::Rejected(RejectReason::InvalidMessage));
+    }
     let Some(selected_version) = identity.supported.negotiate(hello.supported) else {
         reject(
             stream,
@@ -229,7 +251,7 @@ where
         reject(stream, RejectReason::ProfileMismatch).await;
         return Err(HandshakeError::IdentityMismatch);
     }
-    if hello.build_id != identity.build_id {
+    if hello.channel != ConnectionChannel::Lifecycle && hello.build_id != identity.build_id {
         reject(stream, RejectReason::BuildMismatch).await;
         return Err(HandshakeError::IdentityMismatch);
     }
@@ -285,7 +307,10 @@ where
     .await?;
     Ok(AuthenticatedClient {
         client_instance_id: hello.client_instance_id,
+        can_force_stop: hello.can_force_stop,
         selected_version,
+        channel: hello.channel,
+        terminal_session_id: hello.terminal_session_id,
     })
 }
 

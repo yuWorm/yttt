@@ -8,5 +8,6 @@ crc32fast = "1"
 postcard = { version = "1", features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+yttt-agent-core = { path = "../yttt-agent-core" }
 yttt-core = { path = "../yttt-core" }
 zeroize = "1"

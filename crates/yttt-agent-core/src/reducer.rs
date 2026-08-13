@@ -157,6 +157,9 @@ impl AgentReducer {
     pub fn snapshot(&self) -> &AgentSnapshot {
         &self.snapshot
     }
+    pub fn decay_stale_activity(&mut self, now: u64, stale_after_millis: u64) -> bool {
+        self.snapshot.decay_stale_activity(now, stale_after_millis)
+    }
 
     pub fn process_starting(&mut self, generation: u64, now: u64) {
         self.snapshot.generation = generation;

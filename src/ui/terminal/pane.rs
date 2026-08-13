@@ -10,7 +10,8 @@ use std::{
 };
 
 use gpui::{
-    Context, Entity, EventEmitter, IntoElement, Render, SharedString, Task, Window, div, prelude::*,
+    AnyWindowHandle, Context, Entity, EventEmitter, IntoElement, Render, SharedString, Task,
+    Window, div, prelude::*,
 };
 use yttt_agent_core::AgentInstanceId;
 use yttt_client_core::{ClientEvent, ConnectionState};
@@ -18,19 +19,19 @@ use yttt_core::model::ids::{ConnectionId, PaneId, ProjectId, TabId, TerminalSess
 use yttt_protocol::{
     Request, Response, ServerEvent,
     terminal::{
-        RemoteTerminalExecutionSpec, TerminalExecutionSpec, TerminalGeometry, TerminalInput,
-        TerminalSpawnSpec, TerminationMode,
+        RemoteTerminalExecutionSpec, ResizeTerminal, ScrollTerminal, SemanticViewport,
+        TerminalExecutionSpec, TerminalGeometry, TerminalInput, TerminalMutationContext,
+        TerminalProcessState, TerminalSpawnSpec, TerminationMode,
     },
 };
-use yttt_ssh::RemoteTerminalExecution;
 use yttt_terminal::{ExitReason, ProcessStatus, PtyIoOperation, TerminalConfig, TerminalView};
 
 use crate::{
-    host_runtime::{DesktopHostRuntime, HostRuntimeGlobal},
+    host_runtime::{DesktopHostRuntime, HostRuntimeGlobal, TerminalRecoveryError},
     model::layout::{PaneConfig, PaneKind, ProcessExitBehavior, TerminalExecutionMode},
     runtime::{
         agent::classify_agent,
-        agent_hooks::{AGENT_HOOK_ENVIRONMENT_VARIABLES, AgentHookClient},
+        agent_hooks::AGENT_HOOK_ENVIRONMENT_VARIABLES,
         agent_manager::{AgentPaneAddress, AgentPaneLaunch},
         notification::{ExitNotificationInput, NotificationEvent, notification_for_exit},
     },
@@ -68,7 +69,6 @@ pub struct TerminalPaneContext {
     pub terminal_input_gate: TerminalInputGate,
     pub ssh: Option<SshTerminalContext>,
     pub agent_launch: Option<AgentPaneLaunch>,
-    pub agent_hook_client: Option<AgentHookClient>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,6 +138,9 @@ pub enum PaneLifecycle {
     SpawnFailed {
         message: String,
     },
+    Lost {
+        message: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,6 +148,14 @@ pub struct TerminalSpawnFailure {
     pub command: String,
     pub cwd: PathBuf,
     pub message: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum TerminalStartAttemptError {
+    #[error("{0}")]
+    Message(String),
+    #[error(transparent)]
+    Recovery(#[from] TerminalRecoveryError),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -181,7 +192,6 @@ pub struct TerminalPaneView {
     notify_on_exit: bool,
     agent_launch: Option<AgentPaneLaunch>,
     agent_session_title: Option<String>,
-    agent_hook_client: Option<AgentHookClient>,
     ssh: Option<SshTerminalContext>,
     terminal: Option<Entity<TerminalView>>,
     terminal_config: TerminalConfig,
@@ -190,11 +200,16 @@ pub struct TerminalPaneView {
     host_session_id: Option<TerminalSessionId>,
     host_session_epoch: Option<u64>,
     host_events_task: Option<Task<()>>,
+    window_handle: Option<AnyWindowHandle>,
     lifecycle: PaneLifecycle,
     terminal_error: Option<String>,
     exit_emitted: bool,
     terminal_input_gate: TerminalInputGate,
     generation: u64,
+    #[cfg(feature = "perf-metrics")]
+    performance_reporter: Option<yttt_terminal::TerminalPerformanceReporter>,
+    #[cfg(feature = "perf-metrics")]
+    performance_probe_started: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -261,7 +276,45 @@ fn accepts_process_exit(
 struct HostTerminalWriter {
     runtime: Arc<DesktopHostRuntime>,
     session_id: TerminalSessionId,
+    mutation_context: Arc<RwLock<TerminalMutationContext>>,
     next_sequence: Arc<AtomicU64>,
+}
+
+fn next_mutation_context(
+    context: &Arc<RwLock<TerminalMutationContext>>,
+    next_sequence: &Arc<AtomicU64>,
+    geometry_epoch: Option<u64>,
+) -> TerminalMutationContext {
+    let mut context = context.write().unwrap();
+    if let Some(geometry_epoch) = geometry_epoch {
+        context.geometry_epoch = geometry_epoch;
+    }
+    context.client_sequence = next_sequence.fetch_add(1, Ordering::Relaxed);
+    *context
+}
+
+fn submit_pending_host_resize(
+    runtime: &Arc<DesktopHostRuntime>,
+    session_id: &TerminalSessionId,
+    mutation_context: &Arc<RwLock<TerminalMutationContext>>,
+    next_mutation_sequence: &Arc<AtomicU64>,
+    next_geometry_epoch: &Arc<AtomicU64>,
+    pending_geometry: &Arc<RwLock<Option<TerminalGeometry>>>,
+) {
+    let Some(geometry) = pending_geometry.write().unwrap().take() else {
+        return;
+    };
+    let geometry_epoch = next_geometry_epoch.fetch_add(1, Ordering::Relaxed) + 1;
+    let context = next_mutation_context(
+        mutation_context,
+        next_mutation_sequence,
+        Some(geometry_epoch),
+    );
+    let _ = runtime.request(Request::ResizeTerminal(ResizeTerminal {
+        session_id: session_id.clone(),
+        context,
+        geometry,
+    }));
 }
 
 impl Write for HostTerminalWriter {
@@ -272,12 +325,14 @@ impl Write for HostTerminalWriter {
                 "Host terminal connection is not ready",
             ));
         }
-        let client_sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
-        let _ = self.runtime.request(Request::TerminalInput(TerminalInput {
-            session_id: self.session_id.clone(),
-            client_sequence,
-            bytes: bytes.to_vec(),
-        }));
+        let context = next_mutation_context(&self.mutation_context, &self.next_sequence, None);
+        self.runtime
+            .request_detached(Request::TerminalInput(TerminalInput {
+                session_id: self.session_id.clone(),
+                context,
+                bytes: bytes.to_vec(),
+            }))
+            .map_err(|error| io::Error::new(io::ErrorKind::WouldBlock, error.to_string()))?;
         Ok(bytes.len())
     }
 
@@ -291,10 +346,11 @@ impl TerminalPaneView {
         context: TerminalPaneContext,
         terminal_config: TerminalConfig,
         theme: WorkbenchTheme,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut view = Self::new_deferred(context, terminal_config, theme);
-        view.start_terminal(cx);
+        view.start_terminal(window, cx);
         view
     }
 
@@ -327,7 +383,6 @@ impl TerminalPaneView {
             terminal_input_gate,
             ssh,
             agent_launch,
-            agent_hook_client,
         } = context;
         let agent_session_title = agent_launch
             .as_ref()
@@ -355,7 +410,6 @@ impl TerminalPaneView {
             notify_on_exit: pane.notify_on_exit,
             agent_launch,
             agent_session_title,
-            agent_hook_client,
             ssh,
             terminal: None,
             terminal_config,
@@ -364,11 +418,16 @@ impl TerminalPaneView {
             host_session_id: None,
             host_session_epoch: None,
             host_events_task: None,
+            window_handle: None,
             lifecycle: PaneLifecycle::Idle,
             terminal_error: None,
             exit_emitted: false,
             terminal_input_gate,
             generation: 0,
+            #[cfg(feature = "perf-metrics")]
+            performance_reporter: None,
+            #[cfg(feature = "perf-metrics")]
+            performance_probe_started: false,
         }
     }
 
@@ -473,9 +532,6 @@ impl TerminalPaneView {
             environment.extend(agent_launch.environment(self.generation));
         }
         remove_inherited_agent_hook_environment(&mut environment);
-        if let Some(client) = &self.agent_hook_client {
-            environment.extend(client.environment(&self.agent_pane_address(), self.generation));
-        }
         environment
     }
 
@@ -486,7 +542,7 @@ impl TerminalPaneView {
         ))
     }
 
-    fn remote_terminal_execution(&self) -> RemoteTerminalExecution {
+    fn remote_terminal_execution(&self) -> RemoteTerminalExecutionSpec {
         if let Some(program) = self
             .agent_launch
             .as_ref()
@@ -497,15 +553,15 @@ impl TerminalPaneView {
                 .as_ref()
                 .and_then(|launch| launch.remote_command(&self.command, &self.args))
             {
-                Some(command) => RemoteTerminalExecution::Shell { command },
-                None => RemoteTerminalExecution::Command {
+                Some(command) => RemoteTerminalExecutionSpec::Shell { command },
+                None => RemoteTerminalExecutionSpec::Command {
                     program: program.to_string(),
                     args: self.command_args(),
                 },
             };
         }
         match self.execution_mode {
-            TerminalExecutionMode::Shell => RemoteTerminalExecution::Shell {
+            TerminalExecutionMode::Shell => RemoteTerminalExecutionSpec::Shell {
                 command: self.command.clone(),
             },
             TerminalExecutionMode::Command => match self
@@ -513,8 +569,8 @@ impl TerminalPaneView {
                 .as_ref()
                 .and_then(|launch| launch.remote_command(&self.command, &self.args))
             {
-                Some(command) => RemoteTerminalExecution::Shell { command },
-                None => RemoteTerminalExecution::Command {
+                Some(command) => RemoteTerminalExecutionSpec::Shell { command },
+                None => RemoteTerminalExecutionSpec::Command {
                     program: self.command.clone(),
                     args: self.command_args(),
                 },
@@ -529,17 +585,9 @@ impl TerminalPaneView {
             .ok_or_else(|| anyhow::anyhow!("terminal path is not valid UTF-8"))?
             .to_string();
         let execution = if let Some(ssh) = &self.ssh {
-            let execution = match self.remote_terminal_execution() {
-                RemoteTerminalExecution::Shell { command } => {
-                    RemoteTerminalExecutionSpec::Shell { command }
-                }
-                RemoteTerminalExecution::Command { program, args } => {
-                    RemoteTerminalExecutionSpec::Command { program, args }
-                }
-            };
             TerminalExecutionSpec::Ssh {
                 connection_id: ssh.connection_id.as_str().to_string(),
-                execution,
+                execution: self.remote_terminal_execution(),
             }
         } else if let Some(program) = self
             .agent_launch
@@ -578,6 +626,8 @@ impl TerminalPaneView {
             execution,
             geometry,
             geometry_epoch: 1,
+            query_palette: self.terminal_config.colors.query_palette(),
+            palette_revision: 1,
             scrollback_limit: self.terminal_config.scrollback.min(u32::MAX as usize) as u32,
             environment,
             removed_environment: AGENT_HOOK_ENVIRONMENT_VARIABLES
@@ -587,7 +637,7 @@ impl TerminalPaneView {
         })
     }
 
-    fn start_host_terminal(&mut self, cx: &mut Context<Self>) -> bool {
+    fn start_host_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(host_runtime) = cx
             .try_global::<HostRuntimeGlobal>()
             .and_then(HostRuntimeGlobal::runtime)
@@ -598,12 +648,15 @@ impl TerminalPaneView {
             self.set_spawn_failure("Host runtime is unavailable".to_string(), cx);
             return false;
         };
-        if !matches!(host_runtime.state(), ConnectionState::Ready { .. }) {
-            self.lifecycle = PaneLifecycle::Starting;
-            self.generation = self.generation.wrapping_add(1);
-            self.set_spawn_failure("Host runtime is not connected".to_string(), cx);
-            return false;
-        }
+        let host_epoch = match host_runtime.state() {
+            ConnectionState::Ready { host_epoch, .. } => host_epoch,
+            _ => {
+                self.lifecycle = PaneLifecycle::Starting;
+                self.generation = self.generation.wrapping_add(1);
+                self.set_spawn_failure("Host runtime is not connected".to_string(), cx);
+                return false;
+            }
+        };
 
         let initial_title = self
             .agent_session_title
@@ -616,6 +669,11 @@ impl TerminalPaneView {
         self.terminal_error = None;
         self.exit_emitted = false;
         self.generation = self.generation.wrapping_add(1);
+        #[cfg(feature = "perf-metrics")]
+        {
+            self.performance_reporter = None;
+            self.performance_probe_started = false;
+        }
 
         let geometry = TerminalGeometry {
             cols: self.terminal_config.cols.min(u16::MAX as usize) as u16,
@@ -632,18 +690,33 @@ impl TerminalPaneView {
         };
         let session_id = spec.session_id.clone();
         let generation = self.generation;
-        let next_input_sequence = Arc::new(AtomicU64::new(1));
+        let next_mutation_sequence = Arc::new(AtomicU64::new(1));
         let next_geometry_epoch = Arc::new(AtomicU64::new(spec.geometry_epoch));
+        let mutation_context = Arc::new(RwLock::new(TerminalMutationContext {
+            host_epoch,
+            session_epoch: 0,
+            lease_epoch: 0,
+            geometry_epoch: spec.geometry_epoch,
+            client_sequence: 0,
+        }));
+        let pending_resize_geometry = Arc::new(RwLock::new(None::<TerminalGeometry>));
+        let resize_geometry_epoch = next_geometry_epoch.clone();
         let writer = HostTerminalWriter {
             runtime: host_runtime.clone(),
             session_id: session_id.clone(),
-            next_sequence: next_input_sequence,
+            mutation_context: mutation_context.clone(),
+            next_sequence: next_mutation_sequence.clone(),
         };
         let terminal_input_allowed = self.terminal_input_gate.shared_flag();
         let resize_runtime = host_runtime.clone();
         let resize_session_id = session_id.clone();
+        let resize_mutation_context = mutation_context.clone();
+        let resize_mutation_sequence = next_mutation_sequence.clone();
+        let resize_pending_geometry = pending_resize_geometry.clone();
         let scroll_runtime = host_runtime.clone();
         let scroll_session_id = session_id.clone();
+        let scroll_mutation_context = mutation_context.clone();
+        let scroll_mutation_sequence = next_mutation_sequence.clone();
         let error_parent = cx.weak_entity();
         let initial_config = self.terminal_config.clone();
         let terminal = cx.new(|cx| {
@@ -653,25 +726,39 @@ impl TerminalPaneView {
                     if !matches!(resize_runtime.state(), ConnectionState::Ready { .. }) {
                         return Err("Host terminal connection is not ready".to_string());
                     }
-                    let geometry_epoch = next_geometry_epoch.fetch_add(1, Ordering::Relaxed) + 1;
-                    let _ = resize_runtime.request(Request::ResizeTerminal {
-                        session_id: resize_session_id.clone(),
-                        geometry: TerminalGeometry {
-                            cols,
-                            rows,
-                            cell_width: 0,
-                            cell_height: 0,
-                        },
-                        geometry_epoch,
-                    });
+                    let geometry = TerminalGeometry {
+                        cols,
+                        rows,
+                        cell_width: 0,
+                        cell_height: 0,
+                    };
+                    if resize_mutation_context.read().unwrap().lease_epoch == 0 {
+                        *resize_pending_geometry.write().unwrap() = Some(geometry);
+                        return Ok(());
+                    }
+                    *resize_pending_geometry.write().unwrap() = Some(geometry);
+                    submit_pending_host_resize(
+                        &resize_runtime,
+                        &resize_session_id,
+                        &resize_mutation_context,
+                        &resize_mutation_sequence,
+                        &resize_geometry_epoch,
+                        &resize_pending_geometry,
+                    );
                     Ok(())
                 })
                 .with_semantic_scroll_callback(move |display_offset| {
                     if matches!(scroll_runtime.state(), ConnectionState::Ready { .. }) {
-                        let _ = scroll_runtime.request(Request::ScrollTerminal {
+                        let context = next_mutation_context(
+                            &scroll_mutation_context,
+                            &scroll_mutation_sequence,
+                            None,
+                        );
+                        let _ = scroll_runtime.request(Request::ScrollTerminal(ScrollTerminal {
                             session_id: scroll_session_id.clone(),
+                            context,
                             display_offset,
-                        });
+                        }));
                     }
                 })
                 .with_io_error_callback(move |cx, operation, message, fatal| {
@@ -687,20 +774,65 @@ impl TerminalPaneView {
                     });
                 })
         });
+        #[cfg(feature = "perf-metrics")]
+        if self.performance_metrics_enabled() {
+            self.performance_reporter = terminal
+                .read(cx)
+                .performance_handle()
+                .spawn_reporter_from_env()
+                .unwrap_or_else(|error| {
+                    eprintln!("failed to start Host terminal performance reporter: {error}");
+                    None
+                });
+        }
+        let terminal_updates = host_runtime.terminal_viewports(session_id.clone());
+        terminal.update(cx, |terminal, cx| {
+            terminal.attach_semantic_viewport_stream(terminal_updates, cx);
+        });
 
-        let host_events = host_runtime.events();
+        let mut host_events = host_runtime.async_events();
         let event_runtime = host_runtime.clone();
         let event_session_id = session_id.clone();
-        let event_task = cx.spawn(async move |this, cx| {
+        let event_task = cx.spawn_in(window, async move |this, cx| {
+            let mut last_title = None::<Option<String>>;
             loop {
-                let event = match host_events.recv_async().await {
+                let event = match host_events.recv().await {
                     Ok(event) => event,
-                    Err(_) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 };
+                if let ClientEvent::MirrorUpdated(updated) = &event {
+                    if *updated != event_session_id {
+                        continue;
+                    }
+                    let Some(viewport) = event_runtime.terminal_snapshot(&event_session_id) else {
+                        continue;
+                    };
+                    let title = viewport.modes.title.clone();
+                    let metadata_changed = last_title.as_ref() != Some(&title)
+                        || matches!(viewport.process_state, TerminalProcessState::Exited { .. });
+                    last_title = Some(title);
+                    if metadata_changed
+                        && this
+                            .update_in(cx, |pane, _window, cx| {
+                                pane.handle_host_viewport_metadata(
+                                    &viewport,
+                                    &event_runtime,
+                                    &event_session_id,
+                                    generation,
+                                    cx,
+                                );
+                            })
+                            .is_err()
+                    {
+                        break;
+                    }
+                    continue;
+                }
                 let runtime = event_runtime.clone();
                 let session_id = event_session_id.clone();
                 if this
-                    .update(cx, move |pane, cx| {
+                    .update_in(cx, move |pane, _window, cx| {
                         pane.handle_host_event(event, runtime, &session_id, generation, cx);
                     })
                     .is_err()
@@ -715,23 +847,82 @@ impl TerminalPaneView {
         self.host_session_id = Some(session_id.clone());
         self.host_session_epoch = None;
         self.host_events_task = Some(event_task);
+        #[cfg(feature = "perf-metrics")]
+        self.start_performance_probe(cx);
 
-        let response = host_runtime.request(Request::SpawnTerminal(spec));
+        let request_runtime = host_runtime.clone();
+        let request_spec = spec;
+        let response_geometry_epoch = next_geometry_epoch.clone();
+        let response_mutation_context = mutation_context.clone();
+        let response_mutation_sequence = next_mutation_sequence.clone();
+        let response_pending_resize = pending_resize_geometry.clone();
         cx.spawn(async move |this, cx| {
-            let result = response
-                .recv_async()
-                .await
-                .map_err(|_| "Host request channel closed".to_string())
-                .and_then(|result| result.map_err(|error| error.to_string()));
+            let result = async {
+                let catalog_response = request_runtime
+                    .request(Request::ListResources)
+                    .recv_async()
+                    .await
+                    .map_err(|_| {
+                        TerminalStartAttemptError::Message(
+                            "Host catalog request channel closed".to_string(),
+                        )
+                    })?
+                    .map_err(|error| TerminalStartAttemptError::Message(error.to_string()))?;
+                let Response::Resources(catalog) = catalog_response else {
+                    return Err(TerminalStartAttemptError::Message(format!(
+                        "unexpected Host catalog response: {catalog_response:?}"
+                    )));
+                };
+                let spawn_fingerprint = request_spec.address_fingerprint();
+                let request = request_runtime.terminal_start_request(request_spec, &catalog)?;
+                let response = request_runtime
+                    .request(request)
+                    .recv_async()
+                    .await
+                    .map_err(|_| {
+                        TerminalStartAttemptError::Message(
+                            "Host terminal request channel closed".to_string(),
+                        )
+                    })?
+                    .map_err(|error| TerminalStartAttemptError::Message(error.to_string()))?;
+                Ok((response, catalog, spawn_fingerprint))
+            }
+            .await;
             let _ = this.update(cx, |pane, cx| {
                 if pane.generation != generation {
                     return;
                 }
                 match result {
-                    Ok(Response::TerminalSpawned {
-                        session_id: spawned_session_id,
-                        session_epoch,
-                    }) if spawned_session_id == session_id => {
+                    Ok((
+                        Response::TerminalSpawned {
+                            lease,
+                            session_epoch,
+                        },
+                        catalog,
+                        spawn_fingerprint,
+                    )) if lease.session_id == session_id => {
+                        if let Err(error) = request_runtime.bind_terminal(
+                            &catalog,
+                            lease.session_id.clone(),
+                            session_epoch,
+                            spawn_fingerprint,
+                        ) {
+                            pane.set_spawn_failure(error, cx);
+                            return;
+                        }
+                        {
+                            let mut context = response_mutation_context.write().unwrap();
+                            context.session_epoch = session_epoch;
+                            context.lease_epoch = lease.lease_epoch;
+                        }
+                        submit_pending_host_resize(
+                            &request_runtime,
+                            &session_id,
+                            &response_mutation_context,
+                            &response_mutation_sequence,
+                            &response_geometry_epoch,
+                            &response_pending_resize,
+                        );
                         pane.host_session_epoch = Some(session_epoch);
                         pane.lifecycle = PaneLifecycle::Running;
                         cx.emit(TerminalPaneEvent::Started(TerminalPaneStartedEvent {
@@ -743,18 +934,114 @@ impl TerminalPaneView {
                         }));
                         cx.notify();
                     }
-                    Ok(response) => {
+                    Ok((
+                        Response::TerminalAttached { lease, checkpoint },
+                        catalog,
+                        spawn_fingerprint,
+                    )) if lease.session_id == session_id => {
+                        let session_epoch = checkpoint.viewport.session_epoch;
+                        if let Err(error) = request_runtime.bind_terminal(
+                            &catalog,
+                            lease.session_id,
+                            session_epoch,
+                            spawn_fingerprint,
+                        ) {
+                            pane.set_spawn_failure(error, cx);
+                            return;
+                        }
+                        response_geometry_epoch
+                            .store(checkpoint.viewport.geometry_epoch, Ordering::Relaxed);
+                        {
+                            let mut context = response_mutation_context.write().unwrap();
+                            context.session_epoch = session_epoch;
+                            context.lease_epoch = lease.lease_epoch;
+                            context.geometry_epoch = checkpoint.viewport.geometry_epoch;
+                        }
+                        submit_pending_host_resize(
+                            &request_runtime,
+                            &session_id,
+                            &response_mutation_context,
+                            &response_mutation_sequence,
+                            &response_geometry_epoch,
+                            &response_pending_resize,
+                        );
+                        pane.host_session_epoch = Some(session_epoch);
+                        let process_state = checkpoint.viewport.process_state;
+                        let final_sequence = checkpoint.viewport.sequence;
+                        if let Some(terminal) = pane.terminal.clone() {
+                            terminal.update(cx, |terminal, cx| {
+                                terminal.set_semantic_viewport(checkpoint.viewport, cx);
+                            });
+                        }
+                        if let TerminalProcessState::Exited { code } = process_state {
+                            pane.finalize_host_process_exit(
+                                &request_runtime,
+                                &session_id,
+                                session_epoch,
+                                final_sequence,
+                                code,
+                                generation,
+                                cx,
+                            );
+                            return;
+                        }
+                        pane.lifecycle = PaneLifecycle::Running;
+                        cx.emit(TerminalPaneEvent::Started(TerminalPaneStartedEvent {
+                            project_id: pane.project_id.clone(),
+                            tab_id: pane.tab_id.clone(),
+                            pane_id: pane.pane_id.clone(),
+                            generation,
+                            agent_instance_id: pane.agent_instance_id().cloned(),
+                        }));
+                        cx.notify();
+                    }
+                    Ok((response, _, _)) => {
                         pane.set_spawn_failure(
-                            format!("unexpected Host spawn response: {response:?}"),
+                            format!("unexpected Host terminal response: {response:?}"),
                             cx,
                         );
                     }
-                    Err(error) => pane.set_spawn_failure(error, cx),
+                    Err(
+                        error @ TerminalStartAttemptError::Recovery(
+                            TerminalRecoveryError::MissingBoundSession { .. },
+                        ),
+                    ) => pane.set_terminal_lost(error.to_string(), cx),
+                    Err(error) => pane.set_spawn_failure(error.to_string(), cx),
                 }
             });
         })
         .detach();
         true
+    }
+
+    fn handle_host_viewport_metadata(
+        &mut self,
+        viewport: &SemanticViewport,
+        runtime: &DesktopHostRuntime,
+        session_id: &TerminalSessionId,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if self.generation != generation {
+            return;
+        }
+        if self.agent_session_title.is_none()
+            && let Some(title) = viewport.modes.title.as_deref()
+        {
+            let title = resolved_terminal_title(&self.default_title, title);
+            self.set_runtime_title(title, cx);
+        }
+        if let TerminalProcessState::Exited { code } = viewport.process_state {
+            self.finalize_host_process_exit(
+                runtime,
+                session_id,
+                viewport.session_epoch,
+                viewport.sequence,
+                code,
+                generation,
+                cx,
+            );
+        }
     }
 
     fn handle_host_event(
@@ -769,55 +1056,41 @@ impl TerminalPaneView {
             return;
         }
         match event {
-            ClientEvent::MirrorUpdated(updated) if updated == *session_id => {
-                let Some(viewport) = runtime.terminal_snapshot(session_id) else {
-                    return;
-                };
-                if self.agent_session_title.is_none() {
-                    if let Some(title) = viewport.modes.title.as_deref() {
-                        let title = resolved_terminal_title(&self.default_title, title);
-                        self.set_runtime_title(title, cx);
-                    }
-                }
-                if let Some(terminal) = self.terminal.clone() {
-                    terminal.update(cx, |terminal, cx| {
-                        terminal.set_semantic_viewport(viewport.clone(), cx);
-                    });
-                }
-            }
             ClientEvent::TerminalUnavailable(unavailable) if unavailable == *session_id => {
-                self.terminal_error =
-                    Some("Terminal session was lost while the Host was unavailable".to_string());
-                self.host_session_id = None;
-                self.host_session_epoch = None;
-                self.handle_process_exit(generation, ExitReason::Failed, cx);
+                self.set_terminal_lost(
+                    "Terminal session was lost while the Host was unavailable".to_string(),
+                    cx,
+                );
             }
             ClientEvent::Server(host_event) => match host_event.body {
                 ServerEvent::TerminalExit {
                     session_id: exited_session_id,
                     session_epoch,
                     code,
+                    final_sequence,
                 } if exited_session_id == *session_id => {
-                    if accepts_process_exit(self.generation, generation, self.exit_emitted) {
-                        self.exit_emitted = true;
-                        self.terminal = None;
-                        self.host_session_epoch = Some(session_epoch);
-                        self.lifecycle = PaneLifecycle::Stopping {
-                            reason: ExitReason::Completed,
-                        };
-                        self.finalize_process_exit(
-                            generation,
-                            ExitReason::Completed,
-                            ProcessStatus::Exited { code },
-                            cx,
-                        );
-                        let _ = runtime.request(Request::AcknowledgeTerminalExit {
-                            session_id: session_id.clone(),
-                            session_epoch,
+                    let final_viewport_is_ready = runtime
+                        .terminal_snapshot(session_id)
+                        .is_some_and(|viewport| {
+                            viewport.session_epoch == session_epoch
+                                && viewport.sequence >= final_sequence
+                                && matches!(
+                                    viewport.process_state,
+                                    TerminalProcessState::Exited { .. }
+                                )
                         });
-                        self.host_session_id = None;
-                        self.host_session_epoch = None;
+                    if !final_viewport_is_ready {
+                        return;
                     }
+                    self.finalize_host_process_exit(
+                        &runtime,
+                        session_id,
+                        session_epoch,
+                        final_sequence,
+                        code,
+                        generation,
+                        cx,
+                    );
                 }
                 ServerEvent::TerminalLeaseRevoked {
                     session_id: revoked_session_id,
@@ -830,17 +1103,49 @@ impl TerminalPaneView {
                 _ => {}
             },
             ClientEvent::Connection(ConnectionState::HostLost { message }) => {
-                self.terminal_error = Some(message);
-                self.host_session_id = None;
-                self.host_session_epoch = None;
-                self.handle_process_exit(generation, ExitReason::Failed, cx);
+                self.set_terminal_lost(message, cx);
             }
             _ => {}
         }
     }
 
-    pub(crate) fn start_terminal(&mut self, cx: &mut Context<Self>) -> bool {
-        self.start_host_terminal(cx)
+    fn finalize_host_process_exit(
+        &mut self,
+        runtime: &DesktopHostRuntime,
+        session_id: &TerminalSessionId,
+        session_epoch: u64,
+        final_sequence: u64,
+        code: Option<i32>,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if !accepts_process_exit(self.generation, generation, self.exit_emitted) {
+            return;
+        }
+        self.exit_emitted = true;
+        self.terminal = None;
+        self.host_session_epoch = Some(session_epoch);
+        self.lifecycle = PaneLifecycle::Stopping {
+            reason: ExitReason::Completed,
+        };
+        self.finalize_process_exit(
+            generation,
+            ExitReason::Completed,
+            ProcessStatus::Exited { code },
+            cx,
+        );
+        let _ = runtime.request(Request::AcknowledgeTerminalExit {
+            session_id: session_id.clone(),
+            session_epoch,
+            final_sequence,
+        });
+        self.host_session_id = None;
+        self.host_session_epoch = None;
+    }
+
+    pub(crate) fn start_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.window_handle = Some(window.window_handle());
+        self.start_host_terminal(window, cx)
     }
 
     fn set_spawn_failure(&mut self, message: String, cx: &mut Context<Self>) {
@@ -863,6 +1168,19 @@ impl TerminalPaneView {
                 message,
             },
         ));
+        cx.notify();
+    }
+
+    fn set_terminal_lost(&mut self, message: String, cx: &mut Context<Self>) {
+        self.lifecycle = PaneLifecycle::Lost {
+            message: message.clone(),
+        };
+        self.terminal_error = Some(message);
+        self.terminal = None;
+        self.host_events_task = None;
+        self.host_session_id = None;
+        self.host_session_epoch = None;
+        self.host_runtime = None;
         cx.notify();
     }
 
@@ -946,17 +1264,22 @@ impl TerminalPaneView {
 
     fn schedule_auto_restart(&self, cx: &mut Context<Self>) {
         let generation = self.generation;
+        let Some(window_handle) = self.window_handle else {
+            return;
+        };
         cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(500))
                 .await;
-            let _ = this.update(cx, |pane, cx| {
-                if pane.generation == generation
-                    && pane.exit_behavior == ProcessExitBehavior::AutoRestart
-                    && matches!(pane.lifecycle, PaneLifecycle::Exited { .. })
-                {
-                    pane.start_terminal(cx);
-                }
+            let _ = window_handle.update(cx, |_root, window, cx| {
+                let _ = this.update(cx, |pane, cx| {
+                    if pane.generation == generation
+                        && pane.exit_behavior == ProcessExitBehavior::AutoRestart
+                        && matches!(pane.lifecycle, PaneLifecycle::Exited { .. })
+                    {
+                        pane.start_terminal(window, cx);
+                    }
+                });
             });
         })
         .detach();
@@ -984,6 +1307,10 @@ impl TerminalPaneView {
 
     pub fn is_running(&self) -> bool {
         self.lifecycle == PaneLifecycle::Running
+    }
+    #[cfg(feature = "perf-metrics")]
+    pub(crate) fn performance_terminal(&self) -> Option<Entity<TerminalView>> {
+        self.terminal.clone()
     }
 
     pub fn focus_terminal(&self, window: &Window, cx: &mut Context<Self>) -> bool {
@@ -1050,6 +1377,36 @@ impl TerminalPaneView {
         self.theme = theme;
         cx.notify();
     }
+
+    #[cfg(feature = "perf-metrics")]
+    fn performance_metrics_enabled(&self) -> bool {
+        std::env::var_os("YTTT_TERMINAL_PERF_OUTPUT").is_some()
+            && std::env::var("YTTT_TERMINAL_PERF_PANE_ID")
+                .ok()
+                .is_none_or(|pane_id| pane_id == self.pane_id)
+    }
+
+    #[cfg(feature = "perf-metrics")]
+    fn start_performance_probe(&mut self, cx: &mut Context<Self>) {
+        if self.performance_probe_started || !self.performance_metrics_enabled() {
+            return;
+        }
+        let Some(delay_ms) = std::env::var("YTTT_TERMINAL_PERF_INPUT_DELAY_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+        else {
+            return;
+        };
+        let Some(terminal) = self.terminal.clone() else {
+            return;
+        };
+        let start_file =
+            std::env::var_os("YTTT_TERMINAL_PERF_START_FILE").map(std::path::PathBuf::from);
+        terminal.update(cx, |terminal, cx| {
+            terminal.start_performance_input_probe(Duration::from_millis(delay_ms), start_file, cx);
+        });
+        self.performance_probe_started = true;
+    }
 }
 
 impl EventEmitter<TerminalPaneEvent> for TerminalPaneView {}
@@ -1066,12 +1423,18 @@ impl Drop for TerminalPaneView {
 }
 
 impl Render for TerminalPaneView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.window_handle = Some(window.window_handle());
+        #[cfg(feature = "perf-metrics")]
+        self.start_performance_probe(cx);
         let ui_style = current_ui_style(cx);
         let body = if let Some(terminal) = &self.terminal {
             div().flex().flex_1().child(terminal.clone())
         } else {
-            let lines = if matches!(self.lifecycle, PaneLifecycle::SpawnFailed { .. }) {
+            let lines = if matches!(
+                self.lifecycle,
+                PaneLifecycle::SpawnFailed { .. } | PaneLifecycle::Lost { .. }
+            ) {
                 spawn_failure_lines(&TerminalSpawnFailure {
                     command: self.command.clone(),
                     cwd: self.project_path.clone(),
@@ -1110,8 +1473,8 @@ impl Render for TerminalPaneView {
                             .py(ui_style.spacing.xs)
                             .text_color(self.theme.text)
                             .hover(|button| button.bg(ui_style.hover_background(self.theme)))
-                            .on_click(cx.listener(|this, _, _window, cx| {
-                                this.start_terminal(cx);
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.start_terminal(window, cx);
                             }))
                             .child("Restart"),
                     )
@@ -1137,6 +1500,7 @@ pub fn pane_lifecycle_label(lifecycle: &PaneLifecycle) -> String {
         } => "killed".to_string(),
         PaneLifecycle::Exited { code: None, .. } => "exited".to_string(),
         PaneLifecycle::SpawnFailed { .. } => "spawn failed".to_string(),
+        PaneLifecycle::Lost { .. } => "lost".to_string(),
     }
 }
 
@@ -1157,7 +1521,7 @@ fn remove_inherited_agent_hook_environment(environment: &mut BTreeMap<String, St
 
 fn terminal_start_error(lifecycle: &PaneLifecycle, terminal_error: &Option<String>) -> String {
     match lifecycle {
-        PaneLifecycle::SpawnFailed { message } => message.clone(),
+        PaneLifecycle::SpawnFailed { message } | PaneLifecycle::Lost { message } => message.clone(),
         _ => terminal_error
             .clone()
             .unwrap_or_else(|| "terminal did not start".to_string()),
@@ -1216,6 +1580,52 @@ mod tests {
             }
         );
     }
+    #[gpui::test]
+    fn production_terminal_refuses_to_spawn_without_host_runtime(cx: &mut gpui::TestAppContext) {
+        let context = TerminalPaneContext {
+            project_id: "project".to_string(),
+            project_path: PathBuf::from("/tmp/project"),
+            project_title: "Project".to_string(),
+            tab_id: "tab".to_string(),
+            tab_title: "Tab".to_string(),
+            pane: PaneConfig {
+                id: "shell".to_string(),
+                title: "Shell".to_string(),
+                command: String::new(),
+                args: Vec::new(),
+                execution_mode: TerminalExecutionMode::Shell,
+                exit_behavior: ProcessExitBehavior::ManualRestart,
+                kind: PaneKind::Shell,
+                notify_on_exit: false,
+                detector: None,
+            },
+            shell: "/bin/sh".to_string(),
+            environment: Arc::new(RwLock::new(BTreeMap::new())),
+            is_focused: true,
+            terminal_input_gate: TerminalInputGate::default(),
+            ssh: None,
+            agent_launch: None,
+        };
+        let (pane, cx) = cx.add_window_view(|window, cx| {
+            TerminalPaneView::new(
+                context,
+                TerminalConfig::default(),
+                WorkbenchTheme::one_dark(),
+                window,
+                cx,
+            )
+        });
+
+        cx.read(|app| {
+            let pane = pane.read(app);
+            assert!(pane.terminal.is_none());
+            assert!(matches!(
+                &pane.lifecycle,
+                PaneLifecycle::SpawnFailed { message } if message == "Host runtime is unavailable"
+            ));
+        });
+    }
+
     #[test]
     fn inherited_agent_hook_credentials_are_removed_from_terminal_environment() {
         let mut environment = BTreeMap::from([

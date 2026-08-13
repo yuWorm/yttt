@@ -319,6 +319,8 @@ impl ThemeRuntime {
         let theme = self.ui;
         let transparent = theme.app_background.alpha(0.0);
         let elevated = theme.surface_elevated.alpha(1.0);
+        let hover_background = self.style.hover_background(theme);
+        let active_background = self.style.active_background(theme);
         let mut colors = ThemeConfigColors::default();
         colors.background = Some(color_hex(theme.app_background.alpha(1.0)).into());
         colors.foreground = Some(color_hex(theme.text).into());
@@ -329,16 +331,16 @@ impl ThemeRuntime {
         colors.accordion_hover = Some(color_hex(theme.ghost_element_hover).into());
         colors.button = Some(color_hex(theme.element_background).into());
         colors.button_foreground = Some(color_hex(theme.text).into());
-        colors.button_hover = Some(color_hex(theme.element_hover).into());
-        colors.button_active = Some(color_hex(theme.element_active).into());
+        colors.button_hover = Some(color_hex(hover_background).into());
+        colors.button_active = Some(color_hex(active_background).into());
         colors.button_primary = Some(color_hex(theme.element_selected).into());
         colors.button_primary_foreground = Some(color_hex(theme.text).into());
-        colors.button_primary_hover = Some(color_hex(theme.element_hover).into());
-        colors.button_primary_active = Some(color_hex(theme.element_active).into());
+        colors.button_primary_hover = Some(color_hex(hover_background).into());
+        colors.button_primary_active = Some(color_hex(active_background).into());
         colors.button_secondary = Some(color_hex(theme.element_background).into());
         colors.button_secondary_foreground = Some(color_hex(theme.text_muted).into());
-        colors.button_secondary_hover = Some(color_hex(theme.element_hover).into());
-        colors.button_secondary_active = Some(color_hex(theme.element_active).into());
+        colors.button_secondary_hover = Some(color_hex(hover_background).into());
+        colors.button_secondary_active = Some(color_hex(active_background).into());
         colors.button_danger = Some(color_hex(theme.danger).into());
         colors.button_danger_foreground = Some(color_hex(theme.text).into());
         colors.button_danger_hover = Some(color_hex(theme.danger).into());
@@ -450,19 +452,20 @@ impl ThemeRuntime {
         colors.tiles = Some(color_hex(theme.element_background).into());
         colors.window_border = Some(color_hex(theme.border_variant).into());
 
-        let mut config = ThemeConfig::default();
-        config.name = self.theme_name.clone().into();
-        config.mode = self.mode;
-        config.radius = Some(self.style.component.radius);
-        config.radius_lg = Some(self.style.component.radius_lg);
-        config.shadow = Some(self.style.component.shadow);
-        config.font_family = Some(self.typography.font_family.clone().into());
-        config.font_size = Some(self.typography.font_size);
-        config.mono_font_family = Some(self.typography.mono_font_family.clone().into());
-        config.mono_font_size = Some(self.typography.mono_font_size);
-        config.colors = colors;
-        config.highlight = Some(self.editor.to_highlight_theme_style());
-        config
+        ThemeConfig {
+            name: self.theme_name.clone().into(),
+            mode: self.mode,
+            radius: Some(self.style.component.radius),
+            radius_lg: Some(self.style.component.radius_lg),
+            shadow: Some(self.style.component.shadow),
+            font_family: Some(self.typography.font_family.clone().into()),
+            font_size: Some(self.typography.font_size),
+            mono_font_family: Some(self.typography.mono_font_family.clone().into()),
+            mono_font_size: Some(self.typography.mono_font_size),
+            colors,
+            highlight: Some(self.editor.to_highlight_theme_style()),
+            ..Default::default()
+        }
     }
 
     pub fn to_terminal_config(&self) -> TerminalConfig {
@@ -756,9 +759,11 @@ mod tests {
     #[test]
     fn replacing_appearance_updates_shared_runtime_and_generation() {
         let state = AppearanceState::new(ThemeRuntime::default());
-        let mut next = ThemeRuntime::default();
-        next.style_id = UiStyleId::Rounded;
-        next.style = UiStyle::resolve(UiStyleId::Rounded);
+        let next = ThemeRuntime {
+            style_id: UiStyleId::Rounded,
+            style: UiStyle::resolve(UiStyleId::Rounded),
+            ..Default::default()
+        };
 
         let replaced = state.replace(next);
 
@@ -769,9 +774,11 @@ mod tests {
 
     #[test]
     fn component_theme_uses_profile_interaction_colors() {
-        let mut runtime = ThemeRuntime::default();
-        runtime.style_id = UiStyleId::Rounded;
-        runtime.style = UiStyle::resolve(UiStyleId::Rounded);
+        let runtime = ThemeRuntime {
+            style_id: UiStyleId::Rounded,
+            style: UiStyle::resolve(UiStyleId::Rounded),
+            ..Default::default()
+        };
 
         let colors = runtime.to_gpui_component_theme_config().colors;
 

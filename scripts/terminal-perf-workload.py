@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import codecs
 import json
+import math
 import os
 from pathlib import Path
 import select
@@ -28,15 +29,22 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--scenario",
-        choices=("full", "damage", "scroll"),
+        choices=("full", "damage", "scroll", "burst", "interactive"),
         default="full",
-        help="full repaints the viewport, damage updates selected rows, scroll emits new rows",
+        help=(
+            "full repaints the viewport, damage updates selected rows, scroll emits "
+            "new rows, burst writes a fixed byte volume, interactive drives echo load"
+        ),
     )
     parser.add_argument("--duration", type=float, default=20.0)
     parser.add_argument("--startup-delay", type=float, default=0.0)
     parser.add_argument("--start-file", type=Path)
     parser.add_argument("--ready-file", type=Path)
 
+    parser.add_argument("--catch-up-seconds", type=float, default=2.0)
+    parser.add_argument("--burst-bytes", type=int, default=11 * 1024 * 1024)
+    parser.add_argument("--final-sentinel", default="YTTT-PERF-FINAL-SENTINEL")
+    parser.add_argument("--final-sentinel-file", type=Path)
 
 
     parser.add_argument("--fps", type=float, default=60.0)
@@ -164,6 +172,12 @@ def main() -> int:
         raise SystemExit("--rows must be >= 4 and --columns must be >= 20")
     if args.startup_delay < 0:
         raise SystemExit("--startup-delay must be non-negative")
+    if args.catch_up_seconds < 0:
+        raise SystemExit("--catch-up-seconds must be non-negative")
+    if args.burst_bytes <= 0:
+        raise SystemExit("--burst-bytes must be positive")
+    if not args.final_sentinel:
+        raise SystemExit("--final-sentinel must not be empty")
 
 
     stdin_fd = sys.stdin.fileno()
@@ -201,70 +215,105 @@ def main() -> int:
     next_frame_at = started_at
 
 
+    final_sentinel_written_at_unix_ns = 0
+    active_finished_at_unix_ns = started_at_unix_ns
     try:
         if input_is_tty:
             tty.setcbreak(stdin_fd)
         bytes_written += write_all(stdout_fd, ALT_SCREEN_ENTER.encode())
-        while not STOP:
-            now = time.monotonic()
-            if now >= deadline:
-                break
+        if args.scenario == "burst":
+            line = (
+                fit_cells(" yttt 11 MiB burst | 终端吞吐🙂 ", args.columns) + "\r\n"
+            ).encode("utf-8")
+            remaining = args.burst_bytes
+            while remaining > 0 and not STOP:
+                payload = line[:remaining]
+                bytes_written += write_all(stdout_fd, payload)
+                remaining -= len(payload)
+                frames += 1
+        else:
+            while not STOP:
+                now = time.monotonic()
+                if now >= deadline:
+                    break
 
-            if input_is_tty:
-                while select.select([stdin_fd], [], [], 0)[0]:
-                    incoming = os.read(stdin_fd, 4096)
-                    if not incoming:
-                        break
-                    if b"\x03" in incoming:
-                        STOP = True
-                        incoming = incoming.replace(b"\x03", b"")
-                    input_bytes += len(incoming)
-                    input_reads += 1
-                    input_text += decoder.decode(incoming)
-                    input_text = input_text[-max(args.columns * 4, 256) :]
+                if input_is_tty:
+                    while select.select([stdin_fd], [], [], 0)[0]:
+                        incoming = os.read(stdin_fd, 4096)
+                        if not incoming:
+                            break
+                        if b"\x03" in incoming:
+                            STOP = True
+                            incoming = incoming.replace(b"\x03", b"")
+                        input_bytes += len(incoming)
+                        if incoming:
+                            bytes_written += write_all(stdout_fd, incoming)
+                        input_reads += 1
+                        input_text += decoder.decode(incoming)
+                        input_text = input_text[-max(args.columns * 4, 256) :]
 
-            now = time.monotonic()
-            if now < next_frame_at:
-                time.sleep(min(next_frame_at - now, 0.002))
-                continue
-            if now - next_frame_at >= frame_interval:
-                missed_deadlines += int((now - next_frame_at) / frame_interval)
-                next_frame_at = now
+                now = time.monotonic()
+                if now < next_frame_at:
+                    time.sleep(min(next_frame_at - now, 0.002))
+                    continue
 
-            if args.scenario == "full":
-                payload = full_frame(
-                    frames, args.rows, args.columns, args.ascii_only, input_text
-                )
-            elif args.scenario == "damage":
-                payload = damage_frame(
-                    frames, args.rows, args.columns, args.ascii_only, input_text
-                )
-            else:
-                payload = scroll_frame(frames, args.columns, args.ascii_only, input_text)
-            bytes_written += write_all(stdout_fd, payload)
-            frames += 1
-            next_frame_at += frame_interval
+                if args.scenario == "full":
+                    payload = full_frame(
+                        frames, args.rows, args.columns, args.ascii_only, input_text
+                    )
+                elif args.scenario in ("damage", "interactive"):
+                    payload = damage_frame(
+                        frames, args.rows, args.columns, args.ascii_only, input_text
+                    )
+                else:
+                    payload = scroll_frame(
+                        frames, args.columns, args.ascii_only, input_text
+                    )
+                bytes_written += write_all(stdout_fd, payload)
+                frames += 1
+                next_frame_at += frame_interval
+        active_finished_at_unix_ns = time.time_ns()
+        if args.scenario != "burst":
+            scheduled_frames = math.ceil(args.duration * args.fps - 1e-9)
+            missed_deadlines = max(scheduled_frames - frames, 0)
     finally:
         try:
             write_all(stdout_fd, ALT_SCREEN_EXIT.encode())
+            final_sentinel_written_at_unix_ns = time.time_ns()
+            bytes_written += write_all(
+                stdout_fd, f"\r\n{args.final_sentinel}\r\n".encode("utf-8")
+            )
+            if args.final_sentinel_file is not None:
+                args.final_sentinel_file.parent.mkdir(parents=True, exist_ok=True)
+                args.final_sentinel_file.touch()
+            if args.catch_up_seconds:
+                time.sleep(args.catch_up_seconds)
         finally:
             if previous_termios is not None:
                 termios.tcsetattr(stdin_fd, termios.TCSADRAIN, previous_termios)
 
     finished_at_unix_ns = time.time_ns()
 
-    elapsed = max(time.monotonic() - started_at, 1e-9)
+    elapsed = max(
+        (active_finished_at_unix_ns - started_at_unix_ns) / 1_000_000_000.0,
+        1e-9,
+    )
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "scenario": args.scenario,
         "ascii_only": args.ascii_only,
         "startup_delay_seconds": args.startup_delay,
         "start_gate_wait_seconds": gate_wait_seconds,
         "started_at_unix_ns": started_at_unix_ns,
+        "active_finished_at_unix_ns": active_finished_at_unix_ns,
+        "final_sentinel": args.final_sentinel,
+        "final_sentinel_written_at_unix_ns": final_sentinel_written_at_unix_ns,
         "finished_at_unix_ns": finished_at_unix_ns,
+        "catch_up_seconds": args.catch_up_seconds,
         "requested_fps": args.fps,
         "requested_rows": args.rows,
         "requested_columns": args.columns,
+        "burst_payload_bytes": args.burst_bytes if args.scenario == "burst" else None,
         "elapsed_seconds": elapsed,
         "frames_generated": frames,
         "generator_fps": frames / elapsed,

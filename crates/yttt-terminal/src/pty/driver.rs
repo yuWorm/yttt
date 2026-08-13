@@ -17,7 +17,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 pub const READ_BUFFER_BYTES: usize = u16::MAX as usize;
-pub const READ_QUEUE_CAPACITY: usize = 8;
+pub const READ_QUEUE_CAPACITY: usize = 9;
+const READ_BUFFER_POOL_CAPACITY: usize = 8;
 pub const MAX_COMMANDS: usize = 1024;
 pub const MAX_USER_COMMANDS: usize = 768;
 pub const MAX_WRITE_CHUNK_BYTES: usize = 64 * 1024;
@@ -187,7 +188,6 @@ impl PtyCommandQueue {
     }
 
     #[cfg(test)]
-
     pub(crate) fn enqueue_input(&self, bytes: Bytes) -> Result<(), String> {
         self.enqueue_input_sampled(bytes, None)
     }
@@ -247,17 +247,17 @@ impl PtyCommandQueue {
             return Err("PTY reply queue capacity exceeded".to_string());
         }
 
-        let mut insert_at = state
+        let insert_at = state
             .commands
             .iter()
             .position(|command| matches!(command, PtyCommand::WriteInput(_)))
             .unwrap_or(state.commands.len());
-        for offset in (0..bytes.len()).step_by(MAX_WRITE_CHUNK_BYTES) {
+        for (chunk_index, offset) in (0..bytes.len()).step_by(MAX_WRITE_CHUNK_BYTES).enumerate() {
             let end = (offset + MAX_WRITE_CHUNK_BYTES).min(bytes.len());
-            state
-                .commands
-                .insert(insert_at, PtyCommand::WriteReply(bytes.slice(offset..end)));
-            insert_at += 1;
+            state.commands.insert(
+                insert_at + chunk_index,
+                PtyCommand::WriteReply(bytes.slice(offset..end)),
+            );
         }
         state.reply_bytes += bytes.len();
         self.diagnostics
@@ -408,7 +408,6 @@ pub(crate) struct PtyIoDriver {
 
 impl PtyIoDriver {
     #[cfg(test)]
-
     pub(crate) fn start<W, R>(
         writer: W,
         reader: R,
@@ -450,8 +449,8 @@ impl PtyIoDriver {
         };
         let cancelled = Arc::new(AtomicBool::new(false));
         let (read_tx, read_rx) = flume::bounded(READ_QUEUE_CAPACITY);
-        let (buffer_tx, buffer_rx) = flume::bounded(READ_QUEUE_CAPACITY + 1);
-        for _ in 0..=READ_QUEUE_CAPACITY {
+        let (buffer_tx, buffer_rx) = flume::bounded(READ_BUFFER_POOL_CAPACITY);
+        for _ in 0..READ_BUFFER_POOL_CAPACITY {
             let buffer: Box<[u8; READ_BUFFER_BYTES]> = vec![0; READ_BUFFER_BYTES]
                 .into_boxed_slice()
                 .try_into()
@@ -527,7 +526,6 @@ impl PtyIoDriver {
     }
 
     #[cfg(any(test, debug_assertions))]
-
     pub(crate) fn diagnostics(&self) -> PtyDiagnosticsSnapshot {
         self.diagnostics.snapshot()
     }
@@ -969,7 +967,7 @@ mod tests {
         let diagnostics = driver.diagnostics();
         assert_eq!(diagnostics.bytes_read, 11);
         assert_eq!(diagnostics.parser_batches, 2);
-        assert!(diagnostics.read_batches_high_water <= READ_QUEUE_CAPACITY);
+        assert!(diagnostics.read_batches_high_water < READ_QUEUE_CAPACITY);
         let redraw_deadline = Instant::now() + Duration::from_secs(2);
         let mut redraw_requested = false;
         while !redraw_requested && Instant::now() < redraw_deadline {

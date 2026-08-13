@@ -407,10 +407,10 @@ impl ColorPalette {
 
     /// Resolve an OSC color query without converting configured RGB through HSL.
     pub fn query_rgb(&self, index: usize, colors: &Colors) -> Option<Rgb> {
-        if index <= NamedColor::DimForeground as usize {
-            if let Some(rgb) = colors[index] {
-                return Some(rgb);
-            }
+        if index <= NamedColor::DimForeground as usize
+            && let Some(rgb) = colors[index]
+        {
+            return Some(rgb);
         }
 
         match index {
@@ -432,6 +432,14 @@ impl ColorPalette {
             }
             _ => None,
         }
+    }
+    /// Returns the complete OSC color-query palette as packed `0xRRGGBB` values.
+    pub fn query_palette(&self) -> Vec<u32> {
+        let overrides = Colors::default();
+        (0..=NamedColor::DimForeground as usize)
+            .filter_map(|index| self.query_rgb(index, &overrides))
+            .map(|rgb| (u32::from(rgb.r) << 16) | (u32::from(rgb.g) << 8) | u32::from(rgb.b))
+            .collect()
     }
 
     /// Gets a reference to the ANSI color palette.

@@ -26,4 +26,5 @@ pub mod profile;
 pub mod settings;
 pub mod ssh;
 pub mod ssh_command;
+pub mod terminal_placements;
 pub mod theme;

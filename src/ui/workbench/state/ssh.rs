@@ -13,7 +13,7 @@ use yttt_core::model::{
     ids::{ConnectionId, CredentialId},
     project::RemotePathBuf,
 };
-use yttt_ssh::{ConnectionEpoch, ConnectionStatus, HostKeyChallenge, TransportService};
+pub(in super::super) use yttt_protocol::ssh::SshConnectionState as ConnectionState;
 
 use crate::{
     config::{
@@ -46,6 +46,26 @@ pub(in super::super) struct SshProjectDirectory {
     pub(in super::super) path: RemotePathBuf,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in super::super) struct ConnectionStatus {
+    pub(in super::super) connection_id: ConnectionId,
+    pub(in super::super) epoch: u64,
+    pub(in super::super) state: ConnectionState,
+    pub(in super::super) error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in super::super) struct HostKeyChallenge {
+    pub(in super::super) challenge_id: u64,
+    pub(in super::super) connection_id: ConnectionId,
+    pub(in super::super) epoch: u64,
+    pub(in super::super) host: String,
+    pub(in super::super) port: u16,
+    pub(in super::super) algorithm: String,
+    pub(in super::super) fingerprint: String,
+    pub(in super::super) previous_fingerprint: Option<String>,
+}
+
 #[derive(Default)]
 pub(in super::super) struct SshProjectPickerState {
     pub(in super::super) open: bool,
@@ -57,7 +77,7 @@ pub(in super::super) struct SshProjectPickerState {
     pub(in super::super) loading: bool,
     pub(in super::super) generation: u64,
     pub(in super::super) connection_generation: u64,
-    pub(in super::super) connection_epoch: Option<ConnectionEpoch>,
+    pub(in super::super) connection_epoch: Option<u64>,
     pub(in super::super) error: Option<String>,
     pub(in super::super) path_input: Option<Entity<InputState>>,
     pub(in super::super) path_input_subscription: Option<Subscription>,
@@ -82,7 +102,6 @@ impl SshProjectPickerState {
 }
 pub(in super::super) struct SshControllerState {
     pub(in super::super) connections: SshConnectionsConfig,
-    pub(in super::super) transport: Option<TransportService>,
     pub(in super::super) statuses: HashMap<ConnectionId, ConnectionStatus>,
     pub(in super::super) manager_open: bool,
     pub(in super::super) form: Option<SshConnectionForm>,
@@ -101,12 +120,10 @@ impl SshControllerState {
             Ok(config) => (config, None),
             Err(error) => (SshConnectionsConfig::default(), Some(error.to_string())),
         };
-        let transport = None;
         let load_error = config_error;
         (
             Self {
                 connections,
-                transport,
                 statuses: HashMap::new(),
                 manager_open: false,
                 form: None,

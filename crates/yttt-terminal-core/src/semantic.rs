@@ -19,7 +19,8 @@ use yttt_protocol::terminal::TerminalStreamUpdate::{Delta, Snapshot};
 use yttt_protocol::terminal::{
     CursorShape, DynamicColor, SemanticColor, SemanticCursor, SemanticDelta, SemanticRow,
     SemanticSpan, SemanticStyle, SemanticViewport, TerminalCheckpoint, TerminalGeometry,
-    TerminalModes, TerminalPalette, TerminalProcessState, TerminalStreamUpdate,
+    TerminalModes, TerminalPalette, TerminalProcessState, TerminalSearchMatch,
+    TerminalSearchResults, TerminalStreamUpdate, TerminalViewportAnchor,
 };
 
 use crate::TerminalState;
@@ -102,7 +103,7 @@ impl SemanticSnapshotter {
         state: &TerminalState<L>,
         context: &SemanticCaptureContext,
     ) -> TerminalStreamUpdate {
-        let captured = state.with_term_mut(capture_term);
+        let mut captured = state.with_term_mut(capture_term);
         self.sequence = self.sequence.saturating_add(1);
         let geometry_changed = self
             .previous_geometry_epoch
@@ -133,51 +134,11 @@ impl SemanticSnapshotter {
             self.logical_line_offset += shift as i64;
         }
 
-        let mut rows = Vec::with_capacity(captured.rows.len());
-        for raw in captured.rows {
-            let key = self.logical_line_offset + i64::from(raw.grid_line);
-            let line_id = match self.line_ids.get(&key).copied() {
-                Some(line_id) => line_id,
-                None => {
-                    let line_id = self.next_line_id;
-                    self.next_line_id = self.next_line_id.saturating_add(1);
-                    self.line_ids.insert(key, line_id);
-                    line_id
-                }
-            };
-            rows.push(SemanticRow {
-                line_id,
-                viewport_row: raw.viewport_row,
-                spans: raw.spans,
-            });
-        }
-        self.prune_line_ids(captured.history_size, captured.screen_lines);
-
-        let mut geometry = context.geometry;
-        geometry.cols = u16::try_from(captured.columns).unwrap_or(u16::MAX);
-        geometry.rows = u16::try_from(captured.screen_lines).unwrap_or(u16::MAX);
-        let viewport = SemanticViewport {
-            session_id: self.session_id.clone(),
-            session_epoch: self.session_epoch,
-            sequence: self.sequence,
-            geometry,
-            geometry_epoch: context.geometry_epoch,
-            scrollback_epoch: self.scrollback_epoch,
-            history_size: captured.history_size as u64,
-            display_offset: captured.display_offset as u64,
-            rows,
-            cursor: captured.cursor,
-            modes: TerminalModes {
-                bits: captured.mode_bits,
-                title: context.title.clone(),
-                cwd: context.cwd.clone(),
-            },
-            palette: TerminalPalette {
-                colors: captured.palette,
-                revision: context.palette_revision,
-            },
-            process_state: context.process_state,
-        };
+        let history_size = captured.history_size;
+        let display_offset = captured.display_offset;
+        let fingerprints = std::mem::take(&mut captured.fingerprints);
+        let alt_screen = captured.alt_screen;
+        let viewport = self.viewport_from_captured(captured, context, self.sequence);
 
         let update = match self.previous.as_ref() {
             Some(previous)
@@ -188,12 +149,12 @@ impl SemanticSnapshotter {
             }
             _ => Snapshot(viewport.clone()),
         };
-        self.previous_history_size = captured.history_size;
-        if captured.display_offset == 0 {
-            self.previous_bottom_fingerprints = captured.fingerprints;
+        self.previous_history_size = history_size;
+        if display_offset == 0 {
+            self.previous_bottom_fingerprints = fingerprints;
         }
         self.previous_geometry_epoch = Some(context.geometry_epoch);
-        self.previous_alt_screen = Some(captured.alt_screen);
+        self.previous_alt_screen = Some(alt_screen);
         self.previous = Some(viewport);
         update
     }
@@ -213,6 +174,167 @@ impl SemanticSnapshotter {
             raw_tail_start_sequence,
         })
     }
+    pub fn read_viewport<L: EventListener>(
+        &mut self,
+        state: &TerminalState<L>,
+        context: &SemanticCaptureContext,
+        scrollback_epoch: u64,
+        anchor: TerminalViewportAnchor,
+    ) -> Result<SemanticViewport, SemanticAccessError> {
+        self.validate_scrollback_epoch(scrollback_epoch)?;
+        let history_size = self.previous.as_ref().map_or(0, |frame| frame.history_size);
+        let display_offset = match anchor {
+            TerminalViewportAnchor::Bottom => 0,
+            TerminalViewportAnchor::DisplayOffset(offset) => offset.min(history_size),
+            TerminalViewportAnchor::LineId(line_id) => {
+                let logical_line = self
+                    .line_ids
+                    .iter()
+                    .find_map(|(logical_line, candidate)| {
+                        (*candidate == line_id).then_some(*logical_line)
+                    })
+                    .ok_or(SemanticAccessError::UnknownLineId(line_id))?;
+                u64::try_from(self.logical_line_offset.saturating_sub(logical_line))
+                    .unwrap_or_default()
+                    .min(history_size)
+            }
+        };
+        let captured = state.with_term_mut(|term| {
+            capture_term_with_offset(
+                term,
+                Some(usize::try_from(display_offset).unwrap_or(usize::MAX)),
+            )
+        });
+        Ok(self.viewport_from_captured(captured, context, self.sequence))
+    }
+
+    pub fn search<L: EventListener>(
+        &mut self,
+        state: &TerminalState<L>,
+        scrollback_epoch: u64,
+        generation: u64,
+        query: &str,
+        case_sensitive: bool,
+        max_results: u16,
+    ) -> Result<TerminalSearchResults, SemanticAccessError> {
+        self.validate_scrollback_epoch(scrollback_epoch)?;
+        if query.is_empty() || max_results == 0 {
+            return Err(SemanticAccessError::InvalidSearch);
+        }
+        let needle = if case_sensitive {
+            query.to_string()
+        } else {
+            query.to_ascii_lowercase()
+        };
+        let limit = usize::from(max_results);
+        let mut matches = Vec::with_capacity(limit.min(64));
+        let mut truncated = false;
+        state.with_term_mut(|term| {
+            let columns = term.columns();
+            let screen_lines = term.screen_lines();
+            let history_size = term.grid().total_lines().saturating_sub(screen_lines);
+            for grid_line in -(history_size as i32)..screen_lines as i32 {
+                let text = plain_text_row(term, Line(grid_line), columns);
+                let haystack = if case_sensitive {
+                    text.clone()
+                } else {
+                    text.to_ascii_lowercase()
+                };
+                for (byte_start, found) in haystack.match_indices(&needle) {
+                    if matches.len() == limit {
+                        truncated = true;
+                        return;
+                    }
+                    let byte_end = byte_start.saturating_add(found.len());
+                    let start_column =
+                        u16::try_from(text[..byte_start].chars().count()).unwrap_or(u16::MAX);
+                    let end_column =
+                        u16::try_from(text[..byte_end].chars().count()).unwrap_or(u16::MAX);
+                    let logical_line = self.logical_line_offset + i64::from(grid_line);
+                    matches.push(TerminalSearchMatch {
+                        line_id: self.line_id_for_key(logical_line),
+                        start_column,
+                        end_column,
+                    });
+                }
+            }
+        });
+        Ok(TerminalSearchResults {
+            session_id: self.session_id.clone(),
+            session_epoch: self.session_epoch,
+            scrollback_epoch,
+            generation,
+            matches,
+            truncated,
+        })
+    }
+
+    fn validate_scrollback_epoch(&self, received: u64) -> Result<(), SemanticAccessError> {
+        if received == self.scrollback_epoch {
+            Ok(())
+        } else {
+            Err(SemanticAccessError::StaleScrollback {
+                received,
+                current: self.scrollback_epoch,
+            })
+        }
+    }
+
+    fn line_id_for_key(&mut self, key: i64) -> u64 {
+        match self.line_ids.get(&key).copied() {
+            Some(line_id) => line_id,
+            None => {
+                let line_id = self.next_line_id;
+                self.next_line_id = self.next_line_id.saturating_add(1);
+                self.line_ids.insert(key, line_id);
+                line_id
+            }
+        }
+    }
+
+    fn viewport_from_captured(
+        &mut self,
+        captured: CapturedTerminal,
+        context: &SemanticCaptureContext,
+        sequence: u64,
+    ) -> SemanticViewport {
+        let mut rows = Vec::with_capacity(captured.rows.len());
+        for raw in captured.rows {
+            let key = self.logical_line_offset + i64::from(raw.grid_line);
+            rows.push(SemanticRow {
+                line_id: self.line_id_for_key(key),
+                viewport_row: raw.viewport_row,
+                spans: raw.spans,
+            });
+        }
+        self.prune_line_ids(captured.history_size, captured.screen_lines);
+
+        let mut geometry = context.geometry;
+        geometry.cols = u16::try_from(captured.columns).unwrap_or(u16::MAX);
+        geometry.rows = u16::try_from(captured.screen_lines).unwrap_or(u16::MAX);
+        SemanticViewport {
+            session_id: self.session_id.clone(),
+            session_epoch: self.session_epoch,
+            sequence,
+            geometry,
+            geometry_epoch: context.geometry_epoch,
+            scrollback_epoch: self.scrollback_epoch,
+            history_size: captured.history_size as u64,
+            display_offset: captured.display_offset as u64,
+            rows,
+            cursor: captured.cursor,
+            modes: TerminalModes {
+                bits: captured.mode_bits,
+                title: context.title.clone(),
+                cwd: context.cwd.clone(),
+            },
+            palette: TerminalPalette {
+                colors: captured.palette,
+                revision: context.palette_revision,
+            },
+            process_state: context.process_state,
+        }
+    }
 
     pub fn session_epoch(&self) -> u64 {
         self.session_epoch
@@ -224,6 +346,13 @@ impl SemanticSnapshotter {
         self.line_ids
             .retain(|line, _| *line >= minimum && *line <= maximum);
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticAccessError {
+    StaleScrollback { received: u64, current: u64 },
+    UnknownLineId(u64),
+    InvalidSearch,
 }
 
 struct CapturedTerminal {
@@ -246,9 +375,16 @@ struct RawSemanticRow {
 }
 
 fn capture_term<L: EventListener>(term: &mut Term<L>) -> CapturedTerminal {
+    capture_term_with_offset(term, None)
+}
+
+fn capture_term_with_offset<L: EventListener>(
+    term: &mut Term<L>,
+    requested_display_offset: Option<usize>,
+) -> CapturedTerminal {
     let columns = term.columns();
     let screen_lines = term.screen_lines();
-    let (display_offset, cursor, colors, mode) = {
+    let (canonical_display_offset, cursor, colors, mode) = {
         let content = term.renderable_content();
         (
             content.display_offset,
@@ -258,6 +394,9 @@ fn capture_term<L: EventListener>(term: &mut Term<L>) -> CapturedTerminal {
         )
     };
     let history_size = term.grid().total_lines().saturating_sub(screen_lines);
+    let display_offset = requested_display_offset
+        .unwrap_or(canonical_display_offset)
+        .min(history_size);
     let cursor_viewport = term::point_to_viewport(display_offset, cursor.point);
     let cursor = SemanticCursor {
         row: cursor_viewport
@@ -306,6 +445,19 @@ fn capture_term<L: EventListener>(term: &mut Term<L>) -> CapturedTerminal {
         alt_screen: mode.contains(TermMode::ALT_SCREEN),
         palette: dynamic_palette(&colors),
     }
+}
+
+fn plain_text_row<L: EventListener>(term: &Term<L>, line: Line, columns: usize) -> String {
+    let grid = term.grid();
+    let mut text = String::with_capacity(columns);
+    for column in 0..columns {
+        let cell = &grid[Point::new(line, Column(column))];
+        if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+            continue;
+        }
+        append_cell_text(&mut text, cell);
+    }
+    text
 }
 
 fn append_semantic_cell(spans: &mut Vec<SemanticSpan>, column: usize, cell: &Cell) {

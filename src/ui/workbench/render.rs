@@ -21,6 +21,16 @@ impl Render for WorkbenchView {
         self.sync_input_owner_state();
         self.prune_terminal_panes();
         self.ensure_eager_terminal_panes(window, cx);
+        #[cfg(feature = "perf-metrics")]
+        if std::env::var_os("YTTT_TERMINAL_PERF_OUTPUT").is_some()
+            && let Some(terminal) = self.terminal.terminal_panes.iter().find_map(|(key, pane)| {
+                key.ends_with(":perf:perf")
+                    .then(|| pane.read(cx).performance_terminal())
+                    .flatten()
+            })
+        {
+            return div().flex().size_full().overflow_hidden().child(terminal);
+        }
         self.ensure_vim_key_feedback_observers(window, cx);
         self.sync_vim_controller(window, cx);
         let focus_handle = self.workbench_focus_handle(cx);
@@ -267,10 +277,10 @@ impl Render for WorkbenchView {
                 }
             }
         }
-        if self.settings.settings_page.is_open {
-            if let Some(search_input) = self.settings_search_input(window, cx) {
-                root = root.child(settings_overlay(self, &search_input, window, cx));
-            }
+        if self.settings.settings_page.is_open
+            && let Some(search_input) = self.settings_search_input(window, cx)
+        {
+            root = root.child(settings_overlay(self, &search_input, window, cx));
         }
         if self.ssh.project_picker.open {
             root = root.child(ssh_project_picker_overlay(self, window, cx));
@@ -288,18 +298,18 @@ impl Render for WorkbenchView {
                 appearance.ui,
             ));
         }
-        if self.overlays.layout_toml_editor.is_some() {
-            if let Some(input) = self.layout_toml_input(window, cx) {
-                root = root.child(layout_toml_editor_overlay(self, &input, cx));
-            }
+        if self.overlays.layout_toml_editor.is_some()
+            && let Some(input) = self.layout_toml_input(window, cx)
+        {
+            root = root.child(layout_toml_editor_overlay(self, &input, cx));
         }
         if let Some(panel) = self.render_git_diff_panel(window, cx) {
             root = root.child(panel);
         }
-        if self.overlays.pending_tab_rename.is_some() {
-            if let Some(input) = self.tab_rename_input(window, cx) {
-                root = root.child(tab_rename_dialog(cx, &self.ui_text, &input, appearance.ui));
-            }
+        if self.overlays.pending_tab_rename.is_some()
+            && let Some(input) = self.tab_rename_input(window, cx)
+        {
+            root = root.child(tab_rename_dialog(cx, &self.ui_text, &input, appearance.ui));
         }
         if self.overlays.pending_keybinding_edit.is_some() {
             if self.overlays.keybinding_recorder_needs_focus {

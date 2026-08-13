@@ -36,7 +36,7 @@ PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-CloseApplications=force
+CloseApplications=yes
 RestartApplications=no
 
 [Languages]
@@ -61,6 +61,47 @@ Root: HKA; Subkey: "Software\Classes\Directory\shell\yttt\command"; ValueType: s
 Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\yttt"; ValueType: string; ValueName: ""; ValueData: "Open with yttt"; Tasks: foldercontext; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\yttt"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#MyAppExeName},0"; Tasks: foldercontext
 Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\yttt\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%V"""; Tasks: foldercontext
+
+[Code]
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  InstalledBinary: String;
+  ReportFile: String;
+  Detail: AnsiString;
+  ResultCode: Integer;
+begin
+  Result := '';
+  InstalledBinary := ExpandConstant('{app}\{#MyAppExeName}');
+  if not FileExists(InstalledBinary) then
+    exit;
+
+  ReportFile := ExpandConstant('{tmp}\yttt-host-preflight.txt');
+  DeleteFile(ReportFile);
+  if not Exec(
+    InstalledBinary,
+    '--installer-host-preflight ' + AddQuotes(ReportFile),
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode)
+  then
+  begin
+    Result := 'Unable to run the installed yttt Host upgrade preflight.';
+    exit;
+  end;
+
+  if ResultCode <> 0 then
+  begin
+    if not LoadStringFromFile(ReportFile, Detail) then
+      Detail := 'The installed yttt Host did not provide blocker details.';
+    if ResultCode = 2 then
+      Result :=
+        'yttt cannot be upgraded while the Host owns running or unacknowledged resources.' +
+        #13#10 + Trim(Detail)
+    else
+      Result := 'yttt Host upgrade preflight failed.' + #13#10 + Trim(Detail);
+  end;
+end;
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent

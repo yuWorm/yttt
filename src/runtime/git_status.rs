@@ -1,4 +1,3 @@
-#[cfg(test)]
 use std::process::{Command, Stdio};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -6,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[cfg(all(test, windows))]
+#[cfg(windows)]
 fn git_command() -> Command {
     use std::os::windows::process::CommandExt as _;
 
@@ -17,7 +16,7 @@ fn git_command() -> Command {
     command
 }
 
-#[cfg(all(test, not(windows)))]
+#[cfg(not(windows))]
 fn git_command() -> Command {
     Command::new("git")
 }
@@ -58,7 +57,6 @@ impl ProjectGitExecutor for LocalGitExecutor<'_> {
         null_device_path()
     }
 }
-#[cfg(test)]
 pub(crate) fn execute_local_git(
     project_path: &Path,
     args: &[OsString],

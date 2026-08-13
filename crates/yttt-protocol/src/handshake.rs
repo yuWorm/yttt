@@ -49,7 +49,21 @@ pub struct ClientHello {
     pub profile_id: ProfileId,
     pub client_instance_id: ClientInstanceId,
     pub host_epoch_hint: Option<u64>,
+    #[serde(default)]
+    pub can_force_stop: bool,
     pub nonce: Nonce,
+    #[serde(default)]
+    pub channel: ConnectionChannel,
+    #[serde(default)]
+    pub terminal_session_id: Option<yttt_core::model::ids::TerminalSessionId>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConnectionChannel {
+    #[default]
+    Control,
+    TerminalData,
+    Lifecycle,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

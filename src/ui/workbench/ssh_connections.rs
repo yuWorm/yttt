@@ -4,15 +4,18 @@ use gpui_component::{
     list::{List, ListEvent, ListState},
     radio::RadioGroup,
 };
+use yttt_client_core::ClientEvent;
 use yttt_core::model::{
     ids::{ConnectionId, CredentialId},
     project::RemotePathBuf,
 };
-use yttt_ssh::{
-    Authentication, ConnectRequest, ConnectionEpoch, ConnectionState, HostKeyDecision, SshEndpoint,
-    StoredCredential, TransportError, TransportEvent,
+use yttt_protocol::{
+    Request, Response, ServerEvent,
+    ssh::{
+        CredentialAnswer, CredentialChallengeKind, HostKeyDecision, SensitiveBytes,
+        SshAuthentication, SshConnectSpec, SshEndpoint, StoredSshCredential,
+    },
 };
-use zeroize::Zeroizing;
 
 use crate::config::ssh::{
     CredentialBinding, CredentialKind, CredentialRef, SshAuthPreference, SshConnectionConfig,
@@ -22,21 +25,51 @@ use crate::config::ssh_command::{format_ssh_command, parse_ssh_command};
 
 use super::*;
 
+pub(super) async fn request_host(
+    runtime: Option<Arc<crate::host_runtime::DesktopHostRuntime>>,
+    request: Request,
+) -> Result<Response, String> {
+    let runtime = runtime.ok_or_else(|| "Host runtime is unavailable".to_string())?;
+    runtime
+        .request(request)
+        .recv_async()
+        .await
+        .map_err(|_| "Host request channel closed".to_string())?
+        .map_err(|error| error.to_string())
+}
+
+pub(super) async fn disconnect_host_ssh(
+    runtime: Option<Arc<crate::host_runtime::DesktopHostRuntime>>,
+    connection_id: ConnectionId,
+) -> Result<(), String> {
+    match request_host(
+        runtime,
+        Request::SshDisconnect {
+            connection_id: connection_id.as_str().to_string(),
+        },
+    )
+    .await?
+    {
+        Response::SshDisconnected => Ok(()),
+        response => Err(format!(
+            "Host returned an unexpected SSH disconnect response: {response:?}"
+        )),
+    }
+}
+
 async fn delete_host_credential(
     runtime: Option<Arc<crate::host_runtime::DesktopHostRuntime>>,
     credential_id: CredentialId,
 ) -> Result<(), String> {
-    let runtime = runtime.ok_or_else(|| "Host runtime is unavailable".to_string())?;
-    let response = runtime
-        .request(yttt_protocol::Request::DeleteSshCredential {
+    match request_host(
+        runtime,
+        Request::DeleteSshCredential {
             credential_id: credential_id.to_string(),
-        })
-        .recv_async()
-        .await
-        .map_err(|_| "Host request channel closed".to_string())?
-        .map_err(|error| error.to_string())?;
-    match response {
-        yttt_protocol::Response::CredentialDeleted => Ok(()),
+        },
+    )
+    .await?
+    {
+        Response::CredentialDeleted => Ok(()),
         response => Err(format!(
             "Host returned an unexpected credential response: {response:?}"
         )),
@@ -48,15 +81,18 @@ impl WorkbenchView {
         if self.ssh.event_task.is_some() {
             return;
         }
-        let Some(transport) = self.ssh.transport.as_ref() else {
+        let Some(runtime) = self.terminal.host_runtime.as_ref() else {
             return;
         };
-        let events = transport.events();
+        let events = runtime.events();
         self.ssh.event_task = Some(cx.spawn(async move |this, cx| {
-            while let Ok(event) = events.recv().await {
+            while let Ok(event) = events.recv_async().await {
+                let ClientEvent::Server(event) = event else {
+                    continue;
+                };
                 if this
                     .update(cx, |root, cx| {
-                        root.apply_ssh_transport_event(event, cx);
+                        root.apply_ssh_host_event(event.body, cx);
                         cx.notify();
                     })
                     .is_err()
@@ -67,14 +103,20 @@ impl WorkbenchView {
         }));
     }
 
-    fn apply_ssh_transport_event(&mut self, event: TransportEvent, cx: &mut Context<Self>) {
+    fn apply_ssh_host_event(&mut self, event: ServerEvent, cx: &mut Context<Self>) {
         match event {
-            TransportEvent::StateChanged(status) => {
+            ServerEvent::SshStateChanged(status) => {
+                let status = ConnectionStatus {
+                    connection_id: ConnectionId::new(status.connection_id),
+                    epoch: status.epoch,
+                    state: status.state,
+                    error: status.error,
+                };
                 if self
                     .ssh
                     .statuses
                     .get(&status.connection_id)
-                    .is_some_and(|current| current.epoch.get() > status.epoch.get())
+                    .is_some_and(|current| current.epoch > status.epoch)
                 {
                     return;
                 }
@@ -109,7 +151,33 @@ impl WorkbenchView {
                     }
                 }
             }
-            TransportEvent::HostKeyChallenge(challenge) => {
+            ServerEvent::CredentialChallenge(challenge) => {
+                let connection_id = ConnectionId::new(challenge.connection_id);
+                let epoch = self
+                    .ssh
+                    .statuses
+                    .get(&connection_id)
+                    .map_or(0, |status| status.epoch);
+                let CredentialChallengeKind::HostKey {
+                    host,
+                    port,
+                    algorithm,
+                    fingerprint,
+                    previous_fingerprint,
+                } = challenge.kind
+                else {
+                    return;
+                };
+                let challenge = HostKeyChallenge {
+                    challenge_id: challenge.challenge_id,
+                    connection_id,
+                    epoch,
+                    host,
+                    port,
+                    algorithm,
+                    fingerprint,
+                    previous_fingerprint,
+                };
                 let is_current = self
                     .ssh
                     .statuses
@@ -124,17 +192,16 @@ impl WorkbenchView {
                 if is_current {
                     self.ssh.pending_host_keys.push_back(challenge);
                 } else {
-                    let _ = challenge.respond(HostKeyDecision {
-                        accept: false,
-                        remember: false,
-                    });
+                    self.send_ssh_host_key_answer(challenge, false, false);
                 }
             }
-            TransportEvent::CredentialSaved {
+            ServerEvent::SshCredentialSaved {
                 connection_id,
                 epoch,
                 credential,
             } => {
+                let connection_id = ConnectionId::new(connection_id);
+                let credential_id = CredentialId::new(credential.id);
                 let current_epoch_matches = self
                     .ssh
                     .statuses
@@ -143,7 +210,7 @@ impl WorkbenchView {
                 if !current_epoch_matches {
                     let runtime = self.terminal.host_runtime.clone();
                     cx.background_spawn(async move {
-                        let _ = delete_host_credential(runtime, credential.id).await;
+                        let _ = delete_host_credential(runtime, credential_id).await;
                     })
                     .detach();
                     return;
@@ -155,7 +222,7 @@ impl WorkbenchView {
                     .find(|connection| connection.id == connection_id)
                 {
                     connection.credential = Some(CredentialRef {
-                        id: credential.id.clone(),
+                        id: credential_id.clone(),
                         kind: CredentialKind::LoginPassword,
                         binding: CredentialBinding {
                             connection_id: connection_id.clone(),
@@ -186,7 +253,6 @@ impl WorkbenchView {
                     Err(error) => {
                         self.ssh.error = Some(error.to_string());
                         let runtime = self.terminal.host_runtime.clone();
-                        let credential_id = credential.id;
                         cx.background_spawn(async move {
                             let _ = delete_host_credential(runtime, credential_id).await;
                         })
@@ -194,6 +260,7 @@ impl WorkbenchView {
                     }
                 }
             }
+            _ => {}
         }
     }
 
@@ -505,18 +572,17 @@ impl WorkbenchView {
         });
         if disconnect_changed_connection && requires_reconnect && connection_was_active {
             self.ssh.statuses.remove(&connection.id);
-            if let Some(transport) = self.ssh.transport.clone() {
-                let connection_id = connection.id.clone();
-                cx.spawn(async move |this, cx| {
-                    if let Err(error) = transport.disconnect(connection_id).await {
-                        let _ = this.update(cx, |root, cx| {
-                            root.ssh.error = Some(error.to_string());
-                            cx.notify();
-                        });
-                    }
-                })
-                .detach();
-            }
+            let runtime = self.terminal.host_runtime.clone();
+            let connection_id = connection.id.clone();
+            cx.spawn(async move |this, cx| {
+                if let Err(error) = disconnect_host_ssh(runtime, connection_id).await {
+                    let _ = this.update(cx, |root, cx| {
+                        root.ssh.error = Some(error);
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
         }
         if let Some(credential_id) = stale_credential_id {
             let runtime = self.terminal.host_runtime.clone();
@@ -584,26 +650,29 @@ impl WorkbenchView {
                 )
             })
             .unwrap_or_default();
-        let key_passphrase = (!key_passphrase.is_empty()).then(|| Zeroizing::new(key_passphrase));
+        let key_passphrase = (!key_passphrase.is_empty()).then_some(key_passphrase);
         let authentication = match connection.auth {
-            SshAuthPreference::Auto => Authentication::Auto {
-                identity_file: connection.identity_file.clone(),
-                passphrase: key_passphrase,
+            SshAuthPreference::Auto => SshAuthentication::Auto {
+                identity_file: connection
+                    .identity_file
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned()),
+                passphrase: key_passphrase.map(|secret| SensitiveBytes::new(secret.into_bytes())),
                 credential: connection
                     .credential
                     .as_ref()
                     .map(stored_credential_from_ref),
             },
-            SshAuthPreference::Agent => Authentication::Agent,
+            SshAuthPreference::Agent => SshAuthentication::Agent,
             SshAuthPreference::Password if password.is_empty() => {
                 let Some(credential) = connection.credential.as_ref() else {
                     self.ssh.error = Some("Enter a password before connecting.".to_string());
                     return;
                 };
-                Authentication::StoredPassword(stored_credential_from_ref(credential))
+                SshAuthentication::StoredPassword(stored_credential_from_ref(credential))
             }
-            SshAuthPreference::Password => Authentication::Password {
-                secret: Zeroizing::new(password),
+            SshAuthPreference::Password => SshAuthentication::Password {
+                secret: SensitiveBytes::new(password.into_bytes()),
                 save_as: self
                     .ssh
                     .form
@@ -615,44 +684,48 @@ impl WorkbenchView {
                             .as_ref()
                             .expect("form checked above")
                             .credential_id
-                            .clone()
+                            .to_string()
                     }),
             },
             SshAuthPreference::PublicKey => {
-                let Some(path) = connection.identity_file.clone() else {
+                let Some(path) = connection.identity_file.as_ref() else {
                     self.ssh.error =
                         Some("Private-key authentication requires an identity file.".to_string());
                     return;
                 };
-                Authentication::PrivateKey {
-                    path,
-                    passphrase: key_passphrase,
+                SshAuthentication::PrivateKey {
+                    path: path.to_string_lossy().into_owned(),
+                    passphrase: key_passphrase
+                        .map(|secret| SensitiveBytes::new(secret.into_bytes())),
                 }
             }
         };
-        let Some(transport) = self.ssh.transport.clone() else {
-            self.ssh.error = Some("SSH runtime is unavailable.".to_string());
-            return;
-        };
+        let runtime = self.terminal.host_runtime.clone();
         self.ssh.error = None;
         cx.spawn_in(window, async move |this, cx| {
-            let result = transport
-                .connect(ConnectRequest {
-                    connection_id,
+            let result = request_host(
+                runtime,
+                Request::SshConnect(SshConnectSpec {
+                    connection_id: connection_id.as_str().to_string(),
                     endpoint: SshEndpoint {
                         host: connection.host,
                         port: connection.port,
-                        user: connection.user,
+                        username: connection.user,
                     },
                     authentication,
                     reconnect: false,
-                })
-                .await;
+                }),
+            )
+            .await
+            .and_then(|response| match response {
+                Response::SshConnected { .. } => Ok(()),
+                response => Err(format!(
+                    "Host returned an unexpected SSH connect response: {response:?}"
+                )),
+            });
             let _ = this.update_in(cx, |root, _window, cx| {
-                if let Err(error) = result
-                    && !matches!(error, TransportError::Superseded)
-                {
-                    root.ssh.error = Some(error.to_string());
+                if let Err(error) = result {
+                    root.ssh.error = Some(error);
                 }
                 cx.notify();
             });
@@ -666,14 +739,12 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(transport) = self.ssh.transport.clone() else {
-            return;
-        };
+        let runtime = self.terminal.host_runtime.clone();
         cx.spawn_in(window, async move |this, cx| {
-            let result = transport.disconnect(connection_id).await;
+            let result = disconnect_host_ssh(runtime, connection_id).await;
             let _ = this.update_in(cx, |root, _window, cx| {
                 if let Err(error) = result {
-                    root.ssh.error = Some(error.to_string());
+                    root.ssh.error = Some(error);
                 }
                 cx.notify();
             });
@@ -746,25 +817,16 @@ impl WorkbenchView {
         }
         self.ssh.error = None;
         self.ssh.statuses.remove(&connection_id);
-        let transport = self.ssh.transport.clone();
         let disconnect_id = connection_id.clone();
         let runtime = self.terminal.host_runtime.clone();
-        let delete_task = cx.background_spawn(async move {
-            match credential_id {
-                Some(credential_id) => delete_host_credential(runtime, credential_id).await,
-                None => Ok(()),
-            }
-        });
         cx.spawn(async move |this, cx| {
-            let disconnect_error = match transport {
-                Some(transport) => transport
-                    .disconnect(disconnect_id)
-                    .await
-                    .err()
-                    .map(|error| error.to_string()),
+            let disconnect_error = disconnect_host_ssh(runtime.clone(), disconnect_id)
+                .await
+                .err();
+            let delete_error = match credential_id {
+                Some(credential_id) => delete_host_credential(runtime, credential_id).await.err(),
                 None => None,
             };
-            let delete_error = delete_task.await.err().map(|error| error.to_string());
             if let Some(error) = disconnect_error.or(delete_error) {
                 let _ = this.update(cx, |root, cx| {
                     root.ssh.error = Some(error);
@@ -826,7 +888,7 @@ impl WorkbenchView {
                 "Connect the SSH endpoint before opening its remote project.".to_string(),
             ));
         }
-        let transport = self.ssh.transport.clone().ok_or_else(|| {
+        let runtime = self.terminal.host_runtime.clone().ok_or_else(|| {
             WorkbenchError::RemoteProject("SSH runtime is unavailable.".to_string())
         })?;
         let title = root
@@ -843,10 +905,24 @@ impl WorkbenchView {
         )?;
         let source_message = layout_source_message(&opened.layout_source);
         let warning_message = layout_load_warning_message(&opened.warnings);
+        let services = ProjectServices::ssh(
+            runtime,
+            opened.descriptor.id.clone(),
+            connection_id,
+            root.clone(),
+        )
+        .map_err(WorkbenchError::RemoteProject)?;
         let already_open = self.workspace.project(&opened.descriptor.id).is_some();
-        let project_id = self
+        let project_id = match self
             .workspace
-            .open_project(opened.descriptor, opened.layout)?;
+            .open_project(opened.descriptor, opened.layout)
+        {
+            Ok(project_id) => project_id,
+            Err(error) => {
+                let _ = services.close_host_registration();
+                return Err(error.into());
+            }
+        };
         if !already_open {
             match mode {
                 ProjectOpenMode::Fresh => self
@@ -863,10 +939,7 @@ impl WorkbenchView {
                 .tab(&project.selected_tab_id)
                 .map(|_| project.selected_tab_id.clone())
         });
-        self.project.services.insert(
-            project_id.clone(),
-            ProjectServices::ssh(transport.sftp_project(connection_id, root.clone())),
-        );
+        self.project.services.insert(project_id.clone(), services);
         self.project.project_editor_runtime.open_project(
             project_id.clone(),
             PathBuf::from(root.as_str()),
@@ -888,15 +961,12 @@ impl WorkbenchView {
     pub(super) fn reject_stale_ssh_host_key_challenges(
         &mut self,
         connection_id: &ConnectionId,
-        epoch: ConnectionEpoch,
+        epoch: u64,
     ) {
         let mut retained = VecDeque::with_capacity(self.ssh.pending_host_keys.len());
         while let Some(challenge) = self.ssh.pending_host_keys.pop_front() {
             if challenge.connection_id == *connection_id && challenge.epoch != epoch {
-                let _ = challenge.respond(HostKeyDecision {
-                    accept: false,
-                    remember: false,
-                });
+                self.send_ssh_host_key_answer(challenge, false, false);
             } else {
                 retained.push_back(challenge);
             }
@@ -991,9 +1061,34 @@ impl WorkbenchView {
         list
     }
 
+    pub(super) fn send_ssh_host_key_answer(
+        &mut self,
+        challenge: HostKeyChallenge,
+        accept: bool,
+        remember: bool,
+    ) {
+        let answer = if !accept {
+            HostKeyDecision::Reject
+        } else if remember {
+            HostKeyDecision::AcceptAndStore
+        } else {
+            HostKeyDecision::AcceptOnce
+        };
+        let Some(runtime) = self.terminal.host_runtime.as_ref() else {
+            self.ssh.error = Some("Host runtime is unavailable.".to_string());
+            return;
+        };
+        if let Err(error) = runtime.request_detached(Request::CredentialAnswer {
+            challenge_id: challenge.challenge_id,
+            answer: CredentialAnswer::HostKey(answer),
+        }) {
+            self.ssh.error = Some(error.to_string());
+        }
+    }
+
     pub fn answer_ssh_host_key(&mut self, accept: bool, remember: bool) {
         if let Some(challenge) = self.ssh.pending_host_keys.pop_front() {
-            let _ = challenge.respond(HostKeyDecision { accept, remember });
+            self.send_ssh_host_key_answer(challenge, accept, remember);
         }
     }
 }
@@ -1544,9 +1639,9 @@ pub(super) fn ssh_host_key_overlay(root: &WorkbenchView, cx: &mut Context<Workbe
     )
 }
 
-pub(super) fn stored_credential_from_ref(credential: &CredentialRef) -> StoredCredential {
-    StoredCredential {
-        id: credential.id.clone(),
+pub(super) fn stored_credential_from_ref(credential: &CredentialRef) -> StoredSshCredential {
+    StoredSshCredential {
+        id: credential.id.to_string(),
         effective_user: credential.binding.effective_user.clone(),
         resolved_host: credential.binding.resolved_host.clone(),
         port: credential.binding.port,

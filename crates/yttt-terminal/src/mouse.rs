@@ -122,8 +122,8 @@ pub fn encode_mouse(
             (point, wheel_code(direction), MouseButtonState::Pressed)
         }
         TerminalMouseEvent::Motion { held_button, point } => {
-            if !mode.contains(TermMode::MOUSE_MOTION)
-                && !(mode.contains(TermMode::MOUSE_DRAG) && held_button.is_some())
+            if !(mode.contains(TermMode::MOUSE_MOTION)
+                || mode.contains(TermMode::MOUSE_DRAG) && held_button.is_some())
             {
                 return None;
             }

@@ -1,6 +1,6 @@
 # yttt P2P、Relay 与多端远程架构
 
-- 状态：本地 C/S 完整切换已实现；公网 P2P、Relay、移动端和完整 tray 生命周期属于后续远程产品范围
+- 状态：Phase 1 本地 C/S Definition of Done 已完成；公网 P2P、Relay、移动端和协作能力尚未实现
 - 更新：2026-08-12
 - 原始代码基线：`master@01f5429`
 - 实现基线：当前工作树
@@ -22,7 +22,7 @@
 7. 协议不得暴露 Host 绝对路径，也不得把 Rust 内部 enum 直接当作长期 Wire ABI。
 8. 移动端后台应按可能断线设计，通过快照和事件序列恢复。
 
-`master@01f5429` 已具备 SSH Project、SFTP、远程终端和稳定资源 ID，但这些能力当时仍由 `WorkbenchView` 生命周期管理。当前本地 C/S 切换已把本地/SSH terminal、项目文件与 Git、Agent 子进程及 hook ingress、SSH runtime 和凭据所有权迁入独立 `yttt-host` 进程；桌面 UI 通过带认证的本地 IPC 使用这些资源。加入移动端和远程网络路径后，目标仍是扩展同一 `yttt-host` 资源服务，而不是另建只包装 PTY 或 SSH channel 的 daemon。
+`master@01f5429` 已具备 SSH Project、SFTP、远程终端和稳定资源 ID，但这些能力当时仍由 `WorkbenchView` 生命周期管理。当前实现已把本地/SSH terminal、项目文件与 Git、Agent 子进程及 hook ingress、SSH runtime 和凭据所有权迁入独立 `yttt-host` 进程；桌面 UI 通过带认证的本地 IPC 使用这些资源。`docs/plans/2026-08-12-local-host-and-remote-follow-up-checklist.md` 的 Phase 1 行为、恢复、安全、性能、资源、三平台和产品 smoke 验收已经完成。加入移动端和远程网络路径后，目标仍是扩展同一 `yttt-host` 资源服务，而不是另建只包装 PTY 或 SSH channel 的 daemon。
 
 ### 1.1 本地 C/S 实现状态
 
@@ -36,6 +36,13 @@
 - 本地/SSH 项目与 Agent hook 通过 Host 请求/事件路径工作；Host 是 SSH keyring 凭据唯一访问者。
 - 开发、测试和 production profile 的 endpoint、token、runtime root、credential namespace 隔离；构建产物包含 Host 进程所需的同一可执行文件。
 - 项目注册进入 Host resource catalog；Host 重启丢失注册状态时，客户端按类型化 `NotFound` 自动重新注册并更新 watcher epoch。
+
+Phase 1 验收已完成：
+
+- 性能 runner 覆盖同机五轮 direct/Host 原始结果、五类 workload、0/1/4/16 local pane、SSH pane、多客户端和 desktop reopen 矩阵。
+- 严格门槛覆盖 Host-only idle CPU、combined RSS、交互延迟、绘制节奏、final sentinel 和零 backlog。
+- 三平台 CI 覆盖 macOS bundle、Windows installer/named-pipe/upgrade、Linux headless/tar 产品 smoke。
+- 产品 smoke 覆盖 local shell、SSH/SFTP/Git/host-key、Agent reconnect、双客户端、慢客户端、desktop reopen 和 Host crash。
 
 本地 C/S 范围之外、尚未落地：
 
@@ -232,8 +239,7 @@ SSH connection ID、凭据、远端绝对 root 和 host-key policy 必须留在 
 
 结论：本地 parser、paint 和 redraw 合并当前没有明显瓶颈。远程架构的主要价值是生命周期、隔离和多端连接，而不是提升本地渲染速度。
 
-本地 C/S 实现后，于 2026-08-12 在同一台 Apple M4 上重新测量 release 构建：
-
+本地 C/S 核心进程边界切换后，于 2026-08-12 在同一台 Apple M4 上重新测量 release 构建：
 | 指标 | 实测结果 |
 |---|---:|
 | 独立 Headless Host 空闲 RSS | 13,632 KiB |

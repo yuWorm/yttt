@@ -4,10 +4,65 @@ impl WorkbenchView {
     pub(super) fn on_application_quit(
         &mut self,
         _: &ApplicationQuit,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.begin_application_quit(cx);
+        self.confirm_application_force_stop(window, cx);
+    }
+
+    pub(super) fn confirm_application_force_stop(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let appearance = self.theme_runtime();
+        let theme = appearance.ui;
+        let ui_style = appearance.style;
+        let workbench = cx.weak_entity();
+        window.open_alert_dialog(cx, move |alert, _, cx| {
+            let workbench = workbench.clone();
+            alert
+                .title("Quit yttt and stop all Host resources?")
+                .description(
+                    "This terminates every running terminal and remote resource. This action cannot be undone.",
+                )
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            yttt_button(
+                                "application-force-stop-cancel",
+                                "Cancel",
+                                YtttButtonVariant::Secondary,
+                                theme,
+                                ui_style,
+                                cx,
+                            )
+                            .debug_selector(|| {
+                                "application-force-stop-cancel".to_string()
+                            })
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(
+                            yttt_button(
+                                "application-force-stop-confirm",
+                                "Stop All and Quit",
+                                YtttButtonVariant::Danger,
+                                theme,
+                                ui_style,
+                                cx,
+                            )
+                            .debug_selector(|| {
+                                "application-force-stop-confirm".to_string()
+                            })
+                            .on_click(move |_, window, cx| {
+                                let _ = workbench.update(cx, |root, root_cx| {
+                                    root.begin_application_quit(root_cx);
+                                });
+                                window.close_dialog(cx);
+                            }),
+                        ),
+                )
+        });
     }
 
     pub(super) fn begin_application_quit(&mut self, cx: &mut Context<Self>) {
@@ -15,10 +70,13 @@ impl WorkbenchView {
             cx.quit();
             return;
         };
-        let response = host_runtime.request(Request::DrainAndStop);
+        let response = host_runtime.request(Request::ForceStop);
         cx.spawn(async move |_, cx| {
-            let _ = response.recv_async().await;
-            let _ = cx.update(|cx| cx.quit());
+            let result = response.recv_async().await;
+            if matches!(result, Ok(Ok(Response::Draining))) {
+                host_runtime.shutdown_client();
+                cx.update(|cx| cx.quit());
+            }
         })
         .detach();
     }
@@ -36,10 +94,10 @@ impl WorkbenchView {
     pub(super) fn on_open_file_finder(
         &mut self,
         _: &OpenFileFinder,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::FileFind, cx);
+        self.dispatch_command_action(CommandId::FileFind, window, cx);
     }
 
     pub(super) fn on_open_project_palette(
@@ -55,37 +113,37 @@ impl WorkbenchView {
     pub(super) fn on_recent_project_palette(
         &mut self,
         _: &OpenRecentProjectPalette,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::ProjectOpenRecent, cx);
+        self.dispatch_command_action(CommandId::ProjectOpenRecent, window, cx);
     }
 
     pub(super) fn on_opened_project_palette(
         &mut self,
         _: &OpenOpenedProjectPalette,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::ProjectOpenedPalette, cx);
+        self.dispatch_command_action(CommandId::ProjectOpenedPalette, window, cx);
     }
 
     pub(super) fn on_project_panel_toggle(
         &mut self,
         _: &ProjectPanelToggle,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::ProjectPanelToggle, cx);
+        self.dispatch_command_action(CommandId::ProjectPanelToggle, window, cx);
     }
 
     pub(super) fn on_project_panel_refresh(
         &mut self,
         _: &ProjectPanelRefresh,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::ProjectPanelRefresh, cx);
+        self.dispatch_command_action(CommandId::ProjectPanelRefresh, window, cx);
     }
 
     pub(super) fn activate_project_panel_page(
@@ -94,9 +152,7 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) {
         self.project.active_panel_page = page;
-        if page == ProjectPanelPage::Files {
-            self.project.pending_project_tree_focus = true;
-        }
+        self.project.pending_project_tree_focus = true;
         cx.notify();
     }
 
@@ -468,26 +524,26 @@ impl WorkbenchView {
         }
     }
 
-    pub(super) fn on_tab_new(&mut self, _: &TabNew, _window: &mut Window, cx: &mut Context<Self>) {
-        self.dispatch_command_action(CommandId::TabNew, cx);
+    pub(super) fn on_tab_new(&mut self, _: &TabNew, window: &mut Window, cx: &mut Context<Self>) {
+        self.dispatch_command_action(CommandId::TabNew, window, cx);
     }
 
     pub(super) fn on_project_close(
         &mut self,
         _: &ProjectClose,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::ProjectClose, cx);
+        self.dispatch_command_action(CommandId::ProjectClose, window, cx);
     }
 
     pub(super) fn on_tab_close(
         &mut self,
         _: &TabClose,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::TabClose, cx);
+        self.dispatch_command_action(CommandId::TabClose, window, cx);
     }
 
     pub(super) fn on_tab_close_all(
@@ -547,136 +603,126 @@ impl WorkbenchView {
     pub(super) fn on_tab_rename(
         &mut self,
         _: &TabRename,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::TabRename, cx);
+        self.dispatch_command_action(CommandId::TabRename, window, cx);
     }
 
-    pub(super) fn on_tab_next(
-        &mut self,
-        _: &TabNext,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.dispatch_command_action(CommandId::TabNext, cx);
+    pub(super) fn on_tab_next(&mut self, _: &TabNext, window: &mut Window, cx: &mut Context<Self>) {
+        self.dispatch_command_action(CommandId::TabNext, window, cx);
     }
 
-    pub(super) fn on_tab_prev(
-        &mut self,
-        _: &TabPrev,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.dispatch_command_action(CommandId::TabPrev, cx);
+    pub(super) fn on_tab_prev(&mut self, _: &TabPrev, window: &mut Window, cx: &mut Context<Self>) {
+        self.dispatch_command_action(CommandId::TabPrev, window, cx);
     }
 
     pub(super) fn on_pane_split_vertical(
         &mut self,
         _: &PaneSplitVertical,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::PaneSplitVertical, cx);
+        self.dispatch_command_action(CommandId::PaneSplitVertical, window, cx);
     }
 
     pub(super) fn on_pane_split_horizontal(
         &mut self,
         _: &PaneSplitHorizontal,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::PaneSplitHorizontal, cx);
+        self.dispatch_command_action(CommandId::PaneSplitHorizontal, window, cx);
     }
 
     pub(super) fn on_pane_close(
         &mut self,
         _: &PaneClose,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::PaneClose, cx);
+        self.dispatch_command_action(CommandId::PaneClose, window, cx);
     }
 
     pub(super) fn on_pane_rename(
         &mut self,
         _: &PaneRename,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::PaneRename, cx);
+        self.dispatch_command_action(CommandId::PaneRename, window, cx);
     }
 
     pub(super) fn on_pane_focus_left(
         &mut self,
         _: &PaneFocusLeft,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::PaneFocusLeft, cx);
+        self.dispatch_command_action(CommandId::PaneFocusLeft, window, cx);
     }
 
     pub(super) fn on_pane_focus_right(
         &mut self,
         _: &PaneFocusRight,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::PaneFocusRight, cx);
+        self.dispatch_command_action(CommandId::PaneFocusRight, window, cx);
     }
 
     pub(super) fn on_pane_focus_up(
         &mut self,
         _: &PaneFocusUp,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::PaneFocusUp, cx);
+        self.dispatch_command_action(CommandId::PaneFocusUp, window, cx);
     }
 
     pub(super) fn on_pane_focus_down(
         &mut self,
         _: &PaneFocusDown,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::PaneFocusDown, cx);
+        self.dispatch_command_action(CommandId::PaneFocusDown, window, cx);
     }
 
     pub(super) fn on_pane_resize_left(
         &mut self,
         _: &PaneResizeLeft,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::PaneResizeLeft, cx);
+        self.dispatch_command_action(CommandId::PaneResizeLeft, window, cx);
     }
 
     pub(super) fn on_pane_resize_right(
         &mut self,
         _: &PaneResizeRight,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::PaneResizeRight, cx);
+        self.dispatch_command_action(CommandId::PaneResizeRight, window, cx);
     }
 
     pub(super) fn on_pane_resize_up(
         &mut self,
         _: &PaneResizeUp,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::PaneResizeUp, cx);
+        self.dispatch_command_action(CommandId::PaneResizeUp, window, cx);
     }
 
     pub(super) fn on_pane_resize_down(
         &mut self,
         _: &PaneResizeDown,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::PaneResizeDown, cx);
+        self.dispatch_command_action(CommandId::PaneResizeDown, window, cx);
     }
 
     pub(super) fn on_layout_save_current(
@@ -685,17 +731,17 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::LayoutSaveCurrent, cx);
+        self.dispatch_command_action(CommandId::LayoutSaveCurrent, window, cx);
         self.flush_pending_status_notifications(window, cx);
     }
 
     pub(super) fn on_layout_default_edit(
         &mut self,
         _: &LayoutDefaultEdit,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::LayoutDefaultEdit, cx);
+        self.dispatch_command_action(CommandId::LayoutDefaultEdit, window, cx);
     }
 
     pub(super) fn on_layout_default_reset(
@@ -704,7 +750,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::LayoutDefaultReset, cx);
+        self.dispatch_command_action(CommandId::LayoutDefaultReset, window, cx);
         self.flush_pending_status_notifications(window, cx);
     }
 
@@ -714,17 +760,17 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::LayoutDefaultReload, cx);
+        self.dispatch_command_action(CommandId::LayoutDefaultReload, window, cx);
         self.flush_pending_status_notifications(window, cx);
     }
 
     pub(super) fn on_layout_project_edit(
         &mut self,
         _: &LayoutProjectEdit,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::LayoutProjectEdit, cx);
+        self.dispatch_command_action(CommandId::LayoutProjectEdit, window, cx);
     }
 
     pub(super) fn on_layout_reset_local_override(
@@ -733,7 +779,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::LayoutResetLocalOverride, cx);
+        self.dispatch_command_action(CommandId::LayoutResetLocalOverride, window, cx);
         self.flush_pending_status_notifications(window, cx);
     }
 
@@ -743,7 +789,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::LayoutExportProjectConfig, cx);
+        self.dispatch_command_action(CommandId::LayoutExportProjectConfig, window, cx);
         self.flush_pending_status_notifications(window, cx);
     }
 
@@ -753,7 +799,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::LayoutOpenFile, cx);
+        self.dispatch_command_action(CommandId::LayoutOpenFile, window, cx);
         self.flush_pending_status_notifications(window, cx);
     }
 
@@ -763,7 +809,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::SettingsKeybindings, cx);
+        self.dispatch_command_action(CommandId::SettingsKeybindings, window, cx);
         self.flush_pending_status_notifications(window, cx);
     }
 
@@ -780,28 +826,28 @@ impl WorkbenchView {
     pub(super) fn on_git_branch_switch(
         &mut self,
         _: &GitBranchSwitch,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::GitBranchSwitch, cx);
+        self.dispatch_command_action(CommandId::GitBranchSwitch, window, cx);
     }
 
     pub(super) fn on_git_diff_open(
         &mut self,
         _: &GitDiffOpen,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::GitDiffOpen, cx);
+        self.dispatch_command_action(CommandId::GitDiffOpen, window, cx);
     }
 
     pub(super) fn on_settings_open(
         &mut self,
         _: &SettingsOpen,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::SettingsOpen, cx);
+        self.dispatch_command_action(CommandId::SettingsOpen, window, cx);
     }
 
     pub(super) fn on_settings_notifications(
@@ -810,7 +856,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dispatch_command_action(CommandId::SettingsNotifications, cx);
+        self.dispatch_command_action(CommandId::SettingsNotifications, window, cx);
         self.flush_pending_status_notifications(window, cx);
     }
 
@@ -843,10 +889,11 @@ impl WorkbenchView {
     pub(super) fn dispatch_command_action(
         &mut self,
         command_id: CommandId,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if command_id == CommandId::ApplicationQuit {
-            self.begin_application_quit(cx);
+            self.confirm_application_force_stop(window, cx);
             return;
         }
         if self.palette.active_palette.is_some()

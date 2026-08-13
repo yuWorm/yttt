@@ -545,7 +545,6 @@ fn personal_layout_v1_serializes_patch_and_replace_through_strict_wire_dtos() {
             startup: Some(TabStartup::Eager),
             ..Default::default()
         }],
-        ..Default::default()
     };
     let mut replacement = sample_layout();
     replacement.tabs[0].cwd = Some(PathBuf::from("<ProjectDir>/dev"));

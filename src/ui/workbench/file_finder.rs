@@ -1,3 +1,5 @@
+#![allow(clippy::items_after_test_module)]
+
 use super::*;
 
 const FILE_PREVIEW_DEBOUNCE: Duration = Duration::from_millis(90);

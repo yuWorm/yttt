@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fmt,
+    net::SocketAddr,
     path::PathBuf,
     sync::{Arc, Mutex, mpsc as blocking_mpsc},
     thread,
@@ -29,8 +30,7 @@ use crate::credential::CredentialStore;
 use crate::host_keys::{HostKeyStore, HostKeyVerification};
 use crate::sftp::{
     RemoteDirectoryEntry, RemoteDirectorySnapshot, RemoteEntryKind, RemoteEntryMutation,
-    RemoteFileState, RemoteFingerprint, RemoteLoadedFile, RemoteSaveOutcome, SftpError,
-    SftpOperation, SftpResponse,
+    RemoteFingerprint, RemoteLoadedFile, RemoteSaveOutcome, SftpError, SftpOperation, SftpResponse,
 };
 use crate::terminal::{
     RemoteCommandOutput, RemoteCommandRequest, RemoteTerminalCommand, RemoteTerminalEndpoint,
@@ -38,6 +38,22 @@ use crate::terminal::{
     remote_exec_command, remote_exec_command_with_environment, remote_shell_startup,
     terminal_error_output,
 };
+
+const AGENT_HOOK_ENDPOINT_ENV: &str = "YTTT_AGENT_HOOK_ENDPOINT";
+const AGENT_HOOK_ENVIRONMENT_VARIABLES: [&str; 3] = [
+    AGENT_HOOK_ENDPOINT_ENV,
+    "YTTT_AGENT_HOOK_TOKEN",
+    "YTTT_AGENT_HOOK_SCOPE",
+];
+const REMOTE_FORWARD_ADDRESS: &str = "127.0.0.1";
+
+type ReverseForwardTargets = Arc<Mutex<HashMap<u32, SocketAddr>>>;
+
+#[derive(Clone, Debug)]
+struct RemoteAgentHookForward {
+    address: &'static str,
+    port: u32,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SshEndpoint {
@@ -727,29 +743,9 @@ impl SftpProject {
                         }
                     })?
             }
-            TransportServiceInner::Host { proxy, .. } => {
-                let response = proxy
-                    .request(yttt_protocol::Request::RemoteCommand(
-                        yttt_protocol::ssh::RemoteCommandRequest {
-                            connection_id: self.connection_id.as_str().to_string(),
-                            root: self.root.as_str().to_string(),
-                            program: program.into(),
-                            args,
-                        },
-                    ))
-                    .map_err(TransportError::Connection)?;
-                let yttt_protocol::Response::RemoteCommand(output) = response else {
-                    return Err(TransportError::Connection(
-                        "Host returned an unexpected remote command response".to_string(),
-                    ));
-                };
-                Ok(RemoteCommandOutput {
-                    stdout: output.stdout,
-                    stderr: output.stderr,
-                    exit_status: (output.exit_status != u32::MAX)
-                        .then_some(output.exit_status as i32),
-                })
-            }
+            TransportServiceInner::Host { .. } => Err(TransportError::Connection(
+                "Host-backed SSH project commands must use the Host project API".to_string(),
+            )),
         }
     }
 
@@ -868,69 +864,27 @@ fn host_sftp_request(
     root: &RemotePathBuf,
     operation: SftpOperation,
 ) -> Result<SftpResponse, SftpError> {
-    let connection_id = connection_id.as_str().to_string();
-    let root = root.as_str().to_string();
     let request = match operation {
-        SftpOperation::ResolveHome => {
-            yttt_protocol::ssh::RemoteFileRequest::ResolveHome { connection_id }
-        }
+        SftpOperation::ResolveHome => yttt_protocol::ssh::RemoteFileRequest::ResolveHome {
+            connection_id: connection_id.as_str().to_string(),
+        },
         SftpOperation::ScanDirectory {
             relative_directory,
             show_hidden,
-        } => yttt_protocol::ssh::RemoteFileRequest::ScanDirectory {
-            connection_id,
-            root,
+        } => yttt_protocol::ssh::RemoteFileRequest::BrowseDirectory {
+            connection_id: connection_id.as_str().to_string(),
+            root: root.as_str().to_string(),
             relative_directory: relative_directory.as_str().to_string(),
             show_hidden,
         },
-        SftpOperation::ReadFile {
-            relative_path,
-            max_bytes,
-        } => yttt_protocol::ssh::RemoteFileRequest::Read {
-            connection_id,
-            root,
-            relative_path: relative_path.as_str().to_string(),
-            maximum_bytes: max_bytes,
-        },
-        SftpOperation::SaveFile {
-            relative_path,
-            bytes,
-            expected,
-            force,
-            max_bytes,
-        } => yttt_protocol::ssh::RemoteFileRequest::Save {
-            connection_id,
-            root,
-            relative_path: relative_path.as_str().to_string(),
-            expected: expected.map(wire_fingerprint),
-            force,
-            maximum_bytes: max_bytes,
-            bytes,
-        },
-        SftpOperation::CreateEntry {
-            relative_path,
-            directory,
-        } => yttt_protocol::ssh::RemoteFileRequest::Create {
-            connection_id,
-            root,
-            relative_path: relative_path.as_str().to_string(),
-            directory,
-        },
-        SftpOperation::RenameEntry {
-            relative_path,
-            new_name,
-        } => yttt_protocol::ssh::RemoteFileRequest::Rename {
-            connection_id,
-            root,
-            relative_path: relative_path.as_str().to_string(),
-            new_name,
-        },
-        SftpOperation::DeleteEntry { relative_path } => {
-            yttt_protocol::ssh::RemoteFileRequest::Delete {
-                connection_id,
-                root,
-                relative_path: relative_path.as_str().to_string(),
-            }
+        SftpOperation::ReadFile { .. }
+        | SftpOperation::SaveFile { .. }
+        | SftpOperation::CreateEntry { .. }
+        | SftpOperation::RenameEntry { .. }
+        | SftpOperation::DeleteEntry { .. } => {
+            return Err(SftpError::Protocol(
+                "Host-backed SSH project operations must use the Host project API".to_string(),
+            ));
         }
     };
     let response = proxy
@@ -963,56 +917,7 @@ fn host_sftp_request(
                 entries,
             }))
         }
-        yttt_protocol::ssh::RemoteFileResponse::File(file) => {
-            Ok(SftpResponse::File(RemoteLoadedFile {
-                canonical_path: RemotePathBuf::new(file.canonical_path)
-                    .map_err(|error| SftpError::InvalidPath(error.to_string()))?,
-                relative_path: RemoteRelativePathBuf::new(file.relative_path)
-                    .map_err(|error| SftpError::InvalidPath(error.to_string()))?,
-                bytes: file.bytes,
-                fingerprint: remote_fingerprint(file.fingerprint),
-            }))
-        }
-        yttt_protocol::ssh::RemoteFileResponse::Save(outcome) => {
-            let outcome = match outcome {
-                yttt_protocol::ssh::RemoteSaveResult::Saved(value) => {
-                    RemoteSaveOutcome::Saved(remote_fingerprint(value))
-                }
-                yttt_protocol::ssh::RemoteSaveResult::Conflict(
-                    yttt_protocol::ssh::RemoteFileState::Missing,
-                ) => RemoteSaveOutcome::Conflict(RemoteFileState::Missing),
-                yttt_protocol::ssh::RemoteSaveResult::Conflict(
-                    yttt_protocol::ssh::RemoteFileState::Present(value),
-                ) => {
-                    RemoteSaveOutcome::Conflict(RemoteFileState::Present(remote_fingerprint(value)))
-                }
-            };
-            Ok(SftpResponse::Save(outcome))
-        }
-        yttt_protocol::ssh::RemoteFileResponse::Mutation(mutation) => {
-            Ok(SftpResponse::Mutation(RemoteEntryMutation {
-                relative_path: RemoteRelativePathBuf::new(mutation.relative_path)
-                    .map_err(|error| SftpError::InvalidPath(error.to_string()))?,
-                kind: remote_entry_kind(mutation.kind),
-            }))
-        }
-        yttt_protocol::ssh::RemoteFileResponse::Deleted => Ok(SftpResponse::Deleted),
-    }
-}
-
-fn wire_fingerprint(value: RemoteFingerprint) -> yttt_protocol::ssh::RemoteFileFingerprint {
-    yttt_protocol::ssh::RemoteFileFingerprint {
-        byte_len: value.byte_len,
-        modified_seconds: value.modified_seconds,
-        content_hash: value.content_hash,
-    }
-}
-
-fn remote_fingerprint(value: yttt_protocol::ssh::RemoteFileFingerprint) -> RemoteFingerprint {
-    RemoteFingerprint {
-        byte_len: value.byte_len,
-        modified_seconds: value.modified_seconds,
-        content_hash: value.content_hash,
+        _ => Err(SftpError::UnexpectedResponse),
     }
 }
 
@@ -1108,6 +1013,7 @@ enum ConnectionCommand {
         request: RemoteTerminalRequest,
         endpoint: RemoteTerminalEndpoint,
     },
+    CancelReverseForward(RemoteAgentHookForward),
     Disconnect,
 }
 
@@ -1373,6 +1279,7 @@ async fn connect_one(
         ..client::Config::default()
     });
     let verified_host_key = Arc::new(Mutex::new(None));
+    let reverse_forward_targets = ReverseForwardTargets::default();
     let handler = HostKeyHandler {
         connection_id: connection_id.clone(),
         epoch,
@@ -1380,6 +1287,7 @@ async fn connect_one(
         events: authentication_runtime.events.clone(),
         host_keys,
         verified_host_key: verified_host_key.clone(),
+        reverse_forward_targets: reverse_forward_targets.clone(),
     };
     let mut session = client::connect(config, (endpoint.host.as_str(), endpoint.port), handler)
         .await
@@ -1418,12 +1326,16 @@ async fn connect_one(
 
     let (actor, actor_rx) = mpsc::unbounded_channel();
     tokio::spawn(connection_loop(
-        connection_id,
-        epoch,
         session,
         sftp,
         actor_rx,
-        runtime_commands,
+        ConnectionLoopContext {
+            connection_id,
+            epoch,
+            connection_commands: actor.clone(),
+            reverse_forward_targets,
+            runtime_commands,
+        },
     ));
     Ok(actor)
 }
@@ -1609,13 +1521,19 @@ async fn authenticate_with_agent(
     Ok(false)
 }
 
-async fn connection_loop(
+struct ConnectionLoopContext {
     connection_id: ConnectionId,
     epoch: ConnectionEpoch,
+    connection_commands: mpsc::UnboundedSender<ConnectionCommand>,
+    reverse_forward_targets: ReverseForwardTargets,
+    runtime_commands: mpsc::UnboundedSender<RuntimeCommand>,
+}
+
+async fn connection_loop(
     session: client::Handle<HostKeyHandler>,
     sftp: Arc<SftpSession>,
     mut commands: mpsc::UnboundedReceiver<ConnectionCommand>,
-    runtime_commands: mpsc::UnboundedSender<RuntimeCommand>,
+    context: ConnectionLoopContext,
 ) {
     let mut session = Box::pin(session);
     let error = loop {
@@ -1646,18 +1564,50 @@ async fn connection_loop(
                         }
                     }
                 }
-                Some(ConnectionCommand::Terminal { request, endpoint }) => {
+                Some(ConnectionCommand::Terminal {
+                    mut request,
+                    endpoint,
+                }) => {
+                    let agent_hook_forward = prepare_remote_agent_hook_forward(
+                        session.as_ref().get_ref(),
+                        &mut request,
+                        &context.reverse_forward_targets,
+                    )
+                    .await;
                     match session.as_ref().get_ref().channel_open_session().await {
                         Ok(channel) => {
-                            tokio::spawn(run_remote_terminal(channel, request, endpoint));
+                            let connection_commands = context.connection_commands.clone();
+                            tokio::spawn(async move {
+                                run_remote_terminal(channel, request, endpoint).await;
+                                if let Some(forward) = agent_hook_forward {
+                                    let _ = connection_commands
+                                        .send(ConnectionCommand::CancelReverseForward(forward));
+                                }
+                            });
                         }
                         Err(error) => {
+                            if let Some(forward) = agent_hook_forward {
+                                cancel_remote_agent_hook_forward(
+                                    session.as_ref().get_ref(),
+                                    &context.reverse_forward_targets,
+                                    &forward,
+                                )
+                                .await;
+                            }
                             fail_remote_terminal(
                                 endpoint,
                                 &format!("failed to open remote terminal: {error}"),
                             );
                         }
                     }
+                }
+                Some(ConnectionCommand::CancelReverseForward(forward)) => {
+                    cancel_remote_agent_hook_forward(
+                        session.as_ref().get_ref(),
+                        &context.reverse_forward_targets,
+                        &forward,
+                    )
+                    .await;
                 }
                 Some(ConnectionCommand::Disconnect) | None => {
                     let _ = sftp.close().await;
@@ -1671,11 +1621,77 @@ async fn connection_loop(
             }
         }
     };
-    let _ = runtime_commands.send(RuntimeCommand::ActorExited {
-        connection_id,
-        epoch,
+    let _ = context.runtime_commands.send(RuntimeCommand::ActorExited {
+        connection_id: context.connection_id,
+        epoch: context.epoch,
         error,
     });
+}
+
+fn loopback_http_target(endpoint: &str) -> Option<SocketAddr> {
+    let target = endpoint
+        .strip_prefix("http://")?
+        .parse::<SocketAddr>()
+        .ok()?;
+    target.ip().is_loopback().then_some(target)
+}
+
+fn remove_agent_hook_environment(request: &mut RemoteTerminalRequest) {
+    for name in AGENT_HOOK_ENVIRONMENT_VARIABLES {
+        request.environment.remove(name);
+    }
+}
+
+async fn prepare_remote_agent_hook_forward(
+    session: &client::Handle<HostKeyHandler>,
+    request: &mut RemoteTerminalRequest,
+    targets: &ReverseForwardTargets,
+) -> Option<RemoteAgentHookForward> {
+    let Some(target) = request
+        .environment
+        .get(AGENT_HOOK_ENDPOINT_ENV)
+        .and_then(|endpoint| loopback_http_target(endpoint))
+    else {
+        remove_agent_hook_environment(request);
+        return None;
+    };
+    let port = match session.tcpip_forward(REMOTE_FORWARD_ADDRESS, 0).await {
+        Ok(port) if port != 0 => port,
+        Ok(_) | Err(_) => {
+            remove_agent_hook_environment(request);
+            return None;
+        }
+    };
+    if let Ok(mut targets) = targets.lock() {
+        targets.insert(port, target);
+    } else {
+        let _ = session
+            .cancel_tcpip_forward(REMOTE_FORWARD_ADDRESS, port)
+            .await;
+        remove_agent_hook_environment(request);
+        return None;
+    }
+    request.environment.insert(
+        AGENT_HOOK_ENDPOINT_ENV.to_string(),
+        format!("http://{REMOTE_FORWARD_ADDRESS}:{port}"),
+    );
+    Some(RemoteAgentHookForward {
+        address: REMOTE_FORWARD_ADDRESS,
+        port,
+    })
+}
+
+async fn cancel_remote_agent_hook_forward(
+    session: &client::Handle<HostKeyHandler>,
+    targets: &ReverseForwardTargets,
+    forward: &RemoteAgentHookForward,
+) {
+    if let Ok(mut targets) = targets.lock() {
+        targets.remove(&forward.port);
+    }
+    let _ = session
+        .cancel_tcpip_forward(forward.address, forward.port)
+        .await;
 }
 
 async fn run_remote_command(
@@ -1831,6 +1847,7 @@ struct HostKeyHandler {
     events: EventSender<TransportEvent>,
     verified_host_key: Arc<Mutex<Option<String>>>,
     host_keys: Arc<Mutex<HostKeyStore>>,
+    reverse_forward_targets: ReverseForwardTargets,
 }
 
 impl HostKeyHandler {
@@ -1913,6 +1930,36 @@ impl client::Handler for HostKeyHandler {
         }
         self.record_verified_host_key(server_public_key)?;
         Ok(true)
+    }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        _connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        let target = self
+            .reverse_forward_targets
+            .lock()
+            .ok()
+            .and_then(|targets| targets.get(&connected_port).copied());
+        let Some(target) = target else {
+            return Ok(());
+        };
+        let Ok(mut target_stream) = tokio::net::TcpStream::connect(target).await else {
+            return Ok(());
+        };
+        let _ = target_stream.set_nodelay(true);
+        reply.accept().await;
+        tokio::spawn(async move {
+            let mut channel_stream = channel.into_stream();
+            let _ = tokio::io::copy_bidirectional(&mut channel_stream, &mut target_stream).await;
+        });
+        Ok(())
     }
 }
 
@@ -2071,6 +2118,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn agent_hook_forward_only_accepts_loopback_http_targets() {
+        assert_eq!(
+            loopback_http_target("http://127.0.0.1:4242"),
+            Some("127.0.0.1:4242".parse().unwrap())
+        );
+        assert_eq!(
+            loopback_http_target("http://[::1]:4242"),
+            Some("[::1]:4242".parse().unwrap())
+        );
+        assert!(loopback_http_target("https://127.0.0.1:4242").is_none());
+        assert!(loopback_http_target("http://192.0.2.1:4242").is_none());
+    }
     #[test]
     fn failed_connection_reports_fenced_state_transitions() {
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();

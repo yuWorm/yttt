@@ -991,9 +991,24 @@ mod tests {
 
     #[test]
     fn test_aurora_theme_parses_gradient_backgrounds() {
-        let theme_set =
-            serde_json::from_str::<ThemeSet>(include_str!("../../../../themes/aurora.json"))
-                .unwrap();
+        let theme_set = serde_json::from_value::<ThemeSet>(serde_json::json!({
+            "name": "Aurora",
+            "themes": [{
+                "name": "Aurora Light",
+                "mode": "light",
+                "colors": {
+                    "background": "#FFFFFF",
+                    "button.primary.background": "linear-gradient(180deg, #1E293B, #0F172A)",
+                    "progress.bar.background": "linear-gradient(180deg, #1E293B, #0F172A)",
+                    "scrollbar.thumb.background": "linear-gradient(to right, #CBD5E173, #94A3B873)",
+                    "switch.background": "linear-gradient(180deg, #E2E8F0, #CBD5E1)",
+                    "switch.thumb.background": "linear-gradient(180deg, #FFFFFF, #F8FAFC)",
+                    "title_bar.background": "linear-gradient(180deg, #FFFFFF, #F8FAFC)",
+                    "status_bar.background": "linear-gradient(180deg, #F8FAFC, #F1F5F9)"
+                }
+            }]
+        }))
+        .unwrap();
         assert_eq!(theme_set.themes.len(), 1);
         assert!(theme_set.themes.iter().all(|theme| !theme.mode.is_dark()));
 

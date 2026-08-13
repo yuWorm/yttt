@@ -1,6 +1,6 @@
 # yttt Host/Client 架构规范
 
-- 状态：实现基线
+- 状态：Phase 1 本地 IPC 完整实现
 - 更新：2026-08-12
 - 适用协议：`yttt-protocol` v1
 - 相关设计：[`p2p-relay-architecture.md`](./p2p-relay-architecture.md)
@@ -239,10 +239,10 @@ UI 不得在 GPUI 线程等待 Host response。输入经有界 writer queue；re
 
 PTY child 退出后：
 
-1. Host 记录 `Exited { code }` 并发布最后 viewport。
-2. Host 发送 `TerminalExit { session_id, session_epoch, code }`。
-3. 资源保持可查询，直到 owner 发送 `AcknowledgeTerminalExit`。
-4. acknowledgement 匹配 session epoch 后，Host 才从 catalog 删除 terminal。
+1. Host drain PTY 尾部、记录 `Exited { code }` 并发布带 final sequence 的最后 viewport。
+2. Host 发送 `TerminalExit { session_id, session_epoch, code, final_sequence }`。
+3. 资源及 final checkpoint 保持可查询，直到 owner 发送 `AcknowledgeTerminalExit` 或 10 分钟 TTL 到期。
+4. acknowledgement 同时匹配 session epoch 和 final sequence 后，Host 才从 catalog 删除 terminal。
 
 重复/旧 generation 的退出回调不得关闭新建 pane。
 

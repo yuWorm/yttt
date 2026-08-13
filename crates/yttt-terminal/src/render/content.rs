@@ -173,17 +173,29 @@ impl RenderOverlayState {
     }
 }
 
+pub(crate) struct TerminalRenderOptions<'a> {
+    pub overlays: &'a RenderOverlayState,
+    pub focused: bool,
+    pub cursor_unfocused_hollow: bool,
+    pub cursor_visible: bool,
+    pub forced_rows: &'a [usize],
+    pub generation: u64,
+}
+
 impl TerminalRenderSnapshot {
     pub(crate) fn build(
         term: &mut Term<GpuiEventProxy>,
         palette: &ColorPalette,
-        overlays: &RenderOverlayState,
-        focused: bool,
-        cursor_unfocused_hollow: bool,
-        cursor_visible: bool,
-        forced_rows: &[usize],
-        generation: u64,
+        options: TerminalRenderOptions<'_>,
     ) -> Self {
+        let TerminalRenderOptions {
+            overlays,
+            focused,
+            cursor_unfocused_hollow,
+            cursor_visible,
+            forced_rows,
+            generation,
+        } = options;
         let cols = term.columns();
         let screen_lines = term.screen_lines();
         let mut damage = match term.damage() {
@@ -765,10 +777,10 @@ fn resolve_cell(
         let character = label.unwrap_or(cell.c);
         if character != '\0' && character != ' ' {
             text.push(character);
-            if label.is_none() {
-                if let Some(zerowidth) = cell.zerowidth() {
-                    text.extend(zerowidth.iter().copied());
-                }
+            if label.is_none()
+                && let Some(zerowidth) = cell.zerowidth()
+            {
+                text.extend(zerowidth.iter().copied());
             }
         }
     }

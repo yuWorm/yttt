@@ -1067,7 +1067,7 @@ fn project_entry_delete_alert_renders_and_executes_confirmation(cx: &mut TestApp
     let cancel = cx
         .debug_bounds("project-entry-delete-cancel")
         .expect("delete confirmation must render a compact cancel button");
-    assert_eq!(confirm.size.height, gpui::px(DEFAULT_UI_FONT_SIZE * 1.25));
+    assert_eq!(confirm.size.height, gpui::px(DEFAULT_UI_FONT_SIZE * 1.375));
     assert_eq!(cancel.size.height, confirm.size.height);
     root.update_in(cx, |root, window, root_cx| {
         root.spawn_project_entry_delete(project_id, PathBuf::from("victim.txt"), window, root_cx);
@@ -1080,6 +1080,40 @@ fn project_entry_delete_alert_renders_and_executes_confirmation(cx: &mut TestApp
     }
 
     assert!(!victim_path.exists());
+}
+
+#[gpui::test]
+fn application_quit_command_requires_force_stop_confirmation(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut workspace = Workspace::new();
+    workspace
+        .open_project(local_project(project_path), dev_fixture_layout())
+        .unwrap();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| {
+            WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
+        });
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        ComponentRoot::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    cx.run_until_parked();
+
+    root.update_in(cx, |root, window, root_cx| {
+        root.dispatch_command_action(CommandId::ApplicationQuit, window, root_cx);
+    });
+    cx.run_until_parked();
+
+    cx.debug_bounds("application-force-stop-confirm")
+        .expect("application quit must render an explicit force-stop button");
+    cx.debug_bounds("application-force-stop-cancel")
+        .expect("application quit must render a cancel button");
 }
 
 #[derive(Clone)]
@@ -1260,152 +1294,16 @@ fn failed_agent_start_does_not_leave_a_running_snapshot(cx: &mut TestAppContext)
     });
 }
 
-#[gpui::test]
-fn killed_detected_agent_clears_sidebar_snapshot_without_notification(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
-    let temp = tempdir().unwrap();
-    let project_path = temp.path().join("project");
-    fs::create_dir_all(&project_path).unwrap();
-    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut workspace = Workspace::new();
-    let project_id = workspace
-        .open_project(local_project(project_path), dev_fixture_layout())
-        .unwrap();
-    let address = AgentPaneAddress::new(project_id.as_str(), "dev", "shell");
-    let view_project_id = project_id.clone();
-    let root_slot = Rc::new(RefCell::new(None));
-    let root_slot_for_window = root_slot.clone();
-    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| {
-            WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
-        });
-        *root_slot_for_window.borrow_mut() = Some(root.clone());
-        ComponentRoot::new(root, window, cx)
-    });
-    let root = root_slot.borrow_mut().take().unwrap();
-
-    root.update_in(cx, |root, window, cx| {
-        let running = root
-            .agent_manager
-            .detected_process_started(address.clone(), BuiltinAgent::Codex, 7)
-            .unwrap();
-        root.record_agent_runtime_snapshot(address.clone(), running)
-            .unwrap();
-        assert!(
-            root.workspace
-                .project(&view_project_id)
-                .unwrap()
-                .tab_state("dev")
-                .unwrap()
-                .pane_states
-                .iter()
-                .find(|pane| pane.pane_id == "shell")
-                .unwrap()
-                .agent_snapshot
-                .is_some()
-        );
-
-        assert!(
-            root.finish_detected_agent(&address, 7, AgentExitReason::KilledByUser, window, cx,)
-        );
-        assert!(
-            root.workspace
-                .project(&view_project_id)
-                .unwrap()
-                .tab_state("dev")
-                .unwrap()
-                .pane_states
-                .iter()
-                .find(|pane| pane.pane_id == "shell")
-                .unwrap()
-                .agent_snapshot
-                .is_none()
-        );
-        assert!(root.agent_manager.retained_snapshots().is_empty());
-        assert!(root.visible_toast_titles().is_empty());
-    });
-}
-
-#[gpui::test]
-fn completed_detected_agent_is_retained_until_the_next_generation(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
-    let temp = tempdir().unwrap();
-    let project_path = temp.path().join("project");
-    fs::create_dir_all(&project_path).unwrap();
-    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut workspace = Workspace::new();
-    let project_id = workspace
-        .open_project(local_project(project_path), dev_fixture_layout())
-        .unwrap();
-    let address = AgentPaneAddress::new(project_id.as_str(), "dev", "shell");
-    let view_project_id = project_id.clone();
-    let root_slot = Rc::new(RefCell::new(None));
-    let root_slot_for_window = root_slot.clone();
-    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| {
-            WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
-        });
-        *root_slot_for_window.borrow_mut() = Some(root.clone());
-        ComponentRoot::new(root, window, cx)
-    });
-    let root = root_slot.borrow_mut().take().unwrap();
-
-    root.update_in(cx, |root, window, cx| {
-        let running = root
-            .agent_manager
-            .detected_process_started(address.clone(), BuiltinAgent::Codex, 7)
-            .unwrap();
-        root.record_agent_runtime_snapshot(address.clone(), running)
-            .unwrap();
-        assert!(root.finish_detected_agent(&address, 7, AgentExitReason::Completed, window, cx,));
-        let completed = root
-            .workspace
-            .project(&view_project_id)
-            .unwrap()
-            .tab_state("dev")
-            .unwrap()
-            .pane_states
-            .iter()
-            .find(|pane| pane.pane_id == "shell")
-            .unwrap()
-            .agent_snapshot
-            .as_ref()
-            .unwrap();
-        assert_eq!(
-            completed.view_state(),
-            yttt_agent_core::AgentViewState::Completed
-        );
-        assert!(root.agent_manager.retained_snapshots().is_empty());
-
-        let next = root
-            .agent_manager
-            .detected_process_started(address.clone(), BuiltinAgent::Codex, 7)
-            .unwrap();
-        root.record_agent_runtime_snapshot(address, next).unwrap();
-        let restarted = root
-            .workspace
-            .project(&view_project_id)
-            .unwrap()
-            .tab_state("dev")
-            .unwrap()
-            .pane_states
-            .iter()
-            .find(|pane| pane.pane_id == "shell")
-            .unwrap()
-            .agent_snapshot
-            .as_ref()
-            .unwrap();
-        assert_eq!(
-            restarted.view_state(),
-            yttt_agent_core::AgentViewState::Idle
-        );
-    });
-}
 fn persist_codex_shell_session(
     config_paths: &AppConfigPaths,
     project_path: &Path,
 ) -> ProjectReferenceConfig {
-    use crate::runtime::agent_hooks::AgentHookRequest;
+    use crate::runtime::agent_manager::AgentPaneExitOutcome;
+    use yttt_agent_core::{
+        AgentEventKind, AgentInstanceId, AgentReducer, AgentSessionMetadata, AgentTask,
+        AgentTaskSource, ProviderId,
+    };
+    use yttt_protocol::agent::{AgentHookScope, AgentSnapshotUpdate};
 
     let mut layout = dev_fixture_layout();
     layout
@@ -1425,31 +1323,55 @@ fn persist_codex_shell_session(
         opened.descriptor.id.clone(),
         opened.descriptor.location.clone(),
     );
-    let address = AgentPaneAddress::new(project.id.as_str(), "dev", "shell");
+    let scope = AgentHookScope {
+        project_id: project.id.as_str().to_string(),
+        tab_id: "dev".to_string(),
+        pane_id: "shell".to_string(),
+        generation: 7,
+    };
+    let mut reducer = AgentReducer::new(
+        AgentInstanceId::random(),
+        ProviderId::from_static("codex"),
+        1,
+    );
+    reducer.process_starting(7, 1);
+    reducer.process_started(7, 2);
+    reducer.apply(
+        7,
+        AgentEventKind::SessionStarted {
+            metadata: AgentSessionMetadata {
+                session_id: Some("codex-session-1".to_string()),
+                ..AgentSessionMetadata::default()
+            },
+        },
+        3,
+    );
+    reducer.apply(
+        7,
+        AgentEventKind::TurnStarted {
+            task: AgentTask::new(
+                "Fix the flaky terminal test",
+                AgentTaskSource::UserPromptHook,
+            ),
+        },
+        4,
+    );
     let mut manager = AgentManager::new(config_paths);
-    manager
-        .detected_process_started(address.clone(), BuiltinAgent::Codex, 7)
-        .unwrap();
-    manager
-        .ingest_hook_request(AgentHookRequest {
-            address: address.clone(),
-            generation: 7,
-            source: BuiltinAgent::Codex,
-            event: "SessionStart".to_string(),
-            payload: serde_json::json!({ "session_id": "codex-session-1" }),
-        })
-        .unwrap()
-        .unwrap();
-    manager
-        .ingest_hook_request(AgentHookRequest {
-            address,
-            generation: 7,
-            source: BuiltinAgent::Codex,
-            event: "UserPromptSubmit".to_string(),
-            payload: serde_json::json!({ "prompt": "Fix the flaky terminal test" }),
-        })
-        .unwrap()
-        .unwrap();
+    assert!(matches!(
+        manager.apply_host_snapshot(AgentSnapshotUpdate {
+            scope,
+            terminal_session_id: TerminalSessionId::new("terminal"),
+            host_epoch: 1,
+            sequence: 1,
+            snapshot: reducer.snapshot().clone(),
+        }),
+        Some(AgentPaneExitOutcome::Snapshot { .. })
+    ));
+    drop(manager);
+    assert_eq!(
+        AgentManager::new(config_paths).retained_snapshots().len(),
+        1
+    );
     project
 }
 
@@ -1528,6 +1450,8 @@ fn restoring_last_session_restores_persisted_agent_session(cx: &mut TestAppConte
 
     cx.update(|_, app| {
         let root = root.read(app);
+        let address = AgentPaneAddress::new(view_project_id.as_str(), "dev", "shell");
+        assert!(root.agent_manager.has_retained_snapshot(&address));
         let snapshot = root
             .workspace
             .project(&view_project_id)
@@ -1578,37 +1502,55 @@ fn failed_restored_shell_session_is_replaced_with_a_fresh_agent(cx: &mut TestApp
     cx.run_until_parked();
 
     let key = terminal_pane_key(project_id.as_str(), "dev", "shell");
-    let (failed_pane, failed_instance, generation) = cx.update(|_, app| {
-        let pane = root
-            .read(app)
+    let failed_instance = cx.update(|_, app| {
+        root.read(app)
             .terminal
             .terminal_panes
             .get(&key)
             .unwrap()
-            .clone();
-        let pane_state = pane.read(app);
-        (
-            pane.clone(),
-            pane_state.agent_instance_id().unwrap().clone(),
-            pane_state.generation(),
-        )
+            .read(app)
+            .agent_instance_id()
+            .unwrap()
+            .clone()
     });
     root.update_in(cx, |root, window, cx| {
-        root.on_terminal_pane_event(
-            &failed_pane,
-            &TerminalPaneEvent::Exited(TerminalPaneExitedEvent {
-                project_id: project_id.as_str().to_string(),
-                tab_id: "dev".to_string(),
-                pane_id: "shell".to_string(),
-                status: yttt_terminal::ProcessStatus::Exited { code: Some(1) },
-                exit_reason: yttt_terminal::ExitReason::Failed,
-                exit_behavior: ProcessExitBehavior::ManualRestart,
-                generation,
-                agent_instance_id: Some(failed_instance.clone()),
-            }),
+        use yttt_agent_core::{
+            AgentExitReason, AgentInstanceId, AgentProcessExit, AgentReducer, ProviderId,
+        };
+        use yttt_protocol::agent::{AgentHookScope, AgentSnapshotUpdate};
+
+        let mut reducer = AgentReducer::new(
+            AgentInstanceId::random(),
+            ProviderId::from_static("codex"),
+            1,
+        );
+        reducer.process_starting(7, 1);
+        reducer.process_started(7, 2);
+        reducer.process_exited(
+            7,
+            AgentProcessExit {
+                code: Some(1),
+                reason: AgentExitReason::Failed,
+            },
+            3,
+        );
+        assert!(root.apply_host_agent_snapshot(
+            AgentSnapshotUpdate {
+                scope: AgentHookScope {
+                    project_id: project_id.as_str().to_string(),
+                    tab_id: "dev".to_string(),
+                    pane_id: "shell".to_string(),
+                    generation: 7,
+                },
+                terminal_session_id: TerminalSessionId::new("terminal"),
+                host_epoch: 1,
+                sequence: 1,
+                snapshot: reducer.snapshot().clone(),
+            },
             window,
             cx,
-        );
+        ));
+        cx.notify();
     });
     cx.run_until_parked();
 
@@ -1620,21 +1562,20 @@ fn failed_restored_shell_session_is_replaced_with_a_fresh_agent(cx: &mut TestApp
             Some(&failed_instance),
             "the failed resume launch must not be reused"
         );
-        let snapshot = root
-            .workspace
-            .project(&project_id)
-            .unwrap()
-            .tab_state("dev")
-            .unwrap()
-            .pane_states
-            .iter()
-            .find(|pane| pane.pane_id == "shell")
-            .unwrap()
-            .agent_snapshot
-            .as_ref()
-            .unwrap();
-        assert_eq!(snapshot.provider_id.as_str(), "codex");
-        assert!(snapshot.session.is_none());
+        assert!(
+            root.workspace
+                .project(&project_id)
+                .unwrap()
+                .tab_state("dev")
+                .unwrap()
+                .pane_states
+                .iter()
+                .find(|pane| pane.pane_id == "shell")
+                .unwrap()
+                .agent_snapshot
+                .is_none(),
+            "fresh launches wait for a Host-owned snapshot"
+        );
     });
 }
 

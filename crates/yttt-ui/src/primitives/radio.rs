@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 use gpui::{ElementId, SharedString};
 use gpui_component::{Sizable as _, radio::Radio};
 

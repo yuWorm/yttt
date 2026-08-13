@@ -150,6 +150,10 @@ impl AppConfigPaths {
         self.config_dir.join("update-state.toml")
     }
 
+    pub fn terminal_placements_file(&self) -> PathBuf {
+        self.config_dir.join("terminal-placements.json")
+    }
+
     pub fn themes_dir(&self) -> PathBuf {
         self.config_dir.join("themes")
     }

@@ -379,8 +379,10 @@ fn vim_distinguishes_logical_and_soft_wrapped_display_lines(cx: &mut gpui::TestA
     });
     let source = format!("{}\nshort", "x".repeat(300));
     let model = project_model(&source, fingerprint(source.len() as u64, 1));
-    let mut appearance = EditorAppearance::default();
-    appearance.soft_wrap = true;
+    let appearance = EditorAppearance {
+        soft_wrap: true,
+        ..Default::default()
+    };
     let document_slot = Rc::new(RefCell::new(None));
     let document_slot_for_window = document_slot.clone();
     let (_root, cx) =

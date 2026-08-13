@@ -44,9 +44,29 @@ pub struct TerminalSpawnSpec {
     pub execution: TerminalExecutionSpec,
     pub geometry: TerminalGeometry,
     pub geometry_epoch: u64,
+    pub query_palette: Vec<u32>,
+    pub palette_revision: u64,
     pub scrollback_limit: u32,
     pub environment: Vec<(String, String)>,
     pub removed_environment: Vec<String>,
+}
+
+impl TerminalSpawnSpec {
+    pub fn address_fingerprint(&self) -> u64 {
+        let encoded = postcard::to_allocvec(&(
+            &self.project_id,
+            &self.tab_id,
+            &self.pane_id,
+            &self.cwd,
+            &self.execution,
+        ))
+        .expect("terminal spawn address must serialize");
+        encoded
+            .into_iter()
+            .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+            })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,8 +206,39 @@ pub enum TerminalStreamUpdate {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalInput {
     pub session_id: TerminalSessionId,
-    pub client_sequence: u64,
+    pub context: TerminalMutationContext,
     pub bytes: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalMutationContext {
+    pub host_epoch: u64,
+    pub session_epoch: u64,
+    pub lease_epoch: u64,
+    pub geometry_epoch: u64,
+    pub client_sequence: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResizeTerminal {
+    pub session_id: TerminalSessionId,
+    pub context: TerminalMutationContext,
+    pub geometry: TerminalGeometry,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScrollTerminal {
+    pub session_id: TerminalSessionId,
+    pub context: TerminalMutationContext,
+    pub display_offset: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetTerminalQueryPalette {
+    pub session_id: TerminalSessionId,
+    pub context: TerminalMutationContext,
+    pub colors: Vec<u32>,
+    pub revision: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,14 +252,80 @@ pub struct AttachTerminal {
     pub session_id: TerminalSessionId,
     pub known_session_epoch: Option<u64>,
     pub after_sequence: Option<u64>,
+    pub mode: TerminalLeaseMode,
     pub geometry: TerminalGeometry,
     pub geometry_epoch: u64,
+    pub query_palette: Vec<u32>,
+    pub palette_revision: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TerminalLeaseMode {
     Observer,
     Interactive,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TerminalViewportAnchor {
+    Bottom,
+    DisplayOffset(u64),
+    LineId(u64),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadTerminalViewport {
+    pub session_id: TerminalSessionId,
+    pub session_epoch: u64,
+    pub scrollback_epoch: u64,
+    pub anchor: TerminalViewportAnchor,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalViewportRead {
+    pub viewport: SemanticViewport,
+    pub bottom_line_id: Option<u64>,
+    pub checkpoint_sequence: u64,
+    pub unseen_output: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchTerminal {
+    pub session_id: TerminalSessionId,
+    pub session_epoch: u64,
+    pub scrollback_epoch: u64,
+    pub generation: u64,
+    pub query: String,
+    pub case_sensitive: bool,
+    pub max_results: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalSearchMatch {
+    pub line_id: u64,
+    pub start_column: u16,
+    pub end_column: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalSearchResults {
+    pub session_id: TerminalSessionId,
+    pub session_epoch: u64,
+    pub scrollback_epoch: u64,
+    pub generation: u64,
+    pub matches: Vec<TerminalSearchMatch>,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminateTerminalRequest {
+    pub request_id: u64,
+    pub session_id: TerminalSessionId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminatedTerminal {
+    pub session_epoch: u64,
+    pub final_sequence: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

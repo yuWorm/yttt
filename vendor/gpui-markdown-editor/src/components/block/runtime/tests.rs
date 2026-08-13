@@ -2603,7 +2603,7 @@ async fn code_language_input_uses_ime_path_without_touching_code_content(cx: &mu
 
     cx.update(|window, cx| {
         block.update(cx, |block, block_cx| {
-            block.code_language_focus_handle.focus(window, cx);
+            block.code_language_focus_handle.focus(window, block_cx);
             block.code_language_selected_range = 0..block.code_language_text().len();
             block.selected_range = 3..3;
             <Block as EntityInputHandler>::replace_text_in_range(
@@ -2637,7 +2637,7 @@ async fn code_language_input_handles_utf16_ranges(cx: &mut TestAppContext) {
 
     cx.update(|window, cx| {
         block.update(cx, |block, block_cx| {
-            block.code_language_focus_handle.focus(window, cx);
+            block.code_language_focus_handle.focus(window, block_cx);
             <Block as EntityInputHandler>::replace_text_in_range(
                 block,
                 Some(2..4),
@@ -2671,7 +2671,7 @@ async fn code_language_input_clears_language_when_empty(cx: &mut TestAppContext)
 
     cx.update(|window, cx| {
         block.update(cx, |block, block_cx| {
-            block.code_language_focus_handle.focus(window, cx);
+            block.code_language_focus_handle.focus(window, block_cx);
             block.code_language_selected_range = 0..block.code_language_text().len();
             <Block as EntityInputHandler>::replace_text_in_range(block, None, "", window, block_cx);
         });
@@ -2723,7 +2723,7 @@ async fn ending_pointer_selection_session_preserves_text_state(cx: &mut TestAppC
 
 #[gpui::test]
 async fn non_dragging_mouse_move_ends_stale_text_selection(cx: &mut TestAppContext) {
-    cx.update(|cx| {});
+    cx.update(|_cx| {});
     let (block, cx) = cx.add_window_view(|_window, cx| {
         Block::with_record(
             cx,
@@ -2753,7 +2753,7 @@ async fn non_dragging_mouse_move_ends_stale_text_selection(cx: &mut TestAppConte
 
 #[gpui::test]
 async fn dragging_mouse_move_keeps_text_selection_session_active(cx: &mut TestAppContext) {
-    cx.update(|cx| {});
+    cx.update(|_cx| {});
     let (block, cx) = cx.add_window_view(|_window, cx| {
         Block::with_record(
             cx,
@@ -2777,7 +2777,7 @@ async fn dragging_mouse_move_keeps_text_selection_session_active(cx: &mut TestAp
 
 #[gpui::test]
 async fn non_dragging_mouse_move_ends_stale_code_language_selection(cx: &mut TestAppContext) {
-    cx.update(|cx| {});
+    cx.update(|_cx| {});
     let (block, cx) = cx.add_window_view(|_window, cx| {
         Block::with_record(
             cx,
@@ -2814,7 +2814,7 @@ async fn non_dragging_mouse_move_ends_stale_code_language_selection(cx: &mut Tes
 async fn code_language_mouse_up_out_ends_selection_without_clearing_text_state(
     cx: &mut TestAppContext,
 ) {
-    cx.update(|cx| {});
+    cx.update(|_cx| {});
     let (block, cx) = cx.add_window_view(|_window, cx| {
         Block::with_record(
             cx,

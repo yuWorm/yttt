@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 use gpui::{Div, ElementId, Pixels, Rems, Rgba, div, prelude::*};
 use gpui_component::{alert::Alert, notification::Notification};
 

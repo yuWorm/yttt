@@ -62,7 +62,8 @@ use crate::pty::{ExitReason, PtyEvent, PtyIoDriver, PtyIoHandle, PtyIoOperation}
 #[cfg(any(test, debug_assertions))]
 use crate::render::TerminalDiagnosticsSnapshot;
 use crate::render::{
-    RenderOverlayState, TerminalRenderCache, TerminalRenderSnapshot, TerminalRenderer,
+    RenderOverlayState, TerminalRenderCache, TerminalRenderOptions, TerminalRenderSnapshot,
+    TerminalRenderer,
 };
 use crate::terminal::{TerminalScrollbarMetrics, TerminalState};
 use alacritty_terminal::grid::{Dimensions, Scroll};
@@ -696,7 +697,6 @@ pub type IoErrorCallback = Box<dyn Fn(&mut Context<TerminalView>, PtyIoOperation
 ///
 /// `TerminalView` is not `Send` as it contains GPUI handles. The stdin writer
 /// is internally wrapped in `Arc<parking_lot::Mutex<>>` for safe concurrent access.
-
 pub struct TerminalView {
     /// The terminal state managing the grid and VTE parser
     state: TerminalState,
@@ -707,6 +707,7 @@ pub struct TerminalView {
     semantic_viewport: Arc<parking_lot::Mutex<Option<yttt_protocol::terminal::SemanticViewport>>>,
     semantic_scroll_callback: Option<Arc<dyn Fn(u64) + Send + Sync>>,
     semantic_scroll_offset: Option<u64>,
+    semantic_animation_deadline: Option<Instant>,
     performance: TerminalPerformanceHandle,
 
     /// Focus handle for keyboard event handling
@@ -721,6 +722,8 @@ pub struct TerminalView {
     /// Signal-driven mailbox consumer; remains active while hidden.
     #[allow(dead_code)]
     _event_task: Task<()>,
+    /// Optional semantic viewport consumer used by Host-backed terminals.
+    _semantic_event_task: Option<Task<()>>,
     /// Runtime terminal configuration.
     config: TerminalConfig,
 
@@ -915,17 +918,18 @@ impl TerminalView {
         R: Read + Send + 'static,
     {
         let config = config.normalized();
+        let semantic_only = stdout_reader.is_none();
         let performance = TerminalPerformanceHandle::new();
         let (event_mailbox, event_signal) =
             TerminalEventMailbox::new_with_performance(performance.clone());
         let event_proxy = GpuiEventProxy::new(event_mailbox.clone());
+        let mut term_options = config.term_options();
+        if semantic_only {
+            term_options.scrolling_history = 0;
+        }
 
-        let state = TerminalState::new_with_options(
-            config.cols,
-            config.rows,
-            config.term_options(),
-            event_proxy,
-        );
+        let state =
+            TerminalState::new_with_options(config.cols, config.rows, term_options, event_proxy);
         if config.start_in_vi_mode {
             state.with_term_mut(|term| term.toggle_vi_mode());
         }
@@ -972,6 +976,7 @@ impl TerminalView {
             semantic_viewport: Arc::new(parking_lot::Mutex::new(None)),
             semantic_scroll_callback: None,
             semantic_scroll_offset: None,
+            semantic_animation_deadline: None,
             performance,
 
             focus_handle,
@@ -979,6 +984,7 @@ impl TerminalView {
             io,
             event_mailbox,
             _event_task: event_task,
+            _semantic_event_task: None,
             config,
             key_handler: None,
             pressed_keys: HashSet::new(),
@@ -1018,11 +1024,37 @@ impl TerminalView {
         viewport: yttt_protocol::terminal::SemanticViewport,
         cx: &mut Context<Self>,
     ) {
+        self.performance.record_semantic_viewport(&viewport);
         self.semantic_scroll_offset = Some(viewport.display_offset);
         *self.semantic_viewport.lock() = Some(viewport);
-        self.render_cache.lock().clear();
         self.render_generation = self.render_generation.wrapping_add(1);
+        self.semantic_animation_deadline = Some(Instant::now() + Duration::from_millis(50));
         cx.notify();
+    }
+    pub fn attach_semantic_viewport_stream(
+        &mut self,
+        updates: flume::Receiver<yttt_protocol::terminal::SemanticViewport>,
+        cx: &mut Context<Self>,
+    ) {
+        self._semantic_event_task = Some(cx.spawn(async move |this, cx| {
+            while let Ok(viewport) = updates.recv_async().await {
+                if this
+                    .update(cx, |terminal, cx| {
+                        terminal.set_semantic_viewport(viewport, cx);
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+                // A continuously-ready receiver can monopolize GPUI's foreground
+                // executor and coalesce several terminal updates into one paint.
+                // Yield briefly after each latest-only update so the scheduled
+                // notification can reach the next presentation frame.
+                cx.background_executor()
+                    .timer(Duration::from_millis(1))
+                    .await;
+            }
+        }));
     }
 
     pub fn with_semantic_scroll_callback(
@@ -2924,34 +2956,17 @@ impl TerminalView {
         (self.state.cols(), self.state.rows())
     }
 
-    fn apply_viewport_size(
-        &mut self,
-        cols: usize,
-        rows: usize,
-        bounds: Bounds<Pixels>,
-        padding: Edges<Pixels>,
-        cell_width: Pixels,
-        cell_height: Pixels,
-        cx: &mut Context<Self>,
-    ) {
-        let cols = cols.clamp(1, u16::MAX as usize);
-        let rows = rows.clamp(1, u16::MAX as usize);
-        let dimensions_changed = self.dimensions() != (cols, rows);
+    fn apply_viewport_size(&mut self, mut viewport: TerminalViewport, cx: &mut Context<Self>) {
+        viewport.cols = viewport.cols.clamp(1, u16::MAX as usize);
+        viewport.rows = viewport.rows.clamp(1, u16::MAX as usize);
+        let dimensions_changed = self.dimensions() != (viewport.cols, viewport.rows);
         if dimensions_changed {
-            let _ = self.io.resize(cols as u16, rows as u16);
-            self.state.resize(cols, rows);
+            let _ = self.io.resize(viewport.cols as u16, viewport.rows as u16);
+            self.state.resize(viewport.cols, viewport.rows);
             self.render_cache.lock().clear();
             self.renderer.invalidate_palette();
         }
-        *self.viewport.lock() = Some(TerminalViewport {
-            bounds,
-            padding,
-            cell_width,
-            cell_height,
-            cols,
-            rows,
-            cursor_bounds: None,
-        });
+        *self.viewport.lock() = Some(viewport);
         cx.notify();
     }
 
@@ -3029,8 +3044,6 @@ impl TerminalView {
         &mut self,
         delay: Duration,
         start_file: Option<std::path::PathBuf>,
-
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         const SAMPLES: [(&str, bool); 6] = [
@@ -3041,42 +3054,48 @@ impl TerminalView {
             ("perf-input-03", false),
             ("终端响应三", true),
         ];
+        let sample_count = std::env::var("YTTT_TERMINAL_PERF_INPUT_SAMPLES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|count| *count > 0)
+            .unwrap_or(SAMPLES.len() * 5);
+        let sample_interval = std::env::var("YTTT_TERMINAL_PERF_INPUT_INTERVAL_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Duration::from_millis)
+            .unwrap_or_else(|| Duration::from_millis(100));
+        let preedit_interval = std::env::var("YTTT_TERMINAL_PERF_PREEDIT_INTERVAL_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Duration::from_millis)
+            .unwrap_or_else(|| Duration::from_millis(50));
 
-        cx.spawn_in(window, async move |this, cx| {
+        let io = self.io.clone();
+        let performance = self.performance.clone();
+        let executor = cx.background_executor().clone();
+        cx.background_spawn(async move {
             while start_file.as_ref().is_some_and(|path| !path.is_file()) {
-                cx.background_executor()
-                    .timer(Duration::from_millis(25))
-                    .await;
+                executor.timer(Duration::from_millis(25)).await;
             }
 
-            cx.background_executor().timer(delay).await;
-            'samples: for _ in 0..5 {
+            executor.timer(delay).await;
+            let mut emitted = 0;
+            'samples: while emitted < sample_count {
                 for (text, uses_ime) in SAMPLES {
-                    if uses_ime {
-                        if this
-                            .update_in(cx, |view, window, cx| {
-                                view.replace_and_mark_text_in_range(None, text, None, window, cx);
-                            })
-                            .is_err()
-                        {
-                            break 'samples;
-                        }
-                        cx.background_executor()
-                            .timer(Duration::from_millis(50))
-                            .await;
-                    }
-
-                    if this
-                        .update_in(cx, |view, window, cx| {
-                            view.replace_text_in_range(None, text, window, cx);
-                        })
-                        .is_err()
-                    {
+                    if emitted == sample_count {
                         break 'samples;
                     }
-                    cx.background_executor()
-                        .timer(Duration::from_millis(100))
-                        .await;
+                    if uses_ime {
+                        performance.record_ime_preedit();
+                        executor.timer(preedit_interval).await;
+                    }
+
+                    if let Err(error) = io.write_input(Bytes::copy_from_slice(text.as_bytes())) {
+                        eprintln!("terminal performance input enqueue failed: {error}");
+                        break 'samples;
+                    }
+                    emitted += 1;
+                    executor.timer(sample_interval).await;
                 }
             }
         })
@@ -3275,7 +3294,7 @@ impl EntityInputHandler for TerminalView {
         if self.search.active {
             if let Some(text) = committed {
                 let mut query = self.search.query.clone();
-                query.push_str(&text);
+                query.push_str(text);
                 self.set_search_query(query, cx);
             } else {
                 self.restart_cursor_blink(cx);
@@ -3295,7 +3314,7 @@ impl EntityInputHandler for TerminalView {
         } else {
             let enqueued = if let Some(text) = committed {
                 let mode = self.mode();
-                encode_text_input(&text, mode).is_some_and(|bytes| self.enqueue_input(bytes, cx))
+                encode_text_input(text, mode).is_some_and(|bytes| self.enqueue_input(bytes, cx))
             } else {
                 false
             };
@@ -3367,6 +3386,17 @@ impl Render for TerminalView {
         self.handle_focus_change(focused, cx);
         self.refresh_visible_search_matches();
         self.refresh_hint_candidates();
+        if self
+            .semantic_animation_deadline
+            .is_some_and(|deadline| deadline > Instant::now())
+        {
+            let this = cx.entity().downgrade();
+            window.on_next_frame(move |_window, cx| {
+                let _ = this.update(cx, |_terminal, cx| cx.notify());
+            });
+        } else {
+            self.semantic_animation_deadline = None;
+        }
 
         let state_arc = self.state.term_arc();
         let renderer = self.renderer.clone();
@@ -3497,12 +3527,15 @@ impl Render for TerminalView {
                             window.defer(cx, move |_window, cx| {
                                 terminal.update(cx, |terminal, terminal_cx| {
                                     terminal.apply_viewport_size(
-                                        cols,
-                                        rows,
-                                        bounds,
-                                        effective_padding,
-                                        metrics.cell_width,
-                                        metrics.cell_height,
+                                        TerminalViewport {
+                                            bounds,
+                                            padding: effective_padding,
+                                            cell_width: metrics.cell_width,
+                                            cell_height: metrics.cell_height,
+                                            cols,
+                                            rows,
+                                            cursor_bounds: None,
+                                        },
                                         terminal_cx,
                                     );
                                 });
@@ -3550,12 +3583,14 @@ impl Render for TerminalView {
                             let snapshot = TerminalRenderSnapshot::build(
                                 &mut term,
                                 &measured_renderer.palette,
-                                &render_overlays,
-                                focused,
-                                cursor_unfocused_hollow,
-                                cursor_visible,
-                                &forced_rows,
-                                render_generation,
+                                TerminalRenderOptions {
+                                    overlays: &render_overlays,
+                                    focused,
+                                    cursor_unfocused_hollow,
+                                    cursor_visible,
+                                    forced_rows: &forced_rows,
+                                    generation: render_generation,
+                                },
                             );
                             let parser_generation = performance_for_prepaint.parser_generation();
                             (snapshot, parser_generation)

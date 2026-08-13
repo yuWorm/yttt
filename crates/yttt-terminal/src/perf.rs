@@ -4,6 +4,7 @@
 mod enabled {
     use bytes::Bytes;
 
+    use crate::pty::READ_QUEUE_CAPACITY;
     use hdrhistogram::Histogram;
     use parking_lot::{Mutex, RwLock};
     use serde::Serialize;
@@ -23,11 +24,11 @@ mod enabled {
     const MAX_INPUT_CORRELATION_AGE: Duration = Duration::from_secs(30);
 
     const MAX_PENDING_IME_EVENTS: usize = 4096;
-    const READ_QUEUE_CAPACITY: usize = 8;
 
     #[derive(Clone, Copy, Debug)]
     pub(crate) struct InputPerformanceSample {
         sequence: u64,
+        started_at: Instant,
     }
 
     #[derive(Clone, Debug, Serialize)]
@@ -63,6 +64,8 @@ mod enabled {
         pub redraw_signals: u64,
         pub redraws_coalesced: u64,
         pub dropped_correlations: u64,
+        pub final_sentinel_seen_at_unix_ns: Option<u64>,
+        pub final_sentinel_painted_at_unix_ns: Option<u64>,
     }
 
     #[derive(Clone, Debug, Serialize)]
@@ -76,7 +79,7 @@ mod enabled {
         pub paint_frame_interval_ms: DurationDistribution,
         pub input_to_pty_write_ms: DurationDistribution,
         pub input_to_echo_parse_ms: DurationDistribution,
-        pub input_to_first_paint_after_echo_ms: DurationDistribution,
+        pub echo_to_first_paint_ms: DurationDistribution,
 
         pub ime_preedit_to_paint_ms: DurationDistribution,
     }
@@ -85,7 +88,7 @@ mod enabled {
     pub struct TerminalPerformanceSemantics {
         pub frame_interval: &'static str,
         pub input_to_parser: &'static str,
-        pub input_to_paint: &'static str,
+        pub echo_to_paint: &'static str,
         pub presentation: &'static str,
     }
 
@@ -187,8 +190,15 @@ mod enabled {
     struct PendingInput {
         sequence: u64,
         started_at: Instant,
-        written_at: Option<Instant>,
         expected_echo: Bytes,
+        match_prefix: Vec<usize>,
+        match_offset: usize,
+        parsed_generation: Option<u64>,
+        echoed_at: Option<Instant>,
+    }
+
+    struct FinalSentinel {
+        expected: Bytes,
         match_prefix: Vec<usize>,
         match_offset: usize,
         parsed_generation: Option<u64>,
@@ -226,6 +236,24 @@ mod enabled {
         false
     }
 
+    fn advance_final_sentinel_match(sentinel: &mut FinalSentinel, bytes: &[u8]) -> bool {
+        if sentinel.expected.is_empty() {
+            return true;
+        }
+        for &byte in bytes {
+            while sentinel.match_offset > 0 && byte != sentinel.expected[sentinel.match_offset] {
+                sentinel.match_offset = sentinel.match_prefix[sentinel.match_offset - 1];
+            }
+            if byte == sentinel.expected[sentinel.match_offset] {
+                sentinel.match_offset += 1;
+                if sentinel.match_offset == sentinel.expected.len() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     struct PerformanceState {
         started_at: RwLock<Instant>,
         finished_at: RwLock<Option<Instant>>,
@@ -244,6 +272,9 @@ mod enabled {
         parser_completions: Mutex<VecDeque<ParserCompletion>>,
         pending_inputs: Mutex<VecDeque<PendingInput>>,
         pending_ime_preedits: Mutex<VecDeque<Instant>>,
+        final_sentinel: Mutex<Option<FinalSentinel>>,
+        final_sentinel_seen_at_unix_ns: AtomicU64,
+        final_sentinel_painted_at_unix_ns: AtomicU64,
         last_paint_at: Mutex<Option<Instant>>,
         parser_batch: DurationMetric,
         parser_lock_wait: DurationMetric,
@@ -254,17 +285,28 @@ mod enabled {
         paint_frame_interval: DurationMetric,
         input_to_pty_write: DurationMetric,
         input_to_echo_parse: DurationMetric,
-        input_to_first_paint_after_echo: DurationMetric,
+        echo_to_first_paint: DurationMetric,
 
         ime_preedit_to_paint: DurationMetric,
     }
 
     impl PerformanceState {
         fn new() -> Self {
+            let final_sentinel = env::var("YTTT_TERMINAL_PERF_FINAL_SENTINEL")
+                .ok()
+                .filter(|sentinel| !sentinel.is_empty())
+                .map(|sentinel| {
+                    let expected = Bytes::from(sentinel);
+                    FinalSentinel {
+                        match_prefix: match_prefix(&expected),
+                        expected,
+                        match_offset: 0,
+                        parsed_generation: None,
+                    }
+                });
             Self {
                 started_at: RwLock::new(Instant::now()),
                 finished_at: RwLock::new(None),
-
                 bytes_read: AtomicU64::new(0),
                 parser_batches: AtomicU64::new(0),
                 read_queue_current: AtomicUsize::new(0),
@@ -279,6 +321,9 @@ mod enabled {
                 parser_completions: Mutex::new(VecDeque::new()),
                 pending_inputs: Mutex::new(VecDeque::new()),
                 pending_ime_preedits: Mutex::new(VecDeque::new()),
+                final_sentinel: Mutex::new(final_sentinel),
+                final_sentinel_seen_at_unix_ns: AtomicU64::new(0),
+                final_sentinel_painted_at_unix_ns: AtomicU64::new(0),
                 last_paint_at: Mutex::new(None),
                 parser_batch: DurationMetric::new(),
                 parser_lock_wait: DurationMetric::new(),
@@ -289,8 +334,7 @@ mod enabled {
                 paint_frame_interval: DurationMetric::new(),
                 input_to_pty_write: DurationMetric::new(),
                 input_to_echo_parse: DurationMetric::new(),
-                input_to_first_paint_after_echo: DurationMetric::new(),
-
+                echo_to_first_paint: DurationMetric::new(),
                 ime_preedit_to_paint: DurationMetric::new(),
             }
         }
@@ -312,6 +356,15 @@ mod enabled {
             Self {
                 state: Arc::new(PerformanceState::new()),
             }
+        }
+
+        fn final_sentinel_pending(&self) -> bool {
+            self.state.final_sentinel.lock().is_some()
+                && self
+                    .state
+                    .final_sentinel_painted_at_unix_ns
+                    .load(Ordering::Acquire)
+                    == 0
         }
 
         pub(crate) fn record_read(&self, bytes: usize) {
@@ -339,16 +392,20 @@ mod enabled {
                     .dropped_correlations
                     .fetch_add(1, Ordering::Relaxed);
             }
+            let started_at = Instant::now();
             pending.push_back(PendingInput {
                 sequence,
-                started_at: Instant::now(),
-                written_at: None,
+                started_at,
                 expected_echo: bytes.clone(),
                 match_prefix: match_prefix(bytes),
                 match_offset: 0,
                 parsed_generation: None,
+                echoed_at: None,
             });
-            InputPerformanceSample { sequence }
+            InputPerformanceSample {
+                sequence,
+                started_at,
+            }
         }
 
         pub(crate) fn cancel_input(&self, sample: InputPerformanceSample) {
@@ -366,21 +423,9 @@ mod enabled {
             sample: InputPerformanceSample,
             completed_at: Instant,
         ) {
-            let started_at = {
-                let mut pending = self.state.pending_inputs.lock();
-                pending
-                    .iter_mut()
-                    .find(|input| input.sequence == sample.sequence)
-                    .map(|input| {
-                        input.written_at = Some(completed_at);
-                        input.started_at
-                    })
-            };
-            if let Some(started_at) = started_at {
-                self.state
-                    .input_to_pty_write
-                    .record(completed_at.saturating_duration_since(started_at));
-            }
+            self.state
+                .input_to_pty_write
+                .record(completed_at.saturating_duration_since(sample.started_at));
         }
 
         pub(crate) fn record_parser_batch(
@@ -395,7 +440,27 @@ mod enabled {
             self.state.parser_batch.record(total);
             self.state.parser_lock_wait.record(lock_wait);
             self.state.parser_advance.record(advance);
+            self.record_output_parts(completed_at, std::iter::once(bytes))
+        }
 
+        pub(crate) fn record_semantic_viewport(
+            &self,
+            viewport: &yttt_protocol::terminal::SemanticViewport,
+        ) {
+            self.record_output_parts(
+                Instant::now(),
+                viewport
+                    .rows
+                    .iter()
+                    .flat_map(|row| row.spans.iter().map(|span| span.text.as_bytes())),
+            );
+        }
+
+        fn record_output_parts<'a>(
+            &self,
+            completed_at: Instant,
+            parts: impl IntoIterator<Item = &'a [u8]>,
+        ) -> u64 {
             let generation = self.state.parser_generation.fetch_add(1, Ordering::AcqRel) + 1;
             {
                 let mut completions = self.state.parser_completions.lock();
@@ -412,16 +477,29 @@ mod enabled {
             }
 
             let mut parser_latencies = Vec::new();
-            {
-                let mut pending = self.state.pending_inputs.lock();
+            let mut pending = self.state.pending_inputs.lock();
+            let mut final_sentinel = self.state.final_sentinel.lock();
+            for bytes in parts {
                 for input in pending.iter_mut() {
                     if input.parsed_generation.is_none() && advance_echo_match(input, bytes) {
                         input.parsed_generation = Some(generation);
+                        input.echoed_at = Some(completed_at);
                         parser_latencies
                             .push(completed_at.saturating_duration_since(input.started_at));
                     }
                 }
+                if let Some(sentinel) = final_sentinel.as_mut()
+                    && sentinel.parsed_generation.is_none()
+                    && advance_final_sentinel_match(sentinel, bytes)
+                {
+                    sentinel.parsed_generation = Some(generation);
+                    self.state
+                        .final_sentinel_seen_at_unix_ns
+                        .store(unix_time_ns(), Ordering::Release);
+                }
             }
+            drop(final_sentinel);
+            drop(pending);
             for latency in parser_latencies {
                 self.state.input_to_echo_parse.record(latency);
             }
@@ -469,6 +547,24 @@ mod enabled {
                     .paint_frame_interval
                     .record(completed_at.saturating_duration_since(previous));
             }
+            if self
+                .state
+                .final_sentinel_painted_at_unix_ns
+                .load(Ordering::Acquire)
+                == 0
+                && self
+                    .state
+                    .final_sentinel
+                    .lock()
+                    .as_ref()
+                    .and_then(|sentinel| sentinel.parsed_generation)
+                    .is_some_and(|generation| generation <= parser_generation)
+            {
+                let _ = self
+                    .state
+                    .final_sentinel_painted_at_unix_ns
+                    .compare_exchange(0, unix_time_ns(), Ordering::AcqRel, Ordering::Acquire);
+            }
 
             let mut input_latencies = Vec::new();
             let mut dropped = 0_u64;
@@ -486,8 +582,10 @@ mod enabled {
                         let input = pending
                             .remove(index)
                             .expect("pending input index must remain valid");
-                        input_latencies
-                            .push(completed_at.saturating_duration_since(input.started_at));
+                        let echoed_at = input
+                            .echoed_at
+                            .expect("parsed input must record its echo timestamp");
+                        input_latencies.push(completed_at.saturating_duration_since(echoed_at));
                     } else if expired {
                         pending.remove(index);
                         dropped += 1;
@@ -502,7 +600,7 @@ mod enabled {
                     .fetch_add(dropped, Ordering::Relaxed);
             }
             for latency in input_latencies {
-                self.state.input_to_first_paint_after_echo.record(latency);
+                self.state.echo_to_first_paint.record(latency);
             }
 
             let ime_preedits = {
@@ -557,7 +655,7 @@ mod enabled {
             let redraw_requests = self.state.redraw_requests.load(Ordering::Relaxed);
             let redraw_signals = self.state.redraw_signals.load(Ordering::Relaxed);
             TerminalPerformanceSnapshot {
-                schema_version: 1,
+                schema_version: 2,
                 elapsed_seconds,
                 paint_fps: if elapsed_seconds > 0.0 {
                     painted_frames as f64 / elapsed_seconds
@@ -576,6 +674,16 @@ mod enabled {
                     redraw_signals,
                     redraws_coalesced: redraw_requests.saturating_sub(redraw_signals),
                     dropped_correlations: self.state.dropped_correlations.load(Ordering::Relaxed),
+                    final_sentinel_seen_at_unix_ns: non_zero(
+                        self.state
+                            .final_sentinel_seen_at_unix_ns
+                            .load(Ordering::Acquire),
+                    ),
+                    final_sentinel_painted_at_unix_ns: non_zero(
+                        self.state
+                            .final_sentinel_painted_at_unix_ns
+                            .load(Ordering::Acquire),
+                    ),
                 },
                 latencies: TerminalLatencyMetrics {
                     parser_batch_ms: self.state.parser_batch.snapshot(),
@@ -587,10 +695,7 @@ mod enabled {
                     paint_frame_interval_ms: self.state.paint_frame_interval.snapshot(),
                     input_to_pty_write_ms: self.state.input_to_pty_write.snapshot(),
                     input_to_echo_parse_ms: self.state.input_to_echo_parse.snapshot(),
-                    input_to_first_paint_after_echo_ms: self
-                        .state
-                        .input_to_first_paint_after_echo
-                        .snapshot(),
+                    echo_to_first_paint_ms: self.state.echo_to_first_paint.snapshot(),
 
                     ime_preedit_to_paint_ms: self.state.ime_preedit_to_paint.snapshot(),
                 },
@@ -598,7 +703,7 @@ mod enabled {
                 semantics: TerminalPerformanceSemantics {
                     frame_interval: "Time between completed terminal paint callbacks; this is not the Metal drawable presentation interval.",
                     input_to_parser: "Time from a GPUI input event until the parser observes the first subsequent PTY output occurrence of the exact submitted byte sequence; unmatched control input is omitted.",
-                    input_to_paint: "Time to the first terminal paint whose snapshot includes the matched echo parser generation.",
+                    echo_to_paint: "Time from matching the echoed input in terminal output until the first paint whose snapshot includes that echo.",
 
                     presentation: "Actual GPU/display presentation is intentionally measured by the accompanying Metal System Trace capture.",
                 },
@@ -623,6 +728,16 @@ mod enabled {
             self.state.parser_completions.lock().clear();
             self.state.pending_inputs.lock().clear();
             self.state.pending_ime_preedits.lock().clear();
+            if let Some(sentinel) = self.state.final_sentinel.lock().as_mut() {
+                sentinel.match_offset = 0;
+                sentinel.parsed_generation = None;
+            }
+            self.state
+                .final_sentinel_seen_at_unix_ns
+                .store(0, Ordering::Release);
+            self.state
+                .final_sentinel_painted_at_unix_ns
+                .store(0, Ordering::Release);
             *self.state.last_paint_at.lock() = None;
             self.state.parser_batch.clear();
             self.state.parser_lock_wait.clear();
@@ -633,7 +748,7 @@ mod enabled {
             self.state.paint_frame_interval.clear();
             self.state.input_to_pty_write.clear();
             self.state.input_to_echo_parse.clear();
-            self.state.input_to_first_paint_after_echo.clear();
+            self.state.echo_to_first_paint.clear();
 
             self.state.ime_preedit_to_paint.clear();
         }
@@ -655,13 +770,15 @@ mod enabled {
             let ready_file = env::var_os("YTTT_TERMINAL_PERF_READY_FILE").map(PathBuf::from);
             let reporter = TerminalPerformanceReporter::spawn(
                 self.clone(),
-                path,
-                label,
-                scenario,
-                interval,
-                warmup,
-                measurement_duration,
-                start_file,
+                TerminalPerformanceReporterConfig {
+                    path,
+                    label,
+                    scenario,
+                    interval,
+                    warmup,
+                    measurement_duration,
+                    start_file,
+                },
             )?;
             if let Some(ready_file) = ready_file {
                 if let Some(parent) = ready_file.parent() {
@@ -699,6 +816,16 @@ mod enabled {
             .map(Duration::from_secs_f64)
     }
 
+    struct TerminalPerformanceReporterConfig {
+        path: PathBuf,
+        label: String,
+        scenario: String,
+        interval: Duration,
+        warmup: Duration,
+        measurement_duration: Option<Duration>,
+        start_file: Option<PathBuf>,
+    }
+
     pub struct TerminalPerformanceReporter {
         stop: Arc<(StdMutex<bool>, Condvar)>,
         thread: Option<JoinHandle<()>>,
@@ -707,15 +834,17 @@ mod enabled {
     impl TerminalPerformanceReporter {
         fn spawn(
             performance: TerminalPerformanceHandle,
-            path: PathBuf,
-            label: String,
-            scenario: String,
-            interval: Duration,
-            warmup: Duration,
-            measurement_duration: Option<Duration>,
-
-            start_file: Option<PathBuf>,
+            config: TerminalPerformanceReporterConfig,
         ) -> io::Result<Self> {
+            let TerminalPerformanceReporterConfig {
+                path,
+                label,
+                scenario,
+                interval,
+                warmup,
+                measurement_duration,
+                start_file,
+            } = config;
             let waiting_for_start = start_file.as_ref().is_some_and(|path| !path.is_file());
 
             write_document(
@@ -795,6 +924,7 @@ mod enabled {
                         if measuring
                             && measurement_deadline
                                 .is_some_and(|deadline| Instant::now() >= deadline)
+                            && !performance.final_sentinel_pending()
                         {
                             performance.finish_measurement();
                             finished_snapshot = Some(performance.snapshot());
@@ -860,6 +990,18 @@ mod enabled {
         }
     }
 
+    fn non_zero(value: u64) -> Option<u64> {
+        (value != 0).then_some(value)
+    }
+
+    fn unix_time_ns() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+            .min(u64::MAX as u128) as u64
+    }
+
     fn unix_time_ms() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -912,15 +1054,35 @@ mod enabled {
             assert_eq!(snapshot.counters.painted_frames, 1);
             assert_eq!(snapshot.latencies.input_to_pty_write_ms.samples, 1);
             assert_eq!(snapshot.latencies.input_to_echo_parse_ms.samples, 1);
+            assert_eq!(snapshot.latencies.echo_to_first_paint_ms.samples, 1);
+
+            assert_eq!(snapshot.latencies.parser_to_prepaint_ms.samples, 1);
+        }
+
+        #[test]
+        fn input_write_latency_survives_echo_paint_race() {
+            let performance = TerminalPerformanceHandle::new();
+            let echoed = Bytes::from_static(b"echo");
+            let input = performance.begin_input(&echoed);
+            let generation = performance.record_parser_batch(
+                Duration::ZERO,
+                Duration::ZERO,
+                Duration::ZERO,
+                Instant::now(),
+                b"echo",
+            );
+            performance.record_paint(generation, Instant::now(), Duration::ZERO);
+
+            performance.record_input_written(input, Instant::now());
+
             assert_eq!(
-                snapshot
+                performance
+                    .snapshot()
                     .latencies
-                    .input_to_first_paint_after_echo_ms
+                    .input_to_pty_write_ms
                     .samples,
                 1
             );
-
-            assert_eq!(snapshot.latencies.parser_to_prepaint_ms.samples, 1);
         }
 
         #[test]
@@ -954,13 +1116,15 @@ mod enabled {
             performance.record_read(42);
             let reporter = TerminalPerformanceReporter::spawn(
                 performance.clone(),
-                report_path.clone(),
-                "test".to_string(),
-                "gate".to_string(),
-                Duration::from_millis(10),
-                Duration::ZERO,
-                None,
-                Some(start_file.clone()),
+                TerminalPerformanceReporterConfig {
+                    path: report_path.clone(),
+                    label: "test".to_string(),
+                    scenario: "gate".to_string(),
+                    interval: Duration::from_millis(10),
+                    warmup: Duration::ZERO,
+                    measurement_duration: None,
+                    start_file: Some(start_file.clone()),
+                },
             )
             .unwrap();
 
@@ -992,13 +1156,15 @@ mod enabled {
             let performance = TerminalPerformanceHandle::new();
             let reporter = TerminalPerformanceReporter::spawn(
                 performance.clone(),
-                report_path.clone(),
-                "test".to_string(),
-                "duration".to_string(),
-                Duration::from_millis(200),
-                Duration::ZERO,
-                Some(Duration::from_millis(40)),
-                None,
+                TerminalPerformanceReporterConfig {
+                    path: report_path.clone(),
+                    label: "test".to_string(),
+                    scenario: "duration".to_string(),
+                    interval: Duration::from_millis(200),
+                    warmup: Duration::ZERO,
+                    measurement_duration: Some(Duration::from_millis(40)),
+                    start_file: None,
+                },
             )
             .unwrap();
 
@@ -1015,6 +1181,65 @@ mod enabled {
             assert!((0.03..=0.08).contains(&elapsed), "{elapsed}");
             thread::sleep(Duration::from_millis(40));
             assert_eq!(performance.snapshot().elapsed_seconds, elapsed);
+
+            drop(reporter);
+            fs::remove_dir_all(directory).unwrap();
+        }
+
+        #[test]
+        fn reporter_waits_for_configured_final_sentinel_after_duration() {
+            let unique = format!(
+                "yttt-terminal-perf-sentinel-{}-{}",
+                std::process::id(),
+                unix_time_ms()
+            );
+            let directory = std::env::temp_dir().join(unique);
+            let report_path = directory.join("metrics.json");
+            let performance = TerminalPerformanceHandle::new();
+            let expected = Bytes::from_static(b"finished");
+            *performance.state.final_sentinel.lock() = Some(FinalSentinel {
+                match_prefix: match_prefix(&expected),
+                expected,
+                match_offset: 0,
+                parsed_generation: None,
+            });
+            let reporter = TerminalPerformanceReporter::spawn(
+                performance.clone(),
+                TerminalPerformanceReporterConfig {
+                    path: report_path.clone(),
+                    label: "test".to_string(),
+                    scenario: "sentinel".to_string(),
+                    interval: Duration::from_millis(10),
+                    warmup: Duration::ZERO,
+                    measurement_duration: Some(Duration::from_millis(30)),
+                    start_file: None,
+                },
+            )
+            .unwrap();
+
+            thread::sleep(Duration::from_millis(75));
+            let document: serde_json::Value =
+                serde_json::from_slice(&fs::read(&report_path).unwrap()).unwrap();
+            assert_eq!(document["phase"], "measuring");
+
+            let generation = performance.record_parser_batch(
+                Duration::ZERO,
+                Duration::ZERO,
+                Duration::ZERO,
+                Instant::now(),
+                b"finished",
+            );
+            performance.record_paint(generation, Instant::now(), Duration::ZERO);
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                let document: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&report_path).unwrap()).unwrap();
+                if document["phase"] == "finished" {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "reporter did not finish");
+                thread::sleep(Duration::from_millis(5));
+            }
 
             drop(reporter);
             fs::remove_dir_all(directory).unwrap();
@@ -1072,6 +1297,12 @@ mod disabled {
             _bytes: &[u8],
         ) -> u64 {
             0
+        }
+
+        pub(crate) fn record_semantic_viewport(
+            &self,
+            _viewport: &yttt_protocol::terminal::SemanticViewport,
+        ) {
         }
 
         pub(crate) fn parser_generation(&self) -> u64 {

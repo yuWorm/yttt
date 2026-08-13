@@ -755,24 +755,22 @@ max_width = 120.0
         vec![ShellBarModule::Settings]
     );
     assert!(
-        loaded
+        !loaded
             .settings
             .bars
             .window
             .layout
             .modules
-            .get("project-path")
-            .is_none()
+            .contains_key("project-path")
     );
     assert!(
-        loaded
+        !loaded
             .settings
             .bars
             .window
             .layout
             .modules
-            .get("missing-module")
-            .is_none()
+            .contains_key("missing-module")
     );
     assert!(loaded.warnings.iter().any(|warning| matches!(
         warning,

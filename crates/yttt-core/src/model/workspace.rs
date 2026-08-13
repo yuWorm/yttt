@@ -646,7 +646,6 @@ impl Workspace {
             .ok_or_else(|| WorkspaceError::PaneNotFound(pane_id.to_string()))?;
 
         pane.process_state = PaneProcessState::Running;
-        pane.agent_snapshot = None;
         Ok(())
     }
 

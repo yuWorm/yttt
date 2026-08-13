@@ -3,26 +3,22 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use yttt_agent_core::{
-    AgentExitReason, AgentInstanceId, AgentProcessExit, AgentProcessState, AgentProvider,
-    AgentReducer, AgentSessionMetadata, AgentSnapshot, ProviderHookEvent, ProviderId,
-    ProviderResumeCommand,
+    AgentInstanceId, AgentProcessState, AgentSessionMetadata, AgentSnapshot, ProviderResumeCommand,
 };
 use yttt_agent_providers::{
     OMP_EXTENSION_FILE_NAME, OMP_EXTENSION_SOURCE, OMP_PROVIDER_ID, builtin_providers,
 };
-use yttt_agent_runtime::{
-    AgentRuntime, AgentRuntimeError, AgentRuntimeUpdate, AgentScopeKey, PreparedAgentLaunch,
-};
+use yttt_agent_runtime::{AgentRuntime, AgentScopeKey, PreparedAgentLaunch};
+use yttt_protocol::agent::AgentSnapshotUpdate;
 
 use crate::{
-    config::{atomic_write, default_layout::BuiltinAgent, paths::AppConfigPaths},
-    runtime::agent_hooks::{AgentHookClient, AgentHookRequest, installer::install_managed_hooks},
+    config::{atomic_write, paths::AppConfigPaths},
+    runtime::agent_hooks::{AgentSnapshotClient, installer::install_managed_hooks},
 };
 
 const AGENT_STATE_VERSION: u32 = 1;
@@ -135,6 +131,7 @@ impl AgentPaneLaunch {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum AgentPaneExitOutcome {
     Snapshot {
@@ -146,20 +143,12 @@ pub enum AgentPaneExitOutcome {
     },
 }
 
-struct DetectedAgentProcess {
-    agent: BuiltinAgent,
-    generation: u64,
-    reducer: AgentReducer,
-}
-
 pub struct AgentManager {
     runtime: AgentRuntime,
     launches_by_address: HashMap<AgentPaneAddress, AgentPaneLaunch>,
     addresses_by_instance: HashMap<AgentInstanceId, AgentPaneAddress>,
-    detected_by_address: HashMap<AgentPaneAddress, DetectedAgentProcess>,
-    finished_detected_generations: HashMap<AgentPaneAddress, u64>,
-    hook_providers: HashMap<String, Arc<dyn AgentProvider>>,
-    hook_client: Option<AgentHookClient>,
+    snapshot_client: Option<AgentSnapshotClient>,
+    host_snapshot_sequences: HashMap<AgentPaneAddress, (u64, u64, u64)>,
     omp_extension_path: Option<PathBuf>,
     state_path: PathBuf,
     retained_snapshots: HashMap<AgentPaneAddress, AgentSnapshot>,
@@ -174,10 +163,6 @@ impl AgentManager {
     pub fn new(config_paths: &AppConfigPaths) -> Self {
         let mut runtime = AgentRuntime::default();
         let providers = builtin_providers();
-        let hook_providers = providers
-            .iter()
-            .map(|provider| (provider.descriptor().id.to_string(), Arc::clone(provider)))
-            .collect();
         for provider in providers {
             runtime.register_provider(provider);
         }
@@ -200,10 +185,8 @@ impl AgentManager {
             runtime,
             launches_by_address: HashMap::new(),
             addresses_by_instance: HashMap::new(),
-            detected_by_address: HashMap::new(),
-            finished_detected_generations: HashMap::new(),
-            hook_providers,
-            hook_client: None,
+            snapshot_client: None,
+            host_snapshot_sequences: HashMap::new(),
             omp_extension_path,
             state_path,
             retained_snapshots,
@@ -224,9 +207,7 @@ impl AgentManager {
         provider_id: &str,
         session: &AgentSessionMetadata,
     ) -> Option<ProviderResumeCommand> {
-        self.hook_providers
-            .get(provider_id)?
-            .resume_command(session)
+        self.runtime.resume_command(provider_id, session)
     }
 
     pub fn retained_snapshots(&self) -> Vec<(AgentPaneAddress, AgentSnapshot)> {
@@ -266,10 +247,6 @@ impl AgentManager {
             .retain(|address, _| !matches(address));
         self.launches_by_address
             .retain(|address, _| !matches(address));
-        self.detected_by_address
-            .retain(|address, _| !matches(address));
-        self.finished_detected_generations
-            .retain(|address, _| !matches(address));
 
         let mut removed_instances = Vec::new();
         self.addresses_by_instance.retain(|instance_id, address| {
@@ -287,6 +264,8 @@ impl AgentManager {
         let retained_count = self.retained_snapshots.len();
         self.retained_snapshots
             .retain(|address, _| !matches(address));
+        self.host_snapshot_sequences
+            .retain(|address, _| !matches(address));
         if self.retained_snapshots.len() != retained_count
             && let Err(error) = write_agent_state(&self.state_path, &self.retained_snapshots)
         {
@@ -297,84 +276,66 @@ impl AgentManager {
     pub fn take_error(&mut self) -> Option<String> {
         self.last_error.take()
     }
-    pub fn set_hook_client(&mut self, client: Option<AgentHookClient>) {
-        self.hook_client = client;
+    pub fn set_snapshot_client(&mut self, client: Option<AgentSnapshotClient>) {
+        self.snapshot_client = client;
     }
 
-    pub fn hook_client(&self) -> Option<AgentHookClient> {
-        self.hook_client.clone()
-    }
-
-    pub fn drain_hook_requests(&self) -> Vec<AgentHookRequest> {
-        self.hook_client
+    pub fn drain_host_snapshots(&self) -> Vec<AgentSnapshotUpdate> {
+        self.snapshot_client
             .as_ref()
-            .map(AgentHookClient::drain)
+            .map(AgentSnapshotClient::drain)
             .unwrap_or_default()
     }
 
-    pub fn ingest_hook_request(
+    pub fn apply_host_snapshot(
         &mut self,
-        request: AgentHookRequest,
-    ) -> Result<Option<(AgentPaneAddress, AgentSnapshot)>, AgentRuntimeError> {
-        let provider_id = request.source.id();
-        if let Some(launch) = self.launches_by_address.get(&request.address) {
-            if launch.prepared.provider_id.as_str() != provider_id {
-                return Ok(None);
-            }
-            let instance_id = launch.instance_id().clone();
-            let update = self.runtime.ingest_hook(
-                &instance_id,
-                request.generation,
-                &request.event,
-                &request.payload,
-            )?;
-            if is_session_start_event(&request.event) {
-                self.mark_resume_succeeded(&instance_id);
-            }
-            return Ok(self.resolve_update(update));
-        }
+        update: AgentSnapshotUpdate,
+    ) -> Option<AgentPaneExitOutcome> {
+        let address = AgentPaneAddress::new(
+            &update.scope.project_id,
+            &update.scope.tab_id,
+            &update.scope.pane_id,
+        );
+        let cursor = (update.host_epoch, update.scope.generation, update.sequence);
         if self
-            .finished_detected_generations
-            .get(&request.address)
-            .is_some_and(|generation| *generation == request.generation)
-            && !is_session_start_event(&request.event)
+            .host_snapshot_sequences
+            .get(&address)
+            .is_some_and(|current| *current >= cursor)
         {
-            return Ok(None);
+            return None;
+        }
+        self.host_snapshot_sequences.insert(address.clone(), cursor);
+
+        let snapshot_failed =
+            update.snapshot.view_state() == yttt_agent_core::AgentViewState::Failed;
+        let resume_failed = snapshot_failed
+            && self
+                .launches_by_address
+                .get(&address)
+                .is_some_and(AgentPaneLaunch::is_resuming_session);
+        if resume_failed {
+            let launch = self.launches_by_address.remove(&address)?;
+            self.addresses_by_instance.remove(launch.instance_id());
+            self.runtime.remove(launch.instance_id());
+            self.retained_snapshots.remove(&address);
+            if let Some(program) = launch.static_program_override() {
+                self.fresh_program_overrides
+                    .insert(address.clone(), program);
+            }
+            if let Err(error) = write_agent_state(&self.state_path, &self.retained_snapshots) {
+                self.last_error = Some(error.to_string());
+            }
+            return Some(AgentPaneExitOutcome::ResumeFailed { address });
+        }
+        if !snapshot_failed && let Some(launch) = self.launches_by_address.get_mut(&address) {
+            launch.resuming_session = false;
         }
 
-        if !self
-            .detected_by_address
-            .get(&request.address)
-            .is_some_and(|detected| {
-                detected.agent == request.source && detected.generation == request.generation
-            })
-        {
-            self.detected_by_address.remove(&request.address);
-            self.detected_process_started(
-                request.address.clone(),
-                request.source,
-                request.generation,
-            );
-        }
-        let Some(provider) = self.hook_providers.get(provider_id) else {
-            return Ok(None);
-        };
-        let events = provider.normalize_hook(ProviderHookEvent {
-            name: &request.event,
-            payload: &request.payload,
-        })?;
-        let snapshot = {
-            let Some(detected) = self.detected_by_address.get_mut(&request.address) else {
-                return Ok(None);
-            };
-            let now = unix_timestamp_millis();
-            for event in events {
-                detected.reducer.apply(request.generation, event, now);
-            }
-            detected.reducer.snapshot().clone()
-        };
-        self.persist_snapshot(request.address.clone(), snapshot.clone());
-        Ok(Some((request.address, snapshot)))
+        self.persist_snapshot(address.clone(), update.snapshot.clone());
+        Some(AgentPaneExitOutcome::Snapshot {
+            address,
+            snapshot: update.snapshot,
+        })
     }
 
     pub fn prepare_pane(
@@ -382,10 +343,14 @@ impl AgentManager {
         address: AgentPaneAddress,
         command: &str,
         remote: bool,
-    ) -> Option<(AgentPaneLaunch, AgentSnapshot)> {
+    ) -> Option<(AgentPaneLaunch, Option<AgentSnapshot>)> {
         if let Some(launch) = self.launches_by_address.get(&address) {
-            let snapshot = self.runtime.snapshot(launch.instance_id())?.clone();
-            return Some((launch.clone(), snapshot));
+            let restored = self
+                .restorable_projects
+                .contains(&address.project_id)
+                .then(|| self.retained_snapshots.get(&address).cloned())
+                .flatten();
+            return Some((launch.clone(), restored));
         }
         let forced_program_override = self.fresh_program_overrides.remove(&address);
         let provider_command = forced_program_override.unwrap_or(command);
@@ -394,7 +359,7 @@ impl AgentManager {
             .contains(&address.project_id)
             .then(|| self.retained_snapshots.get(&address).cloned())
             .flatten();
-        let Some((prepared, snapshot)) = self.runtime.prepare_launch_with_snapshot(
+        let Some((prepared, _)) = self.runtime.prepare_launch_with_snapshot(
             provider_command,
             address.scope_key(),
             restored.as_ref(),
@@ -426,41 +391,16 @@ impl AgentManager {
         };
         self.addresses_by_instance
             .insert(launch.instance_id().clone(), address.clone());
-        self.launches_by_address
-            .insert(address.clone(), launch.clone());
-        self.persist_snapshot(address, snapshot.clone());
-        Some((launch, snapshot))
-    }
-
-    pub fn process_started(
-        &mut self,
-        instance_id: &AgentInstanceId,
-        generation: u64,
-    ) -> Option<(AgentPaneAddress, AgentSnapshot)> {
-        let update = self.runtime.process_started(instance_id, generation)?;
-        self.resolve_update(update)
+        self.launches_by_address.insert(address, launch.clone());
+        Some((launch, restored))
     }
 
     pub fn process_start_failed(
         &mut self,
         instance_id: &AgentInstanceId,
-        generation: u64,
+        _generation: u64,
     ) -> Option<AgentPaneAddress> {
-        let update = self.runtime.process_exited(
-            instance_id,
-            generation,
-            AgentProcessExit {
-                code: None,
-                reason: AgentExitReason::Failed,
-            },
-        )?;
-        if update.snapshot.generation != generation {
-            return None;
-        }
-        let address = self
-            .addresses_by_instance
-            .get(&update.snapshot.instance_id)?
-            .clone();
+        let address = self.addresses_by_instance.get(instance_id)?.clone();
         if !self
             .launches_by_address
             .get(&address)
@@ -473,169 +413,6 @@ impl AgentManager {
             self.last_error = Some(error.to_string());
         }
         Some(address)
-    }
-
-    pub fn process_exited(
-        &mut self,
-        instance_id: &AgentInstanceId,
-        generation: u64,
-        exit: AgentProcessExit,
-    ) -> Option<AgentPaneExitOutcome> {
-        let resume_failed = agent_exit_failed(&exit);
-        let update = self.runtime.process_exited(instance_id, generation, exit)?;
-        let address = self
-            .addresses_by_instance
-            .get(&update.snapshot.instance_id)?
-            .clone();
-        let resume_failed = resume_failed
-            && update.snapshot.generation == generation
-            && self
-                .launches_by_address
-                .get(&address)
-                .is_some_and(|launch| {
-                    launch.instance_id() == instance_id && launch.is_resuming_session()
-                });
-        let fresh_program_override = resume_failed
-            .then(|| {
-                self.launches_by_address
-                    .get(&address)
-                    .and_then(AgentPaneLaunch::static_program_override)
-            })
-            .flatten();
-        if resume_failed {
-            self.launches_by_address.remove(&address);
-            self.addresses_by_instance.remove(instance_id);
-            self.runtime.remove(instance_id);
-            self.retained_snapshots.remove(&address);
-            if let Some(program) = fresh_program_override {
-                self.fresh_program_overrides
-                    .insert(address.clone(), program);
-            }
-            if let Err(error) = write_agent_state(&self.state_path, &self.retained_snapshots) {
-                self.last_error = Some(error.to_string());
-            }
-            return Some(AgentPaneExitOutcome::ResumeFailed { address });
-        }
-
-        self.persist_snapshot(address.clone(), update.snapshot.clone());
-        Some(AgentPaneExitOutcome::Snapshot {
-            address,
-            snapshot: update.snapshot,
-        })
-    }
-
-    pub fn ingest_title(
-        &mut self,
-        title: &str,
-    ) -> Result<Option<(AgentPaneAddress, AgentSnapshot)>, AgentRuntimeError> {
-        let Some(update) = self.runtime.ingest_title(title)? else {
-            return Ok(None);
-        };
-        self.mark_resume_succeeded(&update.snapshot.instance_id);
-        Ok(self.resolve_update(update))
-    }
-
-    pub fn detected_process_started(
-        &mut self,
-        address: AgentPaneAddress,
-        agent: BuiltinAgent,
-        generation: u64,
-    ) -> Option<AgentSnapshot> {
-        if self.launches_by_address.contains_key(&address)
-            || self
-                .detected_by_address
-                .get(&address)
-                .is_some_and(|detected| {
-                    detected.agent == agent && detected.generation == generation
-                })
-        {
-            return None;
-        }
-        self.finished_detected_generations.remove(&address);
-
-        let now = unix_timestamp_millis();
-        let mut reducer = AgentReducer::new(
-            AgentInstanceId::random(),
-            ProviderId::from_static(agent.id()),
-            now,
-        );
-        reducer.process_starting(generation, now);
-        reducer.process_started(generation, now);
-        let snapshot = reducer.snapshot().clone();
-        self.detected_by_address.insert(
-            address.clone(),
-            DetectedAgentProcess {
-                agent,
-                generation,
-                reducer,
-            },
-        );
-        self.persist_snapshot(address, snapshot.clone());
-        Some(snapshot)
-    }
-
-    pub fn detected_process_exited(
-        &mut self,
-        address: &AgentPaneAddress,
-        generation: u64,
-        reason: AgentExitReason,
-    ) -> Option<AgentSnapshot> {
-        let detected = self.detected_by_address.remove(address)?;
-        if detected.generation != generation {
-            self.detected_by_address.insert(address.clone(), detected);
-            return None;
-        }
-        self.finished_detected_generations
-            .insert(address.clone(), generation);
-
-        let mut reducer = detected.reducer;
-        let reason = if reason == AgentExitReason::Completed {
-            match reducer.snapshot().view_state() {
-                yttt_agent_core::AgentViewState::Failed => AgentExitReason::Failed,
-                yttt_agent_core::AgentViewState::Interrupted => AgentExitReason::KilledByUser,
-                _ => AgentExitReason::Completed,
-            }
-        } else {
-            reason
-        };
-        reducer.process_exited(
-            generation,
-            AgentProcessExit {
-                code: (reason == AgentExitReason::Completed).then_some(0),
-                reason,
-            },
-            unix_timestamp_millis(),
-        );
-        let snapshot = reducer.snapshot().clone();
-        self.retained_snapshots.remove(address);
-        if let Err(error) = write_agent_state(&self.state_path, &self.retained_snapshots) {
-            self.last_error = Some(error.to_string());
-        }
-        Some(snapshot)
-    }
-
-    fn mark_resume_succeeded(&mut self, instance_id: &AgentInstanceId) {
-        let Some(address) = self.addresses_by_instance.get(instance_id) else {
-            return;
-        };
-        let Some(launch) = self.launches_by_address.get_mut(address) else {
-            return;
-        };
-        if launch.instance_id() == instance_id {
-            launch.resuming_session = false;
-        }
-    }
-
-    fn resolve_update(
-        &mut self,
-        update: AgentRuntimeUpdate,
-    ) -> Option<(AgentPaneAddress, AgentSnapshot)> {
-        let address = self
-            .addresses_by_instance
-            .get(&update.snapshot.instance_id)?
-            .clone();
-        self.persist_snapshot(address.clone(), update.snapshot.clone());
-        Some((address, update.snapshot))
     }
 
     fn persist_snapshot(&mut self, address: AgentPaneAddress, snapshot: AgentSnapshot) {
@@ -657,25 +434,9 @@ impl AgentManager {
         }
     }
 }
-fn is_session_start_event(event: &str) -> bool {
-    matches!(event, "SessionStart" | "session_start")
-}
-
-fn agent_exit_failed(exit: &AgentProcessExit) -> bool {
-    exit.reason == AgentExitReason::Failed || exit.code.is_some_and(|code| code != 0)
-}
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
-
-fn unix_timestamp_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
 }
 
 fn combine_errors(first: Option<String>, second: Option<String>) -> Option<String> {
@@ -776,8 +537,10 @@ fn install_omp_extension(config_paths: &AppConfigPaths) -> std::io::Result<PathB
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
     use tempfile::TempDir;
+    use yttt_agent_core::{AgentReducer, AgentViewState, ProviderId};
+    use yttt_core::model::ids::TerminalSessionId;
+    use yttt_protocol::agent::{AgentHookScope, AgentSnapshotUpdate};
 
     use super::*;
 
@@ -788,8 +551,7 @@ mod tests {
         let mut manager = AgentManager::new(&paths);
         assert!(manager.setup_error().is_none());
         let address = AgentPaneAddress::new("project", "agent", "omp");
-        let (first, snapshot) = manager.prepare_pane(address.clone(), "omp", false).unwrap();
-        assert_eq!(snapshot.provider_id.as_str(), OMP_PROVIDER_ID);
+        let (first, _) = manager.prepare_pane(address.clone(), "omp", false).unwrap();
         assert_eq!(first.additional_args()[0], "--extension");
         assert!(PathBuf::from(&first.additional_args()[1]).is_file());
         let (second, _) = manager.prepare_pane(address, "omp", false).unwrap();
@@ -797,620 +559,41 @@ mod tests {
     }
 
     #[test]
-    fn failed_pane_start_is_not_retained_and_can_retry() {
+    fn applies_only_monotonic_host_snapshots_and_persists_them() {
         let temp = TempDir::new().unwrap();
         let paths = AppConfigPaths::from_config_dir(temp.path());
         let mut manager = AgentManager::new(&paths);
-        let address = AgentPaneAddress::new("project", "agent", "codex");
-        let (launch, starting) = manager
-            .prepare_pane(address.clone(), "codex", false)
-            .unwrap();
-        let instance_id = launch.instance_id().clone();
-        assert_eq!(starting.process_state, AgentProcessState::Starting);
-        assert_eq!(manager.retained_snapshots().len(), 1);
-
-        assert_eq!(
-            manager.process_start_failed(&instance_id, 1),
-            Some(address.clone())
+        let scope = AgentHookScope {
+            project_id: "project".to_string(),
+            tab_id: "tab".to_string(),
+            pane_id: "pane".to_string(),
+            generation: 3,
+        };
+        let mut reducer = AgentReducer::new(
+            AgentInstanceId::new("agent").unwrap(),
+            ProviderId::new("codex").unwrap(),
+            1,
         );
-        assert!(manager.retained_snapshots().is_empty());
-
-        let (retried_address, running) = manager.process_started(&instance_id, 2).unwrap();
-        assert_eq!(retried_address, address);
-        assert_eq!(running.process_state, AgentProcessState::Running);
-    }
-
-    #[test]
-    fn remote_omp_uses_a_home_relative_managed_extension() {
-        let temp = TempDir::new().unwrap();
-        let paths = AppConfigPaths::from_config_dir(temp.path());
-        let mut manager = AgentManager::new(&paths);
-        let (launch, _) = manager
-            .prepare_pane(
-                AgentPaneAddress::new("project", "agent", "omp"),
-                "omp",
-                true,
-            )
-            .unwrap();
-        assert!(launch.additional_args().is_empty());
-        let command = launch
-            .remote_command("omp", &["prompt with 'quote".to_string()])
-            .unwrap();
-        assert!(command.contains("$HOME/.config/yttt/agent-providers/omp"));
-        assert!(command.contains("'prompt with '\"'\"'quote'"));
-        assert!(command.contains("--extension \"$yttt_agent_path\""));
-    }
-
-    #[test]
-    fn restores_the_latest_snapshot_from_disk() {
-        let temp = TempDir::new().unwrap();
-        let paths = AppConfigPaths::from_config_dir(temp.path());
-        let address = AgentPaneAddress::new("project", "agent", "omp");
-        let expected_instance = {
-            let mut manager = AgentManager::new(&paths);
-            let (launch, _) = manager.prepare_pane(address.clone(), "omp", false).unwrap();
-            assert!(manager.take_error().is_none());
-            launch.instance_id().clone()
+        reducer.process_starting(3, 1);
+        reducer.process_started(3, 2);
+        let update = AgentSnapshotUpdate {
+            scope,
+            terminal_session_id: TerminalSessionId::new("terminal"),
+            host_epoch: 4,
+            sequence: 2,
+            snapshot: reducer.snapshot().clone(),
         };
 
-        let restored = AgentManager::new(&paths).retained_snapshots();
-        assert_eq!(restored.len(), 1);
-        assert_eq!(restored[0].0, address);
-        assert_eq!(restored[0].1.instance_id, expected_instance);
-    }
-
-    #[test]
-    fn detected_shell_agent_snapshot_is_removed_on_exit() {
-        let temp = TempDir::new().unwrap();
-        let paths = AppConfigPaths::from_config_dir(temp.path());
-        let mut manager = AgentManager::new(&paths);
-        let address = AgentPaneAddress::new("project", "shell", "terminal");
-
-        let running = manager
-            .detected_process_started(address.clone(), BuiltinAgent::Codex, 7)
-            .unwrap();
-        assert_eq!(running.provider_id.as_str(), "codex");
-        assert_eq!(running.view_state(), yttt_agent_core::AgentViewState::Idle);
-        assert!(
-            manager
-                .detected_process_started(address.clone(), BuiltinAgent::Codex, 7)
-                .is_none()
-        );
-
-        let completed = manager
-            .detected_process_exited(&address, 7, AgentExitReason::Completed)
-            .unwrap();
-        assert_eq!(
-            completed.view_state(),
-            yttt_agent_core::AgentViewState::Completed
-        );
-        assert!(manager.retained_snapshots().is_empty());
-        drop(manager);
-        assert!(AgentManager::new(&paths).retained_snapshots().is_empty());
-    }
-
-    #[test]
-    fn late_hook_is_ignored_but_a_new_shell_session_can_start() {
-        let temp = TempDir::new().unwrap();
-        let paths = AppConfigPaths::from_config_dir(temp.path());
-        let mut manager = AgentManager::new(&paths);
-        let address = AgentPaneAddress::new("project", "shell", "terminal");
-
-        manager
-            .detected_process_started(address.clone(), BuiltinAgent::OhMyPi, 7)
-            .unwrap();
-        manager
-            .detected_process_exited(&address, 7, AgentExitReason::Completed)
-            .unwrap();
-
-        let late_hook = manager
-            .ingest_hook_request(AgentHookRequest {
-                address: address.clone(),
-                generation: 7,
-                source: BuiltinAgent::OhMyPi,
-                event: "agent_end".to_string(),
-                payload: json!({ "willContinue": false }),
-            })
-            .unwrap();
-        assert!(late_hook.is_none());
-        assert!(manager.retained_snapshots().is_empty());
-
-        assert!(
-            manager
-                .ingest_hook_request(AgentHookRequest {
-                    address,
-                    generation: 7,
-                    source: BuiltinAgent::OhMyPi,
-                    event: "session_start".to_string(),
-                    payload: json!({ "sessionId": "omp-restarted" }),
-                })
-                .unwrap()
-                .is_some()
-        );
-    }
-    #[test]
-    fn five_managed_agents_follow_prompt_working_and_completion_hooks() {
-        let temp = TempDir::new().unwrap();
-        let paths = AppConfigPaths::from_config_dir(temp.path());
-        let mut manager = AgentManager::new(&paths);
-        let cases = [
-            (
-                BuiltinAgent::Codex,
-                "UserPromptSubmit",
-                json!({ "prompt": "Codex task" }),
-                "Stop",
-                json!({}),
-            ),
-            (
-                BuiltinAgent::Claude,
-                "UserPromptSubmit",
-                json!({ "prompt": "Claude task" }),
-                "Stop",
-                json!({}),
-            ),
-            (
-                BuiltinAgent::OpenCode,
-                "user_prompt",
-                json!({ "prompt": "OpenCode task" }),
-                "session_idle",
-                json!({}),
-            ),
-            (
-                BuiltinAgent::Pi,
-                "before_agent_start",
-                json!({ "prompt": "Pi task" }),
-                "agent_end",
-                json!({ "willContinue": false }),
-            ),
-            (
-                BuiltinAgent::OhMyPi,
-                "before_agent_start",
-                json!({ "prompt": "Oh My Pi task" }),
-                "agent_end",
-                json!({ "willContinue": false }),
-            ),
-        ];
-
-        for (agent, start_event, start_payload, finish_event, finish_payload) in cases {
-            let address = AgentPaneAddress::new("project", "agent", agent.id());
-            let (launch, _) = manager
-                .prepare_pane(address.clone(), agent.command(), false)
-                .unwrap();
-            let (_, idle) = manager.process_started(launch.instance_id(), 1).unwrap();
-            assert_eq!(idle.view_state(), yttt_agent_core::AgentViewState::Idle);
-
-            let (_, working) = manager
-                .ingest_hook_request(AgentHookRequest {
-                    address: address.clone(),
-                    generation: 1,
-                    source: agent,
-                    event: start_event.to_string(),
-                    payload: start_payload,
-                })
-                .unwrap()
-                .unwrap();
-            assert_eq!(
-                working.view_state(),
-                yttt_agent_core::AgentViewState::Working
-            );
-            assert!(
-                working.task.is_some(),
-                "{} task missing",
-                agent.display_name()
-            );
-
-            let (_, completed) = manager
-                .ingest_hook_request(AgentHookRequest {
-                    address,
-                    generation: 1,
-                    source: agent,
-                    event: finish_event.to_string(),
-                    payload: finish_payload,
-                })
-                .unwrap()
-                .unwrap();
-            assert_eq!(
-                completed.view_state(),
-                yttt_agent_core::AgentViewState::Completed
-            );
-        }
-    }
-
-    #[test]
-    fn authenticated_omp_titles_update_parent_and_child_tasks() {
-        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-        use serde_json::{Value, json};
-
-        let temp = TempDir::new().unwrap();
-        let paths = AppConfigPaths::from_config_dir(temp.path());
-        let mut manager = AgentManager::new(&paths);
-        let address = AgentPaneAddress::new("project", "agent", "omp");
-        let (launch, _) = manager.prepare_pane(address.clone(), "omp", false).unwrap();
-        manager.process_started(launch.instance_id(), 1).unwrap();
-        let environment = launch.environment(1);
-        let token = environment
-            .iter()
-            .find(|(name, _)| name == "YTTT_AGENT_TOKEN")
-            .map(|(_, value)| value)
-            .unwrap();
-        let title_for = |event: &str, payload: Value| {
-            let envelope = json!({
-                "protocol": 1,
-                "instanceId": launch.instance_id().as_str(),
-                "token": token,
-                "generation": 1,
-                "event": event,
-                "payload": payload,
-            });
-            format!(
-                "{}{}",
-                yttt_agent_runtime::AGENT_TITLE_PREFIX,
-                URL_SAFE_NO_PAD.encode(serde_json::to_vec(&envelope).unwrap())
-            )
+        let Some(AgentPaneExitOutcome::Snapshot { address, snapshot }) =
+            manager.apply_host_snapshot(update.clone())
+        else {
+            panic!("new Host snapshot was not applied");
         };
+        assert_eq!(address, AgentPaneAddress::new("project", "tab", "pane"));
+        assert_eq!(snapshot.view_state(), AgentViewState::Idle);
+        assert!(manager.apply_host_snapshot(update).is_none());
 
-        let (updated_address, snapshot) = manager
-            .ingest_title(&title_for(
-                "before_agent_start",
-                json!({ "prompt": "Implement authenticated OMP progress" }),
-            ))
-            .unwrap()
-            .unwrap();
-        assert_eq!(updated_address, address);
-        assert_eq!(
-            snapshot.task.as_ref().map(|task| task.title.as_str()),
-            Some("Implement authenticated OMP progress")
-        );
-        assert_eq!(
-            snapshot.view_state(),
-            yttt_agent_core::AgentViewState::Working
-        );
-
-        manager
-            .ingest_title(&title_for(
-                "child_started",
-                json!({
-                    "childId": "child-1",
-                    "name": "Reviewer",
-                    "task": "Review runtime mapping",
-                }),
-            ))
-            .unwrap();
-        let (_, snapshot) = manager
-            .ingest_title(&title_for(
-                "child_updated",
-                json!({
-                    "childId": "child-1",
-                    "task": "Review runtime mapping",
-                    "action": "read",
-                    "status": "running",
-                }),
-            ))
-            .unwrap()
-            .unwrap();
-        assert_eq!(snapshot.children.len(), 1);
-        assert_eq!(
-            snapshot.children[0].primary_text(),
-            "Review runtime mapping"
-        );
-        assert_eq!(
-            snapshot.children[0].secondary_text().as_deref(),
-            Some("read")
-        );
-    }
-    #[test]
-    fn persisted_configured_session_resumes_with_its_title() {
-        let temp = TempDir::new().unwrap();
-        let paths = AppConfigPaths::from_config_dir(temp.path());
-        let address = AgentPaneAddress::new("project", "agent", "opencode");
-        let previous_instance = {
-            let mut manager = AgentManager::new(&paths);
-            let (launch, _) = manager
-                .prepare_pane(address.clone(), "opencode", false)
-                .unwrap();
-            manager.process_started(launch.instance_id(), 1).unwrap();
-            manager
-                .ingest_hook_request(AgentHookRequest {
-                    address: address.clone(),
-                    generation: 1,
-                    source: BuiltinAgent::OpenCode,
-                    event: "session_start".to_string(),
-                    payload: json!({
-                        "id": "open-session-1",
-                        "title": "Refactor authentication",
-                    }),
-                })
-                .unwrap()
-                .unwrap();
-            launch.instance_id().clone()
-        };
-
-        let mut restored_manager = AgentManager::new(&paths);
-        restored_manager.enable_project_session_restore("project");
-        let (launch, snapshot) = restored_manager
-            .prepare_pane(address, "opencode", false)
-            .unwrap();
-        assert_ne!(launch.instance_id(), &previous_instance);
-        assert!(launch.program_override().is_none());
-        assert_eq!(
-            launch.additional_args(),
-            &["--session".to_string(), "open-session-1".to_string()]
-        );
-        assert_eq!(
-            launch.restored_title_for("OpenCode"),
-            Some("Refactor authentication")
-        );
-        assert_eq!(snapshot.primary_text(), "Refactor authentication");
-        assert_eq!(snapshot.process_state, AgentProcessState::Starting);
-    }
-
-    #[test]
-    fn failed_restored_session_falls_back_to_a_fresh_launch_once() {
-        let temp = TempDir::new().unwrap();
-        let paths = AppConfigPaths::from_config_dir(temp.path());
-        let address = AgentPaneAddress::new("project", "agent", "opencode");
-        {
-            let mut manager = AgentManager::new(&paths);
-            let (launch, _) = manager
-                .prepare_pane(address.clone(), "opencode", false)
-                .unwrap();
-            manager.process_started(launch.instance_id(), 1).unwrap();
-            manager
-                .ingest_hook_request(AgentHookRequest {
-                    address: address.clone(),
-                    generation: 1,
-                    source: BuiltinAgent::OpenCode,
-                    event: "session_start".to_string(),
-                    payload: json!({ "id": "missing-session" }),
-                })
-                .unwrap()
-                .unwrap();
-        }
-
-        let mut manager = AgentManager::new(&paths);
-        manager.enable_project_session_restore("project");
-        let (restored, _) = manager
-            .prepare_pane(address.clone(), "opencode", false)
-            .unwrap();
-        assert!(restored.is_resuming_session());
-        assert_eq!(
-            restored.additional_args(),
-            &["--session".to_string(), "missing-session".to_string()]
-        );
-        manager.process_started(restored.instance_id(), 1).unwrap();
-
-        let outcome = manager
-            .process_exited(
-                restored.instance_id(),
-                1,
-                AgentProcessExit {
-                    code: Some(1),
-                    reason: AgentExitReason::Failed,
-                },
-            )
-            .unwrap();
-        assert!(matches!(
-            outcome,
-            AgentPaneExitOutcome::ResumeFailed {
-                address: failed_address
-            } if failed_address == address
-        ));
-        assert!(manager.retained_snapshots().is_empty());
-
-        let (fresh, snapshot) = manager.prepare_pane(address, "opencode", false).unwrap();
-        assert!(!fresh.is_resuming_session());
-        assert!(fresh.additional_args().is_empty());
-        assert!(snapshot.session.is_none());
-    }
-
-    #[test]
-    fn restored_session_start_prevents_later_failure_from_triggering_fallback() {
-        let temp = TempDir::new().unwrap();
-        let paths = AppConfigPaths::from_config_dir(temp.path());
-        let address = AgentPaneAddress::new("project", "agent", "opencode");
-        {
-            let mut manager = AgentManager::new(&paths);
-            let (launch, _) = manager
-                .prepare_pane(address.clone(), "opencode", false)
-                .unwrap();
-            manager.process_started(launch.instance_id(), 1).unwrap();
-            manager
-                .ingest_hook_request(AgentHookRequest {
-                    address: address.clone(),
-                    generation: 1,
-                    source: BuiltinAgent::OpenCode,
-                    event: "session_start".to_string(),
-                    payload: json!({ "id": "valid-session" }),
-                })
-                .unwrap()
-                .unwrap();
-        }
-
-        let mut manager = AgentManager::new(&paths);
-        manager.enable_project_session_restore("project");
-        let (restored, _) = manager
-            .prepare_pane(address.clone(), "opencode", false)
-            .unwrap();
-        manager.process_started(restored.instance_id(), 1).unwrap();
-        manager
-            .ingest_hook_request(AgentHookRequest {
-                address: address.clone(),
-                generation: 1,
-                source: BuiltinAgent::OpenCode,
-                event: "session_start".to_string(),
-                payload: json!({ "id": "valid-session" }),
-            })
-            .unwrap()
-            .unwrap();
-        assert!(
-            !manager
-                .prepare_pane(address.clone(), "opencode", false)
-                .unwrap()
-                .0
-                .is_resuming_session()
-        );
-
-        let outcome = manager
-            .process_exited(
-                restored.instance_id(),
-                1,
-                AgentProcessExit {
-                    code: Some(1),
-                    reason: AgentExitReason::Failed,
-                },
-            )
-            .unwrap();
-        assert!(matches!(
-            outcome,
-            AgentPaneExitOutcome::Snapshot {
-                address: failed_address,
-                ..
-            } if failed_address == address
-        ));
-        assert_eq!(manager.retained_snapshots().len(), 1);
-    }
-
-    #[test]
-    fn persisted_detected_shell_session_resumes_the_detected_provider() {
-        let temp = TempDir::new().unwrap();
-        let paths = AppConfigPaths::from_config_dir(temp.path());
-        let address = AgentPaneAddress::new("project", "dev", "shell");
-        {
-            let mut manager = AgentManager::new(&paths);
-            manager
-                .detected_process_started(address.clone(), BuiltinAgent::Codex, 7)
-                .unwrap();
-            manager
-                .ingest_hook_request(AgentHookRequest {
-                    address: address.clone(),
-                    generation: 7,
-                    source: BuiltinAgent::Codex,
-                    event: "SessionStart".to_string(),
-                    payload: json!({ "session_id": "codex-session-1" }),
-                })
-                .unwrap()
-                .unwrap();
-            manager
-                .ingest_hook_request(AgentHookRequest {
-                    address: address.clone(),
-                    generation: 7,
-                    source: BuiltinAgent::Codex,
-                    event: "UserPromptSubmit".to_string(),
-                    payload: json!({ "prompt": "Fix the flaky terminal test" }),
-                })
-                .unwrap()
-                .unwrap();
-        }
-
-        let mut restored_manager = AgentManager::new(&paths);
-        restored_manager.enable_project_session_restore("project");
-        let (launch, snapshot) = restored_manager
-            .prepare_pane(address, "zsh", false)
-            .unwrap();
-        assert_eq!(launch.program_override(), Some("codex"));
-        assert_eq!(
-            launch.additional_args(),
-            &["resume".to_string(), "codex-session-1".to_string()]
-        );
-        assert_eq!(
-            launch.restored_title_for("Shell"),
-            Some("Fix the flaky terminal test")
-        );
-        assert_eq!(snapshot.primary_text(), "Fix the flaky terminal test");
-    }
-    #[test]
-    fn remote_omp_resume_keeps_the_managed_extension_wrapper() {
-        let temp = TempDir::new().unwrap();
-        let paths = AppConfigPaths::from_config_dir(temp.path());
-        let address = AgentPaneAddress::new("project", "agent", "omp");
-        {
-            let mut manager = AgentManager::new(&paths);
-            let (launch, _) = manager.prepare_pane(address.clone(), "omp", true).unwrap();
-            manager.process_started(launch.instance_id(), 1).unwrap();
-            manager
-                .ingest_hook_request(AgentHookRequest {
-                    address: address.clone(),
-                    generation: 1,
-                    source: BuiltinAgent::OhMyPi,
-                    event: "session_start".to_string(),
-                    payload: json!({ "sessionId": "omp-session-1" }),
-                })
-                .unwrap()
-                .unwrap();
-        }
-
-        let mut manager = AgentManager::new(&paths);
-        manager.enable_project_session_restore("project");
-        let (launch, _) = manager.prepare_pane(address, "omp", true).unwrap();
-        assert_eq!(
-            launch.additional_args(),
-            &["--resume".to_string(), "omp-session-1".to_string()]
-        );
-        let command = launch.remote_command("omp", &[]).unwrap();
-        assert!(command.contains("'--resume' 'omp-session-1'"));
-        assert!(command.contains("--extension \"$yttt_agent_path\""));
-    }
-
-    #[test]
-    fn inferred_detected_exit_preserves_a_hook_reported_failure() {
-        let temp = TempDir::new().unwrap();
-        let paths = AppConfigPaths::from_config_dir(temp.path());
-        let mut manager = AgentManager::new(&paths);
-        let address = AgentPaneAddress::new("project", "shell", "terminal");
-        manager
-            .detected_process_started(address.clone(), BuiltinAgent::Codex, 7)
-            .unwrap();
-        assert!(
-            manager
-                .detected_by_address
-                .get_mut(&address)
-                .unwrap()
-                .reducer
-                .apply(
-                    7,
-                    yttt_agent_core::AgentEventKind::TurnFinished {
-                        outcome: yttt_agent_core::TurnOutcome::Failed,
-                    },
-                    1,
-                )
-        );
-
-        let snapshot = manager
-            .detected_process_exited(&address, 7, AgentExitReason::Completed)
-            .unwrap();
-        assert_eq!(
-            snapshot.view_state(),
-            yttt_agent_core::AgentViewState::Failed
-        );
-    }
-
-    #[test]
-    fn closing_tabs_and_panes_forgets_their_agent_history() {
-        let temp = TempDir::new().unwrap();
-        let paths = AppConfigPaths::from_config_dir(temp.path());
-        let mut manager = AgentManager::new(&paths);
-        let first_address = AgentPaneAddress::new("project", "first", "agent");
-        let second_address = AgentPaneAddress::new("project", "second", "agent");
-        let (first_launch, _) = manager
-            .prepare_pane(first_address.clone(), "codex", false)
-            .unwrap();
-        let first_instance = first_launch.instance_id().clone();
-        manager
-            .prepare_pane(second_address.clone(), "claude", false)
-            .unwrap();
-
-        manager.forget_tabs("project", &["first".to_string()]);
-        assert_eq!(manager.retained_snapshots().len(), 1);
-        assert_eq!(manager.retained_snapshots()[0].0, second_address);
-
-        let (replacement, _) = manager.prepare_pane(first_address, "codex", false).unwrap();
-        assert_ne!(replacement.instance_id(), &first_instance);
-
-        manager.forget_pane(&second_address);
-        assert_eq!(manager.retained_snapshots().len(), 1);
-        assert_eq!(
-            manager.retained_snapshots()[0].0,
-            AgentPaneAddress::new("project", "first", "agent")
-        );
+        let restored = load_agent_state(&paths.agent_state_path()).unwrap();
+        assert_eq!(restored.get(&address), Some(&snapshot));
     }
 }

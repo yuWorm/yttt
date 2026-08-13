@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
+
 use gpui::{
     App, ClickEvent, Div, ElementId, Pixels, Rems, Rgba, Stateful, Window, div, prelude::*,
 };

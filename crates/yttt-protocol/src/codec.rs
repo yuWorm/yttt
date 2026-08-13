@@ -3,7 +3,9 @@ use std::io::{self, Read, Write};
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
-use crate::{HEADER_LEN, MAX_FRAME_BYTES, PROTOCOL_MAGIC, PROTOCOL_VERSION};
+use crate::{
+    DEFAULT_COMPATIBILITY_WINDOW, HEADER_LEN, MAX_FRAME_BYTES, PROTOCOL_MAGIC, PROTOCOL_VERSION,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u16)]
@@ -100,7 +102,9 @@ pub fn decode_header(bytes: &[u8; HEADER_LEN]) -> Result<FrameHeader, ProtocolCo
         return Err(ProtocolCodecError::InvalidMagic);
     }
     let version = u16::from_be_bytes([bytes[4], bytes[5]]);
-    if version != PROTOCOL_VERSION {
+    let minimum = PROTOCOL_VERSION.saturating_sub(DEFAULT_COMPATIBILITY_WINDOW);
+    let maximum = PROTOCOL_VERSION.saturating_add(DEFAULT_COMPATIBILITY_WINDOW);
+    if !(minimum..=maximum).contains(&version) {
         return Err(ProtocolCodecError::VersionMismatch {
             received: version,
             expected: PROTOCOL_VERSION,

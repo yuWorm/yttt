@@ -1,6 +1,7 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use yttt_core::model::ids::ProjectId;
 use zeroize::Zeroize;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,7 +167,6 @@ pub struct RemoteDirectory {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteFileContent {
-    pub canonical_path: String,
     pub relative_path: String,
     pub bytes: Vec<u8>,
     pub fingerprint: RemoteFileFingerprint,
@@ -195,21 +195,24 @@ pub enum RemoteFileRequest {
     ResolveHome {
         connection_id: String,
     },
-    ScanDirectory {
+    BrowseDirectory {
         connection_id: String,
         root: String,
         relative_directory: String,
         show_hidden: bool,
     },
+    ScanDirectory {
+        project_id: ProjectId,
+        relative_directory: String,
+        show_hidden: bool,
+    },
     Read {
-        connection_id: String,
-        root: String,
+        project_id: ProjectId,
         relative_path: String,
         maximum_bytes: u64,
     },
     Save {
-        connection_id: String,
-        root: String,
+        project_id: ProjectId,
         relative_path: String,
         expected: Option<RemoteFileFingerprint>,
         force: bool,
@@ -217,20 +220,17 @@ pub enum RemoteFileRequest {
         bytes: Vec<u8>,
     },
     Create {
-        connection_id: String,
-        root: String,
+        project_id: ProjectId,
         relative_path: String,
         directory: bool,
     },
     Rename {
-        connection_id: String,
-        root: String,
+        project_id: ProjectId,
         relative_path: String,
         new_name: String,
     },
     Delete {
-        connection_id: String,
-        root: String,
+        project_id: ProjectId,
         relative_path: String,
     },
 }
@@ -247,8 +247,7 @@ pub enum RemoteFileResponse {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteCommandRequest {
-    pub connection_id: String,
-    pub root: String,
+    pub project_id: ProjectId,
     pub program: String,
     pub args: Vec<String>,
 }

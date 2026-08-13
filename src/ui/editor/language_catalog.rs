@@ -103,8 +103,7 @@ impl EditorLanguageId {
         builtin_language_definitions()
             .into_iter()
             .find(|definition| {
-                definition.id.as_str() == value
-                    || definition.aliases.iter().any(|alias| *alias == value)
+                definition.id.as_str() == value || definition.aliases.contains(&value)
             })
             .map(|definition| definition.id)
     }
@@ -188,11 +187,8 @@ impl EditorLanguageCatalog {
             .iter()
             .find(|definition| {
                 definition.id.as_str() == value
-                    || definition.aliases.iter().any(|alias| *alias == value)
-                    || definition
-                        .extensions
-                        .iter()
-                        .any(|extension| *extension == value)
+                    || definition.aliases.contains(&value)
+                    || definition.extensions.contains(&value)
             })
             .map(|definition| {
                 self.resolution_for(

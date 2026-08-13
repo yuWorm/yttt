@@ -3,12 +3,16 @@ use std::{
     io::{Read, Write},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use crate::diagnostics::{
+    LatencyDiagnostics, QueueDiagnostics, TerminalPipelineDiagnosticsSnapshot,
+};
+use crate::terminal_data::SharedTerminalUpdate;
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::vte::ansi::Rgb;
@@ -20,8 +24,9 @@ use yttt_core::model::{
     project::RemotePathBuf,
 };
 use yttt_protocol::terminal::{
-    RemoteTerminalExecutionSpec, SemanticViewport, TerminalCheckpoint, TerminalExecutionSpec,
-    TerminalGeometry, TerminalProcessState, TerminalSpawnSpec, TerminalStreamUpdate,
+    RemoteTerminalExecutionSpec, SearchTerminal, SemanticViewport, TerminalCheckpoint,
+    TerminalExecutionSpec, TerminalGeometry, TerminalProcessState, TerminalSearchResults,
+    TerminalSpawnSpec, TerminalStreamUpdate, TerminalViewportAnchor,
 };
 use yttt_ssh::{
     RemoteTerminalExecution, RemoteTerminalRequest, RemoteTerminalResizeHandle,
@@ -29,25 +34,88 @@ use yttt_ssh::{
 };
 use yttt_terminal_core::{
     TerminalParser, TerminalState,
-    semantic::{SemanticCaptureContext, SemanticSnapshotter},
+    semantic::{SemanticAccessError, SemanticCaptureContext, SemanticSnapshotter},
 };
 
 const RAW_REPLAY_BYTES: usize = 8 * 1024 * 1024;
 const WRITER_QUEUE_CAPACITY: usize = 1024;
 const EVENT_QUEUE_CAPACITY: usize = 256;
 const SUBSCRIBER_CAPACITY: usize = 64;
-const OUTPUT_CAPTURE_INTERVAL: Duration = Duration::from_millis(16);
+// Capture at most once per quarter frame so parser, IPC, and GPUI scheduling
+// still have time to reach the next 60 Hz presentation without busy-polling.
+const OUTPUT_CAPTURE_INTERVAL: Duration = Duration::from_millis(4);
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+struct TerminalPipelineDiagnostics {
+    subscribers: AtomicUsize,
+    bytes_parsed: AtomicU64,
+    semantic_encode_count: AtomicU64,
+    shared_ipc_encode_count: Arc<AtomicU64>,
+    skipped_unsubscribed_captures: AtomicU64,
+    parser: LatencyDiagnostics,
+    semantic_encode: LatencyDiagnostics,
+    input_to_pty: LatencyDiagnostics,
+    writer_queue: Arc<QueueDiagnostics>,
+    event_queue: Arc<QueueDiagnostics>,
+}
+
+impl TerminalPipelineDiagnostics {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            subscribers: AtomicUsize::new(0),
+            bytes_parsed: AtomicU64::new(0),
+            semantic_encode_count: AtomicU64::new(0),
+            shared_ipc_encode_count: Arc::new(AtomicU64::new(0)),
+            skipped_unsubscribed_captures: AtomicU64::new(0),
+            parser: LatencyDiagnostics::default(),
+            semantic_encode: LatencyDiagnostics::default(),
+            input_to_pty: LatencyDiagnostics::default(),
+            writer_queue: QueueDiagnostics::new("terminal_writer", WRITER_QUEUE_CAPACITY),
+            event_queue: QueueDiagnostics::new("terminal_events", EVENT_QUEUE_CAPACITY),
+        })
+    }
+
+    fn snapshot(&self, session_id: &TerminalSessionId) -> TerminalPipelineDiagnosticsSnapshot {
+        TerminalPipelineDiagnosticsSnapshot {
+            session_id: session_id.to_string(),
+            subscribers: self.subscribers.load(Ordering::Acquire),
+            bytes_parsed: self.bytes_parsed.load(Ordering::Acquire),
+            semantic_encode_count: self.semantic_encode_count.load(Ordering::Acquire),
+            shared_ipc_encode_count: self.shared_ipc_encode_count.load(Ordering::Acquire),
+            skipped_unsubscribed_captures: self
+                .skipped_unsubscribed_captures
+                .load(Ordering::Acquire),
+            parser: self.parser.snapshot(),
+            semantic_encode: self.semantic_encode.snapshot(),
+            input_to_pty: self.input_to_pty.snapshot(),
+            queues: vec![self.writer_queue.snapshot(), self.event_queue.snapshot()],
+        }
+    }
+
+    fn reset(&self) {
+        self.bytes_parsed.store(0, Ordering::Release);
+        self.semantic_encode_count.store(0, Ordering::Release);
+        self.shared_ipc_encode_count.store(0, Ordering::Release);
+        self.skipped_unsubscribed_captures
+            .store(0, Ordering::Release);
+        self.parser.reset();
+        self.semantic_encode.reset();
+        self.input_to_pty.reset();
+        self.writer_queue.reset();
+        self.event_queue.reset();
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum HostTerminalEvent {
     Update {
         session_id: TerminalSessionId,
-        update: TerminalStreamUpdate,
+        update: Arc<SharedTerminalUpdate>,
     },
     Exited {
         session_id: TerminalSessionId,
         session_epoch: u64,
         code: Option<i32>,
+        final_sequence: u64,
     },
     TitleChanged {
         session_id: TerminalSessionId,
@@ -55,6 +123,10 @@ pub enum HostTerminalEvent {
     },
     Bell {
         session_id: TerminalSessionId,
+    },
+    LeaseRevoked {
+        session_id: TerminalSessionId,
+        previous_owner: yttt_core::model::ids::ClientInstanceId,
     },
 }
 
@@ -72,15 +144,32 @@ pub enum HostedTerminalError {
     StaleGeometry { received: u64, current: u64 },
     #[error("stale scrollback epoch {received}; current epoch is {current}")]
     StaleScrollback { received: u64, current: u64 },
+    #[error("terminal line ID {0} is no longer available")]
+    UnknownLineId(u64),
+    #[error("terminal search query and result limit must be non-empty")]
+    InvalidSearch,
     #[error("terminal I/O failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("terminal PTY failed: {0}")]
     Pty(#[from] anyhow::Error),
 }
 
+impl From<SemanticAccessError> for HostedTerminalError {
+    fn from(error: SemanticAccessError) -> Self {
+        match error {
+            SemanticAccessError::StaleScrollback { received, current } => {
+                Self::StaleScrollback { received, current }
+            }
+            SemanticAccessError::UnknownLineId(line_id) => Self::UnknownLineId(line_id),
+            SemanticAccessError::InvalidSearch => Self::InvalidSearch,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct HostEventProxy {
     events: flume::Sender<Event>,
+    diagnostics: Arc<QueueDiagnostics>,
 }
 
 impl EventListener for HostEventProxy {
@@ -94,9 +183,15 @@ impl EventListener for HostEventProxy {
                 | Event::Exit
         );
         if required {
-            let _ = self.events.send(event);
+            if self.events.send(event).is_ok() {
+                self.diagnostics.observe(self.events.len());
+            }
         } else {
-            let _ = self.events.try_send(event);
+            match self.events.try_send(event) {
+                Ok(()) => self.diagnostics.observe(self.events.len()),
+                Err(flume::TrySendError::Full(_)) => self.diagnostics.dropped(),
+                Err(flume::TrySendError::Disconnected(_)) => {}
+            }
         }
     }
 }
@@ -121,6 +216,9 @@ struct HostedTerminalInner {
     capture_requested: AtomicBool,
     stopped: AtomicBool,
     exited: AtomicBool,
+    exited_at_millis: AtomicU64,
+    reader_finished: AtomicBool,
+    diagnostics: Arc<TerminalPipelineDiagnostics>,
 }
 
 enum TerminalBackend {
@@ -158,7 +256,10 @@ impl TerminalMetadata {
 }
 
 enum WriterCommand {
-    Input(Vec<u8>),
+    Input {
+        bytes: Vec<u8>,
+        enqueued_at: Instant,
+    },
     Reply(Vec<u8>),
     Shutdown,
 }
@@ -171,7 +272,7 @@ struct RawReplayRing {
 impl RawReplayRing {
     fn new() -> Self {
         Self {
-            bytes: VecDeque::with_capacity(RAW_REPLAY_BYTES),
+            bytes: VecDeque::new(),
             dropped_bytes: 0,
         }
     }
@@ -291,9 +392,11 @@ impl HostedTerminal {
         backend: TerminalBackend,
         mark_exit_on_eof: bool,
     ) -> Result<Self, HostedTerminalError> {
+        let diagnostics = TerminalPipelineDiagnostics::new();
         let (terminal_event_tx, terminal_event_rx) = flume::bounded(EVENT_QUEUE_CAPACITY);
         let event_proxy = HostEventProxy {
             events: terminal_event_tx,
+            diagnostics: diagnostics.event_queue.clone(),
         };
         let state = TerminalState::new_with_scrollback(
             spec.geometry.cols as usize,
@@ -311,12 +414,12 @@ impl HostedTerminal {
             metadata: Mutex::new(TerminalMetadata {
                 geometry: spec.geometry,
                 geometry_epoch: spec.geometry_epoch,
-                palette_revision: 0,
+                palette_revision: spec.palette_revision,
                 title: None,
                 cwd: Some(spec.cwd.clone()),
                 process_state: TerminalProcessState::Running,
             }),
-            query_palette: Mutex::new(Vec::new()),
+            query_palette: Mutex::new(spec.query_palette.clone()),
             raw_replay: Mutex::new(RawReplayRing::new()),
             spec,
             session_epoch,
@@ -328,6 +431,9 @@ impl HostedTerminal {
             capture_requested: AtomicBool::new(false),
             stopped: AtomicBool::new(false),
             exited: AtomicBool::new(false),
+            exited_at_millis: AtomicU64::new(0),
+            reader_finished: AtomicBool::new(false),
+            diagnostics,
         });
         spawn_writer(writer, writer_rx, inner.clone());
         spawn_event_processor(terminal_event_rx, inner.clone());
@@ -360,13 +466,49 @@ impl HostedTerminal {
         if self.inner.stopped.load(Ordering::Acquire) {
             return Err(HostedTerminalError::Stopped);
         }
-        self.inner
-            .writer
-            .try_send(WriterCommand::Input(bytes))
-            .map_err(|error| match error {
-                flume::TrySendError::Full(_) => HostedTerminalError::Backpressure,
-                flume::TrySendError::Disconnected(_) => HostedTerminalError::Stopped,
-            })
+        match self.inner.writer.try_send(WriterCommand::Input {
+            bytes,
+            enqueued_at: Instant::now(),
+        }) {
+            Ok(()) => {
+                self.inner
+                    .diagnostics
+                    .writer_queue
+                    .observe(self.inner.writer.len());
+                Ok(())
+            }
+            Err(flume::TrySendError::Full(_)) => {
+                self.inner.diagnostics.writer_queue.dropped();
+                Err(HostedTerminalError::Backpressure)
+            }
+            Err(flume::TrySendError::Disconnected(_)) => Err(HostedTerminalError::Stopped),
+        }
+    }
+
+    pub fn set_subscriber_count(&self, count: usize) {
+        let previous = self
+            .inner
+            .diagnostics
+            .subscribers
+            .swap(count, Ordering::AcqRel);
+        if previous == 0 && count != 0 {
+            self.inner.request_output_capture();
+        }
+    }
+
+    pub fn diagnostics(&self) -> TerminalPipelineDiagnosticsSnapshot {
+        self.inner.diagnostics.snapshot(self.session_id())
+    }
+
+    pub(crate) fn shared_update(&self, update: TerminalStreamUpdate) -> Arc<SharedTerminalUpdate> {
+        SharedTerminalUpdate::new(
+            update,
+            self.inner.diagnostics.shared_ipc_encode_count.clone(),
+        )
+    }
+
+    pub fn reset_diagnostics(&self) {
+        self.inner.diagnostics.reset();
     }
 
     pub fn resize(
@@ -425,11 +567,49 @@ impl HostedTerminal {
         self.inner.snapshots.lock().latest_viewport().cloned()
     }
 
+    pub fn read_viewport(
+        &self,
+        scrollback_epoch: u64,
+        anchor: TerminalViewportAnchor,
+    ) -> Result<SemanticViewport, HostedTerminalError> {
+        let context = self.inner.metadata.lock().capture_context();
+        let state = self.inner.state.lock();
+        self.inner
+            .snapshots
+            .lock()
+            .read_viewport(&state, &context, scrollback_epoch, anchor)
+            .map_err(HostedTerminalError::from)
+    }
+
+    pub fn search(
+        &self,
+        request: &SearchTerminal,
+    ) -> Result<TerminalSearchResults, HostedTerminalError> {
+        let state = self.inner.state.lock();
+        self.inner
+            .snapshots
+            .lock()
+            .search(
+                &state,
+                request.scrollback_epoch,
+                request.generation,
+                &request.query,
+                request.case_sensitive,
+                request.max_results,
+            )
+            .map_err(HostedTerminalError::from)
+    }
+
     pub fn terminate(&self) -> Result<(), HostedTerminalError> {
         if self.inner.stopped.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
-        let _ = self.inner.writer.try_send(WriterCommand::Shutdown);
+        if self.inner.writer.try_send(WriterCommand::Shutdown).is_ok() {
+            self.inner
+                .diagnostics
+                .writer_queue
+                .observe(self.inner.writer.len());
+        }
         self.inner.backend.terminate()?;
         self.inner.mark_exited(None);
         Ok(())
@@ -441,6 +621,11 @@ impl HostedTerminal {
 
     pub fn is_exited(&self) -> bool {
         self.inner.exited.load(Ordering::Acquire)
+    }
+
+    pub fn exited_at_millis(&self) -> Option<u64> {
+        let timestamp = self.inner.exited_at_millis.load(Ordering::Acquire);
+        (timestamp != 0).then_some(timestamp)
     }
 }
 
@@ -486,16 +671,41 @@ impl HostedTerminalInner {
         self.capture_notify.notify_one();
     }
 
-    fn capture_and_publish(&self) {
+    fn capture_and_publish(&self) -> u64 {
+        let started_at = Instant::now();
         let context = self.metadata.lock().capture_context();
-        let update = {
+        let (update, sequence) = {
             let state = self.state.lock();
-            self.snapshots.lock().capture(&state, &context)
+            let mut snapshots = self.snapshots.lock();
+            let update = snapshots.capture(&state, &context);
+            let sequence = snapshots
+                .latest_viewport()
+                .map_or(0, |viewport| viewport.sequence);
+            (update, sequence)
         };
+        self.diagnostics
+            .semantic_encode
+            .record(started_at.elapsed());
+        self.diagnostics
+            .semantic_encode_count
+            .fetch_add(1, Ordering::Relaxed);
+        let update =
+            SharedTerminalUpdate::new(update, self.diagnostics.shared_ipc_encode_count.clone());
         let _ = self.events.send(HostTerminalEvent::Update {
             session_id: self.spec.session_id.clone(),
             update,
         });
+        sequence
+    }
+
+    fn capture_output_and_publish(&self) {
+        if self.diagnostics.subscribers.load(Ordering::Acquire) == 0 {
+            self.diagnostics
+                .skipped_unsubscribed_captures
+                .fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        self.capture_and_publish();
     }
 
     fn mark_exited(&self, code: Option<i32>) {
@@ -503,15 +713,27 @@ impl HostedTerminalInner {
             return;
         }
         self.stopped.store(true, Ordering::Release);
+        self.exited_at_millis
+            .store(now_millis().max(1), Ordering::Release);
         self.metadata.lock().process_state = TerminalProcessState::Exited { code };
-        self.capture_and_publish();
+        let final_sequence = self.capture_and_publish();
         let _ = self.events.send(HostTerminalEvent::Exited {
             session_id: self.spec.session_id.clone(),
             session_epoch: self.session_epoch,
             code,
+            final_sequence,
         });
-        let _ = self.writer.try_send(WriterCommand::Shutdown);
+        if self.writer.try_send(WriterCommand::Shutdown).is_ok() {
+            self.diagnostics.writer_queue.observe(self.writer.len());
+        }
     }
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn spawn_reader(
@@ -531,13 +753,20 @@ fn spawn_reader(
                     Ok(length) => {
                         let bytes = &buffer[..length];
                         inner.raw_replay.lock().append(bytes);
+                        let started_at = Instant::now();
                         parser.advance(bytes);
+                        inner.diagnostics.parser.record(started_at.elapsed());
+                        inner
+                            .diagnostics
+                            .bytes_parsed
+                            .fetch_add(length as u64, Ordering::Relaxed);
                         inner.request_output_capture();
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(_) => break,
                 }
             }
+            inner.reader_finished.store(true, Ordering::Release);
             if mark_exit_on_eof {
                 inner.mark_exited(None);
             }
@@ -563,7 +792,7 @@ fn spawn_output_publisher(inner: Arc<HostedTerminalInner>) {
             if !inner.capture_requested.swap(false, Ordering::AcqRel) {
                 continue;
             }
-            inner.capture_and_publish();
+            inner.capture_output_and_publish();
             last_capture = Instant::now();
         }
     });
@@ -578,12 +807,17 @@ fn spawn_writer(
         .name(format!("yttt-host-pty-write-{}", inner.spec.session_id))
         .spawn(move || {
             while let Ok(command) = commands.recv() {
-                let bytes = match command {
-                    WriterCommand::Input(bytes) | WriterCommand::Reply(bytes) => bytes,
+                inner.diagnostics.writer_queue.observe(commands.len());
+                let (bytes, enqueued_at) = match command {
+                    WriterCommand::Input { bytes, enqueued_at } => (bytes, Some(enqueued_at)),
+                    WriterCommand::Reply(bytes) => (bytes, None),
                     WriterCommand::Shutdown => break,
                 };
                 if writer.write_all(&bytes).is_err() || writer.flush().is_err() {
                     break;
+                }
+                if let Some(enqueued_at) = enqueued_at {
+                    inner.diagnostics.input_to_pty.record(enqueued_at.elapsed());
                 }
             }
         })
@@ -598,9 +832,16 @@ fn spawn_event_processor(events: flume::Receiver<Event>, inner: Arc<HostedTermin
         ))
         .spawn(move || {
             while let Ok(event) = events.recv() {
+                inner.diagnostics.event_queue.observe(events.len());
                 match event {
                     Event::PtyWrite(data) => {
-                        let _ = inner.writer.send(WriterCommand::Reply(data.into_bytes()));
+                        if inner
+                            .writer
+                            .send(WriterCommand::Reply(data.into_bytes()))
+                            .is_ok()
+                        {
+                            inner.diagnostics.writer_queue.observe(inner.writer.len());
+                        }
                     }
                     Event::Title(title) => {
                         inner.metadata.lock().title = Some(title.clone());
@@ -631,7 +872,13 @@ fn spawn_event_processor(events: flume::Receiver<Event>, inner: Arc<HostedTermin
                             cell_width: geometry.cell_width,
                             cell_height: geometry.cell_height,
                         });
-                        let _ = inner.writer.send(WriterCommand::Reply(reply.into_bytes()));
+                        if inner
+                            .writer
+                            .send(WriterCommand::Reply(reply.into_bytes()))
+                            .is_ok()
+                        {
+                            inner.diagnostics.writer_queue.observe(inner.writer.len());
+                        }
                     }
                     Event::Exit => {
                         let _ = inner.backend.terminate();
@@ -644,7 +891,13 @@ fn spawn_event_processor(events: flume::Receiver<Event>, inner: Arc<HostedTermin
                                 g: ((color >> 8) & 0xff) as u8,
                                 b: (color & 0xff) as u8,
                             });
-                            let _ = inner.writer.send(WriterCommand::Reply(reply.into_bytes()));
+                            if inner
+                                .writer
+                                .send(WriterCommand::Reply(reply.into_bytes()))
+                                .is_ok()
+                            {
+                                inner.diagnostics.writer_queue.observe(inner.writer.len());
+                            }
                         }
                     }
                     Event::Wakeup
@@ -669,11 +922,17 @@ fn spawn_child_monitor(
                 let status = child.lock().try_wait();
                 match status {
                     Ok(Some(status)) => {
+                        while !inner.reader_finished.load(Ordering::Acquire) {
+                            thread::sleep(Duration::from_millis(1));
+                        }
                         inner.mark_exited(i32::try_from(status.exit_code()).ok());
                         break;
                     }
                     Ok(None) => thread::sleep(Duration::from_millis(25)),
                     Err(_) => {
+                        while !inner.reader_finished.load(Ordering::Acquire) {
+                            thread::sleep(Duration::from_millis(1));
+                        }
                         inner.mark_exited(None);
                         break;
                     }

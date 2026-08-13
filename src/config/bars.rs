@@ -68,18 +68,10 @@ pub enum BarsSaveError {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct ShellBarsSettings {
     pub window: WindowBarSettings,
     pub status: StatusBarSettings,
-}
-
-impl Default for ShellBarsSettings {
-    fn default() -> Self {
-        Self {
-            window: WindowBarSettings::default(),
-            status: StatusBarSettings::default(),
-        }
-    }
 }
 
 impl ShellBarsSettings {

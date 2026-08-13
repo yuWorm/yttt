@@ -11,4 +11,7 @@ pub use auth::{
 };
 pub use endpoint::{EndpointAddress, LocalEndpoint};
 pub use platform::{AsyncLocalStream, LocalListener, LocalStream, TransportError, connect};
-pub use wire::{WireError, receive_control, receive_handshake, send_control, send_handshake};
+pub use wire::{
+    WireError, WireReceiveDiagnostics, receive_control, receive_control_observed,
+    receive_handshake, send_control, send_control_bounded, send_handshake,
+};

@@ -28,6 +28,9 @@ version.workspace = true
 edition.workspace = true
 default-run = "yttt"
 
+[features]
+perf-metrics = ["yttt-terminal/perf-metrics"]
+
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
@@ -41,7 +44,6 @@ ignore = "0.4"
 yttt-agent-core = { path = "crates/yttt-agent-core" }
 yttt-agent-providers = { path = "crates/yttt-agent-providers" }
 yttt-agent-runtime = { path = "crates/yttt-agent-runtime" }
-yttt-ssh = { path = "crates/yttt-ssh" }
 zeroize = "1"
 notify = "7.0.0"
 notify-rust = "4.18"

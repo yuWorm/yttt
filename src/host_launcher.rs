@@ -9,7 +9,8 @@ use std::{
 
 use yttt_core::model::ids::{ClientInstanceId, ProfileId};
 use yttt_protocol::{
-    ClientRequest, ControlMessage, HostResponse, PROTOCOL_VERSION, ProtocolRange, Request, Response,
+    ClientRequest, ConnectionChannel, ControlMessage, DEFAULT_COMPATIBILITY_WINDOW, HostBlocker,
+    HostResponse, PROTOCOL_VERSION, ProtocolRange, Request, Response,
 };
 use yttt_transport_local::{
     AuthToken, ClientIdentity, LocalEndpoint, LocalStream, client_handshake, connect,
@@ -28,10 +29,14 @@ pub enum ProcessRole {
 }
 
 pub fn process_role(args: impl IntoIterator<Item = impl AsRef<OsStr>>) -> ProcessRole {
-    args.into_iter()
+    if args
+        .into_iter()
         .any(|argument| argument.as_ref() == OsStr::new("--process-role=host"))
-        .then_some(ProcessRole::Host)
-        .unwrap_or(ProcessRole::Desktop)
+    {
+        ProcessRole::Host
+    } else {
+        ProcessRole::Desktop
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -46,6 +51,8 @@ pub enum HostLaunchError {
     ReadyTimeout,
     #[error("Host returned an unexpected control message")]
     UnexpectedMessage,
+    #[error("an incompatible Host is still busy: {0:?}")]
+    HostBusy(Vec<HostBlocker>),
     #[error("Host request failed: {0}")]
     RequestFailed(String),
     #[error("Host I/O failed: {0}")]
@@ -90,12 +97,31 @@ impl HostLauncher {
     pub async fn launch_or_attach(&self) -> Result<ManagedHostProcess, HostLaunchError> {
         let token_file = self.ensure_auth_token_file()?;
         let token = read_token(&token_file)?;
-        if self.connect_with_token(&token).await.is_ok() {
-            return Ok(ManagedHostProcess {
-                launcher: self.clone(),
-                token_file,
-                child: None,
-            });
+        let connection_error = match self.connect_with_token(&token).await {
+            Ok(_) => {
+                return Ok(ManagedHostProcess {
+                    launcher: self.clone(),
+                    token_file,
+                    child: None,
+                });
+            }
+            Err(error) => error,
+        };
+        if matches!(
+            &connection_error,
+            HostLaunchError::Handshake(yttt_transport_local::HandshakeError::Rejected(
+                yttt_protocol::RejectReason::BuildMismatch
+                    | yttt_protocol::RejectReason::VersionMismatch { .. }
+            ))
+        ) {
+            let mut lifecycle = self.connect_lifecycle_with_token(&token).await?;
+            match lifecycle.request(Request::StopIfIdle).await? {
+                Response::HostIdle => self.wait_for_existing_host_exit().await?,
+                Response::HostBusy { blockers } => {
+                    return Err(HostLaunchError::HostBusy(blockers));
+                }
+                _ => return Err(HostLaunchError::UnexpectedMessage),
+            }
         }
 
         fs::create_dir_all(&self.profile.paths().logs)?;
@@ -149,6 +175,9 @@ impl HostLauncher {
                 profile_id: self.profile.id().clone(),
                 client_instance_id,
                 host_epoch_hint: None,
+                can_force_stop: true,
+                channel: yttt_protocol::ConnectionChannel::Control,
+                terminal_session_id: None,
             },
             token,
         ))
@@ -176,11 +205,43 @@ impl HostLauncher {
         &self,
         token: &AuthToken,
     ) -> Result<HostControlClient, HostLaunchError> {
+        self.connect_channel_with_token(
+            token,
+            ConnectionChannel::Control,
+            ProtocolRange::exact(PROTOCOL_VERSION),
+            true,
+        )
+        .await
+    }
+
+    async fn connect_lifecycle_with_token(
+        &self,
+        token: &AuthToken,
+    ) -> Result<HostControlClient, HostLaunchError> {
+        self.connect_channel_with_token(
+            token,
+            ConnectionChannel::Lifecycle,
+            ProtocolRange {
+                minimum: PROTOCOL_VERSION.saturating_sub(DEFAULT_COMPATIBILITY_WINDOW),
+                maximum: PROTOCOL_VERSION,
+            },
+            false,
+        )
+        .await
+    }
+
+    async fn connect_channel_with_token(
+        &self,
+        token: &AuthToken,
+        channel: ConnectionChannel,
+        supported: ProtocolRange,
+        can_force_stop: bool,
+    ) -> Result<HostControlClient, HostLaunchError> {
         let mut stream = connect(&self.endpoint()).await?;
         let authenticated = client_handshake(
             &mut stream,
             &ClientIdentity {
-                supported: ProtocolRange::exact(PROTOCOL_VERSION),
+                supported,
                 build_id: self.build_id.clone(),
                 profile_id: self.profile.id().clone(),
                 client_instance_id: ClientInstanceId::new(format!(
@@ -188,6 +249,9 @@ impl HostLauncher {
                     uuid::Uuid::new_v4()
                 )),
                 host_epoch_hint: None,
+                can_force_stop,
+                channel,
+                terminal_session_id: None,
             },
             token,
         )
@@ -197,6 +261,18 @@ impl HostLauncher {
             host_epoch: authenticated.host_epoch,
             next_request_id: 1,
         })
+    }
+
+    async fn wait_for_existing_host_exit(&self) -> Result<(), HostLaunchError> {
+        let deadline = tokio::time::Instant::now() + HOST_STOP_TIMEOUT;
+        let runtime = &self.profile.paths().runtime;
+        while tokio::time::Instant::now() < deadline {
+            if !runtime.join("host-ready.json").exists() && !runtime.join("host.pid").exists() {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        Err(HostLaunchError::ReadyTimeout)
     }
 }
 
@@ -222,7 +298,7 @@ impl ManagedHostProcess {
 
     pub async fn drain_and_stop(mut self) -> Result<(), HostLaunchError> {
         let mut client = self.connect().await?;
-        match client.request(Request::DrainAndStop).await? {
+        match client.request(Request::ForceStop).await? {
             Response::Draining => {}
             _ => return Err(HostLaunchError::UnexpectedMessage),
         }

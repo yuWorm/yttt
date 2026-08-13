@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 use gpui::{Entity, Pixels, Rems, Rgba, prelude::*};
 use gpui_component::{
     Sizable as _,

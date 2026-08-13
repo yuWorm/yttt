@@ -102,6 +102,11 @@ pub enum ProjectRequest {
         project_id: ProjectId,
         root: PlatformPath,
     },
+    RegisterSsh {
+        project_id: ProjectId,
+        connection_id: String,
+        root: String,
+    },
     Close {
         project_id: ProjectId,
         registration_epoch: u64,

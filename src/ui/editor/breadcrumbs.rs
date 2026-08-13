@@ -79,18 +79,18 @@ fn collect_symbols(node: Node<'_>, source: &str, symbols: &mut Vec<EditorSymbol>
         return;
     }
 
-    if let Some(kind) = symbol_kind(node.kind()) {
-        if let Some(name) = symbol_name(node, source) {
-            let start = node.start_position();
-            let end = node.end_position();
-            symbols.push(EditorSymbol {
-                name,
-                kind,
-                start_line: start.row,
-                start_column: start.column,
-                end_line: end.row,
-            });
-        }
+    if let Some(kind) = symbol_kind(node.kind())
+        && let Some(name) = symbol_name(node, source)
+    {
+        let start = node.start_position();
+        let end = node.end_position();
+        symbols.push(EditorSymbol {
+            name,
+            kind,
+            start_line: start.row,
+            start_column: start.column,
+            end_line: end.row,
+        });
     }
 
     let mut cursor = node.walk();

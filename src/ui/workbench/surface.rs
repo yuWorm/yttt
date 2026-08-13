@@ -625,7 +625,7 @@ impl WorkbenchView {
                 .flex()
                 .flex_1()
                 .overflow_hidden()
-                .child(tree)
+                .child(tree.clone())
                 .into_any_element(),
         };
         let content = match active_panel_page {
@@ -637,7 +637,19 @@ impl WorkbenchView {
                 .child(files_content),
             ProjectPanelPage::AgentSessions => {
                 let search_input = self.agent_sessions_search_input(window, cx);
-                self.agent_sessions_panel_content(&search_input, theme, ui_style, cx)
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.agent_sessions_panel_content(&search_input, theme, ui_style, cx))
+                    .child(
+                        div()
+                            .absolute()
+                            .size(px(0.0))
+                            .overflow_hidden()
+                            .invisible()
+                            .child(tree),
+                    )
             }
         };
 
@@ -941,6 +953,7 @@ impl WorkbenchView {
             let mut list = div()
                 .flex()
                 .flex_col()
+                .min_w_0()
                 .size_full()
                 .overflow_y_scrollbar()
                 .py(ui_style.spacing.xs);
@@ -1064,6 +1077,8 @@ impl WorkbenchView {
             .flex()
             .flex_col()
             .flex_1()
+            .min_w_0()
+            .overflow_hidden()
             .min_h_0()
             .child(header)
             .when(show_search, |panel| panel.child(search))
@@ -1103,6 +1118,9 @@ impl WorkbenchView {
             .cursor_pointer()
             .flex()
             .items_center()
+            .min_w_0()
+            .w_full()
+            .overflow_hidden()
             .gap(ui_style.spacing.sm)
             .mx(ui_style.spacing.xs)
             .when(inset, |row| row.ml(ui_style.spacing.xl))
@@ -1419,20 +1437,17 @@ impl WorkbenchView {
                     }),
                     ProjectLocation::Local { .. } => None,
                 });
-        context.agent_hook_client = if context.ssh.is_none() {
-            self.agent_manager.hook_client()
-        } else {
-            None
-        };
         let agent_address =
             AgentPaneAddress::new(&context.project_id, &context.tab_id, &context.pane.id);
-        if let Some((launch, snapshot)) = self.agent_manager.prepare_pane(
+        if let Some((launch, restored)) = self.agent_manager.prepare_pane(
             agent_address.clone(),
             &context.pane.command,
             context.ssh.is_some(),
         ) {
             context.agent_launch = Some(launch);
-            if let Err(error) = self.record_agent_runtime_snapshot(agent_address.clone(), snapshot)
+            if let Some(snapshot) = restored
+                && let Err(error) =
+                    self.record_agent_runtime_snapshot(agent_address.clone(), snapshot)
             {
                 self.load_error = Some(error.to_string());
             }
@@ -1466,23 +1481,12 @@ impl WorkbenchView {
         self.terminal.terminal_panes.insert(key, pane_view.clone());
         if start_processes {
             pane_view.update(cx, |pane, cx| {
-                pane.start_terminal(cx);
+                pane.start_terminal(window, cx);
             });
         } else {
             if let Err(error) =
                 self.workspace
                     .mark_pane_running(&ProjectId::new(&project_id), &tab_id, &pane_id)
-            {
-                self.load_error = Some(error.to_string());
-            }
-            let running_agent = (
-                pane_view.read(cx).agent_instance_id().cloned(),
-                pane_view.read(cx).generation(),
-            );
-            if let (Some(instance_id), generation) = running_agent
-                && let Some((address, snapshot)) =
-                    self.agent_manager.process_started(&instance_id, generation)
-                && let Err(error) = self.record_agent_runtime_snapshot(address, snapshot)
             {
                 self.load_error = Some(error.to_string());
             }
@@ -1510,7 +1514,6 @@ impl WorkbenchView {
             terminal_input_gate: self.terminal.terminal_input_gate.clone(),
             ssh: None,
             agent_launch: None,
-            agent_hook_client: None,
         };
         let pane_view = self.ensure_terminal_pane(context, window, cx);
 
@@ -1781,14 +1784,6 @@ impl WorkbenchView {
                 if let Err(error) = self.handle_terminal_pane_started(event.clone()) {
                     self.load_error = Some(error.to_string());
                 }
-                if let Some(instance_id) = &event.agent_instance_id
-                    && let Some((address, snapshot)) = self
-                        .agent_manager
-                        .process_started(instance_id, event.generation)
-                    && let Err(error) = self.record_agent_runtime_snapshot(address, snapshot)
-                {
-                    self.load_error = Some(error.to_string());
-                }
                 cx.notify();
             }
             TerminalPaneEvent::StartFailed(event) => {
@@ -1823,87 +1818,16 @@ impl WorkbenchView {
                 }
                 cx.notify();
             }
-            TerminalPaneEvent::AgentStatusFrame { frame, .. } => {
-                if let Ok(Some((address, snapshot))) = self.agent_manager.ingest_title(frame)
-                    && let Err(error) =
-                        self.record_agent_event_snapshot(address, snapshot, window, cx)
-                {
-                    self.load_error = Some(error.to_string());
-                }
-                cx.notify();
-            }
+            TerminalPaneEvent::AgentStatusFrame { .. } => {}
             TerminalPaneEvent::TitleChanged { .. } => {
                 cx.notify();
             }
             TerminalPaneEvent::Exited(event) => {
-                let reason = match event.exit_reason {
-                    yttt_terminal::ExitReason::Completed => AgentExitReason::Completed,
-                    yttt_terminal::ExitReason::Failed => AgentExitReason::Failed,
-                    yttt_terminal::ExitReason::KilledByUser => AgentExitReason::KilledByUser,
-                };
-                if let Some(instance_id) = &event.agent_instance_id {
-                    let code = match event.status {
-                        yttt_terminal::ProcessStatus::Running => None,
-                        yttt_terminal::ProcessStatus::Exited { code } => code,
-                    };
-                    let exit = AgentProcessExit { code, reason };
-                    match self
-                        .agent_manager
-                        .process_exited(instance_id, event.generation, exit)
-                    {
-                        Some(AgentPaneExitOutcome::Snapshot { address, snapshot }) => {
-                            let result = if snapshot.view_state() == AgentViewState::Failed {
-                                self.workspace.clear_agent_snapshot(
-                                    &ProjectId::new(&address.project_id),
-                                    &address.tab_id,
-                                    &address.pane_id,
-                                )
-                            } else {
-                                self.record_agent_runtime_snapshot(address, snapshot)
-                            };
-                            if let Err(error) = result {
-                                self.load_error = Some(error.to_string());
-                            }
-                        }
-                        Some(AgentPaneExitOutcome::ResumeFailed { address }) => {
-                            let project_id = ProjectId::new(&address.project_id);
-                            if let Err(error) = self.workspace.clear_agent_snapshot(
-                                &project_id,
-                                &address.tab_id,
-                                &address.pane_id,
-                            ) {
-                                self.load_error = Some(error.to_string());
-                            }
-                            let key = terminal_pane_key(
-                                &address.project_id,
-                                &address.tab_id,
-                                &address.pane_id,
-                            );
-                            self.terminal.terminal_panes.remove(&key);
-                            self.terminal.terminal_pane_subscriptions.remove(&key);
-                            self.terminal.agent_process_observations.remove(&address);
-                        }
-                        None => {}
-                    }
-                } else {
-                    let address =
-                        AgentPaneAddress::new(&event.project_id, &event.tab_id, &event.pane_id);
-                    if self
-                        .terminal
-                        .agent_process_observations
-                        .get(&address)
-                        .is_some_and(|observation| observation.generation == event.generation)
-                    {
-                        self.terminal.agent_process_observations.remove(&address);
-                        self.finish_detected_agent(&address, event.generation, reason, window, cx);
-                    }
-                }
                 match self.handle_terminal_pane_exit(event.clone()) {
                     Ok(PaneExitCloseOutcome::PaneKept) => {}
                     Ok(_) => {
                         let address =
                             AgentPaneAddress::new(&event.project_id, &event.tab_id, &event.pane_id);
-                        self.terminal.agent_process_observations.remove(&address);
                         self.agent_manager.forget_pane(&address);
                     }
                     Err(error) => {

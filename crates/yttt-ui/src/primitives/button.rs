@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
+
 use gpui::{App, ElementId, Pixels, Rgba, SharedString, prelude::*};
 use gpui_component::{
     Sizable as _,

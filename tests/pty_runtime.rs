@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use yttt::runtime::terminal::{
+use yttt_terminal::{
     PortablePtyRuntime, ProcessStatus, TerminalRuntime, TerminalSpawnRequest,
     spawn_portable_pty_session,
 };

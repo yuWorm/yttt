@@ -1,12 +1,16 @@
 #![forbid(unsafe_code)]
 mod agent_hooks;
+pub mod diagnostics;
+mod lifecycle;
 mod project;
 pub mod runtime;
 mod ssh_runtime;
 pub mod terminal;
+mod terminal_data;
+pub use terminal_data::SharedTerminalUpdate;
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, VecDeque},
     fs::{self, File, OpenOptions},
     io::{self, Read as _, Seek as _, SeekFrom, Write as _},
     path::{Path, PathBuf},
@@ -14,24 +18,37 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use crate::{
     agent_hooks::HostAgentHookRuntime,
+    diagnostics::{
+        DEFAULT_DIAGNOSTICS_LOG_BYTES, DIAGNOSTICS_SCHEMA_VERSION, DiagnosticsClock,
+        DiagnosticsSink, HostDiagnosticsSnapshot, ProcessDiagnosticsSampler,
+        RotatingJsonlDiagnosticsSink, SystemDiagnosticsClock, diagnostics_log_path,
+    },
+    lifecycle::HostLifecycle,
     project::{HostProjectError, HostProjectRuntime},
     runtime::{HostRuntime, HostRuntimeError},
     ssh_runtime::HostSshRuntime,
     terminal::{HostTerminalEvent, HostedTerminalError},
+    terminal_data::TerminalDataWriter,
 };
 use fs2::FileExt as _;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use tokio::sync::{broadcast, watch};
-use yttt_core::model::ids::{ClientInstanceId, HostId, ProfileId};
+use yttt_core::model::ids::{ClientInstanceId, HostId, ProfileId, TerminalSessionId};
 use yttt_protocol::{
-    ClientRequest, ControlMessage, FailureCode, HostEvent, HostResponse, PROTOCOL_VERSION,
-    ProtocolFailure, ProtocolRange, Request, ResourceCatalog, Response, ServerEvent,
-    terminal::{AttachTerminal, TerminalLeaseMode, TerminalStreamUpdate, TerminationMode},
+    ClientRequest, ControlMessage, DEFAULT_COMPATIBILITY_WINDOW, FailureCode, HostEvent,
+    HostResponse, PROTOCOL_VERSION, ProtocolFailure, ProtocolRange, Request, ResourceCatalog,
+    Response, ServerEvent, TerminalTerminationResult,
+    terminal::{
+        AttachTerminal, TerminalLeaseMode, TerminalStreamUpdate, TerminalViewportAnchor,
+        TerminalViewportRead, TerminationMode,
+    },
 };
 use yttt_transport_local::{
     AuthToken, HostIdentity, LocalEndpoint, LocalListener, LocalStream, receive_control,
@@ -112,7 +129,10 @@ pub async fn run(bootstrap: HostBootstrap) -> Result<(), HostError> {
     };
 
     let identity = Arc::new(HostIdentity {
-        supported: ProtocolRange::exact(PROTOCOL_VERSION),
+        supported: ProtocolRange {
+            minimum: PROTOCOL_VERSION.saturating_sub(DEFAULT_COMPATIBILITY_WINDOW),
+            maximum: PROTOCOL_VERSION,
+        },
         build_id: bootstrap.build_id,
         profile_id: bootstrap.profile_id.clone(),
         host_id,
@@ -122,23 +142,104 @@ pub async fn run(bootstrap: HostBootstrap) -> Result<(), HostError> {
     let token = Arc::new(token);
     let next_connection = Arc::new(AtomicU64::new(1));
     let next_host_sequence = Arc::new(AtomicU64::new(1));
+    let request_journals = Arc::new(Mutex::new(HashMap::new()));
     let (stop_tx, mut stop_rx) = watch::channel(false);
     let runtime = HostRuntime::new();
+    let lifecycle = Arc::new(HostLifecycle::new(stop_tx.clone()));
     let projects = Arc::new(HostProjectRuntime::new());
     let ssh = HostSshRuntime::start(
         bootstrap.ssh_host_keys_file.clone(),
         bootstrap.credential_namespace.clone(),
     )
     .map_err(HostError::Ssh)?;
-    let agent_hooks = HostAgentHookRuntime::start()?;
+    tokio::spawn(
+        lifecycle
+            .clone()
+            .run(runtime.clone(), ssh.clone(), projects.clone()),
+    );
+    let diagnostics_sink: Arc<dyn DiagnosticsSink> = Arc::new(RotatingJsonlDiagnosticsSink::new(
+        diagnostics_log_path(&bootstrap.runtime_root),
+        DEFAULT_DIAGNOSTICS_LOG_BYTES,
+    ));
+    let diagnostics_clock: Arc<dyn DiagnosticsClock> = Arc::new(SystemDiagnosticsClock);
+    let diagnostics_runtime = runtime.clone();
+    let diagnostics_lifecycle = lifecycle.clone();
+    let diagnostics_sink_for_task = diagnostics_sink.clone();
+    let diagnostics_clock_for_task = diagnostics_clock.clone();
+    let mut diagnostics_stop = stop_rx.clone();
+    let diagnostics_task = tokio::spawn(async move {
+        let mut sampler = ProcessDiagnosticsSampler::default();
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {}
+                changed = diagnostics_stop.changed() => {
+                    if changed.is_err() || *diagnostics_stop.borrow() {
+                        let snapshot = collect_host_diagnostics(
+                            diagnostics_clock_for_task.as_ref(),
+                            host_epoch,
+                            &diagnostics_runtime,
+                            &diagnostics_lifecycle,
+                            &mut sampler,
+                        );
+                        let _ = diagnostics_sink_for_task.record(&snapshot);
+                        break;
+                    }
+                    continue;
+                }
+            }
+            let snapshot = collect_host_diagnostics(
+                diagnostics_clock_for_task.as_ref(),
+                host_epoch,
+                &diagnostics_runtime,
+                &diagnostics_lifecycle,
+                &mut sampler,
+            );
+            let _ = diagnostics_sink_for_task.record(&snapshot);
+        }
+    });
+    let agent_hooks = HostAgentHookRuntime::start(host_epoch)?;
+    let mut agent_terminal_events = runtime.subscribe();
+    let terminal_agent_hooks = agent_hooks.clone();
+    let terminal_runtime = runtime.clone();
+    tokio::spawn(async move {
+        loop {
+            match agent_terminal_events.recv().await {
+                Ok(HostTerminalEvent::Exited {
+                    session_id, code, ..
+                }) => terminal_agent_hooks.terminal_exited(&session_id, code),
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    for placement in terminal_runtime.placements() {
+                        if let Some(viewport) = placement.viewport
+                            && let yttt_protocol::terminal::TerminalProcessState::Exited { code } =
+                                viewport.process_state
+                        {
+                            terminal_agent_hooks.terminal_exited(&placement.session_id, code);
+                        }
+                    }
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+                Ok(_) => {}
+            }
+        }
+    });
     guard.publish_ready(&ready)?;
 
+    let mut exit_reaper = tokio::time::interval(Duration::from_secs(60));
+    exit_reaper.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             changed = stop_rx.changed() => {
                 if changed.is_err() || *stop_rx.borrow() {
                     break;
                 }
+            }
+            _ = exit_reaper.tick() => {
+                if runtime.reap_expired_exits(now_millis()) != 0 {
+                    lifecycle.resource_changed();
+                }
+                agent_hooks.decay_stale_activity();
             }
             accepted = listener.accept() => {
                 let stream = accepted?;
@@ -153,8 +254,10 @@ pub async fn run(bootstrap: HostBootstrap) -> Result<(), HostError> {
                     ssh: ssh.clone(),
                     agent_hooks: agent_hooks.clone(),
                     projects: projects.clone(),
+                    request_journals: request_journals.clone(),
                     runtime: runtime.clone(),
-                    stop_tx: stop_tx.clone(),
+                    lifecycle: lifecycle.clone(),
+                    stop: stop_rx.clone(),
                 };
                 tokio::spawn(async move {
                     let _ = serve_connection(stream, token, context).await;
@@ -164,8 +267,36 @@ pub async fn run(bootstrap: HostBootstrap) -> Result<(), HostError> {
     }
 
     drop(listener);
+    let _ = diagnostics_task.await;
     drop(guard);
     Ok(())
+}
+
+fn collect_host_diagnostics(
+    clock: &dyn DiagnosticsClock,
+    host_epoch: u64,
+    runtime: &HostRuntime,
+    lifecycle: &HostLifecycle,
+    sampler: &mut ProcessDiagnosticsSampler,
+) -> HostDiagnosticsSnapshot {
+    let sessions = runtime.session_count();
+    let attachments = runtime.attachment_count();
+    let process = sampler.sample();
+    HostDiagnosticsSnapshot {
+        schema_version: DIAGNOSTICS_SCHEMA_VERSION,
+        captured_at_millis: clock.now_millis(),
+        host_epoch,
+        sessions,
+        clients: lifecycle.client_count(),
+        attachments,
+        rss_bytes: process.rss_bytes,
+        thread_count: process.thread_count,
+        idle_cpu_percent: (sessions == 0 && attachments == 0)
+            .then_some(process.cpu_percent)
+            .flatten(),
+        terminals: runtime.terminal_diagnostics(),
+        queues: runtime.attachment_queue_diagnostics(),
+    }
 }
 
 struct ConnectionContext {
@@ -175,8 +306,152 @@ struct ConnectionContext {
     ssh: Arc<HostSshRuntime>,
     agent_hooks: Arc<HostAgentHookRuntime>,
     projects: Arc<HostProjectRuntime>,
+    request_journals:
+        Arc<Mutex<HashMap<ClientInstanceId, Arc<tokio::sync::Mutex<RequestJournal>>>>>,
     runtime: Arc<HostRuntime>,
-    stop_tx: watch::Sender<bool>,
+    lifecycle: Arc<HostLifecycle>,
+    stop: watch::Receiver<bool>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TerminalAttachment {
+    mode: TerminalLeaseMode,
+    lease_epoch: u64,
+    display_offset: u64,
+    unseen_output: u64,
+    search_generation: u64,
+    last_client_sequence: u64,
+}
+
+impl TerminalAttachment {
+    fn new(mode: TerminalLeaseMode, lease_epoch: u64) -> Self {
+        Self {
+            mode,
+            lease_epoch,
+            display_offset: 0,
+            unseen_output: 0,
+            search_generation: 0,
+            last_client_sequence: 0,
+        }
+    }
+}
+
+const MAX_REQUEST_JOURNAL_ENTRIES: usize = 256;
+const MAX_REQUEST_JOURNAL_BYTES: usize = 4 * 1024 * 1024;
+
+struct DigestWriter(Sha256);
+
+impl io::Write for DigestWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct CountingWriter(usize);
+
+impl io::Write for CountingWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 = self.0.saturating_add(bytes.len());
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct RequestJournalEntry {
+    request_id: u64,
+    fingerprint: [u8; 32],
+    response: HostResponse,
+    encoded_bytes: usize,
+}
+
+#[derive(Default)]
+struct RequestJournal {
+    entries: VecDeque<RequestJournalEntry>,
+    encoded_bytes: usize,
+}
+
+enum JournalLookup {
+    Miss,
+    Replay(Box<HostResponse>),
+    Conflict,
+}
+
+impl RequestJournal {
+    fn lookup(&self, request_id: u64, fingerprint: &[u8; 32]) -> JournalLookup {
+        let Some(entry) = self
+            .entries
+            .iter()
+            .find(|entry| entry.request_id == request_id)
+        else {
+            return JournalLookup::Miss;
+        };
+        if entry.fingerprint == *fingerprint {
+            JournalLookup::Replay(Box::new(entry.response.clone()))
+        } else {
+            JournalLookup::Conflict
+        }
+    }
+
+    fn insert(&mut self, fingerprint: [u8; 32], response: HostResponse) {
+        let mut counter = CountingWriter::default();
+        if serde_json::to_writer(&mut counter, &response).is_err()
+            || counter.0 > MAX_REQUEST_JOURNAL_BYTES
+        {
+            return;
+        }
+        while self.entries.len() >= MAX_REQUEST_JOURNAL_ENTRIES
+            || self.encoded_bytes.saturating_add(counter.0) > MAX_REQUEST_JOURNAL_BYTES
+        {
+            let Some(removed) = self.entries.pop_front() else {
+                break;
+            };
+            self.encoded_bytes = self.encoded_bytes.saturating_sub(removed.encoded_bytes);
+        }
+        self.encoded_bytes = self.encoded_bytes.saturating_add(counter.0);
+        self.entries.push_back(RequestJournalEntry {
+            request_id: response.request_id,
+            fingerprint,
+            response,
+            encoded_bytes: counter.0,
+        });
+    }
+}
+
+fn request_is_journalable(request: &Request) -> bool {
+    !matches!(
+        request,
+        Request::SshConnect(_) | Request::CredentialAnswer { .. }
+    )
+}
+
+fn request_fingerprint(request: &Request) -> [u8; 32] {
+    let mut writer = DigestWriter(Sha256::new());
+    match request {
+        Request::TerminalInput(input) => {
+            writer.0.update(b"terminal-input");
+            writer.0.update(input.session_id.as_str().as_bytes());
+            writer.0.update(input.context.host_epoch.to_le_bytes());
+            writer.0.update(input.context.session_epoch.to_le_bytes());
+            writer.0.update(input.context.lease_epoch.to_le_bytes());
+            writer.0.update(input.context.geometry_epoch.to_le_bytes());
+            writer.0.update(input.context.client_sequence.to_le_bytes());
+        }
+        _ => {
+            serde_json::to_writer(&mut writer, request)
+                .expect("serializing a protocol request for journaling must succeed");
+        }
+    }
+    writer.0.finalize().into()
 }
 
 async fn serve_connection(
@@ -191,18 +466,46 @@ async fn serve_connection(
         ssh,
         agent_hooks,
         projects,
+        request_journals,
         runtime,
-        stop_tx,
+        lifecycle,
+        stop,
     } = &context;
     let authenticated = server_handshake(&mut stream, identity, token.as_ref())
         .await
         .map_err(|_| ())?;
+    lifecycle.client_connected();
     let client_id = authenticated.client_instance_id;
+    let can_force_stop = authenticated.can_force_stop;
+    let lifecycle_only = authenticated.channel == yttt_protocol::ConnectionChannel::Lifecycle;
+    if authenticated.channel == yttt_protocol::ConnectionChannel::TerminalData {
+        let session_id = authenticated.terminal_session_id.ok_or(())?;
+        let result = serve_terminal_data_connection(
+            stream,
+            client_id,
+            session_id,
+            runtime,
+            host_sequence,
+            stop.clone(),
+        )
+        .await;
+        lifecycle.client_disconnected();
+        lifecycle.resource_changed();
+        return result;
+    }
+    let request_journal = {
+        let mut journals = request_journals.lock();
+        journals
+            .entry(client_id.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(RequestJournal::default())))
+            .clone()
+    };
     let mut ssh_events = ssh.subscribe();
     let mut agent_hook_events = agent_hooks.subscribe();
     let mut project_events = projects.subscribe();
     let mut runtime_events = runtime.subscribe();
-    let mut subscriptions = HashSet::new();
+    let mut subscriptions = HashMap::<_, TerminalAttachment>::new();
+    let mut stop = stop.clone();
     let result = async {
     loop {
         tokio::select! {
@@ -210,16 +513,48 @@ async fn serve_connection(
                 let ControlMessage::Request(request) = message.map_err(|_| ())? else {
                     return Err(());
                 };
+                if lifecycle_only
+                    && !matches!(&request.body, Request::Ping { .. } | Request::StopIfIdle)
+                {
+                    send_control(
+                        &mut stream,
+                        &ControlMessage::Response(HostResponse {
+                            request_id: request.request_id,
+                            result: Err(ProtocolFailure::new(
+                                FailureCode::PermissionDenied,
+                                "lifecycle compatibility channels only allow Ping and StopIfIdle",
+                                false,
+                            )),
+                        }),
+                    )
+                    .await
+                    .map_err(|_| ())?;
+                    continue;
+                }
                 let subscription = match &request.body {
-                    Request::SpawnTerminal(spec) => Some(spec.session_id.clone()),
-                    Request::AttachTerminal(attach) => Some(attach.session_id.clone()),
-                    Request::AcquireTerminalLease { session_id, .. }
-                    | Request::RequestCheckpoint { session_id, .. } => Some(session_id.clone()),
+                    Request::SpawnTerminal(spec) => Some((
+                        spec.session_id.clone(),
+                        TerminalLeaseMode::Interactive,
+                        true,
+                    )),
+                    Request::AttachTerminal(attach) => {
+                        Some((attach.session_id.clone(), attach.mode, true))
+                    }
+                    Request::AcquireTerminalLease { session_id, mode } => {
+                        Some((session_id.clone(), *mode, true))
+                    }
+                    Request::ReleaseTerminalLease { session_id } => {
+                        Some((session_id.clone(), TerminalLeaseMode::Observer, true))
+                    }
+                    Request::RequestCheckpoint { session_id, .. } => Some((
+                        session_id.clone(),
+                        TerminalLeaseMode::Observer,
+                        false,
+                    )),
                     _ => None,
                 };
                 let unsubscription = match &request.body {
                     Request::DetachTerminal { session_id }
-                    | Request::ReleaseTerminalLease { session_id }
                     | Request::TerminateTerminal { session_id, .. }
                     | Request::AcknowledgeTerminalExit {
                         session_id,
@@ -227,24 +562,112 @@ async fn serve_connection(
                     } => Some(session_id.clone()),
                     _ => None,
                 };
-                let should_stop = matches!(&request.body, Request::DrainAndStop);
-                let response = handle_request(
-                    request,
-                    &context,
-                    &client_id,
-                    host_sequence.fetch_add(1, Ordering::Relaxed),
-                )
-                .await;
-                if response.result.is_ok()
-                    && let Some(session_id) = subscription
-                {
-                    subscriptions.insert(session_id);
+                let stop_behavior = matches!(&request.body, Request::ForceStop).then_some(true);
+                let (response, apply_effects) = if request_is_journalable(&request.body) {
+                    let fingerprint = request_fingerprint(&request.body);
+                    let mut journal = request_journal.lock().await;
+                    match journal.lookup(request.request_id, &fingerprint) {
+                        JournalLookup::Replay(response) => (*response, false),
+                        JournalLookup::Conflict => (
+                            HostResponse {
+                                request_id: request.request_id,
+                                result: Err(ProtocolFailure::new(
+                                    FailureCode::InvalidRequest,
+                                    "request ID was already used for a different request",
+                                    false,
+                                )),
+                            },
+                            false,
+                        ),
+                        JournalLookup::Miss => {
+                            let response = handle_request(
+                                request,
+                                &context,
+                                &client_id,
+                                can_force_stop,
+                                &mut subscriptions,
+                                host_sequence.fetch_add(1, Ordering::Relaxed),
+                            )
+                            .await;
+                            journal.insert(fingerprint, response.clone());
+                            (response, true)
+                        }
+                    }
+                } else {
+                    (
+                        handle_request(
+                            request,
+                            &context,
+                            &client_id,
+                            can_force_stop,
+                            &mut subscriptions,
+                            host_sequence.fetch_add(1, Ordering::Relaxed),
+                        )
+                        .await,
+                        true,
+                    )
+                };
+                if apply_effects {
+                    if let Ok(result) = &response.result {
+                    if let Some((session_id, mode, replace_mode)) = subscription {
+                        let lease_epoch = match result {
+                            Response::TerminalSpawned { lease, .. }
+                            | Response::TerminalAttached { lease, .. }
+                            | Response::TerminalLease(lease) => lease.lease_epoch,
+                            _ => subscriptions
+                                .get(&session_id)
+                                .map_or(0, |attachment| attachment.lease_epoch),
+                        };
+                        runtime.register_attachment(&session_id, &client_id);
+                        let attachment = subscriptions
+                            .entry(session_id)
+                            .or_insert_with(|| TerminalAttachment::new(mode, lease_epoch));
+                        if replace_mode {
+                            attachment.mode = mode;
+                            attachment.lease_epoch = lease_epoch;
+                            attachment.last_client_sequence = 0;
+                        }
+                    }
+                    match result {
+                        Response::TerminalScrolled(read) | Response::TerminalViewport(read) => {
+                            if let Some(attachment) =
+                                subscriptions.get_mut(&read.viewport.session_id)
+                            {
+                                attachment.display_offset = read.viewport.display_offset;
+                                runtime.update_attachment_display_offset(
+                                    &read.viewport.session_id,
+                                    &client_id,
+                                    read.viewport.display_offset,
+                                );
+                                if attachment.display_offset == 0 {
+                                    attachment.unseen_output = 0;
+                                }
+                            }
+                        }
+                        Response::TerminalSearch(results) => {
+                            if let Some(attachment) =
+                                subscriptions.get_mut(&results.session_id)
+                            {
+                                attachment.search_generation = results.generation;
+                            }
+                        }
+                        Response::TerminalsTerminated { results } => {
+                            for result in results.iter().filter(|result| result.result.is_ok()) {
+                                subscriptions.remove(&result.session_id);
+                                runtime.release_attachment(&result.session_id, &client_id);
+                            }
+                        }
+                        _ => {}
+                    }
+                    if let Some(session_id) = unsubscription {
+                        subscriptions.remove(&session_id);
+                        runtime.release_attachment(&session_id, &client_id);
+                    }
+                    }
+                    lifecycle.resource_changed();
                 }
-                if response.result.is_ok()
-                    && let Some(session_id) = unsubscription
-                {
-                    subscriptions.remove(&session_id);
-                }
+                let should_stop =
+                    stop_behavior == Some(true) && apply_effects && response.result.is_ok();
                 send_control(&mut stream, &ControlMessage::Response(response))
                     .await
                     .map_err(|_| ())?;
@@ -257,26 +680,43 @@ async fn serve_connection(
                         }),
                     )
                     .await;
-                    let _ = stop_tx.send(true);
                     return Ok(());
                 }
             }
             event = runtime_events.recv() => {
                 let server_event = match event {
-                    Ok(HostTerminalEvent::Update { session_id, update })
-                        if subscriptions.contains(&session_id) =>
-                    {
-                        Some(ServerEvent::Terminal(update))
+                    Ok(HostTerminalEvent::Update { session_id, .. }) => {
+                        if let Some(attachment) = subscriptions.get_mut(&session_id)
+                            && attachment.display_offset != 0
+                        {
+                            attachment.unseen_output =
+                                attachment.unseen_output.saturating_add(1);
+                        }
+                        None
                     }
                     Ok(HostTerminalEvent::Exited {
                         session_id,
                         session_epoch,
                         code,
-                    }) if subscriptions.contains(&session_id) => {
+                        final_sequence,
+                    }) if subscriptions.contains_key(&session_id) => {
                         Some(ServerEvent::TerminalExit {
                             session_id,
                             session_epoch,
                             code,
+                            final_sequence,
+                        })
+                    }
+                    Ok(HostTerminalEvent::LeaseRevoked {
+                        session_id,
+                        previous_owner,
+                    }) if previous_owner == client_id => {
+                        if let Some(attachment) = subscriptions.get_mut(&session_id) {
+                            attachment.mode = TerminalLeaseMode::Observer;
+                        }
+                        Some(ServerEvent::TerminalLeaseRevoked {
+                            session_id,
+                            previous_owner,
                         })
                     }
                     Ok(HostTerminalEvent::TitleChanged { .. } | HostTerminalEvent::Bell { .. }) => {
@@ -284,19 +724,11 @@ async fn serve_connection(
                     }
                     Ok(_) => None,
                     Err(broadcast::error::RecvError::Lagged(_)) => {
-                        for session_id in &subscriptions {
-                            let available_from_sequence = runtime
-                                .terminal(session_id)
-                                .and_then(|terminal| terminal.latest_viewport())
-                                .map_or(0, |viewport| viewport.sequence);
-                            let event = ControlMessage::Event(HostEvent {
-                                host_sequence: host_sequence.fetch_add(1, Ordering::Relaxed),
-                                body: ServerEvent::Terminal(TerminalStreamUpdate::ResyncRequired {
-                                    session_id: session_id.clone(),
-                                    available_from_sequence,
-                                }),
-                            });
-                            send_control(&mut stream, &event).await.map_err(|_| ())?;
+                        for attachment in subscriptions.values_mut() {
+                            if attachment.display_offset != 0 {
+                                attachment.unseen_output =
+                                    attachment.unseen_output.saturating_add(1);
+                            }
                         }
                         None
                     }
@@ -360,32 +792,173 @@ async fn serve_connection(
                 }
             }
             event = agent_hook_events.recv() => {
-                let body = match event {
-                    Ok(event) => event,
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                let updates = match event {
+                    Ok(update) => vec![update],
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        agent_hooks.snapshots_after(&[])
+                    }
                     Err(broadcast::error::RecvError::Closed) => return Err(()),
                 };
-                send_control(
-                    &mut stream,
-                    &ControlMessage::Event(HostEvent {
-                        host_sequence: host_sequence.fetch_add(1, Ordering::Relaxed),
-                        body,
-                    }),
-                )
-                .await
-                .map_err(|_| ())?;
+                for update in updates {
+                    send_control(
+                        &mut stream,
+                        &ControlMessage::Event(HostEvent {
+                            host_sequence: host_sequence.fetch_add(1, Ordering::Relaxed),
+                            body: ServerEvent::AgentSnapshot(Box::new(update)),
+                        }),
+                    )
+                    .await
+                    .map_err(|_| ())?;
+                }
+            }
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow() {
+                    let _ = send_control(
+                        &mut stream,
+                        &ControlMessage::Event(HostEvent {
+                            host_sequence: host_sequence.fetch_add(1, Ordering::Relaxed),
+                            body: ServerEvent::HostStopping,
+                        }),
+                    )
+                    .await;
+                    return Ok(());
+                }
             }
         }
     }
     }.await;
     runtime.release_client(&client_id);
+    lifecycle.client_disconnected();
+    lifecycle.resource_changed();
     result
 }
 
+async fn serve_terminal_data_connection(
+    stream: LocalStream,
+    client_id: ClientInstanceId,
+    session_id: TerminalSessionId,
+    runtime: &Arc<HostRuntime>,
+    host_sequence: &Arc<AtomicU64>,
+    mut stop: watch::Receiver<bool>,
+) -> Result<(), ()> {
+    let terminal = runtime.terminal(&session_id).ok_or(())?;
+    let mut attachment = runtime
+        .attachment_receiver(&session_id, &client_id)
+        .ok_or(())?;
+    let mut attachment_state = *attachment.borrow();
+    if !attachment_state.attached {
+        return Err(());
+    }
+    let mut terminal_events = terminal.subscribe();
+    let output = TerminalDataWriter::new(stream, runtime.new_attachment_queue_diagnostics());
+    let mut output_failure = output.subscribe_failure();
+    let checkpoint = terminal.checkpoint().ok_or(())?;
+    output
+        .enqueue(
+            host_sequence,
+            TerminalStreamUpdate::Snapshot(checkpoint.viewport),
+        )
+        .map_err(|_| ())?;
+    if terminal.is_exited() {
+        let checkpoint = terminal.checkpoint().ok_or(())?;
+        output
+            .enqueue(
+                host_sequence,
+                TerminalStreamUpdate::Snapshot(checkpoint.viewport),
+            )
+            .map_err(|_| ())?;
+        drain_terminal_data(&output).await?;
+        return Ok(());
+    }
+    loop {
+        tokio::select! {
+            event = terminal_events.recv() => {
+                match event {
+                    Ok(HostTerminalEvent::Update {
+                        session_id: update_session_id,
+                        update,
+                    }) if update_session_id == session_id
+                        && attachment_state.display_offset == 0 =>
+                    {
+                        output
+                            .enqueue_shared(host_sequence, update.as_ref())
+                            .map_err(|_| ())?;
+                    }
+                    Ok(HostTerminalEvent::Exited {
+                        session_id: exited_session_id,
+                        ..
+                    }) if exited_session_id == session_id => {
+                        let checkpoint = terminal.checkpoint().ok_or(())?;
+                        output
+                            .enqueue(
+                                host_sequence,
+                                TerminalStreamUpdate::Snapshot(checkpoint.viewport),
+                            )
+                            .map_err(|_| ())?;
+                        drain_terminal_data(&output).await?;
+                        return Ok(());
+                    }
+                    Ok(_) => {}
+                    Err(broadcast::error::RecvError::Lagged(_))
+                        if attachment_state.display_offset == 0 =>
+                    {
+                        let available_from_sequence = terminal
+                            .latest_viewport()
+                            .map_or(0, |viewport| viewport.sequence);
+                        output
+                            .enqueue(
+                                host_sequence,
+                                TerminalStreamUpdate::ResyncRequired {
+                                    session_id: session_id.clone(),
+                                    available_from_sequence,
+                                },
+                            )
+                            .map_err(|_| ())?;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => return Err(()),
+                }
+            }
+            changed = attachment.changed() => {
+                if changed.is_err() {
+                    return Ok(());
+                }
+                let previous_offset = attachment_state.display_offset;
+                attachment_state = *attachment.borrow();
+                if !attachment_state.attached {
+                    return Ok(());
+                }
+                if previous_offset != 0 && attachment_state.display_offset == 0 {
+                    let checkpoint = terminal.checkpoint().ok_or(())?;
+                    output
+                        .enqueue(
+                            host_sequence,
+                            TerminalStreamUpdate::Snapshot(checkpoint.viewport),
+                        )
+                        .map_err(|_| ())?;
+                }
+            }
+            _ = output_failure.changed() => return Err(()),
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow() {
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
+async fn drain_terminal_data(output: &TerminalDataWriter) -> Result<(), ()> {
+    tokio::time::timeout(Duration::from_secs(1), output.drain())
+        .await
+        .map_err(|_| ())?
+}
 async fn handle_request(
     request: ClientRequest,
     context: &ConnectionContext,
     client_id: &ClientInstanceId,
+    can_force_stop: bool,
+    attachments: &mut HashMap<yttt_core::model::ids::TerminalSessionId, TerminalAttachment>,
     host_sequence: u64,
 ) -> HostResponse {
     let ConnectionContext {
@@ -395,9 +968,21 @@ async fn handle_request(
         agent_hooks,
         projects,
         runtime,
+        lifecycle,
         ..
     } = context;
     let ClientRequest { request_id, body } = request;
+    let _resource_admission = if request_creates_resource(&body) {
+        let Some(admission) = lifecycle.admit_resource() else {
+            return HostResponse {
+                request_id,
+                result: Err(host_stopping_failure()),
+            };
+        };
+        Some(admission)
+    } else {
+        None
+    };
     let result = match body {
         Request::Ping { sent_millis } => Ok(Response::Pong {
             sent_millis,
@@ -412,89 +997,196 @@ async fn handle_request(
             ssh_connections: ssh.connections(),
             projects: projects.projects(),
         })),
-        Request::SpawnTerminal(spec) => (|| {
-            let terminal = runtime.spawn_with_transport(spec, Some(ssh.transport()))?;
-            runtime.acquire_lease(
-                terminal.session_id(),
-                client_id,
-                TerminalLeaseMode::Interactive,
-            )?;
-            Ok(Response::TerminalSpawned {
-                session_id: terminal.session_id().clone(),
-                session_epoch: terminal.session_epoch(),
-            })
-        })()
-        .map_err(runtime_failure),
+        Request::SpawnTerminal(mut spec) => {
+            let scope = agent_hooks.secure_terminal_environment(&mut spec);
+            match runtime.spawn_with_transport(spec, Some(ssh.transport())) {
+                Ok(terminal) => runtime
+                    .acquire_lease(
+                        terminal.session_id(),
+                        client_id,
+                        TerminalLeaseMode::Interactive,
+                    )
+                    .map(|lease| Response::TerminalSpawned {
+                        lease,
+                        session_epoch: terminal.session_epoch(),
+                    })
+                    .map_err(runtime_failure),
+                Err(error) => {
+                    agent_hooks.cancel_terminal(&scope);
+                    Err(runtime_failure(error))
+                }
+            }
+        }
         Request::AttachTerminal(attach) => {
+            if attach.mode == TerminalLeaseMode::Observer
+                && attachments
+                    .get(&attach.session_id)
+                    .is_some_and(|attachment| attachment.mode == TerminalLeaseMode::Interactive)
+            {
+                runtime.release_lease(&attach.session_id, client_id);
+            }
             attach_terminal(runtime, client_id, attach).map_err(runtime_failure)
         }
-        Request::DetachTerminal { session_id } | Request::ReleaseTerminalLease { session_id } => {
-            runtime.release_lease(&session_id, client_id);
+        Request::DetachTerminal { session_id } => {
+            if attachments
+                .get(&session_id)
+                .is_some_and(|attachment| attachment.mode == TerminalLeaseMode::Interactive)
+            {
+                runtime.release_lease(&session_id, client_id);
+            }
             Ok(Response::TerminalDetached)
         }
+        Request::ReleaseTerminalLease { session_id } => (|| {
+            require_interactive_attachment(attachments, &session_id)?;
+            runtime.release_lease(&session_id, client_id);
+            Ok(Response::TerminalDetached)
+        })()
+        .map_err(runtime_failure),
         Request::AcquireTerminalLease { session_id, mode } => runtime
             .acquire_lease(&session_id, client_id, mode)
             .map(Response::TerminalLease)
             .map_err(runtime_failure),
         Request::TerminalInput(input) => (|| {
-            runtime.validate_lease(&input.session_id, client_id)?;
             let terminal = runtime
                 .terminal(&input.session_id)
                 .ok_or_else(|| HostRuntimeError::NotFound(input.session_id.clone()))?;
-            terminal.input(input.bytes)?;
-            Ok(Response::TerminalInputAccepted {
-                client_sequence: input.client_sequence,
-            })
-        })()
-        .map_err(runtime_failure),
-        Request::ResizeTerminal {
-            session_id,
-            geometry,
-            geometry_epoch,
-        } => (|| {
-            runtime.validate_lease(&session_id, client_id)?;
-            let terminal = runtime
-                .terminal(&session_id)
-                .ok_or_else(|| HostRuntimeError::NotFound(session_id.clone()))?;
-            terminal.resize(geometry, geometry_epoch)?;
-            Ok(Response::TerminalResized { geometry_epoch })
-        })()
-        .map_err(runtime_failure),
-        Request::ScrollTerminal {
-            session_id,
-            display_offset,
-        } => (|| {
-            runtime.validate_lease(&session_id, client_id)?;
-            let terminal = runtime
-                .terminal(&session_id)
-                .ok_or_else(|| HostRuntimeError::NotFound(session_id.clone()))?;
-            let viewport = terminal
-                .latest_viewport()
-                .ok_or_else(|| HostRuntimeError::NotFound(session_id.clone()))?;
-            let delta = display_offset as i128 - viewport.display_offset as i128;
-            terminal.scroll(
-                delta.clamp(i32::MIN as i128, i32::MAX as i128) as i32,
-                viewport.scrollback_epoch,
+            validate_terminal_mutation(
+                identity.host_epoch,
+                attachments,
+                &terminal,
+                &input.session_id,
+                input.context,
+                true,
+                true,
             )?;
-            let actual_offset = terminal
-                .latest_viewport()
-                .map_or(0, |viewport| viewport.display_offset);
-            Ok(Response::TerminalScrolled {
-                display_offset: actual_offset,
+            runtime.validate_lease(&input.session_id, client_id)?;
+            terminal.input(input.bytes)?;
+            accept_terminal_mutation(
+                attachments,
+                &input.session_id,
+                input.context.client_sequence,
+            );
+            Ok(Response::TerminalInputAccepted {
+                client_sequence: input.context.client_sequence,
             })
         })()
         .map_err(runtime_failure),
-        Request::SetTerminalQueryPalette {
-            session_id,
-            colors,
-            revision,
-        } => (|| {
-            runtime.validate_lease(&session_id, client_id)?;
+        Request::ResizeTerminal(request) => (|| {
             let terminal = runtime
-                .terminal(&session_id)
-                .ok_or_else(|| HostRuntimeError::NotFound(session_id.clone()))?;
-            terminal.set_query_palette(colors, revision);
-            Ok(Response::TerminalPaletteAccepted { revision })
+                .terminal(&request.session_id)
+                .ok_or_else(|| HostRuntimeError::NotFound(request.session_id.clone()))?;
+            validate_terminal_mutation(
+                identity.host_epoch,
+                attachments,
+                &terminal,
+                &request.session_id,
+                request.context,
+                true,
+                false,
+            )?;
+            runtime.validate_lease(&request.session_id, client_id)?;
+            terminal.resize(request.geometry, request.context.geometry_epoch)?;
+            accept_terminal_mutation(
+                attachments,
+                &request.session_id,
+                request.context.client_sequence,
+            );
+            Ok(Response::TerminalResized {
+                geometry_epoch: request.context.geometry_epoch,
+            })
+        })()
+        .map_err(runtime_failure),
+        Request::ScrollTerminal(request) => (|| {
+            let terminal = runtime
+                .terminal(&request.session_id)
+                .ok_or_else(|| HostRuntimeError::NotFound(request.session_id.clone()))?;
+            validate_terminal_mutation(
+                identity.host_epoch,
+                attachments,
+                &terminal,
+                &request.session_id,
+                request.context,
+                false,
+                true,
+            )?;
+            let unseen_output = attachments
+                .get(&request.session_id)
+                .map_or(0, |attachment| attachment.unseen_output);
+            let current = terminal
+                .latest_viewport()
+                .ok_or_else(|| HostRuntimeError::NotFound(request.session_id.clone()))?;
+            let viewport = terminal.read_viewport(
+                current.scrollback_epoch,
+                TerminalViewportAnchor::DisplayOffset(request.display_offset),
+            )?;
+            accept_terminal_mutation(
+                attachments,
+                &request.session_id,
+                request.context.client_sequence,
+            );
+            Ok(Response::TerminalScrolled(terminal_viewport_read(
+                &terminal,
+                viewport,
+                unseen_output,
+            )))
+        })()
+        .map_err(runtime_failure),
+        Request::ReadTerminalViewport(request) => (|| {
+            let attachment = require_attachment(attachments, &request.session_id)?;
+            let terminal = runtime
+                .terminal(&request.session_id)
+                .ok_or_else(|| HostRuntimeError::NotFound(request.session_id.clone()))?;
+            validate_terminal_session_epoch(&terminal, request.session_epoch)?;
+            let viewport = terminal.read_viewport(request.scrollback_epoch, request.anchor)?;
+            Ok(Response::TerminalViewport(terminal_viewport_read(
+                &terminal,
+                viewport,
+                attachment.unseen_output,
+            )))
+        })()
+        .map_err(runtime_failure),
+        Request::SearchTerminal(request) => (|| {
+            let attachment = require_attachment(attachments, &request.session_id)?;
+            if request.generation < attachment.search_generation {
+                return Err(HostRuntimeError::StaleSearchGeneration {
+                    session_id: request.session_id,
+                    received: request.generation,
+                    current: attachment.search_generation,
+                });
+            }
+            let terminal = runtime
+                .terminal(&request.session_id)
+                .ok_or_else(|| HostRuntimeError::NotFound(request.session_id.clone()))?;
+            validate_terminal_session_epoch(&terminal, request.session_epoch)?;
+            terminal
+                .search(&request)
+                .map(Response::TerminalSearch)
+                .map_err(HostRuntimeError::from)
+        })()
+        .map_err(runtime_failure),
+        Request::SetTerminalQueryPalette(request) => (|| {
+            let terminal = runtime
+                .terminal(&request.session_id)
+                .ok_or_else(|| HostRuntimeError::NotFound(request.session_id.clone()))?;
+            validate_terminal_mutation(
+                identity.host_epoch,
+                attachments,
+                &terminal,
+                &request.session_id,
+                request.context,
+                true,
+                true,
+            )?;
+            runtime.validate_lease(&request.session_id, client_id)?;
+            terminal.set_query_palette(request.colors, request.revision);
+            accept_terminal_mutation(
+                attachments,
+                &request.session_id,
+                request.context.client_sequence,
+            );
+            Ok(Response::TerminalPaletteAccepted {
+                revision: request.revision,
+            })
         })()
         .map_err(runtime_failure),
         Request::RequestCheckpoint { session_id, .. } => runtime
@@ -510,44 +1202,55 @@ async fn handle_request(
         Request::AcknowledgeTerminalExit {
             session_id,
             session_epoch,
+            final_sequence,
         } => runtime
-            .acknowledge_terminal_exit(&session_id, session_epoch)
+            .acknowledge_terminal_exit(&session_id, session_epoch, final_sequence)
             .map(|()| Response::TerminalExitAcknowledged)
             .map_err(runtime_failure),
         Request::TerminateTerminal { session_id, mode } => match mode {
             TerminationMode::Detach => {
-                runtime.release_lease(&session_id, client_id);
+                if attachments
+                    .get(&session_id)
+                    .is_some_and(|attachment| attachment.mode == TerminalLeaseMode::Interactive)
+                {
+                    runtime.release_lease(&session_id, client_id);
+                }
                 Ok(Response::TerminalDetached)
             }
             TerminationMode::Terminate | TerminationMode::TerminateMany => (|| {
+                require_interactive_attachment(attachments, &session_id)?;
                 runtime.validate_lease(&session_id, client_id)?;
-                runtime.terminate(&session_id)?;
-                Ok(Response::TerminalTerminated)
+                runtime
+                    .terminate(&session_id)
+                    .map(Response::TerminalTerminated)
             })()
             .map_err(runtime_failure),
         },
-        Request::TerminateMany { session_ids } => {
-            let mut terminated = 0;
-            let mut failure = None;
-            for session_id in session_ids {
-                let result = (|| {
-                    runtime.validate_lease(&session_id, client_id)?;
-                    let session_epoch = runtime
-                        .terminal(&session_id)
-                        .ok_or_else(|| HostRuntimeError::NotFound(session_id.clone()))?
-                        .session_epoch();
-                    runtime.terminate(&session_id)?;
-                    runtime.acknowledge_terminal_exit(&session_id, session_epoch)
-                })();
-                match result {
-                    Ok(()) => terminated += 1,
-                    Err(error) => {
-                        failure = Some(runtime_failure(error));
-                        break;
+        Request::TerminateMany { requests } => {
+            let results = requests
+                .into_iter()
+                .map(|request| {
+                    let session_id = request.session_id;
+                    let result = (|| {
+                        require_interactive_attachment(attachments, &session_id)?;
+                        runtime.validate_lease(&session_id, client_id)?;
+                        let terminated = runtime.terminate(&session_id)?;
+                        runtime.acknowledge_terminal_exit(
+                            &session_id,
+                            terminated.session_epoch,
+                            terminated.final_sequence,
+                        )?;
+                        Ok(terminated)
+                    })()
+                    .map_err(runtime_failure);
+                    TerminalTerminationResult {
+                        request_id: request.request_id,
+                        session_id,
+                        result,
                     }
-                }
-            }
-            failure.map_or_else(|| Ok(Response::TerminalsTerminated { terminated }), Err)
+                })
+                .collect();
+            Ok(Response::TerminalsTerminated { results })
         }
         Request::SshConnect(spec) => ssh.connect(spec).await.map_err(ssh_failure),
         Request::SshDisconnect { connection_id } => {
@@ -564,17 +1267,19 @@ async fn handle_request(
         }
         Request::RemoteFile(request) => {
             let ssh = ssh.clone();
-            tokio::task::spawn_blocking(move || ssh.remote_file(request))
+            let projects = projects.clone();
+            tokio::task::spawn_blocking(move || ssh.remote_file(&projects, request))
                 .await
                 .map_err(|error| ssh_failure(error.to_string()))
-                .and_then(|result| result.map_err(ssh_failure))
+                .and_then(|result| result.map_err(project_failure))
         }
         Request::RemoteCommand(request) => {
             let ssh = ssh.clone();
-            tokio::task::spawn_blocking(move || ssh.remote_command(request))
+            let projects = projects.clone();
+            tokio::task::spawn_blocking(move || ssh.remote_command(&projects, request))
                 .await
                 .map_err(|error| ssh_failure(error.to_string()))
-                .and_then(|result| result.map_err(ssh_failure))
+                .and_then(|result| result.map_err(project_failure))
         }
         Request::Project(request) => {
             let projects = projects.clone();
@@ -585,15 +1290,147 @@ async fn handle_request(
                 })
                 .and_then(|result| result.map(Response::Project).map_err(project_failure))
         }
-        Request::AgentHookEnvironment(scope) => Ok(Response::AgentHookEnvironment(
-            agent_hooks.environment(scope),
+        Request::ReadAgentSnapshots { acknowledged } => Ok(Response::AgentSnapshots(
+            agent_hooks.snapshots_after(&acknowledged),
         )),
+        Request::StopIfIdle => {
+            match lifecycle.stop_if_idle(runtime, ssh.connections(), projects.projects()) {
+                Ok(()) => Ok(Response::HostIdle),
+                Err(blockers) => Ok(Response::HostBusy { blockers }),
+            }
+        }
         Request::DrainAndStop => {
-            runtime.terminate_all();
+            lifecycle.begin_drain();
             Ok(Response::Draining)
         }
+        Request::ForceStop if can_force_stop => {
+            lifecycle.force_stop();
+            Ok(Response::Draining)
+        }
+        Request::ForceStop => Err(ProtocolFailure::new(
+            FailureCode::PermissionDenied,
+            "this authenticated client is not authorized to force-stop the Host",
+            false,
+        )),
     };
     HostResponse { request_id, result }
+}
+
+fn require_attachment<'a>(
+    attachments: &'a HashMap<TerminalSessionId, TerminalAttachment>,
+    session_id: &TerminalSessionId,
+) -> Result<&'a TerminalAttachment, HostRuntimeError> {
+    attachments
+        .get(session_id)
+        .ok_or_else(|| HostRuntimeError::LeaseRequired(session_id.clone()))
+}
+
+fn require_interactive_attachment(
+    attachments: &HashMap<TerminalSessionId, TerminalAttachment>,
+    session_id: &TerminalSessionId,
+) -> Result<(), HostRuntimeError> {
+    let attachment = require_attachment(attachments, session_id)?;
+    if attachment.mode == TerminalLeaseMode::Interactive {
+        Ok(())
+    } else {
+        Err(HostRuntimeError::LeaseRequired(session_id.clone()))
+    }
+}
+
+fn validate_terminal_mutation(
+    host_epoch: u64,
+    attachments: &mut HashMap<TerminalSessionId, TerminalAttachment>,
+    terminal: &crate::terminal::HostedTerminal,
+    session_id: &TerminalSessionId,
+    context: yttt_protocol::terminal::TerminalMutationContext,
+    requires_interactive: bool,
+    require_current_geometry: bool,
+) -> Result<(), HostRuntimeError> {
+    if context.host_epoch != host_epoch {
+        return Err(HostRuntimeError::StaleHostEpoch {
+            expected: host_epoch,
+            actual: context.host_epoch,
+        });
+    }
+    validate_terminal_session_epoch(terminal, context.session_epoch)?;
+    let attachment = attachments
+        .get(session_id)
+        .ok_or_else(|| HostRuntimeError::LeaseRequired(session_id.clone()))?;
+    if requires_interactive && attachment.mode != TerminalLeaseMode::Interactive {
+        return Err(HostRuntimeError::LeaseRequired(session_id.clone()));
+    }
+    if context.lease_epoch != attachment.lease_epoch {
+        return Err(HostRuntimeError::StaleLeaseEpoch {
+            session_id: session_id.clone(),
+            expected: attachment.lease_epoch,
+            actual: context.lease_epoch,
+        });
+    }
+    if context.client_sequence <= attachment.last_client_sequence {
+        return Err(HostRuntimeError::StaleClientSequence {
+            session_id: session_id.clone(),
+            last_accepted: attachment.last_client_sequence,
+            received: context.client_sequence,
+        });
+    }
+    if require_current_geometry {
+        let current = terminal
+            .latest_viewport()
+            .map_or(context.geometry_epoch, |viewport| viewport.geometry_epoch);
+        if context.geometry_epoch != current {
+            return Err(HostRuntimeError::Terminal(
+                HostedTerminalError::StaleGeometry {
+                    received: context.geometry_epoch,
+                    current,
+                },
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn accept_terminal_mutation(
+    attachments: &mut HashMap<TerminalSessionId, TerminalAttachment>,
+    session_id: &TerminalSessionId,
+    client_sequence: u64,
+) {
+    if let Some(attachment) = attachments.get_mut(session_id) {
+        attachment.last_client_sequence = client_sequence;
+    }
+}
+
+fn validate_terminal_session_epoch(
+    terminal: &crate::terminal::HostedTerminal,
+    received: u64,
+) -> Result<(), HostRuntimeError> {
+    if terminal.session_epoch() == received {
+        Ok(())
+    } else {
+        Err(HostRuntimeError::StaleSessionEpoch {
+            session_id: terminal.session_id().clone(),
+            expected: terminal.session_epoch(),
+            actual: received,
+        })
+    }
+}
+
+fn terminal_viewport_read(
+    terminal: &crate::terminal::HostedTerminal,
+    viewport: yttt_protocol::terminal::SemanticViewport,
+    unseen_output: u64,
+) -> TerminalViewportRead {
+    let canonical = terminal.latest_viewport();
+    TerminalViewportRead {
+        bottom_line_id: canonical
+            .as_ref()
+            .and_then(|viewport| viewport.rows.last())
+            .map(|row| row.line_id),
+        checkpoint_sequence: canonical
+            .as_ref()
+            .map_or(viewport.sequence, |viewport| viewport.sequence),
+        viewport,
+        unseen_output,
+    }
 }
 
 fn attach_terminal(
@@ -613,16 +1450,15 @@ fn attach_terminal(
             actual: known_epoch,
         });
     }
-    let lease = runtime.acquire_lease(
-        terminal.session_id(),
-        client_id,
-        TerminalLeaseMode::Interactive,
-    )?;
-    let current_geometry_epoch = terminal
-        .latest_viewport()
-        .map_or(0, |viewport| viewport.geometry_epoch);
-    if attach.geometry_epoch > current_geometry_epoch {
-        terminal.resize(attach.geometry, attach.geometry_epoch)?;
+    let lease = runtime.acquire_lease(terminal.session_id(), client_id, attach.mode)?;
+    if attach.mode == TerminalLeaseMode::Interactive {
+        terminal.set_query_palette(attach.query_palette, attach.palette_revision);
+        let current_geometry_epoch = terminal
+            .latest_viewport()
+            .map_or(0, |viewport| viewport.geometry_epoch);
+        if attach.geometry_epoch > current_geometry_epoch {
+            terminal.resize(attach.geometry, attach.geometry_epoch)?;
+        }
     }
     let checkpoint = terminal
         .checkpoint()
@@ -630,23 +1466,49 @@ fn attach_terminal(
     Ok(Response::TerminalAttached { lease, checkpoint })
 }
 
+fn request_creates_resource(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::SpawnTerminal(_)
+            | Request::SshConnect(_)
+            | Request::Project(yttt_protocol::project::ProjectRequest::Register { .. })
+    )
+}
+
+fn host_stopping_failure() -> ProtocolFailure {
+    ProtocolFailure::new(
+        FailureCode::HostStopping,
+        "Host is draining and no longer accepts new resources",
+        false,
+    )
+}
+
 fn runtime_failure(error: HostRuntimeError) -> ProtocolFailure {
     let code = match &error {
         HostRuntimeError::AlreadyExists(_) => FailureCode::AlreadyExists,
+        HostRuntimeError::AddressConflict { .. } => FailureCode::AddressConflict,
         HostRuntimeError::NotFound(_) => FailureCode::NotFound,
         HostRuntimeError::LeaseConflict { .. } | HostRuntimeError::TerminalStillRunning(_) => {
             FailureCode::Conflict
         }
         HostRuntimeError::LeaseRequired(_) => FailureCode::PermissionDenied,
-        HostRuntimeError::StaleSessionEpoch { .. }
+        HostRuntimeError::StaleHostEpoch { .. }
+        | HostRuntimeError::StaleSessionEpoch { .. }
+        | HostRuntimeError::StaleLeaseEpoch { .. }
         | HostRuntimeError::Terminal(
             HostedTerminalError::StaleGeometry { .. } | HostedTerminalError::StaleScrollback { .. },
         ) => FailureCode::StaleEpoch,
+        HostRuntimeError::StaleClientSequence { .. }
+        | HostRuntimeError::StaleFinalSequence { .. }
+        | HostRuntimeError::StaleSearchGeneration { .. }
+        | HostRuntimeError::Terminal(HostedTerminalError::UnknownLineId(_)) => {
+            FailureCode::StaleSequence
+        }
         HostRuntimeError::Terminal(HostedTerminalError::Backpressure) => FailureCode::Backpressure,
         HostRuntimeError::Terminal(HostedTerminalError::Stopped) => FailureCode::TransportClosed,
-        HostRuntimeError::Terminal(HostedTerminalError::InvalidGeometry) => {
-            FailureCode::InvalidRequest
-        }
+        HostRuntimeError::Terminal(
+            HostedTerminalError::InvalidGeometry | HostedTerminalError::InvalidSearch,
+        ) => FailureCode::InvalidRequest,
         HostRuntimeError::Terminal(
             HostedTerminalError::UnsupportedExecution
             | HostedTerminalError::Io(_)
@@ -803,4 +1665,83 @@ fn validate_user_only_file(path: &Path) -> Result<(), HostError> {
         return Err(HostError::InsecureBootstrapFile);
     }
     Ok(())
+}
+#[cfg(test)]
+mod request_journal_tests {
+    use super::*;
+    use yttt_core::model::ids::{PaneId, ProjectId, TabId, TerminalSessionId};
+    use yttt_protocol::{
+        ssh::{CredentialAnswer, SensitiveBytes},
+        terminal::{TerminalExecutionSpec, TerminalGeometry, TerminalSpawnSpec},
+    };
+
+    fn response(request_id: u64) -> HostResponse {
+        HostResponse {
+            request_id,
+            result: Ok(Response::Applied),
+        }
+    }
+
+    #[test]
+    fn journal_evicts_old_entries_at_its_hard_entry_limit() {
+        let mut journal = RequestJournal::default();
+        for request_id in 0..=MAX_REQUEST_JOURNAL_ENTRIES as u64 {
+            journal.insert([request_id as u8; 32], response(request_id));
+        }
+        assert_eq!(journal.entries.len(), MAX_REQUEST_JOURNAL_ENTRIES);
+        assert!(matches!(journal.lookup(0, &[0; 32]), JournalLookup::Miss));
+        assert!(matches!(
+            journal.lookup(1, &[1; 32]),
+            JournalLookup::Replay(_)
+        ));
+        assert!(journal.encoded_bytes <= MAX_REQUEST_JOURNAL_BYTES);
+    }
+
+    #[test]
+    fn secret_bearing_requests_are_never_journalable() {
+        let sensitive = Request::CredentialAnswer {
+            challenge_id: 1,
+            answer: CredentialAnswer::Secret(SensitiveBytes::new(b"secret".to_vec())),
+        };
+        let ssh = Request::SshConnect(yttt_protocol::ssh::SshConnectSpec {
+            connection_id: "secret".to_string(),
+            endpoint: yttt_protocol::ssh::SshEndpoint {
+                host: "localhost".to_string(),
+                port: 22,
+                username: "user".to_string(),
+            },
+            authentication: yttt_protocol::ssh::SshAuthentication::Password {
+                secret: SensitiveBytes::new(b"secret".to_vec()),
+                save_as: None,
+            },
+            reconnect: false,
+        });
+        let non_secret = Request::SpawnTerminal(TerminalSpawnSpec {
+            session_id: TerminalSessionId::new("safe"),
+            project_id: ProjectId::new("project"),
+            tab_id: TabId::new("tab"),
+            pane_id: PaneId::new("pane"),
+            cwd: "/tmp".to_string(),
+            execution: TerminalExecutionSpec::Shell {
+                program: "/bin/sh".to_string(),
+                args: Vec::new(),
+                initial_command: None,
+            },
+            geometry: TerminalGeometry {
+                cols: 80,
+                rows: 24,
+                cell_width: 0,
+                cell_height: 0,
+            },
+            geometry_epoch: 1,
+            query_palette: Vec::new(),
+            palette_revision: 1,
+            scrollback_limit: 100,
+            environment: Vec::new(),
+            removed_environment: Vec::new(),
+        });
+        assert!(!request_is_journalable(&sensitive));
+        assert!(!request_is_journalable(&ssh));
+        assert!(request_is_journalable(&non_secret));
+    }
 }

@@ -1,5 +1,6 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
+use crate::project::{HostProjectError, HostProjectRuntime, RegisteredSshProject};
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
 use yttt_core::model::{
@@ -146,7 +147,11 @@ impl HostSshRuntime {
         Ok(Response::CredentialDeleted)
     }
 
-    pub fn remote_file(&self, request: RemoteFileRequest) -> Result<Response, String> {
+    pub fn remote_file(
+        &self,
+        projects: &HostProjectRuntime,
+        request: RemoteFileRequest,
+    ) -> Result<Response, HostProjectError> {
         let response = match request {
             RemoteFileRequest::ResolveHome { connection_id } => {
                 let root = RemotePathBuf::new("/").map_err(|error| error.to_string())?;
@@ -160,13 +165,38 @@ impl HostSshRuntime {
                         .to_string(),
                 )
             }
-            RemoteFileRequest::ScanDirectory {
+            RemoteFileRequest::BrowseDirectory {
                 connection_id,
                 root,
                 relative_directory,
                 show_hidden,
             } => {
-                let project = self.project(connection_id, root)?;
+                let root = RemotePathBuf::new(root).map_err(|error| error.to_string())?;
+                let project = self
+                    .transport
+                    .sftp_project(ConnectionId::new(connection_id), root);
+                let snapshot = project
+                    .scan_directory(remote_relative(relative_directory)?, show_hidden)
+                    .map_err(|error| error.to_string())?;
+                RemoteFileResponse::Directory(RemoteDirectory {
+                    relative_directory: snapshot.relative_directory.to_string(),
+                    entries: snapshot
+                        .entries
+                        .into_iter()
+                        .map(|entry| RemoteFileEntry {
+                            name: entry.name,
+                            relative_path: entry.relative_path.to_string(),
+                            kind: file_kind(entry.kind),
+                        })
+                        .collect(),
+                })
+            }
+            RemoteFileRequest::ScanDirectory {
+                project_id,
+                relative_directory,
+                show_hidden,
+            } => {
+                let project = self.project(projects.ssh_project(&project_id)?);
                 let relative = remote_relative(relative_directory)?;
                 let snapshot = project
                     .scan_directory(relative, show_hidden)
@@ -185,32 +215,29 @@ impl HostSshRuntime {
                 })
             }
             RemoteFileRequest::Read {
-                connection_id,
-                root,
+                project_id,
                 relative_path,
                 maximum_bytes,
             } => {
-                let project = self.project(connection_id, root)?;
+                let project = self.project(projects.ssh_project(&project_id)?);
                 let file = project
                     .read_file(remote_relative(relative_path)?, maximum_bytes)
                     .map_err(|error| error.to_string())?;
                 RemoteFileResponse::File(RemoteFileContent {
-                    canonical_path: file.canonical_path.to_string(),
                     relative_path: file.relative_path.to_string(),
                     bytes: file.bytes,
                     fingerprint: fingerprint(file.fingerprint),
                 })
             }
             RemoteFileRequest::Save {
-                connection_id,
-                root,
+                project_id,
                 relative_path,
                 expected,
                 force,
                 maximum_bytes,
                 bytes,
             } => {
-                let project = self.project(connection_id, root)?;
+                let project = self.project(projects.ssh_project(&project_id)?);
                 let outcome = project
                     .save_file(
                         remote_relative(relative_path)?,
@@ -231,35 +258,32 @@ impl HostSshRuntime {
                 })
             }
             RemoteFileRequest::Create {
-                connection_id,
-                root,
+                project_id,
                 relative_path,
                 directory,
             } => {
-                let project = self.project(connection_id, root)?;
+                let project = self.project(projects.ssh_project(&project_id)?);
                 let mutation = project
                     .create_entry(remote_relative(relative_path)?, directory)
                     .map_err(|error| error.to_string())?;
                 RemoteFileResponse::Mutation(entry_mutation(mutation))
             }
             RemoteFileRequest::Rename {
-                connection_id,
-                root,
+                project_id,
                 relative_path,
                 new_name,
             } => {
-                let project = self.project(connection_id, root)?;
+                let project = self.project(projects.ssh_project(&project_id)?);
                 let mutation = project
                     .rename_entry(remote_relative(relative_path)?, new_name)
                     .map_err(|error| error.to_string())?;
                 RemoteFileResponse::Mutation(entry_mutation(mutation))
             }
             RemoteFileRequest::Delete {
-                connection_id,
-                root,
+                project_id,
                 relative_path,
             } => {
-                let project = self.project(connection_id, root)?;
+                let project = self.project(projects.ssh_project(&project_id)?);
                 project
                     .delete_entry(remote_relative(relative_path)?)
                     .map_err(|error| error.to_string())?;
@@ -269,8 +293,12 @@ impl HostSshRuntime {
         Ok(Response::RemoteFile(response))
     }
 
-    pub fn remote_command(&self, request: RemoteCommandRequest) -> Result<Response, String> {
-        let project = self.project(request.connection_id, request.root)?;
+    pub fn remote_command(
+        &self,
+        projects: &HostProjectRuntime,
+        request: RemoteCommandRequest,
+    ) -> Result<Response, HostProjectError> {
+        let project = self.project(projects.ssh_project(&request.project_id)?);
         let output = project
             .run_command(request.program, request.args)
             .map_err(|error| error.to_string())?;
@@ -285,11 +313,9 @@ impl HostSshRuntime {
         self.transport.clone()
     }
 
-    fn project(&self, connection_id: String, root: String) -> Result<SftpProject, String> {
-        let root = RemotePathBuf::new(root).map_err(|error| error.to_string())?;
-        Ok(self
-            .transport
-            .sftp_project(ConnectionId::new(connection_id), root))
+    fn project(&self, project: RegisteredSshProject) -> SftpProject {
+        self.transport
+            .sftp_project(ConnectionId::new(project.connection_id), project.root)
     }
 
     fn publish_transport_event(&self, event: TransportEvent) {
