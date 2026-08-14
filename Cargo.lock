@@ -10998,6 +10998,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "winreg"
+version = "0.56.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
+dependencies = [
+ "cfg-if",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "winresource"
 version = "0.1.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11240,6 +11250,7 @@ dependencies = [
  "cocoa 0.26.0",
  "dunce",
  "flume 0.12.0",
+ "fs2",
  "futures-lite 2.6.1",
  "gpui",
  "gpui-component",
@@ -11288,6 +11299,7 @@ dependencies = [
  "tree-sitter-xml",
  "tree-sitter-zig",
  "uuid",
+ "winreg 0.56.0",
  "winresource",
  "yttt-agent-core",
  "yttt-agent-providers",

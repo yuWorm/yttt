@@ -134,10 +134,11 @@ bundle_version="${version%%-*}"
 contents_dir="$bundle_dir/Contents"
 macos_dir="$contents_dir/MacOS"
 resources_dir="$contents_dir/Resources"
+launch_agents_dir="$contents_dir/Library/LaunchAgents"
 bundle_binary="$macos_dir/yttt"
 
 rm -rf "$bundle_dir"
-mkdir -p "$macos_dir" "$resources_dir"
+mkdir -p "$macos_dir" "$resources_dir" "$launch_agents_dir"
 install -m 755 "$binary" "$bundle_binary"
 install -m 644 "$app_icon" "$resources_dir/AppIcon.icns"
 
@@ -177,9 +178,34 @@ cat > "$contents_dir/Info.plist" <<EOF
 </dict>
 </plist>
 EOF
+cat > "$launch_agents_dir/com.yttt.host.plist" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.yttt.host</string>
+  <key>BundleProgram</key>
+  <string>Contents/MacOS/yttt</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>yttt</string>
+    <string>--start-host</string>
+    <string>--profile-id</string>
+    <string>default</string>
+  </array>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>
+EOF
+
 
 printf 'APPL????' > "$contents_dir/PkgInfo"
 /usr/bin/plutil -lint "$contents_dir/Info.plist" >/dev/null
+/usr/bin/plutil -lint "$launch_agents_dir/com.yttt.host.plist" >/dev/null
 
 if [[ "$sign" -eq 1 ]]; then
   /usr/bin/codesign --force --sign - "$bundle_dir"

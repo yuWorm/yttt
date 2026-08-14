@@ -393,6 +393,21 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSectionProviders => "Session providers",
         UiTextKey::SettingsSectionCorePermissions => "Core access",
         UiTextKey::SettingsSectionOptionalPermissions => "Optional integrations",
+        UiTextKey::SettingsSectionBackgroundHost => "Background Host",
+        UiTextKey::SettingsLoginStartup => "Start Host at login",
+        UiTextKey::SettingsLoginStartupDescription => {
+            "Keep the profile-isolated Host available after sign-in. No network listener or secret is added to the startup registration."
+        }
+        UiTextKey::SettingsLoginStartupEnabled => "Enabled",
+        UiTextKey::SettingsLoginStartupDisabled => "Disabled",
+        UiTextKey::SettingsLoginStartupRequiresApproval => "Approval required",
+        UiTextKey::SettingsLoginStartupUnavailable => "Unavailable",
+        UiTextKey::SettingsLoginStartupChecking => "Checking...",
+        UiTextKey::SettingsLoginStartupConfirmTitle => "Start the yttt Host when you sign in?",
+        UiTextKey::SettingsLoginStartupConfirmDescription => {
+            "This registers a per-user background startup item and keeps terminal, project, SSH, and Agent resources available without an open yttt window. It does not expose a network listener. You can disable it here or in system startup settings."
+        }
+        UiTextKey::SettingsLoginStartupConfirmAction => "Enable at login",
         UiTextKey::SettingsPermissionNotifications => "System notifications",
         UiTextKey::SettingsPermissionNotificationsDescription => {
             "Allow agent completion and attention alerts when yttt is not focused."

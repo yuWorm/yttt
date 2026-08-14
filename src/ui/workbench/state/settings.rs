@@ -3,12 +3,15 @@ use std::{collections::HashMap, rc::Rc};
 use gpui::{Entity, Subscription};
 use gpui_component::{VirtualListScrollHandle, input::InputState};
 
-use crate::ui::app::platform::{self, PermissionKind, PermissionStatus};
 use crate::ui::settings::{
     SettingsPageState,
     keybindings::{KeybindingProfile, KeybindingRow, KeybindingsEditorState},
 };
 use crate::ui::theme::zed::{ZedThemeDetection, ZedThemeImportConflictPolicy};
+use crate::{
+    login_startup::LoginStartupState,
+    ui::app::platform::{self, PermissionKind, PermissionStatus},
+};
 
 use super::super::{
     SettingsBarField, SettingsFontFamilySelectState, SettingsNumberField, SettingsStringSelectState,
@@ -81,6 +84,11 @@ pub(in super::super) struct SettingsControllerState {
     pub(in super::super) permission_statuses_loaded: bool,
     pub(in super::super) permission_refresh_generation: u64,
     pub(in super::super) permission_requesting: Option<PermissionKind>,
+    pub(in super::super) login_startup_state: LoginStartupState,
+    pub(in super::super) login_startup_refreshing: bool,
+    pub(in super::super) login_startup_loaded: bool,
+    pub(in super::super) login_startup_generation: u64,
+    pub(in super::super) login_startup_changing: bool,
 }
 
 impl SettingsControllerState {
@@ -146,6 +154,11 @@ impl SettingsControllerState {
             permission_statuses_loaded: false,
             permission_refresh_generation: 0,
             permission_requesting: None,
+            login_startup_state: LoginStartupState::unavailable(),
+            login_startup_refreshing: false,
+            login_startup_loaded: false,
+            login_startup_generation: 0,
+            login_startup_changing: false,
             zed_theme_import_dialog: None,
         }
     }

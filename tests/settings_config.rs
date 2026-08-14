@@ -76,6 +76,7 @@ fn missing_settings_file_writes_defaults() {
     assert_eq!(loaded.settings.theme.name, "one-dark-theme");
     assert_eq!(loaded.settings.theme.terminal, None);
     assert!(!loaded.settings.notifications.system);
+    assert!(!loaded.settings.remote_access.login_startup_consent_granted);
     assert_eq!(loaded.settings.agent.primary, None);
     assert!(loaded.settings.agent.sessions_enabled);
     assert!(loaded.settings.agent.additional_session_agents.is_empty());
@@ -125,6 +126,20 @@ fn settings_default_language_is_system() {
     let settings = AppSettings::default();
 
     assert_eq!(settings.general.language, LanguageSetting::System);
+}
+
+#[test]
+fn login_startup_consent_round_trips_in_settings() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    let mut settings = AppSettings::default();
+    settings.remote_access.login_startup_consent_granted = true;
+
+    save_settings(&paths, &settings).unwrap();
+    let loaded = load_or_create_settings(&paths).unwrap();
+
+    assert!(loaded.settings.remote_access.login_startup_consent_granted);
+    assert!(loaded.warnings.is_empty());
 }
 
 #[test]

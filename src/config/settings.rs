@@ -29,6 +29,7 @@ pub struct AppSettings {
     pub window: WindowSettings,
     pub theme: ThemeSettings,
     pub notifications: NotificationSettings,
+    pub remote_access: RemoteAccessSettings,
     pub agent: AgentSettings,
     pub terminal: TerminalSettings,
     pub editor: EditorSettings,
@@ -110,6 +111,11 @@ impl Default for GeneralSettings {
             ],
         }
     }
+}
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct RemoteAccessSettings {
+    pub login_startup_consent_granted: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

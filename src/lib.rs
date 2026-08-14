@@ -9,6 +9,7 @@ pub mod desktop_tray;
 pub use yttt_core::model;
 pub mod host_launcher;
 pub mod host_runtime;
+pub mod login_startup;
 pub mod palette;
 pub mod runtime;
 pub mod ui;

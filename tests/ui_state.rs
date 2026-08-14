@@ -3,6 +3,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     rc::Rc,
+    sync::{Arc, Mutex},
     time::{Duration, SystemTime},
 };
 
@@ -18,13 +19,20 @@ use yttt::{
             save_keybindings,
         },
         paths::AppConfigPaths,
+        profile::{
+            AppProfile, EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
+        },
         settings::{
             AppSettings, EditorAutosave, LanguageSetting, VimModeSetting, WindowBackgroundEffect,
             load_or_create_settings, save_settings,
         },
     },
+    login_startup::{
+        LoginStartupBackend, LoginStartupManager, LoginStartupMethod, LoginStartupSpec,
+        LoginStartupState, LoginStartupStatus,
+    },
     model::{
-        ids::ProjectId,
+        ids::{ProfileId, ProjectId},
         layout::{
             LayoutNode, PaneKind, ProcessExitBehavior, SplitDirection, TerminalExecutionMode,
         },
@@ -91,6 +99,37 @@ use yttt_agent_core::{
 };
 use yttt_terminal::{ExitReason, ProcessStatus};
 use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
+
+#[derive(Default)]
+struct FakeLoginStartupBackend {
+    calls: Mutex<Vec<&'static str>>,
+}
+
+impl LoginStartupBackend for FakeLoginStartupBackend {
+    fn status(&self, _spec: &LoginStartupSpec) -> std::io::Result<LoginStartupState> {
+        self.calls.lock().unwrap().push("status");
+        Ok(LoginStartupState {
+            status: LoginStartupStatus::Disabled,
+            method: LoginStartupMethod::LinuxXdgAutostart,
+        })
+    }
+
+    fn enable(&self, _spec: &LoginStartupSpec) -> std::io::Result<LoginStartupState> {
+        self.calls.lock().unwrap().push("enable");
+        Ok(LoginStartupState {
+            status: LoginStartupStatus::Enabled,
+            method: LoginStartupMethod::LinuxXdgAutostart,
+        })
+    }
+
+    fn disable(&self, _spec: &LoginStartupSpec) -> std::io::Result<LoginStartupState> {
+        self.calls.lock().unwrap().push("disable");
+        Ok(LoginStartupState {
+            status: LoginStartupStatus::Disabled,
+            method: LoginStartupMethod::LinuxXdgAutostart,
+        })
+    }
+}
 
 fn local_project(path: PathBuf) -> ProjectDescriptor {
     let location = ProjectLocation::local(path);
@@ -5589,6 +5628,9 @@ fn permissions_settings_group_renders_cross_platform_access_controls(
     cx.refresh().unwrap();
 
     for selector in [
+        "settings-login-startup-row",
+        "settings-login-startup-status",
+        "settings-login-startup",
         "settings-permissions-status-row",
         "settings-permissions-refresh",
         "settings-permission-notifications-status",
@@ -5604,6 +5646,56 @@ fn permissions_settings_group_renders_cross_platform_access_controls(
     ] {
         assert!(cx.debug_bounds(selector).is_some(), "missing {selector}");
     }
+}
+
+#[gpui::test]
+fn enabling_login_startup_requires_confirmation_before_backend_registration(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let profile = AppProfile::scoped(
+        ProfileId::new("default"),
+        EnvironmentKind::Production,
+        ProfilePersistence::Persistent,
+        temp.path(),
+        ProjectConfigPolicy::Normal,
+        HostConnectPolicy::ProfileDiscovery,
+    );
+    let backend = Arc::new(FakeLoginStartupBackend::default());
+    let manager = LoginStartupManager::with_backend(
+        LoginStartupSpec::new(&profile, "/opt/yttt/bin/yttt"),
+        backend.clone(),
+    );
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let paths_for_window = paths.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| {
+            WorkbenchView::with_config_paths_for_test(paths_for_window).with_login_startup(manager)
+        });
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.open_settings();
+        root.select_settings_group("permissions").unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    let toggle = cx
+        .debug_bounds("settings-login-startup")
+        .expect("login startup should expose a switch");
+    cx.simulate_click(toggle.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+
+    assert!(cx.debug_bounds("login-startup-confirm").is_some());
+    assert!(!backend.calls.lock().unwrap().contains(&"enable"));
 }
 
 #[test]

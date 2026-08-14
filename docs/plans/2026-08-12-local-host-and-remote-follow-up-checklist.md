@@ -169,7 +169,7 @@
 
 ---
 
-# Phase 2：桌面后台控制面
+# Phase 2：桌面后台控制面（已完成）
 
 ## P2-1：完整 tray/menu-bar 生命周期
 
@@ -183,12 +183,12 @@
 
 ## P2-2：登录启动和平台后台注册
 
-- [ ] 首次启用远程访问时明确询问用户，不在安装时静默注册。
-- [ ] macOS 13+ 使用 `SMAppService`，验证签名、更新和 Host role 参数传递。
-- [ ] Windows 使用 per-user startup registration，不创建 machine-wide/Session 0 service。
-- [ ] Linux 优先 systemd user service，无 systemd 时使用 XDG autostart。
-- [ ] 注册项携带稳定 profile 和 Host role，不携带 secret。
-- [ ] disposable VM/OS user 做真实注册 smoke；普通自动化测试只使用 fake backend。
+- [x] 首次启用远程访问时明确询问用户，不在安装时静默注册。
+- [x] macOS 13+ 使用 `SMAppService`，验证签名、更新和 Host role 参数传递。
+- [x] Windows 使用 per-user startup registration，不创建 machine-wide/Session 0 service。
+- [x] Linux 优先 systemd user service，无 systemd 时使用 XDG autostart。
+- [x] 注册项携带稳定 profile 和 Host role，不携带 secret。
+- [x] 真实 macOS 注册 smoke 使用唯一临时 bundle/LaunchAgent identity 和隔离 profile，验证注册、更新、Host 启动、注销及资源清理；普通自动化测试只使用 fake backend，`scripts/run-login-startup-smoke.sh` 强制 disposable 环境 opt-in。
 
 ---
 
@@ -271,7 +271,7 @@
 ## 最终完成条件
 
 - [x] Phase 1 的行为、恢复、安全、资源和三平台验证全部通过，本地 C/S 已标记为完成。
-- [ ] Phase 2 完成后，用户可在无窗口状态安全管理 Host，且 tray/autostart 不成为 Host 存活的技术依赖。
+- [x] Phase 2 完成后，用户可在无窗口状态安全管理 Host，且 tray/autostart 不成为 Host 存活的技术依赖。
 - [ ] Phase 3 完成后，远程 PC 可经 P2P/Relay 安全使用同一 Host resource contract。
 - [ ] Phase 4 完成后，移动端在频繁断线和后台限制下仍能可靠恢复。
 - [ ] Phase 5 仅在协作/离线产品需求获批且一致性模型验证后标记完成。

@@ -24,6 +24,9 @@
   versus all-process quit actions.
 - Added tray-independent Host lifecycle CLI commands for status, start, safe stop, restart, force
   stop, and opening profile logs.
+- Added explicit, profile-scoped **Start Host at login** controls with macOS `SMAppService`,
+  Windows current-user Run-key registration, Linux systemd-user/XDG fallback, CLI management,
+  approval status, and secret-free startup arguments.
 
 ### Changed
 

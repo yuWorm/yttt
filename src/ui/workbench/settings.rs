@@ -1023,6 +1023,197 @@ impl WorkbenchView {
         )
     }
 
+    pub fn login_startup_state(&self) -> LoginStartupState {
+        self.settings.login_startup_state
+    }
+
+    pub fn login_startup_enabled(&self) -> bool {
+        matches!(
+            self.settings.login_startup_state.status,
+            LoginStartupStatus::Enabled | LoginStartupStatus::RequiresApproval
+        )
+    }
+
+    pub fn login_startup_busy(&self) -> bool {
+        self.settings.login_startup_refreshing || self.settings.login_startup_changing
+    }
+
+    pub(super) fn ensure_login_startup_refresh(&mut self, cx: &mut Context<Self>) {
+        if !self.settings.login_startup_loaded
+            && !self.settings.login_startup_refreshing
+            && !self.settings.login_startup_changing
+        {
+            self.refresh_login_startup(cx);
+        }
+    }
+
+    pub fn refresh_login_startup(&mut self, cx: &mut Context<Self>) {
+        if self.settings.login_startup_changing {
+            return;
+        }
+        let Some(manager) = self.login_startup.clone() else {
+            self.settings.login_startup_state = LoginStartupState::unavailable();
+            self.settings.login_startup_loaded = true;
+            self.settings.login_startup_refreshing = false;
+            return;
+        };
+
+        self.settings.login_startup_generation =
+            self.settings.login_startup_generation.wrapping_add(1);
+        let generation = self.settings.login_startup_generation;
+        self.settings.login_startup_refreshing = true;
+        let task =
+            cx.background_spawn(async move { manager.status().map_err(|error| error.to_string()) });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |root, cx| {
+                if root.settings.login_startup_generation != generation {
+                    return;
+                }
+                root.settings.login_startup_refreshing = false;
+                root.settings.login_startup_loaded = true;
+                match result {
+                    Ok(state) => root.settings.login_startup_state = state,
+                    Err(error) => {
+                        root.settings.login_startup_state = LoginStartupState::unavailable();
+                        root.load_error = Some(error);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn request_login_startup_change(
+        &mut self,
+        enabled: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings.login_startup_changing {
+            return;
+        }
+        if enabled
+            && !self
+                .app_settings
+                .remote_access
+                .login_startup_consent_granted
+        {
+            self.confirm_login_startup_enable(window, cx);
+        } else {
+            self.begin_login_startup_change(enabled, true, cx);
+        }
+    }
+
+    fn confirm_login_startup_enable(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let appearance = self.theme_runtime();
+        let theme = appearance.ui;
+        let ui_style = appearance.style;
+        let title = self
+            .ui_text
+            .get(UiTextKey::SettingsLoginStartupConfirmTitle);
+        let description = self
+            .ui_text
+            .get(UiTextKey::SettingsLoginStartupConfirmDescription);
+        let confirm_label = self
+            .ui_text
+            .get(UiTextKey::SettingsLoginStartupConfirmAction);
+        let cancel_label = self.ui_text.get(UiTextKey::Cancel);
+        let workbench = cx.weak_entity();
+        window.open_alert_dialog(cx, move |alert, _, cx| {
+            let workbench = workbench.clone();
+            alert.title(title).description(description).footer(
+                DialogFooter::new()
+                    .child(
+                        yttt_button(
+                            "login-startup-cancel",
+                            cancel_label,
+                            YtttButtonVariant::Secondary,
+                            theme,
+                            ui_style,
+                            cx,
+                        )
+                        .debug_selector(|| "login-startup-cancel".to_string())
+                        .on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child(
+                        yttt_button(
+                            "login-startup-confirm",
+                            confirm_label,
+                            YtttButtonVariant::Primary,
+                            theme,
+                            ui_style,
+                            cx,
+                        )
+                        .debug_selector(|| "login-startup-confirm".to_string())
+                        .on_click(move |_, window, cx| {
+                            let _ = workbench.update(cx, |root, root_cx| {
+                                root.begin_login_startup_change(true, true, root_cx);
+                            });
+                            window.close_dialog(cx);
+                        }),
+                    ),
+            )
+        });
+    }
+
+    fn begin_login_startup_change(
+        &mut self,
+        enabled: bool,
+        user_confirmed: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(manager) = self.login_startup.clone() else {
+            self.settings.login_startup_state = LoginStartupState::unavailable();
+            self.settings.login_startup_loaded = true;
+            return;
+        };
+        self.settings.login_startup_generation =
+            self.settings.login_startup_generation.wrapping_add(1);
+        let generation = self.settings.login_startup_generation;
+        self.settings.login_startup_refreshing = false;
+        self.settings.login_startup_changing = true;
+        let task = cx.background_spawn(async move {
+            manager
+                .set_enabled(enabled, user_confirmed)
+                .map_err(|error| error.to_string())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |root, cx| {
+                if root.settings.login_startup_generation != generation {
+                    return;
+                }
+                root.settings.login_startup_changing = false;
+                root.settings.login_startup_loaded = true;
+                match result {
+                    Ok(state) => {
+                        root.settings.login_startup_state = state;
+                        if enabled
+                            && !root
+                                .app_settings
+                                .remote_access
+                                .login_startup_consent_granted
+                        {
+                            root.app_settings
+                                .remote_access
+                                .login_startup_consent_granted = true;
+                            if let Err(error) =
+                                save_settings(&root.config_paths, &root.app_settings)
+                            {
+                                root.load_error = Some(error.to_string());
+                            }
+                        }
+                    }
+                    Err(error) => root.load_error = Some(error),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub fn permission_status(&self, kind: platform::PermissionKind) -> platform::PermissionStatus {
         self.settings.permission_statuses[kind.index()]
     }

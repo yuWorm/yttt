@@ -21,7 +21,9 @@ Agent resources. Closing the last window keeps the native tray/menu-bar control 
 without terminating those resources; the tray can reopen windows, show resource counts, manage
 the Host lifecycle, and exit the desktop independently. Environments without a tray can use the
 equivalent `--host-status`, `--start-host`, `--stop-host`, `--restart-host`, and
-`--force-stop-host` commands. See [Usage](docs/usage.md#desktop-and-host-lifecycle).
+`--force-stop-host` commands. Login startup is opt-in under **Settings → Permissions → Background
+Host**, with per-user registration on macOS, Windows, and Linux. See
+[Usage](docs/usage.md#desktop-and-host-lifecycle).
 
 ## Project Files and Editor
 

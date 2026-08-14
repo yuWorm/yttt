@@ -347,6 +347,21 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsSectionProviders => "会话提供方",
         UiTextKey::SettingsSectionCorePermissions => "核心权限",
         UiTextKey::SettingsSectionOptionalPermissions => "可选集成",
+        UiTextKey::SettingsSectionBackgroundHost => "后台 Host",
+        UiTextKey::SettingsLoginStartup => "登录时启动 Host",
+        UiTextKey::SettingsLoginStartupDescription => {
+            "登录后保持当前 profile 的隔离 Host 可用；启动项不会添加网络监听地址或秘密。"
+        }
+        UiTextKey::SettingsLoginStartupEnabled => "已启用",
+        UiTextKey::SettingsLoginStartupDisabled => "已停用",
+        UiTextKey::SettingsLoginStartupRequiresApproval => "需要系统批准",
+        UiTextKey::SettingsLoginStartupUnavailable => "不可用",
+        UiTextKey::SettingsLoginStartupChecking => "检测中...",
+        UiTextKey::SettingsLoginStartupConfirmTitle => "登录时启动 yttt Host？",
+        UiTextKey::SettingsLoginStartupConfirmDescription => {
+            "这会注册当前用户的后台启动项，让终端、项目、SSH 和 Agent 资源在没有打开 yttt 窗口时仍可用。它不会开放网络监听。你可以随时在此处或系统启动项设置中关闭。"
+        }
+        UiTextKey::SettingsLoginStartupConfirmAction => "启用登录启动",
         UiTextKey::SettingsPermissionNotifications => "系统通知",
         UiTextKey::SettingsPermissionNotificationsDescription => {
             "允许 yttt 在后台发送 Agent 任务完成或等待处理的提醒。"

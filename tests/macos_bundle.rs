@@ -54,6 +54,7 @@ fn macos_bundle_script_packages_a_signed_launchable_app() {
     let plist = bundle.join("Contents/Info.plist");
     let bundled_binary = bundle.join("Contents/MacOS/yttt");
     let bundled_icon = bundle.join("Contents/Resources/AppIcon.icns");
+    let launch_agent = bundle.join("Contents/Library/LaunchAgents/com.yttt.host.plist");
 
     assert_eq!(plist_value(&plist, "CFBundleExecutable"), "yttt");
     assert_eq!(plist_value(&plist, "CFBundleIdentifier"), "com.yttt.app");
@@ -69,6 +70,26 @@ fn macos_bundle_script_packages_a_signed_launchable_app() {
             .contains("CFBundleIconName")
     );
     assert_eq!(plist_value(&plist, "LSMinimumSystemVersion"), "13.0");
+    assert_eq!(plist_value(&launch_agent, "Label"), "com.yttt.host");
+    assert_eq!(
+        plist_value(&launch_agent, "BundleProgram"),
+        "Contents/MacOS/yttt"
+    );
+    let launch_agent_source = std::fs::read_to_string(&launch_agent).unwrap();
+    for argument in ["--start-host", "--profile-id", "default"] {
+        assert!(
+            launch_agent_source.contains(&format!("<string>{argument}</string>")),
+            "LaunchAgent must preserve the stable Host startup argument {argument}"
+        );
+    }
+    for secret_name in ["token", "password", "credential", "auth"] {
+        assert!(
+            !launch_agent_source
+                .to_ascii_lowercase()
+                .contains(secret_name),
+            "LaunchAgent must not persist {secret_name} material"
+        );
+    }
     assert!(bundled_binary.metadata().unwrap().len() > 0);
     assert!(
         bundled_binary.metadata().unwrap().permissions().mode() & 0o111 != 0,

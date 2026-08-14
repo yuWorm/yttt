@@ -1834,10 +1834,43 @@ fn settings_permission_rows(
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
     root.ensure_permission_status_refresh(cx);
+    root.ensure_login_startup_refresh(cx);
     let theme = root.theme_runtime().ui;
     let text = root.ui_text;
     let refreshing = root.permission_refreshing();
     let action_in_progress = root.permission_action_in_progress();
+    let login_startup_state = root.login_startup_state();
+    let login_startup_enabled = root.login_startup_enabled();
+    let login_startup_busy = root.login_startup_busy();
+    let login_startup_control = div()
+        .flex()
+        .items_center()
+        .justify_end()
+        .gap(style.ui_style.spacing.sm)
+        .child(login_startup_status_value(
+            login_startup_state.status,
+            login_startup_busy,
+            text,
+            theme,
+            style.ui_style,
+        ))
+        .child(
+            settings_switch(
+                "settings-login-startup",
+                login_startup_enabled,
+                theme,
+                style.ui_style,
+                cx.listener(move |this, checked: &bool, window, cx| {
+                    if !login_startup_busy {
+                        this.request_login_startup_change(*checked, window, cx);
+                        cx.notify();
+                    }
+                }),
+            )
+            .opacity(if login_startup_busy { 0.5 } else { 1.0 })
+            .debug_selector(|| "settings-login-startup".to_string()),
+        )
+        .into_any_element();
     let permissions = platform::platform_permissions();
     let core_rows = permissions
         .iter()
@@ -1900,8 +1933,24 @@ fn settings_permission_rows(
         .child(settings_section_header(
             style,
             theme,
-            text.get(UiTextKey::SettingsSectionCorePermissions),
+            text.get(UiTextKey::SettingsSectionBackgroundHost),
             true,
+        ))
+        .child(
+            setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsLoginStartup),
+                text.get(UiTextKey::SettingsLoginStartupDescription),
+                login_startup_control,
+            )
+            .debug_selector(|| "settings-login-startup-row".to_string()),
+        )
+        .child(settings_section_header(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSectionCorePermissions),
+            false,
         ))
         .child(
             setting_row(
@@ -2000,6 +2049,44 @@ fn permission_setting_row(
         control.into_any_element(),
     )
     .debug_selector(move || format!("settings-permission-{}-row", permission.kind.as_str()))
+}
+
+fn login_startup_status_value(
+    status: LoginStartupStatus,
+    busy: bool,
+    text: UiText,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Div {
+    let (key, color) = if busy {
+        (UiTextKey::SettingsLoginStartupChecking, theme.accent)
+    } else {
+        match status {
+            LoginStartupStatus::Enabled => (UiTextKey::SettingsLoginStartupEnabled, theme.success),
+            LoginStartupStatus::Disabled => {
+                (UiTextKey::SettingsLoginStartupDisabled, theme.text_subtle)
+            }
+            LoginStartupStatus::RequiresApproval => (
+                UiTextKey::SettingsLoginStartupRequiresApproval,
+                theme.warning,
+            ),
+            LoginStartupStatus::Unavailable => (
+                UiTextKey::SettingsLoginStartupUnavailable,
+                theme.text_subtle,
+            ),
+        }
+    };
+    div()
+        .debug_selector(|| "settings-login-startup-status".to_string())
+        .rounded(ui_style.radius.compact)
+        .border(ui_style.border.hairline)
+        .border_color(color.alpha(0.5))
+        .bg(color.alpha(0.1))
+        .px(ui_style.spacing.md)
+        .py(ui_style.spacing.xs)
+        .text_xs()
+        .text_color(color)
+        .child(text.get(key))
 }
 
 fn permission_status_value(

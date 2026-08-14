@@ -50,7 +50,7 @@ Phase 1 验收已完成：
 
 - 公网 P2P、NAT 穿透、Relay 和端到端加密远程传输。
 - 移动端/浏览器客户端、多用户授权、跨设备配对。
-- 登录启动和所有平台的后台服务注册；desktop tray/menu-bar 控制面已经落地。
+- 公网远程访问的登录授权、设备配对和 capability ACL；本地 Host 登录启动与三平台用户级后台注册已经落地。
 - 文档多人协作、跨端 writer handoff 和 CRDT；当前实现提供单机多客户端基础。
 
 ## 2. 目标与非目标
@@ -464,8 +464,10 @@ menu event 再转发到 GPUI foreground executor。同一 profile 的 desktop-sh
 只调用 desktop-shell 或 Host lifecycle protocol，不直接 kill PID。托盘崩溃或 desktop
 被强制退出时，独立 Host 仍继续运行。
 
-`Remote Access`、`Start Host at Login`、`Pair Device` 和真实平台后台注册属于 Phase 2
-后续项，不能在尚未实现时显示伪状态。
+`Start Host at Login` 已在 Permissions 中提供显式首次确认、平台注册状态和关闭入口；
+macOS `SMAppService`、Windows 当前用户 Run key、Linux systemd user/XDG fallback 均只注册
+`--start-host` 与稳定 profile，不写入 secret。`Remote Access` 和 `Pair Device` 仍属于
+Phase 3，在设备身份、配对和 capability ACL 落地前不能显示伪状态。
 
 托盘进程归属有明确资源权衡：
 
@@ -488,7 +490,7 @@ menu event 再转发到 GPUI foreground executor。同一 profile 的 desktop-sh
 
 第一阶段三个安装产物都按“一个 executable、两个 process role”调整：
 
-- macOS `.app` 默认只打包一个签名的 `yttt` Mach-O。阶段 0 必须验证 `SMAppService` 管理的 LoginItem/LaunchAgent 能否可靠地以 Host role 启动它；若平台注册、签名或更新约束不允许，再增加只负责转发参数和 lifecycle handle 的极薄签名 helper，不复制 Host 实现。
+- macOS `.app` 仍只打包一个签名的 `yttt` Mach-O；bundle 内 LaunchAgent 通过 `SMAppService` 以 `--start-host --profile-id default` 启动同一 executable，签名校验、原位 bundle 更新、真实注册和 Host role 启动 smoke 已验证，无需额外 helper。
 - Windows installer 安装一个 `yttt.exe`，per-user startup command 显式携带 Host role 和 profile；卸载/升级前仍需通过协议 drain，因为运行中的同名 Host 会锁定 executable。
 - Linux tar 安装一个 `yttt`、可选 systemd user unit 和 XDG autostart template；`ExecStart` 显式选择 Host role。若发布纯 headless 包，则由同一 Host crate 额外产出不链接 GPUI/tray 的 `yttt-host`。
 - 单 binary 不消除版本协商：macOS/Linux 替换磁盘文件后旧 Host 仍可继续运行旧映像，Windows 更新则通常必须先停止占用文件的进程；新 desktop 都必须通过 handshake 检测 build/protocol compatibility。

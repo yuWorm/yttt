@@ -155,6 +155,7 @@ use crate::{
         },
         theme::{ThemeLoadWarning, ThemeStore, load_theme_store},
     },
+    login_startup::{LoginStartupManager, LoginStartupState, LoginStartupStatus},
     model::{
         ids::ProjectId,
         layout::{LayoutNode, PaneConfig, ProcessExitBehavior, ProjectLayout, SplitDirection},
@@ -319,6 +320,7 @@ use crate::{
 pub struct WorkbenchView {
     workspace: Workspace,
     config_paths: AppConfigPaths,
+    login_startup: Option<LoginStartupManager>,
     default_layout_state: DefaultLayoutState,
     onboarding: Option<OnboardingState>,
     palette: PaletteControllerState,
@@ -534,6 +536,10 @@ impl WorkbenchView {
             root.restore_projects_open_at_last_exit();
         }
         root
+    }
+    pub fn with_login_startup(mut self, manager: LoginStartupManager) -> Self {
+        self.login_startup = Some(manager);
+        self
     }
 
     pub fn from_startup(config_paths: AppConfigPaths, force_onboarding: bool) -> Self {
@@ -870,6 +876,7 @@ impl WorkbenchView {
         Self {
             workspace,
             config_paths,
+            login_startup: None,
             default_layout_state,
             onboarding,
             palette: PaletteControllerState::new(recent_projects),
@@ -3217,6 +3224,7 @@ impl WorkbenchView {
             && self.settings.settings_page.selected_group == SettingsGroupId::Permissions
         {
             self.refresh_permission_statuses(cx);
+            self.refresh_login_startup(cx);
         }
         if is_active && self.queue_default_active_work_item_focus(cx) {
             window.blur();

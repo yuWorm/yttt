@@ -13,6 +13,7 @@ use yttt::{
     },
     desktop_shell::{DesktopShellClaim, DesktopShellCommand, DesktopShellRuntime},
     host_launcher::{HostLauncher, ProcessRole, process_role, run_host_process},
+    login_startup::{LoginStartupManager, LoginStartupStatus},
     model::ids::ProfileId,
 };
 use yttt_protocol::{LifecycleRequest, LifecycleResponse};
@@ -47,6 +48,9 @@ enum DesktopCliCommand {
     StopHost,
     RestartHost,
     ForceStopHost,
+    LoginStartupStatus,
+    EnableLoginStartup,
+    DisableLoginStartup,
     OpenLogs,
 }
 
@@ -58,6 +62,18 @@ fn desktop_cli_command(args: &[OsString]) -> Result<Option<DesktopCliCommand>, S
         ("--stop-host", DesktopCliCommand::StopHost),
         ("--restart-host", DesktopCliCommand::RestartHost),
         ("--force-stop-host", DesktopCliCommand::ForceStopHost),
+        (
+            "--login-startup-status",
+            DesktopCliCommand::LoginStartupStatus,
+        ),
+        (
+            "--enable-login-startup",
+            DesktopCliCommand::EnableLoginStartup,
+        ),
+        (
+            "--disable-login-startup",
+            DesktopCliCommand::DisableLoginStartup,
+        ),
         ("--open-logs", DesktopCliCommand::OpenLogs),
     ] {
         if args.iter().any(|argument| argument == OsStr::new(flag))
@@ -66,7 +82,59 @@ fn desktop_cli_command(args: &[OsString]) -> Result<Option<DesktopCliCommand>, S
             return Err("only one Host lifecycle command may be used at a time".to_string());
         }
     }
+    if selected == Some(DesktopCliCommand::EnableLoginStartup)
+        && !args
+            .iter()
+            .any(|argument| argument == OsStr::new("--confirm-remote-access"))
+    {
+        return Err(
+            "--enable-login-startup requires --confirm-remote-access after reviewing the background Host access prompt"
+                .to_string(),
+        );
+    }
     Ok(selected)
+}
+
+fn profile_for_args(args: &[OsString]) -> Result<AppProfile, String> {
+    let profile = desktop_profile();
+    let mut requested_profile = None;
+    for pair in args.windows(2) {
+        if pair[0] == OsStr::new("--profile-id") {
+            if requested_profile.replace(&pair[1]).is_some() {
+                return Err("--profile-id may be specified only once".to_string());
+            }
+        }
+    }
+    if let Some(requested_profile) = requested_profile {
+        if requested_profile != OsStr::new(profile.id().as_str()) {
+            return Err(format!(
+                "login startup requested profile {:?}, but this executable owns profile {}",
+                requested_profile,
+                profile.id().as_str()
+            ));
+        }
+    }
+    Ok(profile)
+}
+
+fn run_login_startup_cli(
+    profile: &AppProfile,
+    command: DesktopCliCommand,
+) -> Result<String, anyhow::Error> {
+    let manager = LoginStartupManager::for_current_platform(profile)?;
+    let state = match command {
+        DesktopCliCommand::LoginStartupStatus => manager.status()?,
+        DesktopCliCommand::EnableLoginStartup => manager.set_enabled(true, true)?,
+        DesktopCliCommand::DisableLoginStartup => manager.set_enabled(false, true)?,
+        _ => unreachable!(),
+    };
+    let status = match state.status {
+        LoginStartupStatus::Disabled => "disabled",
+        LoginStartupStatus::Enabled => "enabled",
+        LoginStartupStatus::RequiresApproval => "requires approval in system settings",
+        LoginStartupStatus::Unavailable => "unavailable",
+    };
+    Ok(format!("Login startup {status} ({:?})", state.method))
 }
 
 fn run_desktop_cli(profile: AppProfile, command: DesktopCliCommand) -> i32 {
@@ -78,6 +146,23 @@ fn run_desktop_cli(profile: AppProfile, command: DesktopCliCommand) -> i32 {
             return 1;
         }
         return 0;
+    }
+    if matches!(
+        command,
+        DesktopCliCommand::LoginStartupStatus
+            | DesktopCliCommand::EnableLoginStartup
+            | DesktopCliCommand::DisableLoginStartup
+    ) {
+        return match run_login_startup_cli(&profile, command) {
+            Ok(message) => {
+                println!("{message}");
+                0
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                1
+            }
+        };
     }
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -169,7 +254,10 @@ fn run_desktop_cli(profile: AppProfile, command: DesktopCliCommand) -> i32 {
                     )),
                 }
             }
-            DesktopCliCommand::OpenLogs => unreachable!(),
+            DesktopCliCommand::LoginStartupStatus
+            | DesktopCliCommand::EnableLoginStartup
+            | DesktopCliCommand::DisableLoginStartup
+            | DesktopCliCommand::OpenLogs => unreachable!(),
         }
     });
     match result {
@@ -289,7 +377,13 @@ fn main() {
     }
     match process_role(args.iter()) {
         ProcessRole::Desktop => {
-            let profile = desktop_profile();
+            let profile = match profile_for_args(&args) {
+                Ok(profile) => profile,
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                }
+            };
             match desktop_cli_command(&args) {
                 Ok(Some(command)) => {
                     std::process::exit(run_desktop_cli(profile, command));
@@ -329,5 +423,59 @@ fn main() {
                 std::process::exit(1);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn arguments(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn login_startup_enable_cli_requires_explicit_remote_access_confirmation() {
+        let error =
+            desktop_cli_command(&arguments(&["yttt", "--enable-login-startup"])).unwrap_err();
+        assert!(error.contains("--confirm-remote-access"));
+
+        assert_eq!(
+            desktop_cli_command(&arguments(&[
+                "yttt",
+                "--enable-login-startup",
+                "--confirm-remote-access",
+            ]))
+            .unwrap(),
+            Some(DesktopCliCommand::EnableLoginStartup)
+        );
+    }
+
+    #[test]
+    fn registered_startup_invocation_bootstraps_host_through_desktop_cli() {
+        let profile = desktop_profile();
+        let args = vec![
+            OsString::from("yttt"),
+            OsString::from("--start-host"),
+            OsString::from("--profile-id"),
+            OsString::from(profile.id().as_str()),
+        ];
+
+        assert_eq!(process_role(args.iter()), ProcessRole::Desktop);
+        assert_eq!(
+            desktop_cli_command(&args).unwrap(),
+            Some(DesktopCliCommand::StartHost)
+        );
+        assert_eq!(
+            profile_for_args(&args).unwrap().id().as_str(),
+            profile.id().as_str()
+        );
+    }
+
+    #[test]
+    fn registered_startup_invocation_rejects_another_profile() {
+        let args = arguments(&["yttt", "--start-host", "--profile-id", "another-profile"]);
+        let error = profile_for_args(&args).unwrap_err();
+        assert!(error.contains("this executable owns profile"));
     }
 }

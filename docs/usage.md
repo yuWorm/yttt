@@ -70,6 +70,58 @@ These commands are profile-scoped and use the authenticated lifecycle protocol; 
 force-stop command may terminate a busy Host. Development builds use executable-scoped runtime and
 credential namespaces, preventing them from attaching to an installed production Host.
 
+### Start Host at Login
+
+**Settings → Permissions → Background Host** exposes an opt-in **Start Host at login** switch.
+The first enable opens an explicit confirmation describing the background Host access. Installation
+never registers a startup item, and disabling the switch removes future login startup without
+stopping an already-running Host.
+
+The registration is per-user: macOS 13+ uses the bundled `SMAppService` LaunchAgent, Windows uses
+the current user's `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` key, and Linux prefers a
+systemd user unit with XDG autostart as the fallback. The registered command contains only the
+executable, `--start-host`, and the stable production profile ID. Authentication tokens, credential
+paths, environment values, and other secrets are resolved by the profile-scoped launcher at runtime
+and are never written into the startup item.
+
+Tray-independent status and registration controls are also available:
+
+```sh
+yttt --login-startup-status
+yttt --enable-login-startup --confirm-remote-access
+yttt --disable-login-startup
+```
+
+Registration is supported only by packaged, persistent production builds. macOS can report
+**Approval required** until the user approves the item in System Settings. Real registration tests
+must run only in a disposable environment. On macOS, the default smoke copies the supplied app to
+a uniquely identified, ad-hoc-signed temporary bundle, verifies Host startup, replaces that bundle
+in place to verify update continuity, then unregisters and removes it. The disposable OS account
+provides the isolated production profile required by registration. On other immediate-start
+backends, the same command requires registration to make a previously stopped Host reachable:
+
+```sh
+YTTT_DISPOSABLE_LOGIN_STARTUP_SMOKE=1 \
+YTTT_LOGIN_STARTUP_SMOKE_CONFIG_HOME=/tmp/empty-disposable-yttt-config \
+  scripts/run-login-startup-smoke.sh /path/to/yttt.app/Contents/MacOS/yttt
+```
+
+Windows Run entries and Linux XDG autostart execute only after login. Verify those paths across a
+real sign-out/sign-in with a state file on persistent storage:
+
+```sh
+YTTT_DISPOSABLE_LOGIN_STARTUP_SMOKE=1 \
+YTTT_LOGIN_STARTUP_SMOKE_PHASE=prepare \
+YTTT_LOGIN_STARTUP_SMOKE_STATE_FILE=/persistent/path/login-startup-smoke.state \
+  scripts/run-login-startup-smoke.sh /path/to/packaged/yttt
+
+# Sign out and back in to the same disposable OS account.
+YTTT_DISPOSABLE_LOGIN_STARTUP_SMOKE=1 \
+YTTT_LOGIN_STARTUP_SMOKE_PHASE=verify \
+YTTT_LOGIN_STARTUP_SMOKE_STATE_FILE=/persistent/path/login-startup-smoke.state \
+  scripts/run-login-startup-smoke.sh /path/to/packaged/yttt
+```
+
 ## Project Files and Editor
 
 Terminal tabs and project files share one tab strip. Opening a file creates a file tab;

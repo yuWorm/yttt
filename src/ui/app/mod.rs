@@ -23,6 +23,7 @@ use crate::{
     desktop_shell::{DesktopShellCommand, DesktopShellRuntime},
     desktop_tray::{DesktopTrayAction, DesktopTrayAdapter, DesktopTrayStatus, create_desktop_tray},
     host_runtime::HostRuntimeGlobal,
+    login_startup::LoginStartupManager,
     ui::{
         app::startup::{
             FORCE_ONBOARDING_ENV, StartupMode, force_onboarding_from_env, startup_mode_from_fixture,
@@ -96,10 +97,25 @@ pub fn run(
         let command_registry = bindable_registry();
         cx.bind_keys(load_app_keybindings(&config_paths, &command_registry));
 
+        let login_startup = LoginStartupManager::for_current_platform(&profile).ok();
+        if let Some(manager) = login_startup.clone() {
+            cx.background_spawn(async move {
+                if let Err(error) = manager.reconcile()
+                    && !matches!(
+                        error,
+                        crate::login_startup::LoginStartupError::UnsupportedProfile
+                    )
+                {
+                    eprintln!("failed to reconcile login startup registration: {error}");
+                }
+            })
+            .detach();
+        }
         let window_context = DesktopWindowContext {
             profile,
             config_paths,
             app_settings,
+            login_startup,
             appearance,
             startup_mode,
             workbenches: Rc::new(RefCell::new(Vec::new())),
@@ -118,6 +134,7 @@ struct DesktopWindowContext {
 
     config_paths: AppConfigPaths,
     app_settings: AppSettings,
+    login_startup: Option<LoginStartupManager>,
     appearance: AppearanceState,
     startup_mode: StartupMode,
     workbenches: Rc<RefCell<Vec<WeakEntity<WorkbenchView>>>>,
@@ -189,6 +206,7 @@ fn open_workbench_window(
     let config_paths = window_context.config_paths.clone();
     let appearance = window_context.appearance.clone();
     let startup_mode = window_context.startup_mode;
+    let login_startup = window_context.login_startup.clone();
     let workbenches = window_context.workbenches.clone();
     let should_check_for_updates = startup_mode == StartupMode::Normal;
     cx.open_window(
@@ -208,6 +226,10 @@ fn open_workbench_window(
                         ),
                         None => WorkbenchView::from_startup(config_paths.clone(), force_onboarding),
                     },
+                };
+                let view = match login_startup.clone() {
+                    Some(manager) => view.with_login_startup(manager),
+                    None => view,
                 };
                 view.with_appearance_state(appearance)
             });
