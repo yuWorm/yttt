@@ -59,8 +59,8 @@ pub enum HostLaunchError {
     InvalidArgument(&'static str),
     #[error("Host process exited before readiness: {0}")]
     EarlyExit(ExitStatus),
-    #[error("Host did not become ready before timeout")]
-    ReadyTimeout,
+    #[error("Host did not become ready before timeout: {0}")]
+    ReadyTimeout(ReadyTimeoutDiagnostics),
     #[error("Host returned an unexpected control message")]
     UnexpectedMessage,
     #[error("an incompatible Host is still busy: {0:?}")]
@@ -79,6 +79,133 @@ pub enum HostLaunchError {
     Wire(#[from] yttt_transport_local::WireError),
     #[error("Host runtime failed: {0}")]
     Host(#[from] yttt_host::HostError),
+}
+
+/// Which wait loop ran out of time. Each stage waits on a different signal, so
+/// the stage decides how the rest of the diagnostics should be read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadyTimeoutStage {
+    /// A freshly spawned Host never became reachable.
+    HostStartup,
+    /// A Host we asked to stop never released the profile runtime files.
+    PreviousHostExit,
+    /// A Host we spawned ourselves never exited after draining.
+    ManagedHostExit,
+    /// A Host owned by another process never exited after draining.
+    AttachedHostExit,
+}
+
+impl ReadyTimeoutStage {
+    fn description(self) -> &'static str {
+        match self {
+            Self::HostStartup => "Host startup",
+            Self::PreviousHostExit => "previous Host exit",
+            Self::ManagedHostExit => "spawned Host exit",
+            Self::AttachedHostExit => "attached Host exit",
+        }
+    }
+}
+
+/// What the launcher could still observe when it gave up. A timeout on its own
+/// says nothing about where the time went, so we capture the runtime footprint
+/// and the last connection failure alongside it.
+#[derive(Debug)]
+pub struct ReadyTimeoutDiagnostics {
+    stage: ReadyTimeoutStage,
+    waited: Duration,
+    connect_attempts: u32,
+    ready_metadata_present: bool,
+    pid_file_present: bool,
+    endpoint_present: Option<bool>,
+    profile_lock_held: Option<bool>,
+    last_connect_error: Option<String>,
+}
+
+impl ReadyTimeoutDiagnostics {
+    fn capture(
+        launcher: &HostLauncher,
+        stage: ReadyTimeoutStage,
+        waited: Duration,
+        connect_attempts: u32,
+        last_connect_error: Option<&HostLaunchError>,
+    ) -> Self {
+        let runtime = &launcher.profile.paths().runtime;
+        Self {
+            stage,
+            waited,
+            connect_attempts,
+            ready_metadata_present: runtime.join("host-ready.json").exists(),
+            pid_file_present: runtime.join("host.pid").exists(),
+            endpoint_present: endpoint_is_present(&launcher.endpoint()),
+            profile_lock_held: yttt_host::profile_lock_is_held(runtime).ok(),
+            last_connect_error: last_connect_error.map(ToString::to_string),
+        }
+    }
+
+    pub fn stage(&self) -> ReadyTimeoutStage {
+        self.stage
+    }
+
+    /// True when nothing the Host publishes ever appeared, which points at the
+    /// process itself never reaching startup rather than at a slow handshake.
+    pub fn host_left_no_trace(&self) -> bool {
+        !self.ready_metadata_present
+            && !self.pid_file_present
+            && self.endpoint_present != Some(true)
+            && self.profile_lock_held != Some(true)
+    }
+}
+
+impl std::fmt::Display for ReadyTimeoutDiagnostics {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn presence(present: bool) -> &'static str {
+            if present { "present" } else { "absent" }
+        }
+
+        write!(
+            formatter,
+            "{} timed out after {:.2?}",
+            self.stage.description(),
+            self.waited
+        )?;
+        if self.connect_attempts != 0 {
+            write!(formatter, " and {} connect attempts", self.connect_attempts)?;
+        }
+        write!(
+            formatter,
+            "; ready-metadata={} pid-file={}",
+            presence(self.ready_metadata_present),
+            presence(self.pid_file_present)
+        )?;
+        if let Some(endpoint_present) = self.endpoint_present {
+            write!(formatter, " endpoint={}", presence(endpoint_present))?;
+        }
+        match self.profile_lock_held {
+            Some(true) => write!(formatter, " profile-lock=held")?,
+            Some(false) => write!(formatter, " profile-lock=free")?,
+            None => write!(formatter, " profile-lock=unknown")?,
+        }
+        if let Some(error) = &self.last_connect_error {
+            write!(formatter, "; last connect error: {error}")?;
+        }
+        if self.host_left_no_trace() {
+            write!(
+                formatter,
+                "; the Host published nothing, so it likely never reached startup"
+            )?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn endpoint_is_present(endpoint: &LocalEndpoint) -> Option<bool> {
+    Some(endpoint.unix_path().exists())
+}
+
+#[cfg(windows)]
+fn endpoint_is_present(_endpoint: &LocalEndpoint) -> Option<bool> {
+    None
 }
 
 #[derive(Clone, Debug)]
@@ -342,7 +469,8 @@ impl HostLauncher {
     }
 
     async fn wait_for_existing_host_exit(&self) -> Result<(), HostLaunchError> {
-        let deadline = tokio::time::Instant::now() + HOST_STOP_TIMEOUT;
+        let started = tokio::time::Instant::now();
+        let deadline = started + HOST_STOP_TIMEOUT;
         let runtime = &self.profile.paths().runtime;
         while tokio::time::Instant::now() < deadline {
             if !runtime.join("host-ready.json").exists() && !runtime.join("host.pid").exists() {
@@ -350,7 +478,15 @@ impl HostLauncher {
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        Err(HostLaunchError::ReadyTimeout)
+        Err(HostLaunchError::ReadyTimeout(
+            ReadyTimeoutDiagnostics::capture(
+                self,
+                ReadyTimeoutStage::PreviousHostExit,
+                started.elapsed(),
+                0,
+                None,
+            ),
+        ))
     }
 }
 fn is_resource_incompatibility(error: &HostLaunchError) -> bool {
@@ -393,7 +529,8 @@ impl ManagedHostProcess {
             LifecycleResponse::Draining => {}
             _ => return Err(HostLaunchError::UnexpectedMessage),
         }
-        let deadline = tokio::time::Instant::now() + HOST_STOP_TIMEOUT;
+        let started = tokio::time::Instant::now();
+        let deadline = started + HOST_STOP_TIMEOUT;
         if let Some(child) = self.child.as_mut() {
             loop {
                 if let Some(status) = child.try_wait()? {
@@ -405,15 +542,26 @@ impl ManagedHostProcess {
                 if tokio::time::Instant::now() >= deadline {
                     child.kill()?;
                     let _ = child.wait();
-                    return Err(HostLaunchError::ReadyTimeout);
+                    return Err(HostLaunchError::ReadyTimeout(
+                        ReadyTimeoutDiagnostics::capture(
+                            &self.launcher,
+                            ReadyTimeoutStage::ManagedHostExit,
+                            started.elapsed(),
+                            0,
+                            None,
+                        ),
+                    ));
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         }
+        let mut attempts = 0;
+        let mut last_connect_error = None;
         while tokio::time::Instant::now() < deadline {
-            let disconnected = self.launcher.connect().await.is_err();
+            attempts += 1;
+            last_connect_error = self.launcher.connect().await.err();
             let runtime = &self.launcher.profile.paths().runtime;
-            if disconnected
+            if last_connect_error.is_some()
                 && !runtime.join("host-ready.json").exists()
                 && !runtime.join("host.pid").exists()
             {
@@ -421,7 +569,15 @@ impl ManagedHostProcess {
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        Err(HostLaunchError::ReadyTimeout)
+        Err(HostLaunchError::ReadyTimeout(
+            ReadyTimeoutDiagnostics::capture(
+                &self.launcher,
+                ReadyTimeoutStage::AttachedHostExit,
+                started.elapsed(),
+                attempts,
+                last_connect_error.as_ref(),
+            ),
+        ))
     }
 
     pub fn force_stop(&mut self) -> Result<(), HostLaunchError> {
@@ -433,8 +589,11 @@ impl ManagedHostProcess {
     }
 
     async fn wait_until_ready(&mut self, token: &AuthToken) -> Result<(), HostLaunchError> {
-        let deadline = tokio::time::Instant::now() + HOST_READY_TIMEOUT;
+        let started = tokio::time::Instant::now();
+        let deadline = started + HOST_READY_TIMEOUT;
         let mut early_exit = None;
+        let mut attempts = 0;
+        let mut last_connect_error;
         loop {
             if let Some(child) = self.child.as_mut()
                 && let Some(status) = child.try_wait()?
@@ -442,13 +601,23 @@ impl ManagedHostProcess {
                 early_exit = Some(status);
                 self.child = None;
             }
-            if self.launcher.connect_with_token(token).await.is_ok() {
-                return Ok(());
+            attempts += 1;
+            match self.launcher.connect_with_token(token).await {
+                Ok(_) => return Ok(()),
+                Err(error) => last_connect_error = Some(error),
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err(early_exit
                     .map(HostLaunchError::EarlyExit)
-                    .unwrap_or(HostLaunchError::ReadyTimeout));
+                    .unwrap_or_else(|| {
+                        HostLaunchError::ReadyTimeout(ReadyTimeoutDiagnostics::capture(
+                            &self.launcher,
+                            ReadyTimeoutStage::HostStartup,
+                            started.elapsed(),
+                            attempts,
+                            last_connect_error.as_ref(),
+                        ))
+                    }));
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
@@ -706,4 +875,70 @@ fn detach_child(command: &mut Command) {
     use std::os::windows::process::CommandExt as _;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn diagnostics(stage: ReadyTimeoutStage) -> ReadyTimeoutDiagnostics {
+        ReadyTimeoutDiagnostics {
+            stage,
+            waited: Duration::from_millis(8007),
+            connect_attempts: 367,
+            ready_metadata_present: false,
+            pid_file_present: false,
+            endpoint_present: Some(false),
+            profile_lock_held: Some(false),
+            last_connect_error: Some("Host transport failed: entity not found".to_string()),
+        }
+    }
+
+    #[test]
+    fn startup_timeout_reports_the_waited_time_attempts_and_last_failure() {
+        let message =
+            HostLaunchError::ReadyTimeout(diagnostics(ReadyTimeoutStage::HostStartup)).to_string();
+
+        assert!(
+            message.contains("Host startup timed out after 8.01s"),
+            "{message}"
+        );
+        assert!(message.contains("367 connect attempts"), "{message}");
+        assert!(
+            message.contains("ready-metadata=absent pid-file=absent endpoint=absent"),
+            "{message}"
+        );
+        assert!(message.contains("profile-lock=free"), "{message}");
+        assert!(
+            message.contains("last connect error: Host transport failed: entity not found"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_host_that_published_nothing_is_called_out_as_never_starting() {
+        let absent = diagnostics(ReadyTimeoutStage::HostStartup);
+        assert!(absent.host_left_no_trace());
+        assert!(absent.to_string().contains("never reached startup"));
+
+        let mut reachable = diagnostics(ReadyTimeoutStage::HostStartup);
+        reachable.ready_metadata_present = true;
+        assert!(!reachable.host_left_no_trace());
+        assert!(!reachable.to_string().contains("never reached startup"));
+    }
+
+    #[test]
+    fn exit_stages_omit_connect_attempts_when_none_were_made() {
+        let mut waiting_for_exit = diagnostics(ReadyTimeoutStage::PreviousHostExit);
+        waiting_for_exit.connect_attempts = 0;
+        waiting_for_exit.last_connect_error = None;
+        let message = waiting_for_exit.to_string();
+
+        assert!(
+            message.starts_with("previous Host exit timed out after"),
+            "{message}"
+        );
+        assert!(!message.contains("connect attempts"), "{message}");
+        assert!(!message.contains("last connect error"), "{message}");
+    }
 }
