@@ -129,8 +129,8 @@ impl HostAgentHookRuntime {
 
         let scope = AgentHookScope {
             project_id: spec.project_id.to_string(),
-            tab_id: spec.tab_id.to_string(),
-            pane_id: spec.pane_id.to_string(),
+            tab_id: spec.session_id.as_str().to_string(),
+            pane_id: spec.session_id.as_str().to_string(),
             generation: self.next_resource_epoch.fetch_add(1, Ordering::Relaxed),
         };
         let encoded_scope = serde_json::to_vec(&scope)
@@ -602,16 +602,14 @@ fn now_millis() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use yttt_core::model::ids::{PaneId, ProjectId, TabId};
+    use yttt_core::model::ids::ProjectId;
     use yttt_protocol::terminal::{TerminalExecutionSpec, TerminalGeometry};
 
-    fn spec(session: &str, pane: &str) -> TerminalSpawnSpec {
+    fn spec(session: &str, _pane: &str) -> TerminalSpawnSpec {
         TerminalSpawnSpec {
             session_id: TerminalSessionId::new(session),
             project_id: ProjectId::new("project"),
-            tab_id: TabId::new("tab"),
-            pane_id: PaneId::new(pane),
-            cwd: "/tmp".to_string(),
+            cwd: yttt_protocol::ProjectRelativePath::root(),
             execution: TerminalExecutionSpec::Command {
                 shell: "/bin/sh".to_string(),
                 program: "/bin/true".to_string(),

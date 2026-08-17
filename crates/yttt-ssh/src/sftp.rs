@@ -46,6 +46,7 @@ pub struct RemoteFingerprint {
     pub byte_len: u64,
     pub modified_seconds: Option<u32>,
     pub content_hash: u64,
+    pub content_sha256: [u8; 32],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -670,21 +671,27 @@ fn absolute_parent(path: &RemotePathBuf) -> Result<RemotePathBuf, SftpError> {
 
 fn expected_matches(expected: Option<&RemoteFingerprint>, current: &RemoteFileState) -> bool {
     match (expected, current) {
-        (Some(expected), RemoteFileState::Present(current)) => expected == current,
+        (Some(expected), RemoteFileState::Present(current)) => {
+            expected.content_sha256 == current.content_sha256
+        }
         (None, RemoteFileState::Missing) => true,
         _ => false,
     }
 }
 
 fn fingerprint(bytes: &[u8], metadata: &FileAttributes) -> RemoteFingerprint {
-    use std::hash::{DefaultHasher, Hash, Hasher};
+    use sha2::{Digest, Sha256};
 
-    let mut hasher = DefaultHasher::new();
-    bytes.hash(&mut hasher);
+    let content_sha256: [u8; 32] = Sha256::digest(bytes).into();
     RemoteFingerprint {
         byte_len: bytes.len() as u64,
         modified_seconds: metadata.mtime,
-        content_hash: hasher.finish(),
+        content_hash: u64::from_le_bytes(
+            content_sha256[..8]
+                .try_into()
+                .expect("sha256 digest is 32 bytes"),
+        ),
+        content_sha256,
     }
 }
 
@@ -794,10 +801,17 @@ mod tests {
             byte_len: 4,
             modified_seconds: Some(7),
             content_hash: 9,
+            content_sha256: [3; 32],
+        };
+        let same_hash_different_mtime = RemoteFingerprint {
+            byte_len: 4,
+            modified_seconds: Some(99),
+            content_hash: 9,
+            content_sha256: [3; 32],
         };
         assert!(expected_matches(
             Some(&expected),
-            &RemoteFileState::Present(expected.clone())
+            &RemoteFileState::Present(same_hash_different_mtime)
         ));
         assert!(!expected_matches(
             Some(&expected),

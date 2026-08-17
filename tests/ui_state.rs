@@ -2133,6 +2133,9 @@ fn root_view_renders_active_file_document_and_consumes_focus(cx: &mut gpui::Test
                     byte_len: 12,
                     modified: Some(SystemTime::UNIX_EPOCH),
                     content_hash: 1,
+                    workspace_epoch: 0,
+                    revision_number: 0,
+                    content_sha256: [0; 32],
                 },
             );
             let document = root_cx.new(|document_cx| {

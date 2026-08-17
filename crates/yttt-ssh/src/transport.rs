@@ -544,9 +544,6 @@ fn wire_stored_credential(credential: StoredCredential) -> yttt_protocol::ssh::S
     yttt_protocol::ssh::StoredSshCredential {
         id: credential.id.as_str().to_string(),
         effective_user: credential.effective_user,
-        resolved_host: credential.resolved_host,
-        port: credential.port,
-        host_key_sha256: credential.host_key_sha256,
         private_key_identity: credential.private_key_identity,
     }
 }
@@ -555,9 +552,9 @@ fn stored_credential(credential: yttt_protocol::ssh::StoredSshCredential) -> Sto
     StoredCredential {
         id: CredentialId::new(credential.id),
         effective_user: credential.effective_user,
-        resolved_host: credential.resolved_host,
-        port: credential.port,
-        host_key_sha256: credential.host_key_sha256,
+        resolved_host: String::new(),
+        port: 0,
+        host_key_sha256: String::new(),
         private_key_identity: credential.private_key_identity,
     }
 }
@@ -1438,10 +1435,11 @@ async fn authenticate_with_stored_password(
     host_key_sha256: &str,
     credential_store: &CredentialStore,
 ) -> Result<bool, TransportError> {
-    if credential.effective_user != endpoint.user
-        || credential.resolved_host != endpoint.host
-        || credential.port != endpoint.port
-        || credential.host_key_sha256 != host_key_sha256
+    if !credential.resolved_host.is_empty()
+        && (credential.effective_user != endpoint.user
+            || credential.resolved_host != endpoint.host
+            || credential.port != endpoint.port
+            || credential.host_key_sha256 != host_key_sha256)
     {
         return Err(TransportError::CredentialBindingMismatch(credential.id));
     }

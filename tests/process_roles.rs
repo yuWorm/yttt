@@ -10,11 +10,11 @@ use yttt::{
 };
 use yttt_client_core::{ClientCore, ConnectionState};
 use yttt_protocol::{
-    BuildIdentity, ConnectionChannel, LIFECYCLE_PROTOCOL_VERSION, ProtocolRange,
+    BuildIdentity, ConnectionChannel, HostPath, LIFECYCLE_PROTOCOL_VERSION, ProtocolRange,
     RESOURCE_PROTOCOL_VERSION, Request, Response,
-    project::{PlatformPath, ProjectRequest, ProjectResponse},
+    project::{ProjectRequest, ProjectResponse},
 };
-use yttt_transport_local::{AuthToken, ClientIdentity};
+use yttt_transport_local::{AuthToken, ClientIdentity, LocalConnector};
 
 fn isolated_profile(root: &std::path::Path) -> AppProfile {
     AppProfile::scoped(
@@ -36,17 +36,8 @@ fn installer_profile(root: &std::path::Path) -> AppProfile {
         HostConnectPolicy::ProfileDiscovery,
     )
 }
-fn platform_path(path: &std::path::Path) -> PlatformPath {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt as _;
-        PlatformPath::Unix(path.as_os_str().as_bytes().to_vec())
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt as _;
-        PlatformPath::Windows(path.as_os_str().encode_wide().collect())
-    }
+fn platform_path(path: &std::path::Path) -> HostPath {
+    HostPath::from_path(path).expect("test project root must be absolute")
 }
 fn test_executable() -> std::path::PathBuf {
     std::env::var_os("YTTT_TEST_EXECUTABLE")
@@ -54,7 +45,7 @@ fn test_executable() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_BIN_EXE_yttt")))
 }
 
-async fn start_incompatible_host(
+async fn start_previous_build_host(
     profile: &AppProfile,
     token: [u8; 32],
 ) -> tokio::task::JoinHandle<Result<(), HostLaunchError>> {
@@ -338,14 +329,14 @@ async fn unreachable_live_host_lock_prevents_duplicate_spawn() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn incompatible_busy_host_is_preserved_then_idle_host_is_safely_replaced() {
+async fn previous_build_host_is_reused_while_the_resource_protocol_still_negotiates() {
     let temp = tempdir().unwrap();
     let profile = isolated_profile(temp.path());
     let token = [73; 32];
-    let old_host = start_incompatible_host(&profile, token).await;
+    let old_host = start_previous_build_host(&profile, token).await;
     let launcher = HostLauncher::new(profile.clone(), test_executable());
     let client = ClientCore::connect(
-        launcher.endpoint(),
+        LocalConnector::new(launcher.endpoint()),
         ClientIdentity {
             supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
             build: BuildIdentity {
@@ -377,18 +368,13 @@ async fn incompatible_busy_host_is_preserved_then_idle_host_is_safely_replaced()
         .await
         .unwrap()
     else {
-        panic!("incompatible Host did not register the blocker project");
+        panic!("previous-build Host did not register the project");
     };
 
-    match launcher.launch_or_attach().await {
-        Err(HostLaunchError::HostBusy(blockers)) => {
-            assert_eq!(
-                blockers,
-                vec![yttt_protocol::HostBlocker::Project(project_id.clone())]
-            );
-        }
-        _ => panic!("incompatible busy Host was not preserved"),
-    }
+    // The handshake negotiates on the protocol range alone, so a Host from an earlier
+    // build that still speaks this resource protocol is attached to, never torn down.
+    let attached = launcher.launch_or_attach().await.unwrap();
+    assert!(!attached.spawned());
     assert!(!old_host.is_finished());
 
     assert_eq!(
@@ -402,14 +388,12 @@ async fn incompatible_busy_host_is_preserved_then_idle_host_is_safely_replaced()
         Response::Project(ProjectResponse::Closed)
     );
     client.shutdown().await;
-    let replacement = launcher.launch_or_attach().await.unwrap();
-    assert!(replacement.spawned());
+    attached.drain_and_stop().await.unwrap();
     tokio::time::timeout(Duration::from_secs(5), old_host)
         .await
-        .expect("incompatible Host did not exit after StopIfIdle")
+        .expect("previous-build Host did not exit after ForceStop")
         .unwrap()
         .unwrap();
-    replacement.drain_and_stop().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -418,10 +402,10 @@ async fn client_reconnects_after_launcher_recovers_a_crashed_host() {
     let profile = isolated_profile(temp.path());
     let launcher = HostLauncher::new(profile, test_executable());
     let mut process = launcher.launch_or_attach().await.unwrap();
-    let (endpoint, identity, token) = launcher
+    let (connector, identity, token) = launcher
         .client_core_config(ClientInstanceId::new("recovery-client"))
         .unwrap();
-    let client = ClientCore::connect(endpoint, identity, token)
+    let client = ClientCore::connect(connector, identity, token)
         .await
         .unwrap();
     let old_epoch = match client.state() {

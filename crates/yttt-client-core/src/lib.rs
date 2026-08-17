@@ -27,9 +27,9 @@ use yttt_protocol::{
     agent::{AgentSnapshotCursor, AgentSnapshotUpdate},
     terminal::{TerminalProcessState, TerminalStreamUpdate},
 };
-use yttt_transport_local::{
-    AuthToken, AuthenticatedHost, ClientIdentity, LocalEndpoint, LocalStream, client_handshake,
-    connect, receive_control, receive_control_observed, send_control,
+use yttt_transport::{
+    AuthToken, AuthenticatedHost, ClientIdentity, SharedConnector, TransportConnector,
+    TransportStream, client_handshake, receive_control, receive_control_observed, send_control,
 };
 
 const COMMAND_CAPACITY: usize = 256;
@@ -148,7 +148,7 @@ struct ClientSessionContext {
     checkpoint_requests: mpsc::Sender<TerminalSessionId>,
     events: broadcast::Sender<ClientEvent>,
     mirrors: Arc<RwLock<HashMap<TerminalSessionId, TerminalMirror>>>,
-    endpoint: LocalEndpoint,
+    connector: SharedConnector,
     identity: ClientIdentity,
     token: AuthToken,
     data_channels: Arc<RwLock<HashMap<TerminalSessionId, watch::Sender<bool>>>>,
@@ -162,10 +162,11 @@ struct ClientSessionContext {
 
 impl ClientCore {
     pub async fn connect(
-        endpoint: LocalEndpoint,
+        connector: impl TransportConnector,
         identity: ClientIdentity,
         token: AuthToken,
     ) -> Result<Self, ClientCoreError> {
+        let connector = SharedConnector::new(connector);
         let (checkpoint_requests, checkpoint_rx) = mpsc::channel(CHECKPOINT_CAPACITY);
         let (command_tx, command_rx) = mpsc::channel(COMMAND_CAPACITY);
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
@@ -180,7 +181,7 @@ impl ClientCore {
         let diagnostics = Arc::new(ClientPipelineDiagnostics::default());
         let (initial_tx, initial_rx) = oneshot::channel();
         let supervisor = tokio::spawn(run_supervisor(
-            endpoint.clone(),
+            connector.clone(),
             identity.clone(),
             token.clone(),
             command_rx,
@@ -331,7 +332,7 @@ impl ClientCore {
 
 #[allow(clippy::too_many_arguments)]
 async fn run_supervisor(
-    endpoint: LocalEndpoint,
+    connector: SharedConnector,
     mut identity: ClientIdentity,
     token: AuthToken,
     mut commands: mpsc::Receiver<ClientCommand>,
@@ -350,7 +351,7 @@ async fn run_supervisor(
     initial: oneshot::Sender<Result<(), String>>,
 ) {
     set_state(&state, &events, ConnectionState::Connecting);
-    let (mut stream, host) = match establish(&endpoint, &identity, &token).await {
+    let (mut stream, host) = match establish(&connector, &identity, &token).await {
         Ok(connection) => connection,
         Err(error) => {
             let message = error.message().to_string();
@@ -381,7 +382,7 @@ async fn run_supervisor(
             checkpoint_requests: checkpoint_requests.clone(),
             events: events.clone(),
             mirrors: mirrors.clone(),
-            endpoint: endpoint.clone(),
+            connector: connector.clone(),
             identity: identity.clone(),
             token: token.clone(),
             data_channels: data_channels.clone(),
@@ -419,7 +420,7 @@ async fn run_supervisor(
         }
         loop {
             set_state(&state, &events, ConnectionState::Connecting);
-            match establish(&endpoint, &identity, &token).await {
+            match establish(&connector, &identity, &token).await {
                 Ok((new_stream, new_host)) => {
                     stream = new_stream;
                     identity.host_epoch_hint = Some(new_host.host_epoch);
@@ -462,11 +463,12 @@ async fn run_supervisor(
 }
 
 async fn establish(
-    endpoint: &LocalEndpoint,
+    connector: &SharedConnector,
     identity: &ClientIdentity,
     token: &AuthToken,
-) -> Result<(LocalStream, AuthenticatedHost), ConnectFailure> {
-    let mut stream = connect(endpoint)
+) -> Result<(TransportStream, AuthenticatedHost), ConnectFailure> {
+    let mut stream = connector
+        .connect()
         .await
         .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
     let host = client_handshake(&mut stream, identity, token)
@@ -476,7 +478,7 @@ async fn establish(
 }
 
 async fn connected_session(
-    stream: LocalStream,
+    stream: TransportStream,
     commands: &mut mpsc::Receiver<ClientCommand>,
     checkpoint_rx: &mut mpsc::Receiver<TerminalSessionId>,
     context: &ClientSessionContext,
@@ -491,6 +493,7 @@ async fn connected_session(
         &mut writer,
         &mut pending,
         &next_internal_request_id,
+        Some(context.identity.client_instance_id.to_string()),
         Request::ListResources,
         PendingRequest::Catalog,
     )
@@ -513,6 +516,7 @@ async fn connected_session(
         &mut writer,
         &mut pending,
         &next_internal_request_id,
+        Some(context.identity.client_instance_id.to_string()),
         Request::ReadAgentSnapshots { acknowledged },
         PendingRequest::AgentSnapshots,
     )
@@ -531,6 +535,8 @@ async fn connected_session(
                 let request_id = command.request_id;
                 let message = ControlMessage::Request(ClientRequest {
                     request_id,
+                    actor_device_id: Some(context.identity.client_instance_id.to_string()),
+                    lease_epoch: None,
                     body: command.body,
                 });
                 if let Err(error) = send_control(&mut writer, &message).await {
@@ -572,6 +578,7 @@ async fn connected_session(
                                     &mut writer,
                                     &mut pending,
                                     &next_internal_request_id,
+                                    Some(context.identity.client_instance_id.to_string()),
                                     session_id,
                                 )
                                 .await
@@ -607,6 +614,7 @@ async fn connected_session(
                                 &mut writer,
                                 &mut pending,
                                 &next_internal_request_id,
+                                Some(context.identity.client_instance_id.to_string()),
                                 session_id,
                             )
                             .await
@@ -629,6 +637,7 @@ async fn connected_session(
                         &mut writer,
                         &mut pending,
                         &next_internal_request_id,
+                        Some(context.identity.client_instance_id.to_string()),
                         session_id,
                     )
                     .await
@@ -758,7 +767,7 @@ fn handle_response(
 }
 
 fn start_terminal_data_channel(session_id: TerminalSessionId, context: &ClientSessionContext) {
-    let endpoint = context.endpoint.clone();
+    let connector = context.connector.clone();
     let mut identity = context.identity.clone();
     let token = context.token.clone();
     let mirrors = context.mirrors.clone();
@@ -803,7 +812,7 @@ fn start_terminal_data_channel(session_id: TerminalSessionId, context: &ClientSe
                     }
                 }
             }
-            let (mut stream, _) = match establish(&endpoint, &identity, &token).await {
+            let (mut stream, _) = match establish(&connector, &identity, &token).await {
                 Ok(connection) => {
                     attempt = 0;
                     connection
@@ -1024,12 +1033,14 @@ async fn send_checkpoint_request(
     writer: &mut (impl tokio::io::AsyncWrite + Unpin),
     pending: &mut HashMap<u64, PendingRequest>,
     next_request_id: &impl Fn() -> u64,
+    actor_device_id: Option<String>,
     session_id: TerminalSessionId,
 ) -> Result<(), ()> {
     send_internal_request(
         writer,
         pending,
         next_request_id,
+        actor_device_id,
         Request::RequestCheckpoint {
             session_id: session_id.clone(),
             after_sequence: None,
@@ -1043,13 +1054,19 @@ async fn send_internal_request(
     writer: &mut (impl tokio::io::AsyncWrite + Unpin),
     pending: &mut HashMap<u64, PendingRequest>,
     next_request_id: &impl Fn() -> u64,
+    actor_device_id: Option<String>,
     body: Request,
     request: PendingRequest,
 ) -> Result<(), ()> {
     let request_id = next_request_id();
     send_control(
         writer,
-        &ControlMessage::Request(ClientRequest { request_id, body }),
+        &ControlMessage::Request(ClientRequest {
+            request_id,
+            actor_device_id,
+            lease_epoch: None,
+            body,
+        }),
     )
     .await
     .map_err(|_| ())?;

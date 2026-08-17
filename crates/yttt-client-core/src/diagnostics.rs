@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use yttt_transport_local::WireReceiveDiagnostics;
+use yttt_transport::WireReceiveDiagnostics;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClientLatencyDiagnosticsSnapshot {

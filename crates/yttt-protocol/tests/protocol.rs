@@ -4,11 +4,11 @@ use yttt_protocol::{
     DESKTOP_SHELL_PROTOCOL_VERSION, DesktopShellMessage, DesktopShellRequest,
     DesktopShellRequestEnvelope, DesktopShellResponse, DesktopShellResponseEnvelope,
     FRAME_FORMAT_VERSION, FrameKind, HEADER_LEN, HandshakeMessage, HostChallenge,
-    HostLifecycleState, HostLifecycleStatus, LIFECYCLE_PROTOCOL_VERSION, LifecycleMessage,
-    LifecycleRequest, LifecycleRequestEnvelope, LifecycleResponse, LifecycleResponseEnvelope,
-    MAX_FRAME_BYTES, Nonce, PROTOCOL_MAGIC, ProtocolCodecError, ProtocolRange,
-    RESOURCE_PROTOCOL_VERSION, RejectReason, decode_frame, decode_message, encode_frame,
-    encode_message, project::PlatformPath,
+    HostLifecycleState, HostLifecycleStatus, HostPath, LIFECYCLE_PROTOCOL_VERSION,
+    LifecycleMessage, LifecycleRequest, LifecycleRequestEnvelope, LifecycleResponse,
+    LifecycleResponseEnvelope, MAX_FRAME_BYTES, Nonce, PROTOCOL_MAGIC, PathSegment,
+    ProtocolCodecError, ProtocolRange, RESOURCE_PROTOCOL_VERSION, RejectReason, decode_frame,
+    decode_message, encode_frame, encode_message,
 };
 
 fn build_identity(fingerprint: &str) -> BuildIdentity {
@@ -153,10 +153,10 @@ fn every_top_level_variant_has_a_typed_binary_payload() {
         assert_eq!(decoded, message);
     }
 
-    let control = ControlMessage::Request(yttt_protocol::ClientRequest {
-        request_id: 42,
-        body: yttt_protocol::Request::Ping { sent_millis: 7 },
-    });
+    let control = ControlMessage::Request(yttt_protocol::ClientRequest::new(
+        42,
+        yttt_protocol::Request::Ping { sent_millis: 7 },
+    ));
     let frame = decode_frame(&encode_message(FrameKind::Control, &control).unwrap()).unwrap();
     assert_eq!(decode_message::<ControlMessage>(&frame).unwrap(), control);
 
@@ -205,7 +205,13 @@ fn every_top_level_variant_has_a_typed_binary_payload() {
         profile_id: ProfileId::new("test"),
         request_id: 11,
         body: DesktopShellRequest::OpenWindow {
-            project_paths: vec![PlatformPath::Unix(b"/tmp/project".to_vec())],
+            project_paths: vec![HostPath {
+                volume: None,
+                segments: vec![
+                    PathSegment::Utf8("tmp".to_string()),
+                    PathSegment::Utf8("project".to_string()),
+                ],
+            }],
         },
     });
     let frame = decode_frame(&encode_message(FrameKind::DesktopShell, &desktop).unwrap()).unwrap();

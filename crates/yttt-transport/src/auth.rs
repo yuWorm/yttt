@@ -151,8 +151,6 @@ where
         _ => return Err(HandshakeError::UnexpectedMessage),
     };
     if challenge.profile_id != identity.profile_id
-        || (identity.channel != ConnectionChannel::Lifecycle
-            && challenge.build.resource_compatibility != identity.build.resource_compatibility)
         || identity
             .supported
             .negotiate(ProtocolRange::exact(challenge.selected_version))
@@ -254,12 +252,6 @@ where
     };
     if hello.profile_id != identity.profile_id {
         reject(stream, RejectReason::ProfileMismatch).await;
-        return Err(HandshakeError::IdentityMismatch);
-    }
-    if hello.channel != ConnectionChannel::Lifecycle
-        && hello.build.resource_compatibility != identity.build.resource_compatibility
-    {
-        reject(stream, RejectReason::BuildMismatch).await;
         return Err(HandshakeError::IdentityMismatch);
     }
     if let Some(host_epoch_hint) = hello.host_epoch_hint

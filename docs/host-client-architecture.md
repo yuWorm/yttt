@@ -2,7 +2,7 @@
 
 - 状态：Phase 1 本地 IPC 完整实现
 - 更新：2026-08-12
-- 适用协议：`yttt-protocol` v1
+- 适用协议：`yttt-protocol` 资源/lifecycle/desktop-shell v2；帧头 v1
 - 相关设计：[`p2p-relay-architecture.md`](./p2p-relay-architecture.md)
 
 本文定义 yttt 的标准 Host/Client 边界、资源所有权、终端同步协议、本地安全模型、生命周期和恢复语义。P2P、Relay、移动端等连接路径只能扩展本规范，不能改变资源所有权。
@@ -49,7 +49,7 @@ flowchart LR
 
 - Unix：profile runtime root 下的 Unix domain socket，目录权限 `0700`，socket 权限 `0600`，并验证 peer UID。
 - Windows：拒绝远程客户端的 named pipe，DACL 仅允许 SYSTEM 和 owner。
-- Wire：16-byte header、固定 magic/version/kind/length、最大 frame 8 MiB；header 在分配 payload 前验证。
+- Wire：16-byte header、固定 magic/version/kind/length、最大 frame 8 MiB；header 在分配 payload 前验证。结构化控制消息使用带字段名的 CBOR；演进规则见 [`wire-evolution.md`](./wire-evolution.md)。
 
 未来 P2P、Relay 或直接网络连接替换的只是 `IPC` 边，不得把 PTY、文件系统或 Agent 状态移回 Client。
 
@@ -58,22 +58,32 @@ flowchart LR
 | 组件 | 责任 | 禁止持有 |
 |---|---|---|
 | `yttt-protocol` | ID、handshake 后 request/response/event、terminal snapshot/delta、SSH/file/git/agent wire DTO | socket、PTY、GPUI 类型、平台 handle |
-| `yttt-transport-local` | endpoint、Unix socket/named pipe、peer/permission 检查、framing、handshake | Host 资源策略、UI 状态 |
-| `yttt-host` | 资源目录、terminal runtime、lease、checkpoint、退出确认、drain | GPUI Entity、window/focus/theme |
-| `yttt-client-core` | 连接 supervisor、请求关联、事件订阅、terminal mirror、重连对账 | PTY child、权威 scrollback |
+| `yttt-transport` | 可靠双向 stream 抽象、framing、handshake、in-process 内存传输 | 具体 IPC/网络实现、Host 资源策略、UI 状态 |
+| `yttt-transport-local` | Unix socket/named pipe endpoint、peer/permission 检查 | Host 资源策略、UI 状态、应用协议 |
+| `yttt-host` | 资源目录、terminal runtime、lease、checkpoint、退出确认、drain | GPUI Entity、window/focus/theme、具体传输类型 |
+| `yttt-client-core` | 连接 supervisor、请求关联、事件订阅、terminal mirror、重连对账 | PTY child、权威 scrollback、具体传输类型 |
 | `yttt-terminal` | Host 侧 VTE/语义快照能力与 Client 侧 semantic render/input adapter | profile/Host 生命周期 |
 | Desktop app | Host launch/attach、window lifecycle、Client mirror 到 `TerminalView` 的适配 | 长生命周期 PTY 所有权 |
 
 依赖方向保持为：
 
 ```text
-yttt-protocol <- yttt-transport-local
-      ^                 ^
-      |                 |
-yttt-client-core     yttt-host
-      ^                 ^
-      +------ desktop --+
+              yttt-protocol
+                    ^
+                    |
+              yttt-transport
+               ^          ^
+               |          |
+     yttt-client-core   yttt-host
+               ^          ^
+               |          |
+        yttt-transport-local
+                    ^
+                    |
+                 desktop
 ```
+
+`yttt-host` 与 `yttt-client-core` 只依赖 `yttt-transport` 抽象；`yttt-transport-local` 是 desktop 与测试使用的本地 IPC 实现。
 
 `yttt-host` 与 `yttt-client-core` 不能依赖 Desktop UI。
 
@@ -157,7 +167,7 @@ Client 必须按 epoch/sequence 处理，旧 epoch 或倒退事件不能覆盖�
 - terminal placements
 - SSH connection IDs
 
-Terminal placement 包含稳定 `project_id`, `tab_id`, `pane_id`, `session_id`、几何、owner、最后 sequence 和可选 viewport。
+Terminal placement 包含稳定 `project_id`、`session_id`、几何、owner、最后 sequence 和可选 viewport。`tab_id` / `pane_id` 只属于客户端布局，不进入 Host catalog 或 `address_fingerprint`。
 
 连接成功或重连成功后，`ClientCore` 第一项内部请求必须是 `ListResources`：
 
@@ -253,7 +263,7 @@ PTY child 退出后：
 | 边界 | 上限 |
 |---|---:|
 | wire frame | 8 MiB |
-| Host terminal raw replay | 8 MiB / terminal |
+| Host terminal raw replay | 8 MiB / subscribed terminal；256 KiB / unsubscribed terminal |
 | Host terminal writer queue | 1024 commands |
 | Host terminal internal event queue | 256 events |
 | Host terminal subscriber channel | 64 events / subscriber |
@@ -264,7 +274,9 @@ PTY child 退出后：
 
 策略：
 
-- PTY raw replay 达到上限时丢弃最旧字节并累计 `dropped_bytes`，不阻塞 PTY。
+- PTY raw replay 达到当前订阅容量时丢弃最旧字节并累计 `dropped_bytes`，不阻塞 PTY。无订阅终端缩到 256 KiB；16 个无订阅高输出终端的回放环上界为 4 MiB。
+- Git 与远程命令走结构化操作，不再透传自由 argv；`git -c` / `-C` / `--exec-path` 等注入在 Host 侧被拒绝。特权远程命令默认关闭。
+- `ClientRequest` 携带 `actor_device_id` 与可选 `lease_epoch`。本地 profile 在每个 mutating 入口检查 capability（当前恒真），并写审计条目；凭据挑战只发给 SSH 连接发起方。
 - semantic event lag 不能阻塞 Host parser；Client 发现 gap 后走 checkpoint。
 - 输入队列满时明确返回 backpressure，不静默丢输入。
 - 未完成请求、event receiver、terminal subscriber 都必须有确定上限。
@@ -386,6 +398,7 @@ Host 重启不可能恢复已经死亡的 OS child。恢复的是 Client 状态�
 
 ```text
 cargo test -p yttt-protocol
+cargo test -p yttt-transport
 cargo test -p yttt-transport-local
 cargo test -p yttt-host
 cargo test -p yttt-client-core

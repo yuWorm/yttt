@@ -149,7 +149,10 @@ fn command_to_request(
                 project_paths: project_paths
                     .iter()
                     .map(|path| path_to_platform(path))
-                    .collect(),
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|_| {
+                        DesktopShellError::Rejected(DesktopShellRejectReason::InvalidRequest)
+                    })?,
             })
         }
     }

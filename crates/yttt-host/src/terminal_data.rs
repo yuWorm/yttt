@@ -17,7 +17,7 @@ use yttt_protocol::{
     ControlMessage, FrameKind, HostEvent, ProtocolCodecError, ServerEvent, encode_message,
     terminal::TerminalStreamUpdate,
 };
-use yttt_transport_local::LocalStream;
+use yttt_transport::TransportStream;
 
 use crate::diagnostics::QueueDiagnostics;
 
@@ -109,6 +109,49 @@ impl AttachmentOutputQueue {
             ready: Notify::new(),
             diagnostics,
         })
+    }
+
+    async fn enqueue_paced(
+        &self,
+        host_sequence: u64,
+        update: TerminalStreamUpdate,
+    ) -> Result<(), ProtocolCodecError> {
+        let session_id = update_session_id(&update).clone();
+        let available_from_sequence = update_sequence(&update);
+        let is_resync = matches!(update, TerminalStreamUpdate::ResyncRequired { .. });
+        let message = terminal_message(host_sequence, update);
+        let frame = Arc::<[u8]>::from(encode_message(FrameKind::Control, &message)?);
+        if frame.len() > MAX_ATTACHMENT_OUTPUT_BYTES {
+            self.enqueue_frame(
+                host_sequence,
+                session_id,
+                available_from_sequence,
+                is_resync,
+                frame,
+            );
+            return Ok(());
+        }
+        loop {
+            let notified = self.ready.notified();
+            {
+                let state = self.state.lock();
+                if state.closed {
+                    return Ok(());
+                }
+                if frame.len() <= MAX_ATTACHMENT_OUTPUT_BYTES.saturating_sub(state.bytes_in_use) {
+                    drop(state);
+                    self.enqueue_frame(
+                        host_sequence,
+                        session_id,
+                        available_from_sequence,
+                        is_resync,
+                        frame,
+                    );
+                    return Ok(());
+                }
+            }
+            notified.await;
+        }
     }
 
     fn enqueue(
@@ -277,7 +320,7 @@ pub(crate) struct TerminalDataWriter {
 }
 
 impl TerminalDataWriter {
-    pub(crate) fn new(stream: LocalStream, diagnostics: Arc<QueueDiagnostics>) -> Self {
+    pub(crate) fn new(stream: TransportStream, diagnostics: Arc<QueueDiagnostics>) -> Self {
         let (_, mut writer) = split(stream);
         let queue = AttachmentOutputQueue::with_diagnostics(diagnostics);
         let writer_queue = queue.clone();
@@ -317,6 +360,16 @@ impl TerminalDataWriter {
     ) -> Result<(), ProtocolCodecError> {
         self.queue
             .enqueue(host_sequence.fetch_add(1, Ordering::Relaxed), update)
+    }
+
+    pub(crate) async fn enqueue_paced(
+        &self,
+        host_sequence: &AtomicU64,
+        update: TerminalStreamUpdate,
+    ) -> Result<(), ProtocolCodecError> {
+        self.queue
+            .enqueue_paced(host_sequence.fetch_add(1, Ordering::Relaxed), update)
+            .await
     }
 
     pub(crate) fn enqueue_shared(

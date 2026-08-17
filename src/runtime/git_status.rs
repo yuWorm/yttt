@@ -5,6 +5,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use yttt_protocol::{ProjectGitOperation, ProjectRelativePath, is_safe_git_ref_name};
+
 #[cfg(windows)]
 fn git_command() -> Command {
     use std::os::windows::process::CommandExt as _;
@@ -29,11 +31,7 @@ pub struct GitCommandOutput {
 }
 
 pub trait ProjectGitExecutor {
-    fn execute_git(
-        &self,
-        args: &[OsString],
-        optional_locks: bool,
-    ) -> Result<GitCommandOutput, String>;
+    fn execute_git(&self, operation: &ProjectGitOperation) -> Result<GitCommandOutput, String>;
 
     fn null_device_path(&self) -> &'static str;
 }
@@ -45,18 +43,32 @@ struct LocalGitExecutor<'a> {
 
 #[cfg(test)]
 impl ProjectGitExecutor for LocalGitExecutor<'_> {
-    fn execute_git(
-        &self,
-        args: &[OsString],
-        optional_locks: bool,
-    ) -> Result<GitCommandOutput, String> {
-        execute_local_git(self.project_path, args, optional_locks)
+    fn execute_git(&self, operation: &ProjectGitOperation) -> Result<GitCommandOutput, String> {
+        execute_local_git_operation(self.project_path, operation, self.null_device_path())
     }
 
     fn null_device_path(&self) -> &'static str {
         null_device_path()
     }
 }
+pub(crate) fn execute_local_git_operation(
+    project_path: &Path,
+    operation: &ProjectGitOperation,
+    null_device: &str,
+) -> Result<GitCommandOutput, String> {
+    let args = operation
+        .argv(null_device)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+    let cwd = match operation.work_tree() {
+        Some(work_tree) => work_tree.join_under(project_path),
+        None => project_path.to_path_buf(),
+    };
+    execute_local_git(&cwd, &args, operation.optional_locks())
+}
+
 pub(crate) fn execute_local_git(
     project_path: &Path,
     args: &[OsString],
@@ -329,13 +341,11 @@ pub fn switch_project_git_branch_with(
     if !is_safe_git_ref_name(&branch.name) {
         return Err(format!("Invalid Git branch name: {}", branch.name));
     }
-    let mut args = vec![OsString::from("switch")];
-    if branch.kind == GitBranchKind::Remote {
-        args.push(OsString::from("--track"));
-    }
-    args.extend([OsString::from("--"), OsString::from(&branch.name)]);
     let output = executor
-        .execute_git(&args, false)
+        .execute_git(&ProjectGitOperation::Switch {
+            name: branch.name.clone(),
+            track_remote: branch.kind == GitBranchKind::Remote,
+        })
         .map_err(|error| format!("Failed to run git switch: {error}"))?;
     if output.success {
         Ok(())
@@ -379,20 +389,11 @@ fn read_project_git_diff_output(
     mode: GitDiffMode,
     ignore_whitespace: bool,
 ) -> Result<String, String> {
-    let mut args = vec![OsString::from("diff")];
-    if mode == GitDiffMode::Staged {
-        args.push(OsString::from("--cached"));
-    }
-    args.extend([
-        OsString::from("--no-ext-diff"),
-        OsString::from("--no-color"),
-    ]);
-    if ignore_whitespace {
-        args.push(OsString::from("-w"));
-    }
-    args.push(OsString::from("--"));
     let output = executor
-        .execute_git(&args, false)
+        .execute_git(&ProjectGitOperation::Diff {
+            staged: mode == GitDiffMode::Staged,
+            ignore_whitespace,
+        })
         .map_err(|error| format!("Failed to read Git changes: {error}"))?;
     if !output.success {
         return Err(git_stderr_message(
@@ -405,22 +406,13 @@ fn read_project_git_diff_output(
         .map_err(|_| "Git diff output was not valid UTF-8".to_string())?;
     if mode == GitDiffMode::Unstaged {
         for path in read_untracked_paths(executor)? {
-            let mut args = vec![
-                OsString::from("diff"),
-                OsString::from("--no-index"),
-                OsString::from("--no-ext-diff"),
-                OsString::from("--no-color"),
-            ];
-            if ignore_whitespace {
-                args.push(OsString::from("-w"));
-            }
-            args.extend([
-                OsString::from("--"),
-                OsString::from(executor.null_device_path()),
-                path.into_os_string(),
-            ]);
+            let relative_path = ProjectRelativePath::from_path(&path)
+                .map_err(|error| format!("Failed to read untracked file diff: {error}"))?;
             let output = executor
-                .execute_git(&args, false)
+                .execute_git(&ProjectGitOperation::DiffUntracked {
+                    relative_path,
+                    ignore_whitespace,
+                })
                 .map_err(|error| format!("Failed to read untracked file diff: {error}"))?;
             if !output.success && output.exit_code != Some(1) {
                 return Err(git_stderr_message(
@@ -447,13 +439,9 @@ pub fn read_project_git_status(project_path: &Path) -> Option<ProjectGitStatus> 
 pub fn read_project_git_status_with(
     executor: &impl ProjectGitExecutor,
 ) -> Option<ProjectGitStatus> {
-    let args = [
-        OsString::from("status"),
-        OsString::from("--porcelain=v1"),
-        OsString::from("-b"),
-        OsString::from("--ignored=matching"),
-    ];
-    let output = executor.execute_git(&args, true).ok()?;
+    let output = executor
+        .execute_git(&ProjectGitOperation::Status { work_tree: None })
+        .ok()?;
     if !output.success {
         return None;
     }
@@ -738,13 +726,10 @@ fn read_git_branch_group(
     reference: &str,
     kind: GitBranchKind,
 ) -> Result<Vec<GitBranch>, String> {
-    let args = [
-        OsString::from("for-each-ref"),
-        OsString::from("--format=%(refname:short)\t%(HEAD)"),
-        OsString::from(reference),
-    ];
     let output = executor
-        .execute_git(&args, false)
+        .execute_git(&ProjectGitOperation::ListRefs {
+            reference: reference.to_string(),
+        })
         .map_err(|error| format!("Failed to list Git branches: {error}"))?;
     if !output.success {
         return Err(git_stderr_message(
@@ -784,29 +769,13 @@ fn git_stderr_message(stderr: &[u8], fallback: &str) -> String {
     }
 }
 
-fn is_safe_git_ref_name(name: &str) -> bool {
-    !name.is_empty()
-        && !name.starts_with('-')
-        && !name.ends_with('.')
-        && !name.ends_with('/')
-        && !name.contains("..")
-        && !name.contains("@{")
-        && !name.contains("//")
-        && !name
-            .chars()
-            .any(|character| character.is_control() || " ~^:?*[\\]".contains(character))
-}
-
 fn read_untracked_paths(executor: &impl ProjectGitExecutor) -> Result<Vec<PathBuf>, String> {
-    let args = [
-        OsString::from("ls-files"),
-        OsString::from("--others"),
-        OsString::from("--exclude-standard"),
-        OsString::from("-z"),
-        OsString::from("--"),
-    ];
     let output = executor
-        .execute_git(&args, false)
+        .execute_git(&ProjectGitOperation::ListFiles {
+            cached: false,
+            others: true,
+            exclude_standard: true,
+        })
         .map_err(|error| format!("Failed to list untracked files: {error}"))?;
     if !output.success {
         return Err(git_stderr_message(
@@ -844,45 +813,36 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingGitExecutor {
-        commands: Mutex<Vec<(Vec<String>, bool)>>,
+        commands: Mutex<Vec<ProjectGitOperation>>,
     }
 
     impl ProjectGitExecutor for RecordingGitExecutor {
-        fn execute_git(
-            &self,
-            args: &[OsString],
-            optional_locks: bool,
-        ) -> Result<GitCommandOutput, String> {
-            let args = args
-                .iter()
-                .map(|arg| arg.to_string_lossy().into_owned())
-                .collect::<Vec<_>>();
-            self.commands
-                .lock()
-                .unwrap()
-                .push((args.clone(), optional_locks));
-            let (success, exit_code, stdout) = match args.first().map(String::as_str) {
-                Some("for-each-ref") if args.last().is_some_and(|arg| arg == "refs/heads") => {
+        fn execute_git(&self, operation: &ProjectGitOperation) -> Result<GitCommandOutput, String> {
+            self.commands.lock().unwrap().push(operation.clone());
+            let (success, exit_code, stdout) = match operation {
+                ProjectGitOperation::ListRefs { reference } if reference == "refs/heads" => {
                     (true, Some(0), b"main\t*\n".to_vec())
                 }
-                Some("for-each-ref") => {
+                ProjectGitOperation::ListRefs { .. } => {
                     (true, Some(0), b"origin/HEAD\t\norigin/feature\t\n".to_vec())
                 }
-                Some("status") => (true, Some(0), b"## main\n M tracked.txt\n?? new.txt\n".to_vec()),
-                Some("ls-files") => (true, Some(0), b"new.txt\0".to_vec()),
-                Some("diff") if args.iter().any(|arg| arg == "--no-index") => (
+                ProjectGitOperation::Status { .. } => {
+                    (true, Some(0), b"## main\n M tracked.txt\n?? new.txt\n".to_vec())
+                }
+                ProjectGitOperation::ListFiles { .. } => (true, Some(0), b"new.txt\0".to_vec()),
+                ProjectGitOperation::DiffUntracked { .. } => (
                     false,
                     Some(1),
                     b"diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+new\n"
                         .to_vec(),
                 ),
-                Some("diff") => (
+                ProjectGitOperation::Diff { .. } => (
                     true,
                     Some(0),
                     b"diff --git a/tracked.txt b/tracked.txt\n--- a/tracked.txt\n+++ b/tracked.txt\n@@ -1 +1 @@\n-old\n+new\n"
                         .to_vec(),
                 ),
-                Some("switch") => (true, Some(0), Vec::new()),
+                ProjectGitOperation::Switch { .. } => (true, Some(0), Vec::new()),
                 command => panic!("unexpected Git command: {command:?}"),
             };
             Ok(GitCommandOutput {
@@ -932,16 +892,8 @@ mod tests {
         )
         .unwrap();
 
-        assert!(
-            executor
-                .commands
-                .lock()
-                .unwrap()
-                .iter()
-                .any(
-                    |(args, optional_locks)| args.first().is_some_and(|arg| arg == "status")
-                        && *optional_locks
-                )
-        );
+        assert!(executor.commands.lock().unwrap().iter().any(|operation| {
+            matches!(operation, ProjectGitOperation::Status { .. }) && operation.optional_locks()
+        }));
     }
 }

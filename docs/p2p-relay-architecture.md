@@ -38,6 +38,7 @@
 - 项目注册进入 Host resource catalog；Host 重启丢失注册状态时，客户端按类型化 `NotFound` 自动重新注册并更新 watcher epoch。
 - Desktop 使用 `QuitMode::Explicit`、single-owner desktop-shell endpoint 和 native
   tray/menu-bar adapter；关闭最后窗口后可重开，Host lifecycle 也可通过 tray 或 CLI 独立控制。
+- Host 加固（H0–H3）已落地：回放环按订阅分级、Git/远程命令为结构化 allowlist、`ClientRequest` 预留 `actor_device_id`/`lease_epoch` 与 capability 检查点，SSH 凭据挑战只发给连接发起方。真实设备 ACL 仍属 P3-3。
 
 Phase 1 验收已完成：
 
@@ -840,7 +841,7 @@ HostId + WorkspaceId + RelativePath
 
 远程攻击面高于本地 UI。长期应优先使用 root directory handle/openat 风格的解析，减少 symlink 和 TOCTOU 风险，而不是只依赖字符串 canonicalize。
 
-现有 `RemoteRelativePathBuf` 已实现 `/` 分段、拒绝绝对路径、拒绝 `..` 和 NUL，可作为验证逻辑起点；协议层应改用与 backend 无关的 `ProjectRelativePath` 名称。`RemotePathBuf` 和 `ProjectLocation::Ssh` 只属于 Host backend，不应作为 P2P payload。还需单独决定本地非 UTF-8 路径的 wire 表示，不能默认把 `PathBuf` 无损转成 `String`。
+协议层已落地 backend-neutral 的 `ProjectRelativePath` / `HostPath` / `PathSegment`：按 segment 编码，拒绝绝对路径、parent 与 NUL，并用 `PathSegment::Bytes` 表示非 UTF-8 路径。`RemotePathBuf` 和 `ProjectLocation::Ssh` 只属于 Host backend，不应作为 P2P payload。
 
 `ProjectServices` 可继续作为 Host 内部 Local/SSH facade，但当前 `read_file`/`save_file` 以完整 `Vec<u8>` 交付，不能承担大文件网络传输。Blob 通道必须流式分块，只有小文件操作才可复用一次性 buffer。
 
@@ -1133,6 +1134,7 @@ SSH workspace 会形成两段数据路径：`client <-> yttt-host` 与 `yttt-hos
 ```text
 yttt-protocol
 yttt-terminal-core
+yttt-transport
 yttt-host
 yttt-client-core
 yttt-transport-local

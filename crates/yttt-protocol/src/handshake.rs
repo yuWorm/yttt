@@ -49,6 +49,7 @@ impl fmt::Debug for AuthMac {
     }
 }
 
+/// `#[serde(default)]` 在 CBOR map 编码下生效：旧对端省略的字段使用缺省值。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
     pub supported: ProtocolRange,

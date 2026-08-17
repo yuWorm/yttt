@@ -20,21 +20,20 @@ use yttt_core::model::{
     project::{RemotePathBuf, RemotePathError, RemoteRelativePathBuf},
 };
 use yttt_protocol::{
-    FailureCode, Request, Response,
+    FailureCode, HostPath, ProjectRelativePath, Request, Response,
     project::{
-        PlatformArgument, PlatformPath, ProjectDirectory, ProjectEntryKind as HostEntryKind,
+        ProjectDirectory, ProjectEntryKind as HostEntryKind,
         ProjectEntryMutation as HostEntryMutation, ProjectFileContent, ProjectFileFingerprint,
-        ProjectFileState, ProjectPasteMode as HostPasteMode, ProjectRequest, ProjectResponse,
-        ProjectSaveMode, ProjectSaveResult,
+        ProjectFileState, ProjectGitOperation, ProjectPasteMode as HostPasteMode, ProjectRequest,
+        ProjectResponse, ProjectSaveMode, ProjectSaveResult,
     },
     ssh::{
         RemoteCommandRequest, RemoteCommandResponse, RemoteDirectory, RemoteEntryMutation,
         RemoteFileContent, RemoteFileFingerprint, RemoteFileKind, RemoteFileRequest,
-        RemoteFileResponse, RemoteFileState, RemoteSaveResult,
+        RemoteFileResponse, RemoteFileState, RemoteHostCommand, RemoteSaveResult,
     },
 };
 
-use super::git_status::execute_local_git;
 use super::git_status::{GitCommandOutput, ProjectGitExecutor};
 use crate::host_runtime::DesktopHostRuntime;
 
@@ -109,7 +108,7 @@ impl HostSshProject {
             .send(Request::Project(ProjectRequest::RegisterSsh {
                 project_id: self.project_id.clone(),
                 connection_id: self.connection_id.as_str().to_string(),
-                root: self.root.as_str().to_string(),
+                root: remote_rel(self.root.as_str()),
             }))
             .map_err(|error| error.to_string())?;
         let Response::Project(ProjectResponse::Registered {
@@ -153,15 +152,10 @@ impl HostSshProject {
         }
     }
 
-    fn remote_command(
-        &self,
-        program: impl Into<String>,
-        args: Vec<String>,
-    ) -> Result<RemoteCommandResponse, String> {
+    fn remote_command(&self, command: RemoteHostCommand) -> Result<RemoteCommandResponse, String> {
         match self.request(Request::RemoteCommand(RemoteCommandRequest {
             project_id: self.project_id.clone(),
-            program: program.into(),
-            args,
+            command,
         }))? {
             Response::RemoteCommand(response) => Ok(response),
             _ => Err("Host returned an unexpected remote-command response".to_string()),
@@ -209,7 +203,7 @@ impl HostProjectServices {
         let response = Self::decode(
             self.send(ProjectRequest::Register {
                 project_id: self.project_id.clone(),
-                root: path_to_platform(&self.root),
+                root: path_to_platform(&self.root)?,
             })
             .map_err(|error| error.to_string())?,
         )?;
@@ -300,11 +294,10 @@ impl ProjectServices {
         let response = runtime
             .request(Request::Project(ProjectRequest::Register {
                 project_id: project_id.clone(),
-                root: path_to_platform(&root),
+                root: path_to_platform(&root)?,
             }))
             .map_err(|error| error.to_string())?;
         let Response::Project(ProjectResponse::Registered {
-            canonical_root,
             registration_epoch,
             watch_error,
             ..
@@ -318,7 +311,7 @@ impl ProjectServices {
                 project_id,
                 registration_epoch: AtomicU64::new(registration_epoch),
                 watch_error,
-                root: platform_path(canonical_root)?,
+                root,
                 registration_lock: Mutex::new(()),
             })),
         })
@@ -418,7 +411,8 @@ impl ProjectServices {
             ProjectBackend::Host(host) => host
                 .request(ProjectRequest::ScanDirectory {
                     project_id: host.project_id.clone(),
-                    relative_directory: path_to_platform(relative_directory),
+                    relative_directory: path_to_relative(relative_directory)
+                        .map_err(|message| tree_remote_error(relative_directory, message))?,
                     show_hidden,
                 })
                 .and_then(|response| match response {
@@ -469,10 +463,11 @@ impl ProjectServices {
             ProjectBackend::Host(host) => host
                 .request(ProjectRequest::ReadFile {
                     project_id: host.project_id.clone(),
-                    relative_path: path_to_platform(relative_path),
+                    relative_path: path_to_relative(relative_path)
+                        .map_err(|message| file_remote_error(relative_path, message))?,
                 })
                 .and_then(|response| match response {
-                    ProjectResponse::File(file) => host_loaded_file(file),
+                    ProjectResponse::File(file) => host_loaded_file(file, &host.root),
                     _ => Err("Host returned an unexpected file response".to_string()),
                 })
                 .map_err(|message| file_remote_error(relative_path, message)),
@@ -520,7 +515,8 @@ impl ProjectServices {
                 };
                 host.request(ProjectRequest::SaveFile {
                     project_id: host.project_id.clone(),
-                    relative_path: path_to_platform(relative_path),
+                    relative_path: path_to_relative(relative_path)
+                        .map_err(|message| file_remote_error(relative_path, message))?,
                     text: text.to_string(),
                     mode,
                 })
@@ -572,7 +568,8 @@ impl ProjectServices {
             ProjectBackend::Host(host) => host
                 .request(ProjectRequest::CreateEntry {
                     project_id: host.project_id.clone(),
-                    relative_parent: path_to_platform(relative_directory),
+                    relative_parent: path_to_relative(relative_directory)
+                        .map_err(|message| entry_remote_error(relative_directory, message))?,
                     input: input.to_string(),
                 })
                 .and_then(|response| match response {
@@ -638,7 +635,8 @@ impl ProjectServices {
             ProjectBackend::Host(host) => host
                 .request(ProjectRequest::RenameEntry {
                     project_id: host.project_id.clone(),
-                    relative_path: path_to_platform(relative_path),
+                    relative_path: path_to_relative(relative_path)
+                        .map_err(|message| entry_remote_error(relative_path, message))?,
                     new_name: new_name.to_string(),
                 })
                 .and_then(|response| match response {
@@ -678,7 +676,8 @@ impl ProjectServices {
             ProjectBackend::Host(host) => host
                 .request(ProjectRequest::DeleteEntry {
                     project_id: host.project_id.clone(),
-                    relative_path: path_to_platform(relative_path),
+                    relative_path: path_to_relative(relative_path)
+                        .map_err(|message| entry_remote_error(relative_path, message))?,
                 })
                 .and_then(|response| match response {
                     ProjectResponse::Deleted => Ok(()),
@@ -725,11 +724,15 @@ impl ProjectServices {
                 source
                     .request(ProjectRequest::PasteEntry {
                         source_project_id: source.project_id.clone(),
-                        source_relative_path: path_to_platform(source_relative_path),
+                        source_relative_path: path_to_relative(source_relative_path)
+                            .map_err(|message| entry_remote_error(source_relative_path, message))?,
                         destination_project_id: destination.project_id.clone(),
-                        destination_relative_directory: path_to_platform(
+                        destination_relative_directory: path_to_relative(
                             destination_relative_directory,
-                        ),
+                        )
+                        .map_err(|message| {
+                            entry_remote_error(destination_relative_directory, message)
+                        })?,
                         mode,
                     })
                     .and_then(|response| match response {
@@ -754,17 +757,12 @@ impl ProjectServices {
     }
 }
 impl ProjectGitExecutor for ProjectServices {
-    fn execute_git(
-        &self,
-        args: &[OsString],
-        optional_locks: bool,
-    ) -> Result<GitCommandOutput, String> {
+    fn execute_git(&self, operation: &ProjectGitOperation) -> Result<GitCommandOutput, String> {
         match self.backend.as_ref() {
             ProjectBackend::Host(host) => {
                 let response = host.request(ProjectRequest::Git {
                     project_id: host.project_id.clone(),
-                    args: args.iter().map(os_string_to_platform).collect(),
-                    optional_locks,
+                    operation: operation.clone(),
                 })?;
                 let ProjectResponse::Git(output) = response else {
                     return Err("Host returned an unexpected Git response".to_string());
@@ -776,17 +774,15 @@ impl ProjectGitExecutor for ProjectServices {
                     stderr: output.stderr,
                 })
             }
-            ProjectBackend::Local(local) => execute_local_git(&local.root, args, optional_locks),
+            ProjectBackend::Local(local) => super::git_status::execute_local_git_operation(
+                &local.root,
+                operation,
+                self.null_device_path(),
+            ),
             ProjectBackend::Ssh(project) => {
-                let args = args
-                    .iter()
-                    .map(|arg| {
-                        arg.to_str()
-                            .map(str::to_string)
-                            .ok_or_else(|| "remote Git arguments must be valid UTF-8".to_string())
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                let output = project.remote_command("git", args)?;
+                let output = project.remote_command(RemoteHostCommand::Git {
+                    operation: operation.clone(),
+                })?;
                 Ok(GitCommandOutput {
                     success: output.exit_status == 0,
                     exit_code: i32::try_from(output.exit_status).ok(),
@@ -832,14 +828,14 @@ fn host_relative_path(root: &Path, document_path: &Path) -> Result<PathBuf, Proj
 
 fn host_directory_snapshot(snapshot: ProjectDirectory) -> Result<DirectorySnapshot, String> {
     Ok(DirectorySnapshot {
-        relative_directory: platform_path(snapshot.relative_directory)?,
+        relative_directory: relative_os_path(snapshot.relative_directory),
         entries: snapshot
             .entries
             .into_iter()
             .map(|entry| {
                 Ok(ProjectTreeEntry {
-                    name: platform_argument(entry.name)?,
-                    relative_path: platform_path(entry.relative_path)?,
+                    name: entry.name.to_os_string(),
+                    relative_path: relative_os_path(entry.relative_path),
                     kind: host_entry_kind(entry.kind),
                 })
             })
@@ -847,10 +843,11 @@ fn host_directory_snapshot(snapshot: ProjectDirectory) -> Result<DirectorySnapsh
     })
 }
 
-fn host_loaded_file(file: ProjectFileContent) -> Result<LoadedProjectFile, String> {
+fn host_loaded_file(file: ProjectFileContent, root: &Path) -> Result<LoadedProjectFile, String> {
+    let relative_path = relative_os_path(file.relative_path);
     Ok(LoadedProjectFile {
-        canonical_path: platform_path(file.canonical_path)?,
-        relative_path: platform_path(file.relative_path)?,
+        canonical_path: root.join(&relative_path),
+        relative_path,
         text: file.text,
         fingerprint: fingerprint_from_host(file.fingerprint)?,
     })
@@ -867,6 +864,11 @@ fn fingerprint_to_host(fingerprint: &DiskFingerprint) -> ProjectFileFingerprint 
                 .map(|duration| duration.as_nanos())
         }),
         content_hash: fingerprint.content_hash,
+        revision: yttt_protocol::ContentRevision {
+            workspace_epoch: fingerprint.workspace_epoch,
+            revision_number: fingerprint.revision_number,
+            content_sha256: fingerprint.content_sha256,
+        },
     }
 }
 
@@ -884,6 +886,9 @@ fn fingerprint_from_host(fingerprint: ProjectFileFingerprint) -> Result<DiskFing
         byte_len: fingerprint.byte_len,
         modified,
         content_hash: fingerprint.content_hash,
+        workspace_epoch: fingerprint.revision.workspace_epoch,
+        revision_number: fingerprint.revision.revision_number,
+        content_sha256: fingerprint.revision.content_sha256,
     })
 }
 
@@ -905,7 +910,7 @@ fn host_save_outcome(outcome: ProjectSaveResult) -> Result<SaveProjectFileOutcom
 
 fn host_entry_mutation(mutation: HostEntryMutation) -> Result<ProjectEntryMutation, String> {
     Ok(ProjectEntryMutation {
-        relative_path: platform_path(mutation.relative_path)?,
+        relative_path: relative_os_path(mutation.relative_path),
         kind: host_entry_kind(mutation.kind),
     })
 }
@@ -919,100 +924,35 @@ fn host_entry_kind(kind: HostEntryKind) -> ProjectTreeEntryKind {
     }
 }
 
-#[cfg(unix)]
-pub(crate) fn path_to_platform(path: &Path) -> PlatformPath {
-    use std::os::unix::ffi::OsStrExt as _;
-    PlatformPath::Unix(path.as_os_str().as_bytes().to_vec())
+pub(crate) fn path_to_platform(path: &Path) -> Result<HostPath, String> {
+    HostPath::from_path(path).map_err(|error| error.to_string())
 }
 
-#[cfg(windows)]
-pub(crate) fn path_to_platform(path: &Path) -> PlatformPath {
-    use std::os::windows::ffi::OsStrExt as _;
-    PlatformPath::Windows(path.as_os_str().encode_wide().collect())
+pub(crate) fn platform_path(path: HostPath) -> Result<PathBuf, String> {
+    path.to_path().map_err(|error| error.to_string())
 }
 
-#[cfg(not(any(unix, windows)))]
-pub(crate) fn path_to_platform(path: &Path) -> PlatformPath {
-    PlatformPath::Unix(path.to_string_lossy().as_bytes().to_vec())
+pub(crate) fn path_to_relative(path: &Path) -> Result<ProjectRelativePath, String> {
+    ProjectRelativePath::from_path(path).map_err(|error| error.to_string())
 }
 
-#[cfg(unix)]
-pub(crate) fn platform_path(path: PlatformPath) -> Result<PathBuf, String> {
-    use std::os::unix::ffi::OsStringExt as _;
-    match path {
-        PlatformPath::Unix(bytes) => Ok(PathBuf::from(OsString::from_vec(bytes))),
-        PlatformPath::Windows(_) => Err("received a Windows path on a Unix client".to_string()),
-    }
+pub(crate) fn relative_os_path(path: ProjectRelativePath) -> PathBuf {
+    path.join_under(Path::new(""))
 }
 
-#[cfg(windows)]
-pub(crate) fn platform_path(path: PlatformPath) -> Result<PathBuf, String> {
-    use std::os::windows::ffi::OsStringExt as _;
-    match path {
-        PlatformPath::Windows(wide) => Ok(PathBuf::from(OsString::from_wide(&wide))),
-        PlatformPath::Unix(_) => Err("received a Unix path on a Windows client".to_string()),
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
-pub(crate) fn platform_path(_path: PlatformPath) -> Result<PathBuf, String> {
-    Err("project paths are unsupported on this platform".to_string())
-}
-
-#[cfg(unix)]
-fn os_string_to_platform(value: &OsString) -> PlatformArgument {
-    use std::os::unix::ffi::OsStrExt as _;
-    PlatformArgument::Unix(value.as_os_str().as_bytes().to_vec())
-}
-
-#[cfg(windows)]
-fn os_string_to_platform(value: &OsString) -> PlatformArgument {
-    use std::os::windows::ffi::OsStrExt as _;
-    PlatformArgument::Windows(value.encode_wide().collect())
-}
-
-#[cfg(not(any(unix, windows)))]
-fn os_string_to_platform(value: &OsString) -> PlatformArgument {
-    PlatformArgument::Unix(value.to_string_lossy().as_bytes().to_vec())
-}
-
-#[cfg(unix)]
-fn platform_argument(value: PlatformArgument) -> Result<OsString, String> {
-    use std::os::unix::ffi::OsStringExt as _;
-    match value {
-        PlatformArgument::Unix(bytes) => Ok(OsString::from_vec(bytes)),
-        PlatformArgument::Windows(_) => {
-            Err("received a Windows argument on a Unix client".to_string())
-        }
-    }
-}
-
-#[cfg(windows)]
-fn platform_argument(value: PlatformArgument) -> Result<OsString, String> {
-    use std::os::windows::ffi::OsStringExt as _;
-    match value {
-        PlatformArgument::Windows(wide) => Ok(OsString::from_wide(&wide)),
-        PlatformArgument::Unix(_) => {
-            Err("received a Unix argument on a Windows client".to_string())
-        }
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
-fn platform_argument(_value: PlatformArgument) -> Result<OsString, String> {
-    Err("project arguments are unsupported on this platform".to_string())
+fn remote_rel(path: &str) -> ProjectRelativePath {
+    ProjectRelativePath::from_utf8(path.trim_start_matches('/'))
+        .unwrap_or_else(|_| ProjectRelativePath::root())
 }
 
 fn searchable_git_files(services: &ProjectServices, show_hidden: bool) -> Option<Vec<PathBuf>> {
-    let args = [
-        OsString::from("ls-files"),
-        OsString::from("--cached"),
-        OsString::from("--others"),
-        OsString::from("--exclude-standard"),
-        OsString::from("-z"),
-        OsString::from("--"),
-    ];
-    let output = services.execute_git(&args, false).ok()?;
+    let output = services
+        .execute_git(&ProjectGitOperation::ListFiles {
+            cached: true,
+            others: true,
+            exclude_standard: true,
+        })
+        .ok()?;
     if !output.success {
         return None;
     }
@@ -1297,6 +1237,11 @@ fn remote_fingerprint(fingerprint: &DiskFingerprint) -> RemoteFileFingerprint {
         byte_len: fingerprint.byte_len,
         modified_seconds,
         content_hash: fingerprint.content_hash,
+        revision: yttt_protocol::ContentRevision {
+            workspace_epoch: fingerprint.workspace_epoch,
+            revision_number: fingerprint.revision_number,
+            content_sha256: fingerprint.content_sha256,
+        },
     }
 }
 
@@ -1308,6 +1253,9 @@ fn disk_fingerprint(fingerprint: RemoteFileFingerprint) -> DiskFingerprint {
             .modified_seconds
             .map(|seconds| UNIX_EPOCH + Duration::from_secs(u64::from(seconds))),
         content_hash: fingerprint.content_hash,
+        workspace_epoch: fingerprint.revision.workspace_epoch,
+        revision_number: fingerprint.revision.revision_number,
+        content_sha256: fingerprint.revision.content_sha256,
     }
 }
 
@@ -1386,6 +1334,10 @@ mod tests {
             byte_len: 42,
             modified_seconds: Some(123),
             content_hash: 99,
+            revision: yttt_protocol::ContentRevision {
+                content_sha256: [7; 32],
+                ..Default::default()
+            },
         };
         assert_eq!(
             remote_fingerprint(&disk_fingerprint(remote.clone())),
@@ -1405,10 +1357,9 @@ mod tests {
                 panic!("unexpected non-project request");
             };
             match request {
-                ProjectRequest::Register { root, .. } => {
+                ProjectRequest::Register { .. } => {
                     let registration_epoch = self.registrations.fetch_add(1, Ordering::Relaxed) + 1;
                     Ok(Response::Project(ProjectResponse::Registered {
-                        canonical_root: root,
                         registration_epoch,
                         watch_error: None,
                         null_device: "/dev/null".to_string(),
@@ -1427,7 +1378,6 @@ mod tests {
                     }
                     Ok(Response::Project(ProjectResponse::File(
                         ProjectFileContent {
-                            canonical_path: relative_path.clone(),
                             relative_path,
                             text: "recovered".to_string(),
                             fingerprint: ProjectFileFingerprint {
@@ -1435,6 +1385,7 @@ mod tests {
                                 byte_len: 9,
                                 modified_nanos: Some(1_000_000_000),
                                 content_hash: 1,
+                                revision: yttt_protocol::ContentRevision::default(),
                             },
                         },
                     )))
@@ -1513,10 +1464,9 @@ mod tests {
                 }) => {
                     assert_eq!(project_id, ProjectId::new("project"));
                     assert_eq!(connection_id, "connection");
-                    assert_eq!(root, "/remote");
+                    assert_eq!(root, ProjectRelativePath::from_utf8("remote").unwrap());
                     let registration_epoch = self.registrations.fetch_add(1, Ordering::Relaxed) + 1;
                     Ok(Response::Project(ProjectResponse::Registered {
-                        canonical_root: PlatformPath::Unix(root.into_bytes()),
                         registration_epoch,
                         watch_error: None,
                         null_device: "/dev/null".to_string(),
@@ -1548,6 +1498,7 @@ mod tests {
                                 byte_len: 9,
                                 modified_seconds: Some(1),
                                 content_hash: 1,
+                                revision: yttt_protocol::ContentRevision::default(),
                             },
                         },
                     )))

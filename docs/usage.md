@@ -224,7 +224,7 @@ Discard and Continue, or Cancel. A save failure leaves the file, project, or win
 ### File editing limits
 
 - Only regular UTF-8 text files are opened.
-- The maximum file size is 10 MiB.
+- The maximum file size is 6 MiB.
 - Canonical paths must remain inside the local or configured remote project root.
 - Symlinked directories are shown but not traversed.
 - Local active projects are watched recursively. Create, modify, and remove events refresh
@@ -806,7 +806,7 @@ Run these before marking a product phase complete:
 ## Known Limits
 
 - The project tree and text editor are not a general-purpose file manager or full IDE.
-- File editing is limited to regular UTF-8 files up to 10 MiB. Continuous filesystem watching is
+- File editing is limited to regular UTF-8 files up to 6 MiB. Continuous filesystem watching is
   limited to the active project; inactive projects refresh when selected.
 - Host/Client transport is local IPC only; remote-network clients are not implemented.
 - A desktop restart reattaches to a surviving Host, but a Host or machine restart cannot resurrect an existing PTY child process.

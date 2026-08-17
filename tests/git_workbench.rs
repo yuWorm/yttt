@@ -1,5 +1,4 @@
 use std::{
-    ffi::OsString,
     fs,
     path::Path,
     process::{Command, Stdio},
@@ -12,24 +11,28 @@ use yttt::runtime::git_status::{
     read_project_git_diff_result_with, read_project_git_status_with,
     switch_project_git_branch_with,
 };
+use yttt_protocol::ProjectGitOperation;
 
 struct LocalGit<'a> {
     project_path: &'a Path,
 }
 
 impl ProjectGitExecutor for LocalGit<'_> {
-    fn execute_git(
-        &self,
-        args: &[OsString],
-        optional_locks: bool,
-    ) -> Result<GitCommandOutput, String> {
+    fn execute_git(&self, operation: &ProjectGitOperation) -> Result<GitCommandOutput, String> {
+        let args = operation
+            .argv(self.null_device_path())
+            .map_err(|error| error.to_string())?;
+        let cwd = match operation.work_tree() {
+            Some(work_tree) => work_tree.join_under(self.project_path),
+            None => self.project_path.to_path_buf(),
+        };
         let mut command = Command::new("git");
         command
-            .args(args)
-            .current_dir(self.project_path)
+            .args(&args)
+            .current_dir(cwd)
             .stdin(Stdio::null())
             .stderr(Stdio::piped());
-        if optional_locks {
+        if operation.optional_locks() {
             command.env("GIT_OPTIONAL_LOCKS", "0");
         }
         let output = command.output().map_err(|error| error.to_string())?;

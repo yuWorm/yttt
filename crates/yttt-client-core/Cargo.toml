@@ -12,10 +12,11 @@ tokio = { version = "1", features = ["io-util", "macros", "rt", "sync", "time"] 
 yttt-agent-core = { path = "../yttt-agent-core" }
 yttt-core = { path = "../yttt-core" }
 yttt-protocol = { path = "../yttt-protocol" }
-yttt-transport-local = { path = "../yttt-transport-local" }
+yttt-transport = { path = "../yttt-transport" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
 serde_json = "1"
 tempfile = "3"
 yttt-host = { path = "../yttt-host" }
+yttt-transport-local = { path = "../yttt-transport-local" }

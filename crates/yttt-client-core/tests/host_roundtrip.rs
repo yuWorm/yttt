@@ -4,7 +4,6 @@ use std::{
     fs,
     io::{Read as _, Write as _},
     net::TcpStream,
-    os::unix::ffi::OsStrExt as _,
     os::unix::fs::PermissionsExt as _,
     process::Command,
     time::Duration,
@@ -13,9 +12,7 @@ use std::{
 use tempfile::TempDir;
 
 use yttt_client_core::{ClientCore, ClientCoreError, ClientEvent, ConnectionState, TerminalMirror};
-use yttt_core::model::ids::{
-    ClientInstanceId, PaneId, ProfileId, ProjectId, TabId, TerminalSessionId,
-};
+use yttt_core::model::ids::{ClientInstanceId, ProfileId, ProjectId, TerminalSessionId};
 use yttt_host::{HostBootstrap, diagnostics::HostDiagnosticsSnapshot, run};
 use yttt_protocol::{
     BuildIdentity, ClientRequest, ControlMessage, FailureCode, LIFECYCLE_PROTOCOL_VERSION,
@@ -23,8 +20,7 @@ use yttt_protocol::{
     LifecycleResponseEnvelope, ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request, Response,
     agent::AgentSnapshotCursor,
     project::{
-        PlatformPath, ProjectFileState, ProjectRequest, ProjectResponse, ProjectSaveMode,
-        ProjectSaveResult,
+        ProjectFileState, ProjectRequest, ProjectResponse, ProjectSaveMode, ProjectSaveResult,
     },
     ssh::{
         CredentialAnswer, CredentialChallengeKind, HostKeyDecision, RemoteCommandRequest,
@@ -39,9 +35,25 @@ use yttt_protocol::{
     },
 };
 use yttt_transport_local::{
-    AuthToken, ClientIdentity, client_handshake, connect, receive_control, receive_lifecycle,
-    send_control, send_lifecycle,
+    AuthToken, ClientIdentity, LocalConnector, LocalEndpoint, LocalListener, client_handshake,
+    connect, receive_control, receive_lifecycle, send_control, send_lifecycle,
 };
+
+fn host_path(path: &std::path::Path) -> yttt_protocol::HostPath {
+    yttt_protocol::HostPath::from_path(path).unwrap()
+}
+
+fn rel_path(path: &std::path::Path) -> yttt_protocol::ProjectRelativePath {
+    yttt_protocol::ProjectRelativePath::from_path(path).unwrap()
+}
+
+fn remote_rel(path: &str) -> yttt_protocol::ProjectRelativePath {
+    yttt_protocol::ProjectRelativePath::from_utf8(path.trim_start_matches('/')).unwrap()
+}
+
+fn host_endpoint(bootstrap: &HostBootstrap) -> LocalEndpoint {
+    LocalEndpoint::for_profile(bootstrap.profile_id.clone(), bootstrap.runtime_root.clone())
+}
 
 struct RunningHost {
     _temp: TempDir,
@@ -72,7 +84,8 @@ impl RunningHost {
                 resource_compatibility: "integration-resource-v1".to_string(),
             },
         };
-        let task = tokio::spawn(run(bootstrap.clone()));
+        let endpoint = host_endpoint(&bootstrap);
+        let task = tokio::spawn(run(bootstrap.clone(), || LocalListener::bind(endpoint)));
         tokio::time::timeout(Duration::from_secs(5), async {
             while !bootstrap.ready_file().exists() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -90,7 +103,7 @@ impl RunningHost {
 
     async fn client(&self, id: &str) -> ClientCore {
         ClientCore::connect(
-            self.bootstrap.endpoint(),
+            LocalConnector::new(host_endpoint(&self.bootstrap)),
             ClientIdentity {
                 supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
                 build: self.bootstrap.build.clone(),
@@ -118,7 +131,7 @@ impl RunningHost {
 }
 
 async fn raw_client(host: &RunningHost, id: &str) -> yttt_transport_local::LocalStream {
-    let mut stream = connect(&host.bootstrap.endpoint()).await.unwrap();
+    let mut stream = connect(&host_endpoint(&host.bootstrap)).await.unwrap();
     client_handshake(
         &mut stream,
         &ClientIdentity {
@@ -152,7 +165,7 @@ async fn raw_lifecycle_client_for(
     id: &str,
     can_force_stop: bool,
 ) -> yttt_transport_local::LocalStream {
-    let mut stream = connect(&bootstrap.endpoint()).await.unwrap();
+    let mut stream = connect(&host_endpoint(bootstrap)).await.unwrap();
     client_handshake(
         &mut stream,
         &ClientIdentity {
@@ -181,7 +194,7 @@ async fn raw_terminal_data_client(
     id: &str,
     session_id: TerminalSessionId,
 ) -> yttt_transport_local::LocalStream {
-    let mut stream = connect(&host.bootstrap.endpoint()).await.unwrap();
+    let mut stream = connect(&host_endpoint(&host.bootstrap)).await.unwrap();
     client_handshake(
         &mut stream,
         &ClientIdentity {
@@ -208,7 +221,7 @@ async fn raw_request(
 ) -> Result<Response, yttt_protocol::ProtocolFailure> {
     send_control(
         stream,
-        &ControlMessage::Request(ClientRequest { request_id, body }),
+        &ControlMessage::Request(ClientRequest::new(request_id, body)),
     )
     .await
     .unwrap();
@@ -275,9 +288,7 @@ fn spawn_spec() -> TerminalSpawnSpec {
     TerminalSpawnSpec {
         session_id: TerminalSessionId::new("host-owned"),
         project_id: ProjectId::new("project"),
-        tab_id: TabId::new("tab"),
-        pane_id: PaneId::new("pane"),
-        cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+        cwd: yttt_protocol::ProjectRelativePath::root(),
         execution: TerminalExecutionSpec::Command {
             shell: "/bin/sh".to_string(),
             program: "/bin/sh".to_string(),
@@ -668,7 +679,6 @@ async fn exited_terminal_reconnects_with_its_final_checkpoint_until_acknowledged
     let first = host.client("exit-first").await;
     let mut spec = spawn_spec();
     spec.session_id = TerminalSessionId::new("exited-reconnect");
-    spec.pane_id = PaneId::new("exited-reconnect");
     spec.execution = TerminalExecutionSpec::Command {
         shell: "/bin/sh".to_string(),
         program: "/bin/sh".to_string(),
@@ -756,7 +766,6 @@ async fn stop_if_idle_is_atomic_and_drain_waits_for_terminal_ack() {
     let client = host.client("lifecycle-blockers").await;
     let mut spec = spawn_spec();
     spec.session_id = TerminalSessionId::new("lifecycle-blocker");
-    spec.pane_id = PaneId::new("lifecycle-blocker");
     spec.execution = TerminalExecutionSpec::Command {
         shell: "/bin/sh".to_string(),
         program: "/bin/sh".to_string(),
@@ -921,10 +930,7 @@ async fn host_rejects_terminal_session_address_collisions() {
         .unwrap();
 
     let mut conflicting = original.clone();
-    conflicting.cwd = std::env::temp_dir()
-        .join("different-address")
-        .to_string_lossy()
-        .into_owned();
+    conflicting.cwd = yttt_protocol::ProjectRelativePath::from_utf8("different-address").unwrap();
     let error = client
         .request(Request::SpawnTerminal(conflicting))
         .await
@@ -974,7 +980,6 @@ async fn host_roundtrip_preserves_input_resize_scroll_environment_and_title() {
     let client = host.client("interactive-client").await;
     let mut spec = spawn_spec();
     spec.session_id = TerminalSessionId::new("interactive");
-    spec.pane_id = PaneId::new("interactive");
     spec.environment = vec![("YTTT_HOST_TEST".to_string(), "environment-ok".to_string())];
     spec.execution = TerminalExecutionSpec::Command {
         shell: "/bin/sh".to_string(),
@@ -1181,7 +1186,6 @@ async fn multiple_clients_keep_independent_viewports_and_a_single_input_owner() 
     let owner = host.client("viewport-owner").await;
     let mut spec = spawn_spec();
     spec.session_id = TerminalSessionId::new("shared-terminal");
-    spec.pane_id = PaneId::new("shared-terminal");
     spec.execution = TerminalExecutionSpec::Command {
         shell: "/bin/sh".to_string(),
         program: "/bin/sh".to_string(),
@@ -1425,38 +1429,73 @@ async fn multiple_clients_keep_independent_viewports_and_a_single_input_owner() 
     ));
 
     let mut owner_events = owner.subscribe_events();
-    let lease_response = observer
+    let mut observer_events = observer.subscribe_events();
+    let conflict = observer
         .request(Request::AcquireTerminalLease {
             session_id: session_id.clone(),
             mode: TerminalLeaseMode::Interactive,
         })
         .await
+        .unwrap_err();
+    assert!(matches!(
+        conflict,
+        ClientCoreError::Protocol(failure) if failure.code == FailureCode::Conflict
+    ));
+    let pending = observer
+        .request(Request::RequestTerminalControl {
+            session_id: session_id.clone(),
+        })
+        .await
         .unwrap();
-    let Response::TerminalLease(new_owner_lease) = lease_response else {
-        panic!("unexpected acquire lease response: {lease_response:?}");
+    let Response::TerminalControlPending { holder, .. } = pending else {
+        panic!("unexpected control request response: {pending:?}");
     };
-    assert_eq!(new_owner_lease.owner.as_str(), "viewport-observer");
-    assert_eq!(new_owner_lease.mode, TerminalLeaseMode::Interactive);
+    assert_eq!(holder.as_str(), "viewport-owner");
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let event = owner_events.recv().await.unwrap();
             if matches!(
                 &event,
                 ClientEvent::Server(yttt_protocol::HostEvent {
-                    body: yttt_protocol::ServerEvent::TerminalLeaseRevoked {
+                    body: yttt_protocol::ServerEvent::TerminalControlRequested {
                         session_id,
-                        previous_owner,
+                        requester,
                     },
                     ..
                 }) if *session_id == TerminalSessionId::new("shared-terminal")
-                    && previous_owner.as_str() == "viewport-owner"
+                    && requester.as_str() == "viewport-observer"
             ) {
                 break;
             }
         }
     })
     .await
-    .expect("lease revocation event timeout");
+    .expect("control request event timeout");
+    assert_eq!(
+        owner
+            .request(Request::ReleaseTerminalControl {
+                session_id: session_id.clone(),
+            })
+            .await
+            .unwrap(),
+        Response::Applied
+    );
+    let new_owner_lease = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = observer_events.recv().await.unwrap();
+            if let ClientEvent::Server(yttt_protocol::HostEvent {
+                body: yttt_protocol::ServerEvent::TerminalControlGranted { lease },
+                ..
+            }) = event
+                && lease.session_id == TerminalSessionId::new("shared-terminal")
+                && lease.owner.as_str() == "viewport-observer"
+            {
+                break lease;
+            }
+        }
+    })
+    .await
+    .expect("control granted event timeout");
     let former_owner_input = owner
         .request(Request::TerminalInput(TerminalInput {
             session_id: session_id.clone(),
@@ -1523,7 +1562,6 @@ async fn slow_observer_does_not_block_the_owner_or_change_canonical_geometry() {
     let owner = host.client("slow-owner").await;
     let mut spec = spawn_spec();
     spec.session_id = TerminalSessionId::new("slow-observer");
-    spec.pane_id = PaneId::new("slow-observer");
     spec.execution = TerminalExecutionSpec::Command {
         shell: "/bin/sh".to_string(),
         program: "/bin/sh".to_string(),
@@ -1711,7 +1749,10 @@ async fn client_reconciles_stale_terminal_after_host_restart() {
     );
     assert!(client.known_terminal_ids().contains(&session_id));
 
-    let restarted = tokio::spawn(run(bootstrap.clone()));
+    let restart_endpoint = host_endpoint(&bootstrap);
+    let restarted = tokio::spawn(run(bootstrap.clone(), || {
+        LocalListener::bind(restart_endpoint)
+    }));
     tokio::time::timeout(Duration::from_secs(5), async {
         while !bootstrap.ready_file().exists() {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1769,8 +1810,6 @@ async fn host_owns_authenticated_agent_state_and_resyncs_snapshots() {
     let mut spec = spawn_spec();
     spec.session_id = session_id.clone();
     spec.project_id = ProjectId::new("project");
-    spec.tab_id = TabId::new("tab");
-    spec.pane_id = PaneId::new("pane");
     spec.environment.push((
         "YTTT_TEST_AGENT_ENVIRONMENT_FILE".to_string(),
         environment_file.to_string_lossy().into_owned(),
@@ -1843,8 +1882,8 @@ async fn host_owns_authenticated_agent_state_and_resyncs_snapshots() {
     };
     let update = update.clone();
     assert_eq!(update.scope.project_id, "project");
-    assert_eq!(update.scope.tab_id, "tab");
-    assert_eq!(update.scope.pane_id, "pane");
+    assert_eq!(update.scope.tab_id, session_id.as_str());
+    assert_eq!(update.scope.pane_id, session_id.as_str());
     assert_eq!(update.terminal_session_id, session_id);
     assert_eq!(
         update
@@ -1976,7 +2015,6 @@ async fn host_owns_project_files_and_publishes_watcher_events() {
     let client = host.client("project-client").await;
     let mut events = client.subscribe_events();
     let project_id = ProjectId::new("host-project");
-    let path = |path: &std::path::Path| PlatformPath::Unix(path.as_os_str().as_bytes().to_vec());
 
     let Response::Project(ProjectResponse::Registered {
         registration_epoch,
@@ -1985,7 +2023,7 @@ async fn host_owns_project_files_and_publishes_watcher_events() {
     }) = client
         .request(Request::Project(ProjectRequest::Register {
             project_id: project_id.clone(),
-            root: path(&project_root),
+            root: host_path(&project_root),
         }))
         .await
         .unwrap()
@@ -2011,7 +2049,7 @@ async fn host_owns_project_files_and_publishes_watcher_events() {
     let Response::Project(ProjectResponse::File(file)) = client
         .request(Request::Project(ProjectRequest::ReadFile {
             project_id: project_id.clone(),
-            relative_path: path(std::path::Path::new("notes.txt")),
+            relative_path: rel_path(std::path::Path::new("notes.txt")),
         }))
         .await
         .unwrap()
@@ -2023,7 +2061,7 @@ async fn host_owns_project_files_and_publishes_watcher_events() {
     let Response::Project(ProjectResponse::Save(ProjectSaveResult::Saved(saved))) = client
         .request(Request::Project(ProjectRequest::SaveFile {
             project_id: project_id.clone(),
-            relative_path: path(std::path::Path::new("notes.txt")),
+            relative_path: rel_path(std::path::Path::new("notes.txt")),
             text: "after".to_string(),
             mode: ProjectSaveMode::Check(file.fingerprint),
         }))
@@ -2043,7 +2081,7 @@ async fn host_owns_project_files_and_publishes_watcher_events() {
     ))) = client
         .request(Request::Project(ProjectRequest::SaveFile {
             project_id: project_id.clone(),
-            relative_path: path(std::path::Path::new("notes.txt")),
+            relative_path: rel_path(std::path::Path::new("notes.txt")),
             text: "stale".to_string(),
             mode: ProjectSaveMode::Check(saved),
         }))
@@ -2053,6 +2091,9 @@ async fn host_owns_project_files_and_publishes_watcher_events() {
         panic!("stale project save did not report a conflict");
     };
     assert_ne!(current.content_hash, 0);
+    assert_ne!(current.revision.workspace_epoch, 0);
+    assert_ne!(current.revision.revision_number, 0);
+    assert_ne!(current.revision.content_sha256, [0; 32]);
 
     let change = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -2082,7 +2123,7 @@ async fn host_owns_project_files_and_publishes_watcher_events() {
     let missing = client
         .request(Request::Project(ProjectRequest::ScanDirectory {
             project_id,
-            relative_directory: path(std::path::Path::new("")),
+            relative_directory: rel_path(std::path::Path::new("")),
             show_hidden: false,
         }))
         .await
@@ -2132,7 +2173,7 @@ async fn remote_project_operations_require_a_host_registration() {
         .request(Request::Project(ProjectRequest::RegisterSsh {
             project_id: project_id.clone(),
             connection_id: "connection".to_string(),
-            root: "/remote".to_string(),
+            root: remote_rel("/remote"),
         }))
         .await
         .unwrap()
@@ -2324,7 +2365,7 @@ async fn host_ssh_product_smoke_covers_host_key_sftp_git_and_terminal() {
         .request(Request::Project(ProjectRequest::RegisterSsh {
             project_id: project_id.clone(),
             connection_id: "ssh-smoke".to_string(),
-            root: home.clone(),
+            root: remote_rel(&home),
         }))
         .await
         .unwrap()
@@ -2348,16 +2389,26 @@ async fn host_ssh_product_smoke_covers_host_key_sftp_git_and_terminal() {
         ))
     );
 
-    let repository = format!("{home}/yttt-smoke/repo");
+    assert!(matches!(
+        client
+            .request(Request::RemoteFile(RemoteFileRequest::Create {
+                project_id: project_id.clone(),
+                relative_path: "yttt-smoke/repo".to_string(),
+                directory: true,
+            }))
+            .await
+            .unwrap(),
+        Response::RemoteFile(RemoteFileResponse::Mutation(_))
+    ));
     let Response::RemoteCommand(initialized) = client
         .request(Request::RemoteCommand(RemoteCommandRequest {
             project_id: project_id.clone(),
-            program: "git".to_string(),
-            args: vec![
-                "init".to_string(),
-                "--quiet".to_string(),
-                repository.clone(),
-            ],
+            command: yttt_protocol::ssh::RemoteHostCommand::Git {
+                operation: yttt_protocol::ProjectGitOperation::Init {
+                    quiet: true,
+                    work_tree: Some(remote_rel("yttt-smoke/repo")),
+                },
+            },
         }))
         .await
         .unwrap()
@@ -2399,13 +2450,11 @@ async fn host_ssh_product_smoke_covers_host_key_sftp_git_and_terminal() {
     let Response::RemoteCommand(status) = client
         .request(Request::RemoteCommand(RemoteCommandRequest {
             project_id: project_id.clone(),
-            program: "git".to_string(),
-            args: vec![
-                "-C".to_string(),
-                repository,
-                "status".to_string(),
-                "--porcelain".to_string(),
-            ],
+            command: yttt_protocol::ssh::RemoteHostCommand::Git {
+                operation: yttt_protocol::ProjectGitOperation::Status {
+                    work_tree: Some(remote_rel("yttt-smoke/repo")),
+                },
+            },
         }))
         .await
         .unwrap()
@@ -2413,13 +2462,14 @@ async fn host_ssh_product_smoke_covers_host_key_sftp_git_and_terminal() {
         panic!("unexpected remote git status response");
     };
     assert_eq!(status.exit_status, 0, "{status:?}");
-    assert_eq!(String::from_utf8(status.stdout).unwrap(), "?? note.txt\n");
+    let stdout = String::from_utf8(status.stdout).unwrap();
+    assert!(stdout.contains("?? note.txt"), "{stdout}");
 
     let session_id = TerminalSessionId::new("ssh-product-terminal");
     let mut spec = spawn_spec();
     spec.session_id = session_id.clone();
     spec.project_id = ProjectId::new("ssh-product-project");
-    spec.cwd = home;
+    spec.cwd = remote_rel(&home);
     spec.execution = TerminalExecutionSpec::Ssh {
         connection_id: "ssh-smoke".to_string(),
         execution: RemoteTerminalExecutionSpec::Command {
@@ -2624,6 +2674,226 @@ async fn host_terminal_performance_probe() {
             mode: TerminationMode::Terminate,
         })
         .await;
+    assert_eq!(
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
+    );
+    tokio::time::timeout(Duration::from_secs(5), host.task)
+        .await
+        .expect("Host shutdown timeout")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn attach_and_checkpoint_omit_raw_replay_tail_and_recover_visible_output() {
+    let host = RunningHost::start().await;
+    let first = host.client("checkpoint-owner").await;
+    let mut spec = spawn_spec();
+    spec.session_id = TerminalSessionId::new("checkpoint-limit");
+    spec.execution = TerminalExecutionSpec::Command {
+        shell: "/bin/sh".to_string(),
+        program: "/bin/sh".to_string(),
+        args: vec![
+            "-lc".to_string(),
+            "printf 'recover-me\\n'; sleep 30".to_string(),
+        ],
+        return_to_shell: false,
+    };
+    let session_id = spec.session_id.clone();
+    let Response::TerminalSpawned { session_epoch, .. } =
+        first.request(Request::SpawnTerminal(spec)).await.unwrap()
+    else {
+        panic!("unexpected spawn response");
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if first
+                .terminal_snapshot(&session_id)
+                .is_some_and(|viewport| viewport_text(&viewport).contains("recover-me"))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("spawned output timeout");
+    first
+        .request(Request::DetachTerminal {
+            session_id: session_id.clone(),
+        })
+        .await
+        .unwrap();
+    drop(first);
+
+    let second = host.client("checkpoint-reattach").await;
+    let attached = second
+        .request(Request::AttachTerminal(AttachTerminal {
+            session_id: session_id.clone(),
+            known_session_epoch: Some(session_epoch),
+            after_sequence: second
+                .terminal_snapshot(&session_id)
+                .map(|viewport| viewport.sequence),
+            mode: TerminalLeaseMode::Interactive,
+            query_palette: Vec::new(),
+            palette_revision: 1,
+            geometry: geometry(),
+            geometry_epoch: 2,
+        }))
+        .await
+        .unwrap();
+    let Response::TerminalAttached { checkpoint, .. } = attached else {
+        panic!("unexpected attach response: {attached:?}");
+    };
+    assert!(checkpoint.raw_replay_tail.is_empty());
+    assert!(viewport_text(&checkpoint.viewport).contains("recover-me"));
+
+    let Response::TerminalCheckpoint(requested) = second
+        .request(Request::RequestCheckpoint {
+            session_id: session_id.clone(),
+            after_sequence: None,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected checkpoint response");
+    };
+    assert!(requested.raw_replay_tail.is_empty());
+    assert!(viewport_text(&requested.viewport).contains("recover-me"));
+
+    let Response::TerminalTerminated(terminated) = second
+        .request(Request::TerminateTerminal {
+            session_id: session_id.clone(),
+            mode: TerminationMode::Terminate,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected terminate response");
+    };
+    second
+        .request(Request::AcknowledgeTerminalExit {
+            session_id,
+            session_epoch,
+            final_sequence: terminated.final_sequence,
+        })
+        .await
+        .unwrap();
+    drop(second);
+    assert_eq!(
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
+    );
+    tokio::time::timeout(Duration::from_secs(5), host.task)
+        .await
+        .expect("Host shutdown timeout")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn project_file_limit_is_frame_safe_and_oversized_files_return_resource_limit() {
+    let host = RunningHost::start().await;
+    let project_root = host._temp.path().join("limit-project");
+    fs::create_dir_all(&project_root).unwrap();
+    let allowed = "ok".repeat(512 * 1024);
+    fs::write(project_root.join("ok.txt"), &allowed).unwrap();
+    fs::write(
+        project_root.join("too-big.txt"),
+        "x".repeat(9 * 1024 * 1024),
+    )
+    .unwrap();
+    let client = host.client("file-limit-client").await;
+    let project_id = ProjectId::new("file-limit");
+
+    let Response::Project(ProjectResponse::Registered {
+        registration_epoch, ..
+    }) = client
+        .request(Request::Project(ProjectRequest::Register {
+            project_id: project_id.clone(),
+            root: host_path(&project_root),
+        }))
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected project registration response");
+    };
+
+    let Response::Project(ProjectResponse::File(file)) = client
+        .request(Request::Project(ProjectRequest::ReadFile {
+            project_id: project_id.clone(),
+            relative_path: rel_path(std::path::Path::new("ok.txt")),
+        }))
+        .await
+        .unwrap()
+    else {
+        panic!("in-limit file read failed");
+    };
+    assert_eq!(file.text, allowed);
+
+    let oversized = client
+        .request(Request::Project(ProjectRequest::ReadFile {
+            project_id: project_id.clone(),
+            relative_path: rel_path(std::path::Path::new("too-big.txt")),
+        }))
+        .await
+        .unwrap_err();
+    let ClientCoreError::Protocol(failure) = oversized else {
+        panic!("unexpected oversized read error: {oversized}");
+    };
+    assert_eq!(failure.code, FailureCode::ResourceLimit);
+    assert!(failure.message.contains("9437184"));
+    assert!(failure.message.contains("6291456"));
+
+    let save_error = client
+        .request(Request::Project(ProjectRequest::SaveFile {
+            project_id: project_id.clone(),
+            relative_path: rel_path(std::path::Path::new("save-too-big.txt")),
+            text: "y".repeat(6 * 1024 * 1024 + 1),
+            mode: ProjectSaveMode::Force,
+        }))
+        .await
+        .unwrap_err();
+    let ClientCoreError::Protocol(failure) = save_error else {
+        panic!("unexpected oversized save error: {save_error}");
+    };
+    assert_eq!(failure.code, FailureCode::ResourceLimit);
+
+    let Response::Project(ProjectResponse::Save(ProjectSaveResult::Saved(_))) = client
+        .request(Request::Project(ProjectRequest::SaveFile {
+            project_id: project_id.clone(),
+            relative_path: rel_path(std::path::Path::new("ok.txt")),
+            text: "rewritten".to_string(),
+            mode: ProjectSaveMode::Force,
+        }))
+        .await
+        .unwrap()
+    else {
+        panic!("in-limit save failed");
+    };
+    let Response::Project(ProjectResponse::File(file)) = client
+        .request(Request::Project(ProjectRequest::ReadFile {
+            project_id: project_id.clone(),
+            relative_path: rel_path(std::path::Path::new("ok.txt")),
+        }))
+        .await
+        .unwrap()
+    else {
+        panic!("in-limit reread failed");
+    };
+    assert_eq!(file.text, "rewritten");
+
+    client
+        .request(Request::Project(ProjectRequest::Close {
+            project_id,
+            registration_epoch,
+        }))
+        .await
+        .unwrap();
+    drop(client);
     assert_eq!(
         host.lifecycle_request(LifecycleRequest::BeginDrain, false)
             .await,

@@ -1231,6 +1231,9 @@ mod tests {
                 byte_len: markdown.len() as u64,
                 modified: None,
                 content_hash: 1,
+                workspace_epoch: 0,
+                revision_number: 0,
+                content_sha256: [0; 32],
             },
         );
         let appearance = EditorAppearance::default();
@@ -1297,6 +1300,9 @@ mod tests {
                 byte_len: 15,
                 modified: None,
                 content_hash: 1,
+                workspace_epoch: 0,
+                revision_number: 0,
+                content_sha256: [0; 32],
             },
         );
         let appearance = EditorAppearance::default();

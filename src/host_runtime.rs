@@ -73,10 +73,10 @@ impl DesktopHostRuntime {
             profile.config_paths().terminal_placements_file(),
         )?);
         let managed_process = Arc::new(Mutex::new(runtime.block_on(launcher.launch_or_attach())?));
-        let (endpoint, identity, token) = launcher.client_core_config(ClientInstanceId::new(
+        let (connector, identity, token) = launcher.client_core_config(ClientInstanceId::new(
             format!("desktop-{}", uuid::Uuid::new_v4()),
         ))?;
-        let client = Arc::new(runtime.block_on(ClientCore::connect(endpoint, identity, token))?);
+        let client = Arc::new(runtime.block_on(ClientCore::connect(connector, identity, token))?);
         let mut state = client.subscribe_state();
         let recovery_launcher = launcher.clone();
         let recovered_process = managed_process.clone();
@@ -551,16 +551,14 @@ mod tests {
     use crate::config::profile::{
         EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
     };
-    use yttt_core::model::ids::{HostId, PaneId, ProfileId, ProjectId, TabId};
+    use yttt_core::model::ids::{HostId, ProfileId, ProjectId};
     use yttt_protocol::terminal::{TerminalExecutionSpec, TerminalGeometry};
 
     fn spec() -> TerminalSpawnSpec {
         TerminalSpawnSpec {
             session_id: TerminalSessionId::new("project:tab:pane"),
             project_id: ProjectId::new("project"),
-            tab_id: TabId::new("tab"),
-            pane_id: PaneId::new("pane"),
-            cwd: "/tmp/project".to_string(),
+            cwd: yttt_protocol::ProjectRelativePath::root(),
             execution: TerminalExecutionSpec::Shell {
                 program: "/bin/sh".to_string(),
                 args: Vec::new(),
@@ -621,8 +619,6 @@ mod tests {
             session_id: spec.session_id.clone(),
             session_epoch: 3,
             project_id: spec.project_id.clone(),
-            tab_id: spec.tab_id.clone(),
-            pane_id: spec.pane_id.clone(),
             geometry: spec.geometry,
             last_sequence: 11,
             spawn_fingerprint: spec.address_fingerprint(),
@@ -663,8 +659,6 @@ mod tests {
             session_id: requested.session_id.clone(),
             session_epoch: 3,
             project_id: requested.project_id.clone(),
-            tab_id: requested.tab_id.clone(),
-            pane_id: requested.pane_id.clone(),
             geometry: requested.geometry,
             last_sequence: 11,
             spawn_fingerprint: requested.address_fingerprint().wrapping_add(1),
@@ -708,8 +702,6 @@ mod tests {
             session_id: requested.session_id.clone(),
             session_epoch: 3,
             project_id: requested.project_id.clone(),
-            tab_id: requested.tab_id.clone(),
-            pane_id: requested.pane_id.clone(),
             geometry: requested.geometry,
             last_sequence: 11,
             spawn_fingerprint: requested.address_fingerprint(),

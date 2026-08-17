@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 use yttt_core::model::ids::ProfileId;
 
-use crate::project::PlatformPath;
+use crate::path::HostPath;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DesktopShellRequest {
     Activate,
-    OpenWindow { project_paths: Vec<PlatformPath> },
+    OpenWindow { project_paths: Vec<HostPath> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

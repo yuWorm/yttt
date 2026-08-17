@@ -1,0 +1,18 @@
+[package]
+name = "yttt-transport"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+hmac = "0.12"
+rand = "0.8"
+sha2 = "0.10"
+serde = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["io-util", "macros", "rt", "sync", "time"] }
+yttt-core = { path = "../yttt-core" }
+yttt-protocol = { path = "../yttt-protocol" }
+zeroize = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

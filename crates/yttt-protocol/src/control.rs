@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
-use yttt_core::model::ids::{
-    ClientInstanceId, HostId, PaneId, ProfileId, ProjectId, TabId, TerminalSessionId,
-};
+use yttt_core::model::ids::{ClientInstanceId, HostId, ProfileId, ProjectId, TerminalSessionId};
 
 use crate::{
     agent::{AgentSnapshotCursor, AgentSnapshotUpdate},
@@ -20,10 +18,37 @@ use crate::{
     },
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Capability {
+    TerminalInteractive,
+    ProjectRead,
+    ProjectMutate,
+    GitRead,
+    GitMutate,
+    SshConnect,
+    RemoteCommandPrivileged,
+    CredentialAnswer,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientRequest {
     pub request_id: u64,
+    #[serde(default)]
+    pub actor_device_id: Option<String>,
+    #[serde(default)]
+    pub lease_epoch: Option<u64>,
     pub body: Request,
+}
+
+impl ClientRequest {
+    pub fn new(request_id: u64, body: Request) -> Self {
+        Self {
+            request_id,
+            actor_device_id: None,
+            lease_epoch: None,
+            body,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,6 +152,136 @@ pub enum Request {
     ReadAgentSnapshots {
         acknowledged: Vec<AgentSnapshotCursor>,
     },
+    RequestTerminalControl {
+        session_id: TerminalSessionId,
+    },
+    ReleaseTerminalControl {
+        session_id: TerminalSessionId,
+    },
+}
+
+impl Request {
+    pub fn required_capability(&self) -> Option<Capability> {
+        match self {
+            Self::Ping { .. }
+            | Self::ListResources
+            | Self::DetachTerminal { .. }
+            | Self::ScrollTerminal(_)
+            | Self::ReadTerminalViewport(_)
+            | Self::SearchTerminal(_)
+            | Self::RequestCheckpoint { .. }
+            | Self::AcknowledgeTerminalExit { .. }
+            | Self::ReadAgentSnapshots { .. } => None,
+            Self::SpawnTerminal(_)
+            | Self::TerminalInput(_)
+            | Self::ResizeTerminal(_)
+            | Self::SetTerminalQueryPalette(_)
+            | Self::RequestTerminalControl { .. }
+            | Self::ReleaseTerminalControl { .. }
+            | Self::ReleaseTerminalLease { .. }
+            | Self::TerminateMany { .. } => Some(Capability::TerminalInteractive),
+            Self::AttachTerminal(attach) => (attach.mode == TerminalLeaseMode::Interactive)
+                .then_some(Capability::TerminalInteractive),
+            Self::AcquireTerminalLease { mode, .. } => {
+                (*mode == TerminalLeaseMode::Interactive).then_some(Capability::TerminalInteractive)
+            }
+            Self::TerminateTerminal { mode, .. } => match mode {
+                TerminationMode::Detach => None,
+                TerminationMode::Terminate | TerminationMode::TerminateMany => {
+                    Some(Capability::TerminalInteractive)
+                }
+            },
+            Self::SshConnect(_) | Self::SshDisconnect { .. } | Self::DeleteSshCredential { .. } => {
+                Some(Capability::SshConnect)
+            }
+            Self::CredentialAnswer { .. } => Some(Capability::CredentialAnswer),
+            Self::RemoteFile(request) => Some(request.required_capability()),
+            Self::RemoteCommand(request) => Some(request.required_capability()),
+            Self::Project(request) => Some(request.required_capability()),
+        }
+    }
+
+    pub fn audit_action(&self) -> Option<&'static str> {
+        Some(match self.required_capability()? {
+            Capability::TerminalInteractive => "terminal.mutate",
+            Capability::ProjectRead => "project.read",
+            Capability::ProjectMutate => "project.mutate",
+            Capability::GitRead => "git.read",
+            Capability::GitMutate => "git.mutate",
+            Capability::SshConnect => "ssh.connect",
+            Capability::RemoteCommandPrivileged => "remote.privileged",
+            Capability::CredentialAnswer => "credential.answer",
+        })
+    }
+
+    pub fn audit_resource(&self) -> String {
+        match self {
+            Self::SpawnTerminal(spec) => spec.session_id.to_string(),
+            Self::AttachTerminal(attach) => attach.session_id.to_string(),
+            Self::DetachTerminal { session_id }
+            | Self::AcquireTerminalLease { session_id, .. }
+            | Self::ReleaseTerminalLease { session_id }
+            | Self::RequestTerminalControl { session_id }
+            | Self::ReleaseTerminalControl { session_id }
+            | Self::RequestCheckpoint { session_id, .. }
+            | Self::AcknowledgeTerminalExit { session_id, .. }
+            | Self::TerminateTerminal { session_id, .. } => session_id.to_string(),
+            Self::TerminalInput(input) => input.session_id.to_string(),
+            Self::ResizeTerminal(request) => request.session_id.to_string(),
+            Self::ScrollTerminal(request) => request.session_id.to_string(),
+            Self::ReadTerminalViewport(request) => request.session_id.to_string(),
+            Self::SearchTerminal(request) => request.session_id.to_string(),
+            Self::SetTerminalQueryPalette(request) => request.session_id.to_string(),
+            Self::SshConnect(spec) => spec.connection_id.clone(),
+            Self::SshDisconnect { connection_id }
+            | Self::DeleteSshCredential {
+                credential_id: connection_id,
+            } => connection_id.clone(),
+            Self::CredentialAnswer { challenge_id, .. } => challenge_id.to_string(),
+            Self::RemoteFile(request) => remote_file_resource(request),
+            Self::RemoteCommand(request) => request.project_id.to_string(),
+            Self::Project(request) => project_resource(request),
+            Self::TerminateMany { requests } => requests
+                .iter()
+                .map(|request| request.session_id.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            Self::Ping { .. } | Self::ListResources | Self::ReadAgentSnapshots { .. } => {
+                String::new()
+            }
+        }
+    }
+}
+
+fn remote_file_resource(request: &RemoteFileRequest) -> String {
+    match request {
+        RemoteFileRequest::ResolveHome { connection_id }
+        | RemoteFileRequest::BrowseDirectory { connection_id, .. } => connection_id.clone(),
+        RemoteFileRequest::ScanDirectory { project_id, .. }
+        | RemoteFileRequest::Read { project_id, .. }
+        | RemoteFileRequest::Save { project_id, .. }
+        | RemoteFileRequest::Create { project_id, .. }
+        | RemoteFileRequest::Rename { project_id, .. }
+        | RemoteFileRequest::Delete { project_id, .. } => project_id.to_string(),
+    }
+}
+
+fn project_resource(request: &ProjectRequest) -> String {
+    match request {
+        ProjectRequest::Register { project_id, .. }
+        | ProjectRequest::RegisterSsh { project_id, .. }
+        | ProjectRequest::Close { project_id, .. }
+        | ProjectRequest::ScanDirectory { project_id, .. }
+        | ProjectRequest::ReadFile { project_id, .. }
+        | ProjectRequest::SaveFile { project_id, .. }
+        | ProjectRequest::CreateEntry { project_id, .. }
+        | ProjectRequest::RenameEntry { project_id, .. }
+        | ProjectRequest::DeleteEntry { project_id, .. }
+        | ProjectRequest::Git { project_id, .. } => project_id.to_string(),
+        ProjectRequest::PasteEntry {
+            source_project_id, ..
+        } => source_project_id.to_string(),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,6 +331,10 @@ pub enum Response {
     Project(ProjectResponse),
     AgentSnapshots(Vec<AgentSnapshotUpdate>),
     Applied,
+    TerminalControlPending {
+        session_id: TerminalSessionId,
+        holder: ClientInstanceId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -202,6 +361,31 @@ pub enum ServerEvent {
     AgentSnapshot(Box<AgentSnapshotUpdate>),
     HostDraining,
     HostStopping,
+    TerminalControlRequested {
+        session_id: TerminalSessionId,
+        requester: ClientInstanceId,
+    },
+    TerminalControlGranted {
+        lease: TerminalLease,
+    },
+    TerminalLeaseReleased {
+        session_id: TerminalSessionId,
+        previous_owner: ClientInstanceId,
+    },
+    TerminalLeaseExpired {
+        session_id: TerminalSessionId,
+        previous_owner: ClientInstanceId,
+    },
+    TerminalControlDenied {
+        session_id: TerminalSessionId,
+        requester: ClientInstanceId,
+        reason: TerminalControlDeniedReason,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TerminalControlDeniedReason {
+    TimedOut,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -228,8 +412,6 @@ pub struct TerminalPlacement {
     pub session_id: TerminalSessionId,
     pub session_epoch: u64,
     pub project_id: ProjectId,
-    pub tab_id: TabId,
-    pub pane_id: PaneId,
     pub geometry: TerminalGeometry,
     pub last_sequence: u64,
     pub spawn_fingerprint: u64,
@@ -254,6 +436,7 @@ pub enum FailureCode {
     TransportClosed,
     HostStopping,
     Internal,
+    ResyncRequired,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -270,5 +453,152 @@ impl ProtocolFailure {
             message: message.into(),
             retryable,
         }
+    }
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use yttt_core::model::ids::{ProjectId, TerminalSessionId};
+
+    use super::*;
+    use crate::{
+        project::{ProjectGitOperation, ProjectRequest},
+        ssh::{RemoteCommandRequest, RemoteFileRequest, RemoteHostCommand},
+        terminal::{AttachTerminal, TerminalGeometry, TerminalLeaseMode, TerminationMode},
+    };
+
+    fn session() -> TerminalSessionId {
+        TerminalSessionId::new("session")
+    }
+
+    fn project() -> ProjectId {
+        ProjectId::new("project")
+    }
+
+    fn attach(mode: TerminalLeaseMode) -> AttachTerminal {
+        AttachTerminal {
+            session_id: session(),
+            known_session_epoch: None,
+            after_sequence: None,
+            mode,
+            geometry: TerminalGeometry::default(),
+            geometry_epoch: 1,
+            query_palette: Vec::new(),
+            palette_revision: 1,
+        }
+    }
+
+    #[test]
+    fn mutating_requests_declare_a_capability() {
+        let mutating = [
+            Request::SpawnTerminal(crate::terminal::TerminalSpawnSpec {
+                session_id: session(),
+                project_id: project(),
+                cwd: crate::ProjectRelativePath::root(),
+                execution: crate::terminal::TerminalExecutionSpec::Shell {
+                    program: "/bin/sh".to_string(),
+                    args: Vec::new(),
+                    initial_command: None,
+                },
+                geometry: TerminalGeometry::default(),
+                geometry_epoch: 1,
+                query_palette: Vec::new(),
+                palette_revision: 1,
+                environment: Vec::new(),
+                removed_environment: Vec::new(),
+                scrollback_limit: 1,
+            }),
+            Request::AttachTerminal(attach(TerminalLeaseMode::Interactive)),
+            Request::AcquireTerminalLease {
+                session_id: session(),
+                mode: TerminalLeaseMode::Interactive,
+            },
+            Request::ReleaseTerminalLease {
+                session_id: session(),
+            },
+            Request::RequestTerminalControl {
+                session_id: session(),
+            },
+            Request::ReleaseTerminalControl {
+                session_id: session(),
+            },
+            Request::TerminateTerminal {
+                session_id: session(),
+                mode: TerminationMode::Terminate,
+            },
+            Request::SshConnect(crate::ssh::SshConnectSpec {
+                connection_id: "ssh".to_string(),
+                endpoint: crate::ssh::SshEndpoint {
+                    host: "localhost".to_string(),
+                    port: 22,
+                    username: "user".to_string(),
+                },
+                authentication: crate::ssh::SshAuthentication::Agent,
+                reconnect: false,
+            }),
+            Request::CredentialAnswer {
+                challenge_id: 1,
+                answer: crate::ssh::CredentialAnswer::Cancelled,
+            },
+            Request::RemoteFile(RemoteFileRequest::Save {
+                project_id: project(),
+                relative_path: "file.txt".to_string(),
+                expected: None,
+                force: true,
+                maximum_bytes: 16,
+                bytes: Vec::new(),
+            }),
+            Request::RemoteCommand(RemoteCommandRequest {
+                project_id: project(),
+                command: RemoteHostCommand::Privileged {
+                    program: "id".to_string(),
+                    args: Vec::new(),
+                },
+            }),
+            Request::Project(ProjectRequest::Git {
+                project_id: project(),
+                operation: ProjectGitOperation::Switch {
+                    name: "main".to_string(),
+                    track_remote: false,
+                },
+            }),
+            Request::Project(ProjectRequest::SaveFile {
+                project_id: project(),
+                relative_path: crate::ProjectRelativePath::from_utf8("notes.txt").unwrap(),
+                text: "x".to_string(),
+                mode: crate::project::ProjectSaveMode::Force,
+            }),
+        ];
+        for request in mutating {
+            assert!(
+                request.required_capability().is_some(),
+                "mutating request must declare a capability: {request:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn observer_and_read_paths_do_not_require_a_capability() {
+        assert_eq!(Request::Ping { sent_millis: 1 }.required_capability(), None);
+        assert_eq!(
+            Request::AttachTerminal(attach(TerminalLeaseMode::Observer)).required_capability(),
+            None
+        );
+        assert_eq!(
+            Request::Project(ProjectRequest::ReadFile {
+                project_id: project(),
+                relative_path: crate::ProjectRelativePath::root(),
+            })
+            .required_capability(),
+            Some(Capability::ProjectRead)
+        );
+        assert_eq!(
+            Request::Project(ProjectRequest::Git {
+                project_id: project(),
+                operation: ProjectGitOperation::Status { work_tree: None },
+            })
+            .required_capability(),
+            Some(Capability::GitRead)
+        );
     }
 }

@@ -15,7 +15,7 @@ use gpui::{
 };
 use yttt_agent_core::AgentInstanceId;
 use yttt_client_core::{ClientEvent, ConnectionState};
-use yttt_core::model::ids::{ConnectionId, PaneId, ProjectId, TabId, TerminalSessionId};
+use yttt_core::model::ids::{ConnectionId, ProjectId, TerminalSessionId};
 use yttt_protocol::{
     Request, Response, ServerEvent,
     terminal::{
@@ -579,11 +579,6 @@ impl TerminalPaneView {
     }
 
     fn host_spawn_spec(&self, geometry: TerminalGeometry) -> anyhow::Result<TerminalSpawnSpec> {
-        let cwd = self
-            .project_path
-            .to_str()
-            .ok_or_else(|| anyhow::anyhow!("terminal path is not valid UTF-8"))?
-            .to_string();
         let execution = if let Some(ssh) = &self.ssh {
             TerminalExecutionSpec::Ssh {
                 connection_id: ssh.connection_id.as_str().to_string(),
@@ -620,9 +615,7 @@ impl TerminalPaneView {
         Ok(TerminalSpawnSpec {
             session_id: self.host_session_id(),
             project_id: ProjectId::new(self.project_id.clone()),
-            tab_id: TabId::new(self.tab_id.clone()),
-            pane_id: PaneId::new(self.pane_id.clone()),
-            cwd,
+            cwd: yttt_protocol::ProjectRelativePath::root(),
             execution,
             geometry,
             geometry_epoch: 1,
@@ -1098,6 +1091,37 @@ impl TerminalPaneView {
                 } if revoked_session_id == *session_id => {
                     self.terminal_error =
                         Some("Terminal input lease was revoked by another client".to_string());
+                    cx.notify();
+                }
+                ServerEvent::TerminalLeaseReleased {
+                    session_id: released_session_id,
+                    ..
+                } if released_session_id == *session_id => {
+                    self.terminal_error = Some("Terminal input lease was released".to_string());
+                    cx.notify();
+                }
+                ServerEvent::TerminalLeaseExpired {
+                    session_id: expired_session_id,
+                    ..
+                } if expired_session_id == *session_id => {
+                    self.terminal_error =
+                        Some("Terminal input lease expired after idle takeover".to_string());
+                    cx.notify();
+                }
+                ServerEvent::TerminalControlRequested {
+                    session_id: requested_session_id,
+                    requester,
+                } if requested_session_id == *session_id => {
+                    self.terminal_error = Some(format!(
+                        "Another client ({}) requested terminal control",
+                        requester.as_str()
+                    ));
+                    cx.notify();
+                }
+                ServerEvent::TerminalControlGranted { lease }
+                    if lease.session_id == *session_id =>
+                {
+                    self.terminal_error = None;
                     cx.notify();
                 }
                 _ => {}

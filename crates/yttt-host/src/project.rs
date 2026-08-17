@@ -25,11 +25,14 @@ use yttt_project_core::{
         paste_project_entry, rename_project_entry, scan_project_directory,
     },
 };
-use yttt_protocol::project::{
-    PlatformArgument, PlatformPath, ProjectChange, ProjectDirectory, ProjectEntry,
-    ProjectEntryKind, ProjectEntryMutation, ProjectFileContent, ProjectFileFingerprint,
-    ProjectFileState, ProjectGitOutput, ProjectPasteMode, ProjectRequest, ProjectResponse,
-    ProjectSaveMode, ProjectSaveResult,
+use yttt_protocol::{
+    HostPath, PathSegment, ProjectRelativePath,
+    project::{
+        ContentRevision, ProjectChange, ProjectDirectory, ProjectEntry, ProjectEntryKind,
+        ProjectEntryMutation, ProjectFileContent, ProjectFileFingerprint, ProjectFileState,
+        ProjectGitOutput, ProjectPasteMode, ProjectRequest, ProjectResponse, ProjectSaveMode,
+        ProjectSaveResult,
+    },
 };
 
 const PROJECT_EVENT_CAPACITY: usize = 256;
@@ -46,6 +49,39 @@ impl HostProjectError {
         Self {
             code: yttt_protocol::FailureCode::NotFound,
             message: message.into(),
+        }
+    }
+
+    pub fn with_code(code: yttt_protocol::FailureCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+impl From<yttt_project_core::file::ProjectFileIoError> for HostProjectError {
+    fn from(error: yttt_project_core::file::ProjectFileIoError) -> Self {
+        let code = match error {
+            yttt_project_core::file::ProjectFileIoError::FileTooLarge { .. } => {
+                yttt_protocol::FailureCode::ResourceLimit
+            }
+            yttt_project_core::file::ProjectFileIoError::PathOutsideProject { .. } => {
+                yttt_protocol::FailureCode::PermissionDenied
+            }
+            yttt_project_core::file::ProjectFileIoError::NotAFile { .. }
+            | yttt_project_core::file::ProjectFileIoError::BinaryContent { .. }
+            | yttt_project_core::file::ProjectFileIoError::InvalidUtf8 { .. } => {
+                yttt_protocol::FailureCode::InvalidRequest
+            }
+            yttt_project_core::file::ProjectFileIoError::Io { .. }
+            | yttt_project_core::file::ProjectFileIoError::Remote { .. } => {
+                yttt_protocol::FailureCode::Internal
+            }
+        };
+        Self {
+            code,
+            message: error.to_string(),
         }
     }
 }
@@ -76,20 +112,120 @@ struct RegisteredProject {
     _watcher: Option<notify::RecommendedWatcher>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AssignedRevision {
+    revision_number: u64,
+    content_sha256: [u8; 32],
+}
+
 pub struct HostProjectRuntime {
     roots: RwLock<HashMap<ProjectId, RegisteredProject>>,
     next_registration_epoch: AtomicU64,
     events: broadcast::Sender<ProjectChange>,
+    workspace_epoch: u64,
+    next_revision: AtomicU64,
+    revisions: RwLock<HashMap<(ProjectId, String), AssignedRevision>>,
 }
 
 impl HostProjectRuntime {
+    #[cfg(test)]
     pub fn new() -> Self {
+        Self::new_with_epoch(1)
+    }
+
+    pub fn new_with_epoch(workspace_epoch: u64) -> Self {
         let (events, _) = broadcast::channel(PROJECT_EVENT_CAPACITY);
         Self {
             roots: RwLock::new(HashMap::new()),
             next_registration_epoch: AtomicU64::new(0),
             events,
+            workspace_epoch,
+            next_revision: AtomicU64::new(1),
+            revisions: RwLock::new(HashMap::new()),
         }
+    }
+
+    #[cfg(test)]
+    pub fn workspace_epoch(&self) -> u64 {
+        self.workspace_epoch
+    }
+
+    pub fn bind_revision(
+        &self,
+        project_id: &ProjectId,
+        relative_path: &str,
+        content_sha256: [u8; 32],
+    ) -> ContentRevision {
+        let key = (project_id.clone(), relative_path.to_string());
+        let mut revisions = self
+            .revisions
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(current) = revisions.get(&key)
+            && current.content_sha256 == content_sha256
+        {
+            return ContentRevision {
+                workspace_epoch: self.workspace_epoch,
+                revision_number: current.revision_number,
+                content_sha256,
+            };
+        }
+        let revision_number = self.next_revision.fetch_add(1, Ordering::Relaxed);
+        revisions.insert(
+            key,
+            AssignedRevision {
+                revision_number,
+                content_sha256,
+            },
+        );
+        ContentRevision {
+            workspace_epoch: self.workspace_epoch,
+            revision_number,
+            content_sha256,
+        }
+    }
+
+    pub fn bump_revision(
+        &self,
+        project_id: &ProjectId,
+        relative_path: &str,
+        content_sha256: [u8; 32],
+    ) -> ContentRevision {
+        let revision_number = self.next_revision.fetch_add(1, Ordering::Relaxed);
+        self.revisions
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(
+                (project_id.clone(), relative_path.to_string()),
+                AssignedRevision {
+                    revision_number,
+                    content_sha256,
+                },
+            );
+        ContentRevision {
+            workspace_epoch: self.workspace_epoch,
+            revision_number,
+            content_sha256,
+        }
+    }
+
+    pub fn revision_matches(
+        &self,
+        project_id: &ProjectId,
+        relative_path: &str,
+        expected: &ContentRevision,
+    ) -> bool {
+        if expected.workspace_epoch != self.workspace_epoch {
+            return false;
+        }
+        self.revisions
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&(project_id.clone(), relative_path.to_string()))
+            .is_some_and(|current| {
+                current.revision_number == expected.revision_number
+                    && current.content_sha256 == expected.content_sha256
+            })
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<ProjectChange> {
@@ -127,7 +263,7 @@ impl HostProjectRuntime {
     pub fn handle(&self, request: ProjectRequest) -> Result<ProjectResponse, HostProjectError> {
         match request {
             ProjectRequest::Register { project_id, root } => {
-                let root = platform_path(root)?;
+                let root = host_os_path(root)?;
                 let root = fs::canonicalize(&root).map_err(|error| {
                     format!("failed to open project {}: {error}", root.display())
                 })?;
@@ -161,7 +297,6 @@ impl HostProjectRuntime {
                         },
                     );
                 Ok(ProjectResponse::Registered {
-                    canonical_root: path_to_platform(&root),
                     registration_epoch,
                     watch_error,
                     null_device: null_device_path().to_string(),
@@ -172,7 +307,7 @@ impl HostProjectRuntime {
                 connection_id,
                 root,
             } => {
-                let root = RemotePathBuf::new(root).map_err(|error| error.to_string())?;
+                let root = remote_root(root)?;
                 let registration_epoch = self
                     .next_registration_epoch
                     .fetch_add(1, Ordering::Relaxed)
@@ -192,7 +327,6 @@ impl HostProjectRuntime {
                         },
                     );
                 Ok(ProjectResponse::Registered {
-                    canonical_root: PlatformPath::Unix(root.as_str().as_bytes().to_vec()),
                     registration_epoch,
                     watch_error: None,
                     null_device: "/dev/null".to_string(),
@@ -220,20 +354,22 @@ impl HostProjectRuntime {
                 show_hidden,
             } => {
                 let root = self.local_root(&project_id)?;
-                let relative_directory = platform_path(relative_directory)?;
+                let relative_directory = relative_os_path(relative_directory);
                 let snapshot = scan_project_directory(&root, &relative_directory, show_hidden)
                     .map_err(|error| error.to_string())?;
                 Ok(ProjectResponse::Directory(ProjectDirectory {
-                    relative_directory: path_to_platform(&snapshot.relative_directory),
+                    relative_directory: path_to_relative(&snapshot.relative_directory)?,
                     entries: snapshot
                         .entries
                         .into_iter()
-                        .map(|entry| ProjectEntry {
-                            name: os_string_to_platform(entry.name),
-                            relative_path: path_to_platform(&entry.relative_path),
-                            kind: entry_kind(entry.kind),
+                        .map(|entry| {
+                            Ok(ProjectEntry {
+                                name: os_string_to_segment(entry.name)?,
+                                relative_path: path_to_relative(&entry.relative_path)?,
+                                kind: entry_kind(entry.kind),
+                            })
                         })
-                        .collect(),
+                        .collect::<Result<Vec<_>, String>>()?,
                 }))
             }
             ProjectRequest::ReadFile {
@@ -241,14 +377,17 @@ impl HostProjectRuntime {
                 relative_path,
             } => {
                 let root = self.local_root(&project_id)?;
-                let relative_path = platform_path(relative_path)?;
-                let loaded =
-                    read_project_file(&root, &relative_path).map_err(|error| error.to_string())?;
+                let relative_path = relative_os_path(relative_path);
+                let path_key = relative_path.to_string_lossy().into_owned();
+                let loaded = read_project_file(&root, &relative_path)?;
                 Ok(ProjectResponse::File(ProjectFileContent {
-                    canonical_path: path_to_platform(&loaded.canonical_path),
-                    relative_path: path_to_platform(&loaded.relative_path),
+                    relative_path: path_to_relative(&loaded.relative_path)?,
                     text: loaded.text,
-                    fingerprint: fingerprint_to_wire(&loaded.fingerprint),
+                    fingerprint: self.fingerprint_to_wire(
+                        &project_id,
+                        &path_key,
+                        &loaded.fingerprint,
+                    ),
                 }))
             }
             ProjectRequest::SaveFile {
@@ -258,7 +397,26 @@ impl HostProjectRuntime {
                 mode,
             } => {
                 let root = self.local_root(&project_id)?;
-                let relative_path = platform_path(relative_path)?;
+                let relative_path = relative_os_path(relative_path);
+                let path_key = relative_path.to_string_lossy().into_owned();
+                if let ProjectSaveMode::Check(base) = &mode
+                    && !self.revision_matches(&project_id, &path_key, &base.revision)
+                {
+                    let current = match read_project_file(&root, &relative_path) {
+                        Ok(loaded) => ProjectFileState::Present(self.fingerprint_to_wire(
+                            &project_id,
+                            &loaded.relative_path.to_string_lossy(),
+                            &loaded.fingerprint,
+                        )),
+                        Err(yttt_project_core::file::ProjectFileIoError::Io { source, .. })
+                            if source.kind() == std::io::ErrorKind::NotFound =>
+                        {
+                            ProjectFileState::Missing
+                        }
+                        Err(error) => return Err(error.into()),
+                    };
+                    return Ok(ProjectResponse::Save(ProjectSaveResult::Conflict(current)));
+                }
                 let expected;
                 let mode = match mode {
                     ProjectSaveMode::Check(fingerprint) => {
@@ -267,15 +425,19 @@ impl HostProjectRuntime {
                     }
                     ProjectSaveMode::Force => SaveMode::Force,
                 };
-                let result = save_project_file(&root, &relative_path, &text, mode)
-                    .map_err(|error| error.to_string())?;
+                let result = save_project_file(&root, &relative_path, &text, mode)?;
                 Ok(ProjectResponse::Save(match result {
                     SaveProjectFileOutcome::Saved(fingerprint) => {
-                        ProjectSaveResult::Saved(fingerprint_to_wire(&fingerprint))
+                        let revision =
+                            self.bump_revision(&project_id, &path_key, fingerprint.content_sha256);
+                        ProjectSaveResult::Saved(fingerprint_to_wire_with_revision(
+                            &fingerprint,
+                            revision,
+                        ))
                     }
-                    SaveProjectFileOutcome::Conflict(state) => {
-                        ProjectSaveResult::Conflict(file_state_to_wire(state))
-                    }
+                    SaveProjectFileOutcome::Conflict(state) => ProjectSaveResult::Conflict(
+                        self.file_state_to_wire(&project_id, &path_key, state),
+                    ),
                 }))
             }
             ProjectRequest::CreateEntry {
@@ -284,7 +446,7 @@ impl HostProjectRuntime {
                 input,
             } => {
                 let root = self.local_root(&project_id)?;
-                let relative_parent = platform_path(relative_parent)?;
+                let relative_parent = relative_os_path(relative_parent);
                 let mutation = create_project_entry(&root, &relative_parent, &input)
                     .map_err(|error| error.to_string())?;
                 Ok(ProjectResponse::Mutation(mutation_to_wire(mutation)))
@@ -295,7 +457,7 @@ impl HostProjectRuntime {
                 new_name,
             } => {
                 let root = self.local_root(&project_id)?;
-                let relative_path = platform_path(relative_path)?;
+                let relative_path = relative_os_path(relative_path);
                 let mutation = rename_project_entry(&root, &relative_path, &new_name)
                     .map_err(|error| error.to_string())?;
                 Ok(ProjectResponse::Mutation(mutation_to_wire(mutation)))
@@ -305,7 +467,7 @@ impl HostProjectRuntime {
                 relative_path,
             } => {
                 let root = self.local_root(&project_id)?;
-                let relative_path = platform_path(relative_path)?;
+                let relative_path = relative_os_path(relative_path);
                 delete_project_entry(&root, &relative_path).map_err(|error| error.to_string())?;
                 Ok(ProjectResponse::Deleted)
             }
@@ -318,8 +480,9 @@ impl HostProjectRuntime {
             } => {
                 let source_root = self.local_root(&source_project_id)?;
                 let destination_root = self.local_root(&destination_project_id)?;
-                let source_relative_path = platform_path(source_relative_path)?;
-                let destination_relative_directory = platform_path(destination_relative_directory)?;
+                let source_relative_path = relative_os_path(source_relative_path);
+                let destination_relative_directory =
+                    relative_os_path(destination_relative_directory);
                 let mode = match mode {
                     ProjectPasteMode::Copy => CorePasteMode::Copy,
                     ProjectPasteMode::Cut => CorePasteMode::Cut,
@@ -336,21 +499,32 @@ impl HostProjectRuntime {
             }
             ProjectRequest::Git {
                 project_id,
-                args,
-                optional_locks,
+                operation,
             } => {
                 let root = self.local_root(&project_id)?;
-                let args = args
-                    .into_iter()
-                    .map(platform_argument)
-                    .collect::<Result<Vec<_>, _>>()?;
+                let cwd = match operation.work_tree() {
+                    Some(work_tree) => work_tree.join_under(&root),
+                    None => root,
+                };
+                let args = operation.argv(null_device_path()).map_err(|error| {
+                    HostProjectError::with_code(
+                        yttt_protocol::FailureCode::InvalidRequest,
+                        error.to_string(),
+                    )
+                })?;
+                if !yttt_protocol::git_argv_is_safe(&args) {
+                    return Err(HostProjectError::with_code(
+                        yttt_protocol::FailureCode::PermissionDenied,
+                        "git arguments are not allowed",
+                    ));
+                }
                 let mut command = git_command();
                 command
                     .args(args)
-                    .current_dir(root)
+                    .current_dir(cwd)
                     .stdin(Stdio::null())
                     .stderr(Stdio::piped());
-                if optional_locks {
+                if operation.optional_locks() {
                     command.env("GIT_OPTIONAL_LOCKS", "0");
                 }
                 let output = command.output().map_err(|error| error.to_string())?;
@@ -364,7 +538,7 @@ impl HostProjectRuntime {
         }
     }
 
-    fn local_root(&self, project_id: &ProjectId) -> Result<PathBuf, HostProjectError> {
+    pub(crate) fn local_root(&self, project_id: &ProjectId) -> Result<PathBuf, HostProjectError> {
         self.roots
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -378,6 +552,30 @@ impl HostProjectRuntime {
                     "project is not registered with Host: {project_id}"
                 ))
             })
+    }
+
+    fn fingerprint_to_wire(
+        &self,
+        project_id: &ProjectId,
+        relative_path: &str,
+        fingerprint: &DiskFingerprint,
+    ) -> ProjectFileFingerprint {
+        let revision = self.bind_revision(project_id, relative_path, fingerprint.content_sha256);
+        fingerprint_to_wire_with_revision(fingerprint, revision)
+    }
+
+    fn file_state_to_wire(
+        &self,
+        project_id: &ProjectId,
+        relative_path: &str,
+        state: CurrentDiskState,
+    ) -> ProjectFileState {
+        match state {
+            CurrentDiskState::Missing => ProjectFileState::Missing,
+            CurrentDiskState::Present(fingerprint) => ProjectFileState::Present(
+                self.fingerprint_to_wire(project_id, relative_path, &fingerprint),
+            ),
+        }
     }
 
     pub fn ssh_project(
@@ -447,7 +645,11 @@ fn watch_project(
                 let relative_paths = event
                     .paths
                     .into_iter()
-                    .filter_map(|path| path.strip_prefix(&callback_root).ok().map(path_to_platform))
+                    .filter_map(|path| {
+                        path.strip_prefix(&callback_root)
+                            .ok()
+                            .and_then(|relative| path_to_relative(relative).ok())
+                    })
                     .collect::<Vec<_>>();
                 if refresh_tree && relative_paths.is_empty() {
                     refresh_all = true;
@@ -484,7 +686,10 @@ fn watch_project(
     Ok(watcher)
 }
 
-fn fingerprint_to_wire(fingerprint: &DiskFingerprint) -> ProjectFileFingerprint {
+fn fingerprint_to_wire_with_revision(
+    fingerprint: &DiskFingerprint,
+    revision: ContentRevision,
+) -> ProjectFileFingerprint {
     ProjectFileFingerprint {
         exists: fingerprint.exists,
         byte_len: fingerprint.byte_len,
@@ -495,6 +700,7 @@ fn fingerprint_to_wire(fingerprint: &DiskFingerprint) -> ProjectFileFingerprint 
                 .map(|duration| duration.as_nanos())
         }),
         content_hash: fingerprint.content_hash,
+        revision,
     }
 }
 
@@ -512,21 +718,16 @@ fn fingerprint_from_wire(fingerprint: ProjectFileFingerprint) -> Result<DiskFing
         byte_len: fingerprint.byte_len,
         modified,
         content_hash: fingerprint.content_hash,
+        workspace_epoch: fingerprint.revision.workspace_epoch,
+        revision_number: fingerprint.revision.revision_number,
+        content_sha256: fingerprint.revision.content_sha256,
     })
-}
-
-fn file_state_to_wire(state: CurrentDiskState) -> ProjectFileState {
-    match state {
-        CurrentDiskState::Missing => ProjectFileState::Missing,
-        CurrentDiskState::Present(fingerprint) => {
-            ProjectFileState::Present(fingerprint_to_wire(&fingerprint))
-        }
-    }
 }
 
 fn mutation_to_wire(mutation: CoreEntryMutation) -> ProjectEntryMutation {
     ProjectEntryMutation {
-        relative_path: path_to_platform(&mutation.relative_path),
+        relative_path: path_to_relative(&mutation.relative_path)
+            .expect("project mutations stay inside the project root"),
         kind: entry_kind(mutation.kind),
     }
 }
@@ -540,86 +741,30 @@ fn entry_kind(kind: CoreEntryKind) -> ProjectEntryKind {
     }
 }
 
-#[cfg(unix)]
-fn platform_path(path: PlatformPath) -> Result<PathBuf, String> {
-    use std::os::unix::ffi::OsStringExt as _;
-    match path {
-        PlatformPath::Unix(bytes) => Ok(PathBuf::from(OsString::from_vec(bytes))),
-        PlatformPath::Windows(_) => Err("received a Windows path on a Unix Host".to_string()),
-    }
+fn host_os_path(path: HostPath) -> Result<PathBuf, String> {
+    path.to_path().map_err(|error| error.to_string())
 }
 
-#[cfg(windows)]
-fn platform_path(path: PlatformPath) -> Result<PathBuf, String> {
-    use std::os::windows::ffi::OsStringExt as _;
-    match path {
-        PlatformPath::Windows(wide) => Ok(PathBuf::from(OsString::from_wide(&wide))),
-        PlatformPath::Unix(_) => Err("received a Unix path on a Windows Host".to_string()),
-    }
+fn relative_os_path(path: ProjectRelativePath) -> PathBuf {
+    path.join_under(Path::new(""))
 }
 
-#[cfg(not(any(unix, windows)))]
-fn platform_path(_path: PlatformPath) -> Result<PathBuf, String> {
-    Err("project paths are unsupported on this platform".to_string())
+fn path_to_relative(path: &Path) -> Result<ProjectRelativePath, String> {
+    ProjectRelativePath::from_path(path).map_err(|error| error.to_string())
 }
 
-#[cfg(unix)]
-fn path_to_platform(path: &Path) -> PlatformPath {
-    use std::os::unix::ffi::OsStrExt as _;
-    PlatformPath::Unix(path.as_os_str().as_bytes().to_vec())
+fn remote_root(path: ProjectRelativePath) -> Result<RemotePathBuf, String> {
+    let relative = path.to_utf8().map_err(|error| error.to_string())?;
+    let absolute = if relative.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{relative}")
+    };
+    RemotePathBuf::new(absolute).map_err(|error| error.to_string())
 }
 
-#[cfg(windows)]
-fn path_to_platform(path: &Path) -> PlatformPath {
-    use std::os::windows::ffi::OsStrExt as _;
-    PlatformPath::Windows(path.as_os_str().encode_wide().collect())
-}
-
-#[cfg(not(any(unix, windows)))]
-fn path_to_platform(path: &Path) -> PlatformPath {
-    PlatformPath::Unix(path.to_string_lossy().as_bytes().to_vec())
-}
-
-#[cfg(unix)]
-fn os_string_to_platform(value: OsString) -> PlatformArgument {
-    use std::os::unix::ffi::OsStringExt as _;
-    PlatformArgument::Unix(value.into_vec())
-}
-
-#[cfg(windows)]
-fn os_string_to_platform(value: OsString) -> PlatformArgument {
-    use std::os::windows::ffi::OsStrExt as _;
-    PlatformArgument::Windows(value.encode_wide().collect())
-}
-
-#[cfg(not(any(unix, windows)))]
-fn os_string_to_platform(value: OsString) -> PlatformArgument {
-    PlatformArgument::Unix(value.to_string_lossy().as_bytes().to_vec())
-}
-
-#[cfg(unix)]
-fn platform_argument(value: PlatformArgument) -> Result<OsString, String> {
-    use std::os::unix::ffi::OsStringExt as _;
-    match value {
-        PlatformArgument::Unix(bytes) => Ok(OsString::from_vec(bytes)),
-        PlatformArgument::Windows(_) => {
-            Err("received a Windows argument on a Unix Host".to_string())
-        }
-    }
-}
-
-#[cfg(windows)]
-fn platform_argument(value: PlatformArgument) -> Result<OsString, String> {
-    use std::os::windows::ffi::OsStringExt as _;
-    match value {
-        PlatformArgument::Windows(wide) => Ok(OsString::from_wide(&wide)),
-        PlatformArgument::Unix(_) => Err("received a Unix argument on a Windows Host".to_string()),
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
-fn platform_argument(_value: PlatformArgument) -> Result<OsString, String> {
-    Err("project arguments are unsupported on this platform".to_string())
+fn os_string_to_segment(value: OsString) -> Result<PathSegment, String> {
+    PathSegment::from_os_str(&value).map_err(|error| error.to_string())
 }
 
 #[cfg(windows)]
@@ -661,7 +806,7 @@ mod tests {
             .handle(ProjectRequest::RegisterSsh {
                 project_id: project_id.clone(),
                 connection_id: "first".to_string(),
-                root: "/first".to_string(),
+                root: ProjectRelativePath::from_utf8("first").unwrap(),
             })
             .unwrap()
         else {
@@ -674,7 +819,7 @@ mod tests {
             .handle(ProjectRequest::RegisterSsh {
                 project_id: project_id.clone(),
                 connection_id: "second".to_string(),
-                root: "/second".to_string(),
+                root: ProjectRelativePath::from_utf8("second").unwrap(),
             })
             .unwrap()
         else {
@@ -704,5 +849,81 @@ mod tests {
             error.to_string(),
             "project is not registered with Host: remote"
         );
+    }
+
+    #[test]
+    fn stale_workspace_epoch_does_not_overwrite_and_returns_conflict() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("notes.txt"), "v1").unwrap();
+        let first = HostProjectRuntime::new_with_epoch(1);
+        let project_id = ProjectId::new("notes");
+        first
+            .handle(ProjectRequest::Register {
+                project_id: project_id.clone(),
+                root: HostPath::from_path(root.path()).unwrap(),
+            })
+            .unwrap();
+        let ProjectResponse::File(file) = first
+            .handle(ProjectRequest::ReadFile {
+                project_id: project_id.clone(),
+                relative_path: ProjectRelativePath::from_utf8("notes.txt").unwrap(),
+            })
+            .unwrap()
+        else {
+            panic!("expected file response");
+        };
+        assert_eq!(
+            file.fingerprint.revision.workspace_epoch,
+            first.workspace_epoch()
+        );
+        assert_eq!(file.fingerprint.revision.revision_number, 1);
+
+        let second = HostProjectRuntime::new_with_epoch(2);
+        second
+            .handle(ProjectRequest::Register {
+                project_id: project_id.clone(),
+                root: HostPath::from_path(root.path()).unwrap(),
+            })
+            .unwrap();
+        let ProjectResponse::Save(ProjectSaveResult::Conflict(ProjectFileState::Present(current))) =
+            second
+                .handle(ProjectRequest::SaveFile {
+                    project_id: project_id.clone(),
+                    relative_path: ProjectRelativePath::from_utf8("notes.txt").unwrap(),
+                    text: "stale".to_string(),
+                    mode: ProjectSaveMode::Check(file.fingerprint),
+                })
+                .unwrap()
+        else {
+            panic!("expected stale epoch conflict");
+        };
+        assert_eq!(current.revision.workspace_epoch, 2);
+        assert_eq!(
+            fs::read_to_string(root.path().join("notes.txt")).unwrap(),
+            "v1"
+        );
+    }
+
+    #[test]
+    fn git_switch_rejects_config_injection_ref_names() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = HostProjectRuntime::new();
+        let project_id = ProjectId::new("git");
+        runtime
+            .handle(ProjectRequest::Register {
+                project_id: project_id.clone(),
+                root: HostPath::from_path(root.path()).unwrap(),
+            })
+            .unwrap();
+        let error = runtime
+            .handle(ProjectRequest::Git {
+                project_id,
+                operation: yttt_protocol::ProjectGitOperation::Switch {
+                    name: "-c".to_string(),
+                    track_remote: false,
+                },
+            })
+            .unwrap_err();
+        assert_eq!(error.code, yttt_protocol::FailureCode::InvalidRequest);
     }
 }

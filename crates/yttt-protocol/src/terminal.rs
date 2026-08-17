@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
-use yttt_core::model::ids::{PaneId, ProjectId, TabId, TerminalSessionId};
+use yttt_core::model::ids::{ProjectId, TerminalSessionId};
+
+use crate::path::ProjectRelativePath;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalGeometry {
@@ -38,9 +40,7 @@ pub enum TerminalExecutionSpec {
 pub struct TerminalSpawnSpec {
     pub session_id: TerminalSessionId,
     pub project_id: ProjectId,
-    pub tab_id: TabId,
-    pub pane_id: PaneId,
-    pub cwd: String,
+    pub cwd: ProjectRelativePath,
     pub execution: TerminalExecutionSpec,
     pub geometry: TerminalGeometry,
     pub geometry_epoch: u64,
@@ -53,14 +53,8 @@ pub struct TerminalSpawnSpec {
 
 impl TerminalSpawnSpec {
     pub fn address_fingerprint(&self) -> u64 {
-        let encoded = postcard::to_allocvec(&(
-            &self.project_id,
-            &self.tab_id,
-            &self.pane_id,
-            &self.cwd,
-            &self.execution,
-        ))
-        .expect("terminal spawn address must serialize");
+        let encoded = postcard::to_allocvec(&(&self.project_id, &self.cwd, &self.execution))
+            .expect("terminal spawn address must serialize");
         encoded
             .into_iter()
             .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
@@ -183,6 +177,7 @@ pub struct SemanticDelta {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalCheckpoint {
     pub viewport: SemanticViewport,
+    #[serde(with = "serde_bytes")]
     pub raw_replay_tail: Vec<u8>,
     pub raw_tail_start_sequence: u64,
 }
@@ -195,6 +190,7 @@ pub enum TerminalStreamUpdate {
         session_id: TerminalSessionId,
         session_epoch: u64,
         sequence: u64,
+        #[serde(with = "serde_bytes")]
         bytes: Vec<u8>,
     },
     ResyncRequired {
@@ -207,6 +203,7 @@ pub enum TerminalStreamUpdate {
 pub struct TerminalInput {
     pub session_id: TerminalSessionId,
     pub context: TerminalMutationContext,
+    #[serde(with = "serde_bytes")]
     pub bytes: Vec<u8>,
 }
 

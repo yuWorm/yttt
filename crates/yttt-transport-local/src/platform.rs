@@ -1,11 +1,6 @@
-use tokio::io::{AsyncRead, AsyncWrite};
-
 use crate::LocalEndpoint;
 
-pub trait AsyncLocalStream: AsyncRead + AsyncWrite + Unpin + Send {}
-impl<T> AsyncLocalStream for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
-
-pub type LocalStream = Box<dyn AsyncLocalStream>;
+pub use yttt_transport::{TransportIo as AsyncLocalStream, TransportStream as LocalStream};
 
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {

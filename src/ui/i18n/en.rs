@@ -96,7 +96,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::ProjectFileUnsupportedBinary => "Binary files are not supported",
         UiTextKey::ProjectFileInvalidEncoding => "Only UTF-8 files are supported",
-        UiTextKey::ProjectFileTooLarge => "File exceeds the 10 MiB editor limit",
+        UiTextKey::ProjectFileTooLarge => "File exceeds the 6 MiB editor limit",
         UiTextKey::ProjectFileOutsideProject => "File is outside the project",
         UiTextKey::FileSaveAction => "Save",
         UiTextKey::FileSaving => "Saving…",

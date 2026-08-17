@@ -16,8 +16,9 @@ use yttt_protocol::{
     Request, Response,
 };
 use yttt_transport_local::{
-    AuthToken, AuthenticatedHost, ClientIdentity, LocalEndpoint, LocalStream, client_handshake,
-    connect, receive_control, receive_lifecycle, send_control, send_lifecycle,
+    AuthToken, AuthenticatedHost, ClientIdentity, LocalConnector, LocalEndpoint, LocalListener,
+    LocalStream, client_handshake, connect, receive_control, receive_lifecycle, send_control,
+    send_lifecycle,
 };
 
 use crate::config::profile::AppProfile;
@@ -180,11 +181,11 @@ impl HostLauncher {
     pub fn client_core_config(
         &self,
         client_instance_id: ClientInstanceId,
-    ) -> Result<(LocalEndpoint, ClientIdentity, AuthToken), HostLaunchError> {
+    ) -> Result<(LocalConnector, ClientIdentity, AuthToken), HostLaunchError> {
         let token_file = self.ensure_auth_token_file()?;
         let token = read_token(&token_file)?;
         Ok((
-            self.endpoint(),
+            LocalConnector::new(self.endpoint()),
             ClientIdentity {
                 supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
                 build: self.build.clone(),
@@ -478,7 +479,7 @@ impl HostControlClient {
         self.next_request_id = self.next_request_id.saturating_add(1);
         send_control(
             &mut self.stream,
-            &ControlMessage::Request(ClientRequest { request_id, body }),
+            &ControlMessage::Request(ClientRequest::new(request_id, body)),
         )
         .await?;
         loop {
@@ -533,15 +534,17 @@ pub async fn run_host_process(
     args: impl IntoIterator<Item = OsString>,
 ) -> Result<(), HostLaunchError> {
     let parsed = ParsedHostArgs::parse(args)?;
-    yttt_host::run(yttt_host::HostBootstrap {
+    let bootstrap = yttt_host::HostBootstrap {
         profile_id: parsed.profile_id,
         runtime_root: parsed.runtime_root,
         auth_token_file: parsed.auth_token_file,
         ssh_host_keys_file: parsed.ssh_host_keys_file,
         credential_namespace: parsed.credential_namespace,
         build: parsed.build,
-    })
-    .await?;
+    };
+    let endpoint =
+        LocalEndpoint::for_profile(bootstrap.profile_id.clone(), bootstrap.runtime_root.clone());
+    yttt_host::run(bootstrap, || LocalListener::bind(endpoint)).await?;
     Ok(())
 }
 

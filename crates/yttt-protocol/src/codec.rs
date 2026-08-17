@@ -57,9 +57,9 @@ pub enum ProtocolCodecError {
     #[error("frame checksum mismatch")]
     ChecksumMismatch,
     #[error("message serialization failed: {0}")]
-    Encode(postcard::Error),
+    Encode(String),
     #[error("message deserialization failed: {0}")]
-    Decode(postcard::Error),
+    Decode(String),
     #[error("frame I/O failed: {0}")]
     Io(#[from] io::Error),
 }
@@ -68,12 +68,15 @@ pub fn encode_message<T: Serialize>(
     kind: FrameKind,
     message: &T,
 ) -> Result<Vec<u8>, ProtocolCodecError> {
-    let payload = postcard::to_allocvec(message).map_err(ProtocolCodecError::Encode)?;
+    let mut payload = Vec::new();
+    ciborium::into_writer(message, &mut payload)
+        .map_err(|error| ProtocolCodecError::Encode(error.to_string()))?;
     encode_frame(kind, &payload)
 }
 
 pub fn decode_message<T: DeserializeOwned>(frame: &DecodedFrame) -> Result<T, ProtocolCodecError> {
-    postcard::from_bytes(&frame.payload).map_err(ProtocolCodecError::Decode)
+    ciborium::from_reader(frame.payload.as_slice())
+        .map_err(|error| ProtocolCodecError::Decode(error.to_string()))
 }
 
 pub fn encode_frame(kind: FrameKind, payload: &[u8]) -> Result<Vec<u8>, ProtocolCodecError> {
@@ -175,4 +178,213 @@ pub fn write_frame(
     writer.write_all(&frame)?;
     writer.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use yttt_core::model::ids::{ClientInstanceId, TerminalSessionId};
+
+    use crate::{
+        ControlMessage, FailureCode, HostResponse, ProtocolFailure, Response, TerminalLease,
+        terminal::{
+            CursorShape, SemanticCursor, SemanticViewport, TerminalCheckpoint, TerminalGeometry,
+            TerminalLeaseMode, TerminalModes, TerminalPalette, TerminalProcessState,
+        },
+    };
+
+    fn sample_viewport() -> SemanticViewport {
+        SemanticViewport {
+            session_id: TerminalSessionId::new("session"),
+            session_epoch: 1,
+            sequence: 4,
+            geometry: TerminalGeometry {
+                cols: 80,
+                rows: 24,
+                cell_width: 8,
+                cell_height: 16,
+            },
+            geometry_epoch: 1,
+            scrollback_epoch: 1,
+            history_size: 0,
+            display_offset: 0,
+            rows: Vec::new(),
+            cursor: SemanticCursor {
+                row: 0,
+                column: 0,
+                shape: CursorShape::Block,
+                visible: true,
+                blinking: false,
+            },
+            modes: TerminalModes {
+                bits: 0,
+                title: None,
+                cwd: None,
+            },
+            palette: TerminalPalette {
+                colors: Vec::new(),
+                revision: 1,
+            },
+            process_state: TerminalProcessState::Running,
+        }
+    }
+
+    fn attached_response(checkpoint: TerminalCheckpoint) -> ControlMessage {
+        ControlMessage::Response(HostResponse {
+            request_id: 1,
+            result: Ok(Response::TerminalAttached {
+                lease: TerminalLease {
+                    session_id: TerminalSessionId::new("session"),
+                    owner: ClientInstanceId::new("client"),
+                    mode: TerminalLeaseMode::Interactive,
+                    lease_epoch: 1,
+                },
+                checkpoint,
+            }),
+        })
+    }
+
+    #[test]
+    fn control_checkpoint_with_full_raw_replay_tail_exceeds_frame_limit() {
+        let encoded = encode_message(
+            FrameKind::Control,
+            &attached_response(TerminalCheckpoint {
+                viewport: sample_viewport(),
+                raw_replay_tail: vec![b'x'; MAX_FRAME_BYTES],
+                raw_tail_start_sequence: 0,
+            }),
+        );
+        assert!(matches!(
+            encoded,
+            Err(ProtocolCodecError::FrameTooLarge { actual, maximum })
+                if actual > MAX_FRAME_BYTES && maximum == MAX_FRAME_BYTES
+        ));
+    }
+
+    #[test]
+    fn control_attach_and_checkpoint_responses_fit_when_raw_tail_is_empty() {
+        let checkpoint = TerminalCheckpoint {
+            viewport: sample_viewport(),
+            raw_replay_tail: Vec::new(),
+            raw_tail_start_sequence: MAX_FRAME_BYTES as u64,
+        };
+        let attached = encode_message(FrameKind::Control, &attached_response(checkpoint.clone()))
+            .expect("attach response must encode");
+        assert!(attached.len() <= MAX_FRAME_BYTES);
+
+        let requested = encode_message(
+            FrameKind::Control,
+            &ControlMessage::Response(HostResponse {
+                request_id: 2,
+                result: Ok(Response::TerminalCheckpoint(checkpoint)),
+            }),
+        )
+        .expect("checkpoint response must encode");
+        assert!(requested.len() <= MAX_FRAME_BYTES);
+    }
+
+    #[test]
+    fn resync_required_failure_encodes_as_a_typed_control_error() {
+        let encoded = encode_message(
+            FrameKind::Control,
+            &ControlMessage::Response(HostResponse {
+                request_id: 3,
+                result: Err(ProtocolFailure::new(
+                    FailureCode::ResyncRequired,
+                    "raw replay starts at 8388608",
+                    true,
+                )),
+            }),
+        )
+        .expect("resync failure must encode");
+        assert!(encoded.len() <= MAX_FRAME_BYTES);
+        let decoded: ControlMessage = decode_message(&decode_frame(&encoded).unwrap()).unwrap();
+        let ControlMessage::Response(HostResponse {
+            result: Err(failure),
+            ..
+        }) = decoded
+        else {
+            panic!("expected failure response");
+        };
+        assert_eq!(failure.code, FailureCode::ResyncRequired);
+        assert!(failure.retryable);
+    }
+
+    #[test]
+    fn project_file_response_at_editor_limit_fits_the_control_frame() {
+        let text = "a".repeat(6 * 1024 * 1024);
+        let encoded = encode_message(
+            FrameKind::Control,
+            &ControlMessage::Response(HostResponse {
+                request_id: 4,
+                result: Ok(Response::Project(crate::project::ProjectResponse::File(
+                    crate::project::ProjectFileContent {
+                        relative_path: crate::ProjectRelativePath::from_utf8("a.txt").unwrap(),
+                        text,
+                        fingerprint: crate::project::ProjectFileFingerprint {
+                            exists: true,
+                            byte_len: 6 * 1024 * 1024,
+                            modified_nanos: Some(1),
+                            content_hash: 1,
+                            revision: crate::project::ContentRevision::default(),
+                        },
+                    },
+                ))),
+            }),
+        )
+        .expect("6 MiB file response must encode");
+        assert!(encoded.len() <= MAX_FRAME_BYTES);
+    }
+
+    #[test]
+    fn project_file_response_above_frame_limit_is_rejected() {
+        let text = "a".repeat(MAX_FRAME_BYTES);
+        let encoded = encode_message(
+            FrameKind::Control,
+            &ControlMessage::Response(HostResponse {
+                request_id: 5,
+                result: Ok(Response::Project(crate::project::ProjectResponse::File(
+                    crate::project::ProjectFileContent {
+                        relative_path: crate::ProjectRelativePath::from_utf8("a.txt").unwrap(),
+                        text,
+                        fingerprint: crate::project::ProjectFileFingerprint {
+                            exists: true,
+                            byte_len: MAX_FRAME_BYTES as u64,
+                            modified_nanos: Some(1),
+                            content_hash: 1,
+                            revision: crate::project::ContentRevision::default(),
+                        },
+                    },
+                ))),
+            }),
+        );
+        assert!(matches!(
+            encoded,
+            Err(ProtocolCodecError::FrameTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn remote_file_response_at_editor_limit_fits_the_control_frame() {
+        let encoded = encode_message(
+            FrameKind::Control,
+            &ControlMessage::Response(HostResponse {
+                request_id: 6,
+                result: Ok(Response::RemoteFile(crate::ssh::RemoteFileResponse::File(
+                    crate::ssh::RemoteFileContent {
+                        relative_path: "a.txt".to_string(),
+                        bytes: vec![b'b'; 6 * 1024 * 1024],
+                        fingerprint: crate::ssh::RemoteFileFingerprint {
+                            byte_len: 6 * 1024 * 1024,
+                            modified_seconds: Some(1),
+                            content_hash: 1,
+                            revision: crate::project::ContentRevision::default(),
+                        },
+                    },
+                ))),
+            }),
+        )
+        .expect("6 MiB remote file response must encode");
+        assert!(encoded.len() <= MAX_FRAME_BYTES);
+    }
 }

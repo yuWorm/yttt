@@ -10,8 +10,8 @@ use yttt::{
     model::ids::{ProfileId, ProjectId},
 };
 use yttt_protocol::{
-    HostBlocker, LifecycleRequest, LifecycleResponse, Request, Response,
-    project::{PlatformPath, ProjectRequest, ProjectResponse},
+    HostBlocker, HostPath, LifecycleRequest, LifecycleResponse, Request, Response,
+    project::{ProjectRequest, ProjectResponse},
 };
 
 fn isolated_profile(root: &Path) -> AppProfile {
@@ -25,16 +25,8 @@ fn isolated_profile(root: &Path) -> AppProfile {
     )
 }
 
-#[cfg(unix)]
-fn platform_path(path: &Path) -> PlatformPath {
-    use std::os::unix::ffi::OsStrExt as _;
-    PlatformPath::Unix(path.as_os_str().as_bytes().to_vec())
-}
-
-#[cfg(windows)]
-fn platform_path(path: &Path) -> PlatformPath {
-    use std::os::windows::ffi::OsStrExt as _;
-    PlatformPath::Windows(path.as_os_str().encode_wide().collect())
+fn platform_path(path: &Path) -> HostPath {
+    HostPath::from_path(path).expect("test project root must be absolute")
 }
 
 #[test]

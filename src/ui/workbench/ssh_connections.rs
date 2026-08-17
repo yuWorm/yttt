@@ -221,15 +221,27 @@ impl WorkbenchView {
                     .iter_mut()
                     .find(|connection| connection.id == connection_id)
                 {
+                    let previous = connection
+                        .credential
+                        .as_ref()
+                        .map(|item| item.binding.clone());
                     connection.credential = Some(CredentialRef {
                         id: credential_id.clone(),
                         kind: CredentialKind::LoginPassword,
                         binding: CredentialBinding {
                             connection_id: connection_id.clone(),
                             effective_user: credential.effective_user.clone(),
-                            resolved_host: credential.resolved_host.clone(),
-                            port: credential.port,
-                            host_key_sha256: credential.host_key_sha256.clone(),
+                            resolved_host: previous
+                                .as_ref()
+                                .map(|binding| binding.resolved_host.clone())
+                                .unwrap_or_else(|| connection.host.clone()),
+                            port: previous
+                                .as_ref()
+                                .map(|binding| binding.port)
+                                .unwrap_or(connection.port),
+                            host_key_sha256: previous
+                                .map(|binding| binding.host_key_sha256)
+                                .unwrap_or_default(),
                             private_key_identity: credential.private_key_identity.clone(),
                         },
                     });
@@ -1643,9 +1655,6 @@ pub(super) fn stored_credential_from_ref(credential: &CredentialRef) -> StoredSs
     StoredSshCredential {
         id: credential.id.to_string(),
         effective_user: credential.binding.effective_user.clone(),
-        resolved_host: credential.binding.resolved_host.clone(),
-        port: credential.binding.port,
-        host_key_sha256: credential.binding.host_key_sha256.clone(),
         private_key_identity: credential.binding.private_key_identity.clone(),
     }
 }

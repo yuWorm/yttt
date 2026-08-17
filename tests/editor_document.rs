@@ -936,5 +936,8 @@ fn fingerprint(byte_len: u64, content_hash: u64) -> DiskFingerprint {
         byte_len,
         modified: Some(SystemTime::UNIX_EPOCH),
         content_hash,
+        workspace_epoch: 0,
+        revision_number: 0,
+        content_sha256: [0; 32],
     }
 }

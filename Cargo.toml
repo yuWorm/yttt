@@ -8,6 +8,7 @@ members = [
     "crates/yttt-host",
     "crates/yttt-protocol",
     "crates/yttt-project-core",
+    "crates/yttt-transport",
     "crates/yttt-transport-local",
     "crates/yttt-core",
     "crates/yttt-terminal-core",

@@ -1,13 +1,15 @@
 use std::{
-    collections::hash_map::DefaultHasher,
     fs::{self, File, OpenOptions},
-    hash::{Hash, Hasher},
     io::{Read, Write},
     path::{Component, Path, PathBuf},
     time::SystemTime,
 };
 
-pub const MAX_PROJECT_FILE_BYTES: u64 = 10 * 1024 * 1024;
+use sha2::{Digest, Sha256};
+
+/// Frame-safe editor limit. Encoded `ProjectResponse::File` / `SaveFile` payloads
+/// must stay under `yttt_protocol::MAX_FRAME_BYTES` (8 MiB), so this is 6 MiB.
+pub const MAX_PROJECT_FILE_BYTES: u64 = 6 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiskFingerprint {
@@ -15,6 +17,48 @@ pub struct DiskFingerprint {
     pub byte_len: u64,
     pub modified: Option<SystemTime>,
     pub content_hash: u64,
+    pub workspace_epoch: u64,
+    pub revision_number: u64,
+    pub content_sha256: [u8; 32],
+}
+
+impl DiskFingerprint {
+    pub fn from_bytes(bytes: &[u8], modified: Option<SystemTime>) -> Self {
+        let content_sha256 = content_sha256(bytes);
+        Self {
+            exists: true,
+            byte_len: bytes.len() as u64,
+            modified,
+            content_hash: content_hash_from_digest(&content_sha256),
+            workspace_epoch: 0,
+            revision_number: 0,
+            content_sha256,
+        }
+    }
+
+    pub fn stub(byte_len: u64, content_hash: u64) -> Self {
+        Self {
+            exists: true,
+            byte_len,
+            modified: None,
+            content_hash,
+            workspace_epoch: 0,
+            revision_number: 0,
+            content_sha256: [0; 32],
+        }
+    }
+}
+
+pub fn content_sha256(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
+
+pub fn content_hash_from_digest(digest: &[u8; 32]) -> u64 {
+    u64::from_le_bytes(digest[..8].try_into().expect("sha256 digest is 32 bytes"))
+}
+
+fn content_matches(current: &DiskFingerprint, expected: &DiskFingerprint) -> bool {
+    current.exists == expected.exists && current.content_sha256 == expected.content_sha256
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -221,7 +265,7 @@ fn save_project_file_with_fs(
     if let SaveMode::Check(expected) = mode {
         let matches_expected = match &current_state {
             CurrentDiskState::Missing => !expected.exists,
-            CurrentDiskState::Present(current) => current == expected,
+            CurrentDiskState::Present(current) => content_matches(current, expected),
         };
         if !matches_expected {
             return Ok(SaveProjectFileOutcome::Conflict(current_state));
@@ -416,14 +460,7 @@ fn normalize_relative_path(path: &Path) -> Result<PathBuf, ProjectFileIoError> {
 }
 
 fn fingerprint_for_bytes(bytes: &[u8], metadata: &fs::Metadata) -> DiskFingerprint {
-    let mut hasher = DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    DiskFingerprint {
-        exists: true,
-        byte_len: bytes.len() as u64,
-        modified: metadata.modified().ok(),
-        content_hash: hasher.finish(),
-    }
+    DiskFingerprint::from_bytes(bytes, metadata.modified().ok())
 }
 
 #[cfg(test)]
@@ -457,5 +494,46 @@ mod tests {
             "old"
         );
         assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn cas_ignores_mtime_and_detects_same_mtime_content_changes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("notes.txt");
+        fs::write(&path, "aaaa").unwrap();
+        let loaded = read_project_file(root.path(), Path::new("notes.txt")).unwrap();
+
+        let mut same_content_different_mtime = loaded.fingerprint.clone();
+        same_content_different_mtime.modified = Some(SystemTime::UNIX_EPOCH);
+        let saved = save_project_file(
+            root.path(),
+            Path::new("notes.txt"),
+            "aaaa",
+            SaveMode::Check(&same_content_different_mtime),
+        )
+        .unwrap();
+        assert!(matches!(saved, SaveProjectFileOutcome::Saved(_)));
+
+        fs::write(&path, "bbbb").unwrap();
+        let mut same_mtime_different_content =
+            read_project_file(root.path(), Path::new("notes.txt"))
+                .unwrap()
+                .fingerprint;
+        same_mtime_different_content.modified = loaded.fingerprint.modified;
+        same_mtime_different_content.content_hash = loaded.fingerprint.content_hash;
+        same_mtime_different_content.content_sha256 = loaded.fingerprint.content_sha256;
+        let conflict = save_project_file(
+            root.path(),
+            Path::new("notes.txt"),
+            "mine",
+            SaveMode::Check(&same_mtime_different_content),
+        )
+        .unwrap();
+        assert!(matches!(
+            conflict,
+            SaveProjectFileOutcome::Conflict(CurrentDiskState::Present(current))
+                if current.content_sha256 != loaded.fingerprint.content_sha256
+        ));
+        assert_eq!(fs::read_to_string(path).unwrap(), "bbbb");
     }
 }

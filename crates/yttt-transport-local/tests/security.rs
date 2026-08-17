@@ -104,10 +104,10 @@ async fn bounded_control_send_rejects_the_frame_before_writing() {
     use tokio::io::AsyncReadExt as _;
 
     let (mut sender, mut receiver) = tokio::io::duplex(1024);
-    let message = yttt_protocol::ControlMessage::Request(yttt_protocol::ClientRequest {
-        request_id: 1,
-        body: yttt_protocol::Request::Ping { sent_millis: 1 },
-    });
+    let message = yttt_protocol::ControlMessage::Request(yttt_protocol::ClientRequest::new(
+        1,
+        yttt_protocol::Request::Ping { sent_millis: 1 },
+    ));
     assert!(matches!(
         send_control_bounded(&mut sender, &message, 1).await,
         Err(WireError::FrameTooLarge {
@@ -277,9 +277,9 @@ async fn invalid_client_proof_is_rejected_without_exposing_secret() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn resource_compatibility_and_profile_mismatches_fail_closed() {
+async fn profile_mismatches_fail_closed() {
     let (mut client_identity, host_identity) = identities();
-    client_identity.build.resource_compatibility = "resource-v2".to_string();
+    client_identity.profile_id = ProfileId::new("other-profile");
     let token = AuthToken::from_bytes([5; 32]);
     let (mut client_stream, mut server_stream) = tokio::net::UnixStream::pair().unwrap();
 
@@ -288,10 +288,90 @@ async fn resource_compatibility_and_profile_mismatches_fail_closed() {
         server_handshake(&mut server_stream, &host_identity, &token),
     );
 
-    assert!(matches!(client_result, Err(HandshakeError::Rejected(_))));
+    assert!(matches!(
+        client_result,
+        Err(HandshakeError::Rejected(
+            yttt_protocol::RejectReason::ProfileMismatch
+        ))
+    ));
     assert!(matches!(
         server_result,
         Err(HandshakeError::IdentityMismatch)
+    ));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn resource_compatibility_mismatch_is_allowed_when_protocol_ranges_overlap() {
+    let (mut client_identity, host_identity) = identities();
+    client_identity.build.resource_compatibility = "resource-v2".to_string();
+    client_identity.build.build_fingerprint = "next-build".to_string();
+    let token = AuthToken::from_bytes([7; 32]);
+    let (mut client_stream, mut server_stream) = tokio::net::UnixStream::pair().unwrap();
+
+    let (client_result, server_result) = tokio::join!(
+        client_handshake(&mut client_stream, &client_identity, &token),
+        server_handshake(&mut server_stream, &host_identity, &token),
+    );
+
+    assert!(client_result.is_ok());
+    assert!(server_result.is_ok());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn overlapping_protocol_ranges_negotiate_the_newest_shared_version() {
+    let (mut client_identity, mut host_identity) = identities();
+    client_identity.supported = ProtocolRange {
+        minimum: RESOURCE_PROTOCOL_VERSION,
+        maximum: RESOURCE_PROTOCOL_VERSION + 1,
+    };
+    host_identity.resource_supported = ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION);
+    let token = AuthToken::from_bytes([11; 32]);
+    let (mut client_stream, mut server_stream) = tokio::net::UnixStream::pair().unwrap();
+
+    let (client_result, server_result) = tokio::join!(
+        client_handshake(&mut client_stream, &client_identity, &token),
+        server_handshake(&mut server_stream, &host_identity, &token),
+    );
+
+    assert_eq!(
+        client_result.unwrap().selected_version,
+        RESOURCE_PROTOCOL_VERSION
+    );
+    assert_eq!(
+        server_result.unwrap().selected_version,
+        RESOURCE_PROTOCOL_VERSION
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn disjoint_protocol_ranges_are_rejected() {
+    let (mut client_identity, host_identity) = identities();
+    client_identity.supported = ProtocolRange {
+        minimum: RESOURCE_PROTOCOL_VERSION + 1,
+        maximum: RESOURCE_PROTOCOL_VERSION + 1,
+    };
+    let token = AuthToken::from_bytes([13; 32]);
+    let (mut client_stream, mut server_stream) = tokio::net::UnixStream::pair().unwrap();
+
+    let (client_result, server_result) = tokio::join!(
+        client_handshake(&mut client_stream, &client_identity, &token),
+        server_handshake(&mut server_stream, &host_identity, &token),
+    );
+
+    assert!(matches!(
+        client_result,
+        Err(HandshakeError::Rejected(
+            yttt_protocol::RejectReason::VersionMismatch { .. }
+        ))
+    ));
+    assert!(matches!(
+        server_result,
+        Err(HandshakeError::Rejected(
+            yttt_protocol::RejectReason::VersionMismatch { .. }
+        ))
     ));
 }
 

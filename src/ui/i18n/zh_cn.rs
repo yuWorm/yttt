@@ -90,7 +90,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::ProjectFilesDeleteConfirmMessage => "所选文件或文件夹将被永久删除，且无法撤销。",
         UiTextKey::ProjectFileUnsupportedBinary => "暂不支持二进制文件",
         UiTextKey::ProjectFileInvalidEncoding => "仅支持 UTF-8 文件",
-        UiTextKey::ProjectFileTooLarge => "文件超过编辑器 10 MiB 限制",
+        UiTextKey::ProjectFileTooLarge => "文件超过编辑器 6 MiB 限制",
         UiTextKey::ProjectFileOutsideProject => "文件位于项目目录之外",
         UiTextKey::FileSaveAction => "保存",
         UiTextKey::FileSaving => "正在保存…",

@@ -23,10 +23,13 @@ use yttt_core::model::{
     ids::{ConnectionId, TerminalSessionId},
     project::RemotePathBuf,
 };
-use yttt_protocol::terminal::{
-    RemoteTerminalExecutionSpec, SearchTerminal, SemanticViewport, TerminalCheckpoint,
-    TerminalExecutionSpec, TerminalGeometry, TerminalProcessState, TerminalSearchResults,
-    TerminalSpawnSpec, TerminalStreamUpdate, TerminalViewportAnchor,
+use yttt_protocol::{
+    ControlMessage, FrameKind, HostResponse, Response, encode_message,
+    terminal::{
+        RemoteTerminalExecutionSpec, SearchTerminal, SemanticViewport, TerminalCheckpoint,
+        TerminalExecutionSpec, TerminalGeometry, TerminalProcessState, TerminalSearchResults,
+        TerminalSpawnSpec, TerminalStreamUpdate, TerminalViewportAnchor,
+    },
 };
 use yttt_ssh::{
     RemoteTerminalExecution, RemoteTerminalRequest, RemoteTerminalResizeHandle,
@@ -37,7 +40,40 @@ use yttt_terminal_core::{
     semantic::{SemanticAccessError, SemanticCaptureContext, SemanticSnapshotter},
 };
 
-const RAW_REPLAY_BYTES: usize = 8 * 1024 * 1024;
+pub const RAW_REPLAY_BYTES: usize = 8 * 1024 * 1024;
+pub const UNSUBSCRIBED_REPLAY_BYTES: usize = 256 * 1024;
+pub const RAW_REPLAY_CHUNK_BYTES: usize = 256 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReplayBudget {
+    pub subscribed_bytes: usize,
+    pub unsubscribed_bytes: usize,
+}
+
+impl Default for ReplayBudget {
+    fn default() -> Self {
+        Self {
+            subscribed_bytes: RAW_REPLAY_BYTES,
+            unsubscribed_bytes: UNSUBSCRIBED_REPLAY_BYTES,
+        }
+    }
+}
+
+impl ReplayBudget {
+    pub fn bytes_for(self, subscribed: bool) -> usize {
+        if subscribed {
+            self.subscribed_bytes.max(1)
+        } else {
+            self.unsubscribed_bytes.max(1)
+        }
+    }
+
+    pub fn host_limit(self, subscribed_terminals: usize, unsubscribed_terminals: usize) -> usize {
+        subscribed_terminals
+            .saturating_mul(self.bytes_for(true))
+            .saturating_add(unsubscribed_terminals.saturating_mul(self.bytes_for(false)))
+    }
+}
 const WRITER_QUEUE_CAPACITY: usize = 1024;
 const EVENT_QUEUE_CAPACITY: usize = 256;
 const SUBSCRIBER_CAPACITY: usize = 64;
@@ -51,6 +87,12 @@ struct TerminalPipelineDiagnostics {
     semantic_encode_count: AtomicU64,
     shared_ipc_encode_count: Arc<AtomicU64>,
     skipped_unsubscribed_captures: AtomicU64,
+    checkpoint_encode_bytes: AtomicU64,
+    checkpoint_encode_high_water: AtomicU64,
+    replay_bytes: AtomicUsize,
+    replay_capacity: AtomicUsize,
+    replay_dropped_bytes: AtomicU64,
+    replay_high_water: AtomicUsize,
     parser: LatencyDiagnostics,
     semantic_encode: LatencyDiagnostics,
     input_to_pty: LatencyDiagnostics,
@@ -66,6 +108,12 @@ impl TerminalPipelineDiagnostics {
             semantic_encode_count: AtomicU64::new(0),
             shared_ipc_encode_count: Arc::new(AtomicU64::new(0)),
             skipped_unsubscribed_captures: AtomicU64::new(0),
+            checkpoint_encode_bytes: AtomicU64::new(0),
+            checkpoint_encode_high_water: AtomicU64::new(0),
+            replay_bytes: AtomicUsize::new(0),
+            replay_capacity: AtomicUsize::new(UNSUBSCRIBED_REPLAY_BYTES),
+            replay_dropped_bytes: AtomicU64::new(0),
+            replay_high_water: AtomicUsize::new(0),
             parser: LatencyDiagnostics::default(),
             semantic_encode: LatencyDiagnostics::default(),
             input_to_pty: LatencyDiagnostics::default(),
@@ -84,6 +132,12 @@ impl TerminalPipelineDiagnostics {
             skipped_unsubscribed_captures: self
                 .skipped_unsubscribed_captures
                 .load(Ordering::Acquire),
+            checkpoint_encode_bytes: self.checkpoint_encode_bytes.load(Ordering::Acquire),
+            checkpoint_encode_high_water: self.checkpoint_encode_high_water.load(Ordering::Acquire),
+            replay_bytes: self.replay_bytes.load(Ordering::Acquire),
+            replay_capacity: self.replay_capacity.load(Ordering::Acquire),
+            replay_dropped_bytes: self.replay_dropped_bytes.load(Ordering::Acquire),
+            replay_high_water: self.replay_high_water.load(Ordering::Acquire),
             parser: self.parser.snapshot(),
             semantic_encode: self.semantic_encode.snapshot(),
             input_to_pty: self.input_to_pty.snapshot(),
@@ -97,11 +151,36 @@ impl TerminalPipelineDiagnostics {
         self.shared_ipc_encode_count.store(0, Ordering::Release);
         self.skipped_unsubscribed_captures
             .store(0, Ordering::Release);
+        self.checkpoint_encode_bytes.store(0, Ordering::Release);
+        self.checkpoint_encode_high_water
+            .store(0, Ordering::Release);
+        self.replay_bytes.store(0, Ordering::Release);
+        self.replay_capacity
+            .store(UNSUBSCRIBED_REPLAY_BYTES, Ordering::Release);
+        self.replay_dropped_bytes.store(0, Ordering::Release);
+        self.replay_high_water.store(0, Ordering::Release);
         self.parser.reset();
         self.semantic_encode.reset();
         self.input_to_pty.reset();
         self.writer_queue.reset();
         self.event_queue.reset();
+    }
+
+    fn observe_checkpoint_encode(&self, encoded_bytes: usize) {
+        let encoded_bytes = encoded_bytes as u64;
+        self.checkpoint_encode_bytes
+            .store(encoded_bytes, Ordering::Release);
+        self.checkpoint_encode_high_water
+            .fetch_max(encoded_bytes, Ordering::AcqRel);
+    }
+
+    fn observe_replay(&self, occupancy: usize, capacity: usize, dropped_bytes: u64) {
+        self.replay_bytes.store(occupancy, Ordering::Release);
+        self.replay_capacity.store(capacity, Ordering::Release);
+        self.replay_dropped_bytes
+            .store(dropped_bytes, Ordering::Release);
+        self.replay_high_water
+            .fetch_max(occupancy, Ordering::AcqRel);
     }
 }
 
@@ -128,6 +207,28 @@ pub enum HostTerminalEvent {
         session_id: TerminalSessionId,
         previous_owner: yttt_core::model::ids::ClientInstanceId,
     },
+    ControlRequested {
+        session_id: TerminalSessionId,
+        holder: yttt_core::model::ids::ClientInstanceId,
+        requester: yttt_core::model::ids::ClientInstanceId,
+    },
+    ControlGranted {
+        session_id: TerminalSessionId,
+        lease: yttt_protocol::TerminalLease,
+    },
+    LeaseReleased {
+        session_id: TerminalSessionId,
+        previous_owner: yttt_core::model::ids::ClientInstanceId,
+    },
+    LeaseExpired {
+        session_id: TerminalSessionId,
+        previous_owner: yttt_core::model::ids::ClientInstanceId,
+    },
+    ControlDenied {
+        session_id: TerminalSessionId,
+        requester: yttt_core::model::ids::ClientInstanceId,
+        reason: yttt_protocol::TerminalControlDeniedReason,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -148,6 +249,13 @@ pub enum HostedTerminalError {
     UnknownLineId(u64),
     #[error("terminal search query and result limit must be non-empty")]
     InvalidSearch,
+    #[error(
+        "terminal replay from sequence {requested} is unavailable; available from {available_from_sequence}"
+    )]
+    ResyncRequired {
+        requested: u64,
+        available_from_sequence: u64,
+    },
     #[error("terminal I/O failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("terminal PTY failed: {0}")]
@@ -208,6 +316,7 @@ struct HostedTerminalInner {
     snapshots: Mutex<SemanticSnapshotter>,
     metadata: Mutex<TerminalMetadata>,
     raw_replay: Mutex<RawReplayRing>,
+    replay_budget: ReplayBudget,
     query_palette: Mutex<Vec<u32>>,
     backend: TerminalBackend,
     writer: flume::Sender<WriterCommand>,
@@ -267,46 +376,99 @@ enum WriterCommand {
 struct RawReplayRing {
     bytes: VecDeque<u8>,
     dropped_bytes: u64,
+    capacity: usize,
+    high_water: usize,
 }
 
 impl RawReplayRing {
-    fn new() -> Self {
+    fn new(budget: ReplayBudget) -> Self {
         Self {
             bytes: VecDeque::new(),
             dropped_bytes: 0,
+            capacity: budget.bytes_for(false),
+            high_water: 0,
         }
     }
 
+    fn set_capacity(&mut self, capacity: usize) {
+        self.capacity = capacity.max(1);
+        self.trim();
+    }
+
+    fn occupancy(&self) -> usize {
+        self.bytes.len()
+    }
+
     fn append(&mut self, bytes: &[u8]) {
-        if bytes.len() >= RAW_REPLAY_BYTES {
+        if bytes.len() >= self.capacity {
             self.dropped_bytes = self
                 .dropped_bytes
                 .saturating_add(self.bytes.len() as u64)
-                .saturating_add((bytes.len() - RAW_REPLAY_BYTES) as u64);
+                .saturating_add((bytes.len() - self.capacity) as u64);
             self.bytes.clear();
             self.bytes
-                .extend(bytes[bytes.len() - RAW_REPLAY_BYTES..].iter().copied());
+                .extend(bytes[bytes.len() - self.capacity..].iter().copied());
+            self.high_water = self.high_water.max(self.bytes.len());
             return;
         }
         let overflow = self
             .bytes
             .len()
             .saturating_add(bytes.len())
-            .saturating_sub(RAW_REPLAY_BYTES);
+            .saturating_sub(self.capacity);
+        self.trim_front(overflow);
+        self.bytes.extend(bytes.iter().copied());
+        self.high_water = self.high_water.max(self.bytes.len());
+    }
+
+    fn trim(&mut self) {
+        let overflow = self.bytes.len().saturating_sub(self.capacity);
+        self.trim_front(overflow);
+    }
+
+    fn trim_front(&mut self, overflow: usize) {
         for _ in 0..overflow {
             self.bytes.pop_front();
         }
         self.dropped_bytes = self.dropped_bytes.saturating_add(overflow as u64);
-        self.bytes.extend(bytes.iter().copied());
     }
 
-    fn snapshot(&self) -> (Vec<u8>, u64) {
-        (self.bytes.iter().copied().collect(), self.dropped_bytes)
+    fn available_from(&self) -> u64 {
+        self.dropped_bytes
+    }
+
+    fn bytes_after(&self, after_sequence: u64) -> Result<Vec<u8>, u64> {
+        if after_sequence < self.dropped_bytes {
+            return Err(self.dropped_bytes);
+        }
+        let skip = usize::try_from(after_sequence.saturating_sub(self.dropped_bytes))
+            .unwrap_or(usize::MAX);
+        if skip >= self.bytes.len() {
+            return Ok(Vec::new());
+        }
+        Ok(self.bytes.iter().skip(skip).copied().collect())
     }
 }
 
 impl HostedTerminal {
     pub fn spawn(spec: TerminalSpawnSpec, session_epoch: u64) -> Result<Self, HostedTerminalError> {
+        Self::spawn_in(spec, session_epoch, None)
+    }
+
+    pub fn spawn_in(
+        spec: TerminalSpawnSpec,
+        session_epoch: u64,
+        cwd: Option<std::path::PathBuf>,
+    ) -> Result<Self, HostedTerminalError> {
+        Self::spawn_in_with_budget(spec, session_epoch, cwd, ReplayBudget::default())
+    }
+
+    pub fn spawn_in_with_budget(
+        spec: TerminalSpawnSpec,
+        session_epoch: u64,
+        cwd: Option<std::path::PathBuf>,
+        replay_budget: ReplayBudget,
+    ) -> Result<Self, HostedTerminalError> {
         validate_geometry(spec.geometry)?;
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
@@ -315,7 +477,8 @@ impl HostedTerminal {
             pixel_width: spec.geometry.cell_width,
             pixel_height: spec.geometry.cell_height,
         })?;
-        let command = command_builder(&spec)?;
+        let cwd = cwd.unwrap_or_else(|| spec.cwd.join_under(&std::env::temp_dir()));
+        let command = command_builder(&spec, &cwd)?;
         let mut child = pair.slave.spawn_command(command)?;
         drop(pair.slave);
         let reader = pair.master.try_clone_reader()?;
@@ -330,13 +493,30 @@ impl HostedTerminal {
             master: Arc::new(Mutex::new(pair.master)),
             child: Arc::new(Mutex::new(child)),
         };
-        Self::from_io(spec, session_epoch, reader, writer, backend, false)
+        Self::from_io(
+            spec,
+            session_epoch,
+            reader,
+            writer,
+            backend,
+            false,
+            replay_budget,
+        )
     }
 
     pub fn spawn_remote(
         spec: TerminalSpawnSpec,
         session_epoch: u64,
         transport: &TransportService,
+    ) -> Result<Self, HostedTerminalError> {
+        Self::spawn_remote_with_budget(spec, session_epoch, transport, ReplayBudget::default())
+    }
+
+    pub fn spawn_remote_with_budget(
+        spec: TerminalSpawnSpec,
+        session_epoch: u64,
+        transport: &TransportService,
+        replay_budget: ReplayBudget,
     ) -> Result<Self, HostedTerminalError> {
         validate_geometry(spec.geometry)?;
         let TerminalExecutionSpec::Ssh {
@@ -360,8 +540,7 @@ impl HostedTerminal {
         let mut session = transport
             .terminal_session(RemoteTerminalRequest {
                 connection_id: ConnectionId::new(connection_id.clone()),
-                cwd: RemotePathBuf::new(spec.cwd.clone())
-                    .map_err(|error| HostedTerminalError::Pty(error.into()))?,
+                cwd: remote_cwd(&spec.cwd).map_err(|error| anyhow::anyhow!(error))?,
                 execution,
                 environment: spec.environment.iter().cloned().collect::<BTreeMap<_, _>>(),
                 cols: spec.geometry.cols,
@@ -381,6 +560,7 @@ impl HostedTerminal {
             Box::new(io.writer),
             backend,
             true,
+            replay_budget,
         )
     }
 
@@ -391,6 +571,7 @@ impl HostedTerminal {
         writer: Box<dyn Write + Send>,
         backend: TerminalBackend,
         mark_exit_on_eof: bool,
+        replay_budget: ReplayBudget,
     ) -> Result<Self, HostedTerminalError> {
         let diagnostics = TerminalPipelineDiagnostics::new();
         let (terminal_event_tx, terminal_event_rx) = flume::bounded(EVENT_QUEUE_CAPACITY);
@@ -416,11 +597,12 @@ impl HostedTerminal {
                 geometry_epoch: spec.geometry_epoch,
                 palette_revision: spec.palette_revision,
                 title: None,
-                cwd: Some(spec.cwd.clone()),
+                cwd: spec.cwd.to_utf8().ok().filter(|value| !value.is_empty()),
                 process_state: TerminalProcessState::Running,
             }),
             query_palette: Mutex::new(spec.query_palette.clone()),
-            raw_replay: Mutex::new(RawReplayRing::new()),
+            raw_replay: Mutex::new(RawReplayRing::new(replay_budget)),
+            replay_budget,
             spec,
             session_epoch,
             state: Mutex::new(state),
@@ -491,6 +673,14 @@ impl HostedTerminal {
             .diagnostics
             .subscribers
             .swap(count, Ordering::AcqRel);
+        let mut replay = self.inner.raw_replay.lock();
+        replay.set_capacity(self.inner.replay_budget.bytes_for(count > 0));
+        self.inner.diagnostics.observe_replay(
+            replay.occupancy(),
+            replay.capacity,
+            replay.dropped_bytes,
+        );
+        drop(replay);
         if previous == 0 && count != 0 {
             self.inner.request_output_capture();
         }
@@ -559,8 +749,70 @@ impl HostedTerminal {
     }
 
     pub fn checkpoint(&self) -> Option<TerminalCheckpoint> {
-        let (raw, start) = self.inner.raw_replay.lock().snapshot();
-        self.inner.snapshots.lock().checkpoint(raw, start)
+        self.control_checkpoint()
+    }
+
+    pub fn control_checkpoint(&self) -> Option<TerminalCheckpoint> {
+        let available_from = self.inner.raw_replay.lock().available_from();
+        let checkpoint = self
+            .inner
+            .snapshots
+            .lock()
+            .checkpoint(Vec::new(), available_from)?;
+        self.record_control_checkpoint_encode(&checkpoint);
+        Some(checkpoint)
+    }
+
+    pub fn raw_replay_available_from(&self) -> u64 {
+        self.inner.raw_replay.lock().available_from()
+    }
+
+    pub fn raw_replay_chunks(
+        &self,
+        after_sequence: u64,
+    ) -> Result<Vec<Vec<u8>>, HostedTerminalError> {
+        let bytes = {
+            let replay = self.inner.raw_replay.lock();
+            replay
+                .bytes_after(after_sequence)
+                .map_err(
+                    |available_from_sequence| HostedTerminalError::ResyncRequired {
+                        requested: after_sequence,
+                        available_from_sequence,
+                    },
+                )?
+        };
+        Ok(bytes
+            .chunks(RAW_REPLAY_CHUNK_BYTES)
+            .filter(|chunk| !chunk.is_empty())
+            .map(<[u8]>::to_vec)
+            .collect())
+    }
+
+    pub fn append_raw_replay_for_tests(&self, bytes: &[u8]) {
+        let mut replay = self.inner.raw_replay.lock();
+        replay.append(bytes);
+        self.inner.diagnostics.observe_replay(
+            replay.occupancy(),
+            replay.capacity,
+            replay.dropped_bytes,
+        );
+    }
+
+    pub fn replay_occupancy_for_tests(&self) -> usize {
+        self.inner.raw_replay.lock().occupancy()
+    }
+
+    fn record_control_checkpoint_encode(&self, checkpoint: &TerminalCheckpoint) {
+        let message = ControlMessage::Response(HostResponse {
+            request_id: 0,
+            result: Ok(Response::TerminalCheckpoint(checkpoint.clone())),
+        });
+        if let Ok(encoded) = encode_message(FrameKind::Control, &message) {
+            self.inner
+                .diagnostics
+                .observe_checkpoint_encode(encoded.len());
+        }
     }
 
     pub fn latest_viewport(&self) -> Option<SemanticViewport> {
@@ -752,7 +1004,15 @@ fn spawn_reader(
                     Ok(0) => break,
                     Ok(length) => {
                         let bytes = &buffer[..length];
-                        inner.raw_replay.lock().append(bytes);
+                        {
+                            let mut replay = inner.raw_replay.lock();
+                            replay.append(bytes);
+                            inner.diagnostics.observe_replay(
+                                replay.occupancy(),
+                                replay.capacity,
+                                replay.dropped_bytes,
+                            );
+                        }
                         let started_at = Instant::now();
                         parser.advance(bytes);
                         inner.diagnostics.parser.record(started_at.elapsed());
@@ -942,7 +1202,20 @@ fn spawn_child_monitor(
         .expect("failed to spawn Host child monitor");
 }
 
-fn command_builder(spec: &TerminalSpawnSpec) -> Result<CommandBuilder, HostedTerminalError> {
+fn remote_cwd(cwd: &yttt_protocol::ProjectRelativePath) -> Result<RemotePathBuf, String> {
+    let relative = cwd.to_utf8().map_err(|error| error.to_string())?;
+    let absolute = if relative.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{relative}")
+    };
+    RemotePathBuf::new(absolute).map_err(|error| error.to_string())
+}
+
+fn command_builder(
+    spec: &TerminalSpawnSpec,
+    cwd: &std::path::Path,
+) -> Result<CommandBuilder, HostedTerminalError> {
     let mut command = match &spec.execution {
         TerminalExecutionSpec::Shell { program, args, .. } => {
             let mut command = CommandBuilder::new(program);
@@ -965,7 +1238,7 @@ fn command_builder(spec: &TerminalSpawnSpec) -> Result<CommandBuilder, HostedTer
         }
         TerminalExecutionSpec::Ssh { .. } => return Err(HostedTerminalError::UnsupportedExecution),
     };
-    command.cwd(&spec.cwd);
+    command.cwd(cwd);
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
     command.env("TERM_PROGRAM", "yttt");
@@ -1091,4 +1364,86 @@ fn startup_command(spec: &TerminalSpawnSpec) -> Option<String> {
         | TerminalExecutionSpec::Ssh { .. } => return None,
     };
     Some(format!("{command}\r"))
+}
+
+#[cfg(test)]
+mod replay_budget_tests {
+    use super::*;
+
+    #[test]
+    fn unsubscribed_ring_shrinks_after_a_subscribed_fill() {
+        let budget = ReplayBudget::default();
+        let mut ring = RawReplayRing::new(budget);
+        ring.set_capacity(budget.bytes_for(true));
+        ring.append(&vec![b'x'; RAW_REPLAY_BYTES]);
+        assert_eq!(ring.occupancy(), RAW_REPLAY_BYTES);
+        ring.set_capacity(budget.bytes_for(false));
+        assert_eq!(ring.occupancy(), UNSUBSCRIBED_REPLAY_BYTES);
+        assert!(ring.dropped_bytes >= (RAW_REPLAY_BYTES - UNSUBSCRIBED_REPLAY_BYTES) as u64);
+    }
+
+    #[test]
+    fn sixteen_unsubscribed_high_output_terminals_stay_within_host_limit() {
+        let budget = ReplayBudget::default();
+        let mut total = 0;
+        for _ in 0..16 {
+            let mut ring = RawReplayRing::new(budget);
+            ring.append(&vec![b'x'; RAW_REPLAY_BYTES]);
+            total += ring.occupancy();
+        }
+        assert_eq!(total, 16 * UNSUBSCRIBED_REPLAY_BYTES);
+        assert_eq!(budget.host_limit(0, 16), 16 * UNSUBSCRIBED_REPLAY_BYTES);
+        assert_eq!(budget.host_limit(16, 0), 16 * RAW_REPLAY_BYTES);
+        assert_eq!(
+            budget.host_limit(4, 12),
+            4 * RAW_REPLAY_BYTES + 12 * UNSUBSCRIBED_REPLAY_BYTES
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn hosted_terminal_exports_replay_occupancy_and_shrinks_when_unsubscribed() {
+        let spec = TerminalSpawnSpec {
+            session_id: TerminalSessionId::new("replay-budget"),
+            project_id: yttt_core::model::ids::ProjectId::new("project"),
+            cwd: yttt_protocol::ProjectRelativePath::root(),
+            execution: TerminalExecutionSpec::Command {
+                shell: "/bin/sh".to_string(),
+                program: "/bin/sh".to_string(),
+                args: vec!["-lc".to_string(), "sleep 30".to_string()],
+                return_to_shell: false,
+            },
+            geometry: TerminalGeometry {
+                cols: 80,
+                rows: 24,
+                cell_width: 8,
+                cell_height: 16,
+            },
+            geometry_epoch: 1,
+            query_palette: Vec::new(),
+            palette_revision: 1,
+            environment: Vec::new(),
+            removed_environment: Vec::new(),
+            scrollback_limit: 100,
+        };
+        let terminal =
+            HostedTerminal::spawn_in_with_budget(spec, 1, None, ReplayBudget::default()).unwrap();
+        terminal.set_subscriber_count(1);
+        terminal.append_raw_replay_for_tests(&vec![b'x'; 512 * 1024]);
+        assert_eq!(terminal.replay_occupancy_for_tests(), 512 * 1024);
+        let subscribed = terminal.diagnostics();
+        assert_eq!(subscribed.replay_bytes, 512 * 1024);
+        assert_eq!(subscribed.replay_capacity, RAW_REPLAY_BYTES);
+        terminal.set_subscriber_count(0);
+        assert_eq!(
+            terminal.replay_occupancy_for_tests(),
+            UNSUBSCRIBED_REPLAY_BYTES
+        );
+        let snapshot = terminal.diagnostics();
+        assert_eq!(snapshot.replay_capacity, UNSUBSCRIBED_REPLAY_BYTES);
+        assert_eq!(snapshot.replay_bytes, UNSUBSCRIBED_REPLAY_BYTES);
+        assert!(snapshot.replay_dropped_bytes > 0);
+        assert!(snapshot.replay_high_water >= 512 * 1024);
+        let _ = terminal.terminate();
+    }
 }

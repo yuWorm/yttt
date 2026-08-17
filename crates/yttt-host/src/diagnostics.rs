@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
-pub const DIAGNOSTICS_SCHEMA_VERSION: u32 = 2;
+pub const DIAGNOSTICS_SCHEMA_VERSION: u32 = 5;
 pub const DEFAULT_DIAGNOSTICS_LOG_BYTES: u64 = 4 * 1024 * 1024;
 const LATENCY_BUCKETS: usize = 64;
 
@@ -201,10 +201,31 @@ pub struct TerminalPipelineDiagnosticsSnapshot {
     pub semantic_encode_count: u64,
     pub shared_ipc_encode_count: u64,
     pub skipped_unsubscribed_captures: u64,
+    #[serde(default)]
+    pub checkpoint_encode_bytes: u64,
+    #[serde(default)]
+    pub checkpoint_encode_high_water: u64,
+    #[serde(default)]
+    pub replay_bytes: usize,
+    #[serde(default)]
+    pub replay_capacity: usize,
+    #[serde(default)]
+    pub replay_dropped_bytes: u64,
+    #[serde(default)]
+    pub replay_high_water: usize,
     pub parser: LatencyDiagnosticsSnapshot,
     pub semantic_encode: LatencyDiagnosticsSnapshot,
     pub input_to_pty: LatencyDiagnosticsSnapshot,
     pub queues: Vec<QueueDiagnosticsSnapshot>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachmentResyncDiagnosticsSnapshot {
+    pub session_id: String,
+    pub client_id: String,
+    pub lagged_events: u64,
+    pub pending_scroll_resync: bool,
+    pub last_resync_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -220,6 +241,8 @@ pub struct HostDiagnosticsSnapshot {
     pub thread_count: Option<usize>,
     pub idle_cpu_percent: Option<f32>,
     pub terminals: Vec<TerminalPipelineDiagnosticsSnapshot>,
+    #[serde(default)]
+    pub attachment_resyncs: Vec<AttachmentResyncDiagnosticsSnapshot>,
 }
 
 pub trait DiagnosticsSink: Send + Sync {

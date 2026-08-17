@@ -1293,6 +1293,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "ciborium"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42e69ffd6f0917f5c029256a24d0161db17cea3997d185db0d35926308770f0e"
+dependencies = [
+ "ciborium-io",
+ "ciborium-ll",
+ "serde",
+]
+
+[[package]]
+name = "ciborium-io"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05afea1e0a06c9be33d539b876f1ce3692f4afea2cb41f740e7743225ed1c757"
+
+[[package]]
+name = "ciborium-ll"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57663b653d948a338bfb3eeba9bb2fd5fcfaecb9e199e87e1eda4d9e8b240fd9"
+dependencies = [
+ "ciborium-io",
+ "half",
+]
+
+[[package]]
 name = "cipher"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11358,6 +11385,7 @@ dependencies = [
  "yttt-core",
  "yttt-host",
  "yttt-protocol",
+ "yttt-transport",
  "yttt-transport-local",
 ]
 
@@ -11401,7 +11429,7 @@ dependencies = [
  "yttt-protocol",
  "yttt-ssh",
  "yttt-terminal-core",
- "yttt-transport-local",
+ "yttt-transport",
  "zeroize",
 ]
 
@@ -11409,6 +11437,7 @@ dependencies = [
 name = "yttt-project-core"
 version = "0.2.0"
 dependencies = [
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
  "uuid",
@@ -11418,9 +11447,12 @@ dependencies = [
 name = "yttt-protocol"
 version = "0.2.0"
 dependencies = [
+ "ciborium",
  "crc32fast",
  "postcard",
  "serde",
+ "serde_bytes",
+ "serde_json",
  "thiserror 2.0.18",
  "yttt-agent-core",
  "yttt-core",
@@ -11437,6 +11469,7 @@ dependencies = [
  "russh",
  "russh-sftp",
  "serde",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -11480,22 +11513,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "yttt-transport"
+version = "0.2.0"
+dependencies = [
+ "hmac 0.12.1",
+ "rand 0.8.6",
+ "serde",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+ "yttt-core",
+ "yttt-protocol",
+ "zeroize",
+]
+
+[[package]]
 name = "yttt-transport-local"
 version = "0.2.0"
 dependencies = [
  "crc32fast",
- "hmac 0.12.1",
- "rand 0.8.6",
  "rustix 1.1.4",
- "serde",
- "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "windows-sys 0.61.2",
  "yttt-core",
  "yttt-protocol",
- "zeroize",
+ "yttt-transport",
 ]
 
 [[package]]

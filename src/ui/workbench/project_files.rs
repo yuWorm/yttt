@@ -35,9 +35,7 @@ impl ProjectFileRefreshBatch {
 
         let mut found_project_path = false;
         for relative_path in change.relative_paths {
-            let Ok(relative_path) = crate::runtime::project::platform_path(relative_path) else {
-                continue;
-            };
+            let relative_path = crate::runtime::project::relative_os_path(relative_path);
             let relative_directory = relative_path.parent().unwrap_or_else(|| Path::new(""));
             self.tree_directories
                 .insert(relative_directory.to_path_buf());
@@ -1457,7 +1455,7 @@ mod tests {
             registration_epoch: 1,
             relative_paths: paths
                 .iter()
-                .map(|path| crate::runtime::project::path_to_platform(Path::new(path)))
+                .map(|path| crate::runtime::project::path_to_relative(Path::new(path)).unwrap())
                 .collect(),
             refresh_status: true,
             refresh_tree,

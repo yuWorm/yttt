@@ -6,7 +6,7 @@ use zeroize::Zeroize;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct SensitiveBytes(Vec<u8>);
+pub struct SensitiveBytes(#[serde(with = "serde_bytes")] Vec<u8>);
 
 impl SensitiveBytes {
     pub fn new(bytes: Vec<u8>) -> Self {
@@ -45,9 +45,6 @@ pub struct SshEndpoint {
 pub struct StoredSshCredential {
     pub id: String,
     pub effective_user: String,
-    pub resolved_host: String,
-    pub port: u16,
-    pub host_key_sha256: String,
     pub private_key_identity: Option<String>,
 }
 
@@ -152,11 +149,12 @@ pub struct RemoteFileEntry {
     pub kind: RemoteFileKind,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteFileFingerprint {
     pub byte_len: u64,
     pub modified_seconds: Option<u32>,
     pub content_hash: u64,
+    pub revision: crate::project::ContentRevision,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,6 +166,7 @@ pub struct RemoteDirectory {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteFileContent {
     pub relative_path: String,
+    #[serde(with = "serde_bytes")]
     pub bytes: Vec<u8>,
     pub fingerprint: RemoteFileFingerprint,
 }
@@ -217,6 +216,7 @@ pub enum RemoteFileRequest {
         expected: Option<RemoteFileFingerprint>,
         force: bool,
         maximum_bytes: u64,
+        #[serde(with = "serde_bytes")]
         bytes: Vec<u8>,
     },
     Create {
@@ -246,15 +246,53 @@ pub enum RemoteFileResponse {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RemoteHostCommand {
+    Git {
+        operation: crate::project::ProjectGitOperation,
+    },
+    Privileged {
+        program: String,
+        args: Vec<String>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteCommandRequest {
     pub project_id: ProjectId,
-    pub program: String,
-    pub args: Vec<String>,
+    pub command: RemoteHostCommand,
+}
+
+impl RemoteCommandRequest {
+    pub fn required_capability(&self) -> crate::Capability {
+        match &self.command {
+            RemoteHostCommand::Git { operation } => match operation.access() {
+                crate::project::GitAccess::Read => crate::Capability::GitRead,
+                crate::project::GitAccess::Mutate => crate::Capability::GitMutate,
+            },
+            RemoteHostCommand::Privileged { .. } => crate::Capability::RemoteCommandPrivileged,
+        }
+    }
+}
+
+impl RemoteFileRequest {
+    pub fn required_capability(&self) -> crate::Capability {
+        match self {
+            Self::ResolveHome { .. }
+            | Self::BrowseDirectory { .. }
+            | Self::ScanDirectory { .. }
+            | Self::Read { .. } => crate::Capability::ProjectRead,
+            Self::Save { .. } | Self::Create { .. } | Self::Rename { .. } | Self::Delete { .. } => {
+                crate::Capability::ProjectMutate
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteCommandResponse {
     pub exit_status: u32,
+    #[serde(with = "serde_bytes")]
     pub stdout: Vec<u8>,
+    #[serde(with = "serde_bytes")]
     pub stderr: Vec<u8>,
 }
