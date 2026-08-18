@@ -1046,13 +1046,6 @@ impl TerminalView {
                 {
                     break;
                 }
-                // A continuously-ready receiver can monopolize GPUI's foreground
-                // executor and coalesce several terminal updates into one paint.
-                // Yield briefly after each latest-only update so the scheduled
-                // notification can reach the next presentation frame.
-                cx.background_executor()
-                    .timer(Duration::from_millis(1))
-                    .await;
             }
         }));
     }
@@ -3777,6 +3770,42 @@ mod tests {
         assert_eq!(recorded.bytes(), expected);
     }
 
+    fn semantic_viewport(sequence: u64) -> SemanticViewport {
+        SemanticViewport {
+            session_id: TerminalSessionId::new("semantic-stream"),
+            session_epoch: 1,
+            sequence,
+            geometry: TerminalGeometry {
+                cols: 80,
+                rows: 24,
+                cell_width: 0,
+                cell_height: 0,
+            },
+            geometry_epoch: 1,
+            scrollback_epoch: 1,
+            history_size: 0,
+            display_offset: 0,
+            rows: Vec::new(),
+            cursor: SemanticCursor {
+                row: 0,
+                column: 0,
+                shape: CursorShape::Block,
+                visible: true,
+                blinking: false,
+            },
+            modes: TerminalModes {
+                bits: 0,
+                title: None,
+                cwd: None,
+            },
+            palette: TerminalPalette {
+                colors: Vec::new(),
+                revision: 0,
+            },
+            process_state: TerminalProcessState::Running,
+        }
+    }
+
     #[test]
     fn terminal_config_maps_complete_alacritty_options() {
         let config = TerminalConfig {
@@ -3837,6 +3866,34 @@ mod tests {
         });
 
         assert!(cx.read(|cx| terminal.read(cx).state.mode().contains(TermMode::VI)));
+    }
+
+    #[gpui::test]
+    fn semantic_viewport_stream_drains_ready_updates_without_a_timer(cx: &mut TestAppContext) {
+        let (updates, viewports) = flume::unbounded();
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new_semantic(RecordingWriter::default(), TerminalConfig::default(), cx)
+        });
+        terminal.update(cx, |terminal, cx| {
+            terminal.attach_semantic_viewport_stream(viewports, cx);
+        });
+
+        updates.send(semantic_viewport(1)).unwrap();
+        updates.send(semantic_viewport(2)).unwrap();
+        cx.run_until_parked();
+
+        assert_eq!(
+            cx.read(|cx| {
+                terminal
+                    .read(cx)
+                    .semantic_viewport
+                    .lock()
+                    .as_ref()
+                    .unwrap()
+                    .sequence
+            }),
+            2
+        );
     }
 
     #[gpui::test]
