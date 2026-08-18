@@ -80,6 +80,7 @@ mod enabled {
         pub input_to_pty_write_ms: DurationDistribution,
         pub input_to_echo_parse_ms: DurationDistribution,
         pub echo_to_first_paint_ms: DurationDistribution,
+        pub input_to_first_paint_ms: DurationDistribution,
 
         pub ime_preedit_to_paint_ms: DurationDistribution,
     }
@@ -89,6 +90,7 @@ mod enabled {
         pub frame_interval: &'static str,
         pub input_to_parser: &'static str,
         pub echo_to_paint: &'static str,
+        pub input_to_paint: &'static str,
         pub presentation: &'static str,
     }
 
@@ -286,6 +288,7 @@ mod enabled {
         input_to_pty_write: DurationMetric,
         input_to_echo_parse: DurationMetric,
         echo_to_first_paint: DurationMetric,
+        input_to_first_paint: DurationMetric,
 
         ime_preedit_to_paint: DurationMetric,
     }
@@ -335,6 +338,7 @@ mod enabled {
                 input_to_pty_write: DurationMetric::new(),
                 input_to_echo_parse: DurationMetric::new(),
                 echo_to_first_paint: DurationMetric::new(),
+                input_to_first_paint: DurationMetric::new(),
                 ime_preedit_to_paint: DurationMetric::new(),
             }
         }
@@ -454,6 +458,30 @@ mod enabled {
                     .iter()
                     .flat_map(|row| row.spans.iter().map(|span| span.text.as_bytes())),
             );
+        }
+
+        pub(crate) fn record_semantic_update(
+            &self,
+            update: &yttt_protocol::terminal::TerminalStreamUpdate,
+        ) {
+            use yttt_protocol::terminal::TerminalStreamUpdate;
+
+            match update {
+                TerminalStreamUpdate::Snapshot(viewport) => {
+                    self.record_semantic_viewport(viewport);
+                }
+                TerminalStreamUpdate::Delta(delta) => {
+                    self.record_output_parts(
+                        Instant::now(),
+                        delta
+                            .changed_rows
+                            .iter()
+                            .flat_map(|row| row.spans.iter().map(|span| span.text.as_bytes())),
+                    );
+                }
+                TerminalStreamUpdate::RawTail { .. }
+                | TerminalStreamUpdate::ResyncRequired { .. } => {}
+            }
         }
 
         fn record_output_parts<'a>(
@@ -585,7 +613,10 @@ mod enabled {
                         let echoed_at = input
                             .echoed_at
                             .expect("parsed input must record its echo timestamp");
-                        input_latencies.push(completed_at.saturating_duration_since(echoed_at));
+                        input_latencies.push((
+                            completed_at.saturating_duration_since(echoed_at),
+                            completed_at.saturating_duration_since(input.started_at),
+                        ));
                     } else if expired {
                         pending.remove(index);
                         dropped += 1;
@@ -599,8 +630,9 @@ mod enabled {
                     .dropped_correlations
                     .fetch_add(dropped, Ordering::Relaxed);
             }
-            for latency in input_latencies {
-                self.state.echo_to_first_paint.record(latency);
+            for (echo_to_paint, input_to_paint) in input_latencies {
+                self.state.echo_to_first_paint.record(echo_to_paint);
+                self.state.input_to_first_paint.record(input_to_paint);
             }
 
             let ime_preedits = {
@@ -696,6 +728,7 @@ mod enabled {
                     input_to_pty_write_ms: self.state.input_to_pty_write.snapshot(),
                     input_to_echo_parse_ms: self.state.input_to_echo_parse.snapshot(),
                     echo_to_first_paint_ms: self.state.echo_to_first_paint.snapshot(),
+                    input_to_first_paint_ms: self.state.input_to_first_paint.snapshot(),
 
                     ime_preedit_to_paint_ms: self.state.ime_preedit_to_paint.snapshot(),
                 },
@@ -704,6 +737,7 @@ mod enabled {
                     frame_interval: "Time between completed terminal paint callbacks; this is not the Metal drawable presentation interval.",
                     input_to_parser: "Time from a GPUI input event until the parser observes the first subsequent PTY output occurrence of the exact submitted byte sequence; unmatched control input is omitted.",
                     echo_to_paint: "Time from matching the echoed input in terminal output until the first paint whose snapshot includes that echo.",
+                    input_to_paint: "Time from a GPUI input event until the first completed paint whose snapshot includes the matching terminal echo.",
 
                     presentation: "Actual GPU/display presentation is intentionally measured by the accompanying Metal System Trace capture.",
                 },
@@ -749,6 +783,7 @@ mod enabled {
             self.state.input_to_pty_write.clear();
             self.state.input_to_echo_parse.clear();
             self.state.echo_to_first_paint.clear();
+            self.state.input_to_first_paint.clear();
 
             self.state.ime_preedit_to_paint.clear();
         }
@@ -1055,6 +1090,7 @@ mod enabled {
             assert_eq!(snapshot.latencies.input_to_pty_write_ms.samples, 1);
             assert_eq!(snapshot.latencies.input_to_echo_parse_ms.samples, 1);
             assert_eq!(snapshot.latencies.echo_to_first_paint_ms.samples, 1);
+            assert_eq!(snapshot.latencies.input_to_first_paint_ms.samples, 1);
 
             assert_eq!(snapshot.latencies.parser_to_prepaint_ms.samples, 1);
         }
@@ -1302,6 +1338,12 @@ mod disabled {
         pub(crate) fn record_semantic_viewport(
             &self,
             _viewport: &yttt_protocol::terminal::SemanticViewport,
+        ) {
+        }
+
+        pub(crate) fn record_semantic_update(
+            &self,
+            _update: &yttt_protocol::terminal::TerminalStreamUpdate,
         ) {
         }
 

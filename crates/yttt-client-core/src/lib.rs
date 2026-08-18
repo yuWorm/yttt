@@ -60,7 +60,7 @@ pub enum ConnectionState {
 pub enum ClientEvent {
     Connection(ConnectionState),
     Server(HostEvent),
-    MirrorUpdated(TerminalSessionId),
+    TerminalUpdated(Arc<TerminalStreamUpdate>),
     TerminalUnavailable(TerminalSessionId),
     AgentSnapshotUpdated(Box<AgentSnapshotUpdate>),
 }
@@ -722,7 +722,9 @@ fn handle_response(
                         lease.session_id.clone(),
                         TerminalMirror::new(checkpoint.viewport.clone()),
                     );
-                    let _ = events.send(ClientEvent::MirrorUpdated(lease.session_id.clone()));
+                    let _ = events.send(ClientEvent::TerminalUpdated(Arc::new(
+                        TerminalStreamUpdate::Snapshot(checkpoint.viewport.clone()),
+                    )));
                     start_terminal_data_channel(lease.session_id.clone(), context);
                 }
                 Ok(Response::TerminalLease(lease)) => {
@@ -732,11 +734,12 @@ fn handle_response(
                 Ok(Response::TerminalViewport(read)) | Ok(Response::TerminalScrolled(read)) => {
                     let session_id = read.viewport.session_id.clone();
                     known_sessions.write().insert(session_id.clone());
-                    mirrors.write().insert(
-                        session_id.clone(),
-                        TerminalMirror::new(read.viewport.clone()),
-                    );
-                    let _ = events.send(ClientEvent::MirrorUpdated(session_id));
+                    mirrors
+                        .write()
+                        .insert(session_id, TerminalMirror::new(read.viewport.clone()));
+                    let _ = events.send(ClientEvent::TerminalUpdated(Arc::new(
+                        TerminalStreamUpdate::Snapshot(read.viewport.clone()),
+                    )));
                 }
                 Ok(Response::Resources(resources)) => {
                     catalog.write().replace(resources.clone());
@@ -761,10 +764,11 @@ fn handle_response(
         PendingRequest::Checkpoint(session_id) => {
             if let Ok(Response::TerminalCheckpoint(checkpoint)) = result {
                 known_sessions.write().insert(session_id.clone());
+                let update = TerminalStreamUpdate::Snapshot(checkpoint.viewport.clone());
                 mirrors
                     .write()
-                    .insert(session_id.clone(), TerminalMirror::new(checkpoint.viewport));
-                let _ = events.send(ClientEvent::MirrorUpdated(session_id));
+                    .insert(session_id, TerminalMirror::new(checkpoint.viewport));
+                let _ = events.send(ClientEvent::TerminalUpdated(Arc::new(update)));
             }
             Vec::new()
         }
@@ -800,8 +804,9 @@ fn handle_response(
             for placement in resources.terminals {
                 sessions.push(placement.session_id.clone());
                 if let Some(viewport) = placement.viewport {
-                    store.insert(placement.session_id.clone(), TerminalMirror::new(viewport));
-                    let _ = events.send(ClientEvent::MirrorUpdated(placement.session_id));
+                    let update = TerminalStreamUpdate::Snapshot(viewport.clone());
+                    store.insert(placement.session_id, TerminalMirror::new(viewport));
+                    let _ = events.send(ClientEvent::TerminalUpdated(Arc::new(update)));
                 }
             }
             drop(store);
@@ -982,15 +987,16 @@ fn handle_event(
         }
         _ => return None,
     };
-    let session_id = update_session_id(&update).clone();
+    let session_id = update.session_id().clone();
     known_sessions.write().insert(session_id.clone());
+    let published_update = Arc::new(update);
     let apply = {
         let mut store = mirrors.write();
         match store.get_mut(&session_id) {
-            Some(mirror) => mirror.apply(update),
-            None => match update {
+            Some(mirror) => mirror.apply(published_update.as_ref()),
+            None => match published_update.as_ref() {
                 TerminalStreamUpdate::Snapshot(viewport) => {
-                    store.insert(session_id.clone(), TerminalMirror::new(viewport));
+                    store.insert(session_id.clone(), TerminalMirror::new(viewport.clone()));
                     MirrorApply::Updated
                 }
                 _ => MirrorApply::SequenceGap,
@@ -999,7 +1005,7 @@ fn handle_event(
     };
     match apply {
         MirrorApply::Updated => {
-            let _ = events.send(ClientEvent::MirrorUpdated(session_id));
+            let _ = events.send(ClientEvent::TerminalUpdated(published_update));
             None
         }
         MirrorApply::Ignored => None,
@@ -1118,15 +1124,6 @@ async fn send_internal_request(
     .map_err(|_| ())?;
     pending.insert(request_id, request);
     Ok(())
-}
-
-fn update_session_id(update: &TerminalStreamUpdate) -> &TerminalSessionId {
-    match update {
-        TerminalStreamUpdate::Snapshot(viewport) => &viewport.session_id,
-        TerminalStreamUpdate::Delta(delta) => &delta.session_id,
-        TerminalStreamUpdate::RawTail { session_id, .. }
-        | TerminalStreamUpdate::ResyncRequired { session_id, .. } => session_id,
-    }
 }
 
 fn set_state(

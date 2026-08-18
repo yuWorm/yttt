@@ -1,7 +1,7 @@
 use super::content::{RenderOverlayState, TerminalRenderSnapshot};
 use alacritty_terminal::index::Line;
 use alacritty_terminal::selection::SelectionRange;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 /// Authoritative resolved visible-frame cache.
@@ -99,6 +99,24 @@ impl TerminalRenderCache {
             return rebuilt_rows;
         }
 
+        let relocated_generations = self.frame.as_ref().map_or_else(HashMap::new, |frame| {
+            let previous = frame
+                .rows
+                .iter()
+                .filter_map(|row| row.semantic_line_id.map(|line_id| (line_id, row)))
+                .collect::<HashMap<_, _>>();
+            update
+                .rows
+                .iter()
+                .filter_map(|row| {
+                    let viewport_row = row.line.0 + update.display_offset as i32;
+                    let previous = previous.get(&row.semantic_line_id?)?;
+                    (viewport_row >= 0 && previous.same_content(row))
+                        .then_some((viewport_row as usize, previous.generation))
+                })
+                .collect()
+        });
+
         let mut rebuilt_rows = 0;
 
         let Some(frame) = self.frame.as_mut().map(Arc::make_mut) else {
@@ -109,8 +127,15 @@ impl TerminalRenderCache {
             if viewport_row < 0 || viewport_row as usize >= frame.rows.len() {
                 continue;
             }
-            let cached = &mut frame.rows[viewport_row as usize];
-            if cached.line == row.line && cached.cells == row.cells {
+            let viewport_row = viewport_row as usize;
+            let cached = &mut frame.rows[viewport_row];
+            if cached.same_content(&row) {
+                cached.semantic_line_id = row.semantic_line_id;
+                continue;
+            }
+            if let Some(generation) = relocated_generations.get(&viewport_row) {
+                row.generation = *generation;
+                *cached = row;
                 continue;
             }
             self.next_generation = self.next_generation.wrapping_add(1);

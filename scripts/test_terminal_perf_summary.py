@@ -153,6 +153,10 @@ class TerminalPerformanceSummaryTests(unittest.TestCase):
                                 "samples": 599,
                                 "p95_ms": 2.0,
                             },
+                            "input_to_first_paint_ms": {
+                                "samples": 599,
+                                "p95_ms": 12.0,
+                            },
                         },
                     },
                 },
@@ -163,6 +167,7 @@ class TerminalPerformanceSummaryTests(unittest.TestCase):
             self.assertIn("metric document contains a non-finite number", failures)
             self.assertIn("interactive input-to-PTY sample count is 599", failures)
             self.assertIn("interactive echo-to-paint sample count is 599", failures)
+            self.assertIn("interactive input-to-paint sample count is 599", failures)
 
     def test_cross_backend_thresholds_reject_missing_runs_and_regressions(self) -> None:
         def aggregate(
@@ -171,6 +176,7 @@ class TerminalPerformanceSummaryTests(unittest.TestCase):
             runs: int,
             throughput: float,
             echo: float | None = None,
+            input_paint: float | None = None,
         ) -> dict[str, object]:
             return {
                 "backend": backend,
@@ -179,19 +185,22 @@ class TerminalPerformanceSummaryTests(unittest.TestCase):
                 "metrics": {
                     "mib_per_second": {"median": throughput},
                     "echo_to_paint_p95_ms": {"median": echo},
+                    "input_to_paint_p95_ms": {"median": input_paint},
                 },
             }
 
         aggregates: list[dict[str, object]] = []
         for scenario in ("full", "damage", "scroll", "burst", "interactive"):
-            aggregates.append(aggregate("direct", scenario, 4, 100.0, 10.0))
-            aggregates.append(aggregate("host", scenario, 4, 80.0, 14.0))
+            aggregates.append(aggregate("direct", scenario, 4, 100.0, 10.0, 10.0))
+            aggregates.append(aggregate("host", scenario, 4, 80.0, 14.0, 21.0))
         failures: list[str] = []
         summary.enforce_cross_backend_thresholds(aggregates, failures)
+        summary.enforce_interactive_latency_threshold(aggregates, failures)
         joined = "\n".join(failures)
         self.assertIn("requires at least 5 direct and 5 host runs", joined)
         self.assertIn("Host throughput regressed 20.00%", joined)
         self.assertIn("Host echo-to-paint p95 median adds 4.00 ms", joined)
+        self.assertIn("Host input-to-paint p95 median is 2.10x Direct", joined)
 
     def test_resource_thresholds_reject_busy_or_oversized_host(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -42,8 +42,8 @@
 
 Phase 1 验收已完成：
 
-- 性能 runner 覆盖同机五轮 direct/Host 原始结果、五类 workload、0/1/4/16 local pane、SSH pane、多客户端和 desktop reopen 矩阵。
-- 严格门槛覆盖 Host-only idle CPU、combined RSS、交互延迟、绘制节奏、final sentinel 和零 backlog。
+- 性能 runner 覆盖同机五轮 direct/Host 原始结果、五类 workload、0/1/4/16 local pane、SSH pane、多客户端和 desktop reopen 矩阵；interactive 场景关联记录 GPUI input、Host/PTY write、echo parse 与首次 paint。
+- 严格门槛覆盖 Host-only idle CPU、combined RSS、绘制节奏、final sentinel、零 backlog，以及 Host input-to-paint p95 不超过同机 Direct 的 `2×`。
 - 三平台 CI 覆盖 macOS bundle、Windows installer/named-pipe/upgrade、Linux headless/tar 产品 smoke。
 - 产品 smoke 覆盖 local shell、SSH/SFTP/Git/host-key、Agent reconnect、双客户端、慢客户端、desktop reopen 和 Host crash。
 
@@ -410,6 +410,11 @@ Host lock 与 desktop-shell lock 必须分离：同一 profile 只有一个 Host
 | `yttt` + `yttt-host` 双 binary | 可提供真正精简的 headless 包；Host loader 不需要 GUI 动态库；可独立做资源预算 | 打包、签名、版本配对和测试产物定位更复杂 |
 
 因此第一阶段选择单 binary、双进程，同时保持 crate 边界，使以后拆成 `yttt-host` executable 只是 composition root 和打包调整，不迁移资源实现。出现以下任一条件再拆：需要无 GUI 依赖的 Linux/headless 安装、实测 Host-only RSS/启动时间被 UI 链接依赖显著抬高、平台登录启动必须使用独立 helper，或 updater 需要独立替换 Host。
+
+单 binary 不代表升级后的 Desktop 可以长期复用旧映像 Host。launcher 必须比较 ready
+metadata 的 build fingerprint 与 resource compatibility；不匹配时只允许经 authenticated
+lifecycle `StopIfIdle` 安全替换。存在 terminal/project/Agent/SSH blocker 时返回 `Busy` 并保留
+旧 Host，不能按 PID 强杀，也不能把协议兼容误当成 executable/resource 实现完全一致。
 
 ### 5.6 启动、关闭与保活策略
 
@@ -1390,6 +1395,7 @@ yttt --profile dev-a --no-spawn-host
 
 - 11 MiB 基准中位数相对当前退化不超过 10%。
 - 本地输入到 PTY p95 不超过 0.5 ms。
+- 同机 interactive workload 的 Host input-to-paint p95 中位数不超过 Direct 的 `2×`。
 - 现有高负载场景保持约 60 FPS。
 - 本地 UI 不依赖公网和 Relay。
 

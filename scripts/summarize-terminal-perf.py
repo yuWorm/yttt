@@ -584,6 +584,9 @@ def analyze_run(root: Path, run_dir: Path) -> dict[str, Any]:
     echo_paint = latency_ms(
         nested(metrics, "latencies", "echo_to_first_paint_ms"), "p95_ms"
     )
+    input_paint = latency_ms(
+        nested(metrics, "latencies", "input_to_first_paint_ms"), "p95_ms"
+    )
     if scenario == "interactive":
         input_samples = (
             nested(terminal_host, "input_to_pty", "samples")
@@ -593,10 +596,17 @@ def analyze_run(root: Path, run_dir: Path) -> dict[str, Any]:
         echo_samples = nested(
             metrics, "latencies", "echo_to_first_paint_ms", "samples"
         )
+        input_paint_samples = nested(
+            metrics, "latencies", "input_to_first_paint_ms", "samples"
+        )
         if not isinstance(input_samples, int) or input_samples < 600:
             failures.append(f"interactive input-to-PTY sample count is {input_samples!r} (<600)")
         if not isinstance(echo_samples, int) or echo_samples < 600:
             failures.append(f"interactive echo-to-paint sample count is {echo_samples!r} (<600)")
+        if not isinstance(input_paint_samples, int) or input_paint_samples < 600:
+            failures.append(
+                f"interactive input-to-paint sample count is {input_paint_samples!r} (<600)"
+            )
         if input_to_pty is None:
             failures.append("missing input-to-PTY p95")
         elif input_to_pty > 0.5:
@@ -626,6 +636,7 @@ def analyze_run(root: Path, run_dir: Path) -> dict[str, Any]:
             "paint_interval_p95_ms": frame_p95,
             "input_to_pty_p95_ms": input_to_pty,
             "echo_to_paint_p95_ms": echo_paint,
+            "input_to_paint_p95_ms": input_paint,
             "final_sentinel_to_paint_ms": sentinel_ms,
         },
         "warnings": warnings,
@@ -656,6 +667,7 @@ def aggregate_runs(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "paint_interval_p95_ms",
             "input_to_pty_p95_ms",
             "echo_to_paint_p95_ms",
+            "input_to_paint_p95_ms",
             "final_sentinel_to_paint_ms",
         )
         aggregates.append(
@@ -733,6 +745,37 @@ def enforce_matrix_coverage(
             failures.append("Host-only resource probe metadata is not zero-pane/headless")
         if not isinstance(document.get("samples"), int) or document["samples"] < 5:
             failures.append("Host-only resource probe contains fewer than 5 idle samples")
+
+
+def enforce_interactive_latency_threshold(
+    aggregates: list[dict[str, Any]], failures: list[str]
+) -> None:
+    by_key = {
+        (aggregate["backend"], aggregate["scenario"]): aggregate
+        for aggregate in aggregates
+    }
+    direct = nested(
+        by_key.get(("direct", "interactive")),
+        "metrics",
+        "input_to_paint_p95_ms",
+        "median",
+    )
+    host = nested(
+        by_key.get(("host", "interactive")),
+        "metrics",
+        "input_to_paint_p95_ms",
+        "median",
+    )
+    if direct is None and host is None:
+        return
+    if not isinstance(direct, (int, float)) or not isinstance(host, (int, float)):
+        failures.append("missing interactive input-to-paint baseline medians")
+    elif direct <= 0:
+        failures.append("Direct interactive input-to-paint p95 median is not positive")
+    elif host > direct * 2.0:
+        failures.append(
+            f"Host input-to-paint p95 median is {host / direct:.2f}x Direct (>2.00x)"
+        )
 
 
 def enforce_cross_backend_thresholds(
@@ -848,6 +891,7 @@ def main() -> int:
         for failure in run["failures"]
     ]
     resources = None
+    enforce_interactive_latency_threshold(aggregates, failures)
     if not args.allow_incomplete:
         enforce_cross_backend_thresholds(aggregates, failures)
         resources = enforce_resource_thresholds(root, failures)
@@ -867,9 +911,9 @@ def main() -> int:
     print(
         "| backend | scenario | runs | MiB/s median/p95/p99 | "
         "paint p95 ms median/p95/p99 | input→PTY p95 ms median | "
-        "echo→paint p95 ms median | sentinel ms median |"
+        "input→paint p95 ms median | echo→paint p95 ms median | sentinel ms median |"
     )
-    print("|---|---|---:|---:|---:|---:|---:|---:|")
+    print("|---|---|---:|---:|---:|---:|---:|---:|---:|")
     for aggregate in aggregates:
         metrics = aggregate["metrics"]
 
@@ -882,6 +926,7 @@ def main() -> int:
             f"{aggregate['runs']} | {triple('mib_per_second')} | "
             f"{triple('paint_interval_p95_ms')} | "
             f"{number(nested(metrics, 'input_to_pty_p95_ms', 'median'), 3)} | "
+            f"{number(nested(metrics, 'input_to_paint_p95_ms', 'median'), 3)} | "
             f"{number(nested(metrics, 'echo_to_paint_p95_ms', 'median'), 3)} | "
             f"{number(nested(metrics, 'final_sentinel_to_paint_ms', 'median'), 3)} |"
         )

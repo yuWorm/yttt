@@ -233,6 +233,57 @@ fn recording_agent_snapshot_preserves_process_lifecycle() {
 }
 
 #[test]
+fn pane_exit_downgrades_live_agent_without_overwriting_terminal_outcomes() {
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(local_project(PathBuf::from("/tmp/yttt")), sample_layout())
+        .unwrap();
+    let mut running = completed_agent_snapshot();
+    running.turn_state = AgentTurnState::Working;
+    workspace
+        .record_agent_snapshot(&project_id, "agent", "codex", running)
+        .unwrap();
+    workspace
+        .record_pane_exited(&project_id, "agent", "codex")
+        .unwrap();
+
+    let pane = workspace
+        .project(&project_id)
+        .unwrap()
+        .tab_state("agent")
+        .unwrap()
+        .pane_states
+        .iter()
+        .find(|pane| pane.pane_id == "codex")
+        .unwrap();
+    assert_eq!(pane.process_state, PaneProcessState::Exited);
+    assert_eq!(
+        pane.agent_snapshot.as_ref().map(AgentSnapshot::view_state),
+        Some(AgentViewState::Stale)
+    );
+
+    workspace
+        .record_agent_snapshot(&project_id, "agent", "codex", completed_agent_snapshot())
+        .unwrap();
+    workspace
+        .record_pane_exited(&project_id, "agent", "codex")
+        .unwrap();
+    let pane = workspace
+        .project(&project_id)
+        .unwrap()
+        .tab_state("agent")
+        .unwrap()
+        .pane_states
+        .iter()
+        .find(|pane| pane.pane_id == "codex")
+        .unwrap();
+    assert_eq!(
+        pane.agent_snapshot.as_ref().map(AgentSnapshot::view_state),
+        Some(AgentViewState::Completed)
+    );
+}
+
+#[test]
 fn close_selected_tab_selects_adjacent_tab() {
     let mut workspace = Workspace::new();
     let project_id = workspace

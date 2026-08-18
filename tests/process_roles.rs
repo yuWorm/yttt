@@ -332,7 +332,7 @@ async fn unreachable_live_host_lock_prevents_duplicate_spawn() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn previous_build_host_is_reused_while_the_resource_protocol_still_negotiates() {
+async fn previous_build_host_is_replaced_only_after_it_becomes_idle() {
     let temp = tempdir().unwrap();
     let profile = isolated_profile(temp.path());
     let token = [73; 32];
@@ -374,10 +374,10 @@ async fn previous_build_host_is_reused_while_the_resource_protocol_still_negotia
         panic!("previous-build Host did not register the project");
     };
 
-    // The handshake negotiates on the protocol range alone, so a Host from an earlier
-    // build that still speaks this resource protocol is attached to, never torn down.
-    let attached = launcher.launch_or_attach().await.unwrap();
-    assert!(!attached.spawned());
+    let Err(error) = launcher.launch_or_attach().await else {
+        panic!("a busy previous-build Host must not be replaced");
+    };
+    assert!(matches!(error, HostLaunchError::HostBusy(blockers) if !blockers.is_empty()));
     assert!(!old_host.is_finished());
 
     assert_eq!(
@@ -391,12 +391,18 @@ async fn previous_build_host_is_reused_while_the_resource_protocol_still_negotia
         Response::Project(ProjectResponse::Closed)
     );
     client.shutdown().await;
-    attached.drain_and_stop().await.unwrap();
+
+    let replacement = launcher.launch_or_attach().await.unwrap_or_else(|error| {
+        let log = fs::read_to_string(profile.paths().logs.join("host.log")).unwrap_or_default();
+        panic!("replacement Host failed: {error}; host.log:\n{log}");
+    });
+    assert!(replacement.spawned());
     tokio::time::timeout(Duration::from_secs(5), old_host)
         .await
-        .expect("previous-build Host did not exit after ForceStop")
+        .expect("previous-build Host did not exit after idle replacement")
         .unwrap()
         .unwrap();
+    replacement.drain_and_stop().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -173,6 +173,7 @@ impl CachedTextRun {
 #[derive(Clone)]
 struct CachedRowDisplay {
     generation: u64,
+    semantic_line_id: Option<u64>,
     background_spans: Arc<[BackgroundSpan]>,
     text_runs: Arc<[CachedTextRun]>,
     decoration_spans: Arc<[DecorationSpan]>,
@@ -394,6 +395,7 @@ impl TerminalRenderer {
         &self,
         row_index: usize,
         row: &RenderableRow,
+        reusable_semantic_rows: &HashMap<(u64, u64), Arc<[CachedTextRun]>>,
         window: &mut Window,
     ) -> CachedRowDisplay {
         if let Some(cached) = self
@@ -401,67 +403,81 @@ impl TerminalRenderer {
             .lock()
             .rows
             .get(&row_index)
-            .filter(|cached| cached.generation == row.generation)
+            .filter(|cached| {
+                cached.generation == row.generation
+                    && cached.semantic_line_id == row.semantic_line_id
+            })
             .cloned()
         {
             return cached;
         }
 
-        let batches = text_batches(&row.cells);
-        let mut text_runs = Vec::with_capacity(batches.len());
-        #[cfg(test)]
-        let shaping_hook = self.shared.lock().shaping_hook.clone();
-
-        for batch in batches {
+        let reusable_text_runs = row.semantic_line_id.and_then(|line_id| {
+            reusable_semantic_rows
+                .get(&(line_id, row.generation))
+                .cloned()
+        });
+        let text_runs = if let Some(text_runs) = reusable_text_runs {
+            text_runs
+        } else {
+            let batches = text_batches(&row.cells);
+            let mut text_runs = Vec::with_capacity(batches.len());
             #[cfg(test)]
-            if let Some(hook) = shaping_hook.as_ref() {
-                hook();
-            }
+            let shaping_hook = self.shared.lock().shaping_hook.clone();
 
-            let TerminalTextBatch {
-                column,
-                cell_count,
-                column_count,
-                cell_starts,
-                text,
-                font_style,
-                foreground,
-                ..
-            } = batch;
-            let run = TextRun {
-                len: text.len(),
-                font: self.font(font_style),
-                color: foreground,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
-            let shaped = window.text_system().shape_line(
-                SharedString::from(text),
-                self.font_size,
-                &[run],
-                Some(self.cell_width),
-            );
-            text_runs.push(CachedTextRun {
-                column,
-                cell_count,
-                column_count,
-                fixed_cell_starts: cell_starts.map(Into::into),
-                foreground,
-                shaped,
-            });
-        }
+            for batch in batches {
+                #[cfg(test)]
+                if let Some(hook) = shaping_hook.as_ref() {
+                    hook();
+                }
+
+                let TerminalTextBatch {
+                    column,
+                    cell_count,
+                    column_count,
+                    cell_starts,
+                    text,
+                    font_style,
+                    foreground,
+                    ..
+                } = batch;
+                let run = TextRun {
+                    len: text.len(),
+                    font: self.font(font_style),
+                    color: foreground,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                let shaped = window.text_system().shape_line(
+                    SharedString::from(text),
+                    self.font_size,
+                    &[run],
+                    Some(self.cell_width),
+                );
+                text_runs.push(CachedTextRun {
+                    column,
+                    cell_count,
+                    column_count,
+                    fixed_cell_starts: cell_starts.map(Into::into),
+                    foreground,
+                    shaped,
+                });
+            }
+            self.diagnostics
+                .shaped_text_runs
+                .fetch_add(text_runs.len() as u64, Ordering::Relaxed);
+            text_runs.into()
+        };
 
         self.diagnostics
             .rebuilt_rows
             .fetch_add(1, Ordering::Relaxed);
-        self.diagnostics
-            .shaped_text_runs
-            .fetch_add(text_runs.len() as u64, Ordering::Relaxed);
         let cached = CachedRowDisplay {
             generation: row.generation,
+            semantic_line_id: row.semantic_line_id,
             background_spans: Self::background_spans(row_index, &row.cells).into(),
-            text_runs: text_runs.into(),
+            text_runs,
             decoration_spans: Self::decoration_spans_for_row(row_index, &row.cells).into(),
         };
         self.shared.lock().rows.insert(row_index, cached.clone());
@@ -473,11 +489,23 @@ impl TerminalRenderer {
         snapshot: Arc<TerminalRenderSnapshot>,
         window: &mut Window,
     ) -> PreparedTerminalFrame {
+        let reusable_semantic_rows = self
+            .shared
+            .lock()
+            .rows
+            .values()
+            .filter_map(|row| {
+                row.semantic_line_id
+                    .map(|line_id| ((line_id, row.generation), row.text_runs.clone()))
+            })
+            .collect::<HashMap<_, _>>();
         let rows = snapshot
             .rows
             .iter()
             .enumerate()
-            .map(|(row_index, row)| self.prepared_row(row_index, row, window))
+            .map(|(row_index, row)| {
+                self.prepared_row(row_index, row, &reusable_semantic_rows, window)
+            })
             .collect();
         PreparedTerminalFrame { snapshot, rows }
     }

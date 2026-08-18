@@ -150,8 +150,9 @@ Client 为每个 request 分配单调 `request_id`。Host 原样回传该 ID。`
 
 `TerminalInput` 仍在同一 control stream 上分配 `request_id`、保持与 resize/scroll 的顺序并由
 Host 返回 response，但 Desktop 快速路径不再为每次按键创建 oneshot waiter 和 Tokio task。
-`ClientCore` 只在 pending map 中保留轻量 completion 类型，用于消费 response 和记录协议
-失败；队列 admission/backpressure 在写入时同步返回。
+`ClientCore` 只在 pending map 中保留轻量 completion 类型；control writer 是有界单消费者，
+response completion 只消费确认/记录协议失败，不与 terminal data decode、mirror merge 或
+GPUI foreground executor 争用执行槽。队列 admission/backpressure 在写入时同步返回。
 
 ### 5.3 server event
 
@@ -163,7 +164,14 @@ Host event 具有：
 
 Client 必须按 epoch/sequence 处理，旧 epoch 或倒退事件不能覆盖新状态。终端自身另有 `session_epoch` 和 terminal `sequence`。
 
-终端 data channel 是例外：`ClientCore` 先把 snapshot/delta 合并到 terminal mirror，只发布轻量的 `MirrorUpdated(session_id)`，不得再把同一 terminal frame 作为通用 `ClientEvent::Server` 重复广播。Desktop 对每个 terminal 使用容量为 1 的 latest-only viewport stream；viewport receiver 在 background executor 中写入共享快照，再通过终端已有的 bounded/coalescing redraw mailbox 唤醒 GPUI。title/process-state 与 lease/exit 等控制事件在 Host runtime worker 中按 `session_id` 过滤后才进入 GPUI，避免 continuously-ready 的 viewport 或无关事件消费者占用前台 executor。
+终端 data channel 是例外：`ClientCore` 在独立 data worker 中把 snapshot/delta 原位合并到
+terminal mirror，只发布 `Arc<TerminalStreamUpdate>`；不得复制完整 `SemanticViewport`，
+也不得把同一 terminal frame 作为通用 `ClientEvent::Server` 重复广播。Desktop 对每个
+terminal 使用有界 update stream；viewport receiver 在 background executor 中原位应用
+delta，再通过终端已有的 bounded/coalescing redraw mailbox 唤醒 GPUI。prepaint 仅转换
+damage row，未变化 row 的 render generation、text shaping 与 line identity 保持不变。
+title/process-state 与 lease/exit 等控制事件在 Host runtime worker 中按 `session_id` 过滤后
+才进入 GPUI，避免 continuously-ready 的 viewport 或无关事件消费者占用前台 executor。
 
 ## 6. 资源目录
 
@@ -292,6 +300,13 @@ PTY child 退出后：
 
 主要性能成本仍是 Host 侧一次 VTE parse 和 Client 侧可见行 shaping/paint。与进程内路径相比，本地 IPC 增加 serialization 和一次镜像应用，但避免双重 parse。空闲 terminal 不做轮询渲染；只有事件、光标闪烁或用户交互唤醒 UI。
 
+`perf-metrics` interactive probe 以同一 input correlation 记录
+`GPUI input -> local writer admission`、`input -> matching echo parse`、
+`echo parse -> first paint` 和完整 `input -> first paint`；Host diagnostics 另记
+`Host request observed -> PTY write complete`。同机三轮以上比较以完整 input-to-paint p95
+中位数为验收值，Host 不得超过 Direct 的 `2×`，不能用 request admission 或
+echo-to-paint 子区间替代端到端指标。
+
 资源预算不能只统计 Rust struct：每个 Host terminal 还包含 PTY、child、若干 worker stack、VTE grid/scrollback、最多 8 MiB replay 和 semantic snapshot；每个 attached Client 包含 mirror、可见 render cache 和一个 input writer worker。部署容量应以真实 shell/TUI workload 测量，不以 `size_of` 推算。
 
 ## 9. 生命周期
@@ -302,13 +317,18 @@ Desktop 启动：
 
 1. `HostLauncher` 从当前 profile 计算 runtime root。
 2. 读取/创建 owner-only auth token。
-3. 尝试连接现有 endpoint。
-4. 成功：attach，不 spawn 第二个 Host。
-5. 失败：以 `--process-role host`、profile、runtime root、token file、build id 和显式 `--host-lifetime` 参数 spawn 当前 executable。
-6. 等待 ready metadata 和 authenticated handshake，最长 8 s；桌面模式随后建立唯一的 `DesktopOwner` channel。
+3. 检查 ready metadata。现有 Host 的 build fingerprint 或 resource compatibility 与当前
+   Desktop 不同时，先通过 lifecycle channel 发送 `StopIfIdle`；返回 `Busy` 时保留旧 Host
+   并向 UI/CLI 返回 blockers，绝不 kill 或覆盖。
+4. build 匹配时尝试连接现有 endpoint；成功即 attach，不 spawn 第二个 Host。
+5. 无现有 Host，或旧 Host 已确认 idle 并退出后，以 `--process-role host`、profile、runtime
+   root、token file、build id 和显式 `--host-lifetime` 参数 spawn 当前 executable。
+6. 等待 ready metadata 和 authenticated handshake，最长 8 s；桌面模式随后建立唯一的
+   `DesktopOwner` channel。
 7. 创建 `ClientCore` 并请求 catalog。
 
-Host 以 profile lock 保证单实例。陈旧 socket/ready/PID 只能在 owner、类型和权限检查通过后清理。
+Host 以 profile lock 保证单实例。陈旧 socket/ready/PID 只能在 owner、类型和权限检查通过后
+清理；build 不匹配本身不是强杀或删除 runtime artifact 的授权。
 
 ### 9.2 普通窗口关闭与 Client 崩溃
 
@@ -358,6 +378,9 @@ Disconnected -> Connecting -> Ready
 - Host 确认 `AcknowledgeTerminalExit` 后，Client 将 durable placement 写为 `Closed`，不得留下指向已回收进程的 `Bound`。
 - handshake 的身份、profile、build 或认证失败属于 fatal `HostLost`，不能无限重试到错误 Host。
 - 用户请求不会跨连接自动重放。
+- 持久化 Agent snapshot 在 Host catalog reconciliation 前统一降级为 `Exited/Stale`；只有
+  当前 Host 的 live snapshot 能恢复 `Running/Working`。terminal `Exited`/`Lost` 事件必须
+  清除对应 pane 的 live Agent 状态，避免应用重启后展示幽灵 `Running`。
 
 ## 11. SSH、文件、Git 与 Agent 扩展边界
 

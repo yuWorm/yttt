@@ -36,7 +36,9 @@ pub enum ProcessRole {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ExistingHostAction {
     Attach,
-    Replace,
+    ReplaceBuild,
+    ReplaceProtocol,
+    ReplaceLifetime,
     Spawn,
 }
 
@@ -263,20 +265,27 @@ impl HostLauncher {
         let token = read_token(&token_file)?;
         match self.existing_host_action(&token).await? {
             ExistingHostAction::Attach => {
-                let actual_lifetime = self.live_host_metadata()?.lifetime;
-                let mut process = ManagedHostProcess {
-                    launcher: self.clone(),
-                    token_file,
-                    child: None,
-                    desktop_owner: None,
-                    actual_lifetime,
-                };
-                self.attach_desktop_owner_if_needed(&mut process, &token)
-                    .await?;
-                return Ok(process);
+                return self.attach_existing(token_file, &token).await;
             }
-            ExistingHostAction::Replace => {
+            action @ (ExistingHostAction::ReplaceBuild
+            | ExistingHostAction::ReplaceProtocol
+            | ExistingHostAction::ReplaceLifetime) => {
                 let mut lifecycle = self.connect_lifecycle_with_token(&token, false).await?;
+                let replacement_became_unnecessary = match action {
+                    ExistingHostAction::ReplaceBuild => {
+                        self.live_host_metadata().is_ok_and(|live| {
+                            !host_build_requires_replacement(&self.build, &live.build)
+                        })
+                    }
+                    ExistingHostAction::ReplaceProtocol => {
+                        self.connect_with_token(&token).await.is_ok()
+                    }
+                    ExistingHostAction::ReplaceLifetime => false,
+                    ExistingHostAction::Attach | ExistingHostAction::Spawn => unreachable!(),
+                };
+                if replacement_became_unnecessary {
+                    return self.attach_existing(token_file, &token).await;
+                }
                 match lifecycle.request(LifecycleRequest::StopIfIdle).await? {
                     LifecycleResponse::Stopping => self.wait_for_existing_host_exit().await?,
                     LifecycleResponse::Busy { blockers } => {
@@ -326,6 +335,24 @@ impl HostLauncher {
         };
         process.wait_until_ready(&token).await?;
         self.attach_desktop_owner_if_needed(&mut process, &token)
+            .await?;
+        Ok(process)
+    }
+
+    async fn attach_existing(
+        &self,
+        token_file: PathBuf,
+        token: &AuthToken,
+    ) -> Result<ManagedHostProcess, HostLaunchError> {
+        let actual_lifetime = self.live_host_metadata()?.lifetime;
+        let mut process = ManagedHostProcess {
+            launcher: self.clone(),
+            token_file,
+            child: None,
+            desktop_owner: None,
+            actual_lifetime,
+        };
+        self.attach_desktop_owner_if_needed(&mut process, token)
             .await?;
         Ok(process)
     }
@@ -479,23 +506,30 @@ impl HostLauncher {
     ) -> Result<ExistingHostAction, HostLaunchError> {
         let deadline = tokio::time::Instant::now() + HOST_READY_TIMEOUT;
         loop {
+            let lock_held = yttt_host::profile_lock_is_held(&self.profile.paths().runtime)?;
+            if lock_held
+                && let Ok(metadata) = self.live_host_metadata()
+                && host_build_requires_replacement(&self.build, &metadata.build)
+            {
+                return Ok(ExistingHostAction::ReplaceBuild);
+            }
             match self.connect_with_token(token).await {
                 Ok(_) => {
                     let actual_lifetime = self.live_host_metadata()?.lifetime;
                     if self.lifetime == yttt_host::HostLifetime::Independent
                         && actual_lifetime == yttt_host::HostLifetime::DesktopOwned
                     {
-                        return Ok(ExistingHostAction::Replace);
+                        return Ok(ExistingHostAction::ReplaceLifetime);
                     }
                     return Ok(ExistingHostAction::Attach);
                 }
                 Err(error) if is_resource_incompatibility(&error) => {
-                    return Ok(ExistingHostAction::Replace);
+                    return Ok(ExistingHostAction::ReplaceProtocol);
                 }
                 Err(_) => {}
             }
 
-            if !yttt_host::profile_lock_is_held(&self.profile.paths().runtime)? {
+            if !lock_held {
                 return Ok(ExistingHostAction::Spawn);
             }
             if self
@@ -553,6 +587,11 @@ impl HostLauncher {
         ))
     }
 }
+fn host_build_requires_replacement(current: &BuildIdentity, live: &BuildIdentity) -> bool {
+    current.build_fingerprint != live.build_fingerprint
+        || current.resource_compatibility != live.resource_compatibility
+}
+
 fn is_resource_incompatibility(error: &HostLaunchError) -> bool {
     matches!(
         error,

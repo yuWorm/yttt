@@ -83,21 +83,21 @@ fn delta(base_sequence: u64, sequence: u64, text: &str) -> SemanticDelta {
 fn mirror_applies_contiguous_deltas_and_rejects_sequence_gaps() {
     let mut mirror = TerminalMirror::new(viewport());
     assert_eq!(
-        mirror.apply(TerminalStreamUpdate::Delta(delta(4, 5, "after"))),
+        mirror.apply(&TerminalStreamUpdate::Delta(delta(4, 5, "after"))),
         MirrorApply::Updated
     );
     assert_eq!(mirror.viewport().sequence, 5);
     assert_eq!(mirror.viewport().rows[0].spans[0].text, "after");
 
     assert_eq!(
-        mirror.apply(TerminalStreamUpdate::Delta(delta(3, 7, "corrupt"))),
+        mirror.apply(&TerminalStreamUpdate::Delta(delta(3, 7, "corrupt"))),
         MirrorApply::SequenceGap
     );
     assert_eq!(mirror.viewport().sequence, 5);
     assert_eq!(mirror.viewport().rows[0].spans[0].text, "after");
 
     assert_eq!(
-        mirror.apply(TerminalStreamUpdate::Delta(delta(4, 5, "duplicate"))),
+        mirror.apply(&TerminalStreamUpdate::Delta(delta(4, 5, "duplicate"))),
         MirrorApply::Ignored
     );
 }

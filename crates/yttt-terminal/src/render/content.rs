@@ -95,8 +95,28 @@ pub(crate) struct RenderableCell {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RenderableRow {
     pub line: Line,
+    pub semantic_line_id: Option<u64>,
     pub cells: Vec<RenderableCell>,
     pub generation: u64,
+}
+
+impl RenderableRow {
+    pub(crate) fn same_content(&self, other: &Self) -> bool {
+        self.semantic_line_id == other.semantic_line_id
+            && self.cells.len() == other.cells.len()
+            && self.cells.iter().zip(&other.cells).all(|(left, right)| {
+                left.point.column == right.point.column
+                    && left.text == right.text
+                    && left.width == right.width
+                    && left.foreground == right.foreground
+                    && left.background == right.background
+                    && left.underline_color == right.underline_color
+                    && left.font_style == right.font_style
+                    && left.decorations == right.decorations
+                    && left.selected == right.selected
+                    && left.hyperlink == right.hyperlink
+            })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -281,6 +301,7 @@ impl TerminalRenderSnapshot {
                 let line = Line(viewport_row as i32 - display_offset as i32);
                 let mut row = RenderableRow {
                     line,
+                    semantic_line_id: None,
                     cells: Vec::with_capacity(cols),
                     generation,
                 };
@@ -370,6 +391,7 @@ impl TerminalRenderSnapshot {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_semantic(
         viewport: &SemanticViewport,
+        damaged_rows: &[usize],
         palette: &ColorPalette,
         overlays: &RenderOverlayState,
         focused: bool,
@@ -398,11 +420,18 @@ impl TerminalRenderSnapshot {
             flags: 0,
             underline_color: SemanticColor::Named(NamedColor::Foreground as u16),
         };
-        let mut rows = Vec::with_capacity(viewport.rows.len());
+        let mut rows = Vec::with_capacity(damaged_rows.len());
         for semantic_row in &viewport.rows {
+            if damaged_rows
+                .binary_search(&usize::from(semantic_row.viewport_row))
+                .is_err()
+            {
+                continue;
+            }
             let line = Line(semantic_row.viewport_row as i32 - display_offset as i32);
             let mut row = RenderableRow {
                 line,
+                semantic_line_id: Some(semantic_row.line_id),
                 cells: (0..cols)
                     .map(|column| {
                         semantic_render_cell(
@@ -508,7 +537,8 @@ impl TerminalRenderSnapshot {
             cursor_shape = CursorShape::HollowBlock;
         }
         let cursor_cell = rows
-            .get_mut(cursor_point.line)
+            .iter_mut()
+            .find(|row| row.line.0 + display_offset as i32 == cursor_point.line as i32)
             .and_then(|row| row.cells.get_mut(cursor_point.column.0));
         let (cursor_color, text_color, cursor_width) = if let Some(cell) = cursor_cell {
             let mut cursor_color = palette.resolve(Color::Named(NamedColor::Cursor), &colors);
@@ -545,7 +575,17 @@ impl TerminalRenderSnapshot {
             screen_lines,
             default_background,
             default_foreground,
-            damage: RenderDamage::Full,
+            damage: RenderDamage::Partial(
+                damaged_rows
+                    .iter()
+                    .copied()
+                    .map(|line| LineDamageBounds {
+                        line,
+                        left: 0,
+                        right: cols.saturating_sub(1),
+                    })
+                    .collect(),
+            ),
             history_size: viewport.history_size as usize,
         }
     }
@@ -930,6 +970,7 @@ mod semantic_tests {
 
         let frame = TerminalRenderSnapshot::from_semantic(
             &viewport,
+            &[0],
             &ColorPalette::default(),
             &RenderOverlayState::default(),
             true,
@@ -949,6 +990,77 @@ mod semantic_tests {
                 .as_ref()
                 .map(Hyperlink::uri),
             Some("https://example.test")
+        );
+
+        let mut partial_viewport = viewport.clone();
+        partial_viewport.geometry.rows = 2;
+        partial_viewport.rows.push(SemanticRow {
+            line_id: 2,
+            viewport_row: 1,
+            spans: Vec::new(),
+        });
+        let partial = TerminalRenderSnapshot::from_semantic(
+            &partial_viewport,
+            &[1],
+            &ColorPalette::default(),
+            &RenderOverlayState::default(),
+            true,
+            true,
+            true,
+            2,
+        );
+        assert_eq!(partial.rows.len(), 1);
+        assert_eq!(partial.rows[0].semantic_line_id, Some(2));
+
+        partial_viewport.cursor.visible = false;
+        let mut cache = crate::render::TerminalRenderCache::default();
+        let initial = TerminalRenderSnapshot::from_semantic(
+            &partial_viewport,
+            &[0, 1],
+            &ColorPalette::default(),
+            &RenderOverlayState::default(),
+            true,
+            true,
+            true,
+            3,
+        );
+        assert_eq!(cache.merge(initial), 2);
+        let initial_generations = cache.row_generations();
+
+        let mut shifted = partial_viewport.clone();
+        shifted.rows = vec![
+            SemanticRow {
+                line_id: 2,
+                viewport_row: 0,
+                spans: Vec::new(),
+            },
+            SemanticRow {
+                line_id: 3,
+                viewport_row: 1,
+                spans: Vec::new(),
+            },
+        ];
+        let shifted = TerminalRenderSnapshot::from_semantic(
+            &shifted,
+            &[0, 1],
+            &ColorPalette::default(),
+            &RenderOverlayState::default(),
+            true,
+            true,
+            true,
+            4,
+        );
+        assert_eq!(cache.merge(shifted), 1);
+        let shifted_frame = cache.frame().unwrap();
+        assert_eq!(shifted_frame.rows[0].generation, initial_generations[1]);
+        assert_ne!(shifted_frame.rows[1].generation, initial_generations[1]);
+        assert_eq!(
+            shifted_frame
+                .rows
+                .iter()
+                .map(|row| row.semantic_line_id)
+                .collect::<Vec<_>>(),
+            vec![Some(2), Some(3)]
         );
     }
 }

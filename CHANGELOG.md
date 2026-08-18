@@ -45,8 +45,9 @@
 - Moved local and SSH terminal processes, project file trees and writes, Git execution, project watchers, Agent hook ingress, SSH connections, and SSH credential access out of the GPUI process and into the Host; closing a window now detaches without terminating Host-owned resources.
 - Release packages keep one executable with separate desktop and headless Host process roles on macOS, Windows, and Linux.
 - Desktop startup now detects Host build/resource incompatibility before using the resource
-  protocol, isolates development builds into executable-scoped profile runtimes, and reports
-  unrecoverable live-Host lock states instead of spawning a duplicate Host or panicking.
+  protocol, replaces an idle old Host through the lifecycle protocol, preserves a busy Host with
+  typed blockers, isolates development builds into executable-scoped profile runtimes, and reports
+  unrecoverable live-Host lock states instead of killing resources or spawning a duplicate Host.
 - Production desktop shells use explicit quit semantics: closing the last window keeps the
   desktop control plane and its owned Host available through the tray, while quitting or losing
   the desktop shell terminates that Host and its resources. Explicit CLI/login-started background
@@ -72,10 +73,13 @@
   GPUI event listeners and filtering low-rate terminal metadata/control updates on the Host runtime
   worker; the interactive Host benchmark now returns to Direct-mode frame cadence.
 - Fixed residual rapid-input latency in Host terminals by queueing input without a per-keystroke
-  response waiter and moving semantic viewport ingestion off the GPUI foreground executor; ready
-  updates now coalesce through the bounded terminal redraw mailbox instead of a timer or hot task.
-- Fixed Host-owned Agent panes remaining `running` after completion by resolving snapshots through
-  their terminal session placement instead of treating Host hook scope IDs as client tab/pane IDs.
+  response waiter, separating control and terminal-data workers, and carrying semantic updates as
+  shared deltas instead of repeatedly cloning a complete viewport. GPUI now applies only damaged
+  rows, coalesces redraw wakeups, and reuses unchanged render generations and text shaping across
+  scroll; the performance runner now enforces end-to-end input-to-first-paint p95 against Direct.
+- Fixed Host-owned Agent panes remaining `running` after completion or restart by resolving live
+  snapshots through terminal placement, downgrading persisted snapshots until Host reconciliation,
+  and clearing Agent state when the backing Host terminal exits or becomes lost.
 - Fixed desktop Host replacement leaving panes permanently bound to an old Host identity:
   missing `Bound`, `ClosePending`, and `Lost` placements now start a fresh session, and successful
   terminal-exit acknowledgements persist `Closed`.

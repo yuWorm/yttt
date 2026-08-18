@@ -728,6 +728,9 @@ impl Workspace {
             .ok_or_else(|| WorkspaceError::PaneNotFound(pane_id.to_string()))?;
 
         pane.process_state = PaneProcessState::Exited;
+        if let Some(snapshot) = pane.agent_snapshot.as_mut() {
+            snapshot.mark_disconnected();
+        }
         Ok(())
     }
 

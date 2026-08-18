@@ -213,8 +213,14 @@ impl AgentManager {
     pub fn retained_snapshots(&self) -> Vec<(AgentPaneAddress, AgentSnapshot)> {
         self.retained_snapshots
             .iter()
-            .map(|(address, snapshot)| (address.clone(), snapshot.clone()))
+            .map(|(address, snapshot)| (address.clone(), disconnected_snapshot(snapshot)))
             .collect()
+    }
+
+    pub fn disconnected_snapshot(&self, address: &AgentPaneAddress) -> Option<AgentSnapshot> {
+        self.retained_snapshots
+            .get(address)
+            .map(disconnected_snapshot)
     }
 
     pub fn has_retained_snapshot(&self, address: &AgentPaneAddress) -> bool {
@@ -344,7 +350,11 @@ impl AgentManager {
             let restored = self
                 .restorable_projects
                 .contains(&address.project_id)
-                .then(|| self.retained_snapshots.get(&address).cloned())
+                .then(|| {
+                    self.retained_snapshots
+                        .get(&address)
+                        .map(disconnected_snapshot)
+                })
                 .flatten();
             return Some((launch.clone(), restored));
         }
@@ -368,6 +378,7 @@ impl AgentManager {
             }
             return None;
         };
+        let restored_for_view = restored.as_ref().map(disconnected_snapshot);
         let resuming_session = !prepared.resume_arguments().is_empty();
         let is_omp = prepared.provider_id.as_str() == OMP_PROVIDER_ID;
         let mut additional_args = prepared.resume_arguments().to_vec();
@@ -388,7 +399,7 @@ impl AgentManager {
         self.addresses_by_instance
             .insert(launch.instance_id().clone(), address.clone());
         self.launches_by_address.insert(address, launch.clone());
-        Some((launch, restored))
+        Some((launch, restored_for_view))
     }
 
     pub fn process_start_failed(
@@ -433,6 +444,12 @@ impl AgentManager {
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn disconnected_snapshot(snapshot: &AgentSnapshot) -> AgentSnapshot {
+    let mut snapshot = snapshot.clone();
+    snapshot.mark_disconnected();
+    snapshot
 }
 
 fn combine_errors(first: Option<String>, second: Option<String>) -> Option<String> {

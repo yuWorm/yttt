@@ -1372,9 +1372,12 @@ fn persist_codex_shell_session(
         Some(AgentPaneExitOutcome::Snapshot { .. })
     ));
     drop(manager);
+    let restored = AgentManager::new(config_paths).retained_snapshots();
+    assert_eq!(restored.len(), 1);
     assert_eq!(
-        AgentManager::new(config_paths).retained_snapshots().len(),
-        1
+        restored[0].1.view_state(),
+        yttt_agent_core::AgentViewState::Stale,
+        "a persisted process must not be shown as live before Host reconciliation"
     );
     project
 }

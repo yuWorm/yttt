@@ -11,7 +11,7 @@ use yttt_protocol::{
     LifecycleRequest, LifecycleResponse, Request, ResourceCatalog, Response, TerminalPlacement,
     TerminalTerminationResult,
     terminal::{
-        AttachTerminal, SemanticViewport, TerminalInput, TerminalSpawnSpec,
+        AttachTerminal, TerminalInput, TerminalSpawnSpec, TerminalStreamUpdate,
         TerminateTerminalRequest,
     },
 };
@@ -84,24 +84,8 @@ fn terminal_client_event_matches(event: &ClientEvent, session_id: &TerminalSessi
         _ => false,
     }
 }
-const TERMINAL_VIEWPORT_QUEUE_CAPACITY: usize = 1;
+const TERMINAL_UPDATE_QUEUE_CAPACITY: usize = 64;
 const TERMINAL_PANE_EVENT_QUEUE_CAPACITY: usize = 16;
-
-fn send_latest<T>(sender: &flume::Sender<T>, receiver: &flume::Receiver<T>, mut value: T) -> bool {
-    loop {
-        match sender.try_send(value) {
-            Ok(()) => return true,
-            Err(flume::TrySendError::Disconnected(_)) => return false,
-            Err(flume::TrySendError::Full(returned)) => {
-                value = returned;
-                match receiver.try_recv() {
-                    Ok(_) | Err(flume::TryRecvError::Empty) => {}
-                    Err(flume::TryRecvError::Disconnected) => return false,
-                }
-            }
-        }
-    }
-}
 
 pub struct DesktopHostRuntime {
     client: Arc<ClientCore>,
@@ -130,7 +114,7 @@ impl DesktopHostRuntime {
         launcher: HostLauncher,
     ) -> Result<Arc<Self>, DesktopHostRuntimeError> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
+            .worker_threads(2)
             .enable_all()
             .thread_name("yttt-client-core")
             .build()?;
@@ -244,26 +228,31 @@ impl DesktopHostRuntime {
         self.request_blocking_typed(request)
             .map_err(|error| error.to_string())
     }
-    pub fn terminal_viewports(
+    pub fn terminal_updates(
         &self,
         session_id: TerminalSessionId,
-    ) -> flume::Receiver<SemanticViewport> {
-        let (sender, receiver) = flume::bounded(TERMINAL_VIEWPORT_QUEUE_CAPACITY);
-        let stale_viewports = receiver.clone();
+    ) -> flume::Receiver<Arc<TerminalStreamUpdate>> {
+        let (sender, receiver) = flume::bounded(TERMINAL_UPDATE_QUEUE_CAPACITY);
         let mut events = self.client.subscribe_events();
         let client = self.client.clone();
         self.runtime.spawn(async move {
             loop {
-                match events.recv().await {
-                    Ok(ClientEvent::MirrorUpdated(updated)) if updated == session_id => {}
+                let update = match events.recv().await {
+                    Ok(ClientEvent::TerminalUpdated(update))
+                        if update.session_id() == &session_id =>
+                    {
+                        update
+                    }
                     Ok(_) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        let Some(viewport) = client.terminal_snapshot(&session_id) else {
+                            continue;
+                        };
+                        Arc::new(TerminalStreamUpdate::Snapshot(viewport))
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                }
-                let Some(viewport) = client.terminal_snapshot(&session_id) else {
-                    continue;
                 };
-                if !send_latest(&sender, &stale_viewports, viewport) {
+                if sender.send_async(update).await.is_err() {
                     break;
                 }
             }
@@ -282,7 +271,11 @@ impl DesktopHostRuntime {
             let mut last_metadata = None::<TerminalPaneMetadataKey>;
             loop {
                 let refresh_metadata = match events.recv().await {
-                    Ok(ClientEvent::MirrorUpdated(updated)) if updated == session_id => true,
+                    Ok(ClientEvent::TerminalUpdated(update))
+                        if update.session_id() == &session_id =>
+                    {
+                        true
+                    }
                     Ok(event) if terminal_client_event_matches(&event, &session_id) => {
                         if sender
                             .send_async(TerminalPaneHostEvent::Client(event))
@@ -839,17 +832,6 @@ mod tests {
                 .error()
                 .is_some_and(|error| error.starts_with("Host runtime unavailable:"))
         );
-    }
-
-    #[test]
-    fn terminal_viewport_queue_keeps_only_the_latest_snapshot() {
-        let (sender, receiver) = flume::bounded(TERMINAL_VIEWPORT_QUEUE_CAPACITY);
-
-        assert!(send_latest(&sender, &receiver, 1));
-        assert!(send_latest(&sender, &receiver, 2));
-        assert_eq!(receiver.recv().unwrap(), 2);
-        drop(receiver);
-        assert!(!send_latest(&sender, &flume::bounded(1).1, 3));
     }
 
     #[test]

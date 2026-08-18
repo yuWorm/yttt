@@ -77,6 +77,7 @@ pub enum TerminalPaneEvent {
     Notification(NotificationEvent),
     Started(TerminalPaneStartedEvent),
     StartFailed(TerminalPaneStartFailedEvent),
+    Lost(TerminalPaneLostEvent),
     Exited(TerminalPaneExitedEvent),
     AgentStatusFrame {
         pane_id: String,
@@ -109,6 +110,14 @@ pub struct TerminalPaneStartFailedEvent {
     pub pane_id: String,
     pub generation: u64,
     pub agent_instance_id: Option<AgentInstanceId>,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalPaneLostEvent {
+    pub project_id: String,
+    pub tab_id: String,
+    pub pane_id: String,
     pub message: String,
 }
 
@@ -779,7 +788,7 @@ impl TerminalPaneView {
                     None
                 });
         }
-        let terminal_updates = host_runtime.terminal_viewports(session_id.clone());
+        let terminal_updates = host_runtime.terminal_updates(session_id.clone());
         terminal.update(cx, |terminal, cx| {
             terminal.attach_semantic_viewport_stream(terminal_updates, cx);
         });
@@ -1174,12 +1183,18 @@ impl TerminalPaneView {
         self.lifecycle = PaneLifecycle::Lost {
             message: message.clone(),
         };
-        self.terminal_error = Some(message);
+        self.terminal_error = Some(message.clone());
         self.terminal = None;
         self.host_events_task = None;
         self.host_session_id = None;
         self.host_session_epoch = None;
         self.host_runtime = None;
+        cx.emit(TerminalPaneEvent::Lost(TerminalPaneLostEvent {
+            project_id: self.project_id.clone(),
+            tab_id: self.tab_id.clone(),
+            pane_id: self.pane_id.clone(),
+            message,
+        }));
         cx.notify();
     }
 

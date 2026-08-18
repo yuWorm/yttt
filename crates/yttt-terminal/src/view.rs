@@ -85,6 +85,9 @@ use std::ops::RangeInclusive;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
+use yttt_protocol::terminal::{
+    SemanticViewport, TerminalStreamApply, TerminalStreamDamage, TerminalStreamUpdate,
+};
 
 pub const TERMINAL_KEY_CONTEXT: &str = "YtttTerminal";
 pub const TERMINAL_SEARCH_KEY_CONTEXT: &str = "YtttTerminalSearch";
@@ -698,6 +701,61 @@ pub type IoErrorCallback = Box<dyn Fn(&mut Context<TerminalView>, PtyIoOperation
 ///
 /// `TerminalView` is not `Send` as it contains GPUI handles. The stdin writer
 /// is internally wrapped in `Arc<parking_lot::Mutex<>>` for safe concurrent access.
+#[derive(Default)]
+struct SemanticViewportState {
+    viewport: Option<SemanticViewport>,
+    damaged_rows: BTreeSet<usize>,
+    full_damage: bool,
+}
+
+impl SemanticViewportState {
+    fn replace(&mut self, viewport: SemanticViewport) {
+        self.viewport = Some(viewport);
+        self.damaged_rows.clear();
+        self.full_damage = true;
+    }
+
+    fn apply(&mut self, update: &TerminalStreamUpdate) -> bool {
+        let Some(viewport) = self.viewport.as_mut() else {
+            if let TerminalStreamUpdate::Snapshot(viewport) = update {
+                self.replace(viewport.clone());
+                return true;
+            }
+            return false;
+        };
+        match viewport.apply_stream_update_ref(update) {
+            TerminalStreamApply::Updated(TerminalStreamDamage::Full) => {
+                self.damaged_rows.clear();
+                self.full_damage = true;
+                true
+            }
+            TerminalStreamApply::Updated(TerminalStreamDamage::Rows(rows)) => {
+                if !self.full_damage {
+                    self.damaged_rows.extend(rows.into_iter().map(usize::from));
+                }
+                true
+            }
+            TerminalStreamApply::Ignored | TerminalStreamApply::SequenceGap => false,
+        }
+    }
+
+    fn take_damaged_rows(&mut self, forced_rows: impl IntoIterator<Item = usize>) -> Vec<usize> {
+        let Some(viewport) = self.viewport.as_ref() else {
+            return Vec::new();
+        };
+        if self.full_damage {
+            self.full_damage = false;
+            self.damaged_rows.clear();
+            return (0..usize::from(viewport.geometry.rows)).collect();
+        }
+        self.damaged_rows.extend(forced_rows);
+        std::mem::take(&mut self.damaged_rows)
+            .into_iter()
+            .filter(|row| *row < usize::from(viewport.geometry.rows))
+            .collect()
+    }
+}
+
 pub struct TerminalView {
     /// The terminal state managing the grid and VTE parser
     state: TerminalState,
@@ -705,7 +763,7 @@ pub struct TerminalView {
     /// The renderer for drawing terminal content
     renderer: TerminalRenderer,
     render_cache: Arc<parking_lot::Mutex<TerminalRenderCache>>,
-    semantic_viewport: Arc<parking_lot::Mutex<Option<yttt_protocol::terminal::SemanticViewport>>>,
+    semantic_viewport: Arc<parking_lot::Mutex<SemanticViewportState>>,
     semantic_scroll_callback: Option<Arc<dyn Fn(u64) + Send + Sync>>,
     semantic_scroll_offset: Arc<parking_lot::Mutex<Option<u64>>>,
     performance: TerminalPerformanceHandle,
@@ -973,7 +1031,7 @@ impl TerminalView {
             state,
             renderer,
             render_cache: Arc::new(parking_lot::Mutex::new(TerminalRenderCache::default())),
-            semantic_viewport: Arc::new(parking_lot::Mutex::new(None)),
+            semantic_viewport: Arc::new(parking_lot::Mutex::new(SemanticViewportState::default())),
             semantic_scroll_callback: None,
             semantic_scroll_offset: Arc::new(parking_lot::Mutex::new(None)),
             performance,
@@ -1018,20 +1076,17 @@ impl TerminalView {
         }
     }
 
-    pub fn set_semantic_viewport(
-        &mut self,
-        viewport: yttt_protocol::terminal::SemanticViewport,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn set_semantic_viewport(&mut self, viewport: SemanticViewport, cx: &mut Context<Self>) {
         self.performance.record_semantic_viewport(&viewport);
         *self.semantic_scroll_offset.lock() = Some(viewport.display_offset);
-        *self.semantic_viewport.lock() = Some(viewport);
+        self.semantic_viewport.lock().replace(viewport);
         self.render_generation.fetch_add(1, Ordering::AcqRel);
         cx.notify();
     }
+
     pub fn attach_semantic_viewport_stream(
         &mut self,
-        updates: flume::Receiver<yttt_protocol::terminal::SemanticViewport>,
+        updates: flume::Receiver<Arc<TerminalStreamUpdate>>,
         cx: &mut Context<Self>,
     ) {
         let semantic_viewport = self.semantic_viewport.clone();
@@ -1040,15 +1095,29 @@ impl TerminalView {
         let event_mailbox = self.event_mailbox.clone();
         let performance = self.performance.clone();
         self._semantic_event_task = Some(cx.background_spawn(async move {
-            while let Ok(mut viewport) = updates.recv_async().await {
-                if let Ok(latest) = updates.try_recv() {
-                    viewport = latest;
+            while let Ok(first) = updates.recv_async().await {
+                let mut update = first;
+                let mut changed = false;
+                let mut state = semantic_viewport.lock();
+                loop {
+                    performance.record_semantic_update(update.as_ref());
+                    changed |= state.apply(update.as_ref());
+                    let Ok(next) = updates.try_recv() else {
+                        break;
+                    };
+                    update = next;
                 }
-                performance.record_semantic_viewport(&viewport);
-                *semantic_scroll_offset.lock() = Some(viewport.display_offset);
-                *semantic_viewport.lock() = Some(viewport);
-                render_generation.fetch_add(1, Ordering::AcqRel);
-                event_mailbox.request_redraw();
+                if changed {
+                    *semantic_scroll_offset.lock() = state
+                        .viewport
+                        .as_ref()
+                        .map(|viewport| viewport.display_offset);
+                }
+                drop(state);
+                if changed {
+                    render_generation.fetch_add(1, Ordering::AcqRel);
+                    event_mailbox.request_redraw();
+                }
             }
         }));
     }
@@ -1066,6 +1135,7 @@ impl TerminalView {
         let Some(bits) = self
             .semantic_viewport
             .lock()
+            .viewport
             .as_ref()
             .map(|viewport| viewport.modes.bits)
         else {
@@ -1077,19 +1147,25 @@ impl TerminalView {
     fn display_offset(&self) -> usize {
         self.semantic_viewport
             .lock()
+            .viewport
             .as_ref()
             .map(|viewport| viewport.display_offset.min(usize::MAX as u64) as usize)
             .unwrap_or_else(|| self.state.display_offset())
     }
 
     fn scroll_display(&mut self, scroll: Scroll) {
-        let semantic = self.semantic_viewport.lock().as_ref().map(|viewport| {
-            (
-                viewport.history_size,
-                viewport.geometry.rows as u64,
-                viewport.display_offset,
-            )
-        });
+        let semantic = self
+            .semantic_viewport
+            .lock()
+            .viewport
+            .as_ref()
+            .map(|viewport| {
+                (
+                    viewport.history_size,
+                    viewport.geometry.rows as u64,
+                    viewport.display_offset,
+                )
+            });
         let Some((history_size, page_rows, viewport_offset)) = semantic else {
             self.state.scroll_display(scroll);
             return;
@@ -1981,16 +2057,21 @@ impl TerminalView {
         if track_height <= 12.0 {
             return None;
         }
-        let semantic_metrics = self.semantic_viewport.lock().as_ref().and_then(|semantic| {
-            let history_size = semantic.history_size.min(usize::MAX as u64) as usize;
-            let display_offset = semantic.display_offset.min(usize::MAX as u64) as usize;
-            TerminalScrollbarMetrics::from_rows(
-                history_size,
-                semantic.geometry.rows as usize,
-                display_offset,
-            )
-            .map(|metrics| (metrics, history_size, display_offset))
-        });
+        let semantic_metrics =
+            self.semantic_viewport
+                .lock()
+                .viewport
+                .as_ref()
+                .and_then(|semantic| {
+                    let history_size = semantic.history_size.min(usize::MAX as u64) as usize;
+                    let display_offset = semantic.display_offset.min(usize::MAX as u64) as usize;
+                    TerminalScrollbarMetrics::from_rows(
+                        history_size,
+                        semantic.geometry.rows as usize,
+                        display_offset,
+                    )
+                    .map(|metrics| (metrics, history_size, display_offset))
+                });
         let (metrics, history_size, display_offset) = if let Some(metrics) = semantic_metrics {
             metrics
         } else {
@@ -3540,12 +3621,30 @@ impl Render for TerminalView {
                         // frame rather than being mistaken for content already captured here.
                         event_mailbox.clear_redraw();
                         let lock_started = Instant::now();
-                        let (snapshot, parser_generation) = if let Some(semantic) =
-                            semantic_viewport.lock().clone()
-                        {
+                        let mut semantic_state = semantic_viewport.lock();
+                        let (snapshot, parser_generation) = if semantic_state.viewport.is_some() {
+                            let selection = state_arc.lock().renderable_content().selection;
+                            let (cursor_row, display_offset, screen_lines) = {
+                                let semantic = semantic_state.viewport.as_ref().unwrap();
+                                (
+                                    Some(usize::from(semantic.cursor.row)),
+                                    semantic.display_offset.min(usize::MAX as u64) as usize,
+                                    usize::from(semantic.geometry.rows),
+                                )
+                            };
+                            let forced_rows = render_cache.lock().overlay_damage_rows(
+                                selection,
+                                cursor_row,
+                                display_offset,
+                                screen_lines,
+                                &render_overlays,
+                            );
+                            let damaged_rows = semantic_state.take_damaged_rows(forced_rows);
+                            let semantic = semantic_state.viewport.as_ref().unwrap();
                             (
                                 TerminalRenderSnapshot::from_semantic(
-                                    &semantic,
+                                    semantic,
+                                    &damaged_rows,
                                     &measured_renderer.palette,
                                     &render_overlays,
                                     focused,
@@ -3556,6 +3655,7 @@ impl Render for TerminalView {
                                 semantic.sequence,
                             )
                         } else {
+                            drop(semantic_state);
                             let mut term = state_arc.lock();
                             let (selection, cursor_row, display_offset, screen_lines) = {
                                 let content = term.renderable_content();
@@ -3763,8 +3863,9 @@ mod tests {
     use std::time::{Duration, Instant};
     use yttt_core::model::ids::TerminalSessionId;
     use yttt_protocol::terminal::{
-        CursorShape, SemanticCursor, SemanticViewport, TerminalGeometry, TerminalModes,
-        TerminalPalette, TerminalProcessState,
+        CursorShape, SemanticColor, SemanticCursor, SemanticDelta, SemanticRow, SemanticSpan,
+        SemanticStyle, SemanticViewport, TerminalGeometry, TerminalModes, TerminalPalette,
+        TerminalProcessState, TerminalStreamUpdate,
     };
     fn wait_for_bytes(recorded: &RecordingWriter, expected: &[u8]) {
         let deadline = Instant::now() + Duration::from_secs(1);
@@ -3807,6 +3908,25 @@ mod tests {
                 revision: 0,
             },
             process_state: TerminalProcessState::Running,
+        }
+    }
+
+    fn semantic_row(line_id: u64, viewport_row: u16, text: &str) -> SemanticRow {
+        SemanticRow {
+            line_id,
+            viewport_row,
+            spans: vec![SemanticSpan {
+                start_column: 0,
+                text: text.to_string(),
+                width: text.chars().count() as u16,
+                style: SemanticStyle {
+                    foreground: SemanticColor::Indexed(7),
+                    background: SemanticColor::Indexed(0),
+                    flags: 0,
+                    underline_color: SemanticColor::Indexed(7),
+                },
+                hyperlink: None,
+            }],
         }
     }
 
@@ -3882,17 +4002,113 @@ mod tests {
             terminal.attach_semantic_viewport_stream(viewports, cx);
         });
 
-        updates.send(semantic_viewport(1)).unwrap();
-        updates.send(semantic_viewport(2)).unwrap();
+        updates
+            .send(Arc::new(TerminalStreamUpdate::Snapshot(semantic_viewport(
+                1,
+            ))))
+            .unwrap();
+        updates
+            .send(Arc::new(TerminalStreamUpdate::Delta(SemanticDelta {
+                session_id: TerminalSessionId::new("semantic-stream"),
+                session_epoch: 1,
+                base_sequence: 1,
+                sequence: 2,
+                geometry_epoch: 1,
+                scrollback_epoch: 1,
+                history_size: 0,
+                display_offset: 0,
+                changed_rows: Vec::new(),
+                cursor: None,
+                modes: None,
+                palette: None,
+                process_state: None,
+            })))
+            .unwrap();
         cx.run_until_parked();
 
         cx.read(|cx| {
             let terminal = terminal.read(cx);
             assert_eq!(
-                terminal.semantic_viewport.lock().as_ref().unwrap().sequence,
+                terminal
+                    .semantic_viewport
+                    .lock()
+                    .viewport
+                    .as_ref()
+                    .unwrap()
+                    .sequence,
                 2
             );
             assert_eq!(terminal.diagnostics_snapshot().gpui_wakeups, 1);
+        });
+    }
+
+    #[gpui::test]
+    fn semantic_scroll_reuses_unchanged_line_text_shaping(cx: &mut TestAppContext) {
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new_semantic(io::sink(), TerminalConfig::default(), cx)
+        });
+        let mut initial = semantic_viewport(1);
+        initial.geometry.cols = 8;
+        initial.geometry.rows = 2;
+        initial.cursor.visible = false;
+        initial.rows = vec![semantic_row(1, 0, "first"), semantic_row(2, 1, "second")];
+        terminal.update(cx, |terminal, cx| {
+            terminal.set_semantic_viewport(initial, cx);
+        });
+        cx.run_until_parked();
+        cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            let frame = terminal.render_cache.lock().frame().unwrap();
+            assert_eq!(
+                (frame.cols, frame.screen_lines, frame.display_offset),
+                (8, 2, 0)
+            );
+            assert_eq!(
+                frame
+                    .rows
+                    .iter()
+                    .map(|row| row.semantic_line_id)
+                    .collect::<Vec<_>>(),
+                vec![Some(1), Some(2)]
+            );
+        });
+
+        let shape_calls = Arc::new(AtomicUsize::new(0));
+        terminal.update(cx, {
+            let shape_calls = shape_calls.clone();
+            move |terminal, cx| {
+                terminal.reset_diagnostics();
+                terminal.renderer.set_shaping_hook(Some(Arc::new(move || {
+                    shape_calls.fetch_add(1, Ordering::Relaxed);
+                })));
+                let update = Arc::new(TerminalStreamUpdate::Delta(SemanticDelta {
+                    session_id: TerminalSessionId::new("semantic-stream"),
+                    session_epoch: 1,
+                    base_sequence: 1,
+                    sequence: 2,
+                    geometry_epoch: 1,
+                    scrollback_epoch: 1,
+                    history_size: 0,
+                    display_offset: 0,
+                    changed_rows: vec![semantic_row(2, 0, "second"), semantic_row(3, 1, "third")],
+                    cursor: None,
+                    modes: None,
+                    palette: None,
+                    process_state: None,
+                }));
+                terminal.semantic_viewport.lock().apply(&update);
+                terminal.render_generation.fetch_add(1, Ordering::AcqRel);
+                cx.notify();
+            }
+        });
+        cx.run_until_parked();
+
+        let diagnostics = cx.read(|cx| terminal.read(cx).diagnostics_snapshot());
+        assert_eq!(diagnostics.rebuilt_rows, 2, "{diagnostics:?}");
+        assert_eq!(diagnostics.shaped_text_runs, 1, "{diagnostics:?}");
+        assert_eq!(shape_calls.load(Ordering::Relaxed), 1);
+        terminal.update(cx, |terminal, _| {
+            terminal.renderer.set_shaping_hook(None);
         });
     }
 

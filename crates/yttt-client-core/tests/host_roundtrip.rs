@@ -402,7 +402,7 @@ async fn terminal_output_uses_a_dedicated_data_connection() {
             else {
                 panic!("unexpected terminal data message: {message:?}");
             };
-            mirror.apply(update);
+            mirror.apply(&update);
             if viewport_text(mirror.viewport()).contains("data-channel-final") {
                 break;
             }

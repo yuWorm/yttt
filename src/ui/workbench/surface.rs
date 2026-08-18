@@ -1806,6 +1806,24 @@ impl WorkbenchView {
                 }
                 cx.notify();
             }
+            TerminalPaneEvent::Lost(event) => {
+                let project_id = ProjectId::new(&event.project_id);
+                if let Err(error) =
+                    self.workspace
+                        .record_pane_exited(&project_id, &event.tab_id, &event.pane_id)
+                {
+                    self.load_error = Some(error.to_string());
+                }
+                let address =
+                    AgentPaneAddress::new(&event.project_id, &event.tab_id, &event.pane_id);
+                if let Some(snapshot) = self.agent_manager.disconnected_snapshot(&address)
+                    && let Err(error) = self.record_agent_runtime_snapshot(address, snapshot)
+                {
+                    self.load_error =
+                        combine_load_messages(self.load_error.take(), Some(error.to_string()));
+                }
+                cx.notify();
+            }
             TerminalPaneEvent::IoError { message, fatal, .. } => {
                 self.load_error = Some(message.clone());
                 if *fatal {

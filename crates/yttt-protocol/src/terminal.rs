@@ -199,6 +199,121 @@ pub enum TerminalStreamUpdate {
     },
 }
 
+impl TerminalStreamUpdate {
+    pub fn session_id(&self) -> &TerminalSessionId {
+        match self {
+            Self::Snapshot(viewport) => &viewport.session_id,
+            Self::Delta(delta) => &delta.session_id,
+            Self::RawTail { session_id, .. } | Self::ResyncRequired { session_id, .. } => {
+                session_id
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TerminalStreamApply {
+    Updated(TerminalStreamDamage),
+    Ignored,
+    SequenceGap,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TerminalStreamDamage {
+    Full,
+    Rows(Vec<u16>),
+}
+
+impl SemanticViewport {
+    pub fn apply_stream_update(&mut self, update: TerminalStreamUpdate) -> TerminalStreamApply {
+        match update {
+            TerminalStreamUpdate::Snapshot(viewport) => {
+                if viewport.session_epoch < self.session_epoch
+                    || (viewport.session_epoch == self.session_epoch
+                        && viewport.sequence < self.sequence)
+                {
+                    return TerminalStreamApply::Ignored;
+                }
+                *self = viewport;
+                TerminalStreamApply::Updated(TerminalStreamDamage::Full)
+            }
+            TerminalStreamUpdate::Delta(delta) => self.apply_delta(delta),
+            TerminalStreamUpdate::RawTail { .. } => TerminalStreamApply::Ignored,
+            TerminalStreamUpdate::ResyncRequired { .. } => TerminalStreamApply::SequenceGap,
+        }
+    }
+
+    pub fn apply_stream_update_ref(
+        &mut self,
+        update: &TerminalStreamUpdate,
+    ) -> TerminalStreamApply {
+        self.apply_stream_update(update.clone())
+    }
+
+    fn apply_delta(&mut self, delta: SemanticDelta) -> TerminalStreamApply {
+        if delta.sequence <= self.sequence {
+            return TerminalStreamApply::Ignored;
+        }
+        if delta.session_id != self.session_id
+            || delta.session_epoch != self.session_epoch
+            || delta.base_sequence != self.sequence
+        {
+            return TerminalStreamApply::SequenceGap;
+        }
+
+        let full_damage = delta.geometry_epoch != self.geometry_epoch
+            || delta.scrollback_epoch != self.scrollback_epoch
+            || delta.display_offset != self.display_offset
+            || delta.palette.is_some();
+        let previous_cursor = self.cursor;
+        let mut damaged_rows = delta
+            .changed_rows
+            .iter()
+            .map(|row| row.viewport_row)
+            .collect::<Vec<_>>();
+        for row in delta.changed_rows {
+            if let Some(current) = self
+                .rows
+                .iter_mut()
+                .find(|current| current.viewport_row == row.viewport_row)
+            {
+                *current = row;
+            } else {
+                self.rows.push(row);
+            }
+        }
+        self.rows.sort_by_key(|row| row.viewport_row);
+        self.sequence = delta.sequence;
+        self.geometry_epoch = delta.geometry_epoch;
+        self.scrollback_epoch = delta.scrollback_epoch;
+        self.history_size = delta.history_size;
+        self.display_offset = delta.display_offset;
+        if let Some(cursor) = delta.cursor {
+            self.cursor = cursor;
+        }
+        if let Some(modes) = delta.modes {
+            self.modes = modes;
+        }
+        if let Some(palette) = delta.palette {
+            self.palette = palette;
+        }
+        if let Some(process_state) = delta.process_state {
+            self.process_state = process_state;
+        }
+
+        if full_damage {
+            return TerminalStreamApply::Updated(TerminalStreamDamage::Full);
+        }
+        if self.cursor != previous_cursor {
+            damaged_rows.push(previous_cursor.row);
+            damaged_rows.push(self.cursor.row);
+        }
+        damaged_rows.sort_unstable();
+        damaged_rows.dedup();
+        TerminalStreamApply::Updated(TerminalStreamDamage::Rows(damaged_rows))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalInput {
     pub session_id: TerminalSessionId,

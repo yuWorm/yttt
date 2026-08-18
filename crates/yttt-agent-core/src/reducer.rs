@@ -56,6 +56,27 @@ impl AgentSnapshot {
         }
     }
 
+    pub fn mark_disconnected(&mut self) {
+        if self.process_state == AgentProcessState::Exited {
+            return;
+        }
+        self.process_state = AgentProcessState::Exited;
+        if !matches!(
+            self.turn_state,
+            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
+        ) {
+            self.turn_state = AgentTurnState::Unknown;
+            self.process_exit = Some(AgentProcessExit {
+                code: None,
+                reason: AgentExitReason::Disconnected,
+            });
+        }
+        self.current_action = None;
+        self.waiting_reason = None;
+        self.waiting_message = None;
+        self.children.clear();
+    }
+
     pub fn decay_stale_activity(&mut self, now: u64, stale_after_millis: u64) -> bool {
         if self.process_state != AgentProcessState::Running
             || now.saturating_sub(self.updated_at) <= stale_after_millis
