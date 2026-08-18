@@ -213,20 +213,38 @@ pub struct HostLauncher {
     profile: AppProfile,
     executable: PathBuf,
     build: BuildIdentity,
+    lifetime: yttt_host::HostLifetime,
 }
 
 impl HostLauncher {
     pub fn new(profile: AppProfile, executable: impl Into<PathBuf>) -> Self {
+        Self::with_lifetime(profile, executable, yttt_host::HostLifetime::Independent)
+    }
+
+    pub fn desktop_owned(profile: AppProfile, executable: impl Into<PathBuf>) -> Self {
+        Self::with_lifetime(profile, executable, yttt_host::HostLifetime::DesktopOwned)
+    }
+
+    fn with_lifetime(
+        profile: AppProfile,
+        executable: impl Into<PathBuf>,
+        lifetime: yttt_host::HostLifetime,
+    ) -> Self {
         let executable = executable.into();
         Self {
             profile,
             build: build_identity(&executable),
             executable,
+            lifetime,
         }
     }
 
     pub fn for_current_executable(profile: AppProfile) -> Result<Self, HostLaunchError> {
         Ok(Self::new(profile, std::env::current_exe()?))
+    }
+
+    pub fn for_current_desktop(profile: AppProfile) -> Result<Self, HostLaunchError> {
+        Ok(Self::desktop_owned(profile, std::env::current_exe()?))
     }
 
     pub fn endpoint(&self) -> LocalEndpoint {
@@ -245,11 +263,17 @@ impl HostLauncher {
         let token = read_token(&token_file)?;
         match self.existing_host_action(&token).await? {
             ExistingHostAction::Attach => {
-                return Ok(ManagedHostProcess {
+                let actual_lifetime = self.live_host_metadata()?.lifetime;
+                let mut process = ManagedHostProcess {
                     launcher: self.clone(),
                     token_file,
                     child: None,
-                });
+                    desktop_owner: None,
+                    actual_lifetime,
+                };
+                self.attach_desktop_owner_if_needed(&mut process, &token)
+                    .await?;
+                return Ok(process);
             }
             ExistingHostAction::Replace => {
                 let mut lifecycle = self.connect_lifecycle_with_token(&token, false).await?;
@@ -286,6 +310,8 @@ impl HostLauncher {
             .arg(&self.build.build_fingerprint)
             .arg("--resource-compatibility")
             .arg(&self.build.resource_compatibility)
+            .arg("--host-lifetime")
+            .arg(self.lifetime.as_arg())
             .stdin(Stdio::null())
             .stdout(Stdio::from(log_file))
             .stderr(Stdio::from(error_log));
@@ -295,8 +321,12 @@ impl HostLauncher {
             launcher: self.clone(),
             token_file,
             child: Some(child),
+            desktop_owner: None,
+            actual_lifetime: self.lifetime,
         };
         process.wait_until_ready(&token).await?;
+        self.attach_desktop_owner_if_needed(&mut process, &token)
+            .await?;
         Ok(process)
     }
 
@@ -421,6 +451,27 @@ impl HostLauncher {
         .await?;
         Ok((stream, authenticated))
     }
+    async fn attach_desktop_owner_if_needed(
+        &self,
+        process: &mut ManagedHostProcess,
+        token: &AuthToken,
+    ) -> Result<(), HostLaunchError> {
+        if self.lifetime != yttt_host::HostLifetime::DesktopOwned
+            || process.actual_lifetime != yttt_host::HostLifetime::DesktopOwned
+        {
+            return Ok(());
+        }
+        let (stream, _) = self
+            .connect_channel_with_token(
+                token,
+                ConnectionChannel::DesktopOwner,
+                ProtocolRange::exact(LIFECYCLE_PROTOCOL_VERSION),
+                false,
+            )
+            .await?;
+        process.desktop_owner = Some(stream);
+        Ok(())
+    }
 
     async fn existing_host_action(
         &self,
@@ -429,7 +480,15 @@ impl HostLauncher {
         let deadline = tokio::time::Instant::now() + HOST_READY_TIMEOUT;
         loop {
             match self.connect_with_token(token).await {
-                Ok(_) => return Ok(ExistingHostAction::Attach),
+                Ok(_) => {
+                    let actual_lifetime = self.live_host_metadata()?.lifetime;
+                    if self.lifetime == yttt_host::HostLifetime::Independent
+                        && actual_lifetime == yttt_host::HostLifetime::DesktopOwned
+                    {
+                        return Ok(ExistingHostAction::Replace);
+                    }
+                    return Ok(ExistingHostAction::Attach);
+                }
                 Err(error) if is_resource_incompatibility(&error) => {
                     return Ok(ExistingHostAction::Replace);
                 }
@@ -453,6 +512,11 @@ impl HostLauncher {
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+    }
+
+    fn live_host_metadata(&self) -> Result<yttt_host::ReadyMetadata, HostLaunchError> {
+        yttt_host::read_ready_metadata(&self.profile.paths().runtime.join("host-ready.json"))
+            .map_err(HostLaunchError::from)
     }
 
     fn live_host_pid(&self) -> Option<u32> {
@@ -503,6 +567,8 @@ pub struct ManagedHostProcess {
     launcher: HostLauncher,
     token_file: PathBuf,
     child: Option<Child>,
+    desktop_owner: Option<LocalStream>,
+    actual_lifetime: yttt_host::HostLifetime,
 }
 
 impl ManagedHostProcess {
@@ -512,6 +578,15 @@ impl ManagedHostProcess {
 
     pub fn child_id(&self) -> Option<u32> {
         self.child.as_ref().map(Child::id)
+    }
+    pub(crate) fn recovery_launcher(&self) -> HostLauncher {
+        let mut launcher = self.launcher.clone();
+        launcher.lifetime = self.actual_lifetime;
+        launcher
+    }
+
+    pub(crate) fn release_desktop_owner(&mut self) {
+        self.desktop_owner.take();
     }
 
     pub async fn connect(&self) -> Result<HostControlClient, HostLaunchError> {
@@ -581,6 +656,7 @@ impl ManagedHostProcess {
     }
 
     pub fn force_stop(&mut self) -> Result<(), HostLaunchError> {
+        self.desktop_owner.take();
         if let Some(child) = self.child.as_mut() {
             child.kill()?;
             let _ = child.wait();
@@ -710,6 +786,7 @@ pub async fn run_host_process(
         ssh_host_keys_file: parsed.ssh_host_keys_file,
         credential_namespace: parsed.credential_namespace,
         build: parsed.build,
+        lifetime: parsed.lifetime,
     };
     let endpoint =
         LocalEndpoint::for_profile(bootstrap.profile_id.clone(), bootstrap.runtime_root.clone());
@@ -724,6 +801,7 @@ struct ParsedHostArgs {
     ssh_host_keys_file: PathBuf,
     credential_namespace: String,
     build: BuildIdentity,
+    lifetime: yttt_host::HostLifetime,
 }
 
 impl ParsedHostArgs {
@@ -741,12 +819,30 @@ impl ParsedHostArgs {
                 .into_string()
                 .map_err(|_| HostLaunchError::InvalidArgument(name))
         };
+        let optional_string_value =
+            |name: &'static str| -> Result<Option<String>, HostLaunchError> {
+                arguments
+                    .windows(2)
+                    .find(|pair| pair[0] == OsStr::new(name))
+                    .map(|pair| {
+                        pair[1]
+                            .clone()
+                            .into_string()
+                            .map_err(|_| HostLaunchError::InvalidArgument(name))
+                    })
+                    .transpose()
+            };
         let profile_id = string_value("--profile-id")?;
         let credential_namespace = string_value("--credential-namespace")?;
         let build = BuildIdentity {
             product_version: string_value("--product-version")?,
             build_fingerprint: string_value("--build-fingerprint")?,
             resource_compatibility: string_value("--resource-compatibility")?,
+        };
+        let lifetime = match optional_string_value("--host-lifetime")?.as_deref() {
+            None | Some("independent") => yttt_host::HostLifetime::Independent,
+            Some("desktop_owned") => yttt_host::HostLifetime::DesktopOwned,
+            Some(_) => return Err(HostLaunchError::InvalidArgument("--host-lifetime")),
         };
         Ok(Self {
             profile_id: ProfileId::new(profile_id),
@@ -755,6 +851,7 @@ impl ParsedHostArgs {
             auth_token_file: PathBuf::from(value("--auth-token-file")?),
             credential_namespace,
             build,
+            lifetime,
         })
     }
 }

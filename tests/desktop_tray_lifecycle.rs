@@ -5,7 +5,6 @@ use yttt::{
     config::profile::{
         AppProfile, EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
     },
-    host_launcher::HostLauncher,
     host_runtime::DesktopHostRuntime,
     model::ids::{ProfileId, ProjectId},
 };
@@ -28,9 +27,20 @@ fn isolated_profile(root: &Path) -> AppProfile {
 fn platform_path(path: &Path) -> HostPath {
     HostPath::from_path(path).expect("test project root must be absolute")
 }
+fn wait_for_host_exit(profile: &AppProfile) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline
+        && (profile.paths().runtime.join("host-ready.json").exists()
+            || profile.paths().runtime.join("host.pid").exists())
+    {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!profile.paths().runtime.join("host-ready.json").exists());
+    assert!(!profile.paths().runtime.join("host.pid").exists());
+}
 
 #[test]
-fn desktop_disconnect_and_stop_if_idle_preserve_active_host_resources() {
+fn desktop_disconnect_stops_owned_host_even_with_active_resources() {
     let temporary = tempdir().unwrap();
     let profile = isolated_profile(temporary.path());
     let executable = std::path::PathBuf::from(env!("CARGO_BIN_EXE_yttt"));
@@ -39,9 +49,10 @@ fn desktop_disconnect_and_stop_if_idle_preserve_active_host_resources() {
     let project_id = ProjectId::new("tray-active-project");
     let desktop =
         DesktopHostRuntime::start_with_executable(profile.clone(), executable.clone()).unwrap();
-    let Response::Project(ProjectResponse::Registered {
-        registration_epoch, ..
-    }) = desktop
+    let ready =
+        yttt_host::read_ready_metadata(&profile.paths().runtime.join("host-ready.json")).unwrap();
+    assert_eq!(ready.lifetime, yttt_host::HostLifetime::DesktopOwned);
+    let Response::Project(ProjectResponse::Registered { .. }) = desktop
         .request_blocking_typed(Request::Project(ProjectRequest::Register {
             project_id: project_id.clone(),
             root: platform_path(&project_root),
@@ -63,22 +74,21 @@ fn desktop_disconnect_and_stop_if_idle_preserve_active_host_resources() {
     ));
 
     desktop.shutdown_client();
-    let lifecycle_runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let launcher = HostLauncher::new(profile.clone(), executable.clone());
-    let status = lifecycle_runtime.block_on(async {
-        let mut lifecycle = launcher.connect_lifecycle(false).await.unwrap();
-        lifecycle.request(LifecycleRequest::Status).await.unwrap()
-    });
-    assert!(matches!(
-        status,
-        LifecycleResponse::Status(status)
-            if status.project_count == 1 && status.client_count == 0
-    ));
+    drop(desktop);
+    wait_for_host_exit(&profile);
 
-    let reopened = DesktopHostRuntime::start_with_executable(profile, executable).unwrap();
+    let reopened = DesktopHostRuntime::start_with_executable(profile.clone(), executable).unwrap();
+    let Response::Project(ProjectResponse::Registered {
+        registration_epoch, ..
+    }) = reopened
+        .request_blocking_typed(Request::Project(ProjectRequest::Register {
+            project_id: project_id.clone(),
+            root: platform_path(&project_root),
+        }))
+        .unwrap()
+    else {
+        panic!("replacement Host did not register the project");
+    };
     assert_eq!(
         reopened
             .request_blocking_typed(Request::Project(ProjectRequest::Close {
@@ -88,13 +98,7 @@ fn desktop_disconnect_and_stop_if_idle_preserve_active_host_resources() {
             .unwrap(),
         Response::Project(ProjectResponse::Closed)
     );
-    assert_eq!(
-        reopened
-            .request_lifecycle(LifecycleRequest::ForceStop, true)
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap()
-            .unwrap(),
-        LifecycleResponse::Draining
-    );
     reopened.shutdown_client();
+    drop(reopened);
+    wait_for_host_exit(&profile);
 }

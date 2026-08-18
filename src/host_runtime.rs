@@ -110,7 +110,7 @@ pub struct DesktopHostRuntime {
 
 impl DesktopHostRuntime {
     pub fn start(profile: AppProfile) -> Result<Arc<Self>, DesktopHostRuntimeError> {
-        let launcher = HostLauncher::for_current_executable(profile.clone())?;
+        let launcher = HostLauncher::for_current_desktop(profile.clone())?;
         Self::start_with_launcher(profile, launcher)
     }
 
@@ -118,7 +118,7 @@ impl DesktopHostRuntime {
         profile: AppProfile,
         executable: impl Into<std::path::PathBuf>,
     ) -> Result<Arc<Self>, DesktopHostRuntimeError> {
-        let launcher = HostLauncher::new(profile.clone(), executable);
+        let launcher = HostLauncher::desktop_owned(profile.clone(), executable);
         Self::start_with_launcher(profile, launcher)
     }
 
@@ -134,7 +134,9 @@ impl DesktopHostRuntime {
         let placement_store = Arc::new(TerminalPlacementStore::load(
             profile.config_paths().terminal_placements_file(),
         )?);
-        let managed_process = Arc::new(Mutex::new(runtime.block_on(launcher.launch_or_attach())?));
+        let managed_process = runtime.block_on(launcher.launch_or_attach())?;
+        let launcher = managed_process.recovery_launcher();
+        let managed_process = Arc::new(Mutex::new(managed_process));
         let (connector, identity, token) = launcher.client_core_config(ClientInstanceId::new(
             format!("desktop-{}", uuid::Uuid::new_v4()),
         ))?;
@@ -163,6 +165,10 @@ impl DesktopHostRuntime {
 
     pub fn shutdown_client(&self) {
         self.runtime.block_on(self.client.shutdown());
+        self._managed_process
+            .lock()
+            .unwrap()
+            .release_desktop_owner();
     }
 
     pub fn state(&self) -> ConnectionState {
@@ -365,6 +371,37 @@ impl DesktopHostRuntime {
             )
             .map_err(|error| error.to_string())
     }
+    pub fn acknowledge_terminal_exit(
+        &self,
+        session_id: TerminalSessionId,
+        session_epoch: u64,
+        final_sequence: u64,
+    ) -> Result<(), ClientCoreError> {
+        let pending = self
+            .client
+            .enqueue_request(Request::AcknowledgeTerminalExit {
+                session_id: session_id.clone(),
+                session_epoch,
+                final_sequence,
+            })?;
+        let placement_store = self.placement_store.clone();
+        self.runtime.spawn(async move {
+            match pending.wait().await {
+                Ok(Response::TerminalExitAcknowledged) => {
+                    if let Err(error) = placement_store.mark_closed(&session_id) {
+                        eprintln!("failed to close acknowledged terminal placement: {error}");
+                    }
+                }
+                Ok(response) => {
+                    eprintln!("unexpected terminal exit acknowledgement response: {response:?}");
+                }
+                Err(error) => {
+                    eprintln!("terminal exit acknowledgement failed: {error}");
+                }
+            }
+        });
+        Ok(())
+    }
 
     pub fn terminate_many_confirmed(
         &self,
@@ -480,22 +517,6 @@ pub enum TerminalRecoveryError {
     PendingAddressConflict(TerminalSessionId),
     #[error("terminal session {0} has an unfinished close request")]
     ClosePending(TerminalSessionId),
-    #[error(
-        "terminal session {session_id} belongs to Host {bound_host_id} epoch {bound_host_epoch}, but connected Host is {actual_host_id} epoch {actual_host_epoch}"
-    )]
-    HostChanged {
-        session_id: TerminalSessionId,
-        bound_host_id: yttt_core::model::ids::HostId,
-        bound_host_epoch: u64,
-        actual_host_id: yttt_core::model::ids::HostId,
-        actual_host_epoch: u64,
-    },
-    #[error("terminal session {session_id} is missing from Host {host_id} epoch {host_epoch}")]
-    MissingBoundSession {
-        session_id: TerminalSessionId,
-        host_id: yttt_core::model::ids::HostId,
-        host_epoch: u64,
-    },
     #[error(transparent)]
     Persistence(#[from] TerminalPlacementStoreError),
 }
@@ -506,35 +527,6 @@ fn reconcile_terminal_start(
     catalog: &ResourceCatalog,
 ) -> Result<Request, TerminalRecoveryError> {
     let durable = store.placement(&spec.session_id);
-    if let Some(
-        DurableTerminalPlacement::Bound {
-            host_id,
-            host_epoch,
-            ..
-        }
-        | DurableTerminalPlacement::ClosePending {
-            host_id,
-            host_epoch,
-            ..
-        }
-        | DurableTerminalPlacement::Lost {
-            host_id,
-            host_epoch,
-            ..
-        },
-    ) = &durable
-        && (host_id != &catalog.host_id || *host_epoch != catalog.host_epoch)
-    {
-        let error = TerminalRecoveryError::HostChanged {
-            session_id: spec.session_id.clone(),
-            bound_host_id: host_id.clone(),
-            bound_host_epoch: *host_epoch,
-            actual_host_id: catalog.host_id.clone(),
-            actual_host_epoch: catalog.host_epoch,
-        };
-        store.mark_lost(&spec.session_id, error.to_string())?;
-        return Err(error);
-    }
     if let Some(placement) = catalog
         .terminals
         .iter()
@@ -548,7 +540,15 @@ fn reconcile_terminal_start(
                 actual,
             });
         }
-        if matches!(durable, Some(DurableTerminalPlacement::ClosePending { .. })) {
+        let close_pending_on_current_host = matches!(
+            &durable,
+            Some(DurableTerminalPlacement::ClosePending {
+                host_id,
+                host_epoch,
+                ..
+            }) if host_id == &catalog.host_id && *host_epoch == catalog.host_epoch
+        );
+        if close_pending_on_current_host {
             return Err(TerminalRecoveryError::ClosePending(
                 placement.session_id.clone(),
             ));
@@ -572,30 +572,18 @@ fn reconcile_terminal_start(
         }));
     }
 
-    match durable {
-        Some(DurableTerminalPlacement::Bound { .. })
-        | Some(DurableTerminalPlacement::ClosePending { .. })
-        | Some(DurableTerminalPlacement::Lost { .. }) => {
-            let error = TerminalRecoveryError::MissingBoundSession {
-                session_id: spec.session_id.clone(),
-                host_id: catalog.host_id.clone(),
-                host_epoch: catalog.host_epoch,
-            };
-            store.mark_lost(&spec.session_id, error.to_string())?;
-            Err(error)
-        }
-        Some(DurableTerminalPlacement::OpenPending {
-            spawn_fingerprint, ..
-        }) if spawn_fingerprint != spec.address_fingerprint() => Err(
-            TerminalRecoveryError::PendingAddressConflict(spec.session_id),
-        ),
-        Some(DurableTerminalPlacement::OpenPending { .. })
-        | Some(DurableTerminalPlacement::Closed)
-        | None => {
-            store.begin_open(&spec.session_id, spec.address_fingerprint())?;
-            Ok(Request::SpawnTerminal(spec))
-        }
+    if let Some(DurableTerminalPlacement::OpenPending {
+        spawn_fingerprint, ..
+    }) = &durable
+        && *spawn_fingerprint != spec.address_fingerprint()
+    {
+        return Err(TerminalRecoveryError::PendingAddressConflict(
+            spec.session_id,
+        ));
     }
+
+    store.begin_open(&spec.session_id, spec.address_fingerprint())?;
+    Ok(Request::SpawnTerminal(spec))
 }
 
 #[derive(Clone)]
@@ -743,21 +731,19 @@ mod tests {
             })
         ));
 
-        let error =
-            reconcile_terminal_start(&store, spec.clone(), &catalog(Vec::new())).unwrap_err();
         assert!(matches!(
-            error,
-            TerminalRecoveryError::MissingBoundSession { host_epoch: 7, .. }
+            reconcile_terminal_start(&store, spec.clone(), &catalog(Vec::new())).unwrap(),
+            Request::SpawnTerminal(_)
         ));
         assert!(matches!(
             store.placement(&spec.session_id),
-            Some(DurableTerminalPlacement::Lost { .. })
+            Some(DurableTerminalPlacement::OpenPending { .. })
         ));
 
         let reloaded = TerminalPlacementStore::load(path).unwrap();
         assert!(matches!(
             reloaded.placement(&spec.session_id),
-            Some(DurableTerminalPlacement::Lost { .. })
+            Some(DurableTerminalPlacement::OpenPending { .. })
         ));
     }
 
@@ -860,33 +846,39 @@ mod tests {
     }
 
     #[test]
-    fn recovery_marks_binding_lost_when_host_identity_changes() {
+    fn lost_placement_from_previous_host_starts_a_fresh_session() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("terminal-placements.json");
-        let store = TerminalPlacementStore::load(path).unwrap();
         let requested = spec();
-        store
-            .bind(
-                HostId::new("previous-host"),
-                6,
-                requested.session_id.clone(),
-                3,
-                requested.address_fingerprint(),
-            )
-            .unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "version": 1,
+                "next_request_id": 2,
+                "placements": {
+                    (requested.session_id.as_str()): {
+                        "state": "lost",
+                        "host_id": "previous-host",
+                        "host_epoch": 6,
+                        "session_id": requested.session_id.as_str(),
+                        "session_epoch": 3,
+                        "spawn_fingerprint": requested.address_fingerprint(),
+                        "reason": "previous desktop owner exited"
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let store = TerminalPlacementStore::load(path).unwrap();
 
         assert!(matches!(
-            reconcile_terminal_start(&store, requested.clone(), &catalog(Vec::new())),
-            Err(TerminalRecoveryError::HostChanged {
-                bound_host_epoch: 6,
-                actual_host_epoch: 7,
-                ..
-            })
+            reconcile_terminal_start(&store, requested.clone(), &catalog(Vec::new())).unwrap(),
+            Request::SpawnTerminal(_)
         ));
         assert!(matches!(
             store.placement(&requested.session_id),
-            Some(DurableTerminalPlacement::Lost { reason, .. })
-                if reason.contains("previous-host") && reason.contains("epoch 7")
+            Some(DurableTerminalPlacement::OpenPending { .. })
         ));
     }
 }

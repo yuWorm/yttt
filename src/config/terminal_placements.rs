@@ -275,57 +275,6 @@ impl TerminalPlacementStore {
         })?
     }
 
-    pub fn mark_lost(
-        &self,
-        session_id: &TerminalSessionId,
-        reason: impl Into<String>,
-    ) -> Result<(), TerminalPlacementStoreError> {
-        let reason = reason.into();
-        self.mutate(|state| {
-            if let Some(placement) = state.placements.get(session_id.as_str()).cloned() {
-                let lost = match placement {
-                    DurableTerminalPlacement::Bound {
-                        host_id,
-                        host_epoch,
-                        session_id,
-                        session_epoch,
-                        spawn_fingerprint,
-                    }
-                    | DurableTerminalPlacement::ClosePending {
-                        host_id,
-                        host_epoch,
-                        session_id,
-                        session_epoch,
-                        spawn_fingerprint,
-                        ..
-                    }
-                    | DurableTerminalPlacement::Lost {
-                        host_id,
-                        host_epoch,
-                        session_id,
-                        session_epoch,
-                        spawn_fingerprint,
-                        ..
-                    } => Some(DurableTerminalPlacement::Lost {
-                        host_id,
-                        host_epoch,
-                        session_id,
-                        session_epoch,
-                        spawn_fingerprint,
-                        reason,
-                    }),
-                    DurableTerminalPlacement::OpenPending { .. }
-                    | DurableTerminalPlacement::Closed => None,
-                };
-                if let Some(lost) = lost {
-                    state
-                        .placements
-                        .insert(session_id.as_str().to_string(), lost);
-                }
-            }
-        })
-    }
-
     pub fn mark_closed(
         &self,
         session_id: &TerminalSessionId,

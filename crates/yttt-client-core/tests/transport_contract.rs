@@ -58,6 +58,7 @@ where
             build_fingerprint: "transport-contract-build".to_string(),
             resource_compatibility: "transport-contract-resource-v1".to_string(),
         },
+        lifetime: yttt_host::HostLifetime::Independent,
     };
     let task = tokio::spawn(run(bootstrap.clone(), || async move {
         Ok::<_, yttt_transport::TransportError>(listener)
@@ -228,6 +229,7 @@ async fn local_transport_satisfies_host_contract() {
             build_fingerprint: "transport-contract-local-build".to_string(),
             resource_compatibility: "transport-contract-resource-v1".to_string(),
         },
+        lifetime: yttt_host::HostLifetime::Independent,
     };
     let endpoint = LocalEndpoint::for_profile(bootstrap.profile_id.clone(), runtime_root);
     let connector = LocalConnector::new(endpoint.clone());

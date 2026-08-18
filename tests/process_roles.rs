@@ -132,6 +132,9 @@ fn desktop_host_cli_starts_reports_reuses_and_stops_the_profile_host() {
         String::from_utf8_lossy(&started.stdout).trim(),
         "Host started"
     );
+    let ready =
+        yttt_host::read_ready_metadata(&profile.paths().runtime.join("host-ready.json")).unwrap();
+    assert_eq!(ready.lifetime, yttt_host::HostLifetime::Independent);
 
     let status = invoke("--host-status");
     assert!(status.status.success(), "{status:?}");

@@ -413,23 +413,23 @@ Host lock 与 desktop-shell lock 必须分离：同一 profile 只有一个 Host
 
 ### 5.6 启动、关闭与保活策略
 
-建议对用户暴露三个明确策略：
+对用户暴露三个明确策略：
 
 | 策略 | 行为 | 适用场景 |
 |---|---|---|
-| `FollowDesktop` | desktop shell 退出后，若无其他客户端和持久资源则停止 Host | 迁移期、测试或明确不需要后台 |
-| `KeepAlive` | 第一次打开 yttt 时启动 Host；之后只有显式 Stop、登出或关机才停止 | 推荐的普通桌面默认 |
-| `StartAtLogin` | OS 用户登录后启动 Host；desktop window 可不自动显示 | 已启用远程访问的推荐配置 |
+| `DesktopOwned` | 普通桌面启动默认策略；desktop shell 持有 authenticated owner channel，shell 退出或崩溃后即使存在资源也 ForceStop Host | 普通桌面默认 |
+| `Independent` | 由 `--start-host` 显式启动；Desktop 只是 Client，退出后 Host 继续运行，只有显式 Stop、登出或关机才停止 | 明确需要后台任务 |
+| `StartAtLogin` | OS 用户登录后启动 `Independent` Host；desktop window 可不自动显示 | 已启用远程访问的推荐配置 |
 
-首次启用远程访问或完成设备配对时，应提示用户开启 `StartAtLogin`，不能在安装时无提示注册后台启动。第一阶段只保证“用户已登录”期间可用；macOS logout、Windows sign-out 和未启用 linger 的 Linux user session 都会结束 per-user Host。
+首次启用后台运行、远程访问或完成设备配对时，应提示用户开启 `StartAtLogin`，不能在安装时无提示注册后台启动。第一阶段只保证“用户已登录”期间可用；macOS logout、Windows sign-out 和未启用 linger 的 Linux user session 都会结束 per-user Host。
 
 操作语义必须拆开：
 
 | 用户操作 | 资源语义 |
 |---|---|
-| 关闭一个窗口 | 关闭本地 placement、退订不可见资源；Host terminal 和 draft 不变 |
-| 关闭最后一个窗口 | desktop shell 继续驻留托盘；Host 不变 |
-| `Quit Desktop` | 退出 GPUI/tray；Host 按 lifecycle policy 保留或安全停止 |
+| 关闭一个窗口 | 关闭本地 placement、退订不可见资源；desktop shell/tray owner 与 Host terminal 不变 |
+| 关闭最后一个窗口 | desktop shell 继续驻留托盘，owner channel 与 Host 不变 |
+| `Quit Desktop` | 退出 GPUI/tray；`DesktopOwned` Host 强制终止，显式 `Independent` Host 保留 |
 | `Stop Host` | 默认发送 `StopIfIdle`；有 terminal、dirty draft、job、mutation 或其他 client 时返回 typed `Busy` |
 | `Drain and Stop` | 拒绝新 resource，等待可结束操作；仍需用户处理交互式 terminal 和 dirty draft |
 | `Force Stop` | 明确二次确认后终止子进程并使所有 lease/epoch 失效 |
@@ -462,8 +462,10 @@ Quit All
 `TrayIcon` 由 desktop event-loop thread 创建和使用；Host 状态经有界 channel 更新，
 menu event 再转发到 GPUI foreground executor。同一 profile 的 desktop-shell endpoint
 保证只有一个 tray owner，后续 invocation 只转发 Activate/OpenWindow。所有 menu action
-只调用 desktop-shell 或 Host lifecycle protocol，不直接 kill PID。托盘崩溃或 desktop
-被强制退出时，独立 Host 仍继续运行。
+只调用 desktop-shell 或 Host lifecycle protocol，不直接按 PID 猜测进程。默认
+`DesktopOwned` Host 通过 authenticated owner channel 观察 desktop shell 生命周期；
+托盘/desktop 进程消失会关闭 channel 并触发 ForceStop。只有显式 `Independent` Host
+继续运行。
 
 `Start Host at Login` 已在 Permissions 中提供显式首次确认、平台注册状态和关闭入口；
 macOS `SMAppService`、Windows 当前用户 Run key、Linux systemd user/XDG fallback 均只注册
@@ -1367,7 +1369,7 @@ yttt --profile dev-a --no-spawn-host
 11. Host 离线时第一版不允许 mutation。
 12. `ProfileId`、environment kind、完整 `AppPaths`、credential namespace 和 project write policy。
 13. local endpoint、single-Host/profile lock、ready nonce 和 explicit/no-fallback connect policy。
-14. `FollowDesktop`、`KeepAlive`、`StartAtLogin` 及 Stop/Drain/Force 的 Host 生命周期语义。
+14. `DesktopOwned`、`Independent`、`StartAtLogin` 及 Stop/Drain/Force 的 Host 生命周期语义。
 15. 自动测试必须使用 ephemeral profile、显式 endpoint 和可回收进程树。
 
 ### 17.2 可以后置

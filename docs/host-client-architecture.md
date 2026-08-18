@@ -1,7 +1,7 @@
 # yttt Host/Client 架构规范
 
 - 状态：Phase 1 本地 IPC 完整实现
-- 更新：2026-08-12
+- 更新：2026-08-18
 - 适用协议：`yttt-protocol` 资源/lifecycle/desktop-shell v2；帧头 v1
 - 相关设计：[`p2p-relay-architecture.md`](./p2p-relay-architecture.md)
 
@@ -10,8 +10,8 @@
 ## 1. 不变量
 
 1. Host 是长生命周期执行资源的权威节点；UI Client 只持有镜像和呈现状态。
-2. 关闭窗口、Client 崩溃或本地 IPC 断开不会终止 Host 中的终端。
-3. 只有显式 `application.quit` / `DrainAndStop` 才会停止 Host 及其资源。
+2. 默认桌面 Host 由 desktop shell 的 authenticated owner channel 持有；关闭窗口不释放 owner，desktop shell 退出或连接消失必须 ForceStop Host 及其资源。
+3. 只有显式启动的独立后台 Host 可在 Desktop Client 退出后继续运行；`--start-host` 与登录启动使用该模式。
 4. 每个 profile 最多一个 Host；不同 profile、开发实例和测试实例使用不同 runtime root，不能串线。
 5. 终端网格只在 Host 解析一次。Client 接收语义快照/增量，不重新解析原始 PTY 字节。
 6. 一个终端同时只有一个 Interactive lease；Observer 可以只读附加。
@@ -299,8 +299,8 @@ Desktop 启动：
 2. 读取/创建 owner-only auth token。
 3. 尝试连接现有 endpoint。
 4. 成功：attach，不 spawn 第二个 Host。
-5. 失败：以 `--process-role host`、profile、runtime root、token file、build id 参数 spawn 当前 executable。
-6. 等待 ready metadata 和 authenticated handshake，最长 8 s。
+5. 失败：以 `--process-role host`、profile、runtime root、token file、build id 和显式 `--host-lifetime` 参数 spawn 当前 executable。
+6. 等待 ready metadata 和 authenticated handshake，最长 8 s；桌面模式随后建立唯一的 `DesktopOwner` channel。
 7. 创建 `ClientCore` 并请求 catalog。
 
 Host 以 profile lock 保证单实例。陈旧 socket/ready/PID 只能在 owner、类型和权限检查通过后清理。
@@ -310,19 +310,23 @@ Host 以 profile lock 保证单实例。陈旧 socket/ready/PID 只能在 owner�
 Production desktop 使用 `QuitMode::Explicit`。关闭最后一个窗口只销毁本地 placement 并
 detach Host terminal；desktop shell 和 tray/menu-bar 继续运行。tray 的 **Open yttt** 或
 **New Window** 会在同一个 desktop 进程中创建窗口并通过 catalog + checkpoint 恢复 terminal
-mirror。Desktop Client 崩溃或被强制结束时，Host 在连接清理中释放 lease，但继续持有 PTY
-child、scrollback 和 checkpoint；再次启动 desktop 会 attach 同一个 Host。
+mirror。默认 `DesktopOwned` Host 持有独立进程，但其生命周期由 desktop shell 的 owner
+channel 管理：Desktop 正常退出、崩溃或被强制结束时，channel 关闭，Host 进入
+`ForceStopping` 并终止 PTY/Agent 子进程。显式 `Independent` 后台 Host 不接受该 owner，
+Desktop 重启时仍可 attach。
 
 ### 9.3 显式生命周期操作
 
-- **Quit Desktop** 关闭 GPUI/tray 和 Client 连接，不终止 Host。
+- **Quit Desktop** 关闭 GPUI/tray 和 Client 连接；默认 `DesktopOwned` Host 随 owner
+  channel 关闭，显式启动的 `Independent` Host 保留。
 - **Stop Host If Idle** 发送 `StopIfIdle`；存在 terminal、project、SSH、Agent 或其他 blocker
   时返回 typed `Busy`，不终止任何资源。
 - **Restart Host If Idle** 仅在安全停止成功后启动新 Host，不能绕过 blocker。
 - **Quit All** 通过具备 capability 的 lifecycle channel 发送 `ForceStop`，Host 进入 draining
   后 Desktop 才退出。
 - `--host-status`、`--start-host`、`--stop-host`、`--restart-host` 和
-  `--force-stop-host` 提供不依赖 tray 的等价恢复入口。
+  `--force-stop-host` 提供不依赖 tray 的等价恢复入口；`--start-host` 创建
+  `Independent` Host。
 
 关闭一个 pane/tab/project 使用 `TerminateTerminal` / `TerminateMany`，只影响被关闭资源；
 关闭 window 不走这些请求。
@@ -345,11 +349,10 @@ Disconnected -> Connecting -> Ready
 - 临时 I/O 失败：保留 mirrors，指数退避 100 ms 到 1 s，持续尝试同一 endpoint。
 - 重连成功：更新 host epoch/connection sequence，立即请求 catalog。
 - Host 在断线期间仍存活：相同 terminal ID 通过 checkpoint/delta 继续。
-- Host 已死亡并由 launcher/外部 supervisor 重启：新 catalog 不含旧进程资源；Client 删除 stale mirror 并发布 `TerminalUnavailable`。
+- Host 已死亡并由 launcher/外部 supervisor 重启：新 catalog 不含旧进程资源；Client 删除 stale mirror，并在 pane 启动时把旧 `Bound` / `ClosePending` / `Lost` placement 原子替换为 `OpenPending` 后创建新 session。
+- Host 确认 `AcknowledgeTerminalExit` 后，Client 将 durable placement 写为 `Closed`，不得留下指向已回收进程的 `Bound`。
 - handshake 的身份、profile、build 或认证失败属于 fatal `HostLost`，不能无限重试到错误 Host。
 - 用户请求不会跨连接自动重放。
-
-Host 重启不可能恢复已经死亡的 OS child。恢复的是 Client 状态一致性；pane 是否重建进程由 `ProcessExitBehavior` 决定。
 
 ## 11. SSH、文件、Git 与 Agent 扩展边界
 

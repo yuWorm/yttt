@@ -48,8 +48,9 @@
   protocol, isolates development builds into executable-scoped profile runtimes, and reports
   unrecoverable live-Host lock states instead of spawning a duplicate Host or panicking.
 - Production desktop shells use explicit quit semantics: closing the last window keeps the
-  desktop control plane available while Host-owned terminals, projects, SSH sessions, and Agent
-  jobs continue independently.
+  desktop control plane and its owned Host available through the tray, while quitting or losing
+  the desktop shell terminates that Host and its resources. Explicit CLI/login-started background
+  Hosts remain independent.
 
 ### Fixed
 
@@ -72,6 +73,9 @@
   worker; the interactive Host benchmark now returns to Direct-mode frame cadence.
 - Fixed Host-owned Agent panes remaining `running` after completion by resolving snapshots through
   their terminal session placement instead of treating Host hook scope IDs as client tab/pane IDs.
+- Fixed desktop Host replacement leaving panes permanently bound to an old Host identity:
+  missing `Bound`, `ClosePending`, and `Lost` placements now start a fresh session, and successful
+  terminal-exit acknowledgements persist `Closed`.
 
 ## 0.2.0 - 2026-07-18
 

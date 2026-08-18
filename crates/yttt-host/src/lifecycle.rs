@@ -2,7 +2,7 @@ use std::{
     collections::BTreeSet,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -10,7 +10,9 @@ use parking_lot::Mutex;
 use tokio::sync::{Notify, watch};
 use yttt_protocol::{HostBlocker, HostLifecycleState};
 
-use crate::{project::HostProjectRuntime, runtime::HostRuntime, ssh_runtime::HostSshRuntime};
+use crate::{
+    HostLifetime, project::HostProjectRuntime, runtime::HostRuntime, ssh_runtime::HostSshRuntime,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StopMode {
@@ -26,7 +28,10 @@ struct LifecycleState {
 }
 
 pub(crate) struct HostLifecycle {
+    lifetime: HostLifetime,
     clients: AtomicUsize,
+    desktop_owners: AtomicUsize,
+    had_desktop_owner: AtomicBool,
     state: Mutex<LifecycleState>,
     changed: Notify,
     stop_tx: watch::Sender<bool>,
@@ -46,9 +51,12 @@ impl Drop for ResourceAdmission {
 }
 
 impl HostLifecycle {
-    pub(crate) fn new(stop_tx: watch::Sender<bool>) -> Self {
+    pub(crate) fn new(stop_tx: watch::Sender<bool>, lifetime: HostLifetime) -> Self {
         Self {
+            lifetime,
             clients: AtomicUsize::new(0),
+            desktop_owners: AtomicUsize::new(0),
+            had_desktop_owner: AtomicBool::new(false),
             state: Mutex::new(LifecycleState {
                 mode: StopMode::Running,
                 pending_resources: 0,
@@ -66,6 +74,23 @@ impl HostLifecycle {
     pub(crate) fn client_disconnected(&self) {
         self.clients.fetch_sub(1, Ordering::AcqRel);
         self.changed.notify_waiters();
+    }
+    pub(crate) fn desktop_owner_connected(&self) -> bool {
+        if self.lifetime != HostLifetime::DesktopOwned {
+            return false;
+        }
+        self.desktop_owners.fetch_add(1, Ordering::AcqRel);
+        self.had_desktop_owner.store(true, Ordering::Release);
+        self.changed.notify_waiters();
+        true
+    }
+
+    pub(crate) fn desktop_owner_disconnected(&self) {
+        if self.desktop_owners.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.force_stop();
+        } else {
+            self.changed.notify_waiters();
+        }
     }
 
     pub(crate) fn client_count(&self) -> usize {
@@ -153,7 +178,8 @@ impl HostLifecycle {
         ssh: Arc<HostSshRuntime>,
         projects: Arc<HostProjectRuntime>,
     ) {
-        const IDLE_EXIT_DELAY: std::time::Duration = std::time::Duration::from_secs(30);
+        const OWNER_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+        let owner_connect_deadline = tokio::time::Instant::now() + OWNER_CONNECT_TIMEOUT;
         loop {
             let notified = self.changed.notified();
             let state = *self.state.lock();
@@ -173,26 +199,13 @@ impl HostLifecycle {
                 let _ = self.stop_tx.send(true);
                 return;
             }
-            if state.mode == StopMode::Running
-                && self.clients.load(Ordering::Acquire) == 0
-                && resources.is_empty()
+            if self.lifetime == HostLifetime::DesktopOwned
+                && !self.had_desktop_owner.load(Ordering::Acquire)
             {
                 tokio::select! {
-                    _ = tokio::time::sleep(IDLE_EXIT_DELAY) => {
-                        let state = *self.state.lock();
-                        if state.mode == StopMode::Running
-                            && self.clients.load(Ordering::Acquire) == 0
-                            && collect_blockers(
-                                &runtime,
-                                ssh.connections(),
-                                projects.projects(),
-                                state.pending_resources,
-                                0,
-                            )
-                            .is_empty()
-                        {
-                            let _ = self.stop_tx.send(true);
-                            return;
+                    _ = tokio::time::sleep_until(owner_connect_deadline) => {
+                        if !self.had_desktop_owner.load(Ordering::Acquire) {
+                            self.force_stop();
                         }
                     }
                     _ = notified => {}
@@ -237,7 +250,7 @@ mod tests {
     #[test]
     fn stop_if_idle_cannot_cross_an_admitted_resource_creation() {
         let (stop_tx, stop_rx) = watch::channel(false);
-        let lifecycle = Arc::new(HostLifecycle::new(stop_tx));
+        let lifecycle = Arc::new(HostLifecycle::new(stop_tx, HostLifetime::Independent));
         let runtime = HostRuntime::new();
         let admission = lifecycle.admit_resource().unwrap();
 
@@ -255,5 +268,27 @@ mod tests {
             .stop_if_idle(&runtime, Vec::new(), Vec::new())
             .unwrap();
         assert!(*stop_rx.borrow());
+    }
+
+    #[test]
+    fn desktop_owner_disconnect_forces_host_shutdown() {
+        let (stop_tx, stop_rx) = watch::channel(false);
+        let lifecycle = HostLifecycle::new(stop_tx, HostLifetime::DesktopOwned);
+
+        assert!(lifecycle.desktop_owner_connected());
+        lifecycle.desktop_owner_disconnected();
+
+        assert_eq!(lifecycle.state(), HostLifecycleState::ForceStopping);
+        assert!(!*stop_rx.borrow());
+    }
+
+    #[test]
+    fn independent_host_rejects_desktop_ownership() {
+        let (stop_tx, stop_rx) = watch::channel(false);
+        let lifecycle = HostLifecycle::new(stop_tx, HostLifetime::Independent);
+
+        assert!(!lifecycle.desktop_owner_connected());
+        assert_eq!(lifecycle.state(), HostLifecycleState::Running);
+        assert!(!*stop_rx.borrow());
     }
 }

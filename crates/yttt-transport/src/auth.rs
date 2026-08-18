@@ -229,13 +229,19 @@ where
         ),
         (ConnectionChannel::Control, None, _)
             | (ConnectionChannel::TerminalData, Some(_), false)
-            | (ConnectionChannel::Lifecycle, None, _)
+            | (
+                ConnectionChannel::Lifecycle | ConnectionChannel::DesktopOwner,
+                None,
+                _
+            )
     ) {
         reject(stream, RejectReason::InvalidMessage).await;
         return Err(HandshakeError::Rejected(RejectReason::InvalidMessage));
     }
     let host_supported = match hello.channel {
-        ConnectionChannel::Lifecycle => identity.lifecycle_supported,
+        ConnectionChannel::Lifecycle | ConnectionChannel::DesktopOwner => {
+            identity.lifecycle_supported
+        }
         ConnectionChannel::Control | ConnectionChannel::TerminalData => identity.resource_supported,
     };
     let Some(selected_version) = host_supported.negotiate(hello.supported) else {

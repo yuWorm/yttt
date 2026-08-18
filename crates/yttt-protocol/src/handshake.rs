@@ -72,6 +72,7 @@ pub enum ConnectionChannel {
     Control,
     TerminalData,
     Lifecycle,
+    DesktopOwner,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

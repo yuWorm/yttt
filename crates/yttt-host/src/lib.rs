@@ -42,7 +42,10 @@ use fs2::FileExt as _;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use tokio::sync::{broadcast, watch};
+use tokio::{
+    io::AsyncReadExt as _,
+    sync::{broadcast, watch},
+};
 use yttt_core::model::ids::{ClientInstanceId, HostId, ProfileId, TerminalSessionId};
 use yttt_protocol::{
     BuildIdentity, ClientRequest, ControlMessage, FailureCode, HostEvent, HostLifecycleStatus,
@@ -60,6 +63,23 @@ use yttt_transport::{
     receive_lifecycle, send_control, send_lifecycle, server_handshake,
 };
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostLifetime {
+    DesktopOwned,
+    #[default]
+    Independent,
+}
+
+impl HostLifetime {
+    pub const fn as_arg(self) -> &'static str {
+        match self {
+            Self::DesktopOwned => "desktop_owned",
+            Self::Independent => "independent",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostBootstrap {
     pub profile_id: ProfileId,
@@ -68,6 +88,7 @@ pub struct HostBootstrap {
     pub ssh_host_keys_file: PathBuf,
     pub credential_namespace: String,
     pub build: BuildIdentity,
+    pub lifetime: HostLifetime,
 }
 
 impl HostBootstrap {
@@ -90,6 +111,8 @@ pub struct ReadyMetadata {
     pub host_id: HostId,
     pub host_epoch: u64,
     pub pid: u32,
+    #[serde(default)]
+    pub lifetime: HostLifetime,
     pub build: BuildIdentity,
     pub resource_protocol: u16,
     pub lifecycle_protocol: u16,
@@ -139,6 +162,7 @@ where
         host_id: host_id.clone(),
         host_epoch,
         pid: std::process::id(),
+        lifetime: bootstrap.lifetime,
         build: bootstrap.build.clone(),
         resource_protocol: RESOURCE_PROTOCOL_VERSION,
         lifecycle_protocol: LIFECYCLE_PROTOCOL_VERSION,
@@ -162,7 +186,7 @@ where
     let audit = Arc::new(HostAuditLog::new());
     let (stop_tx, mut stop_rx) = watch::channel(false);
     let runtime = HostRuntime::new();
-    let lifecycle = Arc::new(HostLifecycle::new(stop_tx.clone()));
+    let lifecycle = Arc::new(HostLifecycle::new(stop_tx.clone(), bootstrap.lifetime));
     let projects = Arc::new(HostProjectRuntime::new_with_epoch(host_epoch));
     let ssh = HostSshRuntime::start(
         bootstrap.ssh_host_keys_file.clone(),
@@ -546,6 +570,15 @@ async fn serve_connection(
     let authenticated = server_handshake(&mut stream, identity, token.as_ref())
         .await
         .map_err(|_| ())?;
+    if authenticated.channel == yttt_protocol::ConnectionChannel::DesktopOwner {
+        if !lifecycle.desktop_owner_connected() {
+            return Err(());
+        }
+        let result = serve_desktop_owner_connection(stream, stop.clone()).await;
+        lifecycle.desktop_owner_disconnected();
+        lifecycle.resource_changed();
+        return result;
+    }
     lifecycle.client_connected();
     if authenticated.channel == yttt_protocol::ConnectionChannel::Lifecycle {
         let result =
@@ -957,6 +990,25 @@ async fn serve_connection(
     lifecycle.client_disconnected();
     lifecycle.resource_changed();
     result
+}
+async fn serve_desktop_owner_connection(
+    mut stream: TransportStream,
+    mut stop: watch::Receiver<bool>,
+) -> Result<(), ()> {
+    let mut byte = [0_u8; 1];
+    tokio::select! {
+        read = stream.read(&mut byte) => match read {
+            Ok(0) => Ok(()),
+            Ok(_) | Err(_) => Err(()),
+        },
+        changed = stop.changed() => {
+            if changed.is_err() || *stop.borrow() {
+                Ok(())
+            } else {
+                Err(())
+            }
+        }
+    }
 }
 
 async fn serve_lifecycle_connection(

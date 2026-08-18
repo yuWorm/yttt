@@ -974,11 +974,6 @@ impl TerminalPaneView {
                             cx,
                         );
                     }
-                    Err(
-                        error @ TerminalStartAttemptError::Recovery(
-                            TerminalRecoveryError::MissingBoundSession { .. },
-                        ),
-                    ) => pane.set_terminal_lost(error.to_string(), cx),
                     Err(error) => pane.set_spawn_failure(error.to_string(), cx),
                 }
             });
@@ -1138,11 +1133,11 @@ impl TerminalPaneView {
             ProcessStatus::Exited { code },
             cx,
         );
-        let _ = runtime.request(Request::AcknowledgeTerminalExit {
-            session_id: session_id.clone(),
-            session_epoch,
-            final_sequence,
-        });
+        if let Err(error) =
+            runtime.acknowledge_terminal_exit(session_id.clone(), session_epoch, final_sequence)
+        {
+            eprintln!("failed to queue terminal exit acknowledgement: {error}");
+        }
         self.host_session_id = None;
         self.host_session_epoch = None;
     }

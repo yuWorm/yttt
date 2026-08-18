@@ -83,6 +83,7 @@ impl RunningHost {
                 build_fingerprint: "integration-build".to_string(),
                 resource_compatibility: "integration-resource-v1".to_string(),
             },
+            lifetime: yttt_host::HostLifetime::Independent,
         };
         let endpoint = host_endpoint(&bootstrap);
         let task = tokio::spawn(run(bootstrap.clone(), || LocalListener::bind(endpoint)));
@@ -885,36 +886,25 @@ async fn lifecycle_channel_survives_resource_build_mismatch_and_is_lifecycle_onl
 }
 
 #[tokio::test]
-async fn idle_exit_waits_thirty_seconds_and_new_clients_cancel_the_countdown() {
+async fn independent_host_remains_available_after_all_clients_disconnect() {
     let host = RunningHost::start().await;
-    let first = host.client("idle-countdown-first").await;
+    let client = host.client("independent-client").await;
+    client.shutdown().await;
+
     tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(31)).await;
+    tokio::time::advance(Duration::from_secs(60)).await;
     tokio::task::yield_now().await;
     assert!(!host.task.is_finished());
-
-    first.shutdown().await;
-    tokio::task::yield_now().await;
-    tokio::time::advance(Duration::from_secs(29)).await;
-    tokio::task::yield_now().await;
-    assert!(!host.task.is_finished());
-
     tokio::time::resume();
-    let second = host.client("idle-countdown-second").await;
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(31)).await;
-    tokio::task::yield_now().await;
-    assert!(!host.task.is_finished());
 
-    second.shutdown().await;
-    tokio::task::yield_now().await;
-    tokio::time::advance(Duration::from_secs(29)).await;
-    tokio::task::yield_now().await;
-    assert!(!host.task.is_finished());
-    tokio::time::advance(Duration::from_secs(2)).await;
-    tokio::time::timeout(Duration::from_secs(1), host.task)
+    assert_eq!(
+        host.lifecycle_request(LifecycleRequest::StopIfIdle, false)
+            .await,
+        LifecycleResponse::Stopping
+    );
+    tokio::time::timeout(Duration::from_secs(5), host.task)
         .await
-        .expect("idle Host shutdown timeout")
+        .expect("independent Host shutdown timeout")
         .unwrap()
         .unwrap();
 }
