@@ -8,7 +8,7 @@ use alacritty_terminal::{
     grid::Dimensions as _,
     index::{Column, Line, Point},
     term::{
-        self, Term, TermMode,
+        self, Term, TermDamage, TermMode,
         cell::{Cell, Flags},
     },
     vte::ansi::{Color, CursorShape as AlacrittyCursorShape, NamedColor},
@@ -103,7 +103,50 @@ impl SemanticSnapshotter {
         state: &TerminalState<L>,
         context: &SemanticCaptureContext,
     ) -> TerminalStreamUpdate {
-        let mut captured = state.with_term_mut(capture_term);
+        let captured = state.with_term_mut(capture_term);
+        self.finish_full_capture(captured, context)
+    }
+
+    pub fn capture_damage<L: EventListener>(
+        &mut self,
+        state: &TerminalState<L>,
+        context: &SemanticCaptureContext,
+    ) -> TerminalStreamUpdate {
+        let (captured, full_damage) = state.with_term_mut(capture_term_damage);
+        let geometry_changed = self
+            .previous_geometry_epoch
+            .is_some_and(|epoch| epoch != context.geometry_epoch);
+        let alternate_changed = self
+            .previous_alt_screen
+            .is_some_and(|alternate| alternate != captured.alt_screen);
+        let history_changed = captured.history_size != self.previous_history_size;
+        let dimensions_changed = self.previous.as_ref().is_some_and(|previous| {
+            usize::from(previous.geometry.cols) != captured.columns
+                || usize::from(previous.geometry.rows) != captured.screen_lines
+        });
+        if self.previous.is_none()
+            || full_damage
+            || geometry_changed
+            || alternate_changed
+            || history_changed
+            || dimensions_changed
+        {
+            let captured = if captured.rows.len() == captured.screen_lines {
+                captured
+            } else {
+                state.with_term_mut(capture_term)
+            };
+            return self.finish_full_capture(captured, context);
+        }
+
+        self.finish_damage_capture(captured, context)
+    }
+
+    fn finish_full_capture(
+        &mut self,
+        mut captured: CapturedTerminal,
+        context: &SemanticCaptureContext,
+    ) -> TerminalStreamUpdate {
         self.sequence = self.sequence.saturating_add(1);
         let geometry_changed = self
             .previous_geometry_epoch
@@ -155,6 +198,88 @@ impl SemanticSnapshotter {
         }
         self.previous_geometry_epoch = Some(context.geometry_epoch);
         self.previous_alt_screen = Some(alt_screen);
+        self.previous = Some(viewport);
+        update
+    }
+
+    fn finish_damage_capture(
+        &mut self,
+        captured: CapturedTerminal,
+        context: &SemanticCaptureContext,
+    ) -> TerminalStreamUpdate {
+        self.sequence = self.sequence.saturating_add(1);
+        let mut viewport = self
+            .previous
+            .take()
+            .expect("damage capture requires a previous viewport");
+        let base_sequence = viewport.sequence;
+        let previous_cursor = viewport.cursor;
+        let previous_modes = viewport.modes.clone();
+        let previous_palette = viewport.palette.clone();
+        let previous_process_state = viewport.process_state;
+        let mut changed_rows = Vec::with_capacity(captured.rows.len());
+        for raw in captured.rows {
+            let key = self.logical_line_offset + i64::from(raw.grid_line);
+            let row = SemanticRow {
+                line_id: self.line_id_for_key(key),
+                viewport_row: raw.viewport_row,
+                spans: raw.spans,
+            };
+            if let Some(current) = viewport
+                .rows
+                .iter_mut()
+                .find(|current| current.viewport_row == row.viewport_row)
+            {
+                current.clone_from(&row);
+            } else {
+                viewport.rows.push(row.clone());
+            }
+            changed_rows.push(row);
+        }
+        viewport.rows.sort_unstable_by_key(|row| row.viewport_row);
+        viewport.sequence = self.sequence;
+        viewport.history_size = captured.history_size as u64;
+        viewport.display_offset = captured.display_offset as u64;
+        viewport.cursor = captured.cursor;
+        viewport.modes = TerminalModes {
+            bits: captured.mode_bits,
+            title: context.title.clone(),
+            cwd: context.cwd.clone(),
+        };
+        viewport.palette = TerminalPalette {
+            colors: captured.palette,
+            revision: context.palette_revision,
+        };
+        viewport.process_state = context.process_state;
+        self.previous_history_size = captured.history_size;
+        if captured.display_offset == 0 {
+            for (raw, fingerprint) in changed_rows.iter().zip(captured.fingerprints) {
+                if let Some(current) = self
+                    .previous_bottom_fingerprints
+                    .get_mut(usize::from(raw.viewport_row))
+                {
+                    *current = fingerprint;
+                }
+            }
+        }
+        self.previous_geometry_epoch = Some(context.geometry_epoch);
+        self.previous_alt_screen = Some(captured.alt_screen);
+        let update = Delta(SemanticDelta {
+            session_id: viewport.session_id.clone(),
+            session_epoch: viewport.session_epoch,
+            base_sequence,
+            sequence: viewport.sequence,
+            geometry_epoch: viewport.geometry_epoch,
+            scrollback_epoch: viewport.scrollback_epoch,
+            history_size: viewport.history_size,
+            display_offset: viewport.display_offset,
+            changed_rows,
+            cursor: (previous_cursor != viewport.cursor).then_some(viewport.cursor),
+            modes: (previous_modes != viewport.modes).then(|| viewport.modes.clone()),
+            palette: (previous_palette != viewport.palette).then(|| viewport.palette.clone()),
+            process_state: (previous_process_state != viewport.process_state)
+                .then_some(viewport.process_state),
+        });
         self.previous = Some(viewport);
         update
     }
@@ -378,9 +503,29 @@ fn capture_term<L: EventListener>(term: &mut Term<L>) -> CapturedTerminal {
     capture_term_with_offset(term, None)
 }
 
+fn capture_term_damage<L: EventListener>(term: &mut Term<L>) -> (CapturedTerminal, bool) {
+    let (damaged_rows, full_damage) = match term.damage() {
+        TermDamage::Full => (None, true),
+        TermDamage::Partial(lines) => {
+            (Some(lines.map(|line| line.line).collect::<Vec<_>>()), false)
+        }
+    };
+    let captured = capture_term_rows(term, None, damaged_rows.as_deref());
+    term.reset_damage();
+    (captured, full_damage)
+}
+
 fn capture_term_with_offset<L: EventListener>(
     term: &mut Term<L>,
     requested_display_offset: Option<usize>,
+) -> CapturedTerminal {
+    capture_term_rows(term, requested_display_offset, None)
+}
+
+fn capture_term_rows<L: EventListener>(
+    term: &mut Term<L>,
+    requested_display_offset: Option<usize>,
+    selected_rows: Option<&[usize]>,
 ) -> CapturedTerminal {
     let columns = term.columns();
     let screen_lines = term.screen_lines();
@@ -410,10 +555,14 @@ fn capture_term_with_offset<L: EventListener>(
         blinking: false,
     };
 
-    let mut rows = Vec::with_capacity(screen_lines);
-    let mut fingerprints = Vec::with_capacity(screen_lines);
+    let row_capacity = selected_rows.map_or(screen_lines, <[usize]>::len);
+    let mut rows = Vec::with_capacity(row_capacity);
+    let mut fingerprints = Vec::with_capacity(row_capacity);
     let grid = term.grid();
-    for viewport_row in 0..screen_lines {
+    let mut capture_row = |viewport_row: usize| {
+        if viewport_row >= screen_lines {
+            return;
+        }
         let line = Line(viewport_row as i32 - display_offset as i32);
         let mut spans = Vec::new();
         for column in 0..columns {
@@ -424,13 +573,21 @@ fn capture_term_with_offset<L: EventListener>(
             }
             append_semantic_cell(&mut spans, column, cell);
         }
-        let fingerprint = fingerprint_spans(&spans);
-        fingerprints.push(fingerprint);
+        fingerprints.push(fingerprint_spans(&spans));
         rows.push(RawSemanticRow {
             grid_line: line.0,
             viewport_row: u16::try_from(viewport_row).unwrap_or(u16::MAX),
             spans,
         });
+    };
+    if let Some(selected_rows) = selected_rows {
+        for &viewport_row in selected_rows {
+            capture_row(viewport_row);
+        }
+    } else {
+        for viewport_row in 0..screen_lines {
+            capture_row(viewport_row);
+        }
     }
 
     CapturedTerminal {

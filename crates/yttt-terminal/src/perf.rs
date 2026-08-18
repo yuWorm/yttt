@@ -64,6 +64,11 @@ mod enabled {
         pub redraw_signals: u64,
         pub redraws_coalesced: u64,
         pub dropped_correlations: u64,
+        pub semantic_updates_received: u64,
+        pub semantic_updates_coalesced: u64,
+        pub semantic_update_queue_current: usize,
+        pub semantic_update_queue_high_water: usize,
+        pub semantic_update_queue_capacity: usize,
         pub final_sentinel_seen_at_unix_ns: Option<u64>,
         pub final_sentinel_painted_at_unix_ns: Option<u64>,
     }
@@ -81,6 +86,9 @@ mod enabled {
         pub input_to_echo_parse_ms: DurationDistribution,
         pub echo_to_first_paint_ms: DurationDistribution,
         pub input_to_first_paint_ms: DurationDistribution,
+        pub gpui_input_handler_ms: DurationDistribution,
+        pub semantic_update_queue_age_ms: DurationDistribution,
+        pub semantic_apply_lock_wait_ms: DurationDistribution,
 
         pub ime_preedit_to_paint_ms: DurationDistribution,
     }
@@ -91,6 +99,8 @@ mod enabled {
         pub input_to_parser: &'static str,
         pub echo_to_paint: &'static str,
         pub input_to_paint: &'static str,
+        pub gpui_input_handler: &'static str,
+        pub semantic_update_queue: &'static str,
         pub presentation: &'static str,
     }
 
@@ -269,6 +279,10 @@ mod enabled {
         redraw_requests: AtomicU64,
         redraw_signals: AtomicU64,
         dropped_correlations: AtomicU64,
+        semantic_updates_received: AtomicU64,
+        semantic_updates_coalesced: AtomicU64,
+        semantic_update_queue_high_water: AtomicUsize,
+        semantic_update_queue_current: AtomicUsize,
         parser_generation: AtomicU64,
         input_sequence: AtomicU64,
         parser_completions: Mutex<VecDeque<ParserCompletion>>,
@@ -289,6 +303,9 @@ mod enabled {
         input_to_echo_parse: DurationMetric,
         echo_to_first_paint: DurationMetric,
         input_to_first_paint: DurationMetric,
+        gpui_input_handler: DurationMetric,
+        semantic_update_queue_age: DurationMetric,
+        semantic_apply_lock_wait: DurationMetric,
 
         ime_preedit_to_paint: DurationMetric,
     }
@@ -319,6 +336,10 @@ mod enabled {
                 redraw_requests: AtomicU64::new(0),
                 redraw_signals: AtomicU64::new(0),
                 dropped_correlations: AtomicU64::new(0),
+                semantic_updates_received: AtomicU64::new(0),
+                semantic_updates_coalesced: AtomicU64::new(0),
+                semantic_update_queue_high_water: AtomicUsize::new(0),
+                semantic_update_queue_current: AtomicUsize::new(0),
                 parser_generation: AtomicU64::new(0),
                 input_sequence: AtomicU64::new(0),
                 parser_completions: Mutex::new(VecDeque::new()),
@@ -339,6 +360,9 @@ mod enabled {
                 input_to_echo_parse: DurationMetric::new(),
                 echo_to_first_paint: DurationMetric::new(),
                 input_to_first_paint: DurationMetric::new(),
+                gpui_input_handler: DurationMetric::new(),
+                semantic_update_queue_age: DurationMetric::new(),
+                semantic_apply_lock_wait: DurationMetric::new(),
                 ime_preedit_to_paint: DurationMetric::new(),
             }
         }
@@ -347,6 +371,19 @@ mod enabled {
     #[derive(Clone)]
     pub struct TerminalPerformanceHandle {
         state: Arc<PerformanceState>,
+    }
+
+    struct InputHandlerTimer {
+        state: Arc<PerformanceState>,
+        started_at: Instant,
+    }
+
+    impl Drop for InputHandlerTimer {
+        fn drop(&mut self) {
+            self.state
+                .gpui_input_handler
+                .record(self.started_at.elapsed());
+        }
     }
 
     impl Default for TerminalPerformanceHandle {
@@ -359,6 +396,13 @@ mod enabled {
         pub(crate) fn new() -> Self {
             Self {
                 state: Arc::new(PerformanceState::new()),
+            }
+        }
+
+        pub(crate) fn measure_input_handler(&self) -> impl Drop {
+            InputHandlerTimer {
+                state: self.state.clone(),
+                started_at: Instant::now(),
             }
         }
 
@@ -482,6 +526,38 @@ mod enabled {
                 TerminalStreamUpdate::RawTail { .. }
                 | TerminalStreamUpdate::ResyncRequired { .. } => {}
             }
+        }
+
+        pub(crate) fn record_semantic_update_queued(&self, depth: usize, coalesced: bool) {
+            self.state
+                .semantic_updates_received
+                .fetch_add(1, Ordering::Relaxed);
+            if coalesced {
+                self.state
+                    .semantic_updates_coalesced
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            self.state
+                .semantic_update_queue_current
+                .store(depth, Ordering::Relaxed);
+            self.state
+                .semantic_update_queue_high_water
+                .fetch_max(depth, Ordering::Relaxed);
+        }
+
+        pub(crate) fn set_semantic_update_queue_depth(&self, depth: usize) {
+            self.state
+                .semantic_update_queue_current
+                .store(depth, Ordering::Relaxed);
+        }
+
+        pub(crate) fn record_semantic_update_applied(
+            &self,
+            queue_age: Duration,
+            lock_wait: Duration,
+        ) {
+            self.state.semantic_update_queue_age.record(queue_age);
+            self.state.semantic_apply_lock_wait.record(lock_wait);
         }
 
         fn record_output_parts<'a>(
@@ -687,7 +763,7 @@ mod enabled {
             let redraw_requests = self.state.redraw_requests.load(Ordering::Relaxed);
             let redraw_signals = self.state.redraw_signals.load(Ordering::Relaxed);
             TerminalPerformanceSnapshot {
-                schema_version: 2,
+                schema_version: 3,
                 elapsed_seconds,
                 paint_fps: if elapsed_seconds > 0.0 {
                     painted_frames as f64 / elapsed_seconds
@@ -706,6 +782,23 @@ mod enabled {
                     redraw_signals,
                     redraws_coalesced: redraw_requests.saturating_sub(redraw_signals),
                     dropped_correlations: self.state.dropped_correlations.load(Ordering::Relaxed),
+                    semantic_updates_received: self
+                        .state
+                        .semantic_updates_received
+                        .load(Ordering::Relaxed),
+                    semantic_updates_coalesced: self
+                        .state
+                        .semantic_updates_coalesced
+                        .load(Ordering::Relaxed),
+                    semantic_update_queue_current: self
+                        .state
+                        .semantic_update_queue_current
+                        .load(Ordering::Relaxed),
+                    semantic_update_queue_high_water: self
+                        .state
+                        .semantic_update_queue_high_water
+                        .load(Ordering::Relaxed),
+                    semantic_update_queue_capacity: crate::view::SEMANTIC_UPDATE_QUEUE_CAPACITY,
                     final_sentinel_seen_at_unix_ns: non_zero(
                         self.state
                             .final_sentinel_seen_at_unix_ns
@@ -729,6 +822,9 @@ mod enabled {
                     input_to_echo_parse_ms: self.state.input_to_echo_parse.snapshot(),
                     echo_to_first_paint_ms: self.state.echo_to_first_paint.snapshot(),
                     input_to_first_paint_ms: self.state.input_to_first_paint.snapshot(),
+                    gpui_input_handler_ms: self.state.gpui_input_handler.snapshot(),
+                    semantic_update_queue_age_ms: self.state.semantic_update_queue_age.snapshot(),
+                    semantic_apply_lock_wait_ms: self.state.semantic_apply_lock_wait.snapshot(),
 
                     ime_preedit_to_paint_ms: self.state.ime_preedit_to_paint.snapshot(),
                 },
@@ -738,6 +834,8 @@ mod enabled {
                     input_to_parser: "Time from a GPUI input event until the parser observes the first subsequent PTY output occurrence of the exact submitted byte sequence; unmatched control input is omitted.",
                     echo_to_paint: "Time from matching the echoed input in terminal output until the first paint whose snapshot includes that echo.",
                     input_to_paint: "Time from a GPUI input event until the first completed paint whose snapshot includes the matching terminal echo.",
+                    gpui_input_handler: "Wall time spent in the GPUI key-down or text-input callback before it returns to the event loop.",
+                    semantic_update_queue: "Age of a Host semantic update when the GPUI foreground applies it, and foreground wait to acquire the render-state lock.",
 
                     presentation: "Actual GPU/display presentation is intentionally measured by the accompanying Metal System Trace capture.",
                 },
@@ -759,6 +857,19 @@ mod enabled {
             self.state.redraw_requests.store(0, Ordering::Relaxed);
             self.state.redraw_signals.store(0, Ordering::Relaxed);
             self.state.dropped_correlations.store(0, Ordering::Relaxed);
+            self.state
+                .semantic_updates_received
+                .store(0, Ordering::Relaxed);
+            self.state
+                .semantic_updates_coalesced
+                .store(0, Ordering::Relaxed);
+            let semantic_current = self
+                .state
+                .semantic_update_queue_current
+                .load(Ordering::Relaxed);
+            self.state
+                .semantic_update_queue_high_water
+                .store(semantic_current, Ordering::Relaxed);
             self.state.parser_completions.lock().clear();
             self.state.pending_inputs.lock().clear();
             self.state.pending_ime_preedits.lock().clear();
@@ -784,6 +895,9 @@ mod enabled {
             self.state.input_to_echo_parse.clear();
             self.state.echo_to_first_paint.clear();
             self.state.input_to_first_paint.clear();
+            self.state.gpui_input_handler.clear();
+            self.state.semantic_update_queue_age.clear();
+            self.state.semantic_apply_lock_wait.clear();
 
             self.state.ime_preedit_to_paint.clear();
         }
@@ -1082,6 +1196,15 @@ mod enabled {
             let prepaint_started = Instant::now();
             performance.record_prepaint(generation, prepaint_started, Duration::from_micros(40));
             performance.record_paint(generation, Instant::now(), Duration::from_micros(50));
+            {
+                let _input_handler = performance.measure_input_handler();
+            }
+            performance.record_semantic_update_queued(3, true);
+            performance.set_semantic_update_queue_depth(0);
+            performance.record_semantic_update_applied(
+                Duration::from_millis(2),
+                Duration::from_micros(10),
+            );
 
             let snapshot = performance.snapshot();
             assert_eq!(snapshot.counters.input_events, 1);
@@ -1093,6 +1216,17 @@ mod enabled {
             assert_eq!(snapshot.latencies.input_to_first_paint_ms.samples, 1);
 
             assert_eq!(snapshot.latencies.parser_to_prepaint_ms.samples, 1);
+            assert_eq!(snapshot.counters.semantic_updates_received, 1);
+            assert_eq!(snapshot.counters.semantic_updates_coalesced, 1);
+            assert_eq!(snapshot.counters.semantic_update_queue_current, 0);
+            assert_eq!(snapshot.counters.semantic_update_queue_high_water, 3);
+            assert_eq!(
+                snapshot.counters.semantic_update_queue_capacity,
+                crate::view::SEMANTIC_UPDATE_QUEUE_CAPACITY
+            );
+            assert_eq!(snapshot.latencies.gpui_input_handler_ms.samples, 1);
+            assert_eq!(snapshot.latencies.semantic_update_queue_age_ms.samples, 1);
+            assert_eq!(snapshot.latencies.semantic_apply_lock_wait_ms.samples, 1);
         }
 
         #[test]
@@ -1299,12 +1433,22 @@ mod disabled {
     #[derive(Clone, Copy, Debug, Default)]
     pub(crate) struct InputPerformanceSample;
 
+    struct InputHandlerTimer;
+
+    impl Drop for InputHandlerTimer {
+        fn drop(&mut self) {}
+    }
+
     #[derive(Clone, Default)]
     pub(crate) struct TerminalPerformanceHandle;
 
     impl TerminalPerformanceHandle {
         pub(crate) fn new() -> Self {
             Self
+        }
+
+        pub(crate) fn measure_input_handler(&self) -> impl Drop {
+            InputHandlerTimer
         }
 
         pub(crate) fn record_read(&self, _bytes: usize) {}
@@ -1344,6 +1488,17 @@ mod disabled {
         pub(crate) fn record_semantic_update(
             &self,
             _update: &yttt_protocol::terminal::TerminalStreamUpdate,
+        ) {
+        }
+
+        pub(crate) fn record_semantic_update_queued(&self, _depth: usize, _coalesced: bool) {}
+
+        pub(crate) fn set_semantic_update_queue_depth(&self, _depth: usize) {}
+
+        pub(crate) fn record_semantic_update_applied(
+            &self,
+            _queue_age: Duration,
+            _lock_wait: Duration,
         ) {
         }
 

@@ -516,7 +516,7 @@ run_direct() {
     "YTTT_TERMINAL_PERF_LABEL=direct"
     "YTTT_TERMINAL_PERF_SCENARIO=$scenario_name"
     "YTTT_TERMINAL_PERF_WARMUP_SECONDS=$warmup"
-    "YTTT_TERMINAL_PERF_DURATION_SECONDS=$((duration + catch_up))"
+    "YTTT_TERMINAL_PERF_DURATION_SECONDS=$((duration + catch_up + 1))"
     "YTTT_TERMINAL_PERF_START_FILE=$run_dir/workload.start"
     "YTTT_TERMINAL_PERF_READY_FILE=$run_dir/terminal.ready"
     "YTTT_TERMINAL_PERF_FINAL_SENTINEL=YTTT-PERF-FINAL-SENTINEL"
@@ -525,7 +525,7 @@ run_direct() {
   if [[ "$scenario_name" == "interactive" ]]; then
     performance_env+=(
       "YTTT_TERMINAL_PERF_INPUT_DELAY_MS=$((warmup * 1000 + 1000))"
-      "YTTT_TERMINAL_PERF_INPUT_SAMPLES=600"
+      "YTTT_TERMINAL_PERF_INPUT_SAMPLES=620"
       "YTTT_TERMINAL_PERF_INPUT_INTERVAL_MS=10"
       "YTTT_TERMINAL_PERF_PREEDIT_INTERVAL_MS=5"
     )
@@ -591,7 +591,7 @@ run_host() {
     "YTTT_TERMINAL_PERF_SCENARIO=$scenario_name"
     "YTTT_TERMINAL_PERF_PANE_ID=perf"
     "YTTT_TERMINAL_PERF_WARMUP_SECONDS=$warmup"
-    "YTTT_TERMINAL_PERF_DURATION_SECONDS=$((duration + catch_up))"
+    "YTTT_TERMINAL_PERF_DURATION_SECONDS=$((duration + catch_up + 1))"
     "YTTT_TERMINAL_PERF_START_FILE=$run_dir/workload.start"
     "YTTT_TERMINAL_PERF_READY_FILE=$run_dir/terminal.ready"
     "YTTT_TERMINAL_PERF_FINAL_SENTINEL=YTTT-PERF-FINAL-SENTINEL"
@@ -600,7 +600,7 @@ run_host() {
   if [[ "$scenario_name" == "interactive" ]]; then
     performance_env+=(
       "YTTT_TERMINAL_PERF_INPUT_DELAY_MS=$((warmup * 1000 + 1000))"
-      "YTTT_TERMINAL_PERF_INPUT_SAMPLES=600"
+      "YTTT_TERMINAL_PERF_INPUT_SAMPLES=620"
       "YTTT_TERMINAL_PERF_INPUT_INTERVAL_MS=10"
       "YTTT_TERMINAL_PERF_PREEDIT_INTERVAL_MS=5"
     )

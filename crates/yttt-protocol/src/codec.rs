@@ -189,7 +189,8 @@ mod tests {
         ControlMessage, FailureCode, HostResponse, ProtocolFailure, Response, TerminalLease,
         terminal::{
             CursorShape, SemanticCursor, SemanticViewport, TerminalCheckpoint, TerminalGeometry,
-            TerminalLeaseMode, TerminalModes, TerminalPalette, TerminalProcessState,
+            TerminalInput, TerminalLeaseMode, TerminalModes, TerminalMutationContext,
+            TerminalPalette, TerminalProcessState,
         },
     };
 
@@ -242,6 +243,25 @@ mod tests {
                 checkpoint,
             }),
         })
+    }
+
+    #[test]
+    fn one_way_terminal_input_round_trips_as_a_control_message() {
+        let message = ControlMessage::TerminalInput(TerminalInput {
+            session_id: TerminalSessionId::new("session"),
+            context: TerminalMutationContext {
+                host_epoch: 1,
+                session_epoch: 2,
+                lease_epoch: 3,
+                client_sequence: 4,
+                geometry_epoch: 5,
+            },
+            bytes: b"typed".to_vec(),
+        });
+
+        let encoded = encode_message(FrameKind::Control, &message).unwrap();
+        let decoded: ControlMessage = decode_message(&decode_frame(&encoded).unwrap()).unwrap();
+        assert_eq!(decoded, message);
     }
 
     #[test]

@@ -929,7 +929,7 @@ impl HostedTerminalInner {
         let (update, sequence) = {
             let state = self.state.lock();
             let mut snapshots = self.snapshots.lock();
-            let update = snapshots.capture(&state, &context);
+            let update = snapshots.capture_damage(&state, &context);
             let sequence = snapshots
                 .latest_viewport()
                 .map_or(0, |viewport| viewport.sequence);

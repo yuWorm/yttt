@@ -97,7 +97,7 @@ impl Drop for ClientCoreInner {
 }
 
 struct ClientCommand {
-    request_id: u64,
+    request_id: Option<u64>,
     body: Request,
     reply: Option<oneshot::Sender<Result<Response, ClientCoreError>>>,
 }
@@ -139,7 +139,6 @@ impl PendingClientRequest {
 
 enum PendingRequest {
     User(oneshot::Sender<Result<Response, ClientCoreError>>),
-    TerminalInput,
     Checkpoint(TerminalSessionId),
     Catalog,
     AgentSnapshots,
@@ -322,7 +321,9 @@ impl ClientCore {
         if !matches!(self.state(), ConnectionState::Ready { .. }) {
             return Err(ClientCoreError::NotConnected);
         }
-        let request_id = self.inner.next_request_id.fetch_add(1, Ordering::Relaxed);
+        let request_id = reply
+            .as_ref()
+            .map(|_| self.inner.next_request_id.fetch_add(1, Ordering::Relaxed));
         self.inner
             .commands
             .try_send(ClientCommand {
@@ -565,23 +566,32 @@ async fn connected_session(
                 }) = command else {
                     break None;
                 };
-                let message = ControlMessage::Request(ClientRequest {
-                    request_id,
-                    actor_device_id: Some(context.identity.client_instance_id.to_string()),
-                    lease_epoch: None,
-                    body,
-                });
+                let one_way_input = reply.is_none() && matches!(&body, Request::TerminalInput(_));
+                let message = if one_way_input {
+                    let Request::TerminalInput(input) = body else {
+                        unreachable!("one-way input guard requires terminal input");
+                    };
+                    ControlMessage::TerminalInput(input)
+                } else {
+                    ControlMessage::Request(ClientRequest {
+                        request_id: request_id.expect("request commands must carry a request ID"),
+                        actor_device_id: Some(context.identity.client_instance_id.to_string()),
+                        lease_epoch: None,
+                        body,
+                    })
+                };
                 if let Err(error) = send_control(&mut writer, &message).await {
                     if let Some(reply) = reply {
                         let _ = reply.send(Err(ClientCoreError::Connection(error.to_string())));
                     }
                     break Some(error.to_string());
                 }
-                let pending_request = reply.map_or(
-                    PendingRequest::TerminalInput,
-                    PendingRequest::User,
-                );
-                pending.insert(request_id, pending_request);
+                if let Some(reply) = reply {
+                    pending.insert(
+                        request_id.expect("request commands must carry a request ID"),
+                        PendingRequest::User(reply),
+                    );
+                }
             }
             message = receive_control(&mut reader) => {
                 let message = match message {
@@ -661,8 +671,8 @@ async fn connected_session(
                             break Some("failed to request terminal checkpoint".to_string());
                         }
                     }
-                    ControlMessage::Request(_) => {
-                        break Some("Host sent a client request on the response stream".to_string());
+                    ControlMessage::Request(_) | ControlMessage::TerminalInput(_) => {
+                        break Some("Host sent a client message on the response stream".to_string());
                     }
                 }
             }
@@ -750,15 +760,6 @@ fn handle_response(
                 _ => {}
             }
             let _ = reply.send(result.map_err(ClientCoreError::Protocol));
-            Vec::new()
-        }
-        PendingRequest::TerminalInput => {
-            if let Err(error) = result {
-                eprintln!(
-                    "detached Host terminal input failed: {}",
-                    ClientCoreError::Protocol(error)
-                );
-            }
             Vec::new()
         }
         PendingRequest::Checkpoint(session_id) => {

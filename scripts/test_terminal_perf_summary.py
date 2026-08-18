@@ -50,6 +50,9 @@ class TerminalPerformanceSummaryTests(unittest.TestCase):
                             "read_queue_capacity": 8,
                             "read_queue_current": 1,
                             "final_sentinel_seen_at_unix_ns": 1_100_000_000,
+                            "semantic_update_queue_current": 1,
+                            "semantic_update_queue_high_water": 64,
+                            "semantic_update_queue_capacity": 64,
                             "final_sentinel_painted_at_unix_ns": 2_100_000_000,
                         },
                         "latencies": {
@@ -87,6 +90,8 @@ class TerminalPerformanceSummaryTests(unittest.TestCase):
             self.assertIn("terminal read queue saturated", failures)
             self.assertIn("terminal read queue ended with backlog", failures)
             self.assertIn("Host queue service ended with backlog", failures)
+            self.assertIn("Desktop semantic queue ended with backlog", failures)
+            self.assertIn("Desktop semantic queue saturated", failures)
             self.assertIn("Host queue terminal-writer saturated", failures)
             self.assertIn("final sentinel reached paint", failures)
             self.assertIn("paint cadence is below", failures)
@@ -157,6 +162,10 @@ class TerminalPerformanceSummaryTests(unittest.TestCase):
                                 "samples": 599,
                                 "p95_ms": 12.0,
                             },
+                            "gpui_input_handler_ms": {
+                                "samples": 599,
+                                "p95_ms": 0.05,
+                            },
                         },
                     },
                 },
@@ -168,6 +177,9 @@ class TerminalPerformanceSummaryTests(unittest.TestCase):
             self.assertIn("interactive input-to-PTY sample count is 599", failures)
             self.assertIn("interactive echo-to-paint sample count is 599", failures)
             self.assertIn("interactive input-to-paint sample count is 599", failures)
+            self.assertIn(
+                "interactive GPUI input-handler sample count is 599", failures
+            )
 
     def test_cross_backend_thresholds_reject_missing_runs_and_regressions(self) -> None:
         def aggregate(

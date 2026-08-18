@@ -148,11 +148,11 @@ Client 为每个 request 分配单调 `request_id`。Host 原样回传该 ID。`
 
 这是 at-most-once Client 语义。调用方若在断线后重试有副作用操作，必须携带资源 ID、epoch/revision 或幂等键。
 
-`TerminalInput` 仍在同一 control stream 上分配 `request_id`、保持与 resize/scroll 的顺序并由
-Host 返回 response，但 Desktop 快速路径不再为每次按键创建 oneshot waiter 和 Tokio task。
-`ClientCore` 只在 pending map 中保留轻量 completion 类型；control writer 是有界单消费者，
-response completion 只消费确认/记录协议失败，不与 terminal data decode、mirror merge 或
-GPUI foreground executor 争用执行槽。队列 admission/backpressure 在写入时同步返回。
+`TerminalInput` 使用 resource protocol v3 的 one-way control message，不分配 `request_id`，
+也不产生逐按键 response；它仍与 resize/scroll 共用同一有序 control stream，因此 lease epoch
+和 `client_sequence` 的校验顺序不变。Desktop 写入有界 command queue 时同步得到
+admission/backpressure；Host 只在 mutation 失败时记录拒绝。需要同步验证错误的诊断调用仍可
+显式发送 request/response 形式的 `Request::TerminalInput`。
 
 ### 5.3 server event
 
@@ -165,13 +165,15 @@ Host event 具有：
 Client 必须按 epoch/sequence 处理，旧 epoch 或倒退事件不能覆盖新状态。终端自身另有 `session_epoch` 和 terminal `sequence`。
 
 终端 data channel 是例外：`ClientCore` 在独立 data worker 中把 snapshot/delta 原位合并到
-terminal mirror，只发布 `Arc<TerminalStreamUpdate>`；不得复制完整 `SemanticViewport`，
-也不得把同一 terminal frame 作为通用 `ClientEvent::Server` 重复广播。Desktop 对每个
-terminal 使用有界 update stream；viewport receiver 在 background executor 中原位应用
-delta，再通过终端已有的 bounded/coalescing redraw mailbox 唤醒 GPUI。prepaint 仅转换
-damage row，未变化 row 的 render generation、text shaping 与 line identity 保持不变。
-title/process-state 与 lease/exit 等控制事件在 Host runtime worker 中按 `session_id` 过滤后
-才进入 GPUI，避免 continuously-ready 的 viewport 或无关事件消费者占用前台 executor。
+terminal mirror，只发布不可变的 `Arc<TerminalStreamUpdate>`；不得复制完整
+`SemanticViewport`，也不得把同一 terminal frame 作为通用 `ClientEvent::Server` 重复广播。
+Desktop 的 background receiver 只把这些 `Arc` 放进 per-terminal mailbox 并请求一次
+coalesced redraw，绝不读取或锁住 GPUI render state。GPUI foreground 在下一次 mailbox drain
+中用一个短锁按顺序应用该绘制帧积累的全部 delta，更新独立的 input-mode/scroll cache，然后
+prepaint 只转换 damage row；未变化 row 的 render generation、text shaping 与 line identity
+保持不变。title/process-state 与 lease/exit 等控制事件在 Host runtime worker 中按
+`session_id` 过滤后才进入 GPUI，避免 continuously-ready 的 viewport 或无关事件消费者占用
+前台 executor。
 
 ## 6. 资源目录
 
@@ -284,7 +286,8 @@ PTY child 退出后：
 | Host terminal writer queue | 1024 commands |
 | Host terminal internal event queue | 256 events |
 | Host terminal subscriber channel | 64 events / subscriber |
-| Client command queue | 256 requests |
+| Client command queue | 256 commands |
+| Desktop semantic update mailbox | 64 updates / terminal |
 | Client event broadcast | 256 events |
 | request timeout | 10 s |
 | initial connect timeout | 10 s |
@@ -295,17 +298,26 @@ PTY child 退出后：
 - Git 与远程命令走结构化操作，不再透传自由 argv；`git -c` / `-C` / `--exec-path` 等注入在 Host 侧被拒绝。特权远程命令默认关闭。
 - `ClientRequest` 携带 `actor_device_id` 与可选 `lease_epoch`。本地 profile 在每个 mutating 入口检查 capability（当前恒真），并写审计条目；凭据挑战只发给 SSH 连接发起方。
 - semantic event lag 不能阻塞 Host parser；Client 发现 gap 后走 checkpoint。
-- 输入队列满时明确返回 backpressure，不静默丢输入。
-- 未完成请求、event receiver、terminal subscriber 都必须有确定上限。
+- terminal input command 在 writer queue 中按 64 KiB 上限合并相邻 `Bytes` slice，不复制
+  payload；输入队列满时明确返回 backpressure，不静默丢输入。
+- 未完成请求、event receiver、terminal subscriber 和 semantic update mailbox 都必须有确定上限。
 
-主要性能成本仍是 Host 侧一次 VTE parse 和 Client 侧可见行 shaping/paint。与进程内路径相比，本地 IPC 增加 serialization 和一次镜像应用，但避免双重 parse。空闲 terminal 不做轮询渲染；只有事件、光标闪烁或用户交互唤醒 UI。
+Host semantic capture 读取 Alacritty 自上次 publish 以来的 damage rows；常规 echo 只扫描并
+编码实际变化的行。geometry、alternate-screen 或 history 边界变化才回退到完整 viewport。
+主要性能成本因此是 Host 一次 VTE parse、damage-row semantic encode 和 Client 可见行
+shaping/paint。空闲 terminal 不做轮询渲染；只有事件、光标闪烁或用户交互唤醒 UI。
+异步 mailbox consumer 更新 terminal entity 后，会把 owning window 的 refresh 延迟到当前
+draw 结束之后；这样在 frame 提交期间到达的最后一次输出不会被 GPUI 合并掉，prepaint
+仍负责清除 redraw gate 并按帧合并后续更新。
 
-`perf-metrics` interactive probe 以同一 input correlation 记录
-`GPUI input -> local writer admission`、`input -> matching echo parse`、
-`echo parse -> first paint` 和完整 `input -> first paint`；Host diagnostics 另记
-`Host request observed -> PTY write complete`。同机三轮以上比较以完整 input-to-paint p95
-中位数为验收值，Host 不得超过 Direct 的 `2×`，不能用 request admission 或
-echo-to-paint 子区间替代端到端指标。
+`perf-metrics` interactive probe 通过 GPUI window dispatch 投递真实 key/text 事件，并以同一
+input correlation 记录 `GPUI input -> local writer admission`、
+`input -> matching echo parse`、`echo parse -> first paint` 和完整
+`input -> first paint`；Host diagnostics 另记 `Host input observed -> PTY write complete`。
+终端报告还记录真实 GPUI key/text callback 耗时、semantic update foreground queue age、
+render-state lock wait、queue high-water 和 coalesced update 数。
+同机三轮以上比较以完整 input-to-paint p95 中位数为验收值，Host 不得
+超过 Direct 的 `2×`，不能用 request admission 或 echo-to-paint 子区间替代端到端指标。
 
 资源预算不能只统计 Rust struct：每个 Host terminal 还包含 PTY、child、若干 worker stack、VTE grid/scrollback、最多 8 MiB replay 和 semantic snapshot；每个 attached Client 包含 mirror、可见 render cache 和一个 input writer worker。部署容量应以真实 shell/TUI workload 测量，不以 `size_of` 推算。
 

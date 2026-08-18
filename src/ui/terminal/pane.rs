@@ -830,7 +830,7 @@ impl TerminalPaneView {
         self.host_session_epoch = None;
         self.host_events_task = Some(event_task);
         #[cfg(feature = "perf-metrics")]
-        self.start_performance_probe(cx);
+        self.start_performance_probe(window.window_handle(), cx);
 
         let request_runtime = host_runtime.clone();
         let request_spec = spec;
@@ -1401,7 +1401,7 @@ impl TerminalPaneView {
     }
 
     #[cfg(feature = "perf-metrics")]
-    fn start_performance_probe(&mut self, cx: &mut Context<Self>) {
+    fn start_performance_probe(&mut self, window_handle: AnyWindowHandle, cx: &mut Context<Self>) {
         if self.performance_probe_started || !self.performance_metrics_enabled() {
             return;
         }
@@ -1417,7 +1417,12 @@ impl TerminalPaneView {
         let start_file =
             std::env::var_os("YTTT_TERMINAL_PERF_START_FILE").map(std::path::PathBuf::from);
         terminal.update(cx, |terminal, cx| {
-            terminal.start_performance_input_probe(Duration::from_millis(delay_ms), start_file, cx);
+            terminal.start_performance_input_probe(
+                window_handle,
+                Duration::from_millis(delay_ms),
+                start_file,
+                cx,
+            );
         });
         self.performance_probe_started = true;
     }
@@ -1440,7 +1445,7 @@ impl Render for TerminalPaneView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.window_handle = Some(window.window_handle());
         #[cfg(feature = "perf-metrics")]
-        self.start_performance_probe(cx);
+        self.start_performance_probe(window.window_handle(), cx);
         let ui_style = current_ui_style(cx);
         let body = if let Some(terminal) = &self.terminal {
             div().flex().flex_1().child(terminal.clone())

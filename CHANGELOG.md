@@ -72,11 +72,16 @@
 - Fixed Host terminal input feeling network-lagged by keeping raw terminal frames off generic
   GPUI event listeners and filtering low-rate terminal metadata/control updates on the Host runtime
   worker; the interactive Host benchmark now returns to Direct-mode frame cadence.
-- Fixed residual rapid-input latency in Host terminals by queueing input without a per-keystroke
-  response waiter, separating control and terminal-data workers, and carrying semantic updates as
-  shared deltas instead of repeatedly cloning a complete viewport. GPUI now applies only damaged
-  rows, coalesces redraw wakeups, and reuses unchanged render generations and text shaping across
-  scroll; the performance runner now enforces end-to-end input-to-first-paint p95 against Direct.
+- Fixed residual rapid-input latency in Host terminals by sending terminal input as an ordered
+  one-way resource-protocol v3 message, removing per-keystroke responses, and coalescing adjacent
+  writer commands without copying their byte payloads.
+- Host semantic capture now encodes Alacritty damage rows instead of rescanning every visible cell;
+  the background receiver only queues immutable updates, while GPUI applies one bounded batch per
+  redraw and serves key/text callbacks from foreground-owned mode state. Async mailbox delivery now
+  defers refresh of the owning window until any in-flight draw completes, preventing the final
+  terminal update from remaining behind a coalesced wakeup. Performance reports expose real input
+  callback time, semantic queue age, render-state lock wait, queue high-water, and coalesced update
+  counts in addition to end-to-end input-to-first-paint latency.
 - Fixed Host-owned Agent panes remaining `running` after completion or restart by resolving live
   snapshots through terminal placement, downgrading persisted snapshots until Host reconciliation,
   and clearing Agent state when the backing Host terminal exits or becomes lost.

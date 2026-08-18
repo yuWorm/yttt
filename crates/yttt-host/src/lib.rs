@@ -620,8 +620,29 @@ async fn serve_connection(
     loop {
         tokio::select! {
             message = receive_control(&mut stream) => {
-                let ControlMessage::Request(request) = message.map_err(|_| ())? else {
-                    return Err(());
+                let message = message.map_err(|_| ())?;
+                let request = match message {
+                    ControlMessage::Request(request) => request,
+                    ControlMessage::TerminalInput(input) => {
+                        let response = handle_request(
+                            ClientRequest {
+                                request_id: 0,
+                                actor_device_id: Some(client_id.to_string()),
+                                lease_epoch: None,
+                                body: Request::TerminalInput(input),
+                            },
+                            &context,
+                            &client_id,
+                            &mut subscriptions,
+                            host_sequence.fetch_add(1, Ordering::Relaxed),
+                        )
+                        .await;
+                        if let Err(error) = response.result {
+                            eprintln!("one-way terminal input rejected: {error:?}");
+                        }
+                        continue;
+                    }
+                    ControlMessage::Response(_) | ControlMessage::Event(_) => return Err(()),
                 };
                 let subscription = match &request.body {
                     Request::SpawnTerminal(spec) => Some((

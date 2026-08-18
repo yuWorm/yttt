@@ -94,6 +94,7 @@ pub const TERMINAL_SEARCH_KEY_CONTEXT: &str = "YtttTerminalSearch";
 pub const TERMINAL_HINT_KEY_CONTEXT: &str = "YtttTerminalHint";
 pub const TERMINAL_VI_KEY_CONTEXT: &str = "YtttTerminalVi";
 const MAX_SEARCH_HISTORY: usize = 100;
+pub(crate) const SEMANTIC_UPDATE_QUEUE_CAPACITY: usize = 64;
 
 /// Alacritty's default URL matcher used by terminal hint mode.
 pub const DEFAULT_TERMINAL_URL_REGEX: &str = r#"(ipfs:|ipns:|magnet:|mailto:|gemini://|gopher://|https://|http://|news:|file:|git://|ssh:|ftp://)[^\u{0000}-\u{001F}\u{007F}-\u{009F}<>"\s{-}\^⟨⟩`\\]+"#;
@@ -701,6 +702,74 @@ pub type IoErrorCallback = Box<dyn Fn(&mut Context<TerminalView>, PtyIoOperation
 ///
 /// `TerminalView` is not `Send` as it contains GPUI handles. The stdin writer
 /// is internally wrapped in `Arc<parking_lot::Mutex<>>` for safe concurrent access.
+#[derive(Clone, Copy, Default)]
+struct SemanticInputSnapshot {
+    available: bool,
+    mode_bits: u32,
+    history_size: u64,
+    rows: u64,
+    display_offset: u64,
+}
+
+impl SemanticInputSnapshot {
+    fn update(&mut self, viewport: &SemanticViewport) {
+        self.available = true;
+        self.mode_bits = viewport.modes.bits;
+        self.history_size = viewport.history_size;
+        self.rows = u64::from(viewport.geometry.rows);
+        self.display_offset = viewport.display_offset;
+    }
+}
+
+struct PendingSemanticUpdate {
+    update: Arc<TerminalStreamUpdate>,
+    received_at: Instant,
+}
+
+struct SemanticUpdateMailbox {
+    sender: flume::Sender<PendingSemanticUpdate>,
+    receiver: flume::Receiver<PendingSemanticUpdate>,
+}
+
+impl Default for SemanticUpdateMailbox {
+    fn default() -> Self {
+        let (sender, receiver) = flume::bounded(SEMANTIC_UPDATE_QUEUE_CAPACITY);
+        Self { sender, receiver }
+    }
+}
+
+impl SemanticUpdateMailbox {
+    async fn push(
+        &self,
+        update: Arc<TerminalStreamUpdate>,
+    ) -> Result<(usize, bool), flume::SendError<PendingSemanticUpdate>> {
+        let coalesced = !self.sender.is_empty();
+        self.sender
+            .send_async(PendingSemanticUpdate {
+                update,
+                received_at: Instant::now(),
+            })
+            .await?;
+        Ok((self.sender.len(), coalesced))
+    }
+
+    fn drain(&self) -> Vec<PendingSemanticUpdate> {
+        let batch_len = self.receiver.len();
+        self.receiver.try_iter().take(batch_len).collect()
+    }
+
+    fn len(&self) -> usize {
+        self.receiver.len()
+    }
+
+    fn clear_redraw_and_rearm(&self, event_mailbox: &TerminalEventMailbox) {
+        event_mailbox.clear_redraw();
+        if !self.receiver.is_empty() {
+            event_mailbox.request_redraw();
+        }
+    }
+}
+
 #[derive(Default)]
 struct SemanticViewportState {
     viewport: Option<SemanticViewport>,
@@ -715,7 +784,7 @@ impl SemanticViewportState {
         self.full_damage = true;
     }
 
-    fn apply(&mut self, update: &TerminalStreamUpdate) -> bool {
+    fn apply_ref(&mut self, update: &TerminalStreamUpdate) -> bool {
         let Some(viewport) = self.viewport.as_mut() else {
             if let TerminalStreamUpdate::Snapshot(viewport) = update {
                 self.replace(viewport.clone());
@@ -723,7 +792,12 @@ impl SemanticViewportState {
             }
             return false;
         };
-        match viewport.apply_stream_update_ref(update) {
+        let result = viewport.apply_stream_update_ref(update);
+        self.record_apply(result)
+    }
+
+    fn record_apply(&mut self, result: TerminalStreamApply) -> bool {
+        match result {
             TerminalStreamApply::Updated(TerminalStreamDamage::Full) => {
                 self.damaged_rows.clear();
                 self.full_damage = true;
@@ -764,8 +838,10 @@ pub struct TerminalView {
     renderer: TerminalRenderer,
     render_cache: Arc<parking_lot::Mutex<TerminalRenderCache>>,
     semantic_viewport: Arc<parking_lot::Mutex<SemanticViewportState>>,
+    semantic_updates: Arc<SemanticUpdateMailbox>,
+    semantic_input: SemanticInputSnapshot,
     semantic_scroll_callback: Option<Arc<dyn Fn(u64) + Send + Sync>>,
-    semantic_scroll_offset: Arc<parking_lot::Mutex<Option<u64>>>,
+    semantic_scroll_offset: Option<u64>,
     performance: TerminalPerformanceHandle,
 
     /// Focus handle for keyboard event handling
@@ -777,6 +853,8 @@ pub struct TerminalView {
     io: PtyIoHandle,
     /// Bounded terminal event mailbox.
     event_mailbox: Arc<TerminalEventMailbox>,
+    /// Window currently rendering this terminal; used to wake the concrete surface from async I/O.
+    window_handle: Option<AnyWindowHandle>,
     /// Signal-driven mailbox consumer; remains active while hidden.
     #[allow(dead_code)]
     _event_task: Task<()>,
@@ -1016,13 +1094,21 @@ impl TerminalView {
 
         let event_task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             while event_signal.recv().await.is_ok() {
-                if this
-                    .update(cx, |view: &mut Self, cx: &mut Context<Self>| {
+                let window_handle =
+                    match this.update(cx, |view: &mut Self, cx: &mut Context<Self>| {
                         view.process_events(cx);
-                    })
-                    .is_err()
-                {
-                    break;
+                        view.event_mailbox
+                            .redraw_pending()
+                            .then_some(view.window_handle)
+                            .flatten()
+                    }) {
+                        Ok(window_handle) => window_handle,
+                        Err(_) => break,
+                    };
+                if let Some(window_handle) = window_handle {
+                    let _ = window_handle.update(cx, |_root, window, cx| {
+                        window.defer(cx, |window, _cx| window.refresh());
+                    });
                 }
             }
         });
@@ -1032,14 +1118,17 @@ impl TerminalView {
             renderer,
             render_cache: Arc::new(parking_lot::Mutex::new(TerminalRenderCache::default())),
             semantic_viewport: Arc::new(parking_lot::Mutex::new(SemanticViewportState::default())),
+            semantic_updates: Arc::new(SemanticUpdateMailbox::default()),
+            semantic_input: SemanticInputSnapshot::default(),
             semantic_scroll_callback: None,
-            semantic_scroll_offset: Arc::new(parking_lot::Mutex::new(None)),
+            semantic_scroll_offset: None,
             performance,
 
             focus_handle,
             io_driver,
             io,
             event_mailbox,
+            window_handle: None,
             _event_task: event_task,
             _semantic_event_task: None,
             config,
@@ -1078,7 +1167,8 @@ impl TerminalView {
 
     pub fn set_semantic_viewport(&mut self, viewport: SemanticViewport, cx: &mut Context<Self>) {
         self.performance.record_semantic_viewport(&viewport);
-        *self.semantic_scroll_offset.lock() = Some(viewport.display_offset);
+        self.semantic_input.update(&viewport);
+        self.semantic_scroll_offset = Some(viewport.display_offset);
         self.semantic_viewport.lock().replace(viewport);
         self.render_generation.fetch_add(1, Ordering::AcqRel);
         cx.notify();
@@ -1089,35 +1179,17 @@ impl TerminalView {
         updates: flume::Receiver<Arc<TerminalStreamUpdate>>,
         cx: &mut Context<Self>,
     ) {
-        let semantic_viewport = self.semantic_viewport.clone();
-        let semantic_scroll_offset = self.semantic_scroll_offset.clone();
-        let render_generation = self.render_generation.clone();
+        let semantic_updates = self.semantic_updates.clone();
         let event_mailbox = self.event_mailbox.clone();
         let performance = self.performance.clone();
         self._semantic_event_task = Some(cx.background_spawn(async move {
-            while let Ok(first) = updates.recv_async().await {
-                let mut update = first;
-                let mut changed = false;
-                let mut state = semantic_viewport.lock();
-                loop {
-                    performance.record_semantic_update(update.as_ref());
-                    changed |= state.apply(update.as_ref());
-                    let Ok(next) = updates.try_recv() else {
-                        break;
-                    };
-                    update = next;
-                }
-                if changed {
-                    *semantic_scroll_offset.lock() = state
-                        .viewport
-                        .as_ref()
-                        .map(|viewport| viewport.display_offset);
-                }
-                drop(state);
-                if changed {
-                    render_generation.fetch_add(1, Ordering::AcqRel);
-                    event_mailbox.request_redraw();
-                }
+            while let Ok(update) = updates.recv_async().await {
+                performance.record_semantic_update(update.as_ref());
+                let Ok((depth, coalesced)) = semantic_updates.push(update).await else {
+                    break;
+                };
+                performance.record_semantic_update_queued(depth, coalesced);
+                event_mailbox.request_redraw();
             }
         }));
     }
@@ -1132,48 +1204,30 @@ impl TerminalView {
 
     fn mode(&self) -> TermMode {
         let local_mode = self.state.mode();
-        let Some(bits) = self
-            .semantic_viewport
-            .lock()
-            .viewport
-            .as_ref()
-            .map(|viewport| viewport.modes.bits)
-        else {
+        if !self.semantic_input.available {
             return local_mode;
-        };
-        TermMode::from_bits_truncate(bits) | (local_mode & TermMode::VI)
+        }
+        TermMode::from_bits_truncate(self.semantic_input.mode_bits) | (local_mode & TermMode::VI)
     }
 
     fn display_offset(&self) -> usize {
-        self.semantic_viewport
-            .lock()
-            .viewport
-            .as_ref()
-            .map(|viewport| viewport.display_offset.min(usize::MAX as u64) as usize)
-            .unwrap_or_else(|| self.state.display_offset())
+        if self.semantic_input.available {
+            self.semantic_input.display_offset.min(usize::MAX as u64) as usize
+        } else {
+            self.state.display_offset()
+        }
     }
 
     fn scroll_display(&mut self, scroll: Scroll) {
-        let semantic = self
-            .semantic_viewport
-            .lock()
-            .viewport
-            .as_ref()
-            .map(|viewport| {
-                (
-                    viewport.history_size,
-                    viewport.geometry.rows as u64,
-                    viewport.display_offset,
-                )
-            });
-        let Some((history_size, page_rows, viewport_offset)) = semantic else {
+        if !self.semantic_input.available {
             self.state.scroll_display(scroll);
             return;
-        };
+        }
+        let history_size = self.semantic_input.history_size;
+        let page_rows = self.semantic_input.rows;
         let current = self
             .semantic_scroll_offset
-            .lock()
-            .unwrap_or(viewport_offset);
+            .unwrap_or(self.semantic_input.display_offset);
         let target = match scroll {
             Scroll::Delta(lines) if lines >= 0 => {
                 current.saturating_add(lines as u64).min(history_size)
@@ -1184,7 +1238,7 @@ impl TerminalView {
             Scroll::Top => history_size,
             Scroll::Bottom => 0,
         };
-        *self.semantic_scroll_offset.lock() = Some(target);
+        self.semantic_scroll_offset = Some(target);
         if target != current
             && let Some(callback) = &self.semantic_scroll_callback
         {
@@ -2478,6 +2532,8 @@ impl TerminalView {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let performance = self.performance.clone();
+        let _input_handler_timer = performance.measure_input_handler();
         let Some(key_event) = TerminalKeyEvent::from_key_down(event) else {
             return;
         };
@@ -2870,7 +2926,37 @@ impl TerminalView {
         }
     }
 
+    fn process_semantic_updates(&mut self) -> bool {
+        let pending = self.semantic_updates.drain();
+        self.performance
+            .set_semantic_update_queue_depth(self.semantic_updates.len());
+        if pending.is_empty() {
+            return false;
+        }
+
+        let queue_age = pending
+            .first()
+            .map_or(Duration::ZERO, |update| update.received_at.elapsed());
+        let lock_started = Instant::now();
+        let mut state = self.semantic_viewport.lock();
+        self.performance
+            .record_semantic_update_applied(queue_age, lock_started.elapsed());
+        let mut changed = false;
+        for pending in pending {
+            changed |= state.apply_ref(pending.update.as_ref());
+        }
+        if changed {
+            if let Some(viewport) = state.viewport.as_ref() {
+                self.semantic_input.update(viewport);
+                self.semantic_scroll_offset = Some(viewport.display_offset);
+            }
+            self.render_generation.fetch_add(1, Ordering::AcqRel);
+        }
+        changed
+    }
+
     fn process_events(&mut self, cx: &mut Context<Self>) {
+        let semantic_changed = self.process_semantic_updates();
         let pending = self.event_mailbox.drain();
         for event in pending.events {
             match event {
@@ -3006,7 +3092,7 @@ impl TerminalView {
                 callback(cx);
             }
         }
-        if pending.redraw {
+        if pending.redraw || semantic_changed {
             cx.notify();
         }
     }
@@ -3127,6 +3213,7 @@ impl TerminalView {
     #[doc(hidden)]
     pub fn start_performance_input_probe(
         &mut self,
+        window_handle: AnyWindowHandle,
         delay: Duration,
         start_file: Option<std::path::PathBuf>,
         cx: &mut Context<Self>,
@@ -3155,15 +3242,15 @@ impl TerminalView {
             .map(Duration::from_millis)
             .unwrap_or_else(|| Duration::from_millis(50));
 
-        let io = self.io.clone();
         let performance = self.performance.clone();
-        let executor = cx.background_executor().clone();
-        cx.background_spawn(async move {
+        cx.spawn(async move |_this, cx| {
             while start_file.as_ref().is_some_and(|path| !path.is_file()) {
-                executor.timer(Duration::from_millis(25)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(25))
+                    .await;
             }
 
-            executor.timer(delay).await;
+            cx.background_executor().timer(delay).await;
             let mut emitted = 0;
             'samples: while emitted < sample_count {
                 for (text, uses_ime) in SAMPLES {
@@ -3172,15 +3259,26 @@ impl TerminalView {
                     }
                     if uses_ime {
                         performance.record_ime_preedit();
-                        executor.timer(preedit_interval).await;
+                        cx.background_executor().timer(preedit_interval).await;
                     }
 
-                    if let Err(error) = io.write_input(Bytes::copy_from_slice(text.as_bytes())) {
-                        eprintln!("terminal performance input enqueue failed: {error}");
+                    let text = text.to_string();
+                    let keystroke = Keystroke {
+                        modifiers: Modifiers::none(),
+                        key: text.clone(),
+                        key_char: Some(text),
+                    };
+                    let dispatched = window_handle
+                        .update(cx, |_root, window, cx| {
+                            window.dispatch_keystroke(keystroke, cx)
+                        })
+                        .unwrap_or(false);
+                    if !dispatched {
+                        eprintln!("terminal performance input event was not dispatched");
                         break 'samples;
                     }
                     emitted += 1;
-                    executor.timer(sample_interval).await;
+                    cx.background_executor().timer(sample_interval).await;
                 }
             }
         })
@@ -3363,6 +3461,8 @@ impl EntityInputHandler for TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let performance = self.performance.clone();
+        let _input_handler_timer = performance.measure_input_handler();
         if !self.platform_text_input_allowed() {
             let had_marked_text = self.ime_state.is_active();
             self.ime_state.clear_marked_text();
@@ -3467,6 +3567,7 @@ impl EntityInputHandler for TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.window_handle = Some(window.window_handle());
         let focused = self.focus_handle.is_focused(window);
         self.handle_focus_change(focused, cx);
         self.refresh_visible_search_matches();
@@ -3477,6 +3578,7 @@ impl Render for TerminalView {
         let render_cache = self.render_cache.clone();
         let semantic_viewport = self.semantic_viewport.clone();
         let event_mailbox = self.event_mailbox.clone();
+        let semantic_updates = self.semantic_updates.clone();
         let event_mailbox_for_paint = event_mailbox.clone();
 
         let performance_for_prepaint = self.performance.clone();
@@ -3619,7 +3721,7 @@ impl Render for TerminalView {
                         // Clear the generation gate before taking the snapshot. Any viewport or
                         // parser update racing with snapshot construction must schedule another
                         // frame rather than being mistaken for content already captured here.
-                        event_mailbox.clear_redraw();
+                        semantic_updates.clear_redraw_and_rearm(&event_mailbox);
                         let lock_started = Instant::now();
                         let mut semantic_state = semantic_viewport.lock();
                         let (snapshot, parser_generation) = if semantic_state.viewport.is_some() {
@@ -3843,11 +3945,11 @@ impl Render for TerminalView {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_TERMINAL_URL_REGEX, TerminalConfig, TerminalCursorShape, TerminalHintAction,
-        TerminalHintCandidate, TerminalImeState, TerminalOsc52Policy, TerminalView,
-        tab_key_down_event,
+        DEFAULT_TERMINAL_URL_REGEX, PendingSemanticUpdate, SemanticUpdateMailbox, TerminalConfig,
+        TerminalCursorShape, TerminalHintAction, TerminalHintCandidate, TerminalImeState,
+        TerminalOsc52Policy, TerminalView, tab_key_down_event,
     };
-    use crate::event::{MAX_OSC52_BYTES, MAX_TITLE_BYTES, TerminalEvent};
+    use crate::event::{MAX_OSC52_BYTES, MAX_TITLE_BYTES, TerminalEvent, TerminalEventMailbox};
     use crate::test_support::{ReadStep, RecordingWriter, ScriptedReader};
     use alacritty_terminal::grid::Scroll;
     use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
@@ -4042,6 +4144,68 @@ mod tests {
         });
     }
 
+    #[test]
+    fn semantic_mailbox_rearms_redraw_when_an_update_remains_after_clear() {
+        let semantic_updates = SemanticUpdateMailbox::default();
+        let (event_mailbox, redraw_signals) = TerminalEventMailbox::new();
+        event_mailbox.request_redraw();
+        redraw_signals
+            .try_recv()
+            .expect("initial redraw signal should be queued");
+        semantic_updates
+            .sender
+            .try_send(PendingSemanticUpdate {
+                update: Arc::new(TerminalStreamUpdate::Snapshot(semantic_viewport(2))),
+                received_at: Instant::now(),
+            })
+            .unwrap();
+
+        semantic_updates.clear_redraw_and_rearm(&event_mailbox);
+
+        redraw_signals
+            .try_recv()
+            .expect("queued semantic update must re-arm the redraw signal");
+    }
+
+    #[gpui::test]
+    fn semantic_render_lock_does_not_block_gpui_input_callback(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let writer = RecordingWriter::default();
+        let recorded = writer.clone();
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new_semantic(writer, TerminalConfig::default(), cx)
+        });
+        terminal.update_in(cx, |terminal, window, cx| {
+            terminal.set_semantic_viewport(semantic_viewport(1), cx);
+            terminal.focus_handle().focus(window, cx);
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("a");
+        wait_for_bytes(&recorded, b"a");
+
+        let render_state = cx.read(|cx| terminal.read(cx).semantic_viewport.clone());
+        let recorded_while_locked = recorded.clone();
+        let (locked_tx, locked_rx) = std::sync::mpsc::sync_channel(0);
+        let holder = std::thread::spawn(move || {
+            let _guard = render_state.lock();
+            locked_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+            let input_enqueued_without_render_state = recorded_while_locked.bytes() == b"ab";
+            std::thread::sleep(Duration::from_millis(200));
+            input_enqueued_without_render_state
+        });
+        locked_rx.recv().unwrap();
+
+        terminal.update_in(cx, |terminal, window, cx| {
+            terminal.replace_text_in_range(None, "b", window, cx);
+        });
+        wait_for_bytes(&recorded, b"ab");
+        assert!(
+            holder.join().unwrap(),
+            "GPUI text input callback did not reach the writer while semantic render state was locked"
+        );
+    }
+
     #[gpui::test]
     fn semantic_scroll_reuses_unchanged_line_text_shaping(cx: &mut TestAppContext) {
         let (terminal, cx) = cx.add_window_view(|_, cx| {
@@ -4096,7 +4260,7 @@ mod tests {
                     palette: None,
                     process_state: None,
                 }));
-                terminal.semantic_viewport.lock().apply(&update);
+                terminal.semantic_viewport.lock().apply_ref(update.as_ref());
                 terminal.render_generation.fetch_add(1, Ordering::AcqRel);
                 cx.notify();
             }

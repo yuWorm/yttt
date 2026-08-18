@@ -490,6 +490,37 @@ def analyze_run(root: Path, run_dir: Path) -> dict[str, Any]:
         failures.append(f"terminal read queue ended with backlog {queue_current!r}")
 
     if backend == "host":
+        semantic_queue_current = nested(
+            metrics, "counters", "semantic_update_queue_current"
+        )
+        semantic_queue_high_water = nested(
+            metrics, "counters", "semantic_update_queue_high_water"
+        )
+        semantic_queue_capacity = nested(
+            metrics, "counters", "semantic_update_queue_capacity"
+        )
+        if not all(
+            isinstance(value, int)
+            for value in (
+                semantic_queue_current,
+                semantic_queue_high_water,
+                semantic_queue_capacity,
+            )
+        ):
+            failures.append("Desktop semantic queue is missing depth metrics")
+        else:
+            if semantic_queue_current != 0:
+                failures.append(
+                    "Desktop semantic queue ended with backlog "
+                    f"{semantic_queue_current}"
+                )
+            if semantic_queue_high_water >= semantic_queue_capacity:
+                failures.append(
+                    "Desktop semantic queue saturated "
+                    f"({semantic_queue_high_water}/{semantic_queue_capacity})"
+                )
+
+    if backend == "host":
         if host is None:
             failures.append("missing host-diagnostics.jsonl")
         queues = all_queues(host)
@@ -587,6 +618,15 @@ def analyze_run(root: Path, run_dir: Path) -> dict[str, Any]:
     input_paint = latency_ms(
         nested(metrics, "latencies", "input_to_first_paint_ms"), "p95_ms"
     )
+    gpui_input_handler = latency_ms(
+        nested(metrics, "latencies", "gpui_input_handler_ms"), "p95_ms"
+    )
+    semantic_queue_age = latency_ms(
+        nested(metrics, "latencies", "semantic_update_queue_age_ms"), "p95_ms"
+    )
+    semantic_lock_wait = latency_ms(
+        nested(metrics, "latencies", "semantic_apply_lock_wait_ms"), "p95_ms"
+    )
     if scenario == "interactive":
         input_samples = (
             nested(terminal_host, "input_to_pty", "samples")
@@ -599,6 +639,9 @@ def analyze_run(root: Path, run_dir: Path) -> dict[str, Any]:
         input_paint_samples = nested(
             metrics, "latencies", "input_to_first_paint_ms", "samples"
         )
+        input_handler_samples = nested(
+            metrics, "latencies", "gpui_input_handler_ms", "samples"
+        )
         if not isinstance(input_samples, int) or input_samples < 600:
             failures.append(f"interactive input-to-PTY sample count is {input_samples!r} (<600)")
         if not isinstance(echo_samples, int) or echo_samples < 600:
@@ -607,6 +650,28 @@ def analyze_run(root: Path, run_dir: Path) -> dict[str, Any]:
             failures.append(
                 f"interactive input-to-paint sample count is {input_paint_samples!r} (<600)"
             )
+        if not isinstance(input_handler_samples, int) or input_handler_samples < 600:
+            failures.append(
+                "interactive GPUI input-handler sample count is "
+                f"{input_handler_samples!r} (<600)"
+            )
+        if backend == "host":
+            semantic_queue_samples = nested(
+                metrics, "latencies", "semantic_update_queue_age_ms", "samples"
+            )
+            semantic_lock_samples = nested(
+                metrics, "latencies", "semantic_apply_lock_wait_ms", "samples"
+            )
+            if not isinstance(semantic_queue_samples, int) or semantic_queue_samples < 1:
+                failures.append(
+                    "interactive semantic queue-age sample count is "
+                    f"{semantic_queue_samples!r} (<1)"
+                )
+            if not isinstance(semantic_lock_samples, int) or semantic_lock_samples < 1:
+                failures.append(
+                    "interactive semantic lock-wait sample count is "
+                    f"{semantic_lock_samples!r} (<1)"
+                )
         if input_to_pty is None:
             failures.append("missing input-to-PTY p95")
         elif input_to_pty > 0.5:
@@ -637,6 +702,9 @@ def analyze_run(root: Path, run_dir: Path) -> dict[str, Any]:
             "input_to_pty_p95_ms": input_to_pty,
             "echo_to_paint_p95_ms": echo_paint,
             "input_to_paint_p95_ms": input_paint,
+            "gpui_input_handler_p95_ms": gpui_input_handler,
+            "semantic_update_queue_age_p95_ms": semantic_queue_age,
+            "semantic_apply_lock_wait_p95_ms": semantic_lock_wait,
             "final_sentinel_to_paint_ms": sentinel_ms,
         },
         "warnings": warnings,
@@ -668,6 +736,9 @@ def aggregate_runs(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "input_to_pty_p95_ms",
             "echo_to_paint_p95_ms",
             "input_to_paint_p95_ms",
+            "gpui_input_handler_p95_ms",
+            "semantic_update_queue_age_p95_ms",
+            "semantic_apply_lock_wait_p95_ms",
             "final_sentinel_to_paint_ms",
         )
         aggregates.append(
@@ -932,7 +1003,7 @@ def main() -> int:
         )
 
     summary = {
-        "schema_version": 2,
+        "schema_version": 3,
         "result_root": str(root),
         "valid": not failures,
         "runs": runs,

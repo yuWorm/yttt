@@ -201,8 +201,10 @@ fn main() -> Result<()> {
                         .ok()
                         .and_then(|value| value.parse::<u64>().ok())
                     {
+                        let window_handle = window.window_handle();
                         terminal.update(cx, |terminal, cx| {
                             terminal.start_performance_input_probe(
+                                window_handle,
                                 std::time::Duration::from_millis(delay_ms),
                                 performance_start_file,
                                 cx,

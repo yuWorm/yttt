@@ -247,7 +247,84 @@ impl SemanticViewport {
         &mut self,
         update: &TerminalStreamUpdate,
     ) -> TerminalStreamApply {
-        self.apply_stream_update(update.clone())
+        match update {
+            TerminalStreamUpdate::Snapshot(viewport) => {
+                if viewport.session_epoch < self.session_epoch
+                    || (viewport.session_epoch == self.session_epoch
+                        && viewport.sequence < self.sequence)
+                {
+                    return TerminalStreamApply::Ignored;
+                }
+                self.clone_from(viewport);
+                TerminalStreamApply::Updated(TerminalStreamDamage::Full)
+            }
+            TerminalStreamUpdate::Delta(delta) => self.apply_delta_ref(delta),
+            TerminalStreamUpdate::RawTail { .. } => TerminalStreamApply::Ignored,
+            TerminalStreamUpdate::ResyncRequired { .. } => TerminalStreamApply::SequenceGap,
+        }
+    }
+
+    fn apply_delta_ref(&mut self, delta: &SemanticDelta) -> TerminalStreamApply {
+        if delta.sequence <= self.sequence {
+            return TerminalStreamApply::Ignored;
+        }
+        if delta.session_id != self.session_id
+            || delta.session_epoch != self.session_epoch
+            || delta.base_sequence != self.sequence
+        {
+            return TerminalStreamApply::SequenceGap;
+        }
+
+        let full_damage = delta.geometry_epoch != self.geometry_epoch
+            || delta.scrollback_epoch != self.scrollback_epoch
+            || delta.display_offset != self.display_offset
+            || delta.palette.is_some();
+        let previous_cursor = self.cursor;
+        let mut damaged_rows = delta
+            .changed_rows
+            .iter()
+            .map(|row| row.viewport_row)
+            .collect::<Vec<_>>();
+        for row in &delta.changed_rows {
+            if let Some(current) = self
+                .rows
+                .iter_mut()
+                .find(|current| current.viewport_row == row.viewport_row)
+            {
+                current.clone_from(row);
+            } else {
+                self.rows.push(row.clone());
+            }
+        }
+        self.rows.sort_by_key(|row| row.viewport_row);
+        self.sequence = delta.sequence;
+        self.geometry_epoch = delta.geometry_epoch;
+        self.scrollback_epoch = delta.scrollback_epoch;
+        self.history_size = delta.history_size;
+        self.display_offset = delta.display_offset;
+        if let Some(cursor) = delta.cursor {
+            self.cursor = cursor;
+        }
+        if let Some(modes) = &delta.modes {
+            self.modes.clone_from(modes);
+        }
+        if let Some(palette) = &delta.palette {
+            self.palette.clone_from(palette);
+        }
+        if let Some(process_state) = delta.process_state {
+            self.process_state = process_state;
+        }
+
+        if full_damage {
+            return TerminalStreamApply::Updated(TerminalStreamDamage::Full);
+        }
+        if self.cursor != previous_cursor {
+            damaged_rows.push(previous_cursor.row);
+            damaged_rows.push(self.cursor.row);
+        }
+        damaged_rows.sort_unstable();
+        damaged_rows.dedup();
+        TerminalStreamApply::Updated(TerminalStreamDamage::Rows(damaged_rows))
     }
 
     fn apply_delta(&mut self, delta: SemanticDelta) -> TerminalStreamApply {

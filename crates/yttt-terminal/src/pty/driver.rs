@@ -5,6 +5,7 @@ use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
 use bytes::Bytes;
 use parking_lot::{Condvar, Mutex, RwLock};
+use smallvec::SmallVec;
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::sync::Arc;
@@ -49,8 +50,37 @@ pub type ResizeCallback = Arc<dyn Fn(u16, u16) -> Result<(), String> + Send + Sy
 
 #[derive(Debug)]
 pub(crate) struct QueuedInput {
-    bytes: Bytes,
-    performance_sample: Option<InputPerformanceSample>,
+    chunks: SmallVec<[Bytes; 8]>,
+    len: usize,
+    user_commands: usize,
+    performance_samples: SmallVec<[(usize, InputPerformanceSample); 8]>,
+}
+
+impl QueuedInput {
+    fn new(bytes: Bytes, performance_sample: Option<InputPerformanceSample>) -> Self {
+        let len = bytes.len();
+        let mut chunks = SmallVec::new();
+        chunks.push(bytes);
+        let mut performance_samples = SmallVec::new();
+        if let Some(sample) = performance_sample {
+            performance_samples.push((len, sample));
+        }
+        Self {
+            chunks,
+            len,
+            user_commands: 1,
+            performance_samples,
+        }
+    }
+
+    fn append(&mut self, bytes: Bytes, performance_sample: Option<InputPerformanceSample>) {
+        self.len += bytes.len();
+        self.user_commands += 1;
+        self.chunks.push(bytes);
+        if let Some(sample) = performance_sample {
+            self.performance_samples.push((self.len, sample));
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -200,31 +230,45 @@ impl PtyCommandQueue {
         if bytes.is_empty() {
             return Ok(());
         }
-        let chunks = bytes.len().div_ceil(MAX_WRITE_CHUNK_BYTES);
         let mut state = self.state.lock();
         if state.closed {
             return Err("PTY input queue is closed".to_string());
         }
+        let merge_capacity = match state.commands.back() {
+            Some(PtyCommand::WriteInput(input)) => MAX_WRITE_CHUNK_BYTES - input.len,
+            _ => 0,
+        };
+        let merged_bytes = bytes.len().min(merge_capacity);
+        let new_commands = (bytes.len() - merged_bytes).div_ceil(MAX_WRITE_CHUNK_BYTES);
+        let added_user_commands = new_commands + usize::from(merged_bytes > 0);
         if state.input_bytes.saturating_add(bytes.len()) > MAX_QUEUED_INPUT_BYTES
-            || state.user_commands.saturating_add(chunks) > MAX_USER_COMMANDS
-            || state.commands.len().saturating_add(chunks) > MAX_COMMANDS
+            || state.user_commands.saturating_add(added_user_commands) > MAX_USER_COMMANDS
+            || state.commands.len().saturating_add(new_commands) > MAX_COMMANDS
         {
             return Err("PTY input queue capacity exceeded".to_string());
         }
 
-        for offset in (0..bytes.len()).step_by(MAX_WRITE_CHUNK_BYTES) {
+        if merged_bytes > 0
+            && let Some(PtyCommand::WriteInput(input)) = state.commands.back_mut()
+        {
+            input.append(
+                bytes.slice(..merged_bytes),
+                (merged_bytes == bytes.len())
+                    .then_some(performance_sample)
+                    .flatten(),
+            );
+        }
+        for offset in (merged_bytes..bytes.len()).step_by(MAX_WRITE_CHUNK_BYTES) {
             let end = (offset + MAX_WRITE_CHUNK_BYTES).min(bytes.len());
             state
                 .commands
-                .push_back(PtyCommand::WriteInput(QueuedInput {
-                    bytes: bytes.slice(offset..end),
-                    performance_sample: (end == bytes.len())
-                        .then_some(performance_sample)
-                        .flatten(),
-                }));
+                .push_back(PtyCommand::WriteInput(QueuedInput::new(
+                    bytes.slice(offset..end),
+                    (end == bytes.len()).then_some(performance_sample).flatten(),
+                )));
         }
         state.input_bytes += bytes.len();
-        state.user_commands += chunks;
+        state.user_commands += added_user_commands;
         self.diagnostics
             .record_input_queue(state.input_bytes, state.commands.len());
 
@@ -295,20 +339,36 @@ impl PtyCommandQueue {
         let mut state = self.state.lock();
         loop {
             if let Some(command) = state.commands.pop_front() {
-                match &command {
-                    PtyCommand::WriteInput(input) => {
-                        state.input_bytes = state.input_bytes.saturating_sub(input.bytes.len());
-                        state.user_commands = state.user_commands.saturating_sub(1);
-                    }
-
-                    PtyCommand::WriteReply(bytes) => {
-                        state.reply_bytes = state.reply_bytes.saturating_sub(bytes.len());
-                    }
-                    PtyCommand::Resize { .. } | PtyCommand::Shutdown => {}
-                }
+                Self::record_popped_command(&mut state, &command);
                 return command;
             }
             self.ready.wait(&mut state);
+        }
+    }
+
+    fn try_pop_reply(&self) -> Option<Bytes> {
+        let mut state = self.state.lock();
+        let index = state
+            .commands
+            .iter()
+            .position(|command| matches!(command, PtyCommand::WriteReply(_)))?;
+        let Some(PtyCommand::WriteReply(bytes)) = state.commands.remove(index) else {
+            unreachable!("reply command index must contain a terminal reply");
+        };
+        state.reply_bytes = state.reply_bytes.saturating_sub(bytes.len());
+        Some(bytes)
+    }
+
+    fn record_popped_command(state: &mut CommandQueueState, command: &PtyCommand) {
+        match command {
+            PtyCommand::WriteInput(input) => {
+                state.input_bytes = state.input_bytes.saturating_sub(input.len);
+                state.user_commands = state.user_commands.saturating_sub(input.user_commands);
+            }
+            PtyCommand::WriteReply(bytes) => {
+                state.reply_bytes = state.reply_bytes.saturating_sub(bytes.len());
+            }
+            PtyCommand::Resize { .. } | PtyCommand::Shutdown => {}
         }
     }
 
@@ -693,11 +753,28 @@ fn spawn_writer<W: Write + Send + 'static>(
             loop {
                 match queue.pop() {
                     PtyCommand::WriteInput(input) => {
-                        if !write_pty_bytes(&mut writer, &input.bytes, &queue, &mailbox) {
-                            return;
-                        }
-                        if let Some(sample) = input.performance_sample {
-                            performance.record_input_written(sample, Instant::now());
+                        let mut completed_bytes = 0;
+                        let mut samples = input.performance_samples.into_iter().peekable();
+                        let chunk_count = input.chunks.len();
+                        for (chunk_index, bytes) in input.chunks.iter().enumerate() {
+                            if !write_pty_bytes(&mut writer, bytes, &queue, &mailbox) {
+                                return;
+                            }
+                            completed_bytes += bytes.len();
+                            while samples
+                                .peek()
+                                .is_some_and(|(sample_end, _)| *sample_end <= completed_bytes)
+                            {
+                                let (_, sample) = samples.next().expect("peeked input sample");
+                                performance.record_input_written(sample, Instant::now());
+                            }
+                            if chunk_index + 1 < chunk_count {
+                                while let Some(reply) = queue.try_pop_reply() {
+                                    if !write_pty_bytes(&mut writer, &reply, &queue, &mailbox) {
+                                        return;
+                                    }
+                                }
+                            }
                         }
                     }
                     PtyCommand::WriteReply(bytes) => {
@@ -799,12 +876,47 @@ mod tests {
         Arc::new(PtyCommandQueue::new(Arc::new(PtyDiagnostics::default())))
     }
 
+    struct ReplyInjectingWriter {
+        queue: Arc<PtyCommandQueue>,
+        events: Arc<Mutex<Vec<Vec<u8>>>>,
+        injected: bool,
+    }
+
+    impl Write for ReplyInjectingWriter {
+        fn write(&mut self, input: &[u8]) -> io::Result<usize> {
+            self.events.lock().push(input.to_vec());
+            if !self.injected {
+                self.injected = true;
+                self.queue
+                    .enqueue_reply(Bytes::from_static(b"R"))
+                    .expect("terminal reply should fit");
+            }
+            Ok(input.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn pty_driver_bounds_input_queue() {
         let queue = queue();
         let oversized = Bytes::from(vec![0; MAX_QUEUED_INPUT_BYTES + 1]);
         assert!(queue.enqueue_input(oversized).is_err());
         assert!(queue.drain_for_test().is_empty());
+    }
+
+    #[test]
+    fn pty_driver_bounds_coalesced_input_commands() {
+        let queue = queue();
+        for _ in 0..MAX_USER_COMMANDS {
+            queue.enqueue_input(Bytes::from_static(b"x")).unwrap();
+        }
+        assert!(
+            queue.enqueue_input(Bytes::from_static(b"x")).is_err(),
+            "coalescing must not bypass the logical input-command limit"
+        );
     }
 
     #[test]
@@ -818,8 +930,34 @@ mod tests {
         assert!(
             matches!(&commands[1], PtyCommand::WriteReply(bytes) if bytes.as_ref() == b"reply")
         );
-        assert!(
-            matches!(&commands[2], PtyCommand::WriteInput(input) if input.bytes.as_ref() == b"input")
+        assert!(matches!(
+            &commands[2],
+            PtyCommand::WriteInput(input)
+                if input.chunks.len() == 1 && input.chunks[0].as_ref() == b"input"
+        ));
+    }
+
+    #[test]
+    fn pty_driver_coalesces_adjacent_input_without_copying_bytes() {
+        let queue = queue();
+        queue.enqueue_input(Bytes::from_static(b"a")).unwrap();
+        queue.enqueue_input(Bytes::from_static(b"b")).unwrap();
+        queue.enqueue_input(Bytes::from_static(b"c")).unwrap();
+
+        let commands = queue.drain_for_test();
+        assert_eq!(commands.len(), 1);
+        let PtyCommand::WriteInput(input) = &commands[0] else {
+            panic!("expected coalesced input command");
+        };
+        assert_eq!(input.len, 3);
+        assert_eq!(input.user_commands, 3);
+        assert_eq!(
+            input
+                .chunks
+                .iter()
+                .flat_map(|chunk| chunk.iter().copied())
+                .collect::<Vec<_>>(),
+            b"abc"
         );
     }
 
@@ -869,6 +1007,117 @@ mod tests {
         queue.shutdown();
         thread.join().unwrap();
         assert_eq!(recorded.bytes(), b"abcdef");
+    }
+
+    #[test]
+    fn pty_driver_replies_preempt_retained_input_chunks() {
+        let queue = queue();
+        queue.enqueue_input(Bytes::from_static(b"a")).unwrap();
+        queue.enqueue_input(Bytes::from_static(b"b")).unwrap();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let writer = ReplyInjectingWriter {
+            queue: queue.clone(),
+            events: events.clone(),
+            injected: false,
+        };
+        let thread = spawn_writer(
+            writer,
+            queue.clone(),
+            Arc::new(RwLock::new(None)),
+            TerminalEventMailbox::new().0,
+            TerminalPerformanceHandle::new(),
+        );
+        let expected = vec![b"a".to_vec(), b"R".to_vec(), b"b".to_vec()];
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while events.lock().as_slice() != expected.as_slice() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        queue.shutdown();
+        thread.join().unwrap();
+        assert_eq!(*events.lock(), expected);
+    }
+
+    #[test]
+    fn pty_driver_retained_input_preemption_keeps_later_resize_order() {
+        let queue = queue();
+        queue.enqueue_input(Bytes::from_static(b"a")).unwrap();
+        queue.enqueue_input(Bytes::from_static(b"b")).unwrap();
+        queue.enqueue_resize(80, 24).unwrap();
+        queue.enqueue_input(Bytes::from_static(b"c")).unwrap();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let writer = ReplyInjectingWriter {
+            queue: queue.clone(),
+            events: events.clone(),
+            injected: false,
+        };
+        let resize_events = events.clone();
+        let resize_callback: ResizeCallback = Arc::new(move |_, _| {
+            resize_events.lock().push(b"<resize>".to_vec());
+            Ok(())
+        });
+        let thread = spawn_writer(
+            writer,
+            queue.clone(),
+            Arc::new(RwLock::new(Some(resize_callback))),
+            TerminalEventMailbox::new().0,
+            TerminalPerformanceHandle::new(),
+        );
+        let expected = vec![
+            b"a".to_vec(),
+            b"R".to_vec(),
+            b"b".to_vec(),
+            b"<resize>".to_vec(),
+            b"c".to_vec(),
+        ];
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while events.lock().as_slice() != expected.as_slice() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        queue.shutdown();
+        thread.join().unwrap();
+        assert_eq!(*events.lock(), expected);
+    }
+
+    #[test]
+    fn pty_driver_does_not_preempt_resize_after_final_input_chunk() {
+        let queue = queue();
+        queue.enqueue_input(Bytes::from_static(b"a")).unwrap();
+        queue.enqueue_resize(80, 24).unwrap();
+        queue.enqueue_input(Bytes::from_static(b"c")).unwrap();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let writer = ReplyInjectingWriter {
+            queue: queue.clone(),
+            events: events.clone(),
+            injected: false,
+        };
+        let resize_events = events.clone();
+        let resize_callback: ResizeCallback = Arc::new(move |_, _| {
+            resize_events.lock().push(b"<resize>".to_vec());
+            Ok(())
+        });
+        let thread = spawn_writer(
+            writer,
+            queue.clone(),
+            Arc::new(RwLock::new(Some(resize_callback))),
+            TerminalEventMailbox::new().0,
+            TerminalPerformanceHandle::new(),
+        );
+        let expected = vec![
+            b"a".to_vec(),
+            b"<resize>".to_vec(),
+            b"R".to_vec(),
+            b"c".to_vec(),
+        ];
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while events.lock().as_slice() != expected.as_slice() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        queue.shutdown();
+        thread.join().unwrap();
+        assert_eq!(*events.lock(), expected);
     }
 
     #[test]

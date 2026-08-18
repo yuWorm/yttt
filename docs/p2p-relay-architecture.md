@@ -1397,6 +1397,10 @@ yttt --profile dev-a --no-spawn-host
 - 本地输入到 PTY p95 不超过 0.5 ms。
 - 同机 interactive workload 的 Host input-to-paint p95 中位数不超过 Direct 的 `2×`。
 - 现有高负载场景保持约 60 FPS。
+- 真实 GPUI key/text callback 不读取 semantic render mutex；Host update queue age、apply lock wait
+  和 queue high-water 必须进入 `perf-metrics` 报告。
+- 常规 Host terminal echo 的 semantic capture 只编码 Alacritty damage rows；完整 viewport
+  capture 仅用于初始、geometry、alternate-screen 和 history 边界变化。
 - 本地 UI 不依赖公网和 Relay。
 
 ### 18.2 终端多端

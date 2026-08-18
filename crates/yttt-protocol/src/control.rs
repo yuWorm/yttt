@@ -93,6 +93,7 @@ pub enum ControlMessage {
     Request(ClientRequest),
     Response(HostResponse),
     Event(HostEvent),
+    TerminalInput(TerminalInput),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -61,6 +61,32 @@ fn semantic_snapshots_use_stable_line_ids_and_bounded_row_deltas() {
 }
 
 #[test]
+fn damage_capture_emits_only_rows_touched_since_the_previous_frame() {
+    let events = EventCollector::default();
+    let mut terminal = TerminalState::new(80, 24, events);
+    let mut snapshots = SemanticSnapshotter::new(TerminalSessionId::new("terminal-damage"), 1);
+    let context = SemanticCaptureContext::running(80, 24, 1);
+
+    let first = match snapshots.capture_damage(&terminal, &context) {
+        Snapshot(snapshot) => snapshot,
+        update => panic!("expected initial snapshot, got {update:?}"),
+    };
+    terminal.process_bytes(b"x");
+    let delta = match snapshots.capture_damage(&terminal, &context) {
+        Delta(delta) => delta,
+        update => panic!("expected damage delta, got {update:?}"),
+    };
+
+    assert_eq!(delta.base_sequence, first.sequence);
+    assert_eq!(delta.changed_rows.len(), 1);
+    assert!(row_text(&delta.changed_rows[0]).starts_with('x'));
+    assert_eq!(
+        snapshots.latest_viewport().unwrap().rows[0],
+        delta.changed_rows[0]
+    );
+}
+
+#[test]
 fn geometry_and_alternate_screen_changes_force_resynchronizing_snapshots() {
     let events = EventCollector::default();
     let mut terminal = TerminalState::new(12, 3, events);

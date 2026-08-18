@@ -14,6 +14,6 @@
 ## 当前版本
 
 - 帧头：`FRAME_FORMAT_VERSION = 1`
-- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 2`
+- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 3`（新增 ordered one-way `TerminalInput`）
 - lifecycle：`LIFECYCLE_PROTOCOL_VERSION = 2`
 - desktop-shell：`DESKTOP_SHELL_PROTOCOL_VERSION = 2`
