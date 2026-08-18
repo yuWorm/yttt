@@ -1012,17 +1012,13 @@ async fn host_roundtrip_preserves_input_resize_scroll_environment_and_title() {
     .await
     .expect("environment and title mirror timeout");
 
-    assert_eq!(
-        client
-            .request(Request::TerminalInput(TerminalInput {
-                session_id: session_id.clone(),
-                context: mutation_context(&client, session_epoch, lease.lease_epoch, 1, 1),
-                bytes: b"roundtrip\r".to_vec(),
-            }))
-            .await
-            .unwrap(),
-        Response::TerminalInputAccepted { client_sequence: 1 }
-    );
+    client
+        .send_terminal_input(TerminalInput {
+            session_id: session_id.clone(),
+            context: mutation_context(&client, session_epoch, lease.lease_epoch, 1, 1),
+            bytes: b"roundtrip\r".to_vec(),
+        })
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if client

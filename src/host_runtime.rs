@@ -10,7 +10,10 @@ use yttt_core::model::ids::{ClientInstanceId, TerminalSessionId};
 use yttt_protocol::{
     LifecycleRequest, LifecycleResponse, Request, ResourceCatalog, Response, TerminalPlacement,
     TerminalTerminationResult,
-    terminal::{AttachTerminal, SemanticViewport, TerminalSpawnSpec, TerminateTerminalRequest},
+    terminal::{
+        AttachTerminal, SemanticViewport, TerminalInput, TerminalSpawnSpec,
+        TerminateTerminalRequest,
+    },
 };
 
 use crate::{
@@ -216,6 +219,10 @@ impl DesktopHostRuntime {
             }
         });
         Ok(())
+    }
+
+    pub fn send_terminal_input(&self, input: TerminalInput) -> Result<(), ClientCoreError> {
+        self.client.send_terminal_input(input)
     }
 
     pub fn request_blocking_typed(&self, request: Request) -> Result<Response, ClientCoreError> {

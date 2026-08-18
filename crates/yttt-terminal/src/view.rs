@@ -82,6 +82,7 @@ use gpui::{Edges, *};
 use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::ops::RangeInclusive;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
@@ -706,8 +707,7 @@ pub struct TerminalView {
     render_cache: Arc<parking_lot::Mutex<TerminalRenderCache>>,
     semantic_viewport: Arc<parking_lot::Mutex<Option<yttt_protocol::terminal::SemanticViewport>>>,
     semantic_scroll_callback: Option<Arc<dyn Fn(u64) + Send + Sync>>,
-    semantic_scroll_offset: Option<u64>,
-    semantic_animation_deadline: Option<Instant>,
+    semantic_scroll_offset: Arc<parking_lot::Mutex<Option<u64>>>,
     performance: TerminalPerformanceHandle,
 
     /// Focus handle for keyboard event handling
@@ -722,7 +722,7 @@ pub struct TerminalView {
     /// Signal-driven mailbox consumer; remains active while hidden.
     #[allow(dead_code)]
     _event_task: Task<()>,
-    /// Optional semantic viewport consumer used by Host-backed terminals.
+    /// Optional background semantic viewport consumer used by Host-backed terminals.
     _semantic_event_task: Option<Task<()>>,
     /// Runtime terminal configuration.
     config: TerminalConfig,
@@ -763,7 +763,7 @@ pub struct TerminalView {
     hovered_link: Option<TerminalLinkHit>,
     scrollbar_drag: Option<ScrollbarDragState>,
     scrollbar_captured: bool,
-    render_generation: u64,
+    render_generation: Arc<AtomicU64>,
     hint_config_generation: u64,
     /// Text currently being composed by the platform input method.
     ime_state: TerminalImeState,
@@ -975,8 +975,7 @@ impl TerminalView {
             render_cache: Arc::new(parking_lot::Mutex::new(TerminalRenderCache::default())),
             semantic_viewport: Arc::new(parking_lot::Mutex::new(None)),
             semantic_scroll_callback: None,
-            semantic_scroll_offset: None,
-            semantic_animation_deadline: None,
+            semantic_scroll_offset: Arc::new(parking_lot::Mutex::new(None)),
             performance,
 
             focus_handle,
@@ -1009,7 +1008,7 @@ impl TerminalView {
             hovered_link: None,
             scrollbar_drag: None,
             scrollbar_captured: false,
-            render_generation: 0,
+            render_generation: Arc::new(AtomicU64::new(0)),
             hint_config_generation: 0,
             ime_state: TerminalImeState::default(),
             cursor_blink_task: None,
@@ -1025,10 +1024,9 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         self.performance.record_semantic_viewport(&viewport);
-        self.semantic_scroll_offset = Some(viewport.display_offset);
+        *self.semantic_scroll_offset.lock() = Some(viewport.display_offset);
         *self.semantic_viewport.lock() = Some(viewport);
-        self.render_generation = self.render_generation.wrapping_add(1);
-        self.semantic_animation_deadline = Some(Instant::now() + Duration::from_millis(50));
+        self.render_generation.fetch_add(1, Ordering::AcqRel);
         cx.notify();
     }
     pub fn attach_semantic_viewport_stream(
@@ -1036,16 +1034,21 @@ impl TerminalView {
         updates: flume::Receiver<yttt_protocol::terminal::SemanticViewport>,
         cx: &mut Context<Self>,
     ) {
-        self._semantic_event_task = Some(cx.spawn(async move |this, cx| {
-            while let Ok(viewport) = updates.recv_async().await {
-                if this
-                    .update(cx, |terminal, cx| {
-                        terminal.set_semantic_viewport(viewport, cx);
-                    })
-                    .is_err()
-                {
-                    break;
+        let semantic_viewport = self.semantic_viewport.clone();
+        let semantic_scroll_offset = self.semantic_scroll_offset.clone();
+        let render_generation = self.render_generation.clone();
+        let event_mailbox = self.event_mailbox.clone();
+        let performance = self.performance.clone();
+        self._semantic_event_task = Some(cx.background_spawn(async move {
+            while let Ok(mut viewport) = updates.recv_async().await {
+                if let Ok(latest) = updates.try_recv() {
+                    viewport = latest;
                 }
+                performance.record_semantic_viewport(&viewport);
+                *semantic_scroll_offset.lock() = Some(viewport.display_offset);
+                *semantic_viewport.lock() = Some(viewport);
+                render_generation.fetch_add(1, Ordering::AcqRel);
+                event_mailbox.request_redraw();
             }
         }));
     }
@@ -1091,7 +1094,10 @@ impl TerminalView {
             self.state.scroll_display(scroll);
             return;
         };
-        let current = self.semantic_scroll_offset.unwrap_or(viewport_offset);
+        let current = self
+            .semantic_scroll_offset
+            .lock()
+            .unwrap_or(viewport_offset);
         let target = match scroll {
             Scroll::Delta(lines) if lines >= 0 => {
                 current.saturating_add(lines as u64).min(history_size)
@@ -1102,7 +1108,7 @@ impl TerminalView {
             Scroll::Top => history_size,
             Scroll::Bottom => 0,
         };
-        self.semantic_scroll_offset = Some(target);
+        *self.semantic_scroll_offset.lock() = Some(target);
         if target != current
             && let Some(callback) = &self.semantic_scroll_callback
         {
@@ -1505,7 +1511,12 @@ impl TerminalView {
         let display_offset = self.state.display_offset();
         let cols = self.state.cols();
         let rows = self.state.rows();
-        let key = (self.render_generation, display_offset, cols, rows);
+        let key = (
+            self.render_generation.load(Ordering::Acquire),
+            display_offset,
+            cols,
+            rows,
+        );
         if self.search.visible_cache_key == Some(key) {
             return;
         }
@@ -1662,7 +1673,7 @@ impl TerminalView {
         let cols = self.state.cols();
         let rows = self.state.rows();
         let key = (
-            self.render_generation,
+            self.render_generation.load(Ordering::Acquire),
             display_offset,
             cols,
             rows,
@@ -3163,7 +3174,7 @@ impl TerminalView {
         }
         self.config = config;
         if interaction_changed {
-            self.render_generation = self.render_generation.wrapping_add(1);
+            self.render_generation.fetch_add(1, Ordering::AcqRel);
         }
         if hint_changed {
             self.hint_config_generation = self.hint_config_generation.wrapping_add(1);
@@ -3379,17 +3390,6 @@ impl Render for TerminalView {
         self.handle_focus_change(focused, cx);
         self.refresh_visible_search_matches();
         self.refresh_hint_candidates();
-        if self
-            .semantic_animation_deadline
-            .is_some_and(|deadline| deadline > Instant::now())
-        {
-            let this = cx.entity().downgrade();
-            window.on_next_frame(move |_window, cx| {
-                let _ = this.update(cx, |_terminal, cx| cx.notify());
-            });
-        } else {
-            self.semantic_animation_deadline = None;
-        }
 
         let state_arc = self.state.term_arc();
         let renderer = self.renderer.clone();
@@ -3415,7 +3415,7 @@ impl Render for TerminalView {
             |frame| (frame.default_background, frame.default_foreground),
         );
         let render_overlays = self.render_overlays();
-        let render_generation = self.render_generation;
+        let render_generation = self.render_generation.load(Ordering::Acquire);
         let hint_active = self.hint.active;
         let key_context = if self.search.active {
             "YtttTerminal YtttTerminalSearch"
@@ -3535,6 +3535,10 @@ impl Render for TerminalView {
                             });
                         }
 
+                        // Clear the generation gate before taking the snapshot. Any viewport or
+                        // parser update racing with snapshot construction must schedule another
+                        // frame rather than being mistaken for content already captured here.
+                        event_mailbox.clear_redraw();
                         let lock_started = Instant::now();
                         let (snapshot, parser_generation) = if let Some(semantic) =
                             semantic_viewport.lock().clone()
@@ -3588,7 +3592,7 @@ impl Render for TerminalView {
                             let parser_generation = performance_for_prepaint.parser_generation();
                             (snapshot, parser_generation)
                         };
-                        event_mailbox.clear_redraw();
+
                         measured_renderer.record_term_lock(
                             lock_started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
                         );
@@ -3869,7 +3873,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn semantic_viewport_stream_drains_ready_updates_without_a_timer(cx: &mut TestAppContext) {
+    fn semantic_viewport_stream_coalesces_updates_through_redraw_mailbox(cx: &mut TestAppContext) {
         let (updates, viewports) = flume::unbounded();
         let (terminal, cx) = cx.add_window_view(|_, cx| {
             TerminalView::new_semantic(RecordingWriter::default(), TerminalConfig::default(), cx)
@@ -3882,18 +3886,14 @@ mod tests {
         updates.send(semantic_viewport(2)).unwrap();
         cx.run_until_parked();
 
-        assert_eq!(
-            cx.read(|cx| {
-                terminal
-                    .read(cx)
-                    .semantic_viewport
-                    .lock()
-                    .as_ref()
-                    .unwrap()
-                    .sequence
-            }),
-            2
-        );
+        cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            assert_eq!(
+                terminal.semantic_viewport.lock().as_ref().unwrap().sequence,
+                2
+            );
+            assert_eq!(terminal.diagnostics_snapshot().gpui_wakeups, 1);
+        });
     }
 
     #[gpui::test]

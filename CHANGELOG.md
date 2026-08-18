@@ -71,8 +71,9 @@
 - Fixed Host terminal input feeling network-lagged by keeping raw terminal frames off generic
   GPUI event listeners and filtering low-rate terminal metadata/control updates on the Host runtime
   worker; the interactive Host benchmark now returns to Direct-mode frame cadence.
-- Fixed residual rapid-input latency in Host terminals by removing the per-viewport GPUI timer;
-  ready semantic updates now drain immediately instead of waiting across presentation frames.
+- Fixed residual rapid-input latency in Host terminals by queueing input without a per-keystroke
+  response waiter and moving semantic viewport ingestion off the GPUI foreground executor; ready
+  updates now coalesce through the bounded terminal redraw mailbox instead of a timer or hot task.
 - Fixed Host-owned Agent panes remaining `running` after completion by resolving snapshots through
   their terminal session placement instead of treating Host hook scope IDs as client tab/pane IDs.
 - Fixed desktop Host replacement leaving panes permanently bound to an old Host identity:

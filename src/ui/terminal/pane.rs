@@ -328,11 +328,11 @@ impl Write for HostTerminalWriter {
         }
         let context = next_mutation_context(&self.mutation_context, &self.next_sequence, None);
         self.runtime
-            .request_detached(Request::TerminalInput(TerminalInput {
+            .send_terminal_input(TerminalInput {
                 session_id: self.session_id.clone(),
                 context,
                 bytes: bytes.to_vec(),
-            }))
+            })
             .map_err(|error| io::Error::new(io::ErrorKind::WouldBlock, error.to_string()))?;
         Ok(bytes.len())
     }

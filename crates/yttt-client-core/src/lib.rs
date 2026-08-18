@@ -25,7 +25,7 @@ use yttt_protocol::{
     ClientRequest, ConnectionChannel, ControlMessage, HostEvent, ProtocolFailure, Request,
     ResourceCatalog, Response, ServerEvent,
     agent::{AgentSnapshotCursor, AgentSnapshotUpdate},
-    terminal::{TerminalProcessState, TerminalStreamUpdate},
+    terminal::{TerminalInput, TerminalProcessState, TerminalStreamUpdate},
 };
 use yttt_transport::{
     AuthToken, AuthenticatedHost, ClientIdentity, SharedConnector, TransportConnector,
@@ -99,7 +99,7 @@ impl Drop for ClientCoreInner {
 struct ClientCommand {
     request_id: u64,
     body: Request,
-    reply: oneshot::Sender<Result<Response, ClientCoreError>>,
+    reply: Option<oneshot::Sender<Result<Response, ClientCoreError>>>,
 }
 
 pub struct PendingClientRequest {
@@ -139,6 +139,7 @@ impl PendingClientRequest {
 
 enum PendingRequest {
     User(oneshot::Sender<Result<Response, ClientCoreError>>),
+    TerminalInput,
     Checkpoint(TerminalSessionId),
     Catalog,
     AgentSnapshots,
@@ -297,8 +298,31 @@ impl ClientCore {
             | Request::AcknowledgeTerminalExit { session_id, .. } => Some(session_id.clone()),
             _ => None,
         };
-        let request_id = self.inner.next_request_id.fetch_add(1, Ordering::Relaxed);
         let (reply, response) = oneshot::channel();
+        self.enqueue_command(body, Some(reply))?;
+        Ok(PendingClientRequest {
+            response,
+            timeout,
+            stopped_session,
+            data_channels: self.inner.data_channels.clone(),
+        })
+    }
+
+    /// Queue terminal input on the ordered control stream without allocating a
+    /// per-input response waiter.
+    pub fn send_terminal_input(&self, input: TerminalInput) -> Result<(), ClientCoreError> {
+        self.enqueue_command(Request::TerminalInput(input), None)
+    }
+
+    fn enqueue_command(
+        &self,
+        body: Request,
+        reply: Option<oneshot::Sender<Result<Response, ClientCoreError>>>,
+    ) -> Result<(), ClientCoreError> {
+        if !matches!(self.state(), ConnectionState::Ready { .. }) {
+            return Err(ClientCoreError::NotConnected);
+        }
+        let request_id = self.inner.next_request_id.fetch_add(1, Ordering::Relaxed);
         self.inner
             .commands
             .try_send(ClientCommand {
@@ -309,13 +333,7 @@ impl ClientCore {
             .map_err(|error| match error {
                 mpsc::error::TrySendError::Full(_) => ClientCoreError::Backpressure,
                 mpsc::error::TrySendError::Closed(_) => ClientCoreError::SupervisorStopped,
-            })?;
-        Ok(PendingClientRequest {
-            response,
-            timeout,
-            stopped_session,
-            data_channels: self.inner.data_channels.clone(),
-        })
+            })
     }
 
     pub async fn request(&self, body: Request) -> Result<Response, ClientCoreError> {
@@ -540,21 +558,30 @@ async fn connected_session(
     let disconnected = 'connected: loop {
         tokio::select! {
             command = commands.recv() => {
-                let Some(command) = command else {
+                let Some(ClientCommand {
+                    request_id,
+                    body,
+                    reply,
+                }) = command else {
                     break None;
                 };
-                let request_id = command.request_id;
                 let message = ControlMessage::Request(ClientRequest {
                     request_id,
                     actor_device_id: Some(context.identity.client_instance_id.to_string()),
                     lease_epoch: None,
-                    body: command.body,
+                    body,
                 });
                 if let Err(error) = send_control(&mut writer, &message).await {
-                    let _ = command.reply.send(Err(ClientCoreError::Connection(error.to_string())));
+                    if let Some(reply) = reply {
+                        let _ = reply.send(Err(ClientCoreError::Connection(error.to_string())));
+                    }
                     break Some(error.to_string());
                 }
-                pending.insert(request_id, PendingRequest::User(command.reply));
+                let pending_request = reply.map_or(
+                    PendingRequest::TerminalInput,
+                    PendingRequest::User,
+                );
+                pending.insert(request_id, pending_request);
             }
             message = receive_control(&mut reader) => {
                 let message = match message {
@@ -720,6 +747,15 @@ fn handle_response(
                 _ => {}
             }
             let _ = reply.send(result.map_err(ClientCoreError::Protocol));
+            Vec::new()
+        }
+        PendingRequest::TerminalInput => {
+            if let Err(error) = result {
+                eprintln!(
+                    "detached Host terminal input failed: {}",
+                    ClientCoreError::Protocol(error)
+                );
+            }
             Vec::new()
         }
         PendingRequest::Checkpoint(session_id) => {

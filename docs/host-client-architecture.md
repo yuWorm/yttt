@@ -148,6 +148,11 @@ Client 为每个 request 分配单调 `request_id`。Host 原样回传该 ID。`
 
 这是 at-most-once Client 语义。调用方若在断线后重试有副作用操作，必须携带资源 ID、epoch/revision 或幂等键。
 
+`TerminalInput` 仍在同一 control stream 上分配 `request_id`、保持与 resize/scroll 的顺序并由
+Host 返回 response，但 Desktop 快速路径不再为每次按键创建 oneshot waiter 和 Tokio task。
+`ClientCore` 只在 pending map 中保留轻量 completion 类型，用于消费 response 和记录协议
+失败；队列 admission/backpressure 在写入时同步返回。
+
 ### 5.3 server event
 
 Host event 具有：
@@ -158,7 +163,7 @@ Host event 具有：
 
 Client 必须按 epoch/sequence 处理，旧 epoch 或倒退事件不能覆盖新状态。终端自身另有 `session_epoch` 和 terminal `sequence`。
 
-终端 data channel 是例外：`ClientCore` 先把 snapshot/delta 合并到 terminal mirror，只发布轻量的 `MirrorUpdated(session_id)`，不得再把同一 terminal frame 作为通用 `ClientEvent::Server` 重复广播。Desktop 对每个 terminal 使用容量为 1 的 latest-only viewport stream；title/process-state 与 lease/exit 等控制事件在 Host runtime worker 中按 `session_id` 过滤后才进入 GPUI，避免 continuously-ready 的无关事件消费者占用前台 executor。
+终端 data channel 是例外：`ClientCore` 先把 snapshot/delta 合并到 terminal mirror，只发布轻量的 `MirrorUpdated(session_id)`，不得再把同一 terminal frame 作为通用 `ClientEvent::Server` 重复广播。Desktop 对每个 terminal 使用容量为 1 的 latest-only viewport stream；viewport receiver 在 background executor 中写入共享快照，再通过终端已有的 bounded/coalescing redraw mailbox 唤醒 GPUI。title/process-state 与 lease/exit 等控制事件在 Host runtime worker 中按 `session_id` 过滤后才进入 GPUI，避免 continuously-ready 的 viewport 或无关事件消费者占用前台 executor。
 
 ## 6. 资源目录
 
