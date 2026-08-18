@@ -1329,6 +1329,7 @@ fn persist_codex_shell_session(
         pane_id: "shell".to_string(),
         generation: 7,
     };
+    let address = AgentPaneAddress::new(&scope.project_id, &scope.tab_id, &scope.pane_id);
     let mut reducer = AgentReducer::new(
         AgentInstanceId::random(),
         ProviderId::from_static("codex"),
@@ -1358,13 +1359,16 @@ fn persist_codex_shell_session(
     );
     let mut manager = AgentManager::new(config_paths);
     assert!(matches!(
-        manager.apply_host_snapshot(AgentSnapshotUpdate {
-            scope,
-            terminal_session_id: TerminalSessionId::new("terminal"),
-            host_epoch: 1,
-            sequence: 1,
-            snapshot: reducer.snapshot().clone(),
-        }),
+        manager.apply_host_snapshot(
+            address,
+            AgentSnapshotUpdate {
+                scope,
+                terminal_session_id: TerminalSessionId::new("terminal"),
+                host_epoch: 1,
+                sequence: 1,
+                snapshot: reducer.snapshot().clone(),
+            }
+        ),
         Some(AgentPaneExitOutcome::Snapshot { .. })
     ));
     drop(manager);
@@ -1478,7 +1482,9 @@ fn restoring_last_session_restores_persisted_agent_session(cx: &mut TestAppConte
 }
 
 #[gpui::test]
-fn failed_restored_shell_session_is_replaced_with_a_fresh_agent(cx: &mut TestAppContext) {
+fn failed_host_scoped_restored_shell_session_is_replaced_with_a_fresh_agent(
+    cx: &mut TestAppContext,
+) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
@@ -1502,6 +1508,7 @@ fn failed_restored_shell_session_is_replaced_with_a_fresh_agent(cx: &mut TestApp
     cx.run_until_parked();
 
     let key = terminal_pane_key(project_id.as_str(), "dev", "shell");
+    let host_session_id = TerminalSessionId::new(key.clone());
     let failed_instance = cx.update(|_, app| {
         root.read(app)
             .terminal
@@ -1538,11 +1545,11 @@ fn failed_restored_shell_session_is_replaced_with_a_fresh_agent(cx: &mut TestApp
             AgentSnapshotUpdate {
                 scope: AgentHookScope {
                     project_id: project_id.as_str().to_string(),
-                    tab_id: "dev".to_string(),
-                    pane_id: "shell".to_string(),
+                    tab_id: host_session_id.as_str().to_string(),
+                    pane_id: host_session_id.as_str().to_string(),
                     generation: 7,
                 },
-                terminal_session_id: TerminalSessionId::new("terminal"),
+                terminal_session_id: host_session_id.clone(),
                 host_epoch: 1,
                 sequence: 1,
                 snapshot: reducer.snapshot().clone(),

@@ -67,6 +67,11 @@
 - Fixed manually launched agents remaining in the sidebar after their terminal process exits or is
   killed; detected-agent snapshots are now removed from memory and persisted state.
 - Fixed late Oh My Pi hook deliveries recreating a sidebar session after the monitored CLI process had already exited.
+- Fixed Host terminal input feeling network-lagged by keeping raw terminal frames off generic
+  GPUI event listeners and filtering low-rate terminal metadata/control updates on the Host runtime
+  worker; the interactive Host benchmark now returns to Direct-mode frame cadence.
+- Fixed Host-owned Agent panes remaining `running` after completion by resolving snapshots through
+  their terminal session placement instead of treating Host hook scope IDs as client tab/pane IDs.
 
 ## 0.2.0 - 2026-07-18
 

@@ -14,7 +14,7 @@ use std::{
 
 use diagnostics::ClientPipelineDiagnostics;
 pub use diagnostics::{ClientLatencyDiagnosticsSnapshot, ClientPipelineDiagnosticsSnapshot};
-pub use mirror::{MirrorApply, TerminalMirror};
+pub use mirror::{MirrorApply, TerminalMirror, TerminalMirrorMetadata};
 use parking_lot::{Mutex, RwLock};
 use tokio::{
     io::split,
@@ -246,6 +246,17 @@ impl ClientCore {
             .read()
             .get(session_id)
             .map(|mirror| mirror.viewport().clone())
+    }
+
+    pub fn terminal_metadata(
+        &self,
+        session_id: &TerminalSessionId,
+    ) -> Option<TerminalMirrorMetadata> {
+        self.inner
+            .mirrors
+            .read()
+            .get(session_id)
+            .map(TerminalMirror::metadata)
     }
 
     pub fn terminal_snapshots(&self) -> Vec<yttt_protocol::terminal::SemanticViewport> {
@@ -1019,9 +1030,8 @@ async fn handle_terminal_data_event(
             )
     );
     let merge_started_at = Instant::now();
-    let checkpoint = handle_event(event.clone(), mirrors, known_sessions, None, events);
+    let checkpoint = handle_event(event, mirrors, known_sessions, None, events);
     diagnostics.record_terminal_merge(merge_started_at.elapsed());
-    let _ = events.send(ClientEvent::Server(event));
     if let Some(session_id) = checkpoint {
         diagnostics.record_checkpoint_resync();
         checkpoint_requests.send(session_id).await.map_err(|_| ())?;
@@ -1128,7 +1138,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn terminal_data_gap_queues_a_checkpoint_request() {
+    async fn terminal_data_gap_queues_checkpoint_without_rebroadcasting_raw_event() {
         let session_id = TerminalSessionId::new("gap");
         let mirrors = Arc::new(RwLock::new(HashMap::new()));
         let known_sessions = Arc::new(RwLock::new(HashSet::new()));
@@ -1157,9 +1167,11 @@ mod tests {
         );
         assert_eq!(checkpoints.recv().await, Some(session_id.clone()));
         assert!(known_sessions.read().contains(&session_id));
-        assert!(matches!(
-            event_rx.recv().await,
-            Ok(ClientEvent::Server(received)) if received == event
-        ));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), event_rx.recv())
+                .await
+                .is_err(),
+            "terminal data must reach observers only through the merged mirror"
+        );
     }
 }

@@ -289,13 +289,9 @@ impl AgentManager {
 
     pub fn apply_host_snapshot(
         &mut self,
+        address: AgentPaneAddress,
         update: AgentSnapshotUpdate,
     ) -> Option<AgentPaneExitOutcome> {
-        let address = AgentPaneAddress::new(
-            &update.scope.project_id,
-            &update.scope.tab_id,
-            &update.scope.pane_id,
-        );
         let cursor = (update.host_epoch, update.scope.generation, update.sequence);
         if self
             .host_snapshot_sequences
@@ -569,6 +565,7 @@ mod tests {
             pane_id: "pane".to_string(),
             generation: 3,
         };
+        let address = AgentPaneAddress::new("project", "tab", "pane");
         let mut reducer = AgentReducer::new(
             AgentInstanceId::new("agent").unwrap(),
             ProviderId::new("codex").unwrap(),
@@ -585,13 +582,17 @@ mod tests {
         };
 
         let Some(AgentPaneExitOutcome::Snapshot { address, snapshot }) =
-            manager.apply_host_snapshot(update.clone())
+            manager.apply_host_snapshot(address.clone(), update.clone())
         else {
             panic!("new Host snapshot was not applied");
         };
         assert_eq!(address, AgentPaneAddress::new("project", "tab", "pane"));
         assert_eq!(snapshot.view_state(), AgentViewState::Idle);
-        assert!(manager.apply_host_snapshot(update).is_none());
+        assert!(
+            manager
+                .apply_host_snapshot(address.clone(), update)
+                .is_none()
+        );
 
         let restored = load_agent_state(&paths.agent_state_path()).unwrap();
         assert_eq!(restored.get(&address), Some(&snapshot));

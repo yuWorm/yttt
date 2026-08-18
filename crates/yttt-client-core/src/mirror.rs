@@ -1,11 +1,21 @@
 use yttt_core::model::ids::TerminalSessionId;
-use yttt_protocol::terminal::{SemanticDelta, SemanticViewport, TerminalStreamUpdate};
+use yttt_protocol::terminal::{
+    SemanticDelta, SemanticViewport, TerminalProcessState, TerminalStreamUpdate,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MirrorApply {
     Updated,
     Ignored,
     SequenceGap,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalMirrorMetadata {
+    pub title: Option<String>,
+    pub process_state: TerminalProcessState,
+    pub session_epoch: u64,
+    pub sequence: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -24,6 +34,15 @@ impl TerminalMirror {
 
     pub fn viewport(&self) -> &SemanticViewport {
         &self.viewport
+    }
+
+    pub fn metadata(&self) -> TerminalMirrorMetadata {
+        TerminalMirrorMetadata {
+            title: self.viewport.modes.title.clone(),
+            process_state: self.viewport.process_state.clone(),
+            session_epoch: self.viewport.session_epoch,
+            sequence: self.viewport.sequence,
+        }
     }
 
     pub fn apply(&mut self, update: TerminalStreamUpdate) -> MirrorApply {

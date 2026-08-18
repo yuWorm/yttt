@@ -158,6 +158,8 @@ Host event 具有：
 
 Client 必须按 epoch/sequence 处理，旧 epoch 或倒退事件不能覆盖新状态。终端自身另有 `session_epoch` 和 terminal `sequence`。
 
+终端 data channel 是例外：`ClientCore` 先把 snapshot/delta 合并到 terminal mirror，只发布轻量的 `MirrorUpdated(session_id)`，不得再把同一 terminal frame 作为通用 `ClientEvent::Server` 重复广播。Desktop 对每个 terminal 使用容量为 1 的 latest-only viewport stream；title/process-state 与 lease/exit 等控制事件在 Host runtime worker 中按 `session_id` 过滤后才进入 GPUI，避免 continuously-ready 的无关事件消费者占用前台 executor。
+
 ## 6. 资源目录
 
 `ListResources` 返回 `ResourceCatalog`：
@@ -168,6 +170,8 @@ Client 必须按 epoch/sequence 处理，旧 epoch 或倒退事件不能覆盖�
 - SSH connection IDs
 
 Terminal placement 包含稳定 `project_id`、`session_id`、几何、owner、最后 sequence 和可选 viewport。`tab_id` / `pane_id` 只属于客户端布局，不进入 Host catalog 或 `address_fingerprint`。
+
+`AgentSnapshotUpdate.terminal_session_id` 是 Agent 状态关联当前客户端布局的唯一资源键。Client 必须先用它找到当前 terminal pane，再取得本地 `project_id/tab_id/pane_id`；Hook scope 中的 `tab_id` / `pane_id` 不是客户端布局键。若 pane 尚未恢复，Client 保留该 session 的最新 snapshot，待 placement 出现后再应用。
 
 连接成功或重连成功后，`ClientCore` 第一项内部请求必须是 `ListResources`：
 

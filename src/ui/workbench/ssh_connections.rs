@@ -76,6 +76,15 @@ async fn delete_host_credential(
     }
 }
 
+fn is_ssh_host_event(event: &ServerEvent) -> bool {
+    matches!(
+        event,
+        ServerEvent::SshStateChanged(_)
+            | ServerEvent::CredentialChallenge(_)
+            | ServerEvent::SshCredentialSaved { .. }
+    )
+}
+
 impl WorkbenchView {
     pub fn start_ssh_event_listener(&mut self, cx: &mut Context<Self>) {
         if self.ssh.event_task.is_some() {
@@ -90,6 +99,9 @@ impl WorkbenchView {
                 let ClientEvent::Server(event) = event else {
                     continue;
                 };
+                if !is_ssh_host_event(&event.body) {
+                    continue;
+                }
                 if this
                     .update(cx, |root, cx| {
                         root.apply_ssh_host_event(event.body, cx);
@@ -1690,4 +1702,29 @@ fn set_ssh_input_value(
     cx: &mut Context<WorkbenchView>,
 ) {
     input.update(cx, |input, cx| input.set_value(value, window, cx));
+}
+
+#[cfg(test)]
+mod tests {
+    use yttt_protocol::ssh::{SshConnectionState, SshConnectionStatus};
+
+    use super::*;
+
+    #[test]
+    fn ssh_listener_rejects_terminal_events_before_updating_workbench() {
+        assert!(is_ssh_host_event(&ServerEvent::SshStateChanged(
+            SshConnectionStatus {
+                connection_id: "ssh".to_string(),
+                epoch: 1,
+                state: SshConnectionState::Connected,
+                error: None,
+            }
+        )));
+        assert!(!is_ssh_host_event(&ServerEvent::TerminalExit {
+            session_id: TerminalSessionId::new("terminal"),
+            session_epoch: 1,
+            code: Some(0),
+            final_sequence: 1,
+        }));
+    }
 }

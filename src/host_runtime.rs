@@ -3,7 +3,9 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use yttt_client_core::{ClientCore, ClientCoreError, ClientEvent, ConnectionState};
+use yttt_client_core::{
+    ClientCore, ClientCoreError, ClientEvent, ConnectionState, TerminalMirrorMetadata,
+};
 use yttt_core::model::ids::{ClientInstanceId, TerminalSessionId};
 use yttt_protocol::{
     LifecycleRequest, LifecycleResponse, Request, ResourceCatalog, Response, TerminalPlacement,
@@ -20,7 +22,67 @@ use crate::{
     },
     host_launcher::{HostLaunchError, HostLauncher, ManagedHostProcess},
 };
+
+#[derive(Clone, Debug)]
+pub enum TerminalPaneHostEvent {
+    Metadata(TerminalMirrorMetadata),
+    Client(ClientEvent),
+}
+
+#[derive(PartialEq, Eq)]
+struct TerminalPaneMetadataKey {
+    title: Option<String>,
+    process_state: yttt_protocol::terminal::TerminalProcessState,
+}
+
+impl From<&TerminalMirrorMetadata> for TerminalPaneMetadataKey {
+    fn from(metadata: &TerminalMirrorMetadata) -> Self {
+        Self {
+            title: metadata.title.clone(),
+            process_state: metadata.process_state,
+        }
+    }
+}
+
+fn terminal_client_event_matches(event: &ClientEvent, session_id: &TerminalSessionId) -> bool {
+    match event {
+        ClientEvent::TerminalUnavailable(unavailable) => unavailable == session_id,
+        ClientEvent::Connection(ConnectionState::HostLost { .. }) => true,
+        ClientEvent::Server(event) => match &event.body {
+            yttt_protocol::ServerEvent::TerminalExit {
+                session_id: event_session_id,
+                ..
+            }
+            | yttt_protocol::ServerEvent::TerminalLeaseRevoked {
+                session_id: event_session_id,
+                ..
+            }
+            | yttt_protocol::ServerEvent::TerminalLeaseReleased {
+                session_id: event_session_id,
+                ..
+            }
+            | yttt_protocol::ServerEvent::TerminalLeaseExpired {
+                session_id: event_session_id,
+                ..
+            }
+            | yttt_protocol::ServerEvent::TerminalControlRequested {
+                session_id: event_session_id,
+                ..
+            }
+            | yttt_protocol::ServerEvent::TerminalControlDenied {
+                session_id: event_session_id,
+                ..
+            } => event_session_id == session_id,
+            yttt_protocol::ServerEvent::TerminalControlGranted { lease } => {
+                &lease.session_id == session_id
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
 const TERMINAL_VIEWPORT_QUEUE_CAPACITY: usize = 1;
+const TERMINAL_PANE_EVENT_QUEUE_CAPACITY: usize = 16;
 
 fn send_latest<T>(sender: &flume::Sender<T>, receiver: &flume::Receiver<T>, mut value: T) -> bool {
     loop {
@@ -169,10 +231,6 @@ impl DesktopHostRuntime {
         self.request_blocking_typed(request)
             .map_err(|error| error.to_string())
     }
-
-    pub fn async_events(&self) -> tokio::sync::broadcast::Receiver<ClientEvent> {
-        self.client.subscribe_events()
-    }
     pub fn terminal_viewports(
         &self,
         session_id: TerminalSessionId,
@@ -200,6 +258,55 @@ impl DesktopHostRuntime {
         receiver
     }
 
+    pub fn terminal_pane_events(
+        &self,
+        session_id: TerminalSessionId,
+    ) -> flume::Receiver<TerminalPaneHostEvent> {
+        let (sender, receiver) = flume::bounded(TERMINAL_PANE_EVENT_QUEUE_CAPACITY);
+        let mut events = self.client.subscribe_events();
+        let client = self.client.clone();
+        self.runtime.spawn(async move {
+            let mut last_metadata = None::<TerminalPaneMetadataKey>;
+            loop {
+                let refresh_metadata = match events.recv().await {
+                    Ok(ClientEvent::MirrorUpdated(updated)) if updated == session_id => true,
+                    Ok(event) if terminal_client_event_matches(&event, &session_id) => {
+                        if sender
+                            .send_async(TerminalPaneHostEvent::Client(event))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                        false
+                    }
+                    Ok(_) => false,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => true,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
+                if !refresh_metadata {
+                    continue;
+                }
+                let Some(metadata) = client.terminal_metadata(&session_id) else {
+                    continue;
+                };
+                let metadata_key = TerminalPaneMetadataKey::from(&metadata);
+                if last_metadata.as_ref() == Some(&metadata_key) {
+                    continue;
+                }
+                last_metadata = Some(metadata_key);
+                if sender
+                    .send_async(TerminalPaneHostEvent::Metadata(metadata))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        receiver
+    }
+
     pub fn events(&self) -> flume::Receiver<ClientEvent> {
         let (sender, receiver) = flume::bounded(256);
         let mut events = self.client.subscribe_events();
@@ -219,8 +326,11 @@ impl DesktopHostRuntime {
         receiver
     }
 
-    pub fn terminal_snapshot(&self, session_id: &TerminalSessionId) -> Option<SemanticViewport> {
-        self.client.terminal_snapshot(session_id)
+    pub fn terminal_metadata(
+        &self,
+        session_id: &TerminalSessionId,
+    ) -> Option<TerminalMirrorMetadata> {
+        self.client.terminal_metadata(session_id)
     }
 
     pub fn resource_catalog(&self) -> Option<ResourceCatalog> {

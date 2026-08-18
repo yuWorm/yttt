@@ -9,25 +9,10 @@ use std::{
     time::Duration,
 };
 
-use gpui::{
-    AnyWindowHandle, Context, Entity, EventEmitter, IntoElement, Render, SharedString, Task,
-    Window, div, prelude::*,
-};
-use yttt_agent_core::AgentInstanceId;
-use yttt_client_core::{ClientEvent, ConnectionState};
-use yttt_core::model::ids::{ConnectionId, ProjectId, TerminalSessionId};
-use yttt_protocol::{
-    Request, Response, ServerEvent,
-    terminal::{
-        RemoteTerminalExecutionSpec, ResizeTerminal, ScrollTerminal, SemanticViewport,
-        TerminalExecutionSpec, TerminalGeometry, TerminalInput, TerminalMutationContext,
-        TerminalProcessState, TerminalSpawnSpec, TerminationMode,
-    },
-};
-use yttt_terminal::{ExitReason, ProcessStatus, PtyIoOperation, TerminalConfig, TerminalView};
-
 use crate::{
-    host_runtime::{DesktopHostRuntime, HostRuntimeGlobal, TerminalRecoveryError},
+    host_runtime::{
+        DesktopHostRuntime, HostRuntimeGlobal, TerminalPaneHostEvent, TerminalRecoveryError,
+    },
     model::layout::{PaneConfig, PaneKind, ProcessExitBehavior, TerminalExecutionMode},
     runtime::{
         agent::classify_agent,
@@ -40,6 +25,22 @@ use crate::{
         theme::{WorkbenchTheme, current_ui_style},
     },
 };
+use gpui::{
+    AnyWindowHandle, Context, Entity, EventEmitter, IntoElement, Render, SharedString, Task,
+    Window, div, prelude::*,
+};
+use yttt_agent_core::AgentInstanceId;
+use yttt_client_core::{ClientEvent, ConnectionState, TerminalMirrorMetadata};
+use yttt_core::model::ids::{ConnectionId, ProjectId, TerminalSessionId};
+use yttt_protocol::{
+    Request, Response, ServerEvent,
+    terminal::{
+        RemoteTerminalExecutionSpec, ResizeTerminal, ScrollTerminal, TerminalExecutionSpec,
+        TerminalGeometry, TerminalInput, TerminalMutationContext, TerminalProcessState,
+        TerminalSpawnSpec, TerminationMode,
+    },
+};
+use yttt_terminal::{ExitReason, ProcessStatus, PtyIoOperation, TerminalConfig, TerminalView};
 
 #[derive(Clone)]
 pub struct SshTerminalContext {
@@ -783,53 +784,32 @@ impl TerminalPaneView {
             terminal.attach_semantic_viewport_stream(terminal_updates, cx);
         });
 
-        let mut host_events = host_runtime.async_events();
+        let host_events = host_runtime.terminal_pane_events(session_id.clone());
         let event_runtime = host_runtime.clone();
         let event_session_id = session_id.clone();
         let event_task = cx.spawn_in(window, async move |this, cx| {
-            let mut last_title = None::<Option<String>>;
-            loop {
-                let event = match host_events.recv().await {
-                    Ok(event) => event,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                };
-                if let ClientEvent::MirrorUpdated(updated) = &event {
-                    if *updated != event_session_id {
-                        continue;
-                    }
-                    let Some(viewport) = event_runtime.terminal_snapshot(&event_session_id) else {
-                        continue;
-                    };
-                    let title = viewport.modes.title.clone();
-                    let metadata_changed = last_title.as_ref() != Some(&title)
-                        || matches!(viewport.process_state, TerminalProcessState::Exited { .. });
-                    last_title = Some(title);
-                    if metadata_changed
-                        && this
-                            .update_in(cx, |pane, _window, cx| {
-                                pane.handle_host_viewport_metadata(
-                                    &viewport,
-                                    &event_runtime,
-                                    &event_session_id,
-                                    generation,
-                                    cx,
-                                );
-                            })
-                            .is_err()
-                    {
-                        break;
-                    }
-                    continue;
-                }
+            while let Ok(event) = host_events.recv_async().await {
                 let runtime = event_runtime.clone();
                 let session_id = event_session_id.clone();
-                if this
-                    .update_in(cx, move |pane, _window, cx| {
-                        pane.handle_host_event(event, runtime, &session_id, generation, cx);
-                    })
-                    .is_err()
-                {
+                let result = match event {
+                    TerminalPaneHostEvent::Metadata(metadata) => {
+                        this.update_in(cx, move |pane, _window, cx| {
+                            pane.handle_host_viewport_metadata(
+                                &metadata,
+                                &runtime,
+                                &session_id,
+                                generation,
+                                cx,
+                            );
+                        })
+                    }
+                    TerminalPaneHostEvent::Client(event) => {
+                        this.update_in(cx, move |pane, _window, cx| {
+                            pane.handle_host_event(event, runtime, &session_id, generation, cx);
+                        })
+                    }
+                };
+                if result.is_err() {
                     break;
                 }
             }
@@ -1009,7 +989,7 @@ impl TerminalPaneView {
 
     fn handle_host_viewport_metadata(
         &mut self,
-        viewport: &SemanticViewport,
+        metadata: &TerminalMirrorMetadata,
         runtime: &DesktopHostRuntime,
         session_id: &TerminalSessionId,
         generation: u64,
@@ -1019,17 +999,17 @@ impl TerminalPaneView {
             return;
         }
         if self.agent_session_title.is_none()
-            && let Some(title) = viewport.modes.title.as_deref()
+            && let Some(title) = metadata.title.as_deref()
         {
             let title = resolved_terminal_title(&self.default_title, title);
             self.set_runtime_title(title, cx);
         }
-        if let TerminalProcessState::Exited { code } = viewport.process_state {
+        if let TerminalProcessState::Exited { code } = metadata.process_state {
             self.finalize_host_process_exit(
                 runtime,
                 session_id,
-                viewport.session_epoch,
-                viewport.sequence,
+                metadata.session_epoch,
+                metadata.sequence,
                 code,
                 generation,
                 cx,
@@ -1063,12 +1043,12 @@ impl TerminalPaneView {
                     final_sequence,
                 } if exited_session_id == *session_id => {
                     let final_viewport_is_ready = runtime
-                        .terminal_snapshot(session_id)
-                        .is_some_and(|viewport| {
-                            viewport.session_epoch == session_epoch
-                                && viewport.sequence >= final_sequence
+                        .terminal_metadata(session_id)
+                        .is_some_and(|metadata| {
+                            metadata.session_epoch == session_epoch
+                                && metadata.sequence >= final_sequence
                                 && matches!(
-                                    viewport.process_state,
+                                    metadata.process_state,
                                     TerminalProcessState::Exited { .. }
                                 )
                         });

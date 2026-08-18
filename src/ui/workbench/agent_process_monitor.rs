@@ -2,9 +2,13 @@ use std::time::Duration;
 
 use gpui::{Context, Window};
 use yttt_agent_core::{AgentProcessState, AgentViewState};
+use yttt_protocol::agent::AgentSnapshotUpdate;
 
 use super::{WorkbenchView, helpers::terminal_pane_key};
-use crate::{model::ids::ProjectId, runtime::agent_manager::AgentPaneExitOutcome};
+use crate::{
+    model::ids::ProjectId,
+    runtime::agent_manager::{AgentPaneAddress, AgentPaneExitOutcome},
+};
 
 const AGENT_SNAPSHOT_DRAIN_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -37,9 +41,12 @@ impl WorkbenchView {
     }
 
     fn apply_host_agent_snapshots(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let updates = self.agent_manager.drain_host_snapshots();
+        let mut pending = std::mem::take(&mut self.terminal.pending_host_agent_snapshots);
+        for update in self.agent_manager.drain_host_snapshots() {
+            pending.insert(update.terminal_session_id.clone(), update);
+        }
         let mut changed = false;
-        for update in updates {
+        for update in pending.into_values() {
             changed |= self.apply_host_agent_snapshot(update, window, cx);
         }
         if let Some(error) = self.agent_manager.take_error() {
@@ -53,11 +60,29 @@ impl WorkbenchView {
 
     pub(super) fn apply_host_agent_snapshot(
         &mut self,
-        update: yttt_protocol::agent::AgentSnapshotUpdate,
+        update: AgentSnapshotUpdate,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        match self.agent_manager.apply_host_snapshot(update) {
+        let Some(pane) = self
+            .terminal
+            .terminal_panes
+            .get(update.terminal_session_id.as_str())
+        else {
+            self.terminal
+                .pending_host_agent_snapshots
+                .insert(update.terminal_session_id.clone(), update);
+            return false;
+        };
+        let address: AgentPaneAddress = pane.read(cx).agent_pane_address();
+        if address.project_id != update.scope.project_id {
+            self.load_error = Some(format!(
+                "Host Agent snapshot project mismatch for terminal {}",
+                update.terminal_session_id.as_str()
+            ));
+            return true;
+        }
+        match self.agent_manager.apply_host_snapshot(address, update) {
             Some(AgentPaneExitOutcome::Snapshot { address, snapshot }) => {
                 let result = if snapshot.process_state == AgentProcessState::Exited
                     && snapshot.view_state() == AgentViewState::Failed
