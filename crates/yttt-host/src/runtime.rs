@@ -13,7 +13,7 @@ use yttt_core::model::ids::{ClientInstanceId, TerminalSessionId};
 use yttt_protocol::{
     HostBlocker, TerminalControlDeniedReason, TerminalLease, TerminalPlacement,
     terminal::{
-        TerminalExecutionSpec, TerminalGeometry, TerminalLeaseMode, TerminalSpawnSpec,
+        TerminalExecutionSpec, TerminalLeaseMode, TerminalProcessState, TerminalSpawnSpec,
         TerminatedTerminal,
     },
 };
@@ -836,29 +836,27 @@ impl HostRuntime {
         let mut placements = terminals
             .values()
             .map(|terminal| {
-                let viewport = terminal.latest_viewport();
-                let geometry = viewport
-                    .as_ref()
-                    .map(|viewport| viewport.geometry)
-                    .unwrap_or(TerminalGeometry {
-                        cols: 0,
-                        rows: 0,
-                        cell_width: 0,
-                        cell_height: 0,
-                    });
                 let spec = terminal.spec();
+                let (geometry, geometry_epoch, last_sequence, process_state) =
+                    terminal.placement_state().unwrap_or((
+                        spec.geometry,
+                        spec.geometry_epoch,
+                        0,
+                        TerminalProcessState::Starting,
+                    ));
                 TerminalPlacement {
                     session_id: spec.session_id.clone(),
                     session_epoch: terminal.session_epoch(),
                     project_id: spec.project_id.clone(),
                     geometry,
-                    last_sequence: viewport.as_ref().map_or(0, |viewport| viewport.sequence),
+                    geometry_epoch,
+                    last_sequence,
                     spawn_fingerprint: spec.address_fingerprint(),
                     owner: control
                         .leases
                         .get(&spec.session_id)
                         .map(|lease| lease.holder.clone()),
-                    viewport,
+                    process_state,
                 }
             })
             .collect::<Vec<_>>();

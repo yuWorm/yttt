@@ -70,7 +70,9 @@ pub struct ClientHello {
 pub enum ConnectionChannel {
     #[default]
     Control,
+    TerminalInteractive,
     TerminalData,
+    StateEvents,
     Lifecycle,
     DesktopOwner,
 }

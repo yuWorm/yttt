@@ -11,8 +11,8 @@ use crate::{
     },
     terminal::{
         AttachTerminal, ReadTerminalViewport, ResizeTerminal, ScrollTerminal, SearchTerminal,
-        SemanticViewport, SetTerminalQueryPalette, TerminalCheckpoint, TerminalGeometry,
-        TerminalInput, TerminalLeaseMode, TerminalSearchResults, TerminalSpawnSpec,
+        SetTerminalQueryPalette, TerminalCheckpoint, TerminalGeometry, TerminalInput,
+        TerminalLeaseMode, TerminalProcessState, TerminalSearchResults, TerminalSpawnSpec,
         TerminalStreamUpdate, TerminalViewportRead, TerminateTerminalRequest, TerminatedTerminal,
         TerminationMode,
     },
@@ -94,6 +94,13 @@ pub enum ControlMessage {
     Response(HostResponse),
     Event(HostEvent),
     TerminalInput(TerminalInput),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TerminalInteractiveMessage {
+    Input(TerminalInput),
+    Request(ClientRequest),
+    Response(HostResponse),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -360,6 +367,7 @@ pub enum ServerEvent {
     },
     ProjectChanged(ProjectChange),
     AgentSnapshot(Box<AgentSnapshotUpdate>),
+    ResourceCatalogChanged,
     HostDraining,
     HostStopping,
     TerminalControlRequested {
@@ -414,10 +422,11 @@ pub struct TerminalPlacement {
     pub session_epoch: u64,
     pub project_id: ProjectId,
     pub geometry: TerminalGeometry,
+    pub geometry_epoch: u64,
     pub last_sequence: u64,
     pub spawn_fingerprint: u64,
     pub owner: Option<ClientInstanceId>,
-    pub viewport: Option<SemanticViewport>,
+    pub process_state: TerminalProcessState,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

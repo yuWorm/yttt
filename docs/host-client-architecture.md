@@ -1,8 +1,8 @@
 # yttt Host/Client 架构规范
 
-- 状态：Phase 1 本地 IPC 完整实现
+- 状态：Host control-plane isolation 完整实现
 - 更新：2026-08-19
-- 适用协议：`yttt-protocol` 资源/lifecycle/desktop-shell v2；帧头 v1
+- 适用协议：`yttt-protocol` 资源 v5、lifecycle v2、desktop-shell v2；帧头 v1
 - 相关设计：[`p2p-relay-architecture.md`](./p2p-relay-architecture.md)
 
 本文定义 yttt 的标准 Host/Client 边界、资源所有权、终端同步协议、本地安全模型、生命周期和恢复语义。P2P、Relay、移动端等连接路径只能扩展本规范，不能改变资源所有权。
@@ -49,7 +49,7 @@ flowchart LR
 
 - Unix：profile runtime root 下的 Unix domain socket，目录权限 `0700`，socket 权限 `0600`，并验证 peer UID。
 - Windows：拒绝远程客户端的 named pipe，DACL 仅允许 SYSTEM 和 owner。
-- Wire：16-byte header、固定 magic/version/kind/length、最大 frame 8 MiB；header 在分配 payload 前验证。结构化控制消息使用带字段名的 CBOR；演进规则见 [`wire-evolution.md`](./wire-evolution.md)。
+- Wire：16-byte header、固定 magic/version/kind/length、最大 frame 8 MiB；header 在分配 payload 前验证。结构化消息使用带字段名的 CBOR；认证握手将连接固定为 control、terminal-interactive、terminal-data、state-events、lifecycle 或 desktop-owner 单一职责，连接建立后不得混用。演进规则见 [`wire-evolution.md`](./wire-evolution.md)。
 
 未来 P2P、Relay 或直接网络连接替换的只是 `IPC` 边，不得把 PTY、文件系统或 Agent 状态移回 Client。
 
@@ -132,7 +132,9 @@ Client handshake 提交：
 
 ### 5.1 帧
 
-每帧包含 `magic`, `protocol_version`, `frame_kind`, `payload_len`。允许的 kind 仅为 handshake、request/response control 和 server event。解码顺序：
+每帧包含 `magic`, `protocol_version`, `frame_kind`, `payload_len`。允许的 kind 为 handshake、
+control、terminal-interactive、state-event、lifecycle 和 desktop-shell；terminal-data 复用
+`HostEvent::Terminal` 的 control encoding，但连接身份只允许这一种 event。解码顺序：
 
 1. 读取固定 header。
 2. 校验 magic、version、kind。
@@ -148,11 +150,13 @@ Client 为每个 request 分配单调 `request_id`。Host 原样回传该 ID。`
 
 这是 at-most-once Client 语义。调用方若在断线后重试有副作用操作，必须携带资源 ID、epoch/revision 或幂等键。
 
-`TerminalInput` 使用 resource protocol v3 的 one-way control message，不分配 `request_id`，
-也不产生逐按键 response；它仍与 resize/scroll 共用同一有序 control stream，因此 lease epoch
-和 `client_sequence` 的校验顺序不变。Desktop 写入有界 command queue 时同步得到
-admission/backpressure；Host 只在 mutation 失败时记录拒绝。需要同步验证错误的诊断调用仍可
-显式发送 request/response 形式的 `Request::TerminalInput`。
+`TerminalInput` 从 resource protocol v3 起使用 one-way message，不分配 `request_id`，也不产生
+逐按键 response。resource protocol v5 将它与 resize/scroll 放入独立的
+terminal-interactive connection；项目、文件、Git、catalog 等慢请求只使用 control
+connection。两条连接分别保持有序，lease epoch、geometry epoch 和 `client_sequence` 仍在
+Host 入口单调校验。Desktop 写入有界 interactive command queue 时同步得到
+admission/backpressure；需要同步验证错误的诊断调用仍可显式发送 request/response 形式的
+`Request::TerminalInput`。
 
 ### 5.3 server event
 
@@ -163,6 +167,17 @@ Host event 具有：
 - event body
 
 Client 必须按 epoch/sequence 处理，旧 epoch 或倒退事件不能覆盖新状态。终端自身另有 `session_epoch` 和 terminal `sequence`。
+
+每个 Client 会话使用相互隔离的通道：
+
+- control：普通 request/response；耗时项目操作可等待，但不能阻塞其他通道。
+- terminal-interactive：输入、resize、scroll 及其同步诊断 response。
+- terminal-data：每个已附加 terminal 一条连接，只承载该 session 的 snapshot/delta。
+- state-events：lease、exit、SSH、project、Agent snapshot 和 catalog invalidation。
+
+Client 的 control/interactive reader 是持续读取的独立 task；request enqueue、checkpoint
+或 catalog refresh 不能取消一个已部分读取的 frame，否则下一帧会从 payload 中间开始并被误判为
+`invalid protocol magic`。
 
 终端 data channel 是例外：`ClientCore` 在独立 data worker 中把 snapshot/delta 原位合并到
 terminal mirror，只发布不可变的 `Arc<TerminalStreamUpdate>`；不得复制完整
@@ -184,17 +199,23 @@ prepaint 只转换 damage row；未变化 row 的 render generation、text shapi
 - terminal placements
 - SSH connection IDs
 
-Terminal placement 包含稳定 `project_id`、`session_id`、几何、owner、最后 sequence 和可选 viewport。`tab_id` / `pane_id` 只属于客户端布局，不进入 Host catalog 或 `address_fingerprint`。
+Terminal placement 只包含稳定 `project_id`、`session_id`、几何、owner、process state 和最后
+sequence；不内嵌 `SemanticViewport`。`tab_id` / `pane_id` 只属于客户端布局，不进入 Host
+catalog 或 `address_fingerprint`。viewport 只通过 terminal-data 的 initial snapshot、后续
+delta 和按需 checkpoint 同步。
 
 `AgentSnapshotUpdate.terminal_session_id` 是 Agent 状态关联当前客户端布局的唯一资源键。Client 必须先用它找到当前 terminal pane，再取得本地 `project_id/tab_id/pane_id`；Hook scope 中的 `tab_id` / `pane_id` 不是客户端布局键。若 pane 尚未恢复，Client 保留该 session 的最新 snapshot，待 placement 出现后再应用。
 Desktop 的 Agent snapshot bridge 必须按 `terminal_session_id` 和 `(host_epoch, generation, sequence)` 合并最新值，不能让有界事件队列在 UI 暂停消费时静默丢失最终状态。Agent 进程存活但尚无权威 snapshot 只表示状态未知，UI 显示 `Stale`，不能推断为 `Working`。
 
-连接成功或重连成功后，`ClientCore` 第一项内部请求必须是 `ListResources`：
+连接成功或重连成功后，`ClientCore` 第一项内部请求是 `ListResources`。此后 Host 只发送
+`ResourceCatalogChanged` invalidation；Client 合并重复通知并异步刷新一次 catalog。创建
+terminal 不再无条件请求完整 catalog，而是读取这份缓存；cache 尚未建立时才同步回退到
+`ListResources`。对账规则：
 
-1. catalog 中存在且带 viewport：立即替换镜像。
-2. catalog 中存在但不带 viewport：请求 checkpoint；旧镜像可暂时显示。
-3. Client cache 中存在但 catalog 不存在：删除镜像并发布 `TerminalUnavailable`。
-4. UI 收到当前 pane 的 `TerminalUnavailable`：结束旧 generation；若 pane 配置为 AutoRestart，则以新 session generation 重建。
+1. catalog 中存在的 session 建立独立 terminal-data connection；initial snapshot 建立或替换 mirror。
+2. data sequence gap、epoch 变化或 `ResyncRequired` 触发 checkpoint。
+3. Client cache 中存在但 catalog 不存在时，删除 mirror 并发布 `TerminalUnavailable`。
+4. UI 收到当前 pane 的 `TerminalUnavailable` 后结束旧 generation；AutoRestart pane 以新 session generation 重建。
 
 对账完成前，旧 checkpoint 只是一份可见缓存，不是资源仍存活的证据。
 
@@ -214,10 +235,9 @@ Desktop 的 Agent snapshot bridge 必须按 `terminal_session_id` 和 `(host_epo
 
 Host 创建 PTY、spawn child、关闭 slave 副本，然后创建：
 
-- PTY reader worker
-- PTY writer queue/worker
-- terminal event processor
-- child monitor
+- 两个阻塞 I/O worker：PTY reader 与有界 writer
+- Tokio terminal event task
+- Tokio child monitor task
 - `alacritty_terminal::Term`
 - bounded raw replay ring（8 MiB）
 - semantic snapshotter
@@ -246,6 +266,10 @@ Host 每次捕获生成完整 semantic viewport，再按上一序列构造 delta
 - geometry/scrollback epoch
 
 Client 仅接受 `base_sequence == mirror.sequence` 的 delta；检测到 gap、epoch 变化或 `ResyncRequired` 后请求 checkpoint。
+
+Host 的 VTE damage capture 最快每 4 ms 运行一次；每条 terminal-data connection 再按 16 ms
+frame cadence 合并连续 delta，同一行只保留最新值。单个未合并 update 继续复用共享编码 frame；
+sequence 不连续时不猜测状态，下一帧回退为当前 authoritative snapshot。
 
 Client 的 `TerminalView::new_semantic` 只启动一个 input writer worker；它不创建空转的 PTY reader/parser，也不分配本地 PTY read-buffer pool。这样 Host 化不会在 Client 重复 VTE 解析或额外保留两条空转线程。
 
@@ -294,7 +318,8 @@ PTY child 退出后：
 | Host terminal writer queue | 1024 commands |
 | Host terminal internal event queue | 256 events |
 | Host terminal subscriber channel | 64 events / subscriber |
-| Client command queue | 256 commands |
+| Client control command queue | 256 commands |
+| Client terminal-interactive command queue | 256 commands |
 | Desktop semantic update mailbox | 64 updates / terminal |
 | Client event broadcast | 256 events |
 | request timeout | 10 s |
@@ -327,7 +352,10 @@ render-state lock wait、queue high-water 和 coalesced update 数。
 同机三轮以上比较以完整 input-to-paint p95 中位数为验收值，Host 不得
 超过 Direct 的 `2×`，不能用 request admission 或 echo-to-paint 子区间替代端到端指标。
 
-资源预算不能只统计 Rust struct：每个 Host terminal 还包含 PTY、child、若干 worker stack、VTE grid/scrollback、最多 8 MiB replay 和 semantic snapshot；每个 attached Client 包含 mirror、可见 render cache 和一个 input writer worker。部署容量应以真实 shell/TUI workload 测量，不以 `size_of` 推算。
+资源预算不能只统计 Rust struct：每个 Host terminal 还包含 PTY、child、两个阻塞 I/O worker
+stack、两个轻量 Tokio task、VTE grid/scrollback、最多 8 MiB replay 和 semantic snapshot；
+每个 attached Client 包含 mirror、可见 render cache 和一个 input writer worker。部署容量应以
+真实 shell/TUI workload 测量，不以 `size_of` 推算。
 
 ## 9. 生命周期
 
@@ -410,10 +438,18 @@ Disconnected -> Connecting -> Ready
 - credential challenge/answer（secret 使用 zeroizing wrapper，Debug 始终 redact）
 - `RemoteFileRequest/Response`
 - `RemoteGitRequest/Response`
-- `AgentHookIngress/Accepted`
+- Host-scoped Agent hook HTTP ingress 与 acknowledged delivery
 - `TerminalExecutionSpec::Ssh`
 
-这些资源遵守与 terminal 相同的规则：以稳定 connection/resource ID 引用；Client 不持有 SSH channel；credential 只通过认证后的加密/本地安全 transport；文件写入携带 expected revision；Git/diff 有 maximum-bytes；Agent hook 有 event ID 去重。
+SSH terminal 进入与本地 PTY 相同的 Host `HostedTerminal::from_io` 路径，复用同一 VTE、
+semantic snapshot/delta、16 ms terminal-data cadence、lease 和 checkpoint 语义；只有 Host 到
+远端 SSH server 的真实网络 RTT 不可消除。
+
+Agent hook delivery 使用随机 `stream_id` 和单调 `sequence`。Host 响应
+`accepted_sequence/next_sequence`，缓存小范围乱序，重复 delivery 只确认而不重复应用；provider
+extension 对断连和非 2xx response 做有上限的指数退避。terminal exit 是最终状态；即使退出时
+首个 hook 尚未到达，Host 也为该 scope 保留终态 tombstone。随后到达的 hook 仍会被确认但不能
+把 `Exited/Completed/Failed` 覆盖回 `Running`；只有新 terminal generation 会清除此 tombstone。
 
 远程网络断开只改变对应 SSH resource 状态，不得使 Host 或本地 terminal runtime 崩溃。Relay 只能转发端到端加密帧，不能获得 SSH credential、项目内容或 auth token。
 
@@ -431,6 +467,10 @@ Disconnected -> Connecting -> Ready
 - Host draining/stopping
 
 错误日志可记录 request kind、resource ID、epoch、sequence、queue depth 和耗时；不得记录 terminal input、clipboard、token、password、private key、完整环境变量或文件正文。
+
+常驻 Host diagnostics 每 5 s 采样并写入 bounded rotating JSONL；missed tick 使用 `Skip`，
+不会在 runtime 恢复后补跑一串采样。terminal input、parser 和队列 latency 计数仍逐事件累计，
+所以降低进程/RSS 采样频率不会丢失交互延迟样本。
 
 ## 13. 验证清单
 

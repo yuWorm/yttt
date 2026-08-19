@@ -18,9 +18,11 @@ use yttt_protocol::{
     BuildIdentity, ClientRequest, ControlMessage, FailureCode, LIFECYCLE_PROTOCOL_VERSION,
     LifecycleMessage, LifecycleRequest, LifecycleRequestEnvelope, LifecycleResponse,
     LifecycleResponseEnvelope, ProtocolRange, RESOURCE_PROTOCOL_VERSION, Request, Response,
+    TerminalInteractiveMessage,
     agent::AgentSnapshotCursor,
     project::{
-        ProjectFileState, ProjectRequest, ProjectResponse, ProjectSaveMode, ProjectSaveResult,
+        ProjectFileState, ProjectGitOperation, ProjectRequest, ProjectResponse, ProjectSaveMode,
+        ProjectSaveResult,
     },
     ssh::{
         CredentialAnswer, CredentialChallengeKind, HostKeyDecision, RemoteCommandRequest,
@@ -36,7 +38,8 @@ use yttt_protocol::{
 };
 use yttt_transport_local::{
     AuthToken, ClientIdentity, LocalConnector, LocalEndpoint, LocalListener, client_handshake,
-    connect, receive_control, receive_lifecycle, send_control, send_lifecycle,
+    connect, receive_control, receive_lifecycle, receive_terminal_interactive, send_control,
+    send_lifecycle, send_terminal_interactive,
 };
 
 fn host_path(path: &std::path::Path) -> yttt_protocol::HostPath {
@@ -215,6 +218,50 @@ async fn raw_terminal_data_client(
     stream
 }
 
+async fn raw_terminal_interactive_client(
+    host: &RunningHost,
+    id: &str,
+) -> yttt_transport_local::LocalStream {
+    let mut stream = connect(&host_endpoint(&host.bootstrap)).await.unwrap();
+    client_handshake(
+        &mut stream,
+        &ClientIdentity {
+            supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
+            build: host.bootstrap.build.clone(),
+            profile_id: host.bootstrap.profile_id.clone(),
+            client_instance_id: ClientInstanceId::new(id),
+            host_epoch_hint: None,
+            can_force_stop: false,
+            channel: yttt_protocol::ConnectionChannel::TerminalInteractive,
+            terminal_session_id: None,
+        },
+        &AuthToken::from_bytes(host.token),
+    )
+    .await
+    .unwrap();
+    stream
+}
+
+async fn raw_interactive_request(
+    stream: &mut yttt_transport_local::LocalStream,
+    request_id: u64,
+    body: Request,
+) -> Result<Response, yttt_protocol::ProtocolFailure> {
+    send_terminal_interactive(
+        stream,
+        &TerminalInteractiveMessage::Request(ClientRequest::new(request_id, body)),
+    )
+    .await
+    .unwrap();
+    let TerminalInteractiveMessage::Response(response) =
+        receive_terminal_interactive(stream).await.unwrap()
+    else {
+        panic!("unexpected interactive response");
+    };
+    assert_eq!(response.request_id, request_id);
+    response.result
+}
+
 async fn raw_request(
     stream: &mut yttt_transport_local::LocalStream,
     request_id: u64,
@@ -323,6 +370,7 @@ async fn terminal_output_uses_a_dedicated_data_connection() {
     let host = RunningHost::start().await;
     let client_id = "split-stream-client";
     let mut control = raw_client(&host, client_id).await;
+    let mut interactive = raw_terminal_interactive_client(&host, client_id).await;
     let mut spec = spawn_spec();
     spec.session_id = TerminalSessionId::new("split-stream");
     spec.execution = TerminalExecutionSpec::Command {
@@ -373,8 +421,8 @@ async fn terminal_output_uses_a_dedicated_data_connection() {
     let geometry_epoch = viewport.geometry_epoch;
     let mut mirror = TerminalMirror::new(viewport);
     assert_eq!(
-        raw_request(
-            &mut control,
+        raw_interactive_request(
+            &mut interactive,
             3,
             Request::TerminalInput(TerminalInput {
                 session_id: session_id.clone(),
@@ -454,6 +502,393 @@ async fn terminal_output_uses_a_dedicated_data_connection() {
         .expect("Host shutdown timeout")
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn blocked_project_request_does_not_delay_terminal_input() {
+    let host = RunningHost::start().await;
+    let client = host.client("mixed-load-client").await;
+    let project_root = host._temp.path().join("blocking-project");
+    fs::create_dir_all(&project_root).unwrap();
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&project_root)
+            .status()
+            .expect("git init must run")
+            .success()
+    );
+    let fsmonitor = project_root.join("blocking-fsmonitor.sh");
+    fs::write(&fsmonitor, "#!/bin/sh\nsleep 2\nprintf '/\\n'\n").unwrap();
+    let mut permissions = fs::metadata(&fsmonitor).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fsmonitor, permissions).unwrap();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&project_root)
+            .args(["config", "core.fsmonitor"])
+            .arg(&fsmonitor)
+            .status()
+            .expect("git config must run")
+            .success()
+    );
+    let project_id = ProjectId::new("blocking-project");
+    assert!(matches!(
+        client
+            .request(Request::Project(ProjectRequest::Register {
+                project_id: project_id.clone(),
+                root: host_path(&project_root),
+            }))
+            .await
+            .unwrap(),
+        Response::Project(ProjectResponse::Registered { .. })
+    ));
+    let mut events = client.subscribe_events();
+
+    let mut spec = spawn_spec();
+    spec.session_id = TerminalSessionId::new("mixed-load-terminal");
+    spec.execution = TerminalExecutionSpec::Command {
+        shell: "/bin/sh".to_string(),
+        program: "/bin/sh".to_string(),
+        args: vec![
+            "-lc".to_string(),
+            "IFS= read -r line; printf 'interactive:%s\\n' \"$line\"; sleep 30".to_string(),
+        ],
+        return_to_shell: false,
+    };
+    let session_id = spec.session_id.clone();
+    let Response::TerminalSpawned {
+        lease,
+        session_epoch,
+    } = client.request(Request::SpawnTerminal(spec)).await.unwrap()
+    else {
+        panic!("unexpected spawn response");
+    };
+    let geometry_epoch = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(viewport) = client.terminal_snapshot(&session_id) {
+                break viewport.geometry_epoch;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("initial terminal snapshot timeout");
+
+    let blocked_git = client
+        .enqueue_request(Request::Project(ProjectRequest::Git {
+            project_id: project_id.clone(),
+            operation: ProjectGitOperation::Status { work_tree: None },
+        }))
+        .unwrap();
+    while events.try_recv().is_ok() {}
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    client
+        .send_terminal_input(TerminalInput {
+            session_id: session_id.clone(),
+            context: mutation_context(&client, session_epoch, lease.lease_epoch, geometry_epoch, 1),
+            bytes: b"while-control-blocked\r".to_vec(),
+        })
+        .unwrap();
+    fs::write(project_root.join("state-event.txt"), "changed").unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        let mut received_input = false;
+        let mut received_project_event = false;
+        while !received_input || !received_project_event {
+            received_input |= client
+                .terminal_snapshot(&session_id)
+                .is_some_and(|viewport| {
+                    viewport_text(&viewport).contains("interactive:while-control-blocked")
+                });
+            tokio::select! {
+                event = events.recv() => {
+                    if let Ok(ClientEvent::Server(yttt_protocol::HostEvent {
+                        body: yttt_protocol::ServerEvent::ProjectChanged(change),
+                        ..
+                    })) = event
+                    {
+                        received_project_event |= change.project_id == project_id;
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+            }
+        }
+    })
+    .await
+    .expect("interactive input or a state event was delayed by a blocked project request");
+
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(5), blocked_git.wait())
+            .await
+            .expect("blocked project request did not resume")
+            .unwrap(),
+        Response::Project(ProjectResponse::Git(_))
+    ));
+
+    let Response::TerminalTerminated(terminated) = client
+        .request(Request::TerminateTerminal {
+            session_id: session_id.clone(),
+            mode: TerminationMode::Terminate,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected terminate response");
+    };
+    assert_eq!(
+        client
+            .request(Request::AcknowledgeTerminalExit {
+                session_id,
+                session_epoch,
+                final_sequence: terminated.final_sequence,
+            })
+            .await
+            .unwrap(),
+        Response::TerminalExitAcknowledged
+    );
+}
+
+#[tokio::test]
+async fn many_terminals_keep_catalog_and_interactive_lanes_responsive() {
+    const TERMINAL_COUNT: usize = 16;
+
+    let host = RunningHost::start().await;
+    let client = host.client("many-terminals").await;
+    let mut session_ids = Vec::with_capacity(TERMINAL_COUNT);
+    let mut first_lease = None;
+    for index in 0..TERMINAL_COUNT {
+        let mut spec = spawn_spec();
+        spec.session_id = TerminalSessionId::new(format!("many-terminal-{index}"));
+        spec.execution = TerminalExecutionSpec::Command {
+            shell: "/bin/sh".to_string(),
+            program: "/bin/sh".to_string(),
+            args: vec![
+                "-lc".to_string(),
+                "IFS= read -r line; printf 'many:%s\\n' \"$line\"; sleep 30".to_string(),
+            ],
+            return_to_shell: false,
+        };
+        let session_id = spec.session_id.clone();
+        let Response::TerminalSpawned {
+            lease,
+            session_epoch,
+        } = client.request(Request::SpawnTerminal(spec)).await.unwrap()
+        else {
+            panic!("unexpected spawn response");
+        };
+        if index == 0 {
+            first_lease = Some((lease, session_epoch));
+        }
+        session_ids.push(session_id);
+    }
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if client.resource_catalog().is_some_and(|catalog| {
+                session_ids.iter().all(|session_id| {
+                    catalog
+                        .terminals
+                        .iter()
+                        .any(|terminal| &terminal.session_id == session_id)
+                })
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("many-terminal resource catalog convergence timeout");
+
+    let (first_lease, first_session_epoch) = first_lease.unwrap();
+    client
+        .send_terminal_input(TerminalInput {
+            session_id: session_ids[0].clone(),
+            context: mutation_context(&client, first_session_epoch, first_lease.lease_epoch, 1, 1),
+            bytes: b"responsive\r".to_vec(),
+        })
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if client
+                .terminal_snapshot(&session_ids[0])
+                .is_some_and(|viewport| viewport_text(&viewport).contains("many:responsive"))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("interactive input stalled with many terminals");
+
+    assert!(matches!(
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            client.request(Request::Ping { sent_millis: 1 })
+        )
+        .await
+        .expect("control request stalled with many terminals")
+        .unwrap(),
+        Response::Pong { .. }
+    ));
+
+    let response = client
+        .request(Request::TerminateMany {
+            requests: session_ids
+                .into_iter()
+                .enumerate()
+                .map(|(index, session_id)| TerminateTerminalRequest {
+                    request_id: index as u64,
+                    session_id,
+                })
+                .collect(),
+        })
+        .await
+        .unwrap();
+    let Response::TerminalsTerminated { results } = response else {
+        panic!("unexpected terminate-many response");
+    };
+    assert_eq!(results.len(), TERMINAL_COUNT);
+    assert!(results.iter().all(|result| result.result.is_ok()));
+}
+
+#[tokio::test]
+#[ignore = "manual Host terminal scaling performance probe"]
+async fn host_terminal_scale_performance_probe() {
+    const SAMPLE_COUNT: u64 = 40;
+    const TERMINAL_COUNTS: [usize; 3] = [1, 8, 24];
+
+    let host = RunningHost::start().await;
+    let client = host.client("host-scale-performance").await;
+    let mut session_ids = Vec::with_capacity(*TERMINAL_COUNTS.last().unwrap());
+    let mut first_lease = None;
+    let mut client_sequence = 0_u64;
+    let mut p95_measurements = Vec::new();
+
+    for terminal_count in TERMINAL_COUNTS {
+        while session_ids.len() < terminal_count {
+            let index = session_ids.len();
+            let mut spec = spawn_spec();
+            spec.session_id = TerminalSessionId::new(format!("host-scale-{index}"));
+            spec.scrollback_limit = 1_000;
+            spec.execution = TerminalExecutionSpec::Command {
+                shell: "/bin/sh".to_string(),
+                program: "/bin/sh".to_string(),
+                args: vec![
+                    "-lc".to_string(),
+                    "while IFS= read -r line; do printf 'scale:%s\\n' \"$line\"; done".to_string(),
+                ],
+                return_to_shell: false,
+            };
+            let session_id = spec.session_id.clone();
+            let Response::TerminalSpawned {
+                lease,
+                session_epoch,
+            } = client.request(Request::SpawnTerminal(spec)).await.unwrap()
+            else {
+                panic!("unexpected scale terminal spawn response");
+            };
+            if first_lease.is_none() {
+                first_lease = Some((lease, session_epoch));
+            }
+            session_ids.push(session_id);
+        }
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if client.terminal_snapshot(&session_ids[0]).is_some() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("scale terminal initial snapshot timeout");
+
+        let (lease, session_epoch) = first_lease.as_ref().unwrap();
+        let mut latencies = Vec::with_capacity(SAMPLE_COUNT as usize);
+        for _ in 0..SAMPLE_COUNT {
+            client_sequence = client_sequence.saturating_add(1);
+            let marker = format!("probe-{client_sequence}");
+            let expected = format!("scale:{marker}");
+            let started = std::time::Instant::now();
+            client
+                .send_terminal_input(TerminalInput {
+                    session_id: session_ids[0].clone(),
+                    context: mutation_context(
+                        &client,
+                        *session_epoch,
+                        lease.lease_epoch,
+                        1,
+                        client_sequence,
+                    ),
+                    bytes: format!("{marker}\r").into_bytes(),
+                })
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    if client
+                        .terminal_snapshot(&session_ids[0])
+                        .is_some_and(|viewport| viewport_text(&viewport).contains(&expected))
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .expect("scale terminal input-to-mirror timeout");
+            latencies.push(started.elapsed());
+        }
+        latencies.sort_unstable();
+        let p50 = latencies[latencies.len() / 2];
+        let p95 = latencies[latencies.len() * 95 / 100];
+        let rss_kib = Command::new("ps")
+            .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .and_then(|rss| rss.trim().parse::<u64>().ok());
+        eprintln!(
+            "HOST_SCALE terminals={terminal_count} input_to_mirror_p50_us={} input_to_mirror_p95_us={} rss_kib={}",
+            p50.as_micros(),
+            p95.as_micros(),
+            rss_kib.map_or_else(|| "unavailable".to_string(), |rss| rss.to_string()),
+        );
+        p95_measurements.push(p95);
+    }
+
+    let low_scale_p95 = p95_measurements[0];
+    let high_scale_p95 = *p95_measurements.last().unwrap();
+    assert!(
+        high_scale_p95
+            <= low_scale_p95
+                .saturating_mul(4)
+                .max(Duration::from_millis(100)),
+        "24-terminal p95 {high_scale_p95:?} regressed from one-terminal p95 {low_scale_p95:?}"
+    );
+
+    let response = client
+        .request(Request::TerminateMany {
+            requests: session_ids
+                .into_iter()
+                .enumerate()
+                .map(|(index, session_id)| TerminateTerminalRequest {
+                    request_id: index as u64,
+                    session_id,
+                })
+                .collect(),
+        })
+        .await
+        .unwrap();
+    let Response::TerminalsTerminated { results } = response else {
+        panic!("unexpected scale terminate-many response");
+    };
+    assert_eq!(results.len(), *TERMINAL_COUNTS.last().unwrap());
+    assert!(results.iter().all(|result| result.result.is_ok()));
 }
 
 async fn wait_for_mirror(client: &ClientCore, expected: &str) {
@@ -1011,6 +1446,21 @@ async fn host_roundtrip_preserves_input_resize_scroll_environment_and_title() {
     })
     .await
     .expect("environment and title mirror timeout");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if client.resource_catalog().is_some_and(|catalog| {
+                catalog
+                    .terminals
+                    .iter()
+                    .any(|terminal| terminal.session_id == session_id)
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("event-driven resource catalog add timeout");
 
     client
         .send_terminal_input(TerminalInput {
@@ -1144,16 +1594,21 @@ async fn host_roundtrip_preserves_input_resize_scroll_environment_and_title() {
     assert_eq!(results[0].request_id, 1);
     assert_eq!(results[0].session_id, session_id);
     assert!(results[0].result.is_ok());
-    let Response::Resources(resources) = client.request(Request::ListResources).await.unwrap()
-    else {
-        panic!("expected resource catalog");
-    };
-    assert!(
-        resources
-            .terminals
-            .iter()
-            .all(|terminal| terminal.session_id != session_id)
-    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if client.resource_catalog().is_some_and(|catalog| {
+                catalog
+                    .terminals
+                    .iter()
+                    .all(|terminal| terminal.session_id != session_id)
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("event-driven resource catalog removal timeout");
     assert_eq!(
         host.lifecycle_request(LifecycleRequest::BeginDrain, false)
             .await,
@@ -1567,6 +2022,7 @@ async fn slow_observer_does_not_block_the_owner_or_change_canonical_geometry() {
         panic!("unexpected spawn response: {spawned:?}");
     };
     let mut slow = raw_client(&host, "slow-raw-observer").await;
+    let mut slow_interactive = raw_terminal_interactive_client(&host, "slow-raw-observer").await;
     let observer_geometry = TerminalGeometry {
         cols: 41,
         rows: 12,
@@ -1611,8 +2067,8 @@ async fn slow_observer_does_not_block_the_owner_or_change_canonical_geometry() {
             ..
         })
     ));
-    let observer_resize = raw_request(
-        &mut slow,
+    let observer_resize = raw_interactive_request(
+        &mut slow_interactive,
         2,
         Request::ResizeTerminal(ResizeTerminal {
             session_id: session_id.clone(),
@@ -2462,14 +2918,21 @@ async fn host_ssh_product_smoke_covers_host_key_sftp_git_and_terminal() {
             program: "/bin/sh".to_string(),
             args: vec![
                 "-lc".to_string(),
-                "printf 'HOST_SSH_TERMINAL_OK\\n'; sleep 30".to_string(),
+                concat!(
+                    "printf 'HOST_SSH_TERMINAL_OK\\n'; ",
+                    "IFS= read -r line; printf 'HOST_SSH_INPUT:%s\\n' \"$line\"; sleep 30"
+                )
+                .to_string(),
             ],
         },
     };
-    assert!(matches!(
-        client.request(Request::SpawnTerminal(spec)).await.unwrap(),
-        Response::TerminalSpawned { .. }
-    ));
+    let Response::TerminalSpawned {
+        lease,
+        session_epoch,
+    } = client.request(Request::SpawnTerminal(spec)).await.unwrap()
+    else {
+        panic!("unexpected SSH terminal spawn response");
+    };
     let mirror = tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             if client
@@ -2494,8 +2957,28 @@ async fn host_ssh_product_smoke_covers_host_key_sftp_git_and_terminal() {
             client.resource_catalog()
         );
     }
+    client
+        .send_terminal_input(TerminalInput {
+            session_id: session_id.clone(),
+            context: mutation_context(&client, session_epoch, lease.lease_epoch, 1, 1),
+            bytes: b"parity\r".to_vec(),
+        })
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if client
+                .terminal_snapshot(&session_id)
+                .is_some_and(|viewport| viewport_text(&viewport).contains("HOST_SSH_INPUT:parity"))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("SSH terminal interactive input mirror timeout");
     let diagnostics_path = host.bootstrap.runtime_root.join("host-diagnostics.jsonl");
-    let diagnostics = tokio::time::timeout(Duration::from_secs(5), async {
+    let diagnostics = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if let Ok(contents) = fs::read_to_string(&diagnostics_path)
                 && let Some(snapshot) = contents
@@ -2602,10 +3085,11 @@ async fn host_terminal_performance_probe() {
         return_to_shell: false,
     };
     let started = std::time::Instant::now();
-    assert!(matches!(
-        client.request(Request::SpawnTerminal(spec)).await.unwrap(),
-        Response::TerminalSpawned { .. }
-    ));
+    let Response::TerminalSpawned { session_epoch, .. } =
+        client.request(Request::SpawnTerminal(spec)).await.unwrap()
+    else {
+        panic!("unexpected performance terminal spawn response");
+    };
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             if client
@@ -2654,12 +3138,27 @@ async fn host_terminal_performance_probe() {
         rss_kib.map_or_else(|| "unavailable".to_string(), |rss| rss.to_string()),
     );
 
-    let _ = client
+    let Response::TerminalTerminated(terminated) = client
         .request(Request::TerminateTerminal {
-            session_id,
+            session_id: session_id.clone(),
             mode: TerminationMode::Terminate,
         })
-        .await;
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected performance terminal termination response");
+    };
+    assert_eq!(
+        client
+            .request(Request::AcknowledgeTerminalExit {
+                session_id,
+                session_epoch,
+                final_sequence: terminated.final_sequence,
+            })
+            .await
+            .unwrap(),
+        Response::TerminalExitAcknowledged
+    );
     assert_eq!(
         host.lifecycle_request(LifecycleRequest::BeginDrain, false)
             .await,
@@ -2748,16 +3247,23 @@ async fn attach_and_checkpoint_omit_raw_replay_tail_and_recover_visible_output()
     };
     assert!(requested.raw_replay_tail.is_empty());
     assert!(viewport_text(&requested.viewport).contains("recover-me"));
+    assert!(
+        matches!(second.state(), ConnectionState::Ready { .. }),
+        "client disconnected before termination: {:?}",
+        second.state()
+    );
 
-    let Response::TerminalTerminated(terminated) = second
+    let termination = second
         .request(Request::TerminateTerminal {
             session_id: session_id.clone(),
             mode: TerminationMode::Terminate,
         })
-        .await
-        .unwrap()
-    else {
-        panic!("unexpected terminate response");
+        .await;
+    let Ok(Response::TerminalTerminated(terminated)) = termination else {
+        panic!(
+            "unexpected terminate result: {termination:?}; state={:?}",
+            second.state()
+        );
     };
     second
         .request(Request::AcknowledgeTerminalExit {

@@ -1,12 +1,12 @@
 use std::{
-    collections::HashMap,
+    collections::VecDeque,
     sync::{Arc, Mutex},
 };
 
 use yttt_client_core::ClientEvent;
 use yttt_protocol::agent::AgentSnapshotUpdate;
 
-use crate::{host_runtime::DesktopHostRuntime, model::ids::TerminalSessionId};
+use crate::host_runtime::DesktopHostRuntime;
 
 pub mod installer;
 
@@ -16,38 +16,10 @@ pub const AGENT_HOOK_ENVIRONMENT_VARIABLES: [&str; 3] = [
     "YTTT_AGENT_HOOK_SCOPE",
 ];
 
-#[derive(Default)]
-struct PendingAgentSnapshots {
-    by_session: HashMap<TerminalSessionId, AgentSnapshotUpdate>,
-}
-
-impl PendingAgentSnapshots {
-    fn push(&mut self, update: AgentSnapshotUpdate) {
-        let cursor = (update.host_epoch, update.scope.generation, update.sequence);
-        if self
-            .by_session
-            .get(&update.terminal_session_id)
-            .is_none_or(|current| {
-                (
-                    current.host_epoch,
-                    current.scope.generation,
-                    current.sequence,
-                ) < cursor
-            })
-        {
-            self.by_session
-                .insert(update.terminal_session_id.clone(), update);
-        }
-    }
-
-    fn drain(&mut self) -> Vec<AgentSnapshotUpdate> {
-        std::mem::take(&mut self.by_session).into_values().collect()
-    }
-}
-
 #[derive(Clone)]
 pub struct AgentSnapshotClient {
-    pending: Arc<Mutex<PendingAgentSnapshots>>,
+    initial: Arc<Mutex<VecDeque<AgentSnapshotUpdate>>>,
+    events: flume::Receiver<ClientEvent>,
 }
 
 impl std::fmt::Debug for AgentSnapshotClient {
@@ -60,49 +32,36 @@ impl std::fmt::Debug for AgentSnapshotClient {
 
 impl AgentSnapshotClient {
     pub fn new(runtime: Arc<DesktopHostRuntime>) -> Self {
-        let source = runtime.events();
-        let pending = Arc::new(Mutex::new(PendingAgentSnapshots::default()));
-        {
-            let mut pending = pending
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            for snapshot in runtime.agent_snapshots() {
-                pending.push(snapshot);
-            }
+        let events = runtime.events();
+        let initial = runtime.agent_snapshots().into();
+        Self {
+            initial: Arc::new(Mutex::new(initial)),
+            events,
         }
-
-        let pending_for_bridge = Arc::downgrade(&pending);
-        std::thread::Builder::new()
-            .name("yttt-agent-snapshots".to_string())
-            .spawn(move || {
-                while let Ok(event) = source.recv() {
-                    let ClientEvent::AgentSnapshotUpdated(update) = event else {
-                        continue;
-                    };
-                    let Some(pending) = pending_for_bridge.upgrade() else {
-                        break;
-                    };
-                    pending
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .push(*update);
-                }
-            })
-            .expect("failed to spawn Agent snapshot Host event bridge");
-        Self { pending }
     }
 
-    pub fn drain(&self) -> Vec<AgentSnapshotUpdate> {
-        self.pending
+    pub async fn recv(&self) -> Option<AgentSnapshotUpdate> {
+        if let Some(update) = self
+            .initial
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .drain()
+            .pop_front()
+        {
+            return Some(update);
+        }
+        loop {
+            match self.events.recv_async().await.ok()? {
+                ClientEvent::AgentSnapshotUpdated(update) => return Some(*update),
+                _ => continue,
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::ids::TerminalSessionId;
     use yttt_agent_core::{
         AgentInstanceId, AgentProcessState, AgentSnapshot, AgentTurnState, ProviderId,
     };
@@ -144,27 +103,29 @@ mod tests {
     }
 
     #[test]
-    fn pending_snapshots_keep_only_the_latest_update_per_session() {
-        let mut pending = PendingAgentSnapshots::default();
-        pending.push(update("a", 1, 1, 2));
-        pending.push(update("a", 1, 1, 1));
-        pending.push(update("a", 0, 99, 99));
-        pending.push(update("a", 1, 2, 1));
-        pending.push(update("b", 1, 1, 3));
+    fn snapshot_client_yields_initial_state_before_live_events() {
+        let initial = update("initial", 1, 1, 2);
+        let live = update("live", 1, 1, 3);
+        let (sender, events) = flume::unbounded();
+        let client = AgentSnapshotClient {
+            initial: Arc::new(Mutex::new(VecDeque::from([initial]))),
+            events,
+        };
+        sender
+            .send(ClientEvent::AgentSnapshotUpdated(Box::new(live)))
+            .unwrap();
+        drop(sender);
 
-        let mut updates = pending.drain();
-        updates.sort_by(|left, right| {
-            left.terminal_session_id
-                .as_str()
-                .cmp(right.terminal_session_id.as_str())
+        futures_lite::future::block_on(async {
+            assert_eq!(
+                client.recv().await.unwrap().terminal_session_id.as_str(),
+                "initial"
+            );
+            assert_eq!(
+                client.recv().await.unwrap().terminal_session_id.as_str(),
+                "live"
+            );
+            assert!(client.recv().await.is_none());
         });
-
-        assert_eq!(updates.len(), 2);
-        assert_eq!(updates[0].terminal_session_id.as_str(), "a");
-        assert_eq!(updates[0].scope.generation, 2);
-        assert_eq!(updates[0].sequence, 1);
-        assert_eq!(updates[1].terminal_session_id.as_str(), "b");
-        assert_eq!(updates[1].sequence, 3);
-        assert!(pending.drain().is_empty());
     }
 }

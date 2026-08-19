@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use gpui::{Context, Window};
 use yttt_agent_core::{AgentProcessState, AgentViewState};
 use yttt_protocol::agent::AgentSnapshotUpdate;
@@ -10,41 +8,47 @@ use crate::{
     runtime::agent_manager::{AgentPaneAddress, AgentPaneExitOutcome},
 };
 
-const AGENT_SNAPSHOT_DRAIN_INTERVAL: Duration = Duration::from_millis(50);
-
 impl WorkbenchView {
     pub(super) fn sync_agent_process_monitoring(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.terminal.agent_process_monitor_task.is_some() || !self.terminal.start_processes {
+        if !self.terminal.start_processes {
             return;
         }
+        self.apply_pending_host_agent_snapshots(window, cx);
+        if self.terminal.agent_process_monitor_task.is_some() {
+            return;
+        }
+        let Some(client) = self.agent_manager.snapshot_client() else {
+            return;
+        };
 
         self.terminal.agent_process_monitor_task =
             Some(cx.spawn_in(window, async move |this, cx| {
-                loop {
+                while let Some(update) = client.recv().await {
                     if this
                         .update_in(cx, |view, window, cx| {
-                            view.apply_host_agent_snapshots(window, cx);
+                            let mut changed = view.apply_host_agent_snapshot(update, window, cx);
+                            if let Some(error) = view.agent_manager.take_error() {
+                                view.load_error = Some(error);
+                                changed = true;
+                            }
+                            if changed {
+                                cx.notify();
+                            }
                         })
                         .is_err()
                     {
                         break;
                     }
-                    cx.background_executor()
-                        .timer(AGENT_SNAPSHOT_DRAIN_INTERVAL)
-                        .await;
                 }
             }));
     }
 
-    fn apply_host_agent_snapshots(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let mut pending = std::mem::take(&mut self.terminal.pending_host_agent_snapshots);
-        for update in self.agent_manager.drain_host_snapshots() {
-            pending.insert(update.terminal_session_id.clone(), update);
-        }
+    fn apply_pending_host_agent_snapshots(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let pending = std::mem::take(&mut self.terminal.pending_host_agent_snapshots);
         let mut changed = false;
         for update in pending.into_values() {
             changed |= self.apply_host_agent_snapshot(update, window, cx);

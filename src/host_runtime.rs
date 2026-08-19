@@ -339,7 +339,7 @@ impl DesktopHostRuntime {
         self.client.terminal_metadata(session_id)
     }
 
-    pub fn resource_catalog(&self) -> Option<ResourceCatalog> {
+    pub fn resource_catalog(&self) -> Option<Arc<ResourceCatalog>> {
         self.client.resource_catalog()
     }
     pub fn agent_snapshots(&self) -> Vec<yttt_protocol::agent::AgentSnapshotUpdate> {
@@ -553,17 +553,11 @@ fn reconcile_terminal_start(
                 placement.session_id.clone(),
             ));
         }
-        let geometry_epoch = placement
-            .viewport
-            .as_ref()
-            .map_or(1, |viewport| viewport.geometry_epoch.saturating_add(1));
+        let geometry_epoch = placement.geometry_epoch.saturating_add(1).max(1);
         return Ok(Request::AttachTerminal(AttachTerminal {
             session_id: placement.session_id.clone(),
             known_session_epoch: Some(placement.session_epoch),
-            after_sequence: placement
-                .viewport
-                .as_ref()
-                .map(|viewport| viewport.sequence),
+            after_sequence: (placement.last_sequence > 0).then_some(placement.last_sequence),
             mode: yttt_protocol::terminal::TerminalLeaseMode::Interactive,
             geometry: spec.geometry,
             geometry_epoch,
@@ -650,7 +644,7 @@ mod tests {
         EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
     };
     use yttt_core::model::ids::{HostId, ProfileId, ProjectId};
-    use yttt_protocol::terminal::{TerminalExecutionSpec, TerminalGeometry};
+    use yttt_protocol::terminal::{TerminalExecutionSpec, TerminalGeometry, TerminalProcessState};
 
     fn spec() -> TerminalSpawnSpec {
         TerminalSpawnSpec {
@@ -716,12 +710,13 @@ mod tests {
         let placement = TerminalPlacement {
             session_id: spec.session_id.clone(),
             session_epoch: 3,
+            geometry_epoch: spec.geometry_epoch,
             project_id: spec.project_id.clone(),
             geometry: spec.geometry,
             last_sequence: 11,
             spawn_fingerprint: spec.address_fingerprint(),
             owner: None,
-            viewport: None,
+            process_state: TerminalProcessState::Running,
         };
         assert!(matches!(
             reconcile_terminal_start(&store, spec.clone(), &catalog(vec![placement])).unwrap(),
@@ -755,11 +750,12 @@ mod tests {
             session_id: requested.session_id.clone(),
             session_epoch: 3,
             project_id: requested.project_id.clone(),
+            geometry_epoch: requested.geometry_epoch,
             geometry: requested.geometry,
             last_sequence: 11,
             spawn_fingerprint: requested.address_fingerprint().wrapping_add(1),
             owner: None,
-            viewport: None,
+            process_state: TerminalProcessState::Running,
         };
         let address_store = TerminalPlacementStore::load(temp.path().join("address.json")).unwrap();
         assert!(matches!(
@@ -799,10 +795,11 @@ mod tests {
             session_epoch: 3,
             project_id: requested.project_id.clone(),
             geometry: requested.geometry,
+            geometry_epoch: requested.geometry_epoch,
             last_sequence: 11,
             spawn_fingerprint: requested.address_fingerprint(),
             owner: None,
-            viewport: None,
+            process_state: TerminalProcessState::Running,
         };
         assert!(matches!(
             reconcile_terminal_start(&close_store, requested, &catalog(vec![live_placement])),

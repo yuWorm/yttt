@@ -2,8 +2,9 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use yttt_protocol::{
     ControlMessage, DecodedFrame, DesktopShellMessage, FrameKind, HEADER_LEN, HandshakeMessage,
-    LifecycleMessage, MAX_DESKTOP_SHELL_FRAME_BYTES, MAX_FRAME_BYTES, ProtocolCodecError,
-    decode_frame, decode_header, decode_message, encode_message,
+    HostEvent, LifecycleMessage, MAX_DESKTOP_SHELL_FRAME_BYTES, MAX_FRAME_BYTES,
+    ProtocolCodecError, TerminalInteractiveMessage, decode_frame, decode_header, decode_message,
+    encode_message,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -153,6 +154,38 @@ pub async fn receive_desktop_shell(
     Ok(decode_message(&frame)?)
 }
 
+pub async fn send_terminal_interactive(
+    stream: &mut (impl AsyncWrite + Unpin),
+    message: &TerminalInteractiveMessage,
+) -> Result<(), WireError> {
+    send(stream, FrameKind::TerminalInteractive, message).await
+}
+
+pub async fn receive_terminal_interactive(
+    stream: &mut (impl AsyncRead + Unpin),
+) -> Result<TerminalInteractiveMessage, WireError> {
+    let (frame, _) = receive(
+        stream,
+        FrameKind::TerminalInteractive,
+        MAX_FRAME_BYTES + HEADER_LEN,
+    )
+    .await?;
+    Ok(decode_message(&frame)?)
+}
+
+pub async fn send_state_event(
+    stream: &mut (impl AsyncWrite + Unpin),
+    event: &HostEvent,
+) -> Result<(), WireError> {
+    send(stream, FrameKind::StateEvent, event).await
+}
+
+pub async fn receive_state_event(
+    stream: &mut (impl AsyncRead + Unpin),
+) -> Result<HostEvent, WireError> {
+    let (frame, _) = receive(stream, FrameKind::StateEvent, MAX_FRAME_BYTES + HEADER_LEN).await?;
+    Ok(decode_message(&frame)?)
+}
 pub async fn send_control(
     stream: &mut (impl AsyncWrite + Unpin),
     message: &ControlMessage,

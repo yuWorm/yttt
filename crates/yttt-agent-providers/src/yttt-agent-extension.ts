@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import {
 	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
@@ -8,6 +10,93 @@ import {
 
 const PREFIX = "yttt-agent-v1:";
 const MAX_TEXT = 2048;
+const DELIVERY_PROTOCOL = 1;
+const DELIVERY_STREAM_ID = randomUUID();
+const MIN_RETRY_DELAY_MS = 25;
+const MAX_RETRY_DELAY_MS = 1000;
+
+type HookDelivery = {
+	endpoint: string;
+	token: string;
+	scope: string;
+	sequence: number;
+	event: string;
+	payload: Record<string, unknown>;
+};
+
+const deliveryQueue: HookDelivery[] = [];
+let nextDeliverySequence = 1;
+let deliveryWorker: Promise<void> | undefined;
+
+
+function startDeliveryWorker(): void {
+	if (deliveryWorker) return;
+	deliveryWorker = drainDeliveryQueue().finally(() => {
+		deliveryWorker = undefined;
+		if (deliveryQueue.length > 0) startDeliveryWorker();
+	});
+}
+
+async function drainDeliveryQueue(): Promise<void> {
+	let retryDelay = MIN_RETRY_DELAY_MS;
+	while (deliveryQueue.length > 0) {
+		const delivery = deliveryQueue[0];
+		try {
+			const response = await fetch(`${delivery.endpoint}/hook/omp`, {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					"x-yttt-agent-hook-token": delivery.token,
+					"x-yttt-agent-hook-scope": delivery.scope,
+				},
+				body: JSON.stringify({
+					protocol: DELIVERY_PROTOCOL,
+					streamId: DELIVERY_STREAM_ID,
+					sequence: delivery.sequence,
+					event: delivery.event,
+					payload: delivery.payload,
+				}),
+				signal: AbortSignal.timeout(2000),
+			});
+			if (response.ok) {
+				const acknowledgement = (await response.json()) as {
+					acceptedSequence?: unknown;
+				};
+				if (
+					typeof acknowledgement.acceptedSequence === "number" &&
+					Number.isSafeInteger(acknowledgement.acceptedSequence) &&
+					acknowledgement.acceptedSequence >= delivery.sequence
+				) {
+					deliveryQueue.shift();
+					retryDelay = MIN_RETRY_DELAY_MS;
+					continue;
+				}
+			}
+		} catch {}
+		const retry = Promise.withResolvers<void>();
+		setTimeout(retry.resolve, retryDelay);
+		await retry.promise;
+		retryDelay = Math.min(retryDelay * 2, MAX_RETRY_DELAY_MS);
+	}
+}
+
+function enqueueDelivery(
+	endpoint: string,
+	token: string,
+	scope: string,
+	event: string,
+	payload: Record<string, unknown>,
+): void {
+	deliveryQueue.push({
+		endpoint,
+		token,
+		scope,
+		sequence: nextDeliverySequence++,
+		event,
+		payload,
+	});
+	startDeliveryWorker();
+}
 
 type StatusContext = {
 	sessionManager: { getSessionId(): string; getSessionFile?(): string | undefined };
@@ -42,16 +131,7 @@ function send(name: string, payload: Record<string, unknown>, ctx: StatusContext
 	const hookToken = process.env.YTTT_AGENT_HOOK_TOKEN;
 	const hookScope = process.env.YTTT_AGENT_HOOK_SCOPE;
 	if (hookEndpoint && hookToken && hookScope) {
-		void fetch(`${hookEndpoint}/hook/omp`, {
-			method: "POST",
-			headers: {
-				"content-type": "application/json",
-				"x-yttt-agent-hook-token": hookToken,
-				"x-yttt-agent-hook-scope": hookScope,
-			},
-			body: JSON.stringify({ event: name, payload: payloadWithContext }),
-			signal: AbortSignal.timeout(2000),
-		}).catch(() => {});
+		enqueueDelivery(hookEndpoint, hookToken, hookScope, name, payloadWithContext);
 		return;
 	}
 

@@ -609,6 +609,8 @@ impl WorkbenchView {
             }
         }
         self.terminal.host_runtime = runtime.clone();
+        self.terminal.agent_process_monitor_task = None;
+        self.terminal.pending_host_agent_snapshots.clear();
         self.agent_manager.set_snapshot_client(
             runtime
                 .clone()

@@ -34,6 +34,7 @@ pub(crate) struct HostLifecycle {
     had_desktop_owner: AtomicBool,
     state: Mutex<LifecycleState>,
     changed: Notify,
+    resource_changes: watch::Sender<u64>,
     stop_tx: watch::Sender<bool>,
 }
 
@@ -62,6 +63,7 @@ impl HostLifecycle {
                 pending_resources: 0,
             }),
             changed: Notify::new(),
+            resource_changes: watch::channel(0).0,
             stop_tx,
         }
     }
@@ -122,7 +124,13 @@ impl HostLifecycle {
     }
 
     pub(crate) fn resource_changed(&self) {
+        self.resource_changes
+            .send_modify(|revision| *revision = revision.saturating_add(1));
         self.changed.notify_waiters();
+    }
+
+    pub(crate) fn subscribe_resource_changes(&self) -> watch::Receiver<u64> {
+        self.resource_changes.subscribe()
     }
 
     pub(crate) fn admit_resource(self: &Arc<Self>) -> Option<ResourceAdmission> {

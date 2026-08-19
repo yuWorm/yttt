@@ -50,10 +50,10 @@ pub type ResizeCallback = Arc<dyn Fn(u16, u16) -> Result<(), String> + Send + Sy
 
 #[derive(Debug)]
 pub(crate) struct QueuedInput {
-    chunks: SmallVec<[Bytes; 8]>,
+    chunks: SmallVec<[Bytes; 1]>,
     len: usize,
     user_commands: usize,
-    performance_samples: SmallVec<[(usize, InputPerformanceSample); 8]>,
+    performance_samples: SmallVec<[(usize, InputPerformanceSample); 1]>,
 }
 
 impl QueuedInput {

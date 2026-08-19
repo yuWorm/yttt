@@ -143,12 +143,18 @@ import json
 import sys
 try:
     lines = [line for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+    fallback = None
     for line in reversed(lines):
         for terminal in json.loads(line).get("terminals", []):
             session_id = terminal.get("session_id")
-            if isinstance(session_id, str) and session_id:
+            if not isinstance(session_id, str) or not session_id:
+                continue
+            fallback = fallback or session_id
+            if session_id.endswith(":perf:perf"):
                 print(session_id)
                 raise SystemExit(0)
+    if fallback:
+        print(fallback)
 except (OSError, json.JSONDecodeError):
     pass
 PY
@@ -614,6 +620,10 @@ run_host() {
     terminate_pid "$desktop_pid"
     die "Host-backed desktop did not initialize its reporter"
   fi
+  wait_for_host_data_clients "$diagnostics_path" "$desktop_pid" "$panes" 30 || {
+    terminate_pid "$desktop_pid"
+    die "Host terminal data attachments did not reach the requested pane count"
+  }
   activate_process "$desktop_pid"
   if ! wait_for_file "$run_dir/workload.ready" "$desktop_pid" 30; then
     terminate_pid "$desktop_pid"
@@ -744,7 +754,9 @@ PY
     --auth-token-file "$auth_token" \
     --ssh-host-keys-file "$profile_root/config/ssh-host-keys.toml" \
     --credential-namespace dev.yttt.ssh.performance \
-    --build-id "$build_id" \
+    --product-version "$build_id" \
+    --build-fingerprint "terminal-perf-$build_id" \
+    --resource-compatibility "yttt-resource-v1" \
     >"$run_dir/host.log" 2>&1 &
   host_pid=$!
   wait_for_path "$profile_root/runtime/host-ready.json" 20 || {

@@ -6760,7 +6760,7 @@ fn visible_project_items_fall_back_to_the_project_directory_name() {
 }
 
 #[test]
-fn visible_project_items_show_agent_working_status() {
+fn visible_project_items_show_stale_without_authoritative_snapshot() {
     let mut workspace = workspace_with_sample_project();
     let project_id = workspace.selected_project_id().unwrap().clone();
     workspace
@@ -6769,7 +6769,7 @@ fn visible_project_items_show_agent_working_status() {
 
     let items = visible_project_items(&workspace);
 
-    assert_eq!(items[0].agent_state, Some(AgentViewState::Working));
+    assert_eq!(items[0].agent_state, Some(AgentViewState::Stale));
 }
 
 #[test]

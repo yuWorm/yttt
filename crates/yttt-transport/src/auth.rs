@@ -230,6 +230,11 @@ where
         (ConnectionChannel::Control, None, _)
             | (ConnectionChannel::TerminalData, Some(_), false)
             | (
+                ConnectionChannel::TerminalInteractive | ConnectionChannel::StateEvents,
+                None,
+                false
+            )
+            | (
                 ConnectionChannel::Lifecycle | ConnectionChannel::DesktopOwner,
                 None,
                 _
@@ -242,7 +247,10 @@ where
         ConnectionChannel::Lifecycle | ConnectionChannel::DesktopOwner => {
             identity.lifecycle_supported
         }
-        ConnectionChannel::Control | ConnectionChannel::TerminalData => identity.resource_supported,
+        ConnectionChannel::Control
+        | ConnectionChannel::TerminalInteractive
+        | ConnectionChannel::TerminalData
+        | ConnectionChannel::StateEvents => identity.resource_supported,
     };
     let Some(selected_version) = host_supported.negotiate(hello.supported) else {
         reject(

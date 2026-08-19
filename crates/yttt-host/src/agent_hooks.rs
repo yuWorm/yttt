@@ -3,8 +3,9 @@ use std::{
     io::{self, Read as _, Write as _},
     net::{TcpListener, TcpStream},
     sync::{
-        Arc,
+        Arc, Mutex as StdMutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError},
     },
     thread::{self, JoinHandle},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -16,13 +17,16 @@ use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 use tokio::sync::broadcast;
 use yttt_agent_core::{
-    AGENT_ACTIVITY_STALE_AFTER_MILLIS, AgentExitReason, AgentInstanceId, AgentProcessExit,
-    AgentProcessState, AgentProvider, AgentReducer,
+    AGENT_ACTIVITY_STALE_AFTER_MILLIS, AgentEventKind, AgentExitReason, AgentInstanceId,
+    AgentProcessExit, AgentProcessState, AgentProvider, AgentReducer,
 };
 use yttt_agent_providers::builtin_providers;
 use yttt_core::model::ids::TerminalSessionId;
 use yttt_protocol::{
-    agent::{AgentHookScope, AgentSnapshotCursor, AgentSnapshotUpdate},
+    agent::{
+        AGENT_HOOK_DELIVERY_PROTOCOL, AgentHookAcknowledgement, AgentHookDelivery, AgentHookScope,
+        AgentSnapshotCursor, AgentSnapshotUpdate,
+    },
     terminal::TerminalSpawnSpec,
 };
 
@@ -32,6 +36,10 @@ const CLIENT_TIMEOUT: Duration = Duration::from_secs(1);
 const ACCEPT_IDLE: Duration = Duration::from_millis(10);
 const EVENT_CAPACITY: usize = 64;
 const MAX_AGENT_RECORDS: usize = 256;
+const MAX_PENDING_DELIVERIES: usize = 256;
+const MAX_RETIRED_DELIVERY_STREAMS: usize = 4;
+const CONNECTION_WORKERS: usize = 4;
+const CONNECTION_QUEUE_CAPACITY: usize = 64;
 const TOKEN_HEADER: &str = "x-yttt-agent-hook-token";
 const SCOPE_HEADER: &str = "x-yttt-agent-hook-scope";
 const ENVIRONMENT_VARIABLES: [&str; 3] = [
@@ -62,6 +70,20 @@ struct AgentRecord {
     terminal_session_id: TerminalSessionId,
     sequence: u64,
     reducer: AgentReducer,
+    delivery: Option<AgentDeliveryState>,
+    terminal_exited: bool,
+}
+
+struct AgentDeliveryState {
+    stream_id: String,
+    accepted_sequence: u64,
+    pending: BTreeMap<u64, Vec<AgentEventKind>>,
+    retired: Vec<(String, u64)>,
+}
+
+struct HookDeliveryMetadata {
+    stream_id: String,
+    sequence: u64,
 }
 
 struct AgentState {
@@ -70,6 +92,7 @@ struct AgentState {
     providers: HashMap<String, Arc<dyn AgentProvider>>,
     bindings: Mutex<HashMap<AgentHookScope, TerminalSessionId>>,
     records: Mutex<HashMap<AgentAddress, AgentRecord>>,
+    terminal_exits: Mutex<HashMap<AgentHookScope, AgentProcessExit>>,
     events: broadcast::Sender<AgentSnapshotUpdate>,
 }
 
@@ -79,6 +102,7 @@ pub struct HostAgentHookRuntime {
     next_resource_epoch: AtomicU64,
     shutdown: Arc<AtomicBool>,
     accept_thread: Option<JoinHandle<()>>,
+    worker_threads: Vec<JoinHandle<()>>,
 }
 
 impl HostAgentHookRuntime {
@@ -104,20 +128,34 @@ impl HostAgentHookRuntime {
             providers,
             bindings: Mutex::new(HashMap::new()),
             records: Mutex::new(HashMap::new()),
+            terminal_exits: Mutex::new(HashMap::new()),
             events,
         });
         let shutdown = Arc::new(AtomicBool::new(false));
-        let thread_state = state.clone();
+        let (connection_tx, connection_rx) = mpsc::sync_channel(CONNECTION_QUEUE_CAPACITY);
+        let connection_rx = Arc::new(StdMutex::new(connection_rx));
+        let mut worker_threads = Vec::with_capacity(CONNECTION_WORKERS);
+        for index in 0..CONNECTION_WORKERS {
+            let worker_state = state.clone();
+            let worker_shutdown = shutdown.clone();
+            let worker_rx = connection_rx.clone();
+            worker_threads.push(
+                thread::Builder::new()
+                    .name(format!("yttt-host-agent-hook-{index}"))
+                    .spawn(move || connection_loop(worker_rx, worker_state, worker_shutdown))?,
+            );
+        }
         let thread_shutdown = shutdown.clone();
         let accept_thread = thread::Builder::new()
             .name("yttt-host-agent-hooks".to_string())
-            .spawn(move || accept_loop(listener, thread_state, thread_shutdown))?;
+            .spawn(move || accept_loop(listener, connection_tx, thread_shutdown))?;
         Ok(Arc::new(Self {
             endpoint,
             state,
             next_resource_epoch: AtomicU64::new(1),
             shutdown,
             accept_thread: Some(accept_thread),
+            worker_threads,
         }))
     }
 
@@ -148,45 +186,56 @@ impl HostAgentHookRuntime {
 
         let address = AgentAddress::from(&scope);
         self.state
-            .bindings
+            .terminal_exits
             .lock()
             .retain(|candidate, _| AgentAddress::from(candidate) != address);
-        self.state
-            .bindings
-            .lock()
-            .insert(scope.clone(), spec.session_id.clone());
+        let mut bindings = self.state.bindings.lock();
+        bindings.retain(|candidate, _| AgentAddress::from(candidate) != address);
+        bindings.insert(scope.clone(), spec.session_id.clone());
         scope
     }
 
     pub fn cancel_terminal(&self, scope: &AgentHookScope) {
         self.state.bindings.lock().remove(scope);
+        self.state.terminal_exits.lock().remove(scope);
     }
 
     pub fn terminal_exited(&self, session_id: &TerminalSessionId, code: Option<i32>) {
         let now = now_millis();
+        let exit = AgentProcessExit {
+            code,
+            reason: if code.unwrap_or_default() == 0 {
+                AgentExitReason::Completed
+            } else {
+                AgentExitReason::Failed
+            },
+        };
+        let exited_scopes = self
+            .state
+            .bindings
+            .lock()
+            .iter()
+            .filter(|(_, bound_session_id)| *bound_session_id == session_id)
+            .map(|(scope, _)| scope.clone())
+            .collect::<Vec<_>>();
+        let mut terminal_exits = self.state.terminal_exits.lock();
+        terminal_exits.extend(exited_scopes.into_iter().map(|scope| (scope, exit)));
         let mut updates = Vec::new();
+        let mut records = self.state.records.lock();
+        for record in records
+            .values_mut()
+            .filter(|record| &record.terminal_session_id == session_id)
         {
-            let mut records = self.state.records.lock();
-            for record in records
-                .values_mut()
-                .filter(|record| &record.terminal_session_id == session_id)
+            record.terminal_exited = true;
+            if record
+                .reducer
+                .process_exited(record.scope.generation, exit, now)
             {
-                let exit = AgentProcessExit {
-                    code,
-                    reason: if code.unwrap_or_default() == 0 {
-                        AgentExitReason::Completed
-                    } else {
-                        AgentExitReason::Failed
-                    },
-                };
-                if record
-                    .reducer
-                    .process_exited(record.scope.generation, exit, now)
-                {
-                    updates.push(snapshot_update(self.state.host_epoch, record));
-                }
+                updates.push(snapshot_update(self.state.host_epoch, record));
             }
         }
+        drop(records);
+        drop(terminal_exits);
         for update in updates {
             let _ = self.state.events.send(update);
         }
@@ -266,6 +315,9 @@ impl Drop for HostAgentHookRuntime {
         if let Some(thread) = self.accept_thread.take() {
             let _ = thread.join();
         }
+        for thread in self.worker_threads.drain(..) {
+            let _ = thread.join();
+        }
     }
 }
 
@@ -284,16 +336,55 @@ fn current_snapshot(host_epoch: u64, record: &AgentRecord) -> AgentSnapshotUpdat
     }
 }
 
-fn accept_loop(listener: TcpListener, state: Arc<AgentState>, shutdown: Arc<AtomicBool>) {
+fn accept_loop(
+    listener: TcpListener,
+    connections: SyncSender<TcpStream>,
+    shutdown: Arc<AtomicBool>,
+) {
     while !shutdown.load(Ordering::Acquire) {
         match listener.accept() {
-            Ok((stream, _)) => handle_connection(stream, &state),
+            Ok((stream, _)) => match connections.try_send(stream) {
+                Ok(()) | Err(TrySendError::Full(_)) => {}
+                Err(TrySendError::Disconnected(_)) => break,
+            },
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 thread::sleep(ACCEPT_IDLE);
             }
             Err(_) => break,
         }
     }
+}
+
+fn connection_loop(
+    connections: Arc<StdMutex<Receiver<TcpStream>>>,
+    state: Arc<AgentState>,
+    shutdown: Arc<AtomicBool>,
+) {
+    while !shutdown.load(Ordering::Acquire) {
+        let received = match connections.lock() {
+            Ok(connections) => connections.recv_timeout(ACCEPT_IDLE),
+            Err(_) => return,
+        };
+        match received {
+            Ok(stream) => handle_connection(stream, &state),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return,
+        }
+    }
+}
+
+enum HookIngestOutcome {
+    Unsequenced,
+    Sequenced {
+        acknowledgement: AgentHookAcknowledgement,
+        pending: bool,
+    },
+}
+
+struct DeliveryApplication {
+    events: Vec<AgentEventKind>,
+    acknowledgement: AgentHookAcknowledgement,
+    pending: bool,
 }
 
 fn handle_connection(mut stream: TcpStream, state: &AgentState) {
@@ -303,22 +394,38 @@ fn handle_connection(mut stream: TcpStream, state: &AgentState) {
     let request = read_http_request(&mut stream)
         .and_then(|request| decode_request(request, &state.secret))
         .and_then(|request| ingest_request(state, request));
-    let status = match request {
-        Ok(()) => 204,
-        Err(HttpRequestError::Unauthorized) => 403,
-        Err(HttpRequestError::NotFound) => 404,
-        Err(HttpRequestError::Invalid) => 400,
+    let (status, reason, body) = match request {
+        Ok(HookIngestOutcome::Unsequenced) => (204, "No Content", Vec::new()),
+        Ok(HookIngestOutcome::Sequenced {
+            acknowledgement,
+            pending,
+        }) => (
+            if pending { 202 } else { 200 },
+            if pending { "Accepted" } else { "OK" },
+            serde_json::to_vec(&acknowledgement).expect("hook acknowledgement must serialize"),
+        ),
+        Err(HttpRequestError::Conflict(acknowledgement)) => (
+            409,
+            "Conflict",
+            serde_json::to_vec(&acknowledgement).expect("hook acknowledgement must serialize"),
+        ),
+        Err(HttpRequestError::Unauthorized) => (403, "Forbidden", Vec::new()),
+        Err(HttpRequestError::NotFound) => (404, "Not Found", Vec::new()),
+        Err(HttpRequestError::Invalid) => (400, "Bad Request", Vec::new()),
     };
-    let reason = match status {
-        204 => "No Content",
-        400 => "Bad Request",
-        403 => "Forbidden",
-        _ => "Not Found",
-    };
-    let _ = write!(
-        stream,
-        "HTTP/1.1 {status} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-    );
+    if body.is_empty() {
+        let _ = write!(
+            stream,
+            "HTTP/1.1 {status} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+    } else {
+        let _ = write!(
+            stream,
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = stream.write_all(&body);
+    }
     let _ = stream.flush();
 }
 
@@ -327,9 +434,13 @@ struct DecodedHookRequest {
     source: String,
     event: String,
     payload: Value,
+    delivery: Option<HookDeliveryMetadata>,
 }
 
-fn ingest_request(state: &AgentState, request: DecodedHookRequest) -> Result<(), HttpRequestError> {
+fn ingest_request(
+    state: &AgentState,
+    request: DecodedHookRequest,
+) -> Result<HookIngestOutcome, HttpRequestError> {
     let terminal_session_id = state
         .bindings
         .lock()
@@ -347,8 +458,10 @@ fn ingest_request(state: &AgentState, request: DecodedHookRequest) -> Result<(),
         })
         .map_err(|_| HttpRequestError::Invalid)?;
     let address = AgentAddress::from(&request.scope);
+    let terminal_exits = state.terminal_exits.lock();
+    let terminal_exit = terminal_exits.get(&request.scope).copied();
     let now = now_millis();
-    let update = {
+    let (update, outcome) = {
         let mut records = state.records.lock();
         if records
             .get(&address)
@@ -373,6 +486,9 @@ fn ingest_request(state: &AgentState, request: DecodedHookRequest) -> Result<(),
                 AgentReducer::new(AgentInstanceId::random(), provider.descriptor().id, now);
             reducer.process_starting(request.scope.generation, now);
             reducer.process_started(request.scope.generation, now);
+            if let Some(exit) = terminal_exit {
+                reducer.process_exited(request.scope.generation, exit, now);
+            }
             records.insert(
                 address.clone(),
                 AgentRecord {
@@ -380,22 +496,128 @@ fn ingest_request(state: &AgentState, request: DecodedHookRequest) -> Result<(),
                     terminal_session_id,
                     sequence: 0,
                     reducer,
+                    delivery: None,
+                    terminal_exited: terminal_exit.is_some(),
                 },
             );
         }
         let record = records
             .get_mut(&address)
             .expect("Agent record was inserted");
+        let (events, outcome) = if let Some(delivery) = request.delivery {
+            let application = queue_delivery(&mut record.delivery, delivery, normalized)?;
+            (
+                application.events,
+                HookIngestOutcome::Sequenced {
+                    acknowledgement: application.acknowledgement,
+                    pending: application.pending,
+                },
+            )
+        } else {
+            (normalized, HookIngestOutcome::Unsequenced)
+        };
         let mut changed = false;
-        for event in normalized {
-            changed |= record.reducer.apply(request.scope.generation, event, now);
+        if !record.terminal_exited {
+            for event in events {
+                changed |= record.reducer.apply(request.scope.generation, event, now);
+            }
         }
-        changed.then(|| snapshot_update(state.host_epoch, record))
+        (
+            changed.then(|| snapshot_update(state.host_epoch, record)),
+            outcome,
+        )
     };
     if let Some(update) = update {
         let _ = state.events.send(update);
     }
-    Ok(())
+    Ok(outcome)
+}
+
+fn queue_delivery(
+    delivery_state: &mut Option<AgentDeliveryState>,
+    delivery: HookDeliveryMetadata,
+    events: Vec<AgentEventKind>,
+) -> Result<DeliveryApplication, HttpRequestError> {
+    let state = delivery_state.get_or_insert_with(|| AgentDeliveryState {
+        stream_id: delivery.stream_id.clone(),
+        accepted_sequence: 0,
+        pending: BTreeMap::new(),
+        retired: Vec::new(),
+    });
+    if state.stream_id != delivery.stream_id {
+        if let Some((_, accepted_sequence)) = state
+            .retired
+            .iter()
+            .find(|(stream_id, _)| stream_id == &delivery.stream_id)
+        {
+            let acknowledgement = AgentHookAcknowledgement {
+                accepted_sequence: *accepted_sequence,
+                next_sequence: accepted_sequence.saturating_add(1),
+            };
+            if delivery.sequence <= *accepted_sequence {
+                return Ok(DeliveryApplication {
+                    events: Vec::new(),
+                    acknowledgement,
+                    pending: false,
+                });
+            }
+            return Err(HttpRequestError::Conflict(acknowledgement));
+        }
+        if delivery.sequence != 1 {
+            return Err(HttpRequestError::Conflict(AgentHookAcknowledgement {
+                accepted_sequence: 0,
+                next_sequence: 1,
+            }));
+        }
+        if state.retired.len() >= MAX_RETIRED_DELIVERY_STREAMS {
+            state.retired.remove(0);
+        }
+        state.retired.push((
+            std::mem::take(&mut state.stream_id),
+            state.accepted_sequence,
+        ));
+        state.stream_id = delivery.stream_id.clone();
+        state.accepted_sequence = 0;
+        state.pending.clear();
+    }
+
+    if delivery.sequence <= state.accepted_sequence {
+        return Ok(DeliveryApplication {
+            events: Vec::new(),
+            acknowledgement: AgentHookAcknowledgement {
+                accepted_sequence: state.accepted_sequence,
+                next_sequence: state.accepted_sequence.saturating_add(1),
+            },
+            pending: false,
+        });
+    }
+    if !state.pending.contains_key(&delivery.sequence) {
+        if state.pending.len() >= MAX_PENDING_DELIVERIES {
+            return Err(HttpRequestError::Conflict(AgentHookAcknowledgement {
+                accepted_sequence: state.accepted_sequence,
+                next_sequence: state.accepted_sequence.saturating_add(1),
+            }));
+        }
+        state.pending.insert(delivery.sequence, events);
+    }
+
+    let requested_sequence = delivery.sequence;
+    let mut accepted_events = Vec::new();
+    while let Some(events) = state
+        .pending
+        .remove(&state.accepted_sequence.saturating_add(1))
+    {
+        state.accepted_sequence = state.accepted_sequence.saturating_add(1);
+        accepted_events.extend(events);
+    }
+    Ok(DeliveryApplication {
+        events: accepted_events,
+        acknowledgement: AgentHookAcknowledgement {
+            accepted_sequence: state.accepted_sequence,
+            next_sequence: state.accepted_sequence.saturating_add(1),
+        },
+        pending: state.accepted_sequence < requested_sequence,
+    })
 }
 
 struct HttpRequest {
@@ -404,11 +626,12 @@ struct HttpRequest {
     body: Vec<u8>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum HttpRequestError {
     Invalid,
     Unauthorized,
     NotFound,
+    Conflict(AgentHookAcknowledgement),
 }
 
 fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpRequestError> {
@@ -525,12 +748,34 @@ fn decode_request(
     }
     let raw: Value =
         serde_json::from_slice(&request.body).map_err(|_| HttpRequestError::Invalid)?;
-    let (event, payload) = provider_event(raw)?;
+    let (event, payload, delivery) = if raw.get("protocol").is_some() {
+        let delivery: AgentHookDelivery<Value> =
+            serde_json::from_value(raw).map_err(|_| HttpRequestError::Invalid)?;
+        if delivery.protocol != AGENT_HOOK_DELIVERY_PROTOCOL
+            || delivery.sequence == 0
+            || delivery.stream_id.trim().is_empty()
+            || delivery.stream_id.len() > 128
+        {
+            return Err(HttpRequestError::Invalid);
+        }
+        (
+            non_empty_event(&delivery.event)?,
+            delivery.payload,
+            Some(HookDeliveryMetadata {
+                stream_id: delivery.stream_id,
+                sequence: delivery.sequence,
+            }),
+        )
+    } else {
+        let (event, payload) = provider_event(raw)?;
+        (event, payload, None)
+    };
     Ok(DecodedHookRequest {
         scope,
         source: source.to_string(),
         event,
         payload,
+        delivery,
     })
 }
 
@@ -602,6 +847,7 @@ fn now_millis() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use yttt_agent_core::AgentViewState;
     use yttt_core::model::ids::ProjectId;
     use yttt_protocol::terminal::{TerminalExecutionSpec, TerminalGeometry};
 
@@ -631,6 +877,24 @@ mod tests {
                 .iter()
                 .map(|name| (*name).to_string())
                 .collect(),
+        }
+    }
+
+    fn sequenced_request(
+        scope: &AgentHookScope,
+        sequence: u64,
+        event: &str,
+        payload: Value,
+    ) -> DecodedHookRequest {
+        DecodedHookRequest {
+            scope: scope.clone(),
+            source: "omp".to_string(),
+            event: event.to_string(),
+            payload,
+            delivery: Some(HookDeliveryMetadata {
+                stream_id: "test-stream".to_string(),
+                sequence,
+            }),
         }
     }
 
@@ -689,5 +953,205 @@ mod tests {
             decode_request(request, &secret),
             Err(HttpRequestError::Unauthorized)
         ));
+    }
+
+    #[test]
+    fn sequenced_hooks_buffer_gaps_and_ignore_retries() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("ordered", "ordered");
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let mut updates = runtime.subscribe();
+
+        let pending = ingest_request(
+            &runtime.state,
+            sequenced_request(
+                &scope,
+                2,
+                "agent_end",
+                serde_json::json!({"willContinue": false}),
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            pending,
+            HookIngestOutcome::Sequenced {
+                acknowledgement: AgentHookAcknowledgement {
+                    accepted_sequence: 0,
+                    next_sequence: 1,
+                },
+                pending: true,
+            }
+        ));
+        assert!(updates.try_recv().is_err());
+
+        let accepted = ingest_request(
+            &runtime.state,
+            sequenced_request(&scope, 1, "agent_start", Value::Null),
+        )
+        .unwrap();
+        assert!(matches!(
+            accepted,
+            HookIngestOutcome::Sequenced {
+                acknowledgement: AgentHookAcknowledgement {
+                    accepted_sequence: 2,
+                    next_sequence: 3,
+                },
+                pending: false,
+            }
+        ));
+        let completed = updates.try_recv().unwrap();
+        assert_eq!(completed.snapshot.view_state(), AgentViewState::Completed);
+
+        let retried = ingest_request(
+            &runtime.state,
+            sequenced_request(&scope, 1, "agent_start", Value::Null),
+        )
+        .unwrap();
+        assert!(matches!(
+            retried,
+            HookIngestOutcome::Sequenced {
+                acknowledgement: AgentHookAcknowledgement {
+                    accepted_sequence: 2,
+                    next_sequence: 3,
+                },
+                pending: false,
+            }
+        ));
+        assert!(updates.try_recv().is_err());
+        assert_eq!(
+            runtime.snapshots_after(&[])[0].snapshot.view_state(),
+            AgentViewState::Completed
+        );
+    }
+
+    #[test]
+    fn terminal_exit_is_final_even_when_a_hook_arrives_late() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("final-exit", "final-exit");
+        let session_id = terminal.session_id.clone();
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let mut updates = runtime.subscribe();
+
+        ingest_request(
+            &runtime.state,
+            sequenced_request(&scope, 1, "agent_start", Value::Null),
+        )
+        .unwrap();
+        let _ = updates.try_recv().unwrap();
+        runtime.terminal_exited(&session_id, Some(0));
+        let completed = updates.try_recv().unwrap();
+        assert_eq!(completed.snapshot.view_state(), AgentViewState::Completed);
+
+        let late = ingest_request(
+            &runtime.state,
+            sequenced_request(&scope, 2, "agent_start", Value::Null),
+        )
+        .unwrap();
+        assert!(matches!(
+            late,
+            HookIngestOutcome::Sequenced {
+                acknowledgement: AgentHookAcknowledgement {
+                    accepted_sequence: 2,
+                    next_sequence: 3,
+                },
+                pending: false,
+            }
+        ));
+        assert!(updates.try_recv().is_err());
+        let current = &runtime.snapshots_after(&[])[0];
+        assert_eq!(current.sequence, completed.sequence);
+        assert_eq!(current.snapshot.view_state(), AgentViewState::Completed);
+    }
+
+    #[test]
+    fn terminal_exit_before_first_hook_is_tombstoned_until_new_generation() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("pre-hook-exit", "pre-hook-exit");
+        let session_id = terminal.session_id.clone();
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let mut updates = runtime.subscribe();
+
+        runtime.terminal_exited(&session_id, Some(0));
+        let late = ingest_request(
+            &runtime.state,
+            sequenced_request(&scope, 1, "agent_start", Value::Null),
+        )
+        .unwrap();
+        assert!(matches!(
+            late,
+            HookIngestOutcome::Sequenced {
+                acknowledgement: AgentHookAcknowledgement {
+                    accepted_sequence: 1,
+                    next_sequence: 2,
+                },
+                pending: false,
+            }
+        ));
+        assert!(updates.try_recv().is_err());
+        assert_eq!(
+            runtime.snapshots_after(&[])[0].snapshot.view_state(),
+            AgentViewState::Completed
+        );
+
+        let mut restarted = spec("pre-hook-exit", "pre-hook-exit");
+        let restarted_scope = runtime.secure_terminal_environment(&mut restarted);
+        assert!(restarted_scope.generation > scope.generation);
+        ingest_request(
+            &runtime.state,
+            sequenced_request(&restarted_scope, 1, "agent_start", Value::Null),
+        )
+        .unwrap();
+        assert_eq!(
+            runtime.snapshots_after(&[])[0].snapshot.view_state(),
+            AgentViewState::Working
+        );
+    }
+
+    #[test]
+    fn stalled_hook_connection_does_not_block_another_delivery() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("concurrent", "concurrent");
+        runtime.secure_terminal_environment(&mut terminal);
+        let endpoint = runtime.endpoint.strip_prefix("http://").unwrap();
+        let stalled = TcpStream::connect(endpoint).unwrap();
+        thread::sleep(Duration::from_millis(25));
+
+        let scope = terminal
+            .environment
+            .iter()
+            .find(|(name, _)| name == ENVIRONMENT_VARIABLES[2])
+            .map(|(_, value)| value)
+            .unwrap();
+        let token = terminal
+            .environment
+            .iter()
+            .find(|(name, _)| name == ENVIRONMENT_VARIABLES[1])
+            .map(|(_, value)| value)
+            .unwrap();
+        let body = serde_json::to_vec(&AgentHookDelivery {
+            protocol: AGENT_HOOK_DELIVERY_PROTOCOL,
+            stream_id: "network-stream".to_string(),
+            sequence: 1,
+            event: "agent_start".to_string(),
+            payload: Value::Null,
+        })
+        .unwrap();
+        let mut delivered = TcpStream::connect(endpoint).unwrap();
+        delivered
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        write!(
+            delivered,
+            "POST /hook/omp HTTP/1.1\r\nHost: {endpoint}\r\nContent-Type: application/json\r\n{TOKEN_HEADER}: {token}\r\n{SCOPE_HEADER}: {scope}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        delivered.write_all(&body).unwrap();
+        delivered.flush().unwrap();
+        let mut response = String::new();
+        delivered.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+        assert!(response.contains("\"acceptedSequence\":1"), "{response}");
+        drop(stalled);
     }
 }

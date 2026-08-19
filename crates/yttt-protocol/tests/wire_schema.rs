@@ -3,7 +3,7 @@ use yttt_protocol::{
     HostPath, ProjectRelativePath, ResourceCatalog, TerminalPlacement,
     project::{ProjectFileContent, ProjectFileFingerprint, ProjectRequest, ProjectResponse},
     ssh::StoredSshCredential,
-    terminal::{TerminalExecutionSpec, TerminalGeometry, TerminalSpawnSpec},
+    terminal::{TerminalExecutionSpec, TerminalGeometry, TerminalProcessState, TerminalSpawnSpec},
 };
 
 fn geometry() -> TerminalGeometry {
@@ -58,14 +58,16 @@ fn client_visible_resource_messages_omit_layout_ids_and_host_absolute_paths() {
         session_epoch: 1,
         project_id: ProjectId::new("project"),
         geometry: geometry(),
+        geometry_epoch: 1,
         last_sequence: 0,
         spawn_fingerprint: 1,
         owner: Some(ClientInstanceId::new("client")),
-        viewport: None,
+        process_state: TerminalProcessState::Running,
     })
     .unwrap();
     assert!(placement.get("tab_id").is_none());
     assert!(placement.get("pane_id").is_none());
+    assert!(placement.get("viewport").is_none());
 
     let registered = serde_json::to_value(ProjectResponse::Registered {
         registration_epoch: 1,

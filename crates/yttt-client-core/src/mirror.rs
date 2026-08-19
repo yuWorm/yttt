@@ -39,7 +39,7 @@ impl TerminalMirror {
     pub fn metadata(&self) -> TerminalMirrorMetadata {
         TerminalMirrorMetadata {
             title: self.viewport.modes.title.clone(),
-            process_state: self.viewport.process_state.clone(),
+            process_state: self.viewport.process_state,
             session_epoch: self.viewport.session_epoch,
             sequence: self.viewport.sequence,
         }

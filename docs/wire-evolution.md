@@ -14,6 +14,8 @@
 ## 当前版本
 
 - 帧头：`FRAME_FORMAT_VERSION = 1`
-- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 3`（新增 ordered one-way `TerminalInput`）
+- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 5`（control / terminal-interactive /
+  terminal-data / state-events 通道隔离；viewport-free placement；event-driven catalog
+  invalidation）。ordered one-way `TerminalInput` 于 v3 引入。
 - lifecycle：`LIFECYCLE_PROTOCOL_VERSION = 2`
 - desktop-shell：`DESKTOP_SHELL_PROTOCOL_VERSION = 2`

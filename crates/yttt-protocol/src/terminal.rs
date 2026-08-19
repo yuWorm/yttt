@@ -174,6 +174,47 @@ pub struct SemanticDelta {
     pub process_state: Option<TerminalProcessState>,
 }
 
+impl SemanticDelta {
+    pub fn merge_contiguous(&mut self, mut next: Self) -> bool {
+        if self.session_id != next.session_id
+            || self.session_epoch != next.session_epoch
+            || self.sequence != next.base_sequence
+        {
+            return false;
+        }
+        for next_row in next.changed_rows.drain(..) {
+            if let Some(current) = self
+                .changed_rows
+                .iter_mut()
+                .find(|current| current.viewport_row == next_row.viewport_row)
+            {
+                *current = next_row;
+            } else {
+                self.changed_rows.push(next_row);
+            }
+        }
+        self.changed_rows.sort_by_key(|row| row.viewport_row);
+        self.sequence = next.sequence;
+        self.geometry_epoch = next.geometry_epoch;
+        self.scrollback_epoch = next.scrollback_epoch;
+        self.history_size = next.history_size;
+        self.display_offset = next.display_offset;
+        if next.cursor.is_some() {
+            self.cursor = next.cursor;
+        }
+        if next.modes.is_some() {
+            self.modes = next.modes;
+        }
+        if next.palette.is_some() {
+            self.palette = next.palette;
+        }
+        if next.process_state.is_some() {
+            self.process_state = next.process_state;
+        }
+        true
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalCheckpoint {
     pub viewport: SemanticViewport,
@@ -522,4 +563,69 @@ pub enum TerminationMode {
     Detach,
     Terminate,
     TerminateMany,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(viewport_row: u16, line_id: u64) -> SemanticRow {
+        SemanticRow {
+            line_id,
+            viewport_row,
+            spans: Vec::new(),
+        }
+    }
+
+    fn delta(base_sequence: u64, sequence: u64, rows: Vec<SemanticRow>) -> SemanticDelta {
+        SemanticDelta {
+            session_id: TerminalSessionId::new("session"),
+            session_epoch: 1,
+            base_sequence,
+            sequence,
+            geometry_epoch: 1,
+            scrollback_epoch: 1,
+            history_size: sequence,
+            display_offset: 0,
+            changed_rows: rows,
+            cursor: None,
+            modes: None,
+            palette: None,
+            process_state: None,
+        }
+    }
+
+    #[test]
+    fn contiguous_deltas_merge_to_the_latest_value_per_row() {
+        let mut merged = delta(1, 2, vec![row(0, 2)]);
+        merged.cursor = Some(SemanticCursor {
+            row: 1,
+            column: 2,
+            shape: CursorShape::Block,
+            visible: true,
+            blinking: false,
+        });
+        let mut next = delta(2, 3, vec![row(0, 3), row(1, 4)]);
+        next.modes = Some(TerminalModes {
+            bits: 7,
+            title: Some("latest".to_string()),
+            cwd: None,
+        });
+
+        assert!(merged.merge_contiguous(next));
+        assert_eq!(merged.base_sequence, 1);
+        assert_eq!(merged.sequence, 3);
+        assert_eq!(merged.history_size, 3);
+        assert_eq!(merged.changed_rows, vec![row(0, 3), row(1, 4)]);
+        assert_eq!(merged.cursor.unwrap().column, 2);
+        assert_eq!(merged.modes.unwrap().title.as_deref(), Some("latest"));
+    }
+
+    #[test]
+    fn noncontiguous_deltas_are_not_merged() {
+        let mut merged = delta(1, 2, vec![row(0, 2)]);
+        let original = merged.clone();
+        assert!(!merged.merge_contiguous(delta(3, 4, vec![row(0, 4)])));
+        assert_eq!(merged, original);
+    }
 }

@@ -284,13 +284,11 @@ impl AgentManager {
     }
     pub fn set_snapshot_client(&mut self, client: Option<AgentSnapshotClient>) {
         self.snapshot_client = client;
+        self.host_snapshot_sequences.clear();
     }
 
-    pub fn drain_host_snapshots(&self) -> Vec<AgentSnapshotUpdate> {
-        self.snapshot_client
-            .as_ref()
-            .map(AgentSnapshotClient::drain)
-            .unwrap_or_default()
+    pub fn snapshot_client(&self) -> Option<AgentSnapshotClient> {
+        self.snapshot_client.clone()
     }
 
     pub fn apply_host_snapshot(

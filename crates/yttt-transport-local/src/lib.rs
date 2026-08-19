@@ -9,8 +9,9 @@ pub use yttt_transport::{
     AuthToken, AuthenticatedClient, AuthenticatedHost, ClientIdentity, HandshakeError,
     HostIdentity, WireError, WireReceiveDiagnostics, client_handshake, receive_control,
     receive_control_observed, receive_desktop_shell, receive_handshake, receive_lifecycle,
-    send_control, send_control_bounded, send_desktop_shell, send_handshake, send_lifecycle,
-    server_handshake,
+    receive_state_event, receive_terminal_interactive, send_control, send_control_bounded,
+    send_desktop_shell, send_handshake, send_lifecycle, send_state_event,
+    send_terminal_interactive, server_handshake,
 };
 
 #[derive(Clone, Debug)]

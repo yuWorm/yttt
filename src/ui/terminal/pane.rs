@@ -840,23 +840,29 @@ impl TerminalPaneView {
         let response_pending_resize = pending_resize_geometry.clone();
         cx.spawn(async move |this, cx| {
             let result = async {
-                let catalog_response = request_runtime
-                    .request(Request::ListResources)
-                    .recv_async()
-                    .await
-                    .map_err(|_| {
-                        TerminalStartAttemptError::Message(
-                            "Host catalog request channel closed".to_string(),
-                        )
-                    })?
-                    .map_err(|error| TerminalStartAttemptError::Message(error.to_string()))?;
-                let Response::Resources(catalog) = catalog_response else {
-                    return Err(TerminalStartAttemptError::Message(format!(
-                        "unexpected Host catalog response: {catalog_response:?}"
-                    )));
+                let catalog = if let Some(catalog) = request_runtime.resource_catalog() {
+                    catalog
+                } else {
+                    let catalog_response = request_runtime
+                        .request(Request::ListResources)
+                        .recv_async()
+                        .await
+                        .map_err(|_| {
+                            TerminalStartAttemptError::Message(
+                                "Host catalog request channel closed".to_string(),
+                            )
+                        })?
+                        .map_err(|error| TerminalStartAttemptError::Message(error.to_string()))?;
+                    let Response::Resources(catalog) = catalog_response else {
+                        return Err(TerminalStartAttemptError::Message(format!(
+                            "unexpected Host catalog response: {catalog_response:?}"
+                        )));
+                    };
+                    Arc::new(catalog)
                 };
                 let spawn_fingerprint = request_spec.address_fingerprint();
-                let request = request_runtime.terminal_start_request(request_spec, &catalog)?;
+                let request =
+                    request_runtime.terminal_start_request(request_spec, catalog.as_ref())?;
                 let response = request_runtime
                     .request(request)
                     .recv_async()

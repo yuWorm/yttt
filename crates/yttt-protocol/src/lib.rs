@@ -18,7 +18,7 @@ pub use codec::{
 pub use control::{
     Capability, ClientRequest, ControlMessage, FailureCode, HostBlocker, HostEvent, HostResponse,
     ProtocolFailure, Request, ResourceCatalog, Response, ServerEvent, TerminalControlDeniedReason,
-    TerminalLease, TerminalPlacement, TerminalTerminationResult,
+    TerminalInteractiveMessage, TerminalLease, TerminalPlacement, TerminalTerminationResult,
 };
 pub use desktop::{
     DesktopShellMessage, DesktopShellRejectReason, DesktopShellRequest,
@@ -40,7 +40,7 @@ pub use project::{
 
 pub const PROTOCOL_MAGIC: [u8; 4] = *b"YTTT";
 pub const FRAME_FORMAT_VERSION: u16 = 1;
-pub const RESOURCE_PROTOCOL_VERSION: u16 = 3;
+pub const RESOURCE_PROTOCOL_VERSION: u16 = 5;
 pub const LIFECYCLE_PROTOCOL_VERSION: u16 = 2;
 pub const DESKTOP_SHELL_PROTOCOL_VERSION: u16 = 2;
 pub const MAX_DESKTOP_SHELL_FRAME_BYTES: usize = 256 * 1024;

@@ -819,6 +819,23 @@ impl HostedTerminal {
         self.inner.snapshots.lock().latest_viewport().cloned()
     }
 
+    pub(crate) fn placement_state(
+        &self,
+    ) -> Option<(TerminalGeometry, u64, u64, TerminalProcessState)> {
+        self.inner
+            .snapshots
+            .lock()
+            .latest_viewport()
+            .map(|viewport| {
+                (
+                    viewport.geometry,
+                    viewport.geometry_epoch,
+                    viewport.sequence,
+                    viewport.process_state,
+                )
+            })
+    }
+
     pub fn read_viewport(
         &self,
         scrollback_epoch: u64,
@@ -1085,52 +1102,66 @@ fn spawn_writer(
 }
 
 fn spawn_event_processor(events: flume::Receiver<Event>, inner: Arc<HostedTerminalInner>) {
-    thread::Builder::new()
-        .name(format!(
-            "yttt-host-terminal-events-{}",
-            inner.spec.session_id
-        ))
-        .spawn(move || {
-            while let Ok(event) = events.recv() {
-                inner.diagnostics.event_queue.observe(events.len());
-                match event {
-                    Event::PtyWrite(data) => {
-                        if inner
-                            .writer
-                            .send(WriterCommand::Reply(data.into_bytes()))
-                            .is_ok()
-                        {
-                            inner.diagnostics.writer_queue.observe(inner.writer.len());
-                        }
+    tokio::spawn(async move {
+        while let Ok(event) = events.recv_async().await {
+            inner.diagnostics.event_queue.observe(events.len());
+            match event {
+                Event::PtyWrite(data) => {
+                    if inner
+                        .writer
+                        .send(WriterCommand::Reply(data.into_bytes()))
+                        .is_ok()
+                    {
+                        inner.diagnostics.writer_queue.observe(inner.writer.len());
                     }
-                    Event::Title(title) => {
-                        inner.metadata.lock().title = Some(title.clone());
-                        let _ = inner.events.send(HostTerminalEvent::TitleChanged {
-                            session_id: inner.spec.session_id.clone(),
-                            title: Some(title),
-                        });
-                        inner.capture_and_publish();
+                }
+                Event::Title(title) => {
+                    inner.metadata.lock().title = Some(title.clone());
+                    let _ = inner.events.send(HostTerminalEvent::TitleChanged {
+                        session_id: inner.spec.session_id.clone(),
+                        title: Some(title),
+                    });
+                    inner.capture_and_publish();
+                }
+                Event::ResetTitle => {
+                    inner.metadata.lock().title = None;
+                    let _ = inner.events.send(HostTerminalEvent::TitleChanged {
+                        session_id: inner.spec.session_id.clone(),
+                        title: None,
+                    });
+                    inner.capture_and_publish();
+                }
+                Event::Bell => {
+                    let _ = inner.events.send(HostTerminalEvent::Bell {
+                        session_id: inner.spec.session_id.clone(),
+                    });
+                }
+                Event::TextAreaSizeRequest(formatter) => {
+                    let geometry = inner.metadata.lock().geometry;
+                    let reply = formatter(WindowSize {
+                        num_lines: geometry.rows,
+                        num_cols: geometry.cols,
+                        cell_width: geometry.cell_width,
+                        cell_height: geometry.cell_height,
+                    });
+                    if inner
+                        .writer
+                        .send(WriterCommand::Reply(reply.into_bytes()))
+                        .is_ok()
+                    {
+                        inner.diagnostics.writer_queue.observe(inner.writer.len());
                     }
-                    Event::ResetTitle => {
-                        inner.metadata.lock().title = None;
-                        let _ = inner.events.send(HostTerminalEvent::TitleChanged {
-                            session_id: inner.spec.session_id.clone(),
-                            title: None,
-                        });
-                        inner.capture_and_publish();
-                    }
-                    Event::Bell => {
-                        let _ = inner.events.send(HostTerminalEvent::Bell {
-                            session_id: inner.spec.session_id.clone(),
-                        });
-                    }
-                    Event::TextAreaSizeRequest(formatter) => {
-                        let geometry = inner.metadata.lock().geometry;
-                        let reply = formatter(WindowSize {
-                            num_lines: geometry.rows,
-                            num_cols: geometry.cols,
-                            cell_width: geometry.cell_width,
-                            cell_height: geometry.cell_height,
+                }
+                Event::Exit => {
+                    let _ = inner.backend.terminate();
+                }
+                Event::ChildExit(code) => inner.mark_exited(Some(code)),
+                Event::ColorRequest(index, formatter) => {
+                    if let Some(color) = inner.query_palette.lock().get(index).copied() {
+                        let reply = formatter(Rgb {
+                            r: ((color >> 16) & 0xff) as u8,
+                            g: ((color >> 8) & 0xff) as u8,
+                            b: (color & 0xff) as u8,
                         });
                         if inner
                             .writer
@@ -1140,66 +1171,43 @@ fn spawn_event_processor(events: flume::Receiver<Event>, inner: Arc<HostedTermin
                             inner.diagnostics.writer_queue.observe(inner.writer.len());
                         }
                     }
-                    Event::Exit => {
-                        let _ = inner.backend.terminate();
-                    }
-                    Event::ChildExit(code) => inner.mark_exited(Some(code)),
-                    Event::ColorRequest(index, formatter) => {
-                        if let Some(color) = inner.query_palette.lock().get(index).copied() {
-                            let reply = formatter(Rgb {
-                                r: ((color >> 16) & 0xff) as u8,
-                                g: ((color >> 8) & 0xff) as u8,
-                                b: (color & 0xff) as u8,
-                            });
-                            if inner
-                                .writer
-                                .send(WriterCommand::Reply(reply.into_bytes()))
-                                .is_ok()
-                            {
-                                inner.diagnostics.writer_queue.observe(inner.writer.len());
-                            }
-                        }
-                    }
-                    Event::Wakeup
-                    | Event::ClipboardStore(..)
-                    | Event::ClipboardLoad(..)
-                    | Event::MouseCursorDirty
-                    | Event::CursorBlinkingChange => {}
                 }
+                Event::Wakeup
+                | Event::ClipboardStore(..)
+                | Event::ClipboardLoad(..)
+                | Event::MouseCursorDirty
+                | Event::CursorBlinkingChange => {}
             }
-        })
-        .expect("failed to spawn Host terminal event processor");
+        }
+    });
 }
 
 fn spawn_child_monitor(
     inner: Arc<HostedTerminalInner>,
     child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
 ) {
-    thread::Builder::new()
-        .name(format!("yttt-host-child-wait-{}", inner.spec.session_id))
-        .spawn(move || {
-            loop {
-                let status = child.lock().try_wait();
-                match status {
-                    Ok(Some(status)) => {
-                        while !inner.reader_finished.load(Ordering::Acquire) {
-                            thread::sleep(Duration::from_millis(1));
-                        }
-                        inner.mark_exited(i32::try_from(status.exit_code()).ok());
-                        break;
+    tokio::spawn(async move {
+        loop {
+            let status = child.lock().try_wait();
+            match status {
+                Ok(Some(status)) => {
+                    while !inner.reader_finished.load(Ordering::Acquire) {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
                     }
-                    Ok(None) => thread::sleep(Duration::from_millis(25)),
-                    Err(_) => {
-                        while !inner.reader_finished.load(Ordering::Acquire) {
-                            thread::sleep(Duration::from_millis(1));
-                        }
-                        inner.mark_exited(None);
-                        break;
+                    inner.mark_exited(i32::try_from(status.exit_code()).ok());
+                    break;
+                }
+                Ok(None) => tokio::time::sleep(Duration::from_millis(25)).await,
+                Err(_) => {
+                    while !inner.reader_finished.load(Ordering::Acquire) {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
                     }
+                    inner.mark_exited(None);
+                    break;
                 }
             }
-        })
-        .expect("failed to spawn Host child monitor");
+        }
+    });
 }
 
 fn remote_cwd(cwd: &yttt_protocol::ProjectRelativePath) -> Result<RemotePathBuf, String> {

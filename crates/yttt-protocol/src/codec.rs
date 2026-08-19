@@ -12,6 +12,8 @@ pub enum FrameKind {
     Control = 2,
     Lifecycle = 3,
     DesktopShell = 4,
+    TerminalInteractive = 5,
+    StateEvent = 6,
 }
 
 impl TryFrom<u16> for FrameKind {
@@ -23,6 +25,8 @@ impl TryFrom<u16> for FrameKind {
             2 => Ok(Self::Control),
             3 => Ok(Self::Lifecycle),
             4 => Ok(Self::DesktopShell),
+            5 => Ok(Self::TerminalInteractive),
+            6 => Ok(Self::StateEvent),
             other => Err(ProtocolCodecError::UnknownFrameKind(other)),
         }
     }

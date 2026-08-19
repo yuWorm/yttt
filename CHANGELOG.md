@@ -52,6 +52,11 @@
   desktop control plane and its owned Host available through the tray, while quitting or losing
   the desktop shell terminates that Host and its resources. Explicit CLI/login-started background
   Hosts remain independent.
+- Isolated each Host client into control, terminal-interactive, per-terminal data, and state-event
+  connections; resource catalogs are now cached and refreshed from invalidation events instead of
+  being embedded in viewport synchronization or fetched before every terminal creation.
+- Reduced long-running Host overhead by moving terminal event and child monitoring from dedicated
+  OS threads to lightweight runtime tasks and sampling process diagnostics every five seconds.
 
 ### Fixed
 
@@ -69,9 +74,10 @@
 - Fixed manually launched agents remaining in the sidebar after their terminal process exits or is
   killed; detected-agent snapshots are now removed from memory and persisted state.
 - Fixed late Oh My Pi hook deliveries recreating a sidebar session after the monitored CLI process had already exited.
-- Fixed Host terminal input feeling network-lagged by keeping raw terminal frames off generic
-  GPUI event listeners and filtering low-rate terminal metadata/control updates on the Host runtime
-  worker; the interactive Host benchmark now returns to Direct-mode frame cadence.
+- Fixed Host terminal input feeling network-lagged by isolating slow project/file/Git requests from
+  the terminal-interactive lane, making control and interactive frame readers cancellation-safe,
+  coalescing semantic terminal data to a 16 ms frame cadence, and keeping terminal frames off
+  generic GPUI event listeners.
 - Fixed residual Host terminal UI stalls by detecting shell candidates once at Workbench startup
   instead of synchronously scanning every `PATH` entry during each GPUI render.
 - Agent panes without an authoritative snapshot now display `Stale` instead of inferring `Working`
@@ -91,9 +97,11 @@
   terminal update from remaining behind a coalesced wakeup. Performance reports expose real input
   callback time, semantic queue age, render-state lock wait, queue high-water, and coalesced update
   counts in addition to end-to-end input-to-first-paint latency.
-- Fixed Host-owned Agent panes remaining `running` after completion or restart by resolving live
-  snapshots through terminal placement, downgrading persisted snapshots until Host reconciliation,
-  and clearing Agent state when the backing Host terminal exits or becomes lost.
+- Fixed Host-owned Agent panes remaining `running` after completion, restart, or delayed hook
+  delivery. Hook events now carry a delivery stream and monotonic sequence, retry with bounded
+  exponential backoff until acknowledged, buffer small gaps, ignore duplicates, and cannot
+  overwrite a terminal's final exit state; desktop reconciliation remains keyed by terminal
+  placement and clears state when the backing Host terminal is lost.
 - Fixed desktop Host replacement leaving panes permanently bound to an old Host identity:
   missing `Bound`, `ClosePending`, and `Lost` placements now start a fresh session, and successful
   terminal-exit acknowledgements persist `Closed`.

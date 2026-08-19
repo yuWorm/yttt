@@ -35,7 +35,7 @@ use crate::{
     project::{HostProjectError, HostProjectRuntime},
     runtime::{AttachmentResyncReason, HostRuntime, HostRuntimeError, TerminalControlOutcome},
     ssh_runtime::HostSshRuntime,
-    terminal::{HostTerminalEvent, HostedTerminalError},
+    terminal::{HostTerminalEvent, HostedTerminal, HostedTerminalError},
     terminal_data::TerminalDataWriter,
 };
 use fs2::FileExt as _;
@@ -52,16 +52,20 @@ use yttt_protocol::{
     HostResponse, LIFECYCLE_PROTOCOL_VERSION, LifecycleMessage, LifecycleRequest,
     LifecycleResponse, LifecycleResponseEnvelope, ProtocolFailure, ProtocolRange,
     RESOURCE_PROTOCOL_VERSION, Request, ResourceCatalog, Response, ServerEvent,
-    TerminalTerminationResult,
+    TerminalInteractiveMessage, TerminalTerminationResult,
     terminal::{
-        AttachTerminal, TerminalLeaseMode, TerminalStreamUpdate, TerminalViewportAnchor,
-        TerminalViewportRead, TerminationMode,
+        AttachTerminal, TerminalLeaseMode, TerminalStreamApply, TerminalStreamUpdate,
+        TerminalViewportAnchor, TerminalViewportRead, TerminationMode,
     },
 };
 use yttt_transport::{
     AuthToken, HostIdentity, TransportListener, TransportStream, receive_control,
-    receive_lifecycle, send_control, send_lifecycle, server_handshake,
+    receive_lifecycle, receive_terminal_interactive, send_control, send_lifecycle,
+    send_state_event, send_terminal_interactive, server_handshake,
 };
+
+const TERMINAL_FRAME_INTERVAL: Duration = Duration::from_millis(16);
+const HOST_DIAGNOSTICS_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -183,6 +187,7 @@ where
     let next_connection = Arc::new(AtomicU64::new(1));
     let next_host_sequence = Arc::new(AtomicU64::new(1));
     let request_journals = Arc::new(Mutex::new(HashMap::new()));
+    let client_attachments = Arc::new(Mutex::new(HashMap::new()));
     let audit = Arc::new(HostAuditLog::new());
     let (stop_tx, mut stop_rx) = watch::channel(false);
     let runtime = HostRuntime::new();
@@ -210,8 +215,8 @@ where
     let mut diagnostics_stop = stop_rx.clone();
     let diagnostics_task = tokio::spawn(async move {
         let mut sampler = ProcessDiagnosticsSampler::default();
-        let mut interval = tokio::time::interval(Duration::from_secs(1));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut interval = tokio::time::interval(HOST_DIAGNOSTICS_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
                 _ = interval.tick() => {}
@@ -252,9 +257,8 @@ where
                 }) => terminal_agent_hooks.terminal_exited(&session_id, code),
                 Err(broadcast::error::RecvError::Lagged(_)) => {
                     for placement in terminal_runtime.placements() {
-                        if let Some(viewport) = placement.viewport
-                            && let yttt_protocol::terminal::TerminalProcessState::Exited { code } =
-                                viewport.process_state
+                        if let yttt_protocol::terminal::TerminalProcessState::Exited { code } =
+                            placement.process_state
                         {
                             terminal_agent_hooks.terminal_exited(&placement.session_id, code);
                         }
@@ -299,6 +303,7 @@ where
                     agent_hooks: agent_hooks.clone(),
                     projects: projects.clone(),
                     request_journals: request_journals.clone(),
+                    client_attachments: client_attachments.clone(),
                     runtime: runtime.clone(),
                     lifecycle: lifecycle.clone(),
                     audit: audit.clone(),
@@ -345,6 +350,9 @@ fn collect_host_diagnostics(
     }
 }
 
+type SharedTerminalAttachments =
+    Arc<tokio::sync::Mutex<HashMap<TerminalSessionId, TerminalAttachment>>>;
+
 struct ConnectionContext {
     identity: HostIdentity,
     profile_id: ProfileId,
@@ -354,6 +362,7 @@ struct ConnectionContext {
     projects: Arc<HostProjectRuntime>,
     request_journals:
         Arc<Mutex<HashMap<ClientInstanceId, Arc<tokio::sync::Mutex<RequestJournal>>>>>,
+    client_attachments: Arc<Mutex<HashMap<ClientInstanceId, SharedTerminalAttachments>>>,
     runtime: Arc<HostRuntime>,
     lifecycle: Arc<HostLifecycle>,
     audit: Arc<HostAuditLog>,
@@ -554,372 +563,611 @@ async fn serve_connection(
     token: Arc<AuthToken>,
     context: ConnectionContext,
 ) -> Result<(), ()> {
-    let ConnectionContext {
-        identity,
-        profile_id: _,
-        host_sequence,
-        ssh,
-        agent_hooks,
-        projects,
-        request_journals,
-        runtime,
-        lifecycle,
-        audit: _,
-        stop,
-    } = &context;
-    let authenticated = server_handshake(&mut stream, identity, token.as_ref())
+    let authenticated = server_handshake(&mut stream, &context.identity, token.as_ref())
         .await
         .map_err(|_| ())?;
     if authenticated.channel == yttt_protocol::ConnectionChannel::DesktopOwner {
-        if !lifecycle.desktop_owner_connected() {
+        if !context.lifecycle.desktop_owner_connected() {
             return Err(());
         }
-        let result = serve_desktop_owner_connection(stream, stop.clone()).await;
-        lifecycle.desktop_owner_disconnected();
-        lifecycle.resource_changed();
+        let result = serve_desktop_owner_connection(stream, context.stop.clone()).await;
+        context.lifecycle.desktop_owner_disconnected();
+        context.lifecycle.resource_changed();
         return result;
     }
-    lifecycle.client_connected();
-    if authenticated.channel == yttt_protocol::ConnectionChannel::Lifecycle {
-        let result =
-            serve_lifecycle_connection(stream, authenticated.can_force_stop, &context).await;
-        lifecycle.client_disconnected();
-        lifecycle.resource_changed();
-        return result;
-    }
+
+    context.lifecycle.client_connected();
     let client_id = authenticated.client_instance_id;
-    if authenticated.channel == yttt_protocol::ConnectionChannel::TerminalData {
-        let session_id = authenticated.terminal_session_id.ok_or(())?;
-        let result = serve_terminal_data_connection(
-            stream,
-            client_id,
-            session_id,
-            runtime,
-            host_sequence,
-            stop.clone(),
-        )
-        .await;
-        lifecycle.client_disconnected();
-        lifecycle.resource_changed();
-        return result;
-    }
-    let request_journal = {
-        let mut journals = request_journals.lock();
-        journals
-            .entry(client_id.clone())
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(RequestJournal::default())))
-            .clone()
+    let result = match authenticated.channel {
+        yttt_protocol::ConnectionChannel::Lifecycle => {
+            serve_lifecycle_connection(stream, authenticated.can_force_stop, &context).await
+        }
+        yttt_protocol::ConnectionChannel::TerminalData => {
+            let session_id = authenticated.terminal_session_id.ok_or(())?;
+            serve_terminal_data_connection(
+                stream,
+                client_id,
+                session_id,
+                &context.runtime,
+                &context.host_sequence,
+                context.stop.clone(),
+            )
+            .await
+        }
+        yttt_protocol::ConnectionChannel::TerminalInteractive => {
+            let attachments = shared_terminal_attachments(&context, &client_id);
+            serve_terminal_interactive_connection(stream, client_id, attachments, &context).await
+        }
+        yttt_protocol::ConnectionChannel::StateEvents => {
+            let attachments = shared_terminal_attachments(&context, &client_id);
+            serve_state_event_connection(stream, client_id, attachments, &context).await
+        }
+        yttt_protocol::ConnectionChannel::Control => {
+            let attachments = shared_terminal_attachments(&context, &client_id);
+            let request_journal = {
+                let mut journals = context.request_journals.lock();
+                journals
+                    .entry(client_id.clone())
+                    .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(RequestJournal::default())))
+                    .clone()
+            };
+            let result = serve_control_connection(
+                stream,
+                client_id.clone(),
+                attachments.clone(),
+                request_journal,
+                &context,
+            )
+            .await;
+            context.runtime.release_client(&client_id);
+            context.ssh.abandon_challenges(&client_id);
+            attachments.lock().await.clear();
+            let mut all_attachments = context.client_attachments.lock();
+            if all_attachments
+                .get(&client_id)
+                .is_some_and(|current| Arc::ptr_eq(current, &attachments))
+            {
+                all_attachments.remove(&client_id);
+            }
+            result
+        }
+        yttt_protocol::ConnectionChannel::DesktopOwner => unreachable!(),
     };
-    let mut ssh_events = ssh.subscribe();
-    let mut agent_hook_events = agent_hooks.subscribe();
-    let mut project_events = projects.subscribe();
-    let mut runtime_events = runtime.subscribe();
-    let mut subscriptions = HashMap::<_, TerminalAttachment>::new();
-    let mut stop = stop.clone();
-    let result = async {
+    context.lifecycle.client_disconnected();
+    context.lifecycle.resource_changed();
+    result
+}
+
+fn shared_terminal_attachments(
+    context: &ConnectionContext,
+    client_id: &ClientInstanceId,
+) -> SharedTerminalAttachments {
+    context
+        .client_attachments
+        .lock()
+        .entry(client_id.clone())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(HashMap::new())))
+        .clone()
+}
+
+fn request_uses_terminal_attachments(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::SpawnTerminal(_)
+            | Request::AttachTerminal(_)
+            | Request::DetachTerminal { .. }
+            | Request::AcquireTerminalLease { .. }
+            | Request::ReleaseTerminalLease { .. }
+            | Request::TerminalInput(_)
+            | Request::ResizeTerminal(_)
+            | Request::ScrollTerminal(_)
+            | Request::ReadTerminalViewport(_)
+            | Request::SearchTerminal(_)
+            | Request::SetTerminalQueryPalette(_)
+            | Request::RequestCheckpoint { .. }
+            | Request::AcknowledgeTerminalExit { .. }
+            | Request::TerminateTerminal { .. }
+            | Request::TerminateMany { .. }
+            | Request::RequestTerminalControl { .. }
+            | Request::ReleaseTerminalControl { .. }
+    )
+}
+
+fn interactive_lane_request(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::TerminalInput(_) | Request::ResizeTerminal(_) | Request::ScrollTerminal(_)
+    )
+}
+fn request_changes_resource_catalog(request: &Request) -> bool {
+    match request {
+        Request::SpawnTerminal(_)
+        | Request::AttachTerminal(_)
+        | Request::DetachTerminal { .. }
+        | Request::AcquireTerminalLease { .. }
+        | Request::ReleaseTerminalLease { .. }
+        | Request::AcknowledgeTerminalExit { .. }
+        | Request::TerminateTerminal { .. }
+        | Request::TerminateMany { .. }
+        | Request::SshConnect(_)
+        | Request::SshDisconnect { .. }
+        | Request::RequestTerminalControl { .. }
+        | Request::ReleaseTerminalControl { .. } => true,
+        Request::Project(request) => matches!(
+            request,
+            yttt_protocol::project::ProjectRequest::Register { .. }
+                | yttt_protocol::project::ProjectRequest::RegisterSsh { .. }
+                | yttt_protocol::project::ProjectRequest::Close { .. }
+        ),
+        _ => false,
+    }
+}
+
+async fn serve_control_connection(
+    mut stream: TransportStream,
+    client_id: ClientInstanceId,
+    attachments: SharedTerminalAttachments,
+    request_journal: Arc<tokio::sync::Mutex<RequestJournal>>,
+    context: &ConnectionContext,
+) -> Result<(), ()> {
+    let mut stop = context.stop.clone();
     loop {
         tokio::select! {
             message = receive_control(&mut stream) => {
                 let message = message.map_err(|_| ())?;
-                let request = match message {
-                    ControlMessage::Request(request) => request,
-                    ControlMessage::TerminalInput(input) => {
-                        let response = handle_request(
-                            ClientRequest {
-                                request_id: 0,
-                                actor_device_id: Some(client_id.to_string()),
-                                lease_epoch: None,
-                                body: Request::TerminalInput(input),
-                            },
-                            &context,
-                            &client_id,
-                            &mut subscriptions,
-                            host_sequence.fetch_add(1, Ordering::Relaxed),
-                        )
-                        .await;
-                        if let Err(error) = response.result {
-                            eprintln!("one-way terminal input rejected: {error:?}");
-                        }
-                        continue;
-                    }
-                    ControlMessage::Response(_) | ControlMessage::Event(_) => return Err(()),
+                let ControlMessage::Request(request) = message else {
+                    return Err(());
                 };
-                let subscription = match &request.body {
-                    Request::SpawnTerminal(spec) => Some((
-                        spec.session_id.clone(),
-                        TerminalLeaseMode::Interactive,
-                        true,
-                    )),
-                    Request::AttachTerminal(attach) => {
-                        Some((attach.session_id.clone(), attach.mode, true))
-                    }
-                    Request::AcquireTerminalLease { session_id, mode } => {
-                        Some((session_id.clone(), *mode, true))
-                    }
-                    Request::ReleaseTerminalLease { session_id }
-                    | Request::ReleaseTerminalControl { session_id } => {
-                        Some((session_id.clone(), TerminalLeaseMode::Observer, true))
-                    }
-                    Request::RequestTerminalControl { session_id } => {
-                        Some((session_id.clone(), TerminalLeaseMode::Observer, false))
-                    }
-                    Request::RequestCheckpoint { session_id, .. } => Some((
-                        session_id.clone(),
-                        TerminalLeaseMode::Observer,
-                        false,
-                    )),
-                    _ => None,
-                };
-                let unsubscription = match &request.body {
-                    Request::DetachTerminal { session_id }
-                    | Request::TerminateTerminal { session_id, .. }
-                    | Request::AcknowledgeTerminalExit {
-                        session_id,
-                        ..
-                    } => Some(session_id.clone()),
-                    _ => None,
-                };
-                let (response, apply_effects) = if request_is_journalable(&request.body) {
-                    let fingerprint = request_fingerprint(&request.body);
-                    let mut journal = request_journal.lock().await;
-                    match journal.lookup(request.request_id, &fingerprint) {
-                        JournalLookup::Replay(response) => (*response, false),
-                        JournalLookup::Conflict => (
-                            HostResponse {
-                                request_id: request.request_id,
-                                result: Err(ProtocolFailure::new(
-                                    FailureCode::InvalidRequest,
-                                    "request ID was already used for a different request",
-                                    false,
-                                )),
-                            },
+                let resource_changed = request_changes_resource_catalog(&request.body);
+                let response = if interactive_lane_request(&request.body) {
+                    HostResponse {
+                        request_id: request.request_id,
+                        result: Err(ProtocolFailure::new(
+                            FailureCode::InvalidRequest,
+                            "terminal mutation must use the interactive channel",
                             false,
-                        ),
-                        JournalLookup::Miss => {
-                            let response = handle_request(
-                                request,
-                                &context,
-                                &client_id,
-                                &mut subscriptions,
-                                host_sequence.fetch_add(1, Ordering::Relaxed),
-                            )
-                            .await;
-                            journal.insert(fingerprint, response.clone());
-                            (response, true)
-                        }
+                        )),
                     }
-                } else {
-                    (
-                        handle_request(
-                            request,
-                            &context,
-                            &client_id,
-                            &mut subscriptions,
-                            host_sequence.fetch_add(1, Ordering::Relaxed),
-                        )
-                        .await,
-                        true,
+                } else if request_uses_terminal_attachments(&request.body) {
+                    let mut attachments = attachments.lock().await;
+                    process_control_request(
+                        request,
+                        context,
+                        &client_id,
+                        &mut attachments,
+                        &request_journal,
                     )
+                    .await
+                } else {
+                    let mut no_attachments = HashMap::new();
+                    process_control_request(
+                        request,
+                        context,
+                        &client_id,
+                        &mut no_attachments,
+                        &request_journal,
+                    )
+                    .await
                 };
-                if apply_effects {
-                    if let Ok(result) = &response.result {
-                    if let Some((session_id, mode, replace_mode)) = subscription {
-                        let granted = match result {
-                            Response::TerminalSpawned { lease, .. }
-                            | Response::TerminalAttached { lease, .. }
-                            | Response::TerminalLease(lease) => Some(lease.clone()),
-                            _ => None,
-                        };
-                        let lease_epoch = granted.as_ref().map_or_else(
-                            || {
-                                subscriptions
-                                    .get(&session_id)
-                                    .map_or(0, |attachment| attachment.lease_epoch)
-                            },
-                            |lease| lease.lease_epoch,
-                        );
-                        runtime.register_attachment(&session_id, &client_id);
-                        let attachment = subscriptions.entry(session_id).or_insert_with(|| {
-                            TerminalAttachment::new(
-                                granted.as_ref().map_or(mode, |lease| lease.mode),
-                                lease_epoch,
-                            )
-                        });
-                        if let Some(lease) = granted {
-                            attachment.mode = lease.mode;
-                            attachment.lease_epoch = lease.lease_epoch;
-                            attachment.last_client_sequence = 0;
-                        } else if replace_mode {
-                            attachment.mode = mode;
-                            attachment.lease_epoch = lease_epoch;
-                            attachment.last_client_sequence = 0;
-                        }
-                    }
-                    match result {
-                        Response::TerminalScrolled(read) | Response::TerminalViewport(read) => {
-                            if let Some(attachment) =
-                                subscriptions.get_mut(&read.viewport.session_id)
-                            {
-                                attachment.display_offset = read.viewport.display_offset;
-                                runtime.update_attachment_display_offset(
-                                    &read.viewport.session_id,
-                                    &client_id,
-                                    read.viewport.display_offset,
-                                );
-                                if attachment.display_offset == 0 {
-                                    attachment.unseen_output = 0;
-                                    if attachment.take_scroll_resync() {
-                                        runtime.mark_attachment_resync(
-                                            &read.viewport.session_id,
-                                            &client_id,
-                                            AttachmentResyncReason::ReturnToBottom,
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                        Response::TerminalSearch(results) => {
-                            if let Some(attachment) =
-                                subscriptions.get_mut(&results.session_id)
-                            {
-                                attachment.search_generation = results.generation;
-                            }
-                        }
-                        Response::TerminalsTerminated { results } => {
-                            for result in results.iter().filter(|result| result.result.is_ok()) {
-                                subscriptions.remove(&result.session_id);
-                                runtime.release_attachment(&result.session_id, &client_id);
-                            }
-                        }
-                        _ => {}
-                    }
-                    if let Some(session_id) = unsubscription {
-                        subscriptions.remove(&session_id);
-                        runtime.release_attachment(&session_id, &client_id);
-                    }
-                    }
-                    lifecycle.resource_changed();
-                }
+                let resource_changed = resource_changed && response.result.is_ok();
                 send_control(&mut stream, &ControlMessage::Response(response))
                     .await
                     .map_err(|_| ())?;
+                if resource_changed {
+                    context.lifecycle.resource_changed();
+                }
             }
-            event = runtime_events.recv() => {
-                let server_event = match event {
-                    Ok(HostTerminalEvent::Update { session_id, .. }) => {
-                        if let Some(attachment) = subscriptions.get_mut(&session_id)
-                            && attachment.display_offset != 0
-                        {
-                            attachment.unseen_output =
-                                attachment.unseen_output.saturating_add(1);
-                        }
-                        None
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow() {
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
+async fn process_control_request(
+    request: ClientRequest,
+    context: &ConnectionContext,
+    client_id: &ClientInstanceId,
+    subscriptions: &mut HashMap<TerminalSessionId, TerminalAttachment>,
+    request_journal: &Arc<tokio::sync::Mutex<RequestJournal>>,
+) -> HostResponse {
+    let subscription = match &request.body {
+        Request::SpawnTerminal(spec) => Some((
+            spec.session_id.clone(),
+            TerminalLeaseMode::Interactive,
+            true,
+        )),
+        Request::AttachTerminal(attach) => Some((attach.session_id.clone(), attach.mode, true)),
+        Request::AcquireTerminalLease { session_id, mode } => {
+            Some((session_id.clone(), *mode, true))
+        }
+        Request::ReleaseTerminalLease { session_id }
+        | Request::ReleaseTerminalControl { session_id } => {
+            Some((session_id.clone(), TerminalLeaseMode::Observer, true))
+        }
+        Request::RequestTerminalControl { session_id } => {
+            Some((session_id.clone(), TerminalLeaseMode::Observer, false))
+        }
+        Request::RequestCheckpoint { session_id, .. } => {
+            Some((session_id.clone(), TerminalLeaseMode::Observer, false))
+        }
+        _ => None,
+    };
+    let unsubscription = match &request.body {
+        Request::DetachTerminal { session_id }
+        | Request::TerminateTerminal { session_id, .. }
+        | Request::AcknowledgeTerminalExit { session_id, .. } => Some(session_id.clone()),
+        _ => None,
+    };
+    let (response, apply_effects) = if request_is_journalable(&request.body) {
+        let fingerprint = request_fingerprint(&request.body);
+        let mut journal = request_journal.lock().await;
+        match journal.lookup(request.request_id, &fingerprint) {
+            JournalLookup::Replay(response) => (*response, false),
+            JournalLookup::Conflict => (
+                HostResponse {
+                    request_id: request.request_id,
+                    result: Err(ProtocolFailure::new(
+                        FailureCode::InvalidRequest,
+                        "request ID was already used for a different request",
+                        false,
+                    )),
+                },
+                false,
+            ),
+            JournalLookup::Miss => {
+                let response = handle_request(
+                    request,
+                    context,
+                    client_id,
+                    subscriptions,
+                    context.host_sequence.fetch_add(1, Ordering::Relaxed),
+                )
+                .await;
+                journal.insert(fingerprint, response.clone());
+                (response, true)
+            }
+        }
+    } else {
+        (
+            handle_request(
+                request,
+                context,
+                client_id,
+                subscriptions,
+                context.host_sequence.fetch_add(1, Ordering::Relaxed),
+            )
+            .await,
+            true,
+        )
+    };
+    if apply_effects && let Ok(result) = &response.result {
+        if let Some((session_id, mode, replace_mode)) = subscription {
+            let granted = match result {
+                Response::TerminalSpawned { lease, .. }
+                | Response::TerminalAttached { lease, .. }
+                | Response::TerminalLease(lease) => Some(lease.clone()),
+                _ => None,
+            };
+            let lease_epoch = granted.as_ref().map_or_else(
+                || {
+                    subscriptions
+                        .get(&session_id)
+                        .map_or(0, |attachment| attachment.lease_epoch)
+                },
+                |lease| lease.lease_epoch,
+            );
+            context.runtime.register_attachment(&session_id, client_id);
+            let attachment = subscriptions.entry(session_id).or_insert_with(|| {
+                TerminalAttachment::new(
+                    granted.as_ref().map_or(mode, |lease| lease.mode),
+                    lease_epoch,
+                )
+            });
+            if let Some(lease) = granted {
+                attachment.mode = lease.mode;
+                attachment.lease_epoch = lease.lease_epoch;
+                attachment.last_client_sequence = 0;
+            } else if replace_mode {
+                attachment.mode = mode;
+                attachment.lease_epoch = lease_epoch;
+                attachment.last_client_sequence = 0;
+            }
+        }
+        apply_terminal_response_effects(result, subscriptions, client_id, &context.runtime);
+        if let Response::TerminalsTerminated { results } = result {
+            for result in results.iter().filter(|result| result.result.is_ok()) {
+                subscriptions.remove(&result.session_id);
+                context
+                    .runtime
+                    .release_attachment(&result.session_id, client_id);
+            }
+        }
+        if let Some(session_id) = unsubscription {
+            subscriptions.remove(&session_id);
+            context.runtime.release_attachment(&session_id, client_id);
+        }
+    }
+    response
+}
+
+fn apply_terminal_response_effects(
+    result: &Response,
+    subscriptions: &mut HashMap<TerminalSessionId, TerminalAttachment>,
+    client_id: &ClientInstanceId,
+    runtime: &HostRuntime,
+) {
+    match result {
+        Response::TerminalScrolled(read) | Response::TerminalViewport(read) => {
+            if let Some(attachment) = subscriptions.get_mut(&read.viewport.session_id) {
+                attachment.display_offset = read.viewport.display_offset;
+                runtime.update_attachment_display_offset(
+                    &read.viewport.session_id,
+                    client_id,
+                    read.viewport.display_offset,
+                );
+                if attachment.display_offset == 0 {
+                    attachment.unseen_output = 0;
+                    if attachment.take_scroll_resync() {
+                        runtime.mark_attachment_resync(
+                            &read.viewport.session_id,
+                            client_id,
+                            AttachmentResyncReason::ReturnToBottom,
+                        );
                     }
-                    Ok(HostTerminalEvent::Exited {
-                        session_id,
-                        session_epoch,
-                        code,
-                        final_sequence,
-                    }) if subscriptions.contains_key(&session_id) => {
-                        Some(ServerEvent::TerminalExit {
+                }
+            }
+        }
+        Response::TerminalSearch(results) => {
+            if let Some(attachment) = subscriptions.get_mut(&results.session_id) {
+                attachment.search_generation = results.generation;
+            }
+        }
+        _ => {}
+    }
+}
+
+async fn serve_terminal_interactive_connection(
+    stream: TransportStream,
+    client_id: ClientInstanceId,
+    attachments: SharedTerminalAttachments,
+    context: &ConnectionContext,
+) -> Result<(), ()> {
+    let (mut reader, mut writer) = tokio::io::split(stream);
+    let mut stop = context.stop.clone();
+    loop {
+        tokio::select! {
+            message = receive_terminal_interactive(&mut reader) => {
+                let message = message.map_err(|_| ())?;
+                let (request, reply) = match message {
+                    TerminalInteractiveMessage::Input(input) => (
+                        ClientRequest {
+                            request_id: 0,
+                            actor_device_id: Some(client_id.to_string()),
+                            lease_epoch: None,
+                            body: Request::TerminalInput(input),
+                        },
+                        false,
+                    ),
+                    TerminalInteractiveMessage::Request(request)
+                        if interactive_lane_request(&request.body) => (request, true),
+                    TerminalInteractiveMessage::Request(request) => {
+                        let response = HostResponse {
+                            request_id: request.request_id,
+                            result: Err(ProtocolFailure::new(
+                                FailureCode::InvalidRequest,
+                                "interactive channel accepts only terminal mutations",
+                                false,
+                            )),
+                        };
+                        send_terminal_interactive(
+                            &mut writer,
+                            &TerminalInteractiveMessage::Response(response),
+                        )
+                        .await
+                        .map_err(|_| ())?;
+                        continue;
+                    }
+                    TerminalInteractiveMessage::Response(_) => return Err(()),
+                };
+                let mut attachments = attachments.lock().await;
+                let response = handle_request(
+                    request,
+                    context,
+                    &client_id,
+                    &mut attachments,
+                    context.host_sequence.fetch_add(1, Ordering::Relaxed),
+                )
+                .await;
+                if let Ok(result) = &response.result {
+                    apply_terminal_response_effects(
+                        result,
+                        &mut attachments,
+                        &client_id,
+                        &context.runtime,
+                    );
+                }
+                drop(attachments);
+                if reply {
+                    send_terminal_interactive(
+                        &mut writer,
+                        &TerminalInteractiveMessage::Response(response),
+                    )
+                    .await
+                    .map_err(|_| ())?;
+                } else if let Err(error) = response.result {
+                    eprintln!("one-way terminal input rejected: {error:?}");
+                }
+            }
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow() {
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
+async fn send_host_state_event(
+    stream: &mut TransportStream,
+    context: &ConnectionContext,
+    body: ServerEvent,
+) -> Result<(), ()> {
+    send_state_event(
+        stream,
+        &HostEvent {
+            host_sequence: context.host_sequence.fetch_add(1, Ordering::Relaxed),
+            body,
+        },
+    )
+    .await
+    .map_err(|_| ())
+}
+
+async fn serve_state_event_connection(
+    mut stream: TransportStream,
+    client_id: ClientInstanceId,
+    attachments: SharedTerminalAttachments,
+    context: &ConnectionContext,
+) -> Result<(), ()> {
+    let mut ssh_events = context.ssh.subscribe();
+    let mut agent_hook_events = context.agent_hooks.subscribe();
+    let mut project_events = context.projects.subscribe();
+    let mut runtime_events = context.runtime.subscribe();
+    let mut resource_changes = context.lifecycle.subscribe_resource_changes();
+    let mut stop = context.stop.clone();
+    for update in context.agent_hooks.snapshots_after(&[]) {
+        send_host_state_event(
+            &mut stream,
+            context,
+            ServerEvent::AgentSnapshot(Box::new(update)),
+        )
+        .await?;
+    }
+    for change in context.projects.resync_changes() {
+        send_host_state_event(&mut stream, context, ServerEvent::ProjectChanged(change)).await?;
+    }
+    loop {
+        tokio::select! {
+            event = runtime_events.recv() => {
+                let server_event = {
+                    let mut subscriptions = attachments.lock().await;
+                    match event {
+                        Ok(HostTerminalEvent::Update { session_id, .. }) => {
+                            if let Some(attachment) = subscriptions.get_mut(&session_id)
+                                && attachment.display_offset != 0
+                            {
+                                attachment.unseen_output =
+                                    attachment.unseen_output.saturating_add(1);
+                            }
+                            None
+                        }
+                        Ok(HostTerminalEvent::Exited {
                             session_id,
                             session_epoch,
                             code,
                             final_sequence,
-                        })
-                    }
-                    Ok(HostTerminalEvent::LeaseRevoked {
-                        session_id,
-                        previous_owner,
-                    }) if previous_owner == client_id => {
-                        if let Some(attachment) = subscriptions.get_mut(&session_id) {
-                            attachment.mode = TerminalLeaseMode::Observer;
-                        }
-                        Some(ServerEvent::TerminalLeaseRevoked {
-                            session_id,
-                            previous_owner,
-                        })
-                    }
-                    Ok(HostTerminalEvent::LeaseReleased {
-                        session_id,
-                        previous_owner,
-                    }) if previous_owner == client_id => {
-                        if let Some(attachment) = subscriptions.get_mut(&session_id) {
-                            attachment.mode = TerminalLeaseMode::Observer;
-                        }
-                        Some(ServerEvent::TerminalLeaseReleased {
-                            session_id,
-                            previous_owner,
-                        })
-                    }
-                    Ok(HostTerminalEvent::LeaseExpired {
-                        session_id,
-                        previous_owner,
-                    }) if previous_owner == client_id => {
-                        if let Some(attachment) = subscriptions.get_mut(&session_id) {
-                            attachment.mode = TerminalLeaseMode::Observer;
-                        }
-                        Some(ServerEvent::TerminalLeaseExpired {
-                            session_id,
-                            previous_owner,
-                        })
-                    }
-                    Ok(HostTerminalEvent::ControlRequested {
-                        session_id,
-                        holder,
-                        requester,
-                    }) if holder == client_id => Some(ServerEvent::TerminalControlRequested {
-                        session_id,
-                        requester,
-                    }),
-                    Ok(HostTerminalEvent::ControlGranted { session_id, lease })
-                        if lease.owner == client_id =>
-                    {
-                        if let Some(attachment) = subscriptions.get_mut(&session_id) {
-                            attachment.mode = TerminalLeaseMode::Interactive;
-                            attachment.lease_epoch = lease.lease_epoch;
-                            attachment.last_client_sequence = 0;
-                        }
-                        Some(ServerEvent::TerminalControlGranted { lease })
-                    }
-                    Ok(HostTerminalEvent::ControlDenied {
-                        session_id,
-                        requester,
-                        reason,
-                    }) if requester == client_id => Some(ServerEvent::TerminalControlDenied {
-                        session_id,
-                        requester,
-                        reason,
-                    }),
-                    Ok(HostTerminalEvent::TitleChanged { .. } | HostTerminalEvent::Bell { .. }) => {
-                        None
-                    }
-                    Ok(_) => None,
-                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                        for (session_id, attachment) in subscriptions.iter_mut() {
-                            let scrolled = attachment.display_offset != 0;
-                            attachment.note_lagged(skipped);
-                            runtime.note_attachment_lag(
+                        }) if subscriptions.contains_key(&session_id) => {
+                            Some(ServerEvent::TerminalExit {
                                 session_id,
-                                &client_id,
-                                skipped,
-                                scrolled,
-                            );
+                                session_epoch,
+                                code,
+                                final_sequence,
+                            })
                         }
-                        None
+                        Ok(HostTerminalEvent::LeaseRevoked {
+                            session_id,
+                            previous_owner,
+                        }) if previous_owner == client_id => {
+                            if let Some(attachment) = subscriptions.get_mut(&session_id) {
+                                attachment.mode = TerminalLeaseMode::Observer;
+                            }
+                            Some(ServerEvent::TerminalLeaseRevoked {
+                                session_id,
+                                previous_owner,
+                            })
+                        }
+                        Ok(HostTerminalEvent::LeaseReleased {
+                            session_id,
+                            previous_owner,
+                        }) if previous_owner == client_id => {
+                            if let Some(attachment) = subscriptions.get_mut(&session_id) {
+                                attachment.mode = TerminalLeaseMode::Observer;
+                            }
+                            Some(ServerEvent::TerminalLeaseReleased {
+                                session_id,
+                                previous_owner,
+                            })
+                        }
+                        Ok(HostTerminalEvent::LeaseExpired {
+                            session_id,
+                            previous_owner,
+                        }) if previous_owner == client_id => {
+                            if let Some(attachment) = subscriptions.get_mut(&session_id) {
+                                attachment.mode = TerminalLeaseMode::Observer;
+                            }
+                            Some(ServerEvent::TerminalLeaseExpired {
+                                session_id,
+                                previous_owner,
+                            })
+                        }
+                        Ok(HostTerminalEvent::ControlRequested {
+                            session_id,
+                            holder,
+                            requester,
+                        }) if holder == client_id => {
+                            Some(ServerEvent::TerminalControlRequested {
+                                session_id,
+                                requester,
+                            })
+                        }
+                        Ok(HostTerminalEvent::ControlGranted { lease, .. })
+                            if lease.owner == client_id =>
+                        {
+                            if let Some(attachment) =
+                                subscriptions.get_mut(&lease.session_id)
+                            {
+                                attachment.mode = TerminalLeaseMode::Interactive;
+                                attachment.lease_epoch = lease.lease_epoch;
+                                attachment.last_client_sequence = 0;
+                            }
+                            Some(ServerEvent::TerminalControlGranted { lease })
+                        }
+                        Ok(HostTerminalEvent::ControlDenied {
+                            session_id,
+                            requester,
+                            reason,
+                        }) if requester == client_id => {
+                            Some(ServerEvent::TerminalControlDenied {
+                                session_id,
+                                requester,
+                                reason,
+                            })
+                        }
+                        Ok(HostTerminalEvent::TitleChanged { .. } | HostTerminalEvent::Bell { .. }) => {
+                            None
+                        }
+                        Ok(_) => None,
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            for (session_id, attachment) in subscriptions.iter_mut() {
+                                let scrolled = attachment.display_offset != 0;
+                                attachment.note_lagged(skipped);
+                                context.runtime.note_attachment_lag(
+                                    session_id,
+                                    &client_id,
+                                    skipped,
+                                    scrolled,
+                                );
+                            }
+                            None
+                        }
+                        Err(broadcast::error::RecvError::Closed) => return Err(()),
                     }
-                    Err(broadcast::error::RecvError::Closed) => return Err(()),
                 };
                 if let Some(body) = server_event {
-                    send_control(
-                        &mut stream,
-                        &ControlMessage::Event(HostEvent {
-                            host_sequence: host_sequence.fetch_add(1, Ordering::Relaxed),
-                            body,
-                        }),
-                    )
-                    .await
-                    .map_err(|_| ())?;
+                    send_host_state_event(&mut stream, context, body).await?;
                 }
             }
             event = ssh_events.recv() => {
@@ -931,40 +1179,26 @@ async fn serve_connection(
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(broadcast::error::RecvError::Closed) => return Err(()),
                 };
-                send_control(
-                    &mut stream,
-                    &ControlMessage::Event(HostEvent {
-                        host_sequence: host_sequence.fetch_add(1, Ordering::Relaxed),
-                        body,
-                    }),
-                )
-                .await
-                .map_err(|_| ())?;
+                send_host_state_event(&mut stream, context, body).await?;
             }
             event = project_events.recv() => {
                 match event {
                     Ok(change) => {
-                        send_control(
+                        send_host_state_event(
                             &mut stream,
-                            &ControlMessage::Event(HostEvent {
-                                host_sequence: host_sequence.fetch_add(1, Ordering::Relaxed),
-                                body: ServerEvent::ProjectChanged(change),
-                            }),
+                            context,
+                            ServerEvent::ProjectChanged(change),
                         )
-                        .await
-                        .map_err(|_| ())?;
+                        .await?;
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {
-                        for change in projects.resync_changes() {
-                            send_control(
+                        for change in context.projects.resync_changes() {
+                            send_host_state_event(
                                 &mut stream,
-                                &ControlMessage::Event(HostEvent {
-                                    host_sequence: host_sequence.fetch_add(1, Ordering::Relaxed),
-                                    body: ServerEvent::ProjectChanged(change),
-                                }),
+                                context,
+                                ServerEvent::ProjectChanged(change),
                             )
-                            .await
-                            .map_err(|_| ())?;
+                            .await?;
                         }
                     }
                     Err(broadcast::error::RecvError::Closed) => return Err(()),
@@ -974,30 +1208,36 @@ async fn serve_connection(
                 let updates = match event {
                     Ok(update) => vec![update],
                     Err(broadcast::error::RecvError::Lagged(_)) => {
-                        agent_hooks.snapshots_after(&[])
+                        context.agent_hooks.snapshots_after(&[])
                     }
                     Err(broadcast::error::RecvError::Closed) => return Err(()),
                 };
                 for update in updates {
-                    send_control(
+                    send_host_state_event(
                         &mut stream,
-                        &ControlMessage::Event(HostEvent {
-                            host_sequence: host_sequence.fetch_add(1, Ordering::Relaxed),
-                            body: ServerEvent::AgentSnapshot(Box::new(update)),
-                        }),
+                        context,
+                        ServerEvent::AgentSnapshot(Box::new(update)),
                     )
-                    .await
-                    .map_err(|_| ())?;
+                    .await?;
                 }
+            }
+            changed = resource_changes.changed() => {
+                if changed.is_err() {
+                    return Err(());
+                }
+                send_host_state_event(
+                    &mut stream,
+                    context,
+                    ServerEvent::ResourceCatalogChanged,
+                )
+                .await?;
             }
             changed = stop.changed() => {
                 if changed.is_err() || *stop.borrow() {
-                    let _ = send_control(
+                    let _ = send_host_state_event(
                         &mut stream,
-                        &ControlMessage::Event(HostEvent {
-                            host_sequence: host_sequence.fetch_add(1, Ordering::Relaxed),
-                            body: ServerEvent::HostStopping,
-                        }),
+                        context,
+                        ServerEvent::HostStopping,
                     )
                     .await;
                     return Ok(());
@@ -1005,12 +1245,6 @@ async fn serve_connection(
             }
         }
     }
-    }.await;
-    runtime.release_client(&client_id);
-    ssh.abandon_challenges(&client_id);
-    lifecycle.client_disconnected();
-    lifecycle.resource_changed();
-    result
 }
 async fn serve_desktop_owner_connection(
     mut stream: TransportStream,
@@ -1133,6 +1367,71 @@ async fn serve_lifecycle_connection(
     }
 }
 
+enum PendingTerminalFrame {
+    Shared(Arc<SharedTerminalUpdate>),
+    Update(Box<TerminalStreamUpdate>),
+    SnapshotRequired,
+}
+
+impl PendingTerminalFrame {
+    fn push(&mut self, update: Arc<SharedTerminalUpdate>) {
+        if matches!(update.update(), TerminalStreamUpdate::Snapshot(_)) {
+            *self = Self::Shared(update);
+            return;
+        }
+        let current = std::mem::replace(self, Self::SnapshotRequired);
+        *self = match current {
+            Self::Shared(current) => {
+                let mut current = current.update().clone();
+                if merge_terminal_updates(&mut current, update.update()) {
+                    Self::Update(Box::new(current))
+                } else {
+                    Self::SnapshotRequired
+                }
+            }
+            Self::Update(mut current) => {
+                if merge_terminal_updates(current.as_mut(), update.update()) {
+                    Self::Update(current)
+                } else {
+                    Self::SnapshotRequired
+                }
+            }
+            Self::SnapshotRequired => Self::SnapshotRequired,
+        };
+    }
+
+    fn enqueue(
+        self,
+        terminal: &HostedTerminal,
+        output: &TerminalDataWriter,
+        host_sequence: &AtomicU64,
+    ) -> Result<(), ()> {
+        match self {
+            Self::Shared(update) => output.enqueue_shared(host_sequence, update.as_ref()),
+            Self::Update(update) => output.enqueue(host_sequence, *update),
+            Self::SnapshotRequired => {
+                let viewport = terminal.latest_viewport().ok_or(())?;
+                output.enqueue(host_sequence, TerminalStreamUpdate::Snapshot(viewport))
+            }
+        }
+        .map_err(|_| ())
+    }
+}
+
+fn merge_terminal_updates(current: &mut TerminalStreamUpdate, next: &TerminalStreamUpdate) -> bool {
+    match current {
+        TerminalStreamUpdate::Snapshot(viewport) => !matches!(
+            viewport.apply_stream_update_ref(next),
+            TerminalStreamApply::SequenceGap
+        ),
+        TerminalStreamUpdate::Delta(current) => match next {
+            TerminalStreamUpdate::Delta(next) => current.merge_contiguous(next.clone()),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 async fn serve_terminal_data_connection(
     stream: TransportStream,
     client_id: ClientInstanceId,
@@ -1208,6 +1507,10 @@ async fn serve_terminal_data_connection(
         drain_terminal_data(&output).await?;
         return Ok(());
     }
+    let mut pending_frame = None::<PendingTerminalFrame>;
+    let mut frame_tick = tokio::time::interval(TERMINAL_FRAME_INTERVAL);
+    frame_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    frame_tick.tick().await;
     loop {
         tokio::select! {
             event = terminal_events.recv() => {
@@ -1218,9 +1521,24 @@ async fn serve_terminal_data_connection(
                     }) if update_session_id == session_id
                         && attachment_state.display_offset == 0 =>
                     {
-                        output
-                            .enqueue_shared(host_sequence, update.as_ref())
-                            .map_err(|_| ())?;
+                        if matches!(
+                            update.update(),
+                            TerminalStreamUpdate::Snapshot(_) | TerminalStreamUpdate::Delta(_)
+                        ) {
+                            if let Some(pending) = pending_frame.as_mut() {
+                                pending.push(update.clone());
+                            } else {
+                                pending_frame =
+                                    Some(PendingTerminalFrame::Shared(update.clone()));
+                            }
+                        } else {
+                            if let Some(pending) = pending_frame.take() {
+                                pending.enqueue(&terminal, &output, host_sequence)?;
+                            }
+                            output
+                                .enqueue_shared(host_sequence, update.as_ref())
+                                .map_err(|_| ())?;
+                        }
                     }
                     Ok(HostTerminalEvent::Exited {
                         session_id: exited_session_id,
@@ -1240,6 +1558,7 @@ async fn serve_terminal_data_connection(
                     Err(broadcast::error::RecvError::Lagged(skipped))
                         if attachment_state.display_offset == 0 =>
                     {
+                        pending_frame = None;
                         runtime.note_attachment_lag(&session_id, &client_id, skipped, false);
                         let available_from_sequence = terminal
                             .latest_viewport()
@@ -1266,6 +1585,9 @@ async fn serve_terminal_data_connection(
                 }
                 let previous_offset = attachment_state.display_offset;
                 attachment_state = *attachment.borrow();
+                if attachment_state.display_offset != 0 {
+                    pending_frame = None;
+                }
                 if !attachment_state.attached {
                     return Ok(());
                 }
@@ -1282,6 +1604,11 @@ async fn serve_terminal_data_connection(
                             TerminalStreamUpdate::Snapshot(checkpoint.viewport),
                         )
                         .map_err(|_| ())?;
+                }
+            }
+            _ = frame_tick.tick() => {
+                if let Some(pending) = pending_frame.take() {
+                    pending.enqueue(&terminal, &output, host_sequence)?;
                 }
             }
             _ = output_failure.changed() => return Err(()),
