@@ -97,6 +97,9 @@
 - Fixed desktop Host replacement leaving panes permanently bound to an old Host identity:
   missing `Bound`, `ClosePending`, and `Lost` placements now start a fresh session, and successful
   terminal-exit acknowledgements persist `Closed`.
+- Fixed completed manual-restart Agent tabs refusing to close in Host mode: a terminal placement
+  already acknowledged as `Closed` now makes repeated close preparation an idempotent no-op instead
+  of failing with `NotBound` before the local tab can be removed.
 
 ## 0.2.0 - 2026-07-18
 

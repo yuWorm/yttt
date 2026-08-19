@@ -410,10 +410,11 @@ impl DesktopHostRuntime {
         let mut requests = Vec::with_capacity(session_ids.len());
         for session_id in session_ids {
             match self.placement_store.begin_close(&session_id) {
-                Ok(request_id) => requests.push(TerminateTerminalRequest {
+                Ok(Some(request_id)) => requests.push(TerminateTerminalRequest {
                     request_id,
                     session_id,
                 }),
+                Ok(None) => {}
                 Err(error) => {
                     for request in &requests {
                         let _ = self.placement_store.finish_close(
@@ -425,6 +426,9 @@ impl DesktopHostRuntime {
                     return Err(error.to_string());
                 }
             }
+        }
+        if requests.is_empty() {
+            return Ok(Vec::new());
         }
         let response = match self.request_blocking(Request::TerminateMany {
             requests: requests.clone(),

@@ -188,7 +188,7 @@ impl TerminalPlacementStore {
     pub fn begin_close(
         &self,
         session_id: &TerminalSessionId,
-    ) -> Result<u64, TerminalPlacementStoreError> {
+    ) -> Result<Option<u64>, TerminalPlacementStoreError> {
         self.mutate(|state| {
             let (host_id, host_epoch, bound_session_id, session_epoch, spawn_fingerprint) =
                 match state.placements.get(session_id.as_str()).cloned() {
@@ -211,6 +211,7 @@ impl TerminalPlacementStore {
                             request_id,
                         });
                     }
+                    Some(DurableTerminalPlacement::Closed) => return Ok(None),
                     _ => return Err(TerminalPlacementStoreError::NotBound(session_id.clone())),
                 };
             let request_id = state.next_request_id;
@@ -226,7 +227,7 @@ impl TerminalPlacementStore {
                     request_id,
                 },
             );
-            Ok(request_id)
+            Ok(Some(request_id))
         })?
     }
 
@@ -362,7 +363,7 @@ mod tests {
             .bind(HostId::new("host"), 7, session_id.clone(), 3, 41)
             .unwrap();
         let close_request = store.begin_close(&session_id).unwrap();
-        assert_eq!(close_request, 2);
+        assert_eq!(close_request, Some(2));
         assert!(matches!(
             store.placement(&session_id),
             Some(DurableTerminalPlacement::ClosePending { request_id: 2, .. })
@@ -386,7 +387,7 @@ mod tests {
             .bind(HostId::new("host"), 7, session_id.clone(), 3, 41)
             .unwrap();
 
-        let request_id = store.begin_close(&session_id).unwrap();
+        let request_id = store.begin_close(&session_id).unwrap().unwrap();
         assert!(matches!(
             store.begin_close(&session_id),
             Err(TerminalPlacementStoreError::CloseAlreadyPending {
@@ -404,6 +405,21 @@ mod tests {
                 session_epoch: 3,
                 spawn_fingerprint: 41,
             })
+        );
+    }
+
+    #[test]
+    fn closing_an_already_closed_terminal_is_idempotent() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_id = TerminalSessionId::new("project:agent:omp");
+        let store =
+            TerminalPlacementStore::load(temp.path().join("terminal-placements.json")).unwrap();
+        store.mark_closed(&session_id).unwrap();
+
+        assert_eq!(
+            store.begin_close(&session_id).unwrap(),
+            None,
+            "an exited manual-restart Agent pane must not block its tab from closing"
         );
     }
 }
