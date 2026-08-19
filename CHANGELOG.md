@@ -80,6 +80,10 @@
 - Fixed residual rapid-input latency in Host terminals by sending terminal input as an ordered
   one-way resource-protocol v3 message, removing per-keystroke responses, and coalescing adjacent
   writer commands without copying their byte payloads.
+- Fixed mouse selection in Host terminals by maintaining an ephemeral Client-side range over the
+  authoritative semantic viewport; drag, word, and line selection now highlight and copy the same
+  text as Direct terminals without a Host round trip, including soft-wrapped and wide-character
+  rows.
 - Host semantic capture now encodes Alacritty damage rows instead of rescanning every visible cell;
   the background receiver only queues immutable updates, while GPUI applies one bounded batch per
   redraw and serves key/text callbacks from foreground-owned mode state. Async mailbox delivery now

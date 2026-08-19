@@ -6,7 +6,7 @@ use yttt_core::model::ids::TerminalSessionId;
 use yttt_protocol::terminal::TerminalStreamUpdate::{Delta, Snapshot};
 use yttt_terminal_core::{
     TerminalState,
-    semantic::{SemanticCaptureContext, SemanticSnapshotter},
+    semantic::{STYLE_WRAPLINE, SemanticCaptureContext, SemanticSnapshotter},
 };
 
 #[derive(Clone, Default)]
@@ -57,6 +57,27 @@ fn semantic_snapshots_use_stable_line_ids_and_bounded_row_deltas() {
             .unwrap()
             .line_id,
         two_id
+    );
+}
+
+#[test]
+fn semantic_snapshots_preserve_wrapped_line_boundaries() {
+    let events = EventCollector::default();
+    let mut terminal = TerminalState::new(4, 2, events);
+    let mut snapshots = SemanticSnapshotter::new(TerminalSessionId::new("terminal-wrap"), 1);
+    terminal.process_bytes(b"abcde");
+
+    let snapshot = match snapshots.capture(&terminal, &SemanticCaptureContext::running(4, 2, 1)) {
+        Snapshot(snapshot) => snapshot,
+        update => panic!("expected initial snapshot, got {update:?}"),
+    };
+
+    assert!(
+        snapshot.rows[0]
+            .spans
+            .iter()
+            .any(|span| span.style.flags & STYLE_WRAPLINE != 0),
+        "semantic rows must retain soft-wrap boundaries for copied selections"
     );
 }
 

@@ -65,6 +65,7 @@ use crate::render::{
     RenderOverlayState, TerminalRenderCache, TerminalRenderOptions, TerminalRenderSnapshot,
     TerminalRenderer,
 };
+use crate::semantic_selection::SemanticSelection;
 use crate::terminal::{TerminalScrollbarMetrics, TerminalState};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point as AlacPoint, Side};
@@ -842,6 +843,7 @@ pub struct TerminalView {
     semantic_input: SemanticInputSnapshot,
     semantic_scroll_callback: Option<Arc<dyn Fn(u64) + Send + Sync>>,
     semantic_scroll_offset: Option<u64>,
+    semantic_selection: Option<SemanticSelection>,
     performance: TerminalPerformanceHandle,
 
     /// Focus handle for keyboard event handling
@@ -1122,6 +1124,7 @@ impl TerminalView {
             semantic_input: SemanticInputSnapshot::default(),
             semantic_scroll_callback: None,
             semantic_scroll_offset: None,
+            semantic_selection: None,
             performance,
 
             focus_handle,
@@ -1165,8 +1168,22 @@ impl TerminalView {
         }
     }
 
+    fn observe_semantic_selection(&mut self, viewport: &SemanticViewport) {
+        let valid = match self.semantic_selection.as_mut() {
+            Some(selection) => selection.observe(viewport),
+            None => true,
+        };
+        if !valid {
+            self.semantic_selection = None;
+            self.selection_anchor = None;
+            self.selecting = false;
+            self.stop_selection_scroll();
+        }
+    }
+
     pub fn set_semantic_viewport(&mut self, viewport: SemanticViewport, cx: &mut Context<Self>) {
         self.performance.record_semantic_viewport(&viewport);
+        self.observe_semantic_selection(&viewport);
         self.semantic_input.update(&viewport);
         self.semantic_scroll_offset = Some(viewport.display_offset);
         self.semantic_viewport.lock().replace(viewport);
@@ -1469,6 +1486,7 @@ impl TerminalView {
             term.selection = None;
             term.cursor_style().blinking
         });
+        self.semantic_selection = None;
         self.scroll_display(Scroll::Bottom);
         self.selection_anchor = None;
         self.selecting = false;
@@ -1537,11 +1555,14 @@ impl TerminalView {
     }
 
     fn copy_selection_to_clipboard(&self, cx: &App) -> bool {
-        let Some(text) = self
-            .state
-            .selection_to_string()
-            .filter(|text| !text.is_empty())
-        else {
+        let text = if self.semantic_input.available {
+            self.semantic_selection
+                .as_ref()
+                .and_then(|selection| selection.text(&self.config.semantic_escape_chars))
+        } else {
+            self.state.selection_to_string()
+        };
+        let Some(text) = text.filter(|text| !text.is_empty()) else {
             return false;
         };
         Self::write_clipboard(ClipboardType::Clipboard, text, cx)
@@ -1987,6 +2008,10 @@ impl TerminalView {
             search_matches: self.search.visible_matches.clone(),
             focused_search_match: self.search.focused_match.clone(),
             hovered_hyperlink: self.hovered_link.as_ref().map(|link| link.range.clone()),
+            selection: self
+                .semantic_selection
+                .as_ref()
+                .and_then(|selection| selection.render_range(&self.config.semantic_escape_chars)),
             ..RenderOverlayState::default()
         };
         if !self.hint.active {
@@ -2265,6 +2290,46 @@ impl TerminalView {
         self.selection_scroll_position = None;
     }
 
+    fn begin_local_selection(
+        &mut self,
+        point: AlacPoint,
+        side: Side,
+        selection_type: AlacSelectionType,
+    ) {
+        if self.semantic_input.available {
+            self.semantic_selection = self
+                .semantic_viewport
+                .lock()
+                .viewport
+                .as_ref()
+                .and_then(|viewport| SemanticSelection::new(viewport, point, side, selection_type));
+        } else {
+            self.state.begin_selection(point, side, selection_type);
+        }
+    }
+
+    fn update_local_selection(&mut self, point: AlacPoint, side: Side) {
+        if !self.semantic_input.available {
+            self.state.update_selection(point, side);
+            return;
+        }
+        let valid = match (
+            self.semantic_selection.as_mut(),
+            self.semantic_viewport.lock().viewport.as_ref(),
+        ) {
+            (Some(selection), Some(viewport)) => selection.update(viewport, point, side),
+            _ => false,
+        };
+        if !valid {
+            self.semantic_selection = None;
+        }
+    }
+
+    fn clear_local_selection(&mut self) {
+        self.semantic_selection = None;
+        self.state.clear_selection();
+    }
+
     fn update_selection_scroll(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let delta = self.selection_scroll_delta_for_position(position);
         self.selection_scroll_position = Some(position);
@@ -2299,7 +2364,7 @@ impl TerminalView {
                         {
                             view.pointer_point = Some(point);
                             view.pointer_side = side;
-                            view.state.update_selection(point, side);
+                            view.update_local_selection(point, side);
                         }
                         cx.notify();
                         true
@@ -2693,10 +2758,9 @@ impl TerminalView {
             self.selection_anchor = Some((point, side));
             self.selecting = event.click_count > 1;
             if self.selecting {
-                self.state
-                    .begin_selection(point, side, Self::selection_type(event.click_count));
+                self.begin_local_selection(point, side, Self::selection_type(event.click_count));
             } else {
-                self.state.clear_selection();
+                self.clear_local_selection();
             }
         }
         cx.notify();
@@ -2753,7 +2817,7 @@ impl TerminalView {
 
         if button == TerminalMouseButton::Left {
             if self.selecting {
-                self.state.update_selection(point, side);
+                self.update_local_selection(point, side);
                 if self.config.copy_on_select {
                     let _ = self.copy_selection_to_clipboard(cx);
                 }
@@ -2828,11 +2892,10 @@ impl TerminalView {
             return;
         }
         if !self.selecting {
-            self.state
-                .begin_selection(anchor, anchor_side, AlacSelectionType::Simple);
+            self.begin_local_selection(anchor, anchor_side, AlacSelectionType::Simple);
             self.selecting = true;
         }
-        self.state.update_selection(point, side);
+        self.update_local_selection(point, side);
         self.update_selection_scroll(event.position, cx);
         cx.notify();
     }
@@ -2949,6 +3012,15 @@ impl TerminalView {
             if let Some(viewport) = state.viewport.as_ref() {
                 self.semantic_input.update(viewport);
                 self.semantic_scroll_offset = Some(viewport.display_offset);
+                let valid = match self.semantic_selection.as_mut() {
+                    Some(selection) => selection.observe(viewport),
+                    None => true,
+                };
+                if !valid {
+                    self.semantic_selection = None;
+                    self.selection_anchor = None;
+                    self.selecting = false;
+                }
             }
             self.render_generation.fetch_add(1, Ordering::AcqRel);
         }
@@ -3725,7 +3797,7 @@ impl Render for TerminalView {
                         let lock_started = Instant::now();
                         let mut semantic_state = semantic_viewport.lock();
                         let (snapshot, parser_generation) = if semantic_state.viewport.is_some() {
-                            let selection = state_arc.lock().renderable_content().selection;
+                            let selection = render_overlays.selection;
                             let (cursor_row, display_offset, screen_lines) = {
                                 let semantic = semantic_state.viewport.as_ref().unwrap();
                                 (
@@ -4273,6 +4345,65 @@ mod tests {
         assert_eq!(shape_calls.load(Ordering::Relaxed), 1);
         terminal.update(cx, |terminal, _| {
             terminal.renderer.set_shaping_hook(None);
+        });
+    }
+
+    #[gpui::test]
+    fn semantic_drag_selection_highlights_and_copies_host_text(cx: &mut TestAppContext) {
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new_semantic(
+                io::sink(),
+                TerminalConfig {
+                    copy_on_select: true,
+                    ..TerminalConfig::default()
+                },
+                cx,
+            )
+        });
+        let mut viewport = semantic_viewport(1);
+        viewport.geometry.cols = 8;
+        viewport.geometry.rows = 2;
+        viewport.cursor.visible = false;
+        viewport.rows = vec![semantic_row(1, 0, "hosttext"), semantic_row(2, 1, "second")];
+        terminal.update(cx, |terminal, cx| {
+            terminal.set_semantic_viewport(viewport, cx);
+        });
+        cx.run_until_parked();
+
+        let painted = cx.read(|cx| {
+            (*terminal.read(cx).viewport.lock()).expect("terminal viewport must be painted")
+        });
+        let start = point(
+            painted.bounds.origin.x + painted.padding.left + painted.cell_width * 0.25,
+            painted.bounds.origin.y + painted.padding.top + painted.cell_height * 0.5,
+        );
+        let end = point(
+            painted.bounds.origin.x + painted.padding.left + painted.cell_width * 3.75,
+            painted.bounds.origin.y + painted.padding.top + painted.cell_height * 0.5,
+        );
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(end, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()),
+            Some("host".to_string())
+        );
+        cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            assert!(
+                terminal.state.selection_to_string().is_none(),
+                "Host text must not depend on the empty local Alacritty grid"
+            );
+            let frame = terminal.render_cache.lock().frame().unwrap();
+            let row = frame
+                .rows
+                .iter()
+                .find(|row| row.semantic_line_id == Some(1))
+                .unwrap();
+            assert!(row.cells[..4].iter().all(|cell| cell.selected));
+            assert!(!row.cells[4].selected);
         });
     }
 

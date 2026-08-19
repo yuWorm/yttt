@@ -36,6 +36,7 @@ pub const STYLE_DOUBLE_UNDERLINE: u16 = 1 << 7;
 pub const STYLE_UNDERCURL: u16 = 1 << 8;
 pub const STYLE_DOTTED_UNDERLINE: u16 = 1 << 9;
 pub const STYLE_DASHED_UNDERLINE: u16 = 1 << 10;
+pub const STYLE_WRAPLINE: u16 = 1 << 11;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SemanticCaptureContext {
@@ -693,6 +694,7 @@ fn semantic_flags(flags: Flags) -> u16 {
         (Flags::UNDERCURL, STYLE_UNDERCURL),
         (Flags::DOTTED_UNDERLINE, STYLE_DOTTED_UNDERLINE),
         (Flags::DASHED_UNDERLINE, STYLE_DASHED_UNDERLINE),
+        (Flags::WRAPLINE, STYLE_WRAPLINE),
     ] {
         if flags.contains(flag) {
             semantic |= value;

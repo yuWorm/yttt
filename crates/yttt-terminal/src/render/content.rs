@@ -2,6 +2,7 @@ use crate::colors::ColorPalette;
 use crate::event::GpuiEventProxy;
 use alacritty_terminal::grid::{Dimensions, Indexed};
 use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
+use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::cell::{Cell, Flags, Hyperlink};
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::{self, Term, TermMode};
@@ -167,6 +168,7 @@ pub(crate) struct RenderOverlayState {
     pub search_matches: Vec<RangeInclusive<AlacPoint>>,
     pub focused_search_match: Option<RangeInclusive<AlacPoint>>,
     pub hovered_hyperlink: Option<RangeInclusive<AlacPoint>>,
+    pub selection: Option<SelectionRange>,
 }
 
 impl RenderOverlayState {
@@ -629,6 +631,11 @@ fn semantic_render_cell(
     {
         text.push(character);
     }
+    let selected = overlays.selection.is_some_and(|selection| {
+        selection.contains(point)
+            || width == TerminalCellWidth::Wide
+                && selection.contains(AlacPoint::new(point.line, point.column + 1))
+    });
     let mut decorations = RenderDecorationFlags::from_cell_flags(flags);
     if let Some(hint) = overlays.hint_at(point) {
         let (hint_foreground, hint_background) = if hint.is_start {
@@ -641,6 +648,13 @@ fn semantic_render_cell(
         if let Some(label) = hint.label {
             text.clear();
             text.push(label);
+        }
+    } else if selected {
+        foreground = palette.selection_foreground().unwrap_or(foreground);
+        background = palette.selection_background();
+        if foreground == background && !flags.contains(Flags::HIDDEN) {
+            foreground = default_background;
+            background = default_foreground;
         }
     } else if let Some(focused) = overlays.search_at(point) {
         (foreground, background) = if focused {
@@ -669,7 +683,7 @@ fn semantic_render_cell(
             dim: flags.contains(Flags::DIM),
         },
         decorations,
-        selected: false,
+        selected,
         hyperlink,
     }
 }

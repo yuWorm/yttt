@@ -249,6 +249,13 @@ Client 仅接受 `base_sequence == mirror.sequence` 的 delta；检测到 gap、
 
 Client 的 `TerminalView::new_semantic` 只启动一个 input writer worker；它不创建空转的 PTY reader/parser，也不分配本地 PTY read-buffer pool。这样 Host 化不会在 Client 重复 VTE 解析或额外保留两条空转线程。
 
+Host terminal selection is ephemeral Client UI state, not Host resource state. `TerminalView` maps
+mouse coordinates to semantic viewport rows, preserves endpoints through sequenced viewport updates
+using stable `line_id` values, and derives highlight/copy text from the same spans. Soft-wrap
+boundaries travel in semantic style flags so copied wrapped output omits synthetic newlines.
+Selection never waits for a Host response and is discarded when geometry/scrollback epochs or
+visible line identity make the endpoints ambiguous.
+
 ### 7.3 输入、resize 与 scroll
 
 - `TerminalInput`：`client_sequence` 必须单调；Host 在写 PTY 前验证 Interactive lease。

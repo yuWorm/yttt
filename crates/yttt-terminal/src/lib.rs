@@ -34,8 +34,8 @@
 //!
 //! - Legacy and Kitty keyboard encoding, including application cursor/keypad modes,
 //!   press/repeat/release events, associated text, and pure IME text events.
-//! - X10, UTF-8, SGR, and SGR-pixel mouse reports; local selection, scrollback, and alternate
-//!   scrolling.
+//! - X10, UTF-8, SGR, and SGR-pixel mouse reports; local-grid and semantic-viewport selection,
+//!   scrollback, and alternate scrolling.
 //! - Bracketed paste normalization, GPUI clipboard and primary-selection integration, and
 //!   focus-aware OSC 52 policy enforcement.
 //! - Dynamic color and size queries, cursor style/blinking, IME preedit, search, URL/hyperlink
@@ -138,6 +138,7 @@ pub mod event;
 pub mod input;
 pub mod mouse;
 mod perf;
+mod semantic_selection;
 
 pub mod pty;
 pub mod render;
