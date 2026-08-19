@@ -1,7 +1,7 @@
 # yttt Host/Client 架构规范
 
 - 状态：Phase 1 本地 IPC 完整实现
-- 更新：2026-08-18
+- 更新：2026-08-19
 - 适用协议：`yttt-protocol` 资源/lifecycle/desktop-shell v2；帧头 v1
 - 相关设计：[`p2p-relay-architecture.md`](./p2p-relay-architecture.md)
 
@@ -187,6 +187,7 @@ prepaint 只转换 damage row；未变化 row 的 render generation、text shapi
 Terminal placement 包含稳定 `project_id`、`session_id`、几何、owner、最后 sequence 和可选 viewport。`tab_id` / `pane_id` 只属于客户端布局，不进入 Host catalog 或 `address_fingerprint`。
 
 `AgentSnapshotUpdate.terminal_session_id` 是 Agent 状态关联当前客户端布局的唯一资源键。Client 必须先用它找到当前 terminal pane，再取得本地 `project_id/tab_id/pane_id`；Hook scope 中的 `tab_id` / `pane_id` 不是客户端布局键。若 pane 尚未恢复，Client 保留该 session 的最新 snapshot，待 placement 出现后再应用。
+Desktop 的 Agent snapshot bridge 必须按 `terminal_session_id` 和 `(host_epoch, generation, sequence)` 合并最新值，不能让有界事件队列在 UI 暂停消费时静默丢失最终状态。Agent 进程存活但尚无权威 snapshot 只表示状态未知，UI 显示 `Stale`，不能推断为 `Working`。
 
 连接成功或重连成功后，`ClientCore` 第一项内部请求必须是 `ListResources`：
 
@@ -255,7 +256,7 @@ Client 的 `TerminalView::new_semantic` 只启动一个 input writer worker；�
 - `ScrollTerminal`：请求绝对 `display_offset`；Host 将其转换为当前 authoritative grid 的受限 delta，并返回实际 offset。
 - palette query：Client 发送当前可见主题 RGB 和 revision，Host 才能正确回答 OSC color query。
 
-UI 不得在 GPUI 线程等待 Host response。输入经有界 writer queue；resize/scroll 发出异步请求。
+UI 不得在 GPUI 线程等待 Host response。输入经有界 writer queue；resize/scroll 发出异步请求。GPUI 的 render/layout/prepaint 热路径也不得执行 shell PATH 探测或其他文件系统 I/O；shell 候选在 Workbench 初始化时探测一次，后续 terminal 创建和设置 UI 只读取缓存。
 
 ### 7.4 lease
 

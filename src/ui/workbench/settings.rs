@@ -1485,8 +1485,10 @@ impl WorkbenchView {
     }
 
     pub(super) fn resolved_terminal_shell(&self) -> String {
-        let candidates = detect_shell_candidates();
-        resolve_default_shell(&self.app_settings.terminal.shell, &candidates)
+        resolve_default_shell(
+            &self.app_settings.terminal.shell,
+            &self.terminal.shell_candidates,
+        )
     }
 
     pub(super) fn available_theme_names(&self) -> Vec<String> {
@@ -1924,8 +1926,8 @@ impl WorkbenchView {
         for shell in &self.app_settings.terminal.custom_shells {
             push_unique_string(&mut items, shell.clone());
         }
-        for shell in detect_shell_candidates() {
-            push_unique_string(&mut items, shell);
+        for shell in &self.terminal.shell_candidates {
+            push_unique_string(&mut items, shell.clone());
         }
         let selected = if self.app_settings.terminal.shell == crate::config::settings::AUTO_SHELL {
             "Auto".to_string()

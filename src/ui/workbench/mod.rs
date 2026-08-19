@@ -872,6 +872,7 @@ impl WorkbenchView {
                 );
             }
         }
+        let shell_candidates = detect_shell_candidates();
 
         Self {
             workspace,
@@ -915,7 +916,10 @@ impl WorkbenchView {
             projects_focus_active: false,
             pending_projects_focus: false,
             window_activation_subscription: None,
-            terminal: TerminalControllerState::new(app_settings.terminal.environment.clone()),
+            terminal: TerminalControllerState::new(
+                app_settings.terminal.environment.clone(),
+                shell_candidates,
+            ),
             sidebar_collapsed: false,
             active_sidebar_resize_drag: None,
             active_split_resize_drag: None,

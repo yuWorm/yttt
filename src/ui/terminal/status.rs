@@ -47,7 +47,7 @@ pub fn pane_agent_status(
     }
 
     match pane_state.process_state {
-        PaneProcessState::Running => Some(AgentViewState::Working),
+        PaneProcessState::Running => Some(AgentViewState::Stale),
         PaneProcessState::Idle | PaneProcessState::Exited => None,
     }
 }
@@ -63,5 +63,56 @@ fn merge_agent_status(
     match current {
         Some(current) if current.priority() >= candidate.priority() => Some(current),
         _ => Some(candidate),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::layout::{PaneKind, ProcessExitBehavior, TerminalExecutionMode};
+
+    fn pane(kind: PaneKind) -> PaneConfig {
+        let command = if kind == PaneKind::Agent { "omp" } else { "" };
+        PaneConfig {
+            id: "pane".to_string(),
+            title: "Pane".to_string(),
+            command: command.to_string(),
+            args: Vec::new(),
+            execution_mode: TerminalExecutionMode::Command,
+            exit_behavior: ProcessExitBehavior::ManualRestart,
+            kind,
+            notify_on_exit: false,
+            detector: None,
+        }
+    }
+
+    fn pane_state(process_state: PaneProcessState) -> PaneState {
+        PaneState {
+            pane_id: "pane".to_string(),
+            process_state,
+            agent_snapshot: None,
+        }
+    }
+
+    #[test]
+    fn running_agent_without_snapshot_is_stale() {
+        assert_eq!(
+            pane_agent_status(
+                &pane(PaneKind::Agent),
+                &pane_state(PaneProcessState::Running),
+            ),
+            Some(AgentViewState::Stale)
+        );
+    }
+
+    #[test]
+    fn running_shell_without_snapshot_has_no_agent_status() {
+        assert_eq!(
+            pane_agent_status(
+                &pane(PaneKind::Shell),
+                &pane_state(PaneProcessState::Running),
+            ),
+            None
+        );
     }
 }

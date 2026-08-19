@@ -23,6 +23,7 @@ pub(in super::super) struct TerminalControllerState {
     pub(in super::super) start_processes: bool,
     pub(in super::super) terminal_input_gate: TerminalInputGate,
     pub(in super::super) environment: Arc<RwLock<BTreeMap<String, String>>>,
+    pub(in super::super) shell_candidates: Vec<String>,
     pub(in super::super) pending_terminal_focus: Option<TerminalPaneTarget>,
     pub(in super::super) terminal_panes: HashMap<String, Entity<TerminalPaneView>>,
     pub(in super::super) terminal_pane_subscriptions: HashMap<String, Subscription>,
@@ -33,11 +34,15 @@ pub(in super::super) struct TerminalControllerState {
 }
 
 impl TerminalControllerState {
-    pub(in super::super) fn new(environment: BTreeMap<String, String>) -> Self {
+    pub(in super::super) fn new(
+        environment: BTreeMap<String, String>,
+        shell_candidates: Vec<String>,
+    ) -> Self {
         Self {
             start_processes: true,
             terminal_input_gate: TerminalInputGate::default(),
             environment: Arc::new(RwLock::new(environment)),
+            shell_candidates,
             pending_terminal_focus: None,
             terminal_panes: HashMap::new(),
             terminal_pane_subscriptions: HashMap::new(),
@@ -50,6 +55,6 @@ impl TerminalControllerState {
 
 impl Default for TerminalControllerState {
     fn default() -> Self {
-        Self::new(BTreeMap::new())
+        Self::new(BTreeMap::new(), Vec::new())
     }
 }

@@ -72,6 +72,11 @@
 - Fixed Host terminal input feeling network-lagged by keeping raw terminal frames off generic
   GPUI event listeners and filtering low-rate terminal metadata/control updates on the Host runtime
   worker; the interactive Host benchmark now returns to Direct-mode frame cadence.
+- Fixed residual Host terminal UI stalls by detecting shell candidates once at Workbench startup
+  instead of synchronously scanning every `PATH` entry during each GPUI render.
+- Agent panes without an authoritative snapshot now display `Stale` instead of inferring `Working`
+  from a live terminal process, and the Host snapshot bridge coalesces the latest sequenced update
+  per terminal session instead of dropping final states when a bounded queue fills.
 - Fixed residual rapid-input latency in Host terminals by sending terminal input as an ordered
   one-way resource-protocol v3 message, removing per-keystroke responses, and coalescing adjacent
   writer commands without copying their byte payloads.

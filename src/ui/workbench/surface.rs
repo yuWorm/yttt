@@ -1351,7 +1351,7 @@ impl WorkbenchView {
 
     fn pending_eager_terminal_pane_contexts(&self) -> Vec<TerminalPaneContext> {
         let mut contexts = Vec::new();
-        let shell = self.resolved_terminal_shell();
+        let mut shell = None;
         for project in self.workspace.opened_projects() {
             let project_path = match &project.location {
                 ProjectLocation::Local { path } => path.clone(),
@@ -1367,13 +1367,14 @@ impl WorkbenchView {
                 {
                     continue;
                 }
+                let shell = shell.get_or_insert_with(|| self.resolved_terminal_shell());
                 collect_terminal_pane_contexts(
                     project.id.as_str(),
                     &project_path,
                     &project.layout.project.name,
                     &tab.id,
                     &tab.title,
-                    &shell,
+                    shell.as_str(),
                     &self.terminal.environment,
                     &tab.layout,
                     None,
