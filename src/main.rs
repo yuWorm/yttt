@@ -99,20 +99,18 @@ fn profile_for_args(args: &[OsString]) -> Result<AppProfile, String> {
     let profile = desktop_profile();
     let mut requested_profile = None;
     for pair in args.windows(2) {
-        if pair[0] == OsStr::new("--profile-id") {
-            if requested_profile.replace(&pair[1]).is_some() {
-                return Err("--profile-id may be specified only once".to_string());
-            }
+        if pair[0] == OsStr::new("--profile-id") && requested_profile.replace(&pair[1]).is_some() {
+            return Err("--profile-id may be specified only once".to_string());
         }
     }
-    if let Some(requested_profile) = requested_profile {
-        if requested_profile != OsStr::new(profile.id().as_str()) {
-            return Err(format!(
-                "login startup requested profile {:?}, but this executable owns profile {}",
-                requested_profile,
-                profile.id().as_str()
-            ));
-        }
+    if let Some(requested_profile) = requested_profile
+        && requested_profile != OsStr::new(profile.id().as_str())
+    {
+        return Err(format!(
+            "login startup requested profile {:?}, but this executable owns profile {}",
+            requested_profile,
+            profile.id().as_str()
+        ));
     }
     Ok(profile)
 }

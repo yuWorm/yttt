@@ -1,0 +1,174 @@
+name: Validation
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to validate; defaults to the caller ref
+        required: false
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to validate; defaults to the selected ref
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux workspace
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Activate pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            clang \
+            cmake \
+            g++ \
+            libasound2-dev \
+            libfontconfig-dev \
+            libglib2.0-dev \
+            libssl-dev \
+            libva-dev \
+            libvulkan1 \
+            libwayland-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libzstd-dev \
+            lld \
+            pkg-config
+
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+
+      - name: Lint workspace code
+        run: |
+          cargo clippy \
+            --package yttt \
+            --package yttt-agent-core \
+            --package yttt-agent-providers \
+            --package yttt-agent-runtime \
+            --package yttt-client-core \
+            --package yttt-host \
+            --package yttt-protocol \
+            --package yttt-project-core \
+            --package yttt-transport \
+            --package yttt-transport-local \
+            --package yttt-core \
+            --package yttt-terminal-core \
+            --package yttt-ssh \
+            --package yttt-terminal \
+            --package yttt-ui \
+            --all-targets \
+            --no-deps \
+            --locked \
+            -- \
+            -D warnings
+
+      - name: Test release tools
+        run: python3 scripts/test_release_tools.py
+
+      - name: Test terminal performance acceptance rules
+        run: python3 scripts/test_terminal_perf_summary.py
+
+      - name: Test workspace
+        env:
+          DISPLAY: ""
+          WAYLAND_DISPLAY: ""
+          DBUS_SESSION_BUS_ADDRESS: ""
+        run: |
+          cargo test \
+            --package yttt \
+            --package yttt-agent-core \
+            --package yttt-agent-providers \
+            --package yttt-agent-runtime \
+            --package yttt-client-core \
+            --package yttt-host \
+            --package yttt-protocol \
+            --package yttt-project-core \
+            --package yttt-transport \
+            --package yttt-transport-local \
+            --package yttt-core \
+            --package yttt-terminal-core \
+            --package yttt-ssh \
+            --package yttt-terminal \
+            --package yttt-ui \
+            --all-targets \
+            --locked \
+            --no-fail-fast
+
+  macos:
+    name: macOS UI and watchers
+    runs-on: macos-15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Activate pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Test desktop, UI, configuration, and bundle contracts
+        run: cargo test --locked -p yttt --tests --no-fail-fast
+
+      - name: Test Host round trips and native file watchers
+        run: cargo test --locked -p yttt-client-core --test host_roundtrip --no-fail-fast
+
+  windows:
+    name: Windows core contracts
+    runs-on: windows-2025
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Activate pinned Rust toolchain
+        shell: bash
+        run: rustup show active-toolchain
+
+      - name: Test local IPC security
+        run: cargo test --locked -p yttt-transport-local --test security
+
+      - name: Test library, profile, and process lifecycle contracts
+        run: cargo test --locked -p yttt --lib --test app_profile --test process_roles
+
+      - name: Test Windows titlebar actions
+        run: cargo test --locked -p yttt --test ui_state titlebar_action_buttons_open_command_picker_and_settings
+
+  gate:
+    name: Required validation
+    if: ${{ always() }}
+    needs:
+      - linux
+      - macos
+      - windows
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every validation job
+        env:
+          LINUX_RESULT: ${{ needs.linux.result }}
+          MACOS_RESULT: ${{ needs.macos.result }}
+          WINDOWS_RESULT: ${{ needs.windows.result }}
+        run: |
+          test "$LINUX_RESULT" = success
+          test "$MACOS_RESULT" = success
+          test "$WINDOWS_RESULT" = success

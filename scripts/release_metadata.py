@@ -30,15 +30,18 @@ def validate_version(version: str) -> tuple[int, int, int]:
 def changelog_section(changelog: str, version: str) -> str:
     validate_version(version)
     lines = changelog.splitlines()
-    start = None
-    for index, line in enumerate(lines):
-        match = RELEASE_HEADING_PATTERN.fullmatch(line)
-        if match is not None and match.group("version") == version:
-            start = index + 1
-            break
-    if start is None:
+    starts = [
+        index + 1
+        for index, line in enumerate(lines)
+        if (match := RELEASE_HEADING_PATTERN.fullmatch(line)) is not None
+        and match.group("version") == version
+    ]
+    if not starts:
         raise ValueError(f"CHANGELOG.md has no release section for {version}")
+    if len(starts) > 1:
+        raise ValueError(f"CHANGELOG.md contains duplicate release sections for {version}")
 
+    start = starts[0]
     end = len(lines)
     for index in range(start, len(lines)):
         if lines[index].startswith("## "):
@@ -48,6 +51,42 @@ def changelog_section(changelog: str, version: str) -> str:
     if not notes:
         raise ValueError(f"CHANGELOG.md release section for {version} is empty")
     return f"{notes}\n"
+
+
+def validate_release_changelog(changelog: str, version: str) -> str:
+    notes = changelog_section(changelog, version)
+    lines = changelog.splitlines()
+    unreleased_headings = [
+        index for index, line in enumerate(lines) if line == "## Unreleased"
+    ]
+    if len(unreleased_headings) != 1:
+        raise ValueError("CHANGELOG.md must contain exactly one Unreleased section")
+
+    unreleased_heading = unreleased_headings[0]
+    next_heading = next(
+        (
+            index
+            for index in range(unreleased_heading + 1, len(lines))
+            if lines[index].startswith("## ")
+        ),
+        None,
+    )
+    if next_heading is None:
+        raise ValueError(f"CHANGELOG.md has no release after Unreleased for {version}")
+    unreleased_body = "\n".join(
+        lines[unreleased_heading + 1 : next_heading]
+    ).strip()
+    if unreleased_body:
+        raise ValueError(
+            "CHANGELOG.md Unreleased section is not empty; "
+            f"archive it before publishing {version}"
+        )
+    match = RELEASE_HEADING_PATTERN.fullmatch(lines[next_heading])
+    if match is None or match.group("version") != version:
+        raise ValueError(
+            f"CHANGELOG.md release {version} must be the first release after Unreleased"
+        )
+    return notes
 
 
 def sha256_file(path: Path) -> str:
@@ -96,16 +135,32 @@ def build_update_manifest(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", required=True)
-    parser.add_argument("--tag", required=True)
-    parser.add_argument("--repository", required=True)
-    parser.add_argument("--dist", type=Path, required=True)
+    parser.add_argument("--tag")
+    parser.add_argument("--repository")
+    parser.add_argument("--dist", type=Path)
     parser.add_argument("--changelog", type=Path, default=Path("CHANGELOG.md"))
-    parser.add_argument("--notes-output", type=Path, required=True)
-    parser.add_argument("--manifest-output", type=Path, required=True)
+    parser.add_argument("--notes-output", type=Path)
+    parser.add_argument("--manifest-output", type=Path)
+    parser.add_argument("--validate-changelog-only", action="store_true")
     args = parser.parse_args()
 
     changelog = args.changelog.read_text(encoding="utf-8")
-    notes = changelog_section(changelog, args.version)
+    notes = validate_release_changelog(changelog, args.version)
+    if args.validate_changelog_only:
+        print(f"Validated CHANGELOG.md release section for {args.version}.")
+        return 0
+
+    required = {
+        "--tag": args.tag,
+        "--repository": args.repository,
+        "--dist": args.dist,
+        "--notes-output": args.notes_output,
+        "--manifest-output": args.manifest_output,
+    }
+    for option, value in required.items():
+        if value is None:
+            parser.error(f"{option} is required unless --validate-changelog-only is used")
+
     manifest = build_update_manifest(
         args.version,
         args.tag,

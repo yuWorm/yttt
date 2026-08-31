@@ -4955,15 +4955,15 @@ fn update_settings_check_and_persist_auto_check(cx: &mut gpui::TestAppContext) {
         "notes": "A test update.",
         "assets": {
             "macos-aarch64": {
-                "url": "https://github.com/yuWorm/yttt/releases/download/v99.0.0/yttt.dmg",
+                "url": "https://github.com/yuWorm/yttt/releases/download/v99.0.0/yttt-99.0.0-macos-aarch64.dmg",
                 "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
             },
             "windows-x86_64": {
-                "url": "https://github.com/yuWorm/yttt/releases/download/v99.0.0/yttt.exe",
+                "url": "https://github.com/yuWorm/yttt/releases/download/v99.0.0/yttt-99.0.0-windows-x86_64-setup.exe",
                 "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
             },
             "linux-x86_64": {
-                "url": "https://github.com/yuWorm/yttt/releases/download/v99.0.0/yttt.tar.gz",
+                "url": "https://github.com/yuWorm/yttt/releases/download/v99.0.0/yttt-99.0.0-linux-x86_64.tar.gz",
                 "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
             }
         }

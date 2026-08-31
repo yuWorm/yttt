@@ -15,8 +15,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  validation:
+    name: Validation
+    uses: ./.github/workflows/validation.yml
+
   build:
     name: ${{ matrix.name }}
+    needs: validation
     strategy:
       fail-fast: false
       matrix:
@@ -36,11 +41,10 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v7
 
-      - name: Install stable Rust
+      - name: Activate pinned Rust toolchain
         shell: bash
         run: |
-          rustup update stable
-          rustup default stable
+          rustup show active-toolchain
           rustup target add "${{ matrix.target }}"
 
       - name: Install Linux build dependencies
@@ -69,19 +73,6 @@ jobs:
 
       - name: Build workspace
         run: cargo build --workspace --locked --target "${{ matrix.target }}"
-      - name: Test local IPC security
-        run: cargo test --locked --target "${{ matrix.target }}" -p yttt-transport-local --test security
-      - name: Test terminal performance acceptance rules
-        if: runner.os == 'Linux'
-        run: python3 scripts/test_terminal_perf_summary.py
-
-
-      - name: Test headless Host process role, upgrade safety, and profile isolation
-        env:
-          DISPLAY: ""
-          WAYLAND_DISPLAY: ""
-          DBUS_SESSION_BUS_ADDRESS: ""
-        run: cargo test --locked --target "${{ matrix.target }}" -p yttt --test app_profile --test process_roles
       - name: Smoke Host-owned SSH, SFTP, Git, and terminal
         if: runner.os == 'Linux'
         run: scripts/run-host-ssh-smoke.sh

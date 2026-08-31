@@ -30,7 +30,7 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      - name: Validate tag and package version
+      - name: Validate tag, package version, and changelog
         id: version
         shell: bash
         run: |
@@ -39,12 +39,31 @@ jobs:
             echo "Release tag $RELEASE_TAG does not match Cargo package version $version." >&2
             exit 1
           fi
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null || true)"
+          head_commit="$(git rev-parse HEAD)"
+          if [[ -z "$tag_commit" || "$tag_commit" != "$head_commit" ]]; then
+            echo "Release tag $RELEASE_TAG is missing or does not resolve to the checked-out commit." >&2
+            exit 1
+          fi
+          python3 scripts/release_metadata.py \
+            --version "$version" \
+            --changelog CHANGELOG.md \
+            --validate-changelog-only
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "ref=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+  validation:
+    name: Validation
+    needs: metadata
+    uses: ./.github/workflows/validation.yml
+    with:
+      ref: ${{ needs.metadata.outputs.ref }}
+
 
   macos:
     name: Package macOS DMG
-    needs: metadata
+    needs:
+      - metadata
+      - validation
     runs-on: macos-15
     steps:
       - name: Check out release tag
@@ -52,11 +71,10 @@ jobs:
         with:
           ref: ${{ needs.metadata.outputs.ref }}
 
-      - name: Install stable Rust
+      - name: Activate pinned Rust toolchain
         shell: bash
         run: |
-          rustup update stable
-          rustup default stable
+          rustup show active-toolchain
           rustup target add aarch64-apple-darwin
 
       - name: Build DMG
@@ -73,7 +91,9 @@ jobs:
 
   windows:
     name: Package Windows installer
-    needs: metadata
+    needs:
+      - metadata
+      - validation
     runs-on: windows-2025
     steps:
       - name: Check out release tag
@@ -81,11 +101,10 @@ jobs:
         with:
           ref: ${{ needs.metadata.outputs.ref }}
 
-      - name: Install stable Rust
+      - name: Activate pinned Rust toolchain
         shell: bash
         run: |
-          rustup update stable
-          rustup default stable
+          rustup show active-toolchain
           rustup target add x86_64-pc-windows-msvc
 
       - name: Install Inno Setup
@@ -107,7 +126,9 @@ jobs:
 
   linux:
     name: Package Linux tarball
-    needs: metadata
+    needs:
+      - metadata
+      - validation
     runs-on: ubuntu-24.04
     steps:
       - name: Check out release tag
@@ -115,11 +136,10 @@ jobs:
         with:
           ref: ${{ needs.metadata.outputs.ref }}
 
-      - name: Install stable Rust
+      - name: Activate pinned Rust toolchain
         shell: bash
         run: |
-          rustup update stable
-          rustup default stable
+          rustup show active-toolchain
           rustup target add x86_64-unknown-linux-gnu
 
       - name: Install Linux build dependencies
@@ -161,6 +181,7 @@ jobs:
     name: Publish GitHub release
     needs:
       - metadata
+      - validation
       - macos
       - windows
       - linux
@@ -196,23 +217,18 @@ jobs:
         working-directory: dist
         run: sha256sum yttt-* update.json > SHA256SUMS
 
-      - name: Create or update GitHub release
+      - name: Create immutable GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
-            gh release edit "$RELEASE_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --latest \
-              --title "$RELEASE_TAG" \
-              --notes-file release-notes.md
-          else
-            gh release create "$RELEASE_TAG" dist/* \
-              --repo "$GITHUB_REPOSITORY" \
-              --verify-tag \
-              --latest \
-              --title "$RELEASE_TAG" \
-              --notes-file release-notes.md
+            echo "GitHub release $RELEASE_TAG already exists; published releases are immutable." >&2
+            exit 1
           fi
+          gh release create "$RELEASE_TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --latest \
+            --title "$RELEASE_TAG" \
+            --notes-file release-notes.md

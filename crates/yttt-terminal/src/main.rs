@@ -23,7 +23,6 @@ struct TerminalApp {
 
 impl TerminalApp {
     #[cfg(not(feature = "perf-metrics"))]
-
     fn new(terminal: Entity<TerminalView>, session: PortablePtySession) -> Self {
         Self {
             terminal,

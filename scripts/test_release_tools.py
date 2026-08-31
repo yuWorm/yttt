@@ -7,8 +7,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from prepare_release import archive_unreleased, replace_workspace_version
-from release_metadata import build_update_manifest, changelog_section, validate_version
+from prepare_release import (
+    archive_unreleased,
+    repair_existing_release,
+    replace_workspace_version,
+)
+from release_metadata import (
+    build_update_manifest,
+    changelog_section,
+    validate_release_changelog,
+    validate_version,
+)
 
 
 class ReleaseMetadataTests(unittest.TestCase):
@@ -43,6 +52,43 @@ Release introduction.
             changelog_section(changelog, "1.2.3"),
             "Release introduction.\n\n### Fixed\n\n- A regression.\n",
         )
+
+    def test_release_changelog_requires_empty_unreleased_and_current_section(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(ValueError, "Unreleased section is not empty"):
+            validate_release_changelog(
+                """# Changelog
+
+## Unreleased
+
+- A change that has not been archived.
+
+## 1.2.3 - 2026-07-20
+
+- Old release notes.
+""",
+                "1.2.3",
+            )
+
+        with self.assertRaisesRegex(
+            ValueError, "must be the first release after Unreleased"
+        ):
+            validate_release_changelog(
+                """# Changelog
+
+## Unreleased
+
+## 1.2.4 - 2026-07-21
+
+- Newer release.
+
+## 1.2.3 - 2026-07-20
+
+- Requested old release.
+""",
+                "1.2.3",
+            )
 
     def test_update_manifest_requires_and_hashes_every_platform_asset(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -131,6 +177,52 @@ Release introduction.
                 "1.1.0",
                 "2026-07-20",
             )
+
+    def test_archive_unreleased_rejects_an_existing_release(self) -> None:
+        with self.assertRaisesRegex(ValueError, "already contains release 1.1.0"):
+            archive_unreleased(
+                """# Changelog
+
+## Unreleased
+
+- New change.
+
+## 1.1.0 - 2026-07-19
+
+- Existing notes.
+""",
+                "1.1.0",
+                "2026-07-20",
+            )
+
+    def test_repair_existing_release_merges_unreleased_without_duplicate_heading(
+        self,
+    ) -> None:
+        changelog = """# Changelog
+
+## Unreleased
+
+- New Host changes.
+
+## 1.1.0 - 2026-07-19
+
+- Existing SSH changes.
+
+## 1.0.0 - 2026-07-18
+
+- Initial release.
+"""
+        repaired = repair_existing_release(changelog, "1.1.0", "2026-07-20")
+        self.assertEqual(repaired.count("## 1.1.0 - "), 1)
+        self.assertIn(
+            "## Unreleased\n\n## 1.1.0 - 2026-07-20\n\n"
+            "- New Host changes.\n\n- Existing SSH changes.",
+            repaired,
+        )
+        self.assertEqual(
+            validate_release_changelog(repaired, "1.1.0"),
+            "- New Host changes.\n\n- Existing SSH changes.\n",
+        )
 
 
 if __name__ == "__main__":

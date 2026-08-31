@@ -6,7 +6,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context as _, Result, ensure};
+use anyhow::{Context as _, Result, bail, ensure};
 use futures_lite::io::AsyncReadExt as _;
 use gpui::http_client::{AsyncBody, HttpClient};
 use semver::Version;
@@ -151,7 +151,7 @@ fn evaluate_manifest(
             .assets
             .get(asset_key)
             .with_context(|| format!("update manifest has no {asset_key} asset"))?;
-        validate_asset(asset, &available_version)?;
+        validate_asset(asset_key, asset, &available_version)?;
         Some(UpdateAsset {
             url: asset.url.clone(),
             sha256: asset.sha256.clone(),
@@ -176,10 +176,16 @@ fn validate_release_url(url: &str, version: &Version) -> Result<()> {
     Ok(())
 }
 
-fn validate_asset(asset: &UpdateManifestAsset, version: &Version) -> Result<()> {
-    let expected_prefix = format!("{RELEASES_URL_PREFIX}download/v{version}/");
+fn validate_asset(asset_key: &str, asset: &UpdateManifestAsset, version: &Version) -> Result<()> {
+    let filename = match asset_key {
+        "macos-aarch64" => format!("yttt-{version}-macos-aarch64.dmg"),
+        "windows-x86_64" => format!("yttt-{version}-windows-x86_64-setup.exe"),
+        "linux-x86_64" => format!("yttt-{version}-linux-x86_64.tar.gz"),
+        _ => bail!("update manifest has an unknown asset key"),
+    };
+    let expected_url = format!("{RELEASES_URL_PREFIX}download/v{version}/{filename}");
     ensure!(
-        asset.url.starts_with(&expected_prefix),
+        asset.url == expected_url,
         "update manifest has an unexpected asset URL"
     );
     ensure!(
@@ -292,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_rejects_untrusted_asset_urls_and_digests() {
+    fn manifest_rejects_untrusted_asset_urls_digests_and_filenames() {
         let source = String::from_utf8(manifest("1.1.0"))
             .unwrap()
             .replace(
@@ -304,6 +310,12 @@ mod tests {
         let source = String::from_utf8(manifest("1.1.0"))
             .unwrap()
             .replace(&"c".repeat(64), "not-a-digest");
+        assert!(evaluate_manifest(source.as_bytes(), "1.0.0", "linux", "x86_64").is_err());
+
+        let source = String::from_utf8(manifest("1.1.0")).unwrap().replace(
+            "yttt-1.1.0-linux-x86_64.tar.gz",
+            "yttt-1.0.0-linux-x86_64.tar.gz",
+        );
         assert!(evaluate_manifest(source.as_bytes(), "1.0.0", "linux", "x86_64").is_err());
     }
 

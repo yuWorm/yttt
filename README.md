@@ -156,9 +156,27 @@ pwsh scripts/build-windows-installer.ps1
 scripts/build-linux-tar.sh
 ```
 
-Pushing a `v<package-version>` tag runs the three native GitHub Actions packaging jobs and
-publishes the DMG, Inno Setup installer, Linux tarball, and SHA-256 checksums to GitHub Releases.
-The macOS package is ad-hoc signed; production Developer ID signing and notarization still require
+Prepare and validate a release before creating its tag:
+
+```bash
+# Normal version bump.
+python3 scripts/prepare_release.py <version>
+
+# Use this instead when Cargo already has <version> and CHANGELOG contains
+# an older section with that version.
+python3 scripts/prepare_release.py <version> --repair-current
+
+python3 scripts/test_release_tools.py
+```
+
+Review `Cargo.toml`, `Cargo.lock`, and `CHANGELOG.md`, then commit and push them. Wait for
+`Validation / Required validation` to pass on the release commit before creating and pushing the
+annotated `v<version>` tag. The release workflow checks out and validates that exact tag again
+before any native packaging job starts. It rejects non-empty `Unreleased` notes, a mismatched
+version section, and an existing GitHub Release instead of replacing published assets.
+
+The workflow publishes the DMG, Inno Setup installer, Linux tarball, and SHA-256 checksums. The
+macOS package is ad-hoc signed; production Developer ID signing and notarization still require
 release credentials.
 
 ## Key Paths
