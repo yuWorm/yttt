@@ -18,9 +18,9 @@ use sha2::{Digest as _, Sha256};
 use tokio::sync::broadcast;
 use yttt_agent_core::{
     AGENT_ACTIVITY_STALE_AFTER_MILLIS, AgentEventKind, AgentExitReason, AgentInstanceId,
-    AgentProcessExit, AgentProcessState, AgentProvider, AgentReducer,
+    AgentProcessExit, AgentProcessState, AgentProvider, AgentReducer, ProviderId,
 };
-use yttt_agent_providers::builtin_providers;
+use yttt_agent_providers::{CLAUDE_PROVIDER_ID, GROK_PROVIDER_ID, builtin_providers};
 use yttt_core::model::ids::TerminalSessionId;
 use yttt_protocol::{
     agent::{
@@ -30,12 +30,15 @@ use yttt_protocol::{
     terminal::TerminalSpawnSpec,
 };
 
+use crate::agent_processes::DetectedAgentProcess;
+
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(1);
 const ACCEPT_IDLE: Duration = Duration::from_millis(10);
 const EVENT_CAPACITY: usize = 64;
 const MAX_AGENT_RECORDS: usize = 256;
+const AGENT_PROCESS_MISSED_SAMPLES_BEFORE_EXIT: u8 = 2;
 const MAX_PENDING_DELIVERIES: usize = 256;
 const MAX_RETIRED_DELIVERY_STREAMS: usize = 4;
 const CONNECTION_WORKERS: usize = 4;
@@ -74,6 +77,26 @@ struct AgentRecord {
     terminal_exited: bool,
 }
 
+#[derive(Clone)]
+struct AgentProcessObservation {
+    scope: AgentHookScope,
+    process: DetectedAgentProcess,
+    missed_samples: u8,
+}
+
+enum AgentProcessAction {
+    Start {
+        terminal_session_id: TerminalSessionId,
+        scope: AgentHookScope,
+        provider_id: ProviderId,
+    },
+    Finish {
+        scope: AgentHookScope,
+        provider_id: ProviderId,
+        reason: AgentExitReason,
+    },
+}
+
 struct AgentDeliveryState {
     stream_id: String,
     accepted_sequence: u64,
@@ -93,6 +116,7 @@ struct AgentState {
     bindings: Mutex<HashMap<AgentHookScope, TerminalSessionId>>,
     records: Mutex<HashMap<AgentAddress, AgentRecord>>,
     terminal_exits: Mutex<HashMap<AgentHookScope, AgentProcessExit>>,
+    process_observations: Mutex<HashMap<TerminalSessionId, AgentProcessObservation>>,
     events: broadcast::Sender<AgentSnapshotUpdate>,
 }
 
@@ -129,6 +153,7 @@ impl HostAgentHookRuntime {
             bindings: Mutex::new(HashMap::new()),
             records: Mutex::new(HashMap::new()),
             terminal_exits: Mutex::new(HashMap::new()),
+            process_observations: Mutex::new(HashMap::new()),
             events,
         });
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -189,6 +214,11 @@ impl HostAgentHookRuntime {
             .terminal_exits
             .lock()
             .retain(|candidate, _| AgentAddress::from(candidate) != address);
+        self.state.records.lock().remove(&address);
+        self.state
+            .process_observations
+            .lock()
+            .remove(&spec.session_id);
         let mut bindings = self.state.bindings.lock();
         bindings.retain(|candidate, _| AgentAddress::from(candidate) != address);
         bindings.insert(scope.clone(), spec.session_id.clone());
@@ -198,9 +228,14 @@ impl HostAgentHookRuntime {
     pub fn cancel_terminal(&self, scope: &AgentHookScope) {
         self.state.bindings.lock().remove(scope);
         self.state.terminal_exits.lock().remove(scope);
+        self.state
+            .process_observations
+            .lock()
+            .retain(|_, observation| observation.scope != *scope);
     }
 
     pub fn terminal_exited(&self, session_id: &TerminalSessionId, code: Option<i32>) {
+        self.state.process_observations.lock().remove(session_id);
         let now = now_millis();
         let exit = AgentProcessExit {
             code,
@@ -236,6 +271,178 @@ impl HostAgentHookRuntime {
         }
         drop(records);
         drop(terminal_exits);
+        for update in updates {
+            let _ = self.state.events.send(update);
+        }
+    }
+
+    pub(crate) fn reconcile_process_scan(
+        &self,
+        roots: &[(TerminalSessionId, u32)],
+        detected: &HashMap<TerminalSessionId, DetectedAgentProcess>,
+    ) {
+        let scopes_by_session = {
+            let bindings = self.state.bindings.lock();
+            bindings
+                .iter()
+                .filter(|(_, session_id)| {
+                    roots
+                        .iter()
+                        .any(|(active_session_id, _)| active_session_id == *session_id)
+                })
+                .map(|(scope, session_id)| (session_id.clone(), scope.clone()))
+                .collect::<HashMap<_, _>>()
+        };
+        let mut actions = Vec::new();
+        {
+            let mut observations = self.state.process_observations.lock();
+            observations.retain(|session_id, observation| {
+                let same_scope = scopes_by_session
+                    .get(session_id)
+                    .is_some_and(|scope| scope == &observation.scope);
+                if !same_scope {
+                    actions.push(AgentProcessAction::Finish {
+                        scope: observation.scope.clone(),
+                        provider_id: observation.process.provider_id.clone(),
+                        reason: AgentExitReason::KilledByUser,
+                    });
+                }
+                same_scope
+            });
+            for (session_id, scope) in &scopes_by_session {
+                match detected.get(session_id) {
+                    Some(process) => {
+                        let changed = observations.get(session_id).is_none_or(|observation| {
+                            observation.scope != *scope || observation.process != *process
+                        });
+                        if changed {
+                            if let Some(previous) = observations.insert(
+                                session_id.clone(),
+                                AgentProcessObservation {
+                                    scope: scope.clone(),
+                                    process: process.clone(),
+                                    missed_samples: 0,
+                                },
+                            ) {
+                                actions.push(AgentProcessAction::Finish {
+                                    scope: previous.scope,
+                                    provider_id: previous.process.provider_id,
+                                    reason: AgentExitReason::Completed,
+                                });
+                            }
+                            actions.push(AgentProcessAction::Start {
+                                terminal_session_id: session_id.clone(),
+                                scope: scope.clone(),
+                                provider_id: process.provider_id.clone(),
+                            });
+                        } else if let Some(observation) = observations.get_mut(session_id) {
+                            observation.missed_samples = 0;
+                        }
+                    }
+                    None => {
+                        let finished = observations.get_mut(session_id).and_then(|observation| {
+                            observation.missed_samples =
+                                observation.missed_samples.saturating_add(1);
+                            (observation.missed_samples >= AGENT_PROCESS_MISSED_SAMPLES_BEFORE_EXIT)
+                                .then(|| observation.clone())
+                        });
+                        if let Some(finished) = finished {
+                            observations.remove(session_id);
+                            actions.push(AgentProcessAction::Finish {
+                                scope: finished.scope,
+                                provider_id: finished.process.provider_id,
+                                reason: AgentExitReason::Completed,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        self.apply_process_actions(actions);
+    }
+
+    fn apply_process_actions(&self, actions: Vec<AgentProcessAction>) {
+        if actions.is_empty() {
+            return;
+        }
+        let now = now_millis();
+        let mut updates = Vec::new();
+        let mut records = self.state.records.lock();
+        for action in actions {
+            match action {
+                AgentProcessAction::Start {
+                    terminal_session_id,
+                    scope,
+                    provider_id,
+                } => {
+                    let address = AgentAddress::from(&scope);
+                    let should_replace = records.get(&address).is_none_or(|record| {
+                        record.scope != scope
+                            || record.reducer.snapshot().provider_id != provider_id
+                            || record.reducer.snapshot().process_state == AgentProcessState::Exited
+                    });
+                    if !should_replace {
+                        continue;
+                    }
+                    let prior_sequence = records
+                        .get(&address)
+                        .map(|record| record.sequence)
+                        .unwrap_or_default();
+                    if !records.contains_key(&address) && records.len() >= MAX_AGENT_RECORDS {
+                        let oldest = records
+                            .iter()
+                            .min_by_key(|(_, record)| record.reducer.snapshot().updated_at)
+                            .map(|(address, _)| address.clone());
+                        if let Some(oldest) = oldest {
+                            records.remove(&oldest);
+                        }
+                    }
+                    let mut reducer =
+                        AgentReducer::new(AgentInstanceId::random(), provider_id, now);
+                    reducer.process_starting(scope.generation, now);
+                    reducer.process_started(scope.generation, now);
+                    records.insert(
+                        address.clone(),
+                        AgentRecord {
+                            scope,
+                            terminal_session_id,
+                            sequence: prior_sequence,
+                            reducer,
+                            delivery: None,
+                            terminal_exited: false,
+                        },
+                    );
+                    let record = records
+                        .get_mut(&address)
+                        .expect("detected Agent record was inserted");
+                    updates.push(snapshot_update(self.state.host_epoch, record));
+                }
+                AgentProcessAction::Finish {
+                    scope,
+                    provider_id,
+                    reason,
+                } => {
+                    let address = AgentAddress::from(&scope);
+                    let Some(record) = records.get_mut(&address) else {
+                        continue;
+                    };
+                    if record.scope != scope
+                        || record.reducer.snapshot().provider_id != provider_id
+                        || record.reducer.snapshot().process_state == AgentProcessState::Exited
+                    {
+                        continue;
+                    }
+                    if record.reducer.process_exited(
+                        scope.generation,
+                        AgentProcessExit { code: None, reason },
+                        now,
+                    ) {
+                        updates.push(snapshot_update(self.state.host_epoch, record));
+                    }
+                }
+            }
+        }
+        drop(records);
         for update in updates {
             let _ = self.state.events.send(update);
         }
@@ -437,6 +644,10 @@ struct DecodedHookRequest {
     delivery: Option<HookDeliveryMetadata>,
 }
 
+fn incoming_provider_is_compatibility_duplicate(current: &str, incoming: &str) -> bool {
+    current == GROK_PROVIDER_ID && incoming == CLAUDE_PROVIDER_ID
+}
+
 fn ingest_request(
     state: &AgentState,
     request: DecodedHookRequest,
@@ -451,12 +662,16 @@ fn ingest_request(
         .providers
         .get(&request.source)
         .ok_or(HttpRequestError::NotFound)?;
+    let provider_id = provider.descriptor().id;
     let normalized = provider
         .normalize_hook(yttt_agent_core::ProviderHookEvent {
             name: &request.event,
             payload: &request.payload,
         })
         .map_err(|_| HttpRequestError::Invalid)?;
+    let starts_session = normalized
+        .iter()
+        .any(|event| matches!(event, AgentEventKind::SessionStarted { .. }));
     let address = AgentAddress::from(&request.scope);
     let terminal_exits = state.terminal_exits.lock();
     let terminal_exit = terminal_exits.get(&request.scope).copied();
@@ -469,10 +684,34 @@ fn ingest_request(
         {
             return Err(HttpRequestError::Unauthorized);
         }
-        if !records
-            .get(&address)
-            .is_some_and(|record| record.scope == request.scope)
-        {
+        let (same_scope, replace_record, compatibility_duplicate) = match records.get(&address) {
+            Some(record) if record.scope == request.scope => {
+                let snapshot = record.reducer.snapshot();
+                let current_provider = snapshot.provider_id.as_str();
+                let compatibility_duplicate = incoming_provider_is_compatibility_duplicate(
+                    current_provider,
+                    provider_id.as_str(),
+                ) && !(starts_session
+                    && snapshot.process_state == AgentProcessState::Exited);
+                (
+                    true,
+                    starts_session
+                        && !compatibility_duplicate
+                        && (snapshot.process_state == AgentProcessState::Exited
+                            || snapshot.provider_id != provider_id),
+                    compatibility_duplicate,
+                )
+            }
+            _ => (false, false, false),
+        };
+        if compatibility_duplicate {
+            return Ok(HookIngestOutcome::Unsequenced);
+        }
+        if !same_scope || replace_record {
+            let prior_sequence = records
+                .get(&address)
+                .map(|record| record.sequence)
+                .unwrap_or_default();
             if records.len() >= MAX_AGENT_RECORDS {
                 let oldest = records
                     .iter()
@@ -483,7 +722,7 @@ fn ingest_request(
                 }
             }
             let mut reducer =
-                AgentReducer::new(AgentInstanceId::random(), provider.descriptor().id, now);
+                AgentReducer::new(AgentInstanceId::random(), provider_id.clone(), now);
             reducer.process_starting(request.scope.generation, now);
             reducer.process_started(request.scope.generation, now);
             if let Some(exit) = terminal_exit {
@@ -494,7 +733,7 @@ fn ingest_request(
                 AgentRecord {
                     scope: request.scope.clone(),
                     terminal_session_id,
-                    sequence: 0,
+                    sequence: prior_sequence,
                     reducer,
                     delivery: None,
                     terminal_exited: terminal_exit.is_some(),
@@ -899,6 +1138,21 @@ mod tests {
         }
     }
 
+    fn unsequenced_request(
+        scope: &AgentHookScope,
+        source: &str,
+        event: &str,
+        payload: Value,
+    ) -> DecodedHookRequest {
+        DecodedHookRequest {
+            scope: scope.clone(),
+            source: source.to_string(),
+            event: event.to_string(),
+            payload,
+            delivery: None,
+        }
+    }
+
     #[test]
     fn host_replaces_forged_hook_environment_and_scopes_each_terminal() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
@@ -984,6 +1238,144 @@ mod tests {
             decoded.payload.get("sessionId").and_then(Value::as_str),
             Some("grok-session")
         );
+    }
+
+    #[test]
+    fn native_grok_hooks_supersede_imported_claude_compatibility_hooks() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("grok-provider", "grok-provider");
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let mut updates = runtime.subscribe();
+        let session = serde_json::json!({
+            "sessionId": "grok-session",
+            "model": "grok-code-fast"
+        });
+
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(&scope, "claude", "SessionStart", session.clone()),
+        )
+        .unwrap();
+        let compatibility = updates.try_recv().unwrap();
+        assert_eq!(compatibility.snapshot.provider_id.as_str(), "claude");
+
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(&scope, "grok", "SessionStart", session.clone()),
+        )
+        .unwrap();
+        let native = updates.try_recv().unwrap();
+        assert_eq!(native.snapshot.provider_id.as_str(), "grok");
+        assert!(native.sequence > compatibility.sequence);
+
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(&scope, "claude", "UserPromptSubmit", session.clone()),
+        )
+        .unwrap();
+        assert!(updates.try_recv().is_err());
+        assert_eq!(
+            runtime.snapshots_after(&[])[0]
+                .snapshot
+                .provider_id
+                .as_str(),
+            "grok"
+        );
+
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(&scope, "grok", "SessionEnd", session.clone()),
+        )
+        .unwrap();
+        let exited = updates.try_recv().unwrap();
+        assert_eq!(exited.snapshot.process_state, AgentProcessState::Exited);
+
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(&scope, "claude", "SessionStart", session),
+        )
+        .unwrap();
+        let claude = updates.try_recv().unwrap();
+        assert_eq!(claude.snapshot.provider_id.as_str(), "claude");
+        assert!(claude.sequence > exited.sequence);
+    }
+
+    #[test]
+    fn a_new_agent_session_replaces_an_exited_session_in_the_same_shell() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("sequential-agent", "sequential-agent");
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let mut updates = runtime.subscribe();
+
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(&scope, "omp", "session_start", Value::Null),
+        )
+        .unwrap();
+        let first = updates.try_recv().unwrap();
+
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(&scope, "omp", "session_shutdown", Value::Null),
+        )
+        .unwrap();
+        let exited = updates.try_recv().unwrap();
+        assert_eq!(exited.snapshot.process_state, AgentProcessState::Exited);
+
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(&scope, "omp", "session_start", Value::Null),
+        )
+        .unwrap();
+        let restarted = updates.try_recv().unwrap();
+        assert_eq!(restarted.snapshot.process_state, AgentProcessState::Running);
+        assert_ne!(restarted.snapshot.instance_id, first.snapshot.instance_id);
+        assert!(restarted.sequence > exited.sequence);
+    }
+
+    #[test]
+    fn process_scans_end_a_killed_agent_and_detect_its_replacement() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("process-scan", "process-scan");
+        let session_id = terminal.session_id.clone();
+        runtime.secure_terminal_environment(&mut terminal);
+        let roots = vec![(session_id.clone(), 10)];
+        let mut updates = runtime.subscribe();
+
+        runtime.reconcile_process_scan(
+            &roots,
+            &HashMap::from([(
+                session_id.clone(),
+                DetectedAgentProcess {
+                    pid: 20,
+                    provider_id: ProviderId::from_static("grok"),
+                },
+            )]),
+        );
+        let started = updates.try_recv().unwrap();
+        assert_eq!(started.snapshot.provider_id.as_str(), "grok");
+        assert_eq!(started.snapshot.process_state, AgentProcessState::Running);
+
+        runtime.reconcile_process_scan(&roots, &HashMap::new());
+        assert!(updates.try_recv().is_err());
+        runtime.reconcile_process_scan(&roots, &HashMap::new());
+        let exited = updates.try_recv().unwrap();
+        assert_eq!(exited.snapshot.process_state, AgentProcessState::Exited);
+
+        runtime.reconcile_process_scan(
+            &roots,
+            &HashMap::from([(
+                session_id,
+                DetectedAgentProcess {
+                    pid: 21,
+                    provider_id: ProviderId::from_static("grok"),
+                },
+            )]),
+        );
+        let restarted = updates.try_recv().unwrap();
+        assert_eq!(restarted.snapshot.process_state, AgentProcessState::Running);
+        assert_ne!(restarted.snapshot.instance_id, started.snapshot.instance_id);
+        assert!(restarted.sequence > exited.sequence);
     }
 
     #[test]
@@ -1127,6 +1519,10 @@ mod tests {
         let mut restarted = spec("pre-hook-exit", "pre-hook-exit");
         let restarted_scope = runtime.secure_terminal_environment(&mut restarted);
         assert!(restarted_scope.generation > scope.generation);
+        assert!(
+            runtime.snapshots_after(&[]).is_empty(),
+            "a new terminal incarnation must not inherit the prior Agent record"
+        );
         ingest_request(
             &runtime.state,
             sequenced_request(&restarted_scope, 1, "agent_start", Value::Null),

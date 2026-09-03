@@ -7,7 +7,11 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 use yttt_agent_providers::{OMP_EXTENSION_SOURCE, OPENCODE_PLUGIN_SOURCE, PI_EXTENSION_SOURCE};
 
-use crate::config::{atomic_write, paths::AppConfigPaths, profile::EnvironmentKind};
+use crate::config::{
+    atomic_write,
+    paths::{AppConfigPaths, native_config_dir},
+    profile::EnvironmentKind,
+};
 
 const MANAGED_HOOK_FILE_NAME: &str = "yttt-agent-hook";
 const GROK_HOOK_FILE_NAME: &str = "yttt-agent-hook.json";
@@ -15,6 +19,7 @@ const MANAGED_MARKER: &str = "yttt-agent-hook";
 const HOOK_TIMEOUT_SECONDS: u64 = 10;
 const CLAUDE_EVENTS: &[&str] = &[
     "SessionStart",
+    "SessionEnd",
     "UserPromptSubmit",
     "PreToolUse",
     "PermissionRequest",
@@ -37,6 +42,7 @@ const CODEX_EVENTS: &[(&str, &str)] = &[
 ];
 const GROK_EVENTS: &[&str] = &[
     "SessionStart",
+    "SessionEnd",
     "UserPromptSubmit",
     "PreToolUse",
     "PostToolUse",
@@ -48,16 +54,25 @@ const GROK_EVENTS: &[&str] = &[
     "StopFailure",
 ];
 
+fn should_install_managed_hooks(environment: EnvironmentKind, test_build: bool) -> bool {
+    !test_build && environment != EnvironmentKind::Test
+}
+
 pub fn install_managed_hooks(config_paths: &AppConfigPaths) -> io::Result<()> {
-    if cfg!(test) || config_paths.environment() != EnvironmentKind::Production {
+    if !should_install_managed_hooks(config_paths.environment(), cfg!(test)) {
         return Ok(());
     }
     let home = home_dir()?;
-    install_managed_hooks_at(config_paths, &home)
+    let integration_config_dir = match config_paths.environment() {
+        EnvironmentKind::Production => config_paths.config_dir().to_path_buf(),
+        EnvironmentKind::Development => native_config_dir(),
+        EnvironmentKind::Test => return Ok(()),
+    };
+    install_managed_hooks_at(&integration_config_dir, &home)
 }
 
-fn install_managed_hooks_at(config_paths: &AppConfigPaths, home: &Path) -> io::Result<()> {
-    let hook_dir = config_paths.config_dir().join("agent-hooks");
+fn install_managed_hooks_at(config_dir: &Path, home: &Path) -> io::Result<()> {
+    let hook_dir = config_dir.join("agent-hooks");
     fs::create_dir_all(&hook_dir)?;
     restrict_directory(&hook_dir)?;
     let script_path = hook_dir.join(managed_hook_file_name());
@@ -443,6 +458,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn development_builds_install_agent_hooks() {
+        assert!(should_install_managed_hooks(
+            EnvironmentKind::Development,
+            false
+        ));
+        assert!(should_install_managed_hooks(
+            EnvironmentKind::Production,
+            false
+        ));
+        assert!(!should_install_managed_hooks(EnvironmentKind::Test, false));
+        assert!(!should_install_managed_hooks(
+            EnvironmentKind::Development,
+            true
+        ));
+    }
+
+    #[test]
     fn installs_all_managed_adapters_without_replacing_user_entries() {
         let temp = TempDir::new().unwrap();
         let config_paths = AppConfigPaths::from_config_dir(temp.path().join("yttt"));
@@ -467,8 +499,8 @@ mod tests {
         )
         .unwrap();
 
-        install_managed_hooks_at(&config_paths, &home).unwrap();
-        install_managed_hooks_at(&config_paths, &home).unwrap();
+        install_managed_hooks_at(config_paths.config_dir(), &home).unwrap();
+        install_managed_hooks_at(config_paths.config_dir(), &home).unwrap();
 
         let claude = fs::read_to_string(home.join(".claude/settings.json")).unwrap();
         assert!(claude.contains("\"theme\": \"dark\""));
@@ -513,7 +545,7 @@ mod tests {
         let settings = home.join(".claude/settings.json");
         fs::write(&settings, "not-json").unwrap();
 
-        let error = install_managed_hooks_at(&config_paths, &home).unwrap_err();
+        let error = install_managed_hooks_at(config_paths.config_dir(), &home).unwrap_err();
         assert!(error.to_string().contains("expected ident"));
         assert_eq!(fs::read_to_string(settings).unwrap(), "not-json");
         assert!(home.join(".codex/hooks.json").is_file());

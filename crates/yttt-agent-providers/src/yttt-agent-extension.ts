@@ -22,6 +22,7 @@ type HookDelivery = {
 	sequence: number;
 	event: string;
 	payload: Record<string, unknown>;
+	delivered: () => void;
 };
 
 const deliveryQueue: HookDelivery[] = [];
@@ -67,7 +68,7 @@ async function drainDeliveryQueue(): Promise<void> {
 					Number.isSafeInteger(acknowledgement.acceptedSequence) &&
 					acknowledgement.acceptedSequence >= delivery.sequence
 				) {
-					deliveryQueue.shift();
+					deliveryQueue.shift()?.delivered();
 					retryDelay = MIN_RETRY_DELAY_MS;
 					continue;
 				}
@@ -86,7 +87,8 @@ function enqueueDelivery(
 	scope: string,
 	event: string,
 	payload: Record<string, unknown>,
-): void {
+): Promise<void> {
+	const completion = Promise.withResolvers<void>();
 	deliveryQueue.push({
 		endpoint,
 		token,
@@ -94,8 +96,10 @@ function enqueueDelivery(
 		sequence: nextDeliverySequence++,
 		event,
 		payload,
+		delivered: completion.resolve,
 	});
 	startDeliveryWorker();
+	return completion.promise;
 }
 
 type StatusContext = {
@@ -120,7 +124,11 @@ function toolDetail(input: unknown): string | undefined {
 	return undefined;
 }
 
-function send(name: string, payload: Record<string, unknown>, ctx: StatusContext): void {
+function deliver(
+	name: string,
+	payload: Record<string, unknown>,
+	ctx: StatusContext,
+): Promise<void> | undefined {
 	const payloadWithContext = {
 		...payload,
 		sessionId: ctx.sessionManager.getSessionId(),
@@ -131,8 +139,7 @@ function send(name: string, payload: Record<string, unknown>, ctx: StatusContext
 	const hookToken = process.env.YTTT_AGENT_HOOK_TOKEN;
 	const hookScope = process.env.YTTT_AGENT_HOOK_SCOPE;
 	if (hookEndpoint && hookToken && hookScope) {
-		enqueueDelivery(hookEndpoint, hookToken, hookScope, name, payloadWithContext);
-		return;
+		return enqueueDelivery(hookEndpoint, hookToken, hookScope, name, payloadWithContext);
 	}
 
 	const instanceId = process.env.YTTT_AGENT_INSTANCE_ID;
@@ -151,6 +158,23 @@ function send(name: string, payload: Record<string, unknown>, ctx: StatusContext
 	process.stdout.write(`\u001b]2;${PREFIX}${encoded}\u0007`);
 }
 
+function send(name: string, payload: Record<string, unknown>, ctx: StatusContext): void {
+	void deliver(name, payload, ctx);
+}
+
+async function sendAndWait(
+	name: string,
+	payload: Record<string, unknown>,
+	ctx: StatusContext,
+): Promise<void> {
+	const delivery = deliver(name, payload, ctx);
+	if (!delivery) return;
+	const timeout = Promise.withResolvers<void>();
+	const timer = setTimeout(timeout.resolve, 2000);
+	await Promise.race([delivery, timeout.promise]);
+	clearTimeout(timer);
+}
+
 export default function (pi: ExtensionAPI) {
 	let statusContext: StatusContext | undefined;
 	const trackContext = (ctx: StatusContext) => {
@@ -160,6 +184,9 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", (_event, ctx) => trackContext(ctx));
 	pi.on("session_switch", (_event, ctx) => trackContext(ctx));
+	pi.on("session_shutdown", async (_event, ctx) => {
+		await sendAndWait("session_shutdown", {}, ctx);
+	});
 	pi.on("before_agent_start", (event, ctx) =>
 		send("before_agent_start", { prompt: clip(event.prompt) }, ctx),
 	);

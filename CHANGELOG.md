@@ -74,9 +74,15 @@
 - Fixed Global Vim Terminal mode intercepting `Escape` and `Ctrl-[`; both now reach the terminal process, while `Ctrl-\ Ctrl-N` returns to yttt Normal mode.
 - Fixed Zed-compatible icon themes falling back to the generic file icon for common extensions, including TypeScript, when the theme relies on Zed's built-in file associations.
 - Open files deleted outside yttt now stay editable with a struck-through tab title and are recreated directly on save instead of blocking on a confirmation dialog.
-- Fixed manually launched agents remaining in the sidebar after their terminal process exits or is
-  killed; detected-agent snapshots are now removed from memory and persisted state.
-- Fixed late Oh My Pi hook deliveries recreating a sidebar session after the monitored CLI process had already exited.
+- Restored Host-owned process-tree monitoring for manually launched Codex, Claude Code, Grok,
+  OpenCode, Pi, and Oh My Pi CLIs. Two missed samples now end the live sidebar snapshot even when
+  the parent shell remains running or the Agent cannot emit its `SessionEnd`/`session_shutdown`
+  hook.
+- Fixed closed and immediately recreated terminal tabs inheriting an old Agent identity by dropping
+  pane caches and retained snapshots synchronously, rejecting late updates for absent tabs, and
+  clearing the Host record before binding a new terminal incarnation.
+- Fixed Grok detection in development builds by installing the shared stateless hook adapter outside
+  the profile runtime and preferring native Grok hooks over Grok-imported Claude compatibility hooks.
 - Fixed Host terminal input feeling network-lagged by isolating slow project/file/Git requests from
   the terminal-interactive lane, making control and interactive frame readers cancellation-safe,
   coalescing semantic terminal data to a 16 ms frame cadence, and keeping terminal frames off

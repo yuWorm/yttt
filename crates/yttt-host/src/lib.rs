@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 mod agent_hooks;
+mod agent_processes;
 mod audit;
 pub mod diagnostics;
 mod lifecycle;
@@ -246,6 +247,11 @@ where
         }
     });
     let agent_hooks = HostAgentHookRuntime::start(host_epoch)?;
+    tokio::spawn(agent_processes::run(
+        runtime.clone(),
+        agent_hooks.clone(),
+        stop_rx.clone(),
+    ));
     let mut agent_terminal_events = runtime.subscribe();
     let terminal_agent_hooks = agent_hooks.clone();
     let terminal_runtime = runtime.clone();

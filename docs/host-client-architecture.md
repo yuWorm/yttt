@@ -448,9 +448,17 @@ semantic snapshot/delta、16 ms terminal-data cadence、lease 和 checkpoint 语
 
 Agent hook delivery 使用随机 `stream_id` 和单调 `sequence`。Host 响应
 `accepted_sequence/next_sequence`，缓存小范围乱序，重复 delivery 只确认而不重复应用；provider
-extension 对断连和非 2xx response 做有上限的指数退避。terminal exit 是最终状态；即使退出时
-首个 hook 尚未到达，Host 也为该 scope 保留终态 tombstone。随后到达的 hook 仍会被确认但不能
-把 `Exited/Completed/Failed` 覆盖回 `Running`；只有新 terminal generation 会清除此 tombstone。
+extension 对断连和非 2xx response 做有上限的指数退避。provider `SessionEnd` 与 terminal exit
+都是最终状态：前者结束仍位于存活 shell 内的 Agent CLI，后者覆盖整个 PTY 生命周期。即使退出时
+首个 hook 尚未到达，Host 也为该 scope 保留终态 tombstone；随后到达的 hook 不能把
+`Exited/Completed/Failed` 覆盖回 `Running`。新 terminal generation 在绑定前删除旧 Agent
+record，防止复用的 tab/pane 标识继承上一代快照。Grok 原生 hook 优先于其导入的 Claude
+兼容 hook。
+
+本地 terminal 的 Agent 存活性由一个 Host-owned 进程树 monitor 统一采样。monitor 从 PTY
+root PID 选择最近的已知 Agent descendant，以两个连续 miss 作为退出确认，因此 Agent 被硬终止
+且父 shell 继续运行时仍会发布最终快照；SSH terminal 不读取远端进程表，继续以 provider hook
+为准。
 
 远程网络断开只改变对应 SSH resource 状态，不得使 Host 或本地 terminal runtime 崩溃。Relay 只能转发端到端加密帧，不能获得 SSH credential、项目内容或 auth token。
 

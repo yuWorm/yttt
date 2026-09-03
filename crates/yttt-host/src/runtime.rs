@@ -264,6 +264,19 @@ impl HostRuntime {
         self.terminals.lock().get(session_id).cloned()
     }
 
+    pub(crate) fn local_process_roots(&self) -> Vec<(TerminalSessionId, u32)> {
+        self.terminals
+            .lock()
+            .values()
+            .filter(|terminal| !terminal.is_exited())
+            .filter_map(|terminal| {
+                terminal
+                    .local_process_id()
+                    .map(|pid| (terminal.session_id().clone(), pid))
+            })
+            .collect()
+    }
+
     pub fn session_count(&self) -> usize {
         self.terminals.lock().len()
     }

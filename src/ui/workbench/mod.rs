@@ -664,6 +664,35 @@ impl WorkbenchView {
         self.terminate_host_sessions_matching(|key| key.starts_with(&prefix))
     }
 
+    fn forget_closed_terminal_tabs(&mut self, project_id: &str, tab_ids: &[String]) {
+        self.agent_manager.forget_tabs(project_id, tab_ids);
+        let prefixes = tab_ids
+            .iter()
+            .map(|tab_id| format!("{project_id}:{tab_id}:"))
+            .collect::<Vec<_>>();
+        let matches_closed_tab = |key: &str| prefixes.iter().any(|prefix| key.starts_with(prefix));
+        self.terminal
+            .terminal_panes
+            .retain(|key, _| !matches_closed_tab(key));
+        self.terminal
+            .terminal_pane_subscriptions
+            .retain(|key, _| !matches_closed_tab(key));
+        self.terminal
+            .pending_host_agent_snapshots
+            .retain(|session_id, _| !matches_closed_tab(session_id.as_str()));
+        if self
+            .terminal
+            .pending_terminal_focus
+            .as_ref()
+            .is_some_and(|target| {
+                target.project_id.as_str() == project_id
+                    && tab_ids.iter().any(|tab_id| tab_id == &target.tab_id)
+            })
+        {
+            self.terminal.pending_terminal_focus = None;
+        }
+    }
+
     fn terminate_host_pane(
         &self,
         project_id: &str,
@@ -1752,8 +1781,7 @@ impl WorkbenchView {
             }
             self.workspace.close_tabs(terminal_ids)?;
             if let Some(project_id) = project_id {
-                self.agent_manager
-                    .forget_tabs(project_id.as_str(), terminal_ids);
+                self.forget_closed_terminal_tabs(project_id.as_str(), terminal_ids);
             }
             if let Some((project_id, remaining_terminal_ids)) =
                 self.selected_project_work_item_ids()
@@ -3066,6 +3094,12 @@ impl WorkbenchView {
                     self.terminate_host_tab(project_id.as_str(), &tab_id)?;
                 }
                 dispatch_workspace_command(&mut self.workspace, CommandId::TabClose)?;
+                if let Some(project_id) = project_id {
+                    self.forget_closed_terminal_tabs(
+                        project_id.as_str(),
+                        std::slice::from_ref(&tab_id),
+                    );
+                }
                 let next = if let Some((project_id, terminal_ids)) =
                     self.selected_project_work_item_ids()
                 {

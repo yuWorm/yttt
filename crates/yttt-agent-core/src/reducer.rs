@@ -237,6 +237,16 @@ impl AgentReducer {
             | AgentEventKind::SessionUpdated { metadata } => {
                 self.update_session(metadata, now);
             }
+            AgentEventKind::SessionEnded => {
+                return self.process_exited(
+                    generation,
+                    AgentProcessExit {
+                        code: Some(0),
+                        reason: AgentExitReason::Completed,
+                    },
+                    now,
+                );
+            }
             AgentEventKind::TurnStarted { task } => {
                 if let Some(task) = task {
                     let title = task.single_line_title();

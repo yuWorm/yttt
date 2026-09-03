@@ -702,18 +702,19 @@ layout.reset_local_override
 A pane is treated as an agent pane when:
 
 - `kind = "agent"` is set in layout TOML;
-- the configured command basename is one of the five onboarding Agents: `codex`, `claude`,
-  `opencode`, `pi`, or `omp`; or
+- the configured command basename is one of the six onboarding Agents: `codex`, `claude`, `grok`
+  (including the `groky` alias), `opencode`, `pi`, or `omp`; or
 - a local shell pane has a live process-tree match for one of those commands. This last path
   detects an Agent started manually after opening a new tab or pane.
 
-Local process discovery samples all pane roots in one shared monitor, recognizes native
+Host-owned local process discovery samples all pane roots in one shared monitor, recognizes native
 executables plus the Node/Bun package paths used by the script-backed CLIs, and chooses the
 nearest matching descendant. Two missed samples end the detected run, avoiding false completion
-during launcher handoff. SSH panes have no local process tree, so manual Agent discovery there
-still requires a provider hook.
+during launcher handoff while still detecting a hard-killed Agent whose parent shell remains alive.
+SSH panes have no local process tree, so manual Agent discovery there still requires a provider
+hook.
 
-All five built-in Agents have managed provider adapters. For configured command panes, yttt:
+All six built-in Agents have managed provider adapters. For configured command panes, yttt:
 
 1. creates a stable Agent instance for the Project/Tab/Pane scope;
 2. installs the provider hook or extension without replacing unrelated user configuration;

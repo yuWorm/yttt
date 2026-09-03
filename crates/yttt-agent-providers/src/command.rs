@@ -164,6 +164,7 @@ fn normalize_command_hook(
     let payload = event.payload;
     let events = match event.name {
         "SessionStart" => vec![session_started(payload)],
+        "SessionEnd" => vec![AgentEventKind::SessionEnded],
         "UserPromptSubmit" => {
             with_session_update(payload, turn_started(payload, &["prompt", "user_prompt"]))
         }
@@ -530,6 +531,14 @@ mod tests {
                 if metadata.session_id.as_deref() == Some("grok-1")
                     && metadata.model.as_deref() == Some("grok-code-fast")
         ));
+
+        let events = GrokProvider
+            .normalize_hook(ProviderHookEvent {
+                name: "SessionEnd",
+                payload: &session,
+            })
+            .unwrap();
+        assert_eq!(events, vec![AgentEventKind::SessionEnded]);
 
         let denied = json!({ "toolName": "Bash", "toolInput": { "command": "rm -rf build" } });
         let events = GrokProvider

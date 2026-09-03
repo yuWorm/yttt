@@ -14,6 +14,7 @@ pub enum AgentEventKind {
     SessionUpdated {
         metadata: AgentSessionMetadata,
     },
+    SessionEnded,
     TurnStarted {
         task: Option<AgentTask>,
     },

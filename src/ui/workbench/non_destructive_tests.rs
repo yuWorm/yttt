@@ -1020,6 +1020,193 @@ fn layout_default_does_not_drop_terminal_entities(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn closing_and_reopening_a_reused_tab_id_drops_stale_agent_state(cx: &mut TestAppContext) {
+    use yttt_agent_core::{AgentInstanceId, AgentReducer, ProviderId};
+    use yttt_protocol::agent::{AgentHookScope, AgentSnapshotUpdate};
+
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(local_project(project_path), dev_fixture_layout())
+        .unwrap();
+    let (root, cx) = cx.add_window_view(|_, _| {
+        WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
+    });
+
+    root.update(cx, |root, cx| {
+        root.run_command(CommandId::TabNew).unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    let key = terminal_pane_key(project_id.as_str(), "tab-1", "shell");
+    let old_entity = cx.update(|_, app| {
+        root.read(app)
+            .terminal
+            .terminal_panes
+            .get(&key)
+            .unwrap()
+            .entity_id()
+    });
+    let mut reducer =
+        AgentReducer::new(AgentInstanceId::random(), ProviderId::from_static("omp"), 1);
+    reducer.process_starting(7, 1);
+    reducer.process_started(7, 2);
+    let active_update = AgentSnapshotUpdate {
+        scope: AgentHookScope {
+            project_id: project_id.as_str().to_string(),
+            tab_id: key.clone(),
+            pane_id: key.clone(),
+            generation: 7,
+        },
+        terminal_session_id: TerminalSessionId::new(key.clone()),
+        host_epoch: 1,
+        sequence: 1,
+        snapshot: reducer.snapshot().clone(),
+    };
+    let mut late_update = active_update.clone();
+    late_update.sequence = 2;
+
+    root.update_in(cx, |root, window, cx| {
+        assert!(root.apply_host_agent_snapshot(active_update, window, cx));
+        assert!(
+            root.agent_manager
+                .retained_snapshots()
+                .iter()
+                .any(|(address, _)| address.tab_id == "tab-1")
+        );
+        root.run_command(CommandId::TabClose).unwrap();
+        assert!(!root.terminal.terminal_panes.contains_key(&key));
+        assert!(!root.apply_host_agent_snapshot(late_update, window, cx));
+        assert!(root.terminal.pending_host_agent_snapshots.is_empty());
+        root.run_command(CommandId::TabNew).unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    cx.update(|_, app| {
+        let root = root.read(app);
+        let project = root.workspace.project(&project_id).unwrap();
+        assert_eq!(project.selected_tab_id, "tab-1");
+        assert!(
+            project
+                .tab_state("tab-1")
+                .unwrap()
+                .pane_states
+                .iter()
+                .all(|pane| pane.agent_snapshot.is_none())
+        );
+        assert_ne!(
+            root.terminal.terminal_panes.get(&key).unwrap().entity_id(),
+            old_entity
+        );
+        assert!(
+            root.agent_manager
+                .retained_snapshots()
+                .iter()
+                .all(|(address, _)| address.tab_id != "tab-1")
+        );
+    });
+}
+
+#[gpui::test]
+fn session_end_removes_the_agent_from_the_live_sidebar(cx: &mut TestAppContext) {
+    use yttt_agent_core::{AgentEventKind, AgentInstanceId, AgentReducer, ProviderId};
+    use yttt_protocol::agent::{AgentHookScope, AgentSnapshotUpdate};
+
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let project_path = temp.path().join("project");
+    fs::create_dir(&project_path).unwrap();
+    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut workspace = Workspace::new();
+    let project_id = workspace
+        .open_project(local_project(project_path), dev_fixture_layout())
+        .unwrap();
+    let (root, cx) = cx.add_window_view(|_, _| {
+        WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
+    });
+    cx.run_until_parked();
+
+    let key = terminal_pane_key(project_id.as_str(), "dev", "shell");
+    let scope = AgentHookScope {
+        project_id: project_id.as_str().to_string(),
+        tab_id: key.clone(),
+        pane_id: key.clone(),
+        generation: 7,
+    };
+    let mut reducer =
+        AgentReducer::new(AgentInstanceId::random(), ProviderId::from_static("omp"), 1);
+    reducer.process_starting(7, 1);
+    reducer.process_started(7, 2);
+    let running = reducer.snapshot().clone();
+    reducer.apply(7, AgentEventKind::SessionEnded, 3);
+    let exited = reducer.snapshot().clone();
+
+    root.update_in(cx, |root, window, cx| {
+        assert!(root.apply_host_agent_snapshot(
+            AgentSnapshotUpdate {
+                scope: scope.clone(),
+                terminal_session_id: TerminalSessionId::new(key.clone()),
+                host_epoch: 1,
+                sequence: 1,
+                snapshot: running,
+            },
+            window,
+            cx,
+        ));
+        let pane_state = root
+            .workspace
+            .project(&project_id)
+            .unwrap()
+            .tab_state("dev")
+            .unwrap()
+            .pane_states
+            .iter()
+            .find(|pane| pane.pane_id == "shell")
+            .unwrap();
+        assert!(pane_state.agent_snapshot.is_some());
+
+        assert!(root.apply_host_agent_snapshot(
+            AgentSnapshotUpdate {
+                scope,
+                terminal_session_id: TerminalSessionId::new(key),
+                host_epoch: 1,
+                sequence: 2,
+                snapshot: exited,
+            },
+            window,
+            cx,
+        ));
+    });
+
+    cx.update(|_, app| {
+        let root = root.read(app);
+        let pane_state = root
+            .workspace
+            .project(&project_id)
+            .unwrap()
+            .tab_state("dev")
+            .unwrap()
+            .pane_states
+            .iter()
+            .find(|pane| pane.pane_id == "shell")
+            .unwrap();
+        assert!(pane_state.agent_snapshot.is_none());
+        assert!(
+            shell::sidebar::visible_project_items(root.workspace())
+                .into_iter()
+                .flat_map(|project| project.agents)
+                .all(|agent| agent.tab_id != "dev" || agent.pane_id != "shell")
+        );
+    });
+}
+
+#[gpui::test]
 fn project_entry_delete_alert_renders_and_executes_confirmation(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();

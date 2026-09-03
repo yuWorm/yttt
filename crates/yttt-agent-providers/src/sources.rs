@@ -17,7 +17,7 @@ function toolDetail(input) {
   return undefined;
 }
 
-function send(name, payload, ctx) {
+function send(name, payload, ctx, wait = false) {
   const enriched = {
     ...payload,
     sessionId: ctx?.sessionManager?.getSessionId?.(),
@@ -28,7 +28,7 @@ function send(name, payload, ctx) {
   const hookToken = process.env.YTTT_AGENT_HOOK_TOKEN;
   const scope = process.env.YTTT_AGENT_HOOK_SCOPE;
   if (endpoint && hookToken && scope) {
-    void fetch(`${endpoint}/hook/pi`, {
+    const request = fetch(`${endpoint}/hook/pi`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -37,7 +37,9 @@ function send(name, payload, ctx) {
       },
       body: JSON.stringify({ event: name, payload: enriched }),
       signal: AbortSignal.timeout(2000),
-    }).catch(() => {});
+    }).then(() => {}).catch(() => {});
+    if (wait) return request;
+    void request;
     return;
   }
   const instanceId = process.env.YTTT_AGENT_INSTANCE_ID;
@@ -53,6 +55,7 @@ export default function (pi) {
   const trackContext = (_event, ctx) => send("session_start", {}, ctx);
   pi.on("session_start", trackContext);
   pi.on("session_switch", trackContext);
+  pi.on("session_shutdown", (_event, ctx) => send("session_shutdown", {}, ctx, true));
   pi.on("before_agent_start", (event, ctx) =>
     send("before_agent_start", { prompt: clip(event?.prompt) }, ctx));
   pi.on("agent_start", (_event, ctx) => send("agent_start", {}, ctx));

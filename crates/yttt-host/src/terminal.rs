@@ -884,6 +884,13 @@ impl HostedTerminal {
         Ok(())
     }
 
+    pub fn local_process_id(&self) -> Option<u32> {
+        match &self.inner.backend {
+            TerminalBackend::Local { child, .. } => child.lock().process_id(),
+            TerminalBackend::Remote { .. } => None,
+        }
+    }
+
     pub fn is_stopped(&self) -> bool {
         self.inner.stopped.load(Ordering::Acquire)
     }

@@ -111,6 +111,18 @@ mod tests {
         ));
         assert_eq!(reducer.snapshot().view_state(), AgentViewState::Interrupted);
     }
+
+    #[test]
+    fn session_end_marks_the_agent_process_exited() {
+        let mut reducer = reducer();
+        reducer.process_starting(1, 2);
+        reducer.process_started(1, 3);
+        reducer.apply(1, AgentEventKind::Working, 4);
+
+        assert!(reducer.apply(1, AgentEventKind::SessionEnded, 5));
+        assert_eq!(reducer.snapshot().process_state, AgentProcessState::Exited);
+        assert_eq!(reducer.snapshot().view_state(), AgentViewState::Completed);
+    }
     #[test]
     fn reducer_tracks_child_agent_lifecycle() {
         let mut reducer = reducer();

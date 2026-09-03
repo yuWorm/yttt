@@ -1,5 +1,5 @@
 use gpui::{Context, Window};
-use yttt_agent_core::{AgentProcessState, AgentViewState};
+use yttt_agent_core::AgentProcessState;
 use yttt_protocol::agent::AgentSnapshotUpdate;
 
 use super::{WorkbenchView, helpers::terminal_pane_key};
@@ -62,6 +62,17 @@ impl WorkbenchView {
         }
     }
 
+    fn expects_host_agent_snapshot(&self, terminal_session_id: &str) -> bool {
+        self.workspace.opened_projects().iter().any(|project| {
+            project.tab_states.iter().any(|tab| {
+                tab.pane_states.iter().any(|pane| {
+                    terminal_pane_key(project.id.as_str(), &tab.tab_id, &pane.pane_id)
+                        == terminal_session_id
+                })
+            })
+        })
+    }
+
     pub(super) fn apply_host_agent_snapshot(
         &mut self,
         update: AgentSnapshotUpdate,
@@ -73,9 +84,11 @@ impl WorkbenchView {
             .terminal_panes
             .get(update.terminal_session_id.as_str())
         else {
-            self.terminal
-                .pending_host_agent_snapshots
-                .insert(update.terminal_session_id.clone(), update);
+            if self.expects_host_agent_snapshot(update.terminal_session_id.as_str()) {
+                self.terminal
+                    .pending_host_agent_snapshots
+                    .insert(update.terminal_session_id.clone(), update);
+            }
             return false;
         };
         let address: AgentPaneAddress = pane.read(cx).agent_pane_address();
@@ -88,9 +101,7 @@ impl WorkbenchView {
         }
         match self.agent_manager.apply_host_snapshot(address, update) {
             Some(AgentPaneExitOutcome::Snapshot { address, snapshot }) => {
-                let result = if snapshot.process_state == AgentProcessState::Exited
-                    && snapshot.view_state() == AgentViewState::Failed
-                {
+                let result = if snapshot.process_state == AgentProcessState::Exited {
                     self.workspace.clear_agent_snapshot(
                         &ProjectId::new(&address.project_id),
                         &address.tab_id,

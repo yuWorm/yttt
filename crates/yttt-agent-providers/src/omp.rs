@@ -44,6 +44,7 @@ impl AgentProvider for OmpProvider {
             "session_updated" => vec![AgentEventKind::SessionUpdated {
                 metadata: session_metadata(payload),
             }],
+            "session_shutdown" => vec![AgentEventKind::SessionEnded],
             "before_agent_start" => with_session_update(
                 payload,
                 AgentEventKind::TurnStarted {
@@ -275,6 +276,14 @@ mod tests {
                 outcome: TurnOutcome::Completed
             }]
         );
+
+        let events = provider
+            .normalize_hook(ProviderHookEvent {
+                name: "session_shutdown",
+                payload: &Value::Null,
+            })
+            .unwrap();
+        assert_eq!(events, vec![AgentEventKind::SessionEnded]);
     }
 
     #[test]
