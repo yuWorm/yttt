@@ -401,8 +401,9 @@ Desktop 重启时仍可 attach。
   `--force-stop-host` 提供不依赖 tray 的等价恢复入口；`--start-host` 创建
   `Independent` Host。
 
-关闭一个 pane/tab/project 使用 `TerminateTerminal` / `TerminateMany`，只影响被关闭资源；
-关闭 window 不走这些请求。
+关闭仍绑定到 Host 的 pane/tab/project 使用 `TerminateTerminal` / `TerminateMany`，只影响被关闭
+资源；已经退出并确认成 `Closed` 的 terminal 再次关闭是幂等本地操作，不得因重复
+`TerminateMany` 或 `NotBound` 阻止 UI 移除 tab。关闭 window 不走这些请求。
 
 ## 10. 断线、Host 重启与恢复
 

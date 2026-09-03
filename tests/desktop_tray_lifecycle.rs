@@ -9,8 +9,10 @@ use yttt::{
     model::ids::{ProfileId, ProjectId},
 };
 use yttt_protocol::{
-    HostBlocker, HostPath, LifecycleRequest, LifecycleResponse, Request, Response,
+    HostBlocker, HostPath, LifecycleRequest, LifecycleResponse, ProjectRelativePath, Request,
+    Response,
     project::{ProjectRequest, ProjectResponse},
+    terminal::{TerminalExecutionSpec, TerminalGeometry, TerminalSpawnSpec},
 };
 
 fn isolated_profile(root: &Path) -> AppProfile {
@@ -100,5 +102,99 @@ fn desktop_disconnect_stops_owned_host_even_with_active_resources() {
     );
     reopened.shutdown_client();
     drop(reopened);
+    wait_for_host_exit(&profile);
+}
+
+#[test]
+fn confirmed_terminal_close_is_idempotent_after_host_acknowledgement() {
+    let temporary = tempdir().unwrap();
+    let profile = isolated_profile(temporary.path());
+    let executable = std::path::PathBuf::from(env!("CARGO_BIN_EXE_yttt"));
+    let project_root = temporary.path().join("agent-close-project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let project_id = ProjectId::new("agent-close-project");
+    let desktop = DesktopHostRuntime::start_with_executable(profile.clone(), executable).unwrap();
+    let Response::Project(ProjectResponse::Registered {
+        registration_epoch, ..
+    }) = desktop
+        .request_blocking_typed(Request::Project(ProjectRequest::Register {
+            project_id: project_id.clone(),
+            root: platform_path(&project_root),
+        }))
+        .unwrap()
+    else {
+        panic!("Host did not register the Agent close test project");
+    };
+    let Response::Resources(catalog) = desktop
+        .request_blocking_typed(Request::ListResources)
+        .unwrap()
+    else {
+        panic!("Host did not return its resource catalog");
+    };
+    let spec = TerminalSpawnSpec {
+        session_id: yttt::model::ids::TerminalSessionId::new("agent-close-project:agent:omp"),
+        project_id: project_id.clone(),
+        cwd: ProjectRelativePath::root(),
+        execution: TerminalExecutionSpec::Command {
+            shell: "/bin/sh".to_string(),
+            program: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), "sleep 30".to_string()],
+            return_to_shell: false,
+        },
+        geometry: TerminalGeometry {
+            cols: 80,
+            rows: 24,
+            cell_width: 8,
+            cell_height: 16,
+        },
+        query_palette: Vec::new(),
+        palette_revision: 1,
+        geometry_epoch: 1,
+        scrollback_limit: 1_000,
+        environment: Vec::new(),
+        removed_environment: Vec::new(),
+    };
+    let spawn_fingerprint = spec.address_fingerprint();
+    let request = desktop
+        .terminal_start_request(spec.clone(), &catalog)
+        .unwrap();
+    let Response::TerminalSpawned { session_epoch, .. } =
+        desktop.request_blocking_typed(request).unwrap()
+    else {
+        panic!("Host did not spawn the Agent close test terminal");
+    };
+    desktop
+        .bind_terminal(
+            &catalog,
+            spec.session_id.clone(),
+            session_epoch,
+            spawn_fingerprint,
+        )
+        .unwrap();
+
+    let first = desktop
+        .terminate_many_confirmed(vec![spec.session_id.clone()])
+        .unwrap();
+    assert_eq!(first.len(), 1);
+    assert!(first[0].result.is_ok());
+    assert!(
+        desktop
+            .terminate_many_confirmed(vec![spec.session_id])
+            .unwrap()
+            .is_empty(),
+        "closing a Host Agent tab after its terminal is Closed must be a local no-op"
+    );
+
+    assert_eq!(
+        desktop
+            .request_blocking_typed(Request::Project(ProjectRequest::Close {
+                project_id,
+                registration_epoch,
+            }))
+            .unwrap(),
+        Response::Project(ProjectResponse::Closed)
+    );
+    desktop.shutdown_client();
+    drop(desktop);
     wait_for_host_exit(&profile);
 }
