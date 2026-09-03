@@ -48,7 +48,7 @@ fn explicit_agent_kind_is_agent() {
 
 #[test]
 fn all_onboarding_agent_commands_are_agents() {
-    for command in ["codex", "claude", "opencode", "pi", "omp"] {
+    for command in ["codex", "claude", "grok", "groky", "opencode", "pi", "omp"] {
         assert!(
             classify_agent(None, command).is_agent(),
             "{command} should be classified as an agent"

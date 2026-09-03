@@ -14,12 +14,14 @@ pub(crate) const EXTERNAL_ICON_ASSET_PREFIX: &str = "yttt-icon://";
 pub const BUILTIN_APP_ICON_ASSET_PATH: &str = "app-icon/yttt.png";
 pub const BUILTIN_CODEX_ICON_ASSET_PATH: &str = "icons/agent-codex.svg";
 pub const BUILTIN_CLAUDE_ICON_ASSET_PATH: &str = "icons/agent-claude.svg";
+pub const BUILTIN_GROK_ICON_ASSET_PATH: &str = "icons/agent-grok.svg";
 pub const BUILTIN_OPENCODE_ICON_ASSET_PATH: &str = "icons/agent-opencode.svg";
 pub const BUILTIN_PI_ICON_ASSET_PATH: &str = "icons/agent-pi.svg";
 pub const BUILTIN_OMP_ICON_ASSET_PATH: &str = "icons/agent-omp.svg";
 pub const BUILTIN_AGENT_ICON_ASSET_PATHS: &[&str] = &[
     BUILTIN_CODEX_ICON_ASSET_PATH,
     BUILTIN_CLAUDE_ICON_ASSET_PATH,
+    BUILTIN_GROK_ICON_ASSET_PATH,
     BUILTIN_OPENCODE_ICON_ASSET_PATH,
     BUILTIN_PI_ICON_ASSET_PATH,
     BUILTIN_OMP_ICON_ASSET_PATH,
@@ -41,6 +43,9 @@ fn builtin_asset(path: &str) -> Option<&'static [u8]> {
         }
         BUILTIN_CLAUDE_ICON_ASSET_PATH => {
             Some(include_bytes!("../../../assets/icons/agent-claude.svg").as_slice())
+        }
+        BUILTIN_GROK_ICON_ASSET_PATH => {
+            Some(include_bytes!("../../../assets/icons/agent-grok.svg").as_slice())
         }
         BUILTIN_OPENCODE_ICON_ASSET_PATH => {
             Some(include_bytes!("../../../assets/icons/agent-opencode.svg").as_slice())

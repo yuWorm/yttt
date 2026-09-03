@@ -42,6 +42,11 @@ fn builtin_template_is_valid_shell_layout() {
 }
 
 #[test]
+fn groky_alias_maps_to_the_grok_builtin_agent() {
+    assert_eq!(BuiltinAgent::from_id("groky"), Some(BuiltinAgent::Grok));
+}
+
+#[test]
 fn onboarding_agents_build_a_valid_split_view_default() {
     for agent in BuiltinAgent::ALL {
         let template = DefaultLayoutTemplate::for_onboarding(DefaultLayoutKind::SplitPane, agent);

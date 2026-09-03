@@ -38,6 +38,7 @@ fn classify_agent_executable(executable: &str) -> Option<BuiltinAgent> {
     match basename {
         "codex" => Some(BuiltinAgent::Codex),
         "claude" => Some(BuiltinAgent::Claude),
+        "grok" | "groky" => Some(BuiltinAgent::Grok),
         "opencode" => Some(BuiltinAgent::OpenCode),
         "pi" => Some(BuiltinAgent::Pi),
         "omp" => Some(BuiltinAgent::OhMyPi),

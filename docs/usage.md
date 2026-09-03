@@ -24,9 +24,10 @@ layout types:
 - **Split view:** one tab with the coding agent on the left and an interactive shell on the right.
 - **Separate tabs:** one agent tab and one shell tab.
 
-Next choose the built-in coding agent: Codex (`codex`), Claude Code (`claude`), OpenCode
-(`opencode`), Pi (`pi`), or Oh My Pi (`omp`). The command palette remains available from both
-onboarding steps through its configured shortcut and the visible Command Palette action.
+Next choose the built-in coding agent: Codex (`codex`), Claude Code (`claude`), Grok (`grok`;
+the `groky` fork is recognized as the same provider), OpenCode (`opencode`), Pi (`pi`), or Oh My
+Pi (`omp`). The command palette remains available from both onboarding steps through its configured
+shortcut and the visible Command Palette action.
 
 Completing onboarding sets `general.onboarding_completed = true`; subsequent launches go directly
 to the workspace. Projects opened afterward inherit the generated global default unless they
@@ -810,8 +811,8 @@ Run these before marking a product phase complete:
   limited to the active project; inactive projects refresh when selected.
 - Host/Client transport is local IPC only; remote-network clients are not implemented.
 - A desktop restart reattaches to a surviving Host, but a Host or machine restart cannot resurrect an existing PTY child process.
-- Provider-level task and tool progress currently has a first-party adapter only for Oh My Pi;
-  other Agent commands retain process-level fallback status.
+- Provider-level task and tool progress requires the managed hook or extension installed for the
+  selected agent; commands without one retain process-level fallback status.
 - No GUI layout editor.
 - Native system notifications and notification click routing are not implemented.
 - macOS packages are ad-hoc signed; Developer ID signing and notarization require release

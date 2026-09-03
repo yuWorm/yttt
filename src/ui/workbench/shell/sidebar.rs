@@ -15,8 +15,8 @@ use crate::commands::CommandId;
 use crate::config::default_layout::BuiltinAgent;
 use crate::model::workspace::Workspace;
 use crate::ui::app::assets::{
-    BUILTIN_CLAUDE_ICON_ASSET_PATH, BUILTIN_CODEX_ICON_ASSET_PATH, BUILTIN_OMP_ICON_ASSET_PATH,
-    BUILTIN_OPENCODE_ICON_ASSET_PATH, BUILTIN_PI_ICON_ASSET_PATH,
+    BUILTIN_CLAUDE_ICON_ASSET_PATH, BUILTIN_CODEX_ICON_ASSET_PATH, BUILTIN_GROK_ICON_ASSET_PATH,
+    BUILTIN_OMP_ICON_ASSET_PATH, BUILTIN_OPENCODE_ICON_ASSET_PATH, BUILTIN_PI_ICON_ASSET_PATH,
 };
 use crate::ui::components::SelectableState;
 use crate::ui::i18n::{UiText, UiTextKey};
@@ -200,6 +200,7 @@ fn agent_provider_id_from_command(command: &str) -> String {
         .unwrap_or_default()
     {
         "oh-my-pi" => "omp".to_string(),
+        "groky" => "grok".to_string(),
         provider => provider.to_string(),
     }
 }
@@ -462,6 +463,10 @@ pub(in super::super) fn agent_type_icon(
         "claude" => (
             "Claude Code".into(),
             AgentLogo::Polychrome(BUILTIN_CLAUDE_ICON_ASSET_PATH),
+        ),
+        "grok" => (
+            "Grok".into(),
+            AgentLogo::Monochrome(BUILTIN_GROK_ICON_ASSET_PATH),
         ),
         "opencode" => (
             "OpenCode".into(),
@@ -814,7 +819,15 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::compact_agent_label;
+    use super::{agent_provider_id_from_command, compact_agent_label};
+
+    #[test]
+    fn groky_command_uses_the_grok_provider_identity() {
+        assert_eq!(
+            agent_provider_id_from_command("/usr/local/bin/groky --model custom"),
+            "grok"
+        );
+    }
 
     #[test]
     fn agent_label_uses_task_and_action_without_repeating_logo_identity() {

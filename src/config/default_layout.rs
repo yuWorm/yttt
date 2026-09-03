@@ -15,6 +15,7 @@ pub enum BuiltinAgent {
     #[default]
     Codex,
     Claude,
+    Grok,
     OpenCode,
     Pi,
     #[serde(rename = "omp")]
@@ -22,9 +23,10 @@ pub enum BuiltinAgent {
 }
 
 impl BuiltinAgent {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Codex,
         Self::Claude,
+        Self::Grok,
         Self::OpenCode,
         Self::Pi,
         Self::OhMyPi,
@@ -34,6 +36,7 @@ impl BuiltinAgent {
         match self {
             Self::Codex => "codex",
             Self::Claude => "claude",
+            Self::Grok => "grok",
             Self::OpenCode => "opencode",
             Self::Pi => "pi",
             Self::OhMyPi => "omp",
@@ -44,6 +47,7 @@ impl BuiltinAgent {
         match id {
             "codex" => Some(Self::Codex),
             "claude" | "claude-code" => Some(Self::Claude),
+            "grok" | "groky" => Some(Self::Grok),
             "opencode" | "open-code" => Some(Self::OpenCode),
             "pi" => Some(Self::Pi),
             "omp" | "oh-my-pi" => Some(Self::OhMyPi),
@@ -55,6 +59,7 @@ impl BuiltinAgent {
         match self {
             Self::Codex => "Codex",
             Self::Claude => "Claude Code",
+            Self::Grok => "Grok",
             Self::OpenCode => "OpenCode",
             Self::Pi => "Pi",
             Self::OhMyPi => "Oh My Pi",

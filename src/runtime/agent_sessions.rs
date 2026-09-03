@@ -103,6 +103,7 @@ fn scan_agent_sessions_for_agents_with_roots(
         sessions.extend(match agent {
             BuiltinAgent::Codex => scan_codex(&roots.codex.join("sessions"), project_path)?,
             BuiltinAgent::Claude => scan_claude(&roots.claude.join("projects"), project_path)?,
+            BuiltinAgent::Grok => scan_grok(&roots.grok, project_path)?,
             BuiltinAgent::OpenCode if allow_native_commands => scan_opencode(project_path)?,
             BuiltinAgent::OpenCode => Vec::new(),
             BuiltinAgent::Pi => scan_pi_family(&roots.pi, project_path, BuiltinAgent::Pi)?,
@@ -323,6 +324,58 @@ fn parse_claude_transcript(file: &SessionFile, project_path: &Path) -> Option<Ag
     })
 }
 
+#[derive(Deserialize)]
+struct GrokSessionSummary {
+    info: GrokSessionInfo,
+    #[serde(default)]
+    generated_title: String,
+    #[serde(default)]
+    session_summary: String,
+    current_model_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GrokSessionInfo {
+    id: String,
+    cwd: PathBuf,
+}
+
+fn scan_grok(
+    sessions_root: &Path,
+    project_path: &Path,
+) -> Result<Vec<AgentSession>, AgentSessionScanError> {
+    let files = collect_grok_summary_files(sessions_root)?;
+    Ok(files
+        .into_iter()
+        .filter_map(|file| parse_grok_summary(&file, project_path))
+        .collect())
+}
+
+fn parse_grok_summary(file: &SessionFile, project_path: &Path) -> Option<AgentSession> {
+    let source = fs::read(&file.path).ok()?;
+    if source.len() as u64 > MAX_TRANSCRIPT_BYTES {
+        return None;
+    }
+    let summary: GrokSessionSummary = serde_json::from_slice(&source).ok()?;
+    if !belongs_to_project(&summary.info.cwd, project_path) {
+        return None;
+    }
+    let id = summary.info.id.trim();
+    if id.is_empty() {
+        return None;
+    }
+    Some(AgentSession {
+        provider: BuiltinAgent::Grok,
+        id: id.to_string(),
+        title: clean_title(summary.generated_title)
+            .or_else(|| clean_title(summary.session_summary))
+            .unwrap_or_default(),
+        model: summary.current_model_id.and_then(clean_title),
+        transcript_path: None,
+        updated_at_ms: file.updated_at_ms,
+    })
+}
+
 fn scan_pi_family(
     sessions_root: &Path,
     project_path: &Path,
@@ -451,6 +504,22 @@ fn collect_session_files(
     root: &Path,
     recursive: bool,
 ) -> Result<Vec<SessionFile>, AgentSessionScanError> {
+    collect_files(root, recursive, |path| {
+        path.extension().and_then(|value| value.to_str()) == Some("jsonl")
+    })
+}
+
+fn collect_grok_summary_files(root: &Path) -> Result<Vec<SessionFile>, AgentSessionScanError> {
+    collect_files(root, true, |path| {
+        path.file_name().and_then(|value| value.to_str()) == Some("summary.json")
+    })
+}
+
+fn collect_files(
+    root: &Path,
+    recursive: bool,
+    accepts: impl Fn(&Path) -> bool,
+) -> Result<Vec<SessionFile>, AgentSessionScanError> {
     if !root.exists() {
         return Ok(Vec::new());
     }
@@ -466,21 +535,20 @@ fn collect_session_files(
                 path: directory.clone(),
                 source,
             })?;
+            let path = entry.path();
             let file_type = entry
                 .file_type()
                 .map_err(|source| AgentSessionScanError::Io {
-                    path: entry.path(),
+                    path: path.clone(),
                     source,
                 })?;
             if file_type.is_dir() {
                 if recursive && entry.file_name() != "subagents" {
-                    directories.push(entry.path());
+                    directories.push(path);
                 }
                 continue;
             }
-            if !file_type.is_file()
-                || entry.path().extension().and_then(|value| value.to_str()) != Some("jsonl")
-            {
+            if !file_type.is_file() || !accepts(&path) {
                 continue;
             }
             let updated_at_ms = entry
@@ -490,7 +558,7 @@ fn collect_session_files(
                 .map(system_time_millis)
                 .unwrap_or_default();
             files.push(SessionFile {
-                path: entry.path(),
+                path,
                 updated_at_ms,
             });
         }
@@ -603,9 +671,42 @@ mod tests {
         AgentSessionRoots {
             codex: root.join("codex"),
             claude: root.join("claude"),
+            grok: root.join("grok"),
             pi: root.join("pi"),
             omp: root.join("omp"),
         }
+    }
+
+    #[test]
+    fn scans_grok_summaries_for_the_selected_project() {
+        let temporary = tempfile::tempdir().unwrap();
+        let roots = roots(temporary.path());
+        let project = temporary.path().join("project");
+        let session_directory = roots.grok.join("encoded-project/grok-session");
+        fs::create_dir_all(&session_directory).unwrap();
+        fs::write(
+            session_directory.join("summary.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "info": {
+                    "id": "grok-session",
+                    "cwd": project,
+                },
+                "generated_title": "Implement Grok support",
+                "session_summary": "fallback",
+                "current_model_id": "grok-code-fast",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let sessions =
+            scan_agent_sessions_with_roots(BuiltinAgent::Grok, &project, &roots).unwrap();
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "grok-session");
+        assert_eq!(sessions[0].title, "Implement Grok support");
+        assert_eq!(sessions[0].model.as_deref(), Some("grok-code-fast"));
+        assert!(sessions[0].transcript_path.is_none());
     }
 
     #[test]

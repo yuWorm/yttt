@@ -716,6 +716,7 @@ fn decode_request(
     let source = match request.path.as_str() {
         "/hook/codex" => "codex",
         "/hook/claude" => "claude",
+        "/hook/grok" => "grok",
         "/hook/opencode" => "opencode",
         "/hook/pi" => "pi",
         "/hook/omp" => "omp",
@@ -953,6 +954,36 @@ mod tests {
             decode_request(request, &secret),
             Err(HttpRequestError::Unauthorized)
         ));
+    }
+
+    #[test]
+    fn decodes_native_grok_hook_requests() {
+        let secret = [9_u8; 32];
+        let scope = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&AgentHookScope {
+                project_id: "project".to_string(),
+                tab_id: "tab".to_string(),
+                pane_id: "grok".to_string(),
+                generation: 1,
+            })
+            .unwrap(),
+        );
+        let request = HttpRequest {
+            path: "/hook/grok".to_string(),
+            headers: BTreeMap::from([
+                (SCOPE_HEADER.to_string(), scope.clone()),
+                (TOKEN_HEADER.to_string(), scope_token(&secret, &scope)),
+            ]),
+            body: br#"{"hookEventName":"SessionStart","sessionId":"grok-session"}"#.to_vec(),
+        };
+
+        let decoded = decode_request(request, &secret).unwrap();
+        assert_eq!(decoded.source, "grok");
+        assert_eq!(decoded.event, "SessionStart");
+        assert_eq!(
+            decoded.payload.get("sessionId").and_then(Value::as_str),
+            Some("grok-session")
+        );
     }
 
     #[test]

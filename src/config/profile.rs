@@ -94,6 +94,7 @@ impl AppProfilePaths {
 pub struct AgentSessionRoots {
     pub codex: PathBuf,
     pub claude: PathBuf,
+    pub grok: PathBuf,
     pub pi: PathBuf,
     pub omp: PathBuf,
 }
@@ -104,6 +105,7 @@ impl AgentSessionRoots {
         Self {
             codex: root.join("codex"),
             claude: root.join("claude"),
+            grok: root.join("grok/sessions"),
             pi: root.join("pi/sessions"),
             omp: root.join("omp/sessions"),
         }
@@ -120,6 +122,9 @@ impl AgentSessionRoots {
         Some(Self {
             codex: non_empty_env_path("CODEX_HOME").unwrap_or_else(|| home.join(".codex")),
             claude: non_empty_env_path("CLAUDE_CONFIG_DIR").unwrap_or_else(|| home.join(".claude")),
+            grok: non_empty_env_path("GROK_HOME")
+                .unwrap_or_else(|| home.join(".grok"))
+                .join("sessions"),
             pi: pi_override
                 .clone()
                 .unwrap_or_else(|| pi_root.join("sessions")),

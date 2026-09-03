@@ -11,10 +11,13 @@
 - Added configurable neo-tree-style Global Vim controls for the Projects list (`j/k`, `gg/G`) and project files (`j/k`, `h/l`, `gg/G`, Enter/`o`, create, rename, delete, copy, cut, paste, collapse-all, hidden-file, refresh, finder, and panel-close actions).
 - Added centered, extensible Project Panel icon tabs with an accent-highlighted Files tab, muted Search/Git/Terminal placeholders, and Vim page navigation (`[ p`, `] p`, `g p f`) scoped independently from file-tree commands.
 - Added persistent global terminal environment variables that are automatically injected into newly started local and SSH shells and CLI commands.
-- Added local process-tree discovery for Codex, Claude Code, OpenCode, Pi, and Oh My Pi launched
-  manually from an existing shell tab or pane.
+- Added local process-tree discovery for Codex, Claude Code, Grok, OpenCode, Pi, and Oh My Pi
+  launched manually from an existing shell tab or pane.
 - Added in-app and optional native desktop notifications when hook-backed agents need input,
   complete a task, or fail.
+- Added first-class Grok Build integration, including the `groky` fork alias and shared Grok icon,
+  native personal hooks, live task/tool/subagent state, local session discovery, and `--resume`
+  restoration.
 - Added a cross-platform Permissions settings page for reviewing core and optional desktop access,
   opening native macOS and Windows settings, and explaining Linux desktop/portal-managed
   authorization.
@@ -38,7 +41,7 @@
 - Clippy boundary rules now reject direct construction of style-sensitive `gpui-component` controls in business UI modules.
 - Legacy workspace, settings, editor, and terminal Vim toggles now migrate to the least restrictive equivalent unified mode, and legacy `WorkspaceVim` keybinding contexts migrate to the Global scope.
 - Consolidated all built-in agent adapters and embedded hook sources into the extensible `yttt-agent-providers` crate instead of keeping Oh My Pi in a separate crate.
-- Restored running Claude, Codex, OpenCode, Pi, and Oh My Pi sessions with provider-specific resume commands after workspace restart; provider titles or stable first-prompt titles now persist with the session while custom pane titles remain authoritative.
+- Restored running Claude, Codex, Grok, OpenCode, Pi, and Oh My Pi sessions with provider-specific resume commands after workspace restart; provider titles or stable first-prompt titles now persist with the session while custom pane titles remain authoritative.
 - The Permissions page now detects native authorization where the operating system supports it,
   requests macOS Notifications, Accessibility, and Screen Recording access in place, refreshes
   after returning from system settings, and reports unsupported status checks explicitly.

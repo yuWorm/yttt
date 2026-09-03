@@ -8,6 +8,7 @@ use yttt_agent_core::{
 
 pub const CODEX_PROVIDER_ID: &str = "codex";
 pub const CLAUDE_PROVIDER_ID: &str = "claude";
+pub const GROK_PROVIDER_ID: &str = "grok";
 pub const OPENCODE_PROVIDER_ID: &str = "opencode";
 pub const PI_PROVIDER_ID: &str = "pi";
 
@@ -16,6 +17,9 @@ pub struct CodexProvider;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ClaudeProvider;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GrokProvider;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OpenCodeProvider;
@@ -55,6 +59,27 @@ impl AgentProvider for ClaudeProvider {
 
     fn resume_command(&self, session: &AgentSessionMetadata) -> Option<ProviderResumeCommand> {
         resume_with_session_id(CLAUDE_PROVIDER_ID, "--resume", session)
+    }
+
+    fn normalize_hook(
+        &self,
+        event: ProviderHookEvent<'_>,
+    ) -> Result<Vec<AgentEventKind>, ProviderError> {
+        normalize_command_hook(event)
+    }
+}
+
+impl AgentProvider for GrokProvider {
+    fn descriptor(&self) -> ProviderDescriptor {
+        descriptor(GROK_PROVIDER_ID, "Grok")
+    }
+
+    fn matches_command(&self, command: &str) -> bool {
+        matches!(command_basename(command), Some("grok" | "groky"))
+    }
+
+    fn resume_command(&self, session: &AgentSessionMetadata) -> Option<ProviderResumeCommand> {
+        resume_with_session_id(GROK_PROVIDER_ID, "--resume", session)
     }
 
     fn normalize_hook(
@@ -149,6 +174,7 @@ fn normalize_command_hook(
         "PermissionRequest" => waiting_events(payload, WaitingReason::Approval),
         "PostToolUse" => vec![action_finished_with_failure(payload, false)],
         "PostToolUseFailure" => vec![action_finished_with_failure(payload, true)],
+        "PermissionDenied" => vec![action_finished_with_failure(payload, true)],
         "Stop" => vec![AgentEventKind::TurnFinished {
             outcome: if bool_field(payload, &["is_interrupt", "interrupted"]) == Some(true) {
                 TurnOutcome::Interrupted
@@ -415,9 +441,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn recognizes_all_four_non_omp_commands() {
+    fn recognizes_all_five_non_omp_commands() {
         assert!(CodexProvider.matches_command("/usr/local/bin/codex --model gpt"));
         assert!(ClaudeProvider.matches_command("claude --dangerously-skip-permissions"));
+        assert!(GrokProvider.matches_command("grok --model grok-code-fast"));
+        assert!(GrokProvider.matches_command("/usr/local/bin/groky"));
         assert!(OpenCodeProvider.matches_command(r"C:\\tools\\opencode"));
         assert!(PiProvider.matches_command("pi"));
         assert!(!PiProvider.matches_command("npm run pi"));
@@ -485,6 +513,41 @@ mod tests {
     }
 
     #[test]
+    fn grok_maps_native_camel_case_hooks() {
+        let session = json!({
+            "sessionId": "grok-1",
+            "model": "grok-code-fast"
+        });
+        let events = GrokProvider
+            .normalize_hook(ProviderHookEvent {
+                name: "SessionStart",
+                payload: &session,
+            })
+            .unwrap();
+        assert!(matches!(
+            &events[0],
+            AgentEventKind::SessionStarted { metadata }
+                if metadata.session_id.as_deref() == Some("grok-1")
+                    && metadata.model.as_deref() == Some("grok-code-fast")
+        ));
+
+        let denied = json!({ "toolName": "Bash", "toolInput": { "command": "rm -rf build" } });
+        let events = GrokProvider
+            .normalize_hook(ProviderHookEvent {
+                name: "PermissionDenied",
+                payload: &denied,
+            })
+            .unwrap();
+        assert_eq!(
+            events,
+            vec![AgentEventKind::ActionFinished {
+                action_id: None,
+                failed: true,
+            }]
+        );
+    }
+
+    #[test]
     fn opencode_maps_normalized_plugin_events() {
         let payload = json!({ "prompt": "Review the state machine" });
         let events = OpenCodeProvider
@@ -532,9 +595,10 @@ mod tests {
             title: None,
             transcript_path: Some("/tmp/pi-session.jsonl".to_string()),
         };
-        let cases: [(&dyn AgentProvider, &str, &[&str]); 5] = [
+        let cases: [(&dyn AgentProvider, &str, &[&str]); 6] = [
             (&CodexProvider, "codex", &["resume", "session-1"]),
             (&ClaudeProvider, "claude", &["--resume", "session-1"]),
+            (&GrokProvider, "grok", &["--resume", "session-1"]),
             (&OpenCodeProvider, "opencode", &["--session", "session-1"]),
             (&PiProvider, "pi", &["--session", "/tmp/pi-session.jsonl"]),
             (&OmpProvider, "omp", &["--resume", "session-1"]),

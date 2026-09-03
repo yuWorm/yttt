@@ -10,6 +10,7 @@ use yttt_agent_providers::{OMP_EXTENSION_SOURCE, OPENCODE_PLUGIN_SOURCE, PI_EXTE
 use crate::config::{atomic_write, paths::AppConfigPaths, profile::EnvironmentKind};
 
 const MANAGED_HOOK_FILE_NAME: &str = "yttt-agent-hook";
+const GROK_HOOK_FILE_NAME: &str = "yttt-agent-hook.json";
 const MANAGED_MARKER: &str = "yttt-agent-hook";
 const HOOK_TIMEOUT_SECONDS: u64 = 10;
 const CLAUDE_EVENTS: &[&str] = &[
@@ -34,6 +35,18 @@ const CODEX_EVENTS: &[(&str, &str)] = &[
     ("SubagentStop", "subagent_stop"),
     ("Stop", "stop"),
 ];
+const GROK_EVENTS: &[&str] = &[
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "PermissionDenied",
+    "SubagentStart",
+    "SubagentStop",
+    "Stop",
+    "StopFailure",
+];
 
 pub fn install_managed_hooks(config_paths: &AppConfigPaths) -> io::Result<()> {
     if cfg!(test) || config_paths.environment() != EnvironmentKind::Production {
@@ -53,6 +66,7 @@ fn install_managed_hooks_at(config_paths: &AppConfigPaths, home: &Path) -> io::R
     let mut errors = Vec::new();
     collect_error(&mut errors, install_claude(home, &script_path));
     collect_error(&mut errors, install_codex(home, &script_path));
+    collect_error(&mut errors, install_grok(home, &script_path));
     collect_error(&mut errors, install_opencode(home));
     collect_error(&mut errors, install_pi_and_omp(home));
     if errors.is_empty() {
@@ -115,6 +129,21 @@ fn install_codex(home: &Path, script_path: &Path) -> io::Result<()> {
     }
     atomic_write_with_parent(&config_path, config.as_bytes())
         .map_err(|error| with_context("Codex trust write", error))
+}
+
+fn install_grok(home: &Path, script_path: &Path) -> io::Result<()> {
+    let grok_home = std::env::var_os("GROK_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".grok"));
+    let hooks_path = grok_home.join("hooks").join(GROK_HOOK_FILE_NAME);
+    let mut settings = read_json_object(&hooks_path)?;
+    let command = managed_command(script_path, "grok");
+    let hooks = object_entry(&mut settings, "hooks")?;
+    for event in GROK_EVENTS {
+        upsert_json_hook(hooks, event, &command)?;
+    }
+    write_json(&hooks_path, Value::Object(settings))
+        .map_err(|error| with_context("Grok hook install", error))
 }
 
 fn install_opencode(home: &Path) -> io::Result<()> {
@@ -420,6 +449,7 @@ mod tests {
         let home = temp.path().join("home");
         fs::create_dir_all(home.join(".claude")).unwrap();
         fs::create_dir_all(home.join(".codex")).unwrap();
+        fs::create_dir_all(home.join(".grok/hooks")).unwrap();
         fs::write(
             home.join(".claude/settings.json"),
             r#"{"theme":"dark","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo user"}]}]}}"#,
@@ -431,6 +461,11 @@ mod tests {
         )
         .unwrap();
         fs::write(home.join(".codex/config.toml"), "model = \"gpt-5\"\n").unwrap();
+        fs::write(
+            home.join(".grok/hooks").join(GROK_HOOK_FILE_NAME),
+            r#"{"owner":"user","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo user"}]}]}}"#,
+        )
+        .unwrap();
 
         install_managed_hooks_at(&config_paths, &home).unwrap();
         install_managed_hooks_at(&config_paths, &home).unwrap();
@@ -449,6 +484,11 @@ mod tests {
             trust.matches("trusted_hash = \"sha256:").count(),
             CODEX_EVENTS.len()
         );
+
+        let grok = fs::read_to_string(home.join(".grok/hooks").join(GROK_HOOK_FILE_NAME)).unwrap();
+        assert!(grok.contains("\"owner\": \"user\""));
+        assert!(grok.contains("echo user"));
+        assert_eq!(grok.matches(MANAGED_MARKER).count(), GROK_EVENTS.len());
 
         assert!(
             home.join(".config/opencode/plugins/yttt-agent-status.js")
@@ -477,6 +517,7 @@ mod tests {
         assert!(error.to_string().contains("expected ident"));
         assert_eq!(fs::read_to_string(settings).unwrap(), "not-json");
         assert!(home.join(".codex/hooks.json").is_file());
+        assert!(home.join(".grok/hooks").join(GROK_HOOK_FILE_NAME).is_file());
     }
     #[test]
     fn codex_hash_matches_a_real_approved_hook() {
