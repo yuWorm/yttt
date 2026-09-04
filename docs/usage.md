@@ -720,6 +720,9 @@ All six built-in Agents have managed provider adapters. For configured command p
 2. installs the provider hook or extension without replacing unrelated user configuration;
 3. injects a per-launch instance ID, generation, and random authentication token; and
 4. receives bounded events through the local hook server or authenticated terminal-title frames.
+Grok's native hooks use `snake_case` event names. When Grok's Claude-compatibility loader also
+re-exports yttt's Claude hook, the adapter discards that duplicate before HTTP delivery so the Host
+receives one native Grok lifecycle stream.
 
 OMP extensions are installed locally and bootstrapped under the remote user's home directory for
 SSH panes. Provider hooks, not process names or terminal text, are authoritative for the session,

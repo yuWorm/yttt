@@ -82,7 +82,8 @@
   pane caches and retained snapshots synchronously, rejecting late updates for absent tabs, and
   clearing the Host record before binding a new terminal incarnation.
 - Fixed Grok detection in development builds by installing the shared stateless hook adapter outside
-  the profile runtime and preferring native Grok hooks over Grok-imported Claude compatibility hooks.
+  the profile runtime, accepting Grok's native `snake_case` lifecycle events, and dropping the
+  duplicate Claude-hook delivery that Grok's compatibility loader re-exports.
 - Fixed Host terminal input feeling network-lagged by isolating slow project/file/Git requests from
   the terminal-interactive lane, making control and interactive frame readers cancellation-safe,
   coalescing semantic terminal data to a 16 ms frame cadence, and keeping terminal frames off

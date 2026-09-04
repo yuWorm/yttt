@@ -452,8 +452,9 @@ extension 对断连和非 2xx response 做有上限的指数退避。provider `S
 都是最终状态：前者结束仍位于存活 shell 内的 Agent CLI，后者覆盖整个 PTY 生命周期。即使退出时
 首个 hook 尚未到达，Host 也为该 scope 保留终态 tombstone；随后到达的 hook 不能把
 `Exited/Completed/Failed` 覆盖回 `Running`。新 terminal generation 在绑定前删除旧 Agent
-record，防止复用的 tab/pane 标识继承上一代快照。Grok 原生 hook 优先于其导入的 Claude
-兼容 hook。
+record，防止复用的 tab/pane 标识继承上一代快照。Grok 原生 hook 的 `snake_case` 事件在 provider
+层归一化；Grok 兼容加载器重新导出的 Claude hook 在 adapter 发起 HTTP 请求前丢弃，Host 仍以
+原生 Grok provider 覆盖已经接收的兼容事件。
 
 本地 terminal 的 Agent 存活性由一个 Host-owned 进程树 monitor 统一采样。monitor 从 PTY
 root PID 选择最近的已知 Agent descendant，以两个连续 miss 作为退出确认，因此 Agent 被硬终止

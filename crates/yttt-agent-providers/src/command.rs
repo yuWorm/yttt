@@ -163,31 +163,39 @@ fn normalize_command_hook(
 ) -> Result<Vec<AgentEventKind>, ProviderError> {
     let payload = event.payload;
     let events = match event.name {
-        "SessionStart" => vec![session_started(payload)],
-        "SessionEnd" => vec![AgentEventKind::SessionEnded],
-        "UserPromptSubmit" => {
+        "SessionStart" | "session_start" => vec![session_started(payload)],
+        "SessionEnd" | "session_end" => vec![AgentEventKind::SessionEnded],
+        "UserPromptSubmit" | "user_prompt_submit" => {
             with_session_update(payload, turn_started(payload, &["prompt", "user_prompt"]))
         }
-        "PreToolUse" if is_user_question(payload) => {
+        "PreToolUse" | "pre_tool_use" if is_user_question(payload) => {
             waiting_events(payload, WaitingReason::UserInput)
         }
-        "PreToolUse" => vec![action_started(payload)?],
-        "PermissionRequest" => waiting_events(payload, WaitingReason::Approval),
-        "PostToolUse" => vec![action_finished_with_failure(payload, false)],
-        "PostToolUseFailure" => vec![action_finished_with_failure(payload, true)],
-        "PermissionDenied" => vec![action_finished_with_failure(payload, true)],
-        "Stop" => vec![AgentEventKind::TurnFinished {
+        "PreToolUse" | "pre_tool_use" => vec![action_started(payload)?],
+        "PermissionRequest" | "permission_request" => {
+            waiting_events(payload, WaitingReason::Approval)
+        }
+        "PostToolUse" | "post_tool_use" => {
+            vec![action_finished_with_failure(payload, false)]
+        }
+        "PostToolUseFailure" | "post_tool_use_failure" => {
+            vec![action_finished_with_failure(payload, true)]
+        }
+        "PermissionDenied" | "permission_denied" => {
+            vec![action_finished_with_failure(payload, true)]
+        }
+        "Stop" | "stop" => vec![AgentEventKind::TurnFinished {
             outcome: if bool_field(payload, &["is_interrupt", "interrupted"]) == Some(true) {
                 TurnOutcome::Interrupted
             } else {
                 TurnOutcome::Completed
             },
         }],
-        "StopFailure" => vec![AgentEventKind::TurnFinished {
+        "StopFailure" | "stop_failure" => vec![AgentEventKind::TurnFinished {
             outcome: TurnOutcome::Failed,
         }],
-        "SubagentStart" => child_started(payload)?,
-        "SubagentStop" => child_finished(payload)?,
+        "SubagentStart" | "subagent_start" => child_started(payload)?,
+        "SubagentStop" | "subagent_stop" => child_finished(payload)?,
         name => return Err(ProviderError::UnsupportedEvent(name.to_string())),
     };
     Ok(events)
@@ -514,14 +522,17 @@ mod tests {
     }
 
     #[test]
-    fn grok_maps_native_camel_case_hooks() {
+    fn grok_maps_native_snake_case_hooks() {
         let session = json!({
+            "hookEventName": "session_start",
+            "hook_event_name": "session_start",
             "sessionId": "grok-1",
-            "model": "grok-code-fast"
+            "session_id": "grok-1",
+            "workspaceRoot": "/tmp/project"
         });
         let events = GrokProvider
             .normalize_hook(ProviderHookEvent {
-                name: "SessionStart",
+                name: "session_start",
                 payload: &session,
             })
             .unwrap();
@@ -529,21 +540,23 @@ mod tests {
             &events[0],
             AgentEventKind::SessionStarted { metadata }
                 if metadata.session_id.as_deref() == Some("grok-1")
-                    && metadata.model.as_deref() == Some("grok-code-fast")
         ));
 
         let events = GrokProvider
             .normalize_hook(ProviderHookEvent {
-                name: "SessionEnd",
+                name: "session_end",
                 payload: &session,
             })
             .unwrap();
         assert_eq!(events, vec![AgentEventKind::SessionEnded]);
 
-        let denied = json!({ "toolName": "Bash", "toolInput": { "command": "rm -rf build" } });
+        let denied = json!({
+            "tool_name": "Bash",
+            "tool_input": { "command": "rm -rf build" }
+        });
         let events = GrokProvider
             .normalize_hook(ProviderHookEvent {
-                name: "PermissionDenied",
+                name: "permission_denied",
                 payload: &denied,
             })
             .unwrap();
@@ -554,6 +567,47 @@ mod tests {
                 failed: true,
             }]
         );
+    }
+
+    #[test]
+    fn snake_case_command_hooks_match_canonical_events() {
+        let payload = json!({
+            "session_id": "session-1",
+            "prompt": "Inspect the lifecycle",
+            "tool_name": "Bash",
+            "tool_use_id": "tool-1",
+            "agent_id": "child-1",
+            "agent_type": "task",
+            "description": "Inspect a child task"
+        });
+        for (canonical, native) in [
+            ("SessionStart", "session_start"),
+            ("SessionEnd", "session_end"),
+            ("UserPromptSubmit", "user_prompt_submit"),
+            ("PreToolUse", "pre_tool_use"),
+            ("PermissionRequest", "permission_request"),
+            ("PostToolUse", "post_tool_use"),
+            ("PostToolUseFailure", "post_tool_use_failure"),
+            ("PermissionDenied", "permission_denied"),
+            ("Stop", "stop"),
+            ("StopFailure", "stop_failure"),
+            ("SubagentStart", "subagent_start"),
+            ("SubagentStop", "subagent_stop"),
+        ] {
+            let canonical_events = GrokProvider
+                .normalize_hook(ProviderHookEvent {
+                    name: canonical,
+                    payload: &payload,
+                })
+                .unwrap();
+            let native_events = GrokProvider
+                .normalize_hook(ProviderHookEvent {
+                    name: native,
+                    payload: &payload,
+                })
+                .unwrap();
+            assert_eq!(native_events, canonical_events, "{native}");
+        }
     }
 
     #[test]

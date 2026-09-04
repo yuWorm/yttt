@@ -1228,12 +1228,12 @@ mod tests {
                 (SCOPE_HEADER.to_string(), scope.clone()),
                 (TOKEN_HEADER.to_string(), scope_token(&secret, &scope)),
             ]),
-            body: br#"{"hookEventName":"SessionStart","sessionId":"grok-session"}"#.to_vec(),
+            body: br#"{"hookEventName":"session_start","sessionId":"grok-session","cwd":"/private/tmp","workspaceRoot":"/private/tmp","permissionMode":"bypassPermissions","source":"new","hook_event_name":"session_start","session_id":"grok-session","permission_mode":"bypassPermissions"}"#.to_vec(),
         };
 
         let decoded = decode_request(request, &secret).unwrap();
         assert_eq!(decoded.source, "grok");
-        assert_eq!(decoded.event, "SessionStart");
+        assert_eq!(decoded.event, "session_start");
         assert_eq!(
             decoded.payload.get("sessionId").and_then(Value::as_str),
             Some("grok-session")
@@ -1241,19 +1241,22 @@ mod tests {
     }
 
     #[test]
-    fn native_grok_hooks_supersede_imported_claude_compatibility_hooks() {
+    fn native_grok_snake_case_hooks_supersede_imported_claude_compatibility_hooks() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("grok-provider", "grok-provider");
         let scope = runtime.secure_terminal_environment(&mut terminal);
         let mut updates = runtime.subscribe();
         let session = serde_json::json!({
+            "hookEventName": "session_start",
+            "hook_event_name": "session_start",
             "sessionId": "grok-session",
-            "model": "grok-code-fast"
+            "session_id": "grok-session",
+            "workspaceRoot": "/tmp/project"
         });
 
         ingest_request(
             &runtime.state,
-            unsequenced_request(&scope, "claude", "SessionStart", session.clone()),
+            unsequenced_request(&scope, "claude", "session_start", session.clone()),
         )
         .unwrap();
         let compatibility = updates.try_recv().unwrap();
@@ -1261,7 +1264,7 @@ mod tests {
 
         ingest_request(
             &runtime.state,
-            unsequenced_request(&scope, "grok", "SessionStart", session.clone()),
+            unsequenced_request(&scope, "grok", "session_start", session.clone()),
         )
         .unwrap();
         let native = updates.try_recv().unwrap();
@@ -1270,7 +1273,7 @@ mod tests {
 
         ingest_request(
             &runtime.state,
-            unsequenced_request(&scope, "claude", "UserPromptSubmit", session.clone()),
+            unsequenced_request(&scope, "claude", "user_prompt_submit", session.clone()),
         )
         .unwrap();
         assert!(updates.try_recv().is_err());
@@ -1284,7 +1287,7 @@ mod tests {
 
         ingest_request(
             &runtime.state,
-            unsequenced_request(&scope, "grok", "SessionEnd", session.clone()),
+            unsequenced_request(&scope, "grok", "session_end", session),
         )
         .unwrap();
         let exited = updates.try_recv().unwrap();
@@ -1292,7 +1295,12 @@ mod tests {
 
         ingest_request(
             &runtime.state,
-            unsequenced_request(&scope, "claude", "SessionStart", session),
+            unsequenced_request(
+                &scope,
+                "claude",
+                "SessionStart",
+                serde_json::json!({ "session_id": "claude-session" }),
+            ),
         )
         .unwrap();
         let claude = updates.try_recv().unwrap();

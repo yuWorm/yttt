@@ -433,7 +433,17 @@ if [ -z "$provider" ] || [ -z "$YTTT_AGENT_HOOK_ENDPOINT" ] || [ -z "$YTTT_AGENT
   command -p cat >/dev/null 2>&1 || :
   exit 0
 fi
-curl --silent --show-error --max-time 2 --request POST \
+body=$(command -p cat) || exit 0
+if [ "$provider" = "claude" ]; then
+  case "$body" in
+    '{"hookEventName":'*)
+      case "$body" in
+        *',"hook_event_name":'*) exit 0 ;;
+      esac
+      ;;
+  esac
+fi
+printf '%s' "$body" | curl --silent --show-error --max-time 2 --request POST \
   --header "Content-Type: application/json" \
   --header "X-Yttt-Agent-Hook-Token: $YTTT_AGENT_HOOK_TOKEN" \
   --header "X-Yttt-Agent-Hook-Scope: $YTTT_AGENT_HOOK_SCOPE" \
@@ -446,6 +456,7 @@ const WINDOWS_HOOK_SOURCE: &str = r#"param([string]$Provider)
 if (-not $Provider -or -not $env:YTTT_AGENT_HOOK_ENDPOINT -or -not $env:YTTT_AGENT_HOOK_TOKEN -or -not $env:YTTT_AGENT_HOOK_SCOPE) { [Console]::In.ReadToEnd() | Out-Null; exit 0 }
 try {
   $body = [Console]::In.ReadToEnd()
+  if ($Provider -eq "claude" -and $body -match '^\s*\{\s*"hookEventName"\s*:' -and $body -match '"hook_event_name"\s*:') { exit 0 }
   Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Method Post -Uri "$env:YTTT_AGENT_HOOK_ENDPOINT/hook/$Provider" -Headers @{ "X-Yttt-Agent-Hook-Token" = $env:YTTT_AGENT_HOOK_TOKEN; "X-Yttt-Agent-Hook-Scope" = $env:YTTT_AGENT_HOOK_SCOPE } -ContentType "application/json" -Body $body | Out-Null
 } catch {}
 exit 0
@@ -454,6 +465,13 @@ exit 0
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
+
+    #[cfg(unix)]
+    use std::{
+        io::Write as _,
+        os::unix::fs::PermissionsExt as _,
+        process::{Command, Stdio},
+    };
 
     use super::*;
 
@@ -472,6 +490,57 @@ mod tests {
             EnvironmentKind::Development,
             true
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn posix_adapter_ignores_claude_hooks_reexported_by_grok() {
+        let temp = TempDir::new().unwrap();
+        let script = temp.path().join(MANAGED_HOOK_FILE_NAME);
+        fs::write(&script, POSIX_HOOK_SOURCE).unwrap();
+        let bin = temp.path().join("bin");
+        fs::create_dir(&bin).unwrap();
+        let fake_curl = bin.join("curl");
+        fs::write(
+            &fake_curl,
+            "#!/bin/sh\ncommand -p cat > \"$YTTT_TEST_CAPTURE\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&fake_curl, fs::Permissions::from_mode(0o700)).unwrap();
+        let capture = temp.path().join("captured.json");
+        let path = format!("{}:/usr/bin:/bin", bin.display());
+        let run = |provider: &str, payload: &str| {
+            let mut child = Command::new("/bin/sh")
+                .arg(&script)
+                .arg(provider)
+                .env("PATH", &path)
+                .env("YTTT_AGENT_HOOK_ENDPOINT", "http://127.0.0.1:1")
+                .env("YTTT_AGENT_HOOK_TOKEN", "token")
+                .env("YTTT_AGENT_HOOK_SCOPE", "scope")
+                .env("YTTT_TEST_CAPTURE", &capture)
+                .stdin(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(payload.as_bytes())
+                .unwrap();
+            assert!(child.wait().unwrap().success());
+        };
+        let grok_payload = r#"{"hookEventName":"session_start","workspaceRoot":"/tmp","hook_event_name":"session_start"}"#;
+
+        run("claude", grok_payload);
+        assert!(!capture.exists());
+
+        let claude_payload = r#"{"hook_event_name":"UserPromptSubmit","session_id":"claude-1","prompt":"{\"hookEventName\":\"session_start\",\"workspaceRoot\":\"/tmp\"}"}"#;
+        run("claude", claude_payload);
+        assert_eq!(fs::read_to_string(&capture).unwrap(), claude_payload);
+        fs::remove_file(&capture).unwrap();
+
+        run("grok", grok_payload);
+        assert_eq!(fs::read_to_string(capture).unwrap(), grok_payload);
     }
 
     #[test]
