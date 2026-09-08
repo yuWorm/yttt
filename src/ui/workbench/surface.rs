@@ -1385,6 +1385,22 @@ impl WorkbenchView {
         }
         contexts.retain(|context| {
             let key = terminal_pane_key(&context.project_id, &context.tab_id, &context.pane.id);
+            if self.terminal.host_runtime.as_ref().is_some()
+                && self
+                    .workspace
+                    .project(&ProjectId::new(&context.project_id))
+                    .and_then(|project| project.tab_state(&context.tab_id))
+                    .and_then(|tab| {
+                        tab.pane_states
+                            .iter()
+                            .find(|pane| pane.pane_id == context.pane.id)
+                    })
+                    .is_some_and(|pane| {
+                        pane.process_state == yttt_core::model::workspace::PaneProcessState::Exited
+                    })
+            {
+                return false;
+            }
             !self.terminal.terminal_panes.contains_key(&key)
         });
         contexts
@@ -1413,6 +1429,9 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.workspace_is_loading() {
+            return;
+        }
         for context in self.pending_eager_terminal_pane_contexts() {
             self.ensure_terminal_pane(context, window, cx);
         }
@@ -1502,6 +1521,53 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
+        let remote_lost = self.terminal.host_runtime.as_ref().is_some()
+            && self
+                .workspace
+                .project(&ProjectId::new(input.project_id))
+                .and_then(|project| project.tab_state(input.tab_id))
+                .and_then(|tab| {
+                    tab.pane_states
+                        .iter()
+                        .find(|pane| pane.pane_id == input.pane.id)
+                })
+                .is_some_and(|pane| {
+                    pane.process_state == yttt_core::model::workspace::PaneProcessState::Exited
+                })
+            && !self
+                .terminal
+                .terminal_panes
+                .contains_key(&terminal_pane_key(
+                    input.project_id,
+                    input.tab_id,
+                    &input.pane.id,
+                ));
+        if remote_lost {
+            let project_id = ProjectId::new(input.project_id);
+            let tab_id = input.tab_id.to_string();
+            let pane_id = input.pane.id.clone();
+            return div()
+                .flex()
+                .flex_1()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap_3()
+                .child("Remote process ended or was lost after Host restart.")
+                .child(
+                    gpui_component::button::Button::new("restart-lost-remote-pane")
+                        .label("Start a new process")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Err(error) =
+                                this.workspace
+                                    .mark_pane_running(&project_id, &tab_id, &pane_id)
+                            {
+                                this.load_error = Some(error.to_string());
+                            }
+                            cx.notify();
+                        })),
+                );
+        }
         let context = TerminalPaneContext {
             project_id: input.project_id.to_string(),
             project_path: input.project_path.to_path_buf(),

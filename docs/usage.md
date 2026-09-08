@@ -33,6 +33,17 @@ Completing onboarding sets `general.onboarding_completed = true`; subsequent lau
 to the workspace. Projects opened afterward inherit the generated global default unless they
 provide a project or personal layout override.
 
+Normal application launches remain local. The bottom status bar identifies the current
+environment; connecting a remote service never replaces the current local window.
+Use **Remote services** on the homepage to manage SSH Server connections or open the
+remembered TLS Host connection list. Connecting opens an independent Client window.
+
+Both local and remote windows restore their Host's confirmed workspace state before starting
+terminal/Agent views. A workspace with opened projects goes directly to its project page; a
+confirmed empty workspace goes to the initial project menu, even when recent-project history
+exists. Multiple saved workspaces restore separately. Explicitly opening a directory or a new
+empty window remains distinct from restoring a saved workspace.
+
 For onboarding development or demos, force the flow even after it has been completed:
 
 ```sh
@@ -53,8 +64,11 @@ profile forwards its open request to the existing desktop shell instead of creat
 On macOS and Windows, the tray menu exposes **Open yttt**, **New Window**, **Open Logs**, current
 Host terminal/client/job counts, **Start Host**, **Stop Host If Idle**, **Restart Host If Idle**,
 **Quit Desktop**, and **Quit All**. Safe stop and restart return `Busy` while resources are active;
-they never kill those resources. **Quit Desktop** leaves the Host running, while **Quit All**
-explicitly force-stops the Host before exiting the desktop.
+they never kill those resources. **Quit Desktop** uses the Host's actual lifetime: it stops a
+`DesktopOwned` Host, its network listener, terminals and Agent tasks, but only disconnects from
+an `Independent` Host. **Quit All** explicitly stops either kind. The confirmation explains the
+consequences; cancellation leaves the desktop owner connected. Confirmed workspaces and drafts
+survive Host shutdown.
 
 Linux and environments without a usable tray retain the same control path through CLI commands:
 
@@ -140,6 +154,54 @@ Directories load lazily. Refresh invalidates stale scans and reloads the root pl
 expanded directories. Git status decorates paths when available. Hidden entries are governed
 by `project_panel.show_hidden`.
 
+### Connect to an existing desktop Host
+
+Use this path to access computer A's already-running yttt from B without deploying another Host:
+
+1. On A, open **Settings → Permissions → Remote access to this computer**. Access is off by
+   default; the initial address is `127.0.0.1:43123`. Enable only after the work windows have
+   published their state. A port conflict leaves the listener disabled.
+2. Copy connection information on A and transfer it privately. It includes the Host certificate,
+   stable environment/profile identity and a work credential—not A's local administration token.
+3. Forward A's listening TCP port using a general-purpose TCP tunnel. Keep the loopback bind when
+   the forwarder's endpoint runs on A. Binding another interface requires explicit confirmation
+   and appropriate firewall protection.
+4. On B, run **Connect to existing yttt** from the command palette. Enter the address reachable on
+   B (for example `127.0.0.1:54321`) and paste A's connection information, limited to 8 KiB.
+   Optional remembered credentials use the OS keychain. A keychain error does not fall back to
+   plaintext storage.
+5. The separate Client verifies TLS 1.3, the imported certificate and environment before using
+   the work credential. The address is a route, not Host identity: a forwarded `localhost`
+   address is valid. No SSH login, binary deployment, or Server startup happens on this path.
+6. Choose observation or profile-wide control. All saved work windows restore under stable
+   workspace IDs, while B's original local windows remain attached to B.
+
+**Ownership and handoff.** Settings, keybindings, themes, layouts, files and recoverable drafts
+belong to A's Host and original config root. Device administration, login-startup consent and
+credentials are not shared configuration. One authenticated Client session controls the entire
+profile across all its windows. During normal handoff the old Client freezes shared editing and
+terminal input, publishes all windows, then relinquishes control. A save failure cancels handoff.
+The five-second deadline never automatically grants control: **Force takeover** explicitly chooses
+the last durable state. The former controller remains an observer; reconnecting does not replay
+old mutations or automatically regain input authority.
+
+**Recovery limits.** Draft bodies are separate from layout manifests: up to 6 MiB per document,
+64 MiB per workspace and 1 MiB per manifest. An oversized or failed publication remains an error;
+unpublished edits are not advertised as saved. Host restart restores confirmed windows and drafts
+but shows lost terminal processes as exited instead of rerunning them.
+
+**Local management.** A can reclaim control, disconnect all TCP sessions, change the address, reset
+credentials or disable access. Closing the settings page or a work window does not close the
+listener. Disable and reset revoke every TCP channel but preserve existing tasks and do not affect
+the separate SSH work entrance. If persisting a disable fails, the effective closed state and the
+unsaved preference are reported separately; the previous preference may apply after restart.
+Remote windows cannot manage A's listener or login startup.
+
+Quitting A's desktop-owned Host stops remote access and running tasks after confirmation.
+Closing B's remote windows only detaches B. See [Desktop and Host Lifecycle](#desktop-and-host-lifecycle)
+for independent background Hosts. TCP forwarding was exercised with a generic local byte forwarder;
+this is not certification of any particular third-party tunnel product.
+
 ### SSH projects
 
 Run **Open SSH Project** from the command palette, the empty-workbench action, or the project
@@ -148,7 +210,7 @@ sidebar menu. This opens a dedicated picker instead of the SSH settings page:
 1. Select a saved connection, or choose **New connection**.
 2. Enter the host, port, user, optional starting root, and authentication details.
 3. Accept or reject an unknown server fingerprint.
-4. Browse remote directories over SFTP and open the current directory.
+4. Continue in the separate remote Client, browse Host directories, and open a project.
 
 Authentication modes:
 
@@ -159,30 +221,40 @@ Authentication modes:
 - **Password**: use the password exactly as entered; **Remember password** writes it to the
   operating-system credential store, never to `ssh-connections.toml`.
 
-Connecting verifies the server key against OpenSSH `known_hosts`. A new key opens a blocking
-Trust/Reject dialog with an option to save it; a changed known key is rejected. The directory
-browser starts at the saved root or the remote home directory and lists only directories. The
-opened directory becomes the hard SFTP boundary: canonicalized reads and saves cannot escape it,
-and symlinked directories are listed but not traversed. Use **SSH connections** in Settings only
-when managing saved endpoints outside the open flow.
+Connecting verifies the server key against yttt's `ssh-host-keys.toml`. Unknown or changed keys
+require explicit approval; OpenSSH's `known_hosts` is not modified. Saved endpoint metadata and
+OS-keychain credentials remain local. The remote window always labels its SSH endpoint.
 
-Recent SSH projects are marked **Remote/SSH**. Selecting one automatically reconnects its saved
-connection, validates the remote root over SFTP, and opens it; connection or root failures remain
-in the picker with retry and credential-edit actions.
+yttt deploys the matching standalone `yttt-server` release into the remote user's
+`~/.local/share/yttt/server/<version>/<platform>-<architecture>/` directory. Linux and macOS on
+x86_64/aarch64 are supported. SSH must permit direct Unix-socket forwarding. Release downloads
+are checked against `SHA256SUMS`; the Host itself has no GUI dependency or default public listener.
+The Server descriptor exposes only a dedicated `work.sock` and work token. Its local administration
+socket and token are separate; even a same-user SSH work connection cannot become a desktop owner
+or invoke device administration.
+An incompatible idle Host can be replaced; an incompatible busy Host refuses upgrade with its
+resource blockers instead of killing work.
 
-Remote terminal panes request a PTY on the same authenticated SSH transport. The project tree,
-editor reads, and conflict-checked temporary-file saves share its SFTP subsystem. Disconnecting
-closes those sessions. Reconnecting refreshes expanded tree directories. Restored remote projects
-remain visible while disconnected, but terminal and file operations require reconnecting the saved
-connection.
+The remote Host owns configuration, default and personal layouts, project `.yttt` files, Git,
+recursive project watching, terminal PTYs, Agent hooks and Agent history. **Open Project** inside
+a remote Client browses the Host filesystem, including directory creation; it never opens a
+local native folder dialog. Settings, theme and keybinding changes affect only that environment.
+Manage SSH endpoints from the local Client.
 
-Git status decorations, branch switching, and the diff panel execute `git` inside the configured
-remote root over non-PTY SSH command channels. Status refreshes after opening or reconnecting,
-manual tree refreshes, remote saves, and tree mutations.
+Remote workspace snapshots include project/tab/group/pane layout, active selection, tree state,
+editor state and unsaved drafts. A save is acknowledged only after durable Host persistence.
+Revision conflicts and disk failures remain visible rather than claiming success; closing with
+an unconfirmed workspace save requires keeping the window open or explicitly discarding that save.
 
-SSH-backed projects use the global default layout; project-local and personal layout files are
-local-project features. Recursive filesystem watching is local-only. Remote open documents and Git
-status are rechecked during tree refreshes rather than watched continuously.
+A second Client can restore the same environment after explicitly taking control. The old Client
+then loses mutation authority, including terminal input, file/config writes and workspace commits.
+Disconnecting or exiting a remote Client leaves Host processes alive. A Host or machine restart
+restores persisted layout and drafts but cannot resurrect a PTY: missing processes are shown as
+exited and require **Start a new process**, never automatic rerun.
+
+Legacy recent SSH entries remain available and launch the new remote Client using their saved
+endpoint/root. They are skipped during local workspace auto-restoration; no local settings or
+old mixed-environment layout is silently copied to the remote environment.
 
 ### Code navigation, folding, and search
 
@@ -228,10 +300,10 @@ Discard and Continue, or Cancel. A save failure leaves the file, project, or win
 - The maximum file size is 6 MiB.
 - Canonical paths must remain inside the local or configured remote project root.
 - Symlinked directories are shown but not traversed.
-- Local active projects are watched recursively. Create, modify, and remove events refresh
-  expanded tree directories, open-document disk state, and Git status after a short debounce.
-- Create, rename, and delete work in local and SSH trees. Copy/move paste works only between local
-  projects; operations involving an SSH project are rejected.
+- Active projects are watched recursively by their Host. Create, modify, and remove events
+  refresh expanded tree directories, open-document disk state, and Git status.
+- Create, rename, delete and copy/move operate within one Host environment. Local and remote
+  Clients do not perform implicit cross-environment file transfers.
 
 ## Desktop Permissions
 
@@ -704,15 +776,15 @@ A pane is treated as an agent pane when:
 - `kind = "agent"` is set in layout TOML;
 - the configured command basename is one of the six onboarding Agents: `codex`, `claude`, `grok`
   (including the `groky` alias), `opencode`, `pi`, or `omp`; or
-- a local shell pane has a live process-tree match for one of those commands. This last path
+- a Host-owned shell pane has a live process-tree match for one of those commands. This last path
   detects an Agent started manually after opening a new tab or pane.
 
 Host-owned local process discovery samples all pane roots in one shared monitor, recognizes native
 executables plus the Node/Bun package paths used by the script-backed CLIs, and chooses the
 nearest matching descendant. Two missed samples end the detected run, avoiding false completion
 during launcher handoff while still detecting a hard-killed Agent whose parent shell remains alive.
-SSH panes have no local process tree, so manual Agent discovery there still requires a provider
-hook.
+Remote workspace panes use the remote Host's process tree, so the same discovery and hard-exit
+cleanup apply without inspecting processes on the desktop machine.
 
 All six built-in Agents have managed provider adapters. For configured command panes, yttt:
 
@@ -724,11 +796,11 @@ Grok's native hooks use `snake_case` event names. When Grok's Claude-compatibili
 re-exports yttt's Claude hook, the adapter discards that duplicate before HTTP delivery so the Host
 receives one native Grok lifecycle stream.
 
-OMP extensions are installed locally and bootstrapped under the remote user's home directory for
-SSH panes. Provider hooks, not process names or terminal text, are authoritative for the session,
+Provider hooks and OMP extensions are installed in the active Host user's home directory.
+Provider hooks, not process names or terminal text, are authoritative for the session,
 active task, tool action, waiting reason, turn completion, and child-agent lifecycle. Process
 discovery and start/exit events remain the fallback for startup, interruption, failure, and
-manually launched local Agents.
+manually launched Agents in either environment.
 
 The normalized status model includes:
 
@@ -813,7 +885,7 @@ Run these before marking a product phase complete:
 - The project tree and text editor are not a general-purpose file manager or full IDE.
 - File editing is limited to regular UTF-8 files up to 6 MiB. Continuous filesystem watching is
   limited to the active project; inactive projects refresh when selected.
-- Host/Client transport is local IPC only; remote-network clients are not implemented.
+- Remote Clients currently require SSH and a Linux/macOS Host; raw public-network Host listeners are not exposed.
 - A desktop restart reattaches to a surviving Host, but a Host or machine restart cannot resurrect an existing PTY child process.
 - Provider-level task and tool progress requires the managed hook or extension installed for the
   selected agent; commands without one retain process-level fallback status.

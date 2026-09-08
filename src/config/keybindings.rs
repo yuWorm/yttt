@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    fs,
     path::{Path, PathBuf},
 };
 
@@ -206,9 +205,11 @@ pub fn load_keybindings(
     registry: &CommandRegistry,
 ) -> Result<LoadedKeybindings, KeybindingsLoadError> {
     let path = ensure_keybindings_file(paths)?;
-    let source = fs::read_to_string(&path).map_err(|source| KeybindingsLoadError::Read {
-        path: path.clone(),
-        source,
+    let source = crate::config::storage::read_to_string(&path).map_err(|source| {
+        KeybindingsLoadError::Read {
+            path: path.clone(),
+            source,
+        }
     })?;
     let config: KeybindingsConfig =
         toml::from_str(&source).map_err(|source| KeybindingsLoadError::Parse {
@@ -229,7 +230,7 @@ pub fn save_keybindings(
 ) -> Result<PathBuf, KeybindingsSaveError> {
     let path = paths.keybindings_file();
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| {
+        crate::config::storage::create_dir_all(parent).map_err(|source| {
             KeybindingsSaveError::CreateConfigDirectory {
                 path: parent.to_path_buf(),
                 source,
@@ -252,12 +253,12 @@ pub fn save_keybindings(
 
 pub fn ensure_keybindings_file(paths: &AppConfigPaths) -> Result<PathBuf, KeybindingsLoadError> {
     let path = paths.keybindings_file();
-    if path.exists() {
+    if crate::config::storage::exists(&path) {
         return Ok(path);
     }
 
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| {
+        crate::config::storage::create_dir_all(parent).map_err(|source| {
             KeybindingsLoadError::CreateConfigDirectory {
                 path: parent.to_path_buf(),
                 source,

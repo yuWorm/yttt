@@ -751,6 +751,8 @@ PY
     --process-role=host \
     --profile-id performance \
     --runtime-root "$profile_root/runtime" \
+    --state-root "$profile_root/state" \
+    --config-root "$profile_root/config" \
     --auth-token-file "$auth_token" \
     --ssh-host-keys-file "$profile_root/config/ssh-host-keys.toml" \
     --credential-namespace dev.yttt.ssh.performance \

@@ -3943,6 +3943,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -3951,13 +3952,16 @@ version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
 dependencies = [
+ "base64 0.22.1",
  "bytes",
  "futures-channel",
  "futures-util",
  "http",
  "http-body",
  "hyper",
+ "ipnet",
  "libc",
+ "percent-encoding",
  "pin-project-lite",
  "socket2",
  "tokio",
@@ -5881,6 +5885,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pem"
+version = "3.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
+dependencies = [
+ "base64 0.22.1",
+ "serde_core",
+]
+
+[[package]]
 name = "pem-rfc7468"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6867,6 +6881,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rcgen"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
+dependencies = [
+ "pem",
+ "ring",
+ "rustls-pki-types",
+ "time",
+ "yasna",
+]
+
+[[package]]
 name = "read-fonts"
 version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6993,6 +7020,46 @@ name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
+
+[[package]]
+name = "reqwest"
+version = "0.12.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "js-sys",
+ "log",
+ "percent-encoding",
+ "pin-project-lite",
+ "quinn",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sync_wrapper",
+ "tokio",
+ "tokio-rustls",
+ "tower",
+ "tower-http",
+ "tower-service",
+ "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "webpki-roots",
+]
 
 [[package]]
 name = "reqwest_client"
@@ -8975,6 +9042,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "tower-http"
+version = "0.6.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
+dependencies = [
+ "bitflags 2.13.0",
+ "bytes",
+ "futures-util",
+ "http",
+ "http-body",
+ "pin-project-lite",
+ "tower",
+ "tower-layer",
+ "tower-service",
+ "url",
+]
+
+[[package]]
 name = "tower-layer"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10175,6 +10260,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "webpki-roots"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11228,6 +11322,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 
 [[package]]
+name = "yasna"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
+dependencies = [
+ "time",
+]
+
+[[package]]
 name = "yazi"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11289,6 +11392,8 @@ dependencies = [
  "notify-rust",
  "nucleo-matcher",
  "objc",
+ "parking_lot",
+ "reqwest",
  "reqwest_client",
  "semver",
  "serde",
@@ -11336,8 +11441,11 @@ dependencies = [
  "yttt-host",
  "yttt-project-core",
  "yttt-protocol",
+ "yttt-ssh",
  "yttt-terminal",
+ "yttt-transport",
  "yttt-transport-local",
+ "yttt-transport-tls",
  "yttt-ui",
  "zeroize",
 ]
@@ -11356,7 +11464,11 @@ dependencies = [
 name = "yttt-agent-providers"
 version = "0.2.0"
 dependencies = [
+ "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
  "yttt-agent-core",
 ]
 
@@ -11377,6 +11489,7 @@ name = "yttt-client-core"
 version = "0.2.0"
 dependencies = [
  "parking_lot",
+ "rcgen",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
@@ -11387,6 +11500,7 @@ dependencies = [
  "yttt-protocol",
  "yttt-transport",
  "yttt-transport-local",
+ "yttt-transport-tls",
 ]
 
 [[package]]
@@ -11412,6 +11526,8 @@ dependencies = [
  "notify",
  "parking_lot",
  "portable-pty",
+ "rand 0.8.6",
+ "rcgen",
  "rustix 1.1.4",
  "serde",
  "serde_json",
@@ -11421,6 +11537,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "toml 0.8.23",
  "uuid",
  "yttt-agent-core",
  "yttt-agent-providers",
@@ -11430,6 +11547,7 @@ dependencies = [
  "yttt-ssh",
  "yttt-terminal-core",
  "yttt-transport",
+ "yttt-transport-tls",
  "zeroize",
 ]
 
@@ -11453,9 +11571,30 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.18",
  "yttt-agent-core",
  "yttt-core",
+ "zeroize",
+]
+
+[[package]]
+name = "yttt-server"
+version = "0.2.0"
+dependencies = [
+ "fs2",
+ "rand 0.8.6",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "yttt-core",
+ "yttt-host",
+ "yttt-protocol",
+ "yttt-transport",
+ "yttt-transport-local",
  "zeroize",
 ]
 
@@ -11476,6 +11615,7 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "yttt-core",
  "yttt-protocol",
+ "yttt-transport",
  "zeroize",
 ]
 
@@ -11538,6 +11678,17 @@ dependencies = [
  "tokio",
  "windows-sys 0.61.2",
  "yttt-core",
+ "yttt-protocol",
+ "yttt-transport",
+]
+
+[[package]]
+name = "yttt-transport-tls"
+version = "0.2.0"
+dependencies = [
+ "rustls",
+ "tokio",
+ "tokio-rustls",
  "yttt-protocol",
  "yttt-transport",
 ]

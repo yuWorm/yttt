@@ -50,11 +50,13 @@ pub struct AppConfigPaths {
     environment: EnvironmentKind,
     project_config: ProjectConfigStore,
     agent_sessions: AgentSessionAccess,
+    profile: Option<AppProfile>,
 }
 
 impl AppConfigPaths {
     pub fn from_config_dir(config_dir: impl Into<PathBuf>) -> Self {
         let config_dir = config_dir.into();
+        super::storage::allow_test_root(&config_dir);
         Self {
             project_config: ProjectConfigStore::new(
                 ProjectConfigPolicy::Normal,
@@ -63,6 +65,7 @@ impl AppConfigPaths {
             config_dir,
             environment: EnvironmentKind::Test,
             agent_sessions: AgentSessionAccess::disabled(),
+            profile: None,
         }
     }
 
@@ -71,6 +74,10 @@ impl AppConfigPaths {
     }
 
     pub fn from_profile(profile: &AppProfile) -> Self {
+        if profile.environment() == EnvironmentKind::Test {
+            super::storage::allow_test_root(&profile.paths().config);
+            super::storage::allow_test_root(&profile.paths().state);
+        }
         Self {
             config_dir: profile.paths().config.clone(),
             environment: profile.environment(),
@@ -79,7 +86,12 @@ impl AppConfigPaths {
                 profile.paths().state.join("project-config-overlay"),
             ),
             agent_sessions: profile.agent_sessions().clone(),
+            profile: Some(profile.clone()),
         }
+    }
+
+    pub fn profile(&self) -> Option<&AppProfile> {
+        self.profile.as_ref()
     }
 
     pub fn config_dir(&self) -> &Path {
@@ -99,10 +111,16 @@ impl AppConfigPaths {
     }
 
     pub fn project_layout_file(&self, project_path: &Path) -> PathBuf {
+        if self.environment == EnvironmentKind::Test {
+            super::storage::allow_test_root(project_path);
+        }
         self.project_config.project_layout_file(project_path)
     }
 
     pub fn project_layout_write_file(&self, project_path: &Path) -> Option<PathBuf> {
+        if self.environment == EnvironmentKind::Test {
+            super::storage::allow_test_root(project_path);
+        }
         self.project_config.project_layout_write_file(project_path)
     }
 
@@ -111,6 +129,9 @@ impl AppConfigPaths {
     }
 
     pub fn local_project_dir(&self, project_path: &Path) -> PathBuf {
+        if self.environment == EnvironmentKind::Test {
+            super::storage::allow_test_root(project_path);
+        }
         let project_path =
             canonicalize_path(project_path).unwrap_or_else(|_| project_path.to_path_buf());
         self.config_dir
@@ -172,7 +193,7 @@ impl AppConfigPaths {
 }
 
 pub fn canonicalize_path(path: &Path) -> io::Result<PathBuf> {
-    dunce::canonicalize(path)
+    super::storage::canonicalize(path)
 }
 
 pub fn display_path(path: &Path) -> String {

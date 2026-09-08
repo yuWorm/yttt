@@ -59,6 +59,9 @@ pub struct ClientIdentity {
     pub profile_id: ProfileId,
     pub client_instance_id: ClientInstanceId,
     pub host_epoch_hint: Option<u64>,
+    pub expected_environment: Option<String>,
+    pub credential_generation: u64,
+    pub session_nonce: Nonce,
     pub can_force_stop: bool,
     pub channel: ConnectionChannel,
     pub terminal_session_id: Option<yttt_core::model::ids::TerminalSessionId>,
@@ -70,6 +73,9 @@ pub struct HostIdentity {
     pub lifecycle_supported: ProtocolRange,
     pub build: BuildIdentity,
     pub profile_id: ProfileId,
+    pub environment_id: String,
+    pub credential_generation: u64,
+    pub ingress: IngressKind,
     pub host_id: HostId,
     pub host_epoch: u64,
     pub connection_sequence: u64,
@@ -82,6 +88,7 @@ pub struct AuthenticatedClient {
     pub can_force_stop: bool,
     pub channel: ConnectionChannel,
     pub terminal_session_id: Option<yttt_core::model::ids::TerminalSessionId>,
+    pub session: AuthenticatedSession,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,6 +113,37 @@ pub enum HandshakeError {
     IdentityMismatch,
     #[error("handshake authentication failed")]
     AuthenticationFailed,
+}
+
+/// Assigned by the accepting listener, never by a peer's wire role.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum IngressKind {
+    LocalAdmin,
+    TlsWork,
+    SshWork,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuthenticatedSession {
+    pub ingress: IngressKind,
+    pub credential_generation: u64,
+    pub nonce: Nonce,
+}
+
+impl IngressKind {
+    pub fn permits(self, channel: ConnectionChannel, can_force_stop: bool) -> bool {
+        self == Self::LocalAdmin
+            || (!can_force_stop
+                && !matches!(
+                    channel,
+                    ConnectionChannel::DesktopOwner | ConnectionChannel::Lifecycle
+                ))
+    }
+}
+
+/// Generate once per Client session; clone the identity for its other lanes.
+pub fn new_session_nonce() -> Nonce {
+    random_nonce()
 }
 
 pub async fn client_handshake<S>(
@@ -139,6 +177,8 @@ where
         profile_id: identity.profile_id.clone(),
         client_instance_id: identity.client_instance_id.clone(),
         host_epoch_hint: identity.host_epoch_hint,
+        session_nonce: identity.session_nonce,
+        credential_generation: identity.credential_generation,
         can_force_stop: identity.can_force_stop,
         nonce: client_nonce,
         channel: identity.channel,
@@ -151,6 +191,12 @@ where
         _ => return Err(HandshakeError::UnexpectedMessage),
     };
     if challenge.profile_id != identity.profile_id
+        || challenge.client_nonce != client_nonce
+        || challenge.credential_generation != identity.credential_generation
+        || identity
+            .expected_environment
+            .as_ref()
+            .is_some_and(|expected| expected != &challenge.environment_id)
         || identity
             .supported
             .negotiate(ProtocolRange::exact(challenge.selected_version))
@@ -221,6 +267,17 @@ where
             return Err(HandshakeError::UnexpectedMessage);
         }
     };
+    if !identity
+        .ingress
+        .permits(hello.channel, hello.can_force_stop)
+    {
+        reject(stream, RejectReason::PermissionDenied).await;
+        return Err(HandshakeError::Rejected(RejectReason::PermissionDenied));
+    }
+    if hello.credential_generation != identity.credential_generation {
+        reject(stream, RejectReason::AuthenticationFailed).await;
+        return Err(HandshakeError::AuthenticationFailed);
+    }
     if !matches!(
         (
             hello.channel,
@@ -278,6 +335,8 @@ where
         selected_version,
         build: identity.build.clone(),
         profile_id: identity.profile_id.clone(),
+        environment_id: identity.environment_id.clone(),
+        credential_generation: identity.credential_generation,
         host_id: identity.host_id.clone(),
         host_epoch: identity.host_epoch,
         client_nonce: hello.nonce,
@@ -324,6 +383,11 @@ where
         selected_version,
         channel: hello.channel,
         terminal_session_id: hello.terminal_session_id,
+        session: AuthenticatedSession {
+            ingress: identity.ingress,
+            credential_generation: identity.credential_generation,
+            nonce: hello.session_nonce,
+        },
     })
 }
 
@@ -351,23 +415,49 @@ fn verify_mac(token: &AuthToken, payload: &[u8], proof: &AuthMac) -> Result<(), 
 }
 
 fn host_proof_bytes(hello: &ClientHello, challenge: &HostChallenge) -> Vec<u8> {
-    transcript(b"yttt-host-proof-v1", hello, challenge)
+    transcript(b"yttt-host-proof-v2", hello, challenge)
 }
 
 fn client_proof_bytes(hello: &ClientHello, challenge: &HostChallenge) -> Vec<u8> {
-    transcript(b"yttt-client-proof-v1", hello, challenge)
+    transcript(b"yttt-client-proof-v2", hello, challenge)
 }
 
 fn transcript(label: &[u8], hello: &ClientHello, challenge: &HostChallenge) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(256);
     push_field(&mut bytes, label);
     push_field(&mut bytes, hello.profile_id.as_str().as_bytes());
+    push_field(&mut bytes, challenge.profile_id.as_str().as_bytes());
+    push_field(&mut bytes, challenge.environment_id.as_bytes());
+    bytes.extend_from_slice(&hello.supported.minimum.to_be_bytes());
+    bytes.extend_from_slice(&hello.supported.maximum.to_be_bytes());
+    bytes.extend_from_slice(&hello.credential_generation.to_be_bytes());
+    bytes.extend_from_slice(&challenge.credential_generation.to_be_bytes());
+    bytes.extend_from_slice(&hello.session_nonce.0);
+    bytes.push(u8::from(hello.can_force_stop));
+    bytes.push(match hello.channel {
+        ConnectionChannel::Control => 0,
+        ConnectionChannel::TerminalInteractive => 1,
+        ConnectionChannel::TerminalData => 2,
+        ConnectionChannel::StateEvents => 3,
+        ConnectionChannel::Lifecycle => 4,
+        ConnectionChannel::DesktopOwner => 5,
+    });
+    bytes.push(u8::from(hello.terminal_session_id.is_some()));
+    if let Some(session) = &hello.terminal_session_id {
+        push_field(&mut bytes, session.as_str().as_bytes());
+    }
+    bytes.push(u8::from(hello.host_epoch_hint.is_some()));
+    if let Some(epoch) = hello.host_epoch_hint {
+        bytes.extend_from_slice(&epoch.to_be_bytes());
+    }
     push_field(&mut bytes, hello.client_instance_id.as_str().as_bytes());
     push_field(&mut bytes, challenge.host_id.as_str().as_bytes());
     bytes.extend_from_slice(&challenge.host_epoch.to_be_bytes());
     bytes.extend_from_slice(&challenge.selected_version.to_be_bytes());
     push_build_identity(&mut bytes, &hello.build);
+    push_build_identity(&mut bytes, &challenge.build);
     bytes.extend_from_slice(&hello.nonce.0);
+    bytes.extend_from_slice(&challenge.client_nonce.0);
     bytes.extend_from_slice(&challenge.host_nonce.0);
     bytes
 }

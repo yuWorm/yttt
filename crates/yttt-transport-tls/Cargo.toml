@@ -1,0 +1,11 @@
+[package]
+name = "yttt-transport-tls"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs"] }
+tokio = { version = "1", features = ["net", "time", "io-util"] }
+yttt-protocol = { path = "../yttt-protocol" }
+yttt-transport = { path = "../yttt-transport" }

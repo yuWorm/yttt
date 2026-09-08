@@ -112,23 +112,13 @@ impl AgentSessionRoots {
     }
 
     fn native() -> Option<Self> {
-        let home = non_empty_env_path("HOME").or_else(|| non_empty_env_path("USERPROFILE"))?;
-        let pi_override = non_empty_env_path("PI_CODING_AGENT_SESSION_DIR");
-        let pi_root =
-            non_empty_env_path("PI_CODING_AGENT_DIR").unwrap_or_else(|| home.join(".pi/agent"));
-        let omp_root =
-            non_empty_env_path("PI_CODING_AGENT_DIR").unwrap_or_else(|| home.join(".omp/agent"));
-
+        let roots = yttt_agent_providers::sessions::AgentSessionRoots::native()?;
         Some(Self {
-            codex: non_empty_env_path("CODEX_HOME").unwrap_or_else(|| home.join(".codex")),
-            claude: non_empty_env_path("CLAUDE_CONFIG_DIR").unwrap_or_else(|| home.join(".claude")),
-            grok: non_empty_env_path("GROK_HOME")
-                .unwrap_or_else(|| home.join(".grok"))
-                .join("sessions"),
-            pi: pi_override
-                .clone()
-                .unwrap_or_else(|| pi_root.join("sessions")),
-            omp: pi_override.unwrap_or_else(|| omp_root.join("sessions")),
+            codex: roots.codex,
+            claude: roots.claude,
+            grok: roots.grok,
+            pi: roots.pi,
+            omp: roots.omp,
         })
     }
 }
@@ -333,10 +323,4 @@ impl fmt::Debug for AppProfile {
             )
             .finish_non_exhaustive()
     }
-}
-
-fn non_empty_env_path(name: &str) -> Option<PathBuf> {
-    std::env::var_os(name)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
 }

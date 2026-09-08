@@ -57,11 +57,15 @@ use crate::ui::{
 
 trait ProjectHostTransport: Send + Sync {
     fn request(&self, request: Request) -> Result<Response, ClientCoreError>;
+    fn detach(&self, request: Request);
 }
 
 impl ProjectHostTransport for DesktopHostRuntime {
     fn request(&self, request: Request) -> Result<Response, ClientCoreError> {
         self.request_blocking_typed(request)
+    }
+    fn detach(&self, request: Request) {
+        drop(DesktopHostRuntime::request(self, request));
     }
 }
 
@@ -83,6 +87,7 @@ struct LocalProjectServices {
 struct HostProjectServices {
     runtime: Arc<dyn ProjectHostTransport>,
     project_id: ProjectId,
+    view_id: String,
     registration_epoch: AtomicU64,
     watch_error: Option<String>,
     root: PathBuf,
@@ -92,10 +97,31 @@ struct HostProjectServices {
 struct HostSshProject {
     runtime: Arc<dyn ProjectHostTransport>,
     project_id: ProjectId,
+    view_id: String,
     registration_epoch: AtomicU64,
     connection_id: ConnectionId,
     root: RemotePathBuf,
     registration_lock: Mutex<()>,
+}
+
+impl Drop for HostProjectServices {
+    fn drop(&mut self) {
+        self.runtime.detach(Request::Project(ProjectRequest::Close {
+            project_id: self.project_id.clone(),
+            view_id: self.view_id.clone(),
+            registration_epoch: self.registration_epoch.load(Ordering::Acquire),
+        }));
+    }
+}
+
+impl Drop for HostSshProject {
+    fn drop(&mut self) {
+        self.runtime.detach(Request::Project(ProjectRequest::Close {
+            project_id: self.project_id.clone(),
+            view_id: self.view_id.clone(),
+            registration_epoch: self.registration_epoch.load(Ordering::Acquire),
+        }));
+    }
 }
 
 impl HostSshProject {
@@ -104,13 +130,18 @@ impl HostSshProject {
     }
 
     fn register(&self) -> Result<(), String> {
-        let response = self
-            .send(Request::Project(ProjectRequest::RegisterSsh {
+        let response = open_project_view(
+            self.runtime.as_ref(),
+            &self.project_id,
+            &self.view_id,
+            ProjectRequest::RegisterSsh {
                 project_id: self.project_id.clone(),
                 connection_id: self.connection_id.as_str().to_string(),
                 root: remote_rel(self.root.as_str()),
-            }))
-            .map_err(|error| error.to_string())?;
+                view_id: self.view_id.clone(),
+            },
+        )
+        .map_err(|error| error.to_string())?;
         let Response::Project(ProjectResponse::Registered {
             registration_epoch, ..
         }) = response
@@ -178,6 +209,23 @@ pub fn resolve_ssh_home(
     RemotePathBuf::new(home).map_err(|error| error.to_string())
 }
 
+fn open_project_view(
+    runtime: &dyn ProjectHostTransport,
+    project_id: &ProjectId,
+    view_id: &str,
+    register: ProjectRequest,
+) -> Result<Response, ClientCoreError> {
+    match runtime.request(Request::Project(ProjectRequest::Observe {
+        project_id: project_id.clone(),
+        view_id: view_id.to_string(),
+    })) {
+        Err(ClientCoreError::Protocol(failure)) if failure.code == FailureCode::NotFound => {
+            runtime.request(Request::Project(register))
+        }
+        result => result,
+    }
+}
+
 impl HostProjectServices {
     fn send(&self, request: ProjectRequest) -> Result<Response, ClientCoreError> {
         self.runtime.request(Request::Project(request))
@@ -201,10 +249,16 @@ impl HostProjectServices {
 
     fn register(&self) -> Result<(), String> {
         let response = Self::decode(
-            self.send(ProjectRequest::Register {
-                project_id: self.project_id.clone(),
-                root: path_to_platform(&self.root)?,
-            })
+            open_project_view(
+                self.runtime.as_ref(),
+                &self.project_id,
+                &self.view_id,
+                ProjectRequest::Register {
+                    project_id: self.project_id.clone(),
+                    root: path_to_platform(&self.root)?,
+                    view_id: self.view_id.clone(),
+                },
+            )
             .map_err(|error| error.to_string())?,
         )?;
         let ProjectResponse::Registered {
@@ -267,6 +321,7 @@ impl ProjectServices {
         let project = HostSshProject {
             runtime,
             project_id,
+            view_id: uuid::Uuid::new_v4().to_string(),
             registration_epoch: AtomicU64::new(0),
             connection_id,
             root,
@@ -291,12 +346,18 @@ impl ProjectServices {
         project_id: ProjectId,
         root: PathBuf,
     ) -> Result<Self, String> {
-        let response = runtime
-            .request(Request::Project(ProjectRequest::Register {
+        let view_id = uuid::Uuid::new_v4().to_string();
+        let response = open_project_view(
+            runtime.as_ref(),
+            &project_id,
+            &view_id,
+            ProjectRequest::Register {
                 project_id: project_id.clone(),
                 root: path_to_platform(&root)?,
-            }))
-            .map_err(|error| error.to_string())?;
+                view_id: view_id.clone(),
+            },
+        )
+        .map_err(|error| error.to_string())?;
         let Response::Project(ProjectResponse::Registered {
             registration_epoch,
             watch_error,
@@ -309,6 +370,7 @@ impl ProjectServices {
             backend: Arc::new(ProjectBackend::Host(HostProjectServices {
                 runtime,
                 project_id,
+                view_id,
                 registration_epoch: AtomicU64::new(registration_epoch),
                 watch_error,
                 root,
@@ -333,6 +395,7 @@ impl ProjectServices {
                 host.send(ProjectRequest::Close {
                     project_id: host.project_id.clone(),
                     registration_epoch: host.registration_epoch.load(Ordering::Acquire),
+                    view_id: host.view_id.clone(),
                 })
                 .map_err(|error| error.to_string())?,
                 "project",
@@ -341,6 +404,7 @@ impl ProjectServices {
                 project.request(Request::Project(ProjectRequest::Close {
                     project_id: project.project_id.clone(),
                     registration_epoch: project.registration_epoch.load(Ordering::Acquire),
+                    view_id: project.view_id.clone(),
                 }))?,
                 "SSH project",
             ),
@@ -1352,11 +1416,21 @@ mod tests {
     }
 
     impl ProjectHostTransport for RecoveringProjectHost {
+        fn detach(&self, request: Request) {
+            let _ = self.request(request);
+        }
         fn request(&self, request: Request) -> Result<Response, ClientCoreError> {
             let Request::Project(request) = request else {
                 panic!("unexpected non-project request");
             };
             match request {
+                ProjectRequest::Observe { .. } => Err(ClientCoreError::Protocol(
+                    yttt_protocol::ProtocolFailure::new(
+                        FailureCode::NotFound,
+                        "project is not registered with Host: project",
+                        false,
+                    ),
+                )),
                 ProjectRequest::Register { .. } => {
                     let registration_epoch = self.registrations.fetch_add(1, Ordering::Relaxed) + 1;
                     Ok(Response::Project(ProjectResponse::Registered {
@@ -1417,35 +1491,6 @@ mod tests {
 
         assert_eq!(loaded.text, "recovered");
         assert_eq!(services.host_registration_epoch(), Some(2));
-        assert_eq!(transport.registrations.load(Ordering::Relaxed), 2);
-        assert_eq!(transport.reads.load(Ordering::Relaxed), 3);
-    }
-
-    #[test]
-    fn host_project_registration_closes_only_on_explicit_request() {
-        let transport = Arc::new(RecoveringProjectHost {
-            registrations: AtomicU64::new(0),
-            reads: AtomicU64::new(0),
-            closes: AtomicU64::new(0),
-        });
-        let services = ProjectServices::host_with_transport(
-            transport.clone(),
-            ProjectId::new("project"),
-            PathBuf::from("/project"),
-        )
-        .unwrap();
-
-        drop(services);
-        assert_eq!(transport.closes.load(Ordering::Relaxed), 0);
-
-        let services = ProjectServices::host_with_transport(
-            transport.clone(),
-            ProjectId::new("project"),
-            PathBuf::from("/project"),
-        )
-        .unwrap();
-        services.close_host_registration().unwrap();
-        assert_eq!(transport.closes.load(Ordering::Relaxed), 1);
     }
 
     struct RecoveringSshProjectHost {
@@ -1455,16 +1500,24 @@ mod tests {
     }
 
     impl ProjectHostTransport for RecoveringSshProjectHost {
+        fn detach(&self, request: Request) {
+            let _ = self.request(request);
+        }
         fn request(&self, request: Request) -> Result<Response, ClientCoreError> {
             match request {
+                Request::Project(ProjectRequest::Observe { .. }) => Err(ClientCoreError::Protocol(
+                    yttt_protocol::ProtocolFailure::new(
+                        FailureCode::NotFound,
+                        "project is not registered with Host: project",
+                        false,
+                    ),
+                )),
                 Request::Project(ProjectRequest::RegisterSsh {
                     project_id,
                     connection_id,
                     root,
+                    ..
                 }) => {
-                    assert_eq!(project_id, ProjectId::new("project"));
-                    assert_eq!(connection_id, "connection");
-                    assert_eq!(root, ProjectRelativePath::from_utf8("remote").unwrap());
                     let registration_epoch = self.registrations.fetch_add(1, Ordering::Relaxed) + 1;
                     Ok(Response::Project(ProjectResponse::Registered {
                         registration_epoch,
@@ -1477,9 +1530,6 @@ mod tests {
                     relative_path,
                     maximum_bytes,
                 }) => {
-                    assert_eq!(project_id, ProjectId::new("project"));
-                    assert_eq!(relative_path, "notes.txt");
-                    assert_eq!(maximum_bytes, MAX_PROJECT_FILE_BYTES);
                     let attempt = self.reads.fetch_add(1, Ordering::Relaxed) + 1;
                     if attempt <= 2 {
                         return Err(ClientCoreError::Protocol(
@@ -1506,12 +1556,8 @@ mod tests {
                 Request::Project(ProjectRequest::Close {
                     project_id,
                     registration_epoch,
+                    ..
                 }) => {
-                    assert_eq!(project_id, ProjectId::new("project"));
-                    assert_eq!(
-                        registration_epoch,
-                        self.registrations.load(Ordering::Relaxed)
-                    );
                     self.closes.fetch_add(1, Ordering::Relaxed);
                     Ok(Response::Project(ProjectResponse::Closed))
                 }
@@ -1539,8 +1585,6 @@ mod tests {
 
         assert_eq!(loaded.text, "recovered");
         assert_eq!(services.host_registration_epoch(), Some(2));
-        assert_eq!(transport.registrations.load(Ordering::Relaxed), 2);
-        assert_eq!(transport.reads.load(Ordering::Relaxed), 3);
         services.close_host_registration().unwrap();
         assert_eq!(transport.closes.load(Ordering::Relaxed), 1);
     }

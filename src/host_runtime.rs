@@ -90,9 +90,24 @@ const TERMINAL_PANE_EVENT_QUEUE_CAPACITY: usize = 16;
 pub struct DesktopHostRuntime {
     client: Arc<ClientCore>,
     runtime: tokio::runtime::Runtime,
-    _managed_process: Arc<Mutex<ManagedHostProcess>>,
-    launcher: HostLauncher,
+    lifecycle: DesktopHostLifecycle,
     placement_store: Arc<TerminalPlacementStore>,
+    storage: Arc<crate::host_storage::HostStorage>,
+    coordinator: Arc<crate::session_coordinator::SessionCoordinator>,
+}
+
+enum DesktopHostLifecycle {
+    Local {
+        managed_process: Arc<Mutex<ManagedHostProcess>>,
+        launcher: HostLauncher,
+    },
+    Remote {
+        connector: yttt_transport::SharedConnector,
+        identity: yttt_transport::ClientIdentity,
+        token: yttt_transport::AuthToken,
+        environment: yttt_protocol::workspace::WorkspaceEnvironment,
+        label: String,
+    },
 }
 
 impl DesktopHostRuntime {
@@ -118,9 +133,6 @@ impl DesktopHostRuntime {
             .enable_all()
             .thread_name("yttt-client-core")
             .build()?;
-        let placement_store = Arc::new(TerminalPlacementStore::load(
-            profile.config_paths().terminal_placements_file(),
-        )?);
         let managed_process = runtime.block_on(launcher.launch_or_attach())?;
         let launcher = managed_process.recovery_launcher();
         let managed_process = Arc::new(Mutex::new(managed_process));
@@ -128,6 +140,42 @@ impl DesktopHostRuntime {
             format!("desktop-{}", uuid::Uuid::new_v4()),
         ))?;
         let client = Arc::new(runtime.block_on(ClientCore::connect(connector, identity, token))?);
+        if client
+            .control_status()
+            .is_some_and(|status| status.owner.is_none())
+        {
+            runtime.block_on(client.request(Request::ProfileControl(
+                yttt_protocol::session::ProfileControlRequest::RequestControl,
+            )))?;
+        }
+        let environment = match runtime.block_on(client.request(Request::Workspace(
+            yttt_protocol::workspace::WorkspaceRequest::Environment,
+        )))? {
+            Response::Workspace(yttt_protocol::workspace::WorkspaceResponse::Environment(
+                environment,
+            )) => environment,
+            _ => {
+                return Err(std::io::Error::other(
+                    "Host did not provide its environment descriptor",
+                )
+                .into());
+            }
+        };
+        let config_root = environment
+            .config_root
+            .to_path()
+            .map_err(std::io::Error::other)?;
+        let storage = Arc::new(crate::host_storage::HostStorage::new(
+            client.clone(),
+            runtime.handle().clone(),
+            config_root,
+            environment,
+            false,
+        ));
+        let placement_store = Arc::new(TerminalPlacementStore::load(
+            profile.config_paths().terminal_placements_file(),
+            storage.clone(),
+        )?);
         let mut state = client.subscribe_state();
         let recovery_launcher = launcher.clone();
         let recovered_process = managed_process.clone();
@@ -141,25 +189,183 @@ impl DesktopHostRuntime {
                 }
             }
         });
+        let index = match runtime.block_on(client.request(Request::Workspace(
+            yttt_protocol::workspace::WorkspaceRequest::List,
+        )))? {
+            Response::Workspace(yttt_protocol::workspace::WorkspaceResponse::Workspaces(index)) => {
+                index
+            }
+            _ => {
+                return Err(
+                    std::io::Error::other("Host did not provide its workspace index").into(),
+                );
+            }
+        };
+        let coordinator = crate::session_coordinator::SessionCoordinator::start(
+            client.clone(),
+            runtime.handle(),
+            index,
+        );
         Ok(Arc::new(Self {
             client,
             runtime,
-            _managed_process: managed_process,
-            launcher,
+            lifecycle: DesktopHostLifecycle::Local {
+                managed_process,
+                launcher,
+            },
             placement_store,
+            storage,
+            coordinator,
         }))
+    }
+
+    pub(crate) fn from_remote(
+        runtime: tokio::runtime::Runtime,
+        client: Arc<ClientCore>,
+        storage: Arc<crate::host_storage::HostStorage>,
+        connector: yttt_transport::SharedConnector,
+        identity: yttt_transport::ClientIdentity,
+        token: yttt_transport::AuthToken,
+        environment: yttt_protocol::workspace::WorkspaceEnvironment,
+        label: String,
+        config_paths: &crate::config::paths::AppConfigPaths,
+    ) -> Result<Arc<Self>, DesktopHostRuntimeError> {
+        let placement_store = Arc::new(TerminalPlacementStore::load(
+            config_paths.terminal_placements_file(),
+            storage.clone(),
+        )?);
+        let index = match runtime.block_on(client.request(Request::Workspace(
+            yttt_protocol::workspace::WorkspaceRequest::List,
+        )))? {
+            Response::Workspace(yttt_protocol::workspace::WorkspaceResponse::Workspaces(index)) => {
+                index
+            }
+            _ => {
+                return Err(
+                    std::io::Error::other("Host did not provide its workspace index").into(),
+                );
+            }
+        };
+        let coordinator = crate::session_coordinator::SessionCoordinator::start(
+            client.clone(),
+            runtime.handle(),
+            index,
+        );
+        Ok(Arc::new(Self {
+            client,
+            runtime,
+            lifecycle: DesktopHostLifecycle::Remote {
+                connector,
+                identity,
+                token,
+                environment,
+                label,
+            },
+            placement_store,
+            storage,
+            coordinator,
+        }))
+    }
+
+    pub fn is_remote(&self) -> bool {
+        matches!(self.lifecycle, DesktopHostLifecycle::Remote { .. })
+    }
+
+    pub fn environment_storage(&self) -> Arc<dyn crate::config::storage::ConfigStorage> {
+        self.storage.clone()
+    }
+
+    pub fn remote_label(&self) -> Option<&str> {
+        match &self.lifecycle {
+            DesktopHostLifecycle::Remote { label, .. } => Some(label),
+            DesktopHostLifecycle::Local { .. } => None,
+        }
+    }
+
+    pub fn remote_environment(&self) -> Option<&yttt_protocol::workspace::WorkspaceEnvironment> {
+        match &self.lifecycle {
+            DesktopHostLifecycle::Remote { environment, .. } => Some(environment),
+            DesktopHostLifecycle::Local { .. } => None,
+        }
+    }
+
+    pub fn workspace_request(
+        &self,
+        request: yttt_protocol::workspace::WorkspaceRequest,
+    ) -> Result<yttt_protocol::workspace::WorkspaceResponse, String> {
+        match self.request_blocking(Request::Workspace(request))? {
+            Response::Workspace(response) => Ok(response),
+            _ => Err("Host returned an unexpected workspace response".to_string()),
+        }
     }
 
     pub fn shutdown_client(&self) {
         self.runtime.block_on(self.client.shutdown());
-        self._managed_process
-            .lock()
-            .unwrap()
-            .release_desktop_owner();
+        if let DesktopHostLifecycle::Local {
+            managed_process, ..
+        } = &self.lifecycle
+        {
+            managed_process.lock().unwrap().release_desktop_owner();
+        }
     }
 
     pub fn state(&self) -> ConnectionState {
         self.client.state()
+    }
+
+    pub fn control_status(&self) -> Option<yttt_protocol::session::ControlStatus> {
+        self.client.control_status()
+    }
+
+    pub fn is_controller(&self) -> bool {
+        self.client.is_controller()
+    }
+
+    pub fn shared_editing_enabled(&self) -> bool {
+        self.client.is_controller() && self.preparing_transfer().is_none()
+    }
+
+    pub fn preparing_transfer(&self) -> Option<String> {
+        self.client
+            .control_status()
+            .and_then(|status| status.transfer)
+            .filter(|transfer| transfer.previous_owner.as_ref() == Some(self.client.client_id()))
+            .map(|transfer| transfer.id)
+            .or_else(|| self.coordinator.local_flush())
+    }
+
+    pub fn claim_workspace_view(
+        &self,
+        restore_existing: bool,
+    ) -> Result<crate::session_coordinator::WorkspaceViewLease, String> {
+        self.coordinator
+            .claim(None, restore_existing || self.is_remote())
+    }
+
+    pub fn sharing_ready(&self) -> bool {
+        self.coordinator.sharing_ready()
+    }
+    pub(crate) fn begin_exit_publication(&self) -> String {
+        self.coordinator.begin_local_flush()
+    }
+    pub(crate) fn cancel_exit_publication(&self) {
+        self.coordinator.end_local_flush();
+    }
+    pub(crate) fn exit_publication_ready(&self, id: &str) -> Result<bool, String> {
+        self.coordinator.local_flush_ready(id)
+    }
+
+    pub fn pending_workspace_count(&self) -> usize {
+        self.coordinator.pending_workspace_count()
+    }
+
+    pub fn actual_lifetime(&self) -> yttt_host::HostLifetime {
+        match &self.lifecycle {
+            DesktopHostLifecycle::Local {
+                managed_process, ..
+            } => managed_process.lock().unwrap().actual_lifetime(),
+            DesktopHostLifecycle::Remote { .. } => yttt_host::HostLifetime::Independent,
+        }
     }
 
     pub fn request(&self, request: Request) -> flume::Receiver<Result<Response, ClientCoreError>> {
@@ -183,15 +389,63 @@ impl DesktopHostRuntime {
         can_force_stop: bool,
     ) -> flume::Receiver<Result<LifecycleResponse, HostLaunchError>> {
         let (sender, receiver) = flume::bounded(1);
-        let launcher = self.launcher.clone();
-        self.runtime.spawn(async move {
-            let result = async {
-                let mut client = launcher.connect_lifecycle(can_force_stop).await?;
-                client.request(request).await
+        match &self.lifecycle {
+            DesktopHostLifecycle::Local { launcher, .. } => {
+                let launcher = launcher.clone();
+                self.runtime.spawn(async move {
+                    let result = async {
+                        let mut client = launcher.connect_lifecycle(can_force_stop).await?;
+                        client.request(request).await
+                    }
+                    .await;
+                    let _ = sender.send_async(result).await;
+                });
             }
-            .await;
-            let _ = sender.send_async(result).await;
-        });
+            DesktopHostLifecycle::Remote {
+                connector,
+                identity,
+                token,
+                ..
+            } => {
+                let connector = connector.clone();
+                let mut identity = identity.clone();
+                identity.channel = yttt_protocol::ConnectionChannel::Lifecycle;
+                identity.supported =
+                    yttt_protocol::ProtocolRange::exact(yttt_protocol::LIFECYCLE_PROTOCOL_VERSION);
+                identity.can_force_stop = can_force_stop;
+                let token = token.clone();
+                self.runtime.spawn(async move {
+                    use yttt_transport::TransportConnector;
+                    let result = async {
+                        let mut stream = connector
+                            .connect()
+                            .await
+                            .map_err(|error| HostLaunchError::RequestFailed(error.to_string()))?;
+                        yttt_transport::client_handshake(&mut stream, &identity, &token).await?;
+                        yttt_transport::send_lifecycle(
+                            &mut stream,
+                            &yttt_protocol::LifecycleMessage::Request(
+                                yttt_protocol::LifecycleRequestEnvelope {
+                                    request_id: 1,
+                                    body: request,
+                                },
+                            ),
+                        )
+                        .await?;
+                        match yttt_transport::receive_lifecycle(&mut stream).await? {
+                            yttt_protocol::LifecycleMessage::Response(response)
+                                if response.request_id == 1 =>
+                            {
+                                Ok(response.result)
+                            }
+                            _ => Err(HostLaunchError::UnexpectedMessage),
+                        }
+                    }
+                    .await;
+                    let _ = sender.send_async(result).await;
+                });
+            }
+        }
         receiver
     }
 
@@ -351,6 +605,20 @@ impl DesktopHostRuntime {
         spec: TerminalSpawnSpec,
         catalog: &ResourceCatalog,
     ) -> Result<Request, TerminalRecoveryError> {
+        if !self.shared_editing_enabled() {
+            let placement = catalog
+                .terminals
+                .iter()
+                .find(|placement| placement.session_id == spec.session_id)
+                .ok_or_else(|| {
+                    TerminalRecoveryError::MissingObservedSession(spec.session_id.clone())
+                })?;
+            return Ok(terminal_attach_request(
+                &spec,
+                placement,
+                yttt_protocol::terminal::TerminalLeaseMode::Observer,
+            ));
+        }
         reconcile_terminal_start(&self.placement_store, spec, catalog)
     }
 
@@ -385,10 +653,13 @@ impl DesktopHostRuntime {
                 final_sequence,
             })?;
         let placement_store = self.placement_store.clone();
+        let client = self.client.clone();
         self.runtime.spawn(async move {
             match pending.wait().await {
                 Ok(Response::TerminalExitAcknowledged) => {
-                    if let Err(error) = placement_store.mark_closed(&session_id) {
+                    if client.is_controller()
+                        && let Err(error) = placement_store.mark_closed(&session_id)
+                    {
                         eprintln!("failed to close acknowledged terminal placement: {error}");
                     }
                 }
@@ -521,6 +792,8 @@ pub enum TerminalRecoveryError {
     PendingAddressConflict(TerminalSessionId),
     #[error("terminal session {0} has an unfinished close request")]
     ClosePending(TerminalSessionId),
+    #[error("terminal {0} is not running; only the controller can explicitly start it")]
+    MissingObservedSession(TerminalSessionId),
     #[error(transparent)]
     Persistence(#[from] TerminalPlacementStoreError),
 }
@@ -557,17 +830,11 @@ fn reconcile_terminal_start(
                 placement.session_id.clone(),
             ));
         }
-        let geometry_epoch = placement.geometry_epoch.saturating_add(1).max(1);
-        return Ok(Request::AttachTerminal(AttachTerminal {
-            session_id: placement.session_id.clone(),
-            known_session_epoch: Some(placement.session_epoch),
-            after_sequence: (placement.last_sequence > 0).then_some(placement.last_sequence),
-            mode: yttt_protocol::terminal::TerminalLeaseMode::Interactive,
-            geometry: spec.geometry,
-            geometry_epoch,
-            query_palette: spec.query_palette.clone(),
-            palette_revision: spec.palette_revision,
-        }));
+        return Ok(terminal_attach_request(
+            &spec,
+            placement,
+            yttt_protocol::terminal::TerminalLeaseMode::Interactive,
+        ));
     }
 
     if let Some(DurableTerminalPlacement::OpenPending {
@@ -582,6 +849,23 @@ fn reconcile_terminal_start(
 
     store.begin_open(&spec.session_id, spec.address_fingerprint())?;
     Ok(Request::SpawnTerminal(spec))
+}
+
+fn terminal_attach_request(
+    spec: &TerminalSpawnSpec,
+    placement: &TerminalPlacement,
+    mode: yttt_protocol::terminal::TerminalLeaseMode,
+) -> Request {
+    Request::AttachTerminal(AttachTerminal {
+        session_id: placement.session_id.clone(),
+        known_session_epoch: Some(placement.session_epoch),
+        after_sequence: (placement.last_sequence > 0).then_some(placement.last_sequence),
+        mode,
+        geometry: spec.geometry,
+        geometry_epoch: placement.geometry_epoch.saturating_add(1).max(1),
+        query_palette: spec.query_palette.clone(),
+        palette_revision: spec.palette_revision,
+    })
 }
 
 #[derive(Clone)]
@@ -691,7 +975,7 @@ mod tests {
     fn startup_reconciles_open_bound_and_missing_placements() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("terminal-placements.json");
-        let store = TerminalPlacementStore::load(&path).unwrap();
+        let store = TerminalPlacementStore::load_local(&path).unwrap();
         let spec = spec();
         assert!(matches!(
             reconcile_terminal_start(&store, spec.clone(), &catalog(Vec::new())).unwrap(),
@@ -739,7 +1023,7 @@ mod tests {
             Some(DurableTerminalPlacement::OpenPending { .. })
         ));
 
-        let reloaded = TerminalPlacementStore::load(path).unwrap();
+        let reloaded = TerminalPlacementStore::load_local(path).unwrap();
         assert!(matches!(
             reloaded.placement(&spec.session_id),
             Some(DurableTerminalPlacement::OpenPending { .. })
@@ -761,7 +1045,8 @@ mod tests {
             owner: None,
             process_state: TerminalProcessState::Running,
         };
-        let address_store = TerminalPlacementStore::load(temp.path().join("address.json")).unwrap();
+        let address_store =
+            TerminalPlacementStore::load_local(temp.path().join("address.json")).unwrap();
         assert!(matches!(
             reconcile_terminal_start(
                 &address_store,
@@ -771,7 +1056,8 @@ mod tests {
             Err(TerminalRecoveryError::AddressConflict { .. })
         ));
 
-        let pending_store = TerminalPlacementStore::load(temp.path().join("pending.json")).unwrap();
+        let pending_store =
+            TerminalPlacementStore::load_local(temp.path().join("pending.json")).unwrap();
         pending_store
             .begin_open(
                 &requested.session_id,
@@ -783,7 +1069,8 @@ mod tests {
             Err(TerminalRecoveryError::PendingAddressConflict(_))
         ));
 
-        let close_store = TerminalPlacementStore::load(temp.path().join("close.json")).unwrap();
+        let close_store =
+            TerminalPlacementStore::load_local(temp.path().join("close.json")).unwrap();
         close_store
             .bind(
                 HostId::new("host"),
@@ -860,7 +1147,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let store = TerminalPlacementStore::load(path).unwrap();
+        let store = TerminalPlacementStore::load_local(path).unwrap();
 
         assert!(matches!(
             reconcile_terminal_start(&store, requested.clone(), &catalog(Vec::new())).unwrap(),

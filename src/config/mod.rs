@@ -1,6 +1,9 @@
 use std::{fs, io::Write as _, path::Path};
 
 pub(crate) fn atomic_write(path: &Path, source: &[u8]) -> std::io::Result<()> {
+    if let Some(storage) = storage::storage_for(path)? {
+        return storage.write(path, source);
+    }
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let mut temporary = tempfile::Builder::new()
         .prefix(".yttt-config-")
@@ -26,5 +29,6 @@ pub mod profile;
 pub mod settings;
 pub mod ssh;
 pub mod ssh_command;
+pub mod storage;
 pub mod terminal_placements;
 pub mod theme;

@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    fs, io,
+    io,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -16,6 +16,7 @@ use yttt_agent_providers::{
 use yttt_agent_runtime::{AgentRuntime, AgentScopeKey, PreparedAgentLaunch};
 use yttt_protocol::agent::AgentSnapshotUpdate;
 
+use crate::config::storage as fs;
 use crate::{
     config::{atomic_write, paths::AppConfigPaths},
     runtime::agent_hooks::{AgentSnapshotClient, installer::install_managed_hooks},
@@ -235,6 +236,23 @@ impl AgentManager {
     pub fn reset_project_sessions(&mut self, project_id: &str) {
         self.restorable_projects.remove(project_id);
         self.forget_matching(|address| address.project_id == project_id);
+    }
+
+    pub(crate) fn reset_for_host_restore(
+        &mut self,
+        snapshots: Vec<(AgentPaneAddress, AgentSnapshot)>,
+    ) {
+        self.runtime = AgentRuntime::default();
+        for provider in builtin_providers() {
+            self.runtime.register_provider(provider);
+        }
+        self.launches_by_address.clear();
+        self.addresses_by_instance.clear();
+        self.host_snapshot_sequences.clear();
+        self.restorable_projects.clear();
+        self.fresh_program_overrides.clear();
+        self.retained_snapshots = snapshots.into_iter().collect();
+        self.last_error = None;
     }
 
     pub fn forget_tabs(&mut self, project_id: &str, tab_ids: &[String]) {

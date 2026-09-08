@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use yttt_agent_core::AgentSnapshot;
 
 use crate::model::{
@@ -16,9 +18,86 @@ pub struct Workspace {
     selected_project_id: Option<ProjectId>,
 }
 
+/// The validated, serializable state needed to restore one workspace exactly.
+///
+/// This deliberately excludes runtime entities. Callers must validate it through
+/// [`Workspace::restore_persisted_state`] before making it live.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct WorkspaceState {
+    pub opened_projects: Vec<OpenedProject>,
+    pub selected_project_id: Option<ProjectId>,
+}
+
 impl Workspace {
     pub fn new() -> Self {
         Self::default()
+    }
+    pub fn persisted_state(&self) -> WorkspaceState {
+        WorkspaceState {
+            opened_projects: self.opened_projects.clone(),
+            selected_project_id: self.selected_project_id.clone(),
+        }
+    }
+
+    pub fn restore_persisted_state(state: WorkspaceState) -> Result<Self, WorkspaceRestoreError> {
+        let mut project_ids = HashSet::new();
+        for project in &state.opened_projects {
+            if !project_ids.insert(project.id.clone()) {
+                return Err(WorkspaceRestoreError::DuplicateProject(
+                    project.id.as_str().to_string(),
+                ));
+            }
+            project
+                .layout
+                .validate()
+                .map_err(WorkspaceRestoreError::InvalidLayout)?;
+            validate_restored_project(project)?;
+        }
+        if let Some(selected_project_id) = &state.selected_project_id
+            && !project_ids.contains(selected_project_id)
+        {
+            return Err(WorkspaceRestoreError::SelectedProjectMissing(
+                selected_project_id.as_str().to_string(),
+            ));
+        }
+        Ok(Self {
+            opened_projects: state.opened_projects,
+            selected_project_id: state.selected_project_id,
+        })
+    }
+
+    /// Reconciles persisted pane activity with the authoritative Host catalog.
+    ///
+    /// A missing formerly-running pane is marked exited rather than started again.
+    /// The caller can surface these losses and decide whether to offer manual restart.
+    pub fn reconcile_host_resources(
+        &mut self,
+        available_terminal_sessions: &HashSet<String>,
+    ) -> Vec<RemoteResourceLoss> {
+        let mut losses = Vec::new();
+        for project in &mut self.opened_projects {
+            for tab in &mut project.tab_states {
+                for pane in &mut tab.pane_states {
+                    let session_id = format!("{}:{}:{}", project.id, tab.tab_id, pane.pane_id);
+                    if available_terminal_sessions.contains(&session_id) {
+                        pane.process_state = PaneProcessState::Running;
+                        continue;
+                    }
+                    if pane.process_state == PaneProcessState::Running {
+                        pane.process_state = PaneProcessState::Exited;
+                        if let Some(snapshot) = pane.agent_snapshot.as_mut() {
+                            snapshot.mark_disconnected();
+                        }
+                        losses.push(RemoteResourceLoss {
+                            project_id: project.id.clone(),
+                            tab_id: tab.tab_id.clone(),
+                            pane_id: pane.pane_id.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        losses
     }
 
     pub fn opened_projects(&self) -> &[OpenedProject] {
@@ -837,7 +916,7 @@ impl Workspace {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct OpenedProject {
     pub id: ProjectId,
     pub instance_id: ProjectInstanceId,
@@ -882,7 +961,7 @@ pub enum CloseProjectDecision {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct TabState {
     pub tab_id: String,
     pub start_state: TabStartState,
@@ -898,20 +977,20 @@ impl TabState {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct PaneState {
     pub pane_id: String,
     pub process_state: PaneProcessState,
     pub agent_snapshot: Option<AgentSnapshot>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub enum TabStartState {
     Lazy,
     Started,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub enum PaneProcessState {
     Idle,
     Running,
@@ -929,6 +1008,29 @@ pub enum PaneExitCloseOutcome {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClosedProject {
     pub project_id: ProjectId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteResourceLoss {
+    pub project_id: ProjectId,
+    pub tab_id: String,
+    pub pane_id: String,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum WorkspaceRestoreError {
+    #[error("duplicate project in persisted workspace: {0}")]
+    DuplicateProject(String),
+    #[error("the selected persisted project does not exist: {0}")]
+    SelectedProjectMissing(String),
+    #[error("project {project_id} has no selected tab")]
+    MissingSelectedTab { project_id: String },
+    #[error("project {project_id} selected tab does not exist: {tab_id}")]
+    SelectedTabMissing { project_id: String, tab_id: String },
+    #[error("project {project_id} has invalid persisted tab state: {message}")]
+    InvalidTabState { project_id: String, message: String },
+    #[error(transparent)]
+    InvalidLayout(#[from] crate::model::layout::LayoutError),
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -959,6 +1061,82 @@ pub enum CloseProjectError {
     RunningProcesses,
     #[error("project not found: {0}")]
     ProjectNotFound(String),
+}
+
+fn validate_restored_project(project: &OpenedProject) -> Result<(), WorkspaceRestoreError> {
+    if project.layout.tabs.is_empty() {
+        if !project.selected_tab_id.is_empty() || !project.tab_states.is_empty() {
+            return Err(WorkspaceRestoreError::InvalidTabState {
+                project_id: project.id.as_str().to_string(),
+                message: "a project without tabs must not retain selected or tab state".to_string(),
+            });
+        }
+        return Ok(());
+    }
+    if project.selected_tab_id.is_empty() {
+        return Err(WorkspaceRestoreError::MissingSelectedTab {
+            project_id: project.id.as_str().to_string(),
+        });
+    }
+    if project.layout.tab(&project.selected_tab_id).is_none() {
+        return Err(WorkspaceRestoreError::SelectedTabMissing {
+            project_id: project.id.as_str().to_string(),
+            tab_id: project.selected_tab_id.clone(),
+        });
+    }
+    if project.tab_states.len() != project.layout.tabs.len() {
+        return Err(WorkspaceRestoreError::InvalidTabState {
+            project_id: project.id.as_str().to_string(),
+            message: "tab state count does not match the layout".to_string(),
+        });
+    }
+
+    let mut state_ids = HashSet::new();
+    for state in &project.tab_states {
+        if !state_ids.insert(state.tab_id.clone()) {
+            return Err(WorkspaceRestoreError::InvalidTabState {
+                project_id: project.id.as_str().to_string(),
+                message: format!("duplicate tab state: {}", state.tab_id),
+            });
+        }
+        let Some(tab) = project.layout.tab(&state.tab_id) else {
+            return Err(WorkspaceRestoreError::InvalidTabState {
+                project_id: project.id.as_str().to_string(),
+                message: format!("state references an unknown tab: {}", state.tab_id),
+            });
+        };
+        let layout_panes = pane_ids(&tab.layout);
+        if state.pane_states.len() != layout_panes.len() {
+            return Err(WorkspaceRestoreError::InvalidTabState {
+                project_id: project.id.as_str().to_string(),
+                message: format!("pane state count does not match tab {}", state.tab_id),
+            });
+        }
+        let mut pane_state_ids = HashSet::new();
+        for pane in &state.pane_states {
+            if !pane_state_ids.insert(pane.pane_id.clone()) || !layout_panes.contains(&pane.pane_id)
+            {
+                return Err(WorkspaceRestoreError::InvalidTabState {
+                    project_id: project.id.as_str().to_string(),
+                    message: format!(
+                        "invalid pane state {} in tab {}",
+                        pane.pane_id, state.tab_id
+                    ),
+                });
+            }
+        }
+        if state
+            .focused_pane_id
+            .as_ref()
+            .is_some_and(|pane_id| !layout_panes.contains(pane_id))
+        {
+            return Err(WorkspaceRestoreError::InvalidTabState {
+                project_id: project.id.as_str().to_string(),
+                message: format!("focused pane is not in tab {}", state.tab_id),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn tab_states_for_layout(layout: &ProjectLayout, selected_tab_id: &str) -> Vec<TabState> {

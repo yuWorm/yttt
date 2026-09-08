@@ -2,6 +2,7 @@ use super::*;
 
 impl Render for WorkbenchView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.flush_pending_settings_save(window, cx);
         let appearance = self.appearance.runtime();
         self.app_settings.theme.ui_style = appearance.style_id;
         window.set_rem_size(px(appearance.typography.font_size));
@@ -61,7 +62,14 @@ impl Render for WorkbenchView {
             .as_ref()
             .is_some_and(|state| state.step == OnboardingStep::Font)
             .then(|| self.settings_font_family_select(window, cx));
-        let body = if let Some(onboarding) = self.onboarding.as_ref() {
+        let body = if self.workspace_is_loading() {
+            div()
+                .flex()
+                .flex_1()
+                .items_center()
+                .justify_center()
+                .child("正在恢复工作区…")
+        } else if let Some(onboarding) = self.onboarding.as_ref() {
             let command_palette_keybinding =
                 self.display_keybinding_for_command(CommandId::CommandPaletteOpen);
             onboarding_view(
@@ -293,6 +301,7 @@ impl Render for WorkbenchView {
                 cx,
                 &self.ui_text,
                 &dialog.detection,
+                &dialog.existing_paths,
                 dialog.conflict_policy,
                 &self.config_paths,
                 appearance.ui,
@@ -406,6 +415,7 @@ impl Render for WorkbenchView {
             .on_action(cx.listener(Self::on_application_quit))
             .on_action(cx.listener(Self::on_open_project))
             .on_action(cx.listener(Self::on_open_ssh_project))
+            .on_action(cx.listener(Self::on_connect_existing_host))
             .on_action(cx.listener(Self::on_open_command_palette))
             .on_action(cx.listener(Self::on_open_file_finder))
             .on_action(cx.listener(Self::on_open_project_palette))

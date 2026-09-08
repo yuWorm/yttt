@@ -1,5 +1,5 @@
 use std::{
-    fs::{self, OpenOptions},
+    fs::OpenOptions,
     io::{self, Write as _},
     path::{Path, PathBuf},
 };
@@ -417,13 +417,16 @@ pub fn open_project_config(
     project_path: &Path,
     default_state: &mut DefaultLayoutState,
 ) -> Result<ProjectOpenConfig, ProjectOpenError> {
+    if paths.environment() == super::profile::EnvironmentKind::Test {
+        super::storage::allow_test_root(project_path);
+    }
     let project_path = canonicalize_path(project_path).map_err(|source| {
         ProjectOpenError::OpenProjectDirectory {
             path: project_path.to_path_buf(),
             source,
         }
     })?;
-    if !project_path.is_dir() {
+    if !crate::config::storage::is_dir(&project_path) {
         return Err(ProjectOpenError::NotDirectory(project_path));
     }
 
@@ -470,15 +473,16 @@ pub fn load_recent_projects(
     paths: &AppConfigPaths,
 ) -> Result<RecentProjectsConfig, ProjectOpenError> {
     let path = paths.recent_projects_file();
-    if !path.exists() {
+    if !crate::config::storage::exists(&path) {
         return Ok(RecentProjectsConfig::default());
     }
 
-    let source =
-        fs::read_to_string(&path).map_err(|source| ProjectOpenError::ReadRecentProjects {
+    let source = crate::config::storage::read_to_string(&path).map_err(|source| {
+        ProjectOpenError::ReadRecentProjects {
             path: path.clone(),
             source,
-        })?;
+        }
+    })?;
     toml::from_str(&source).map_err(|source| ProjectOpenError::ParseRecentProjects { path, source })
 }
 
@@ -489,9 +493,11 @@ pub fn save_local_layout(
 ) -> Result<PathBuf, ProjectOpenError> {
     let path = paths.local_layout_file(project_path);
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| ProjectOpenError::CreateConfigDirectory {
-            path: parent.to_path_buf(),
-            source,
+        crate::config::storage::create_dir_all(parent).map_err(|source| {
+            ProjectOpenError::CreateConfigDirectory {
+                path: parent.to_path_buf(),
+                source,
+            }
         })?;
     }
     let source = serialize_personal_replace(layout).map_err(|source| {
@@ -500,9 +506,11 @@ pub fn save_local_layout(
             source,
         }
     })?;
-    fs::write(&path, source).map_err(|source| ProjectOpenError::WritePersonalLayout {
-        path: path.clone(),
-        source,
+    crate::config::storage::write(&path, source).map_err(|source| {
+        ProjectOpenError::WritePersonalLayout {
+            path: path.clone(),
+            source,
+        }
     })?;
     Ok(path)
 }
@@ -537,11 +545,11 @@ struct StdLocalLayoutFileSystem;
 
 impl LocalLayoutFileSystem for StdLocalLayoutFileSystem {
     fn exists(&self, path: &Path) -> bool {
-        path.exists()
+        crate::config::storage::exists(&path)
     }
 
     fn remove_file(&self, path: &Path) -> io::Result<()> {
-        fs::remove_file(path)
+        crate::config::storage::remove_file(path)
     }
 }
 
@@ -566,7 +574,7 @@ pub fn create_project_layout_scaffold(
     let project_config_dir = layout_file
         .parent()
         .expect("project layout path must have a parent");
-    fs::create_dir_all(project_config_dir).map_err(|source| {
+    crate::config::storage::create_dir_all(project_config_dir).map_err(|source| {
         ProjectOpenError::CreateConfigDirectory {
             path: project_config_dir.to_path_buf(),
             source,
@@ -605,10 +613,17 @@ pub fn create_project_layout_scaffold(
 }
 
 fn write_new_file(path: &Path, contents: &[u8]) -> io::Result<bool> {
+    if let Some(storage) = crate::config::storage::storage_for(path)? {
+        if storage.exists(path) {
+            return Ok(false);
+        }
+        storage.write(path, contents)?;
+        return Ok(true);
+    }
     let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            return if path.is_file() {
+            return if crate::config::storage::is_file(&path) {
                 Ok(false)
             } else {
                 Err(io::Error::new(
@@ -622,7 +637,7 @@ fn write_new_file(path: &Path, contents: &[u8]) -> io::Result<bool> {
 
     if let Err(error) = file.write_all(contents) {
         drop(file);
-        let _ = fs::remove_file(path);
+        let _ = crate::config::storage::remove_file(path);
         return Err(error);
     }
     Ok(true)
@@ -639,9 +654,11 @@ pub fn export_project_layout(
             project_path: project_path.to_path_buf(),
         })?;
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| ProjectOpenError::CreateConfigDirectory {
-            path: parent.to_path_buf(),
-            source,
+        crate::config::storage::create_dir_all(parent).map_err(|source| {
+            ProjectOpenError::CreateConfigDirectory {
+                path: parent.to_path_buf(),
+                source,
+            }
         })?;
     }
     write_project_layout(&path, layout)?;
@@ -738,7 +755,8 @@ fn load_project_layout(
     default_state: &mut DefaultLayoutState,
 ) -> Result<LoadedProjectLayout, ProjectOpenError> {
     let project_layout_file = paths.project_layout_file(project_path);
-    let (base, base_source, mut warnings) = if project_layout_file.exists() {
+    let (base, base_source, mut warnings) = if crate::config::storage::exists(&project_layout_file)
+    {
         (
             read_project_layout(&project_layout_file, project_path)?,
             LayoutSource::ProjectConfig(project_layout_file),
@@ -756,7 +774,7 @@ fn load_project_layout(
     };
 
     let local_layout_file = paths.local_layout_file(project_path);
-    if !local_layout_file.exists() {
+    if !crate::config::storage::exists(&local_layout_file) {
         return Ok(LoadedProjectLayout {
             layout: base,
             source: base_source,
@@ -764,7 +782,7 @@ fn load_project_layout(
         });
     }
 
-    let source = match fs::read_to_string(&local_layout_file) {
+    let source = match crate::config::storage::read_to_string(&local_layout_file) {
         Ok(source) => source,
         Err(error) => {
             warnings.push(LayoutLoadWarning::PersonalOverrideRead {
@@ -903,11 +921,12 @@ fn read_project_layout(
     path: &Path,
     project_path: &Path,
 ) -> Result<ProjectLayout, ProjectOpenError> {
-    let source =
-        fs::read_to_string(path).map_err(|source| ProjectOpenError::ReadProjectLayout {
+    let source = crate::config::storage::read_to_string(path).map_err(|source| {
+        ProjectOpenError::ReadProjectLayout {
             path: path.to_path_buf(),
             source,
-        })?;
+        }
+    })?;
     parse_project_layout(path, project_path, &source)
 }
 
@@ -943,9 +962,11 @@ fn parse_project_layout(
 
 fn write_project_layout(path: &Path, layout: &ProjectLayout) -> Result<(), ProjectOpenError> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| ProjectOpenError::CreateConfigDirectory {
-            path: parent.to_path_buf(),
-            source,
+        crate::config::storage::create_dir_all(parent).map_err(|source| {
+            ProjectOpenError::CreateConfigDirectory {
+                path: parent.to_path_buf(),
+                source,
+            }
         })?;
     }
 
@@ -955,9 +976,11 @@ fn write_project_layout(path: &Path, layout: &ProjectLayout) -> Result<(), Proje
             source,
         }
     })?;
-    fs::write(path, source).map_err(|source| ProjectOpenError::WriteProjectLayout {
-        path: path.to_path_buf(),
-        source,
+    crate::config::storage::write(path, source).map_err(|source| {
+        ProjectOpenError::WriteProjectLayout {
+            path: path.to_path_buf(),
+            source,
+        }
     })
 }
 
@@ -1036,9 +1059,11 @@ fn write_recent_projects(
 ) -> Result<(), ProjectOpenError> {
     let path = paths.recent_projects_file();
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| ProjectOpenError::CreateConfigDirectory {
-            path: parent.to_path_buf(),
-            source,
+        crate::config::storage::create_dir_all(parent).map_err(|source| {
+            ProjectOpenError::CreateConfigDirectory {
+                path: parent.to_path_buf(),
+                source,
+            }
         })?;
     }
 
@@ -1048,24 +1073,7 @@ fn write_recent_projects(
             source,
         }
     })?;
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("recent-projects.toml");
-    let temp_path = path.with_file_name(format!(".{file_name}.tmp"));
-    fs::write(&temp_path, source).map_err(|source| ProjectOpenError::WriteRecentProjects {
-        path: temp_path.clone(),
-        source,
-    })?;
-    OpenOptions::new()
-        .write(true)
-        .open(&temp_path)
-        .and_then(|file| file.sync_all())
-        .map_err(|source| ProjectOpenError::WriteRecentProjects {
-            path: temp_path.clone(),
-            source,
-        })?;
-    fs::rename(&temp_path, &path)
+    crate::config::atomic_write(&path, source.as_bytes())
         .map_err(|source| ProjectOpenError::WriteRecentProjects { path, source })
 }
 

@@ -7,8 +7,9 @@ mod stream;
 mod wire;
 
 pub use auth::{
-    AuthToken, AuthenticatedClient, AuthenticatedHost, ClientIdentity, HandshakeError,
-    HostIdentity, client_handshake, server_handshake,
+    AuthToken, AuthenticatedClient, AuthenticatedHost, AuthenticatedSession, ClientIdentity,
+    HandshakeError, HostIdentity, IngressKind, client_handshake, new_session_nonce,
+    server_handshake,
 };
 pub use error::TransportError;
 pub use memory::{MemoryConnector, MemoryListener, memory_pair};

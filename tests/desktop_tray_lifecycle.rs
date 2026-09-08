@@ -57,6 +57,7 @@ fn desktop_disconnect_stops_owned_host_even_with_active_resources() {
     let Response::Project(ProjectResponse::Registered { .. }) = desktop
         .request_blocking_typed(Request::Project(ProjectRequest::Register {
             project_id: project_id.clone(),
+            view_id: "tray-window".to_string(),
             root: platform_path(&project_root),
         }))
         .unwrap()
@@ -85,6 +86,7 @@ fn desktop_disconnect_stops_owned_host_even_with_active_resources() {
     }) = reopened
         .request_blocking_typed(Request::Project(ProjectRequest::Register {
             project_id: project_id.clone(),
+            view_id: "tray-window".to_string(),
             root: platform_path(&project_root),
         }))
         .unwrap()
@@ -96,6 +98,7 @@ fn desktop_disconnect_stops_owned_host_even_with_active_resources() {
             .request_blocking_typed(Request::Project(ProjectRequest::Close {
                 project_id,
                 registration_epoch,
+                view_id: "tray-window".to_string(),
             }))
             .unwrap(),
         Response::Project(ProjectResponse::Closed)
@@ -119,6 +122,7 @@ fn confirmed_terminal_close_is_idempotent_after_host_acknowledgement() {
     }) = desktop
         .request_blocking_typed(Request::Project(ProjectRequest::Register {
             project_id: project_id.clone(),
+            view_id: "agent-window".to_string(),
             root: platform_path(&project_root),
         }))
         .unwrap()
@@ -190,6 +194,7 @@ fn confirmed_terminal_close_is_idempotent_after_host_acknowledgement() {
             .request_blocking_typed(Request::Project(ProjectRequest::Close {
                 project_id,
                 registration_epoch,
+                view_id: "agent-window".to_string(),
             }))
             .unwrap(),
         Response::Project(ProjectResponse::Closed)

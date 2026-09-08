@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    fs,
     path::{Path, PathBuf},
     sync::LazyLock,
 };
@@ -10,6 +9,7 @@ use gpui::{AnyElement, ImageSource, IntoElement, Resource, Rgba, SharedString, S
 use gpui_component::{Icon, IconName};
 use serde::Deserialize;
 
+use crate::config::storage as fs;
 use crate::{config::paths::AppConfigPaths, ui::app::assets::external_icon_asset_path};
 
 const CSHARP_FILE_ICON: &str = "icons/file-csharp.svg";
@@ -560,7 +560,7 @@ fn load_icon_theme_candidates(
             packages_dir.display()
         )
     })?;
-    let assets_root = packages_dir.canonicalize().with_context(|| {
+    let assets_root = fs::canonicalize(&packages_dir).with_context(|| {
         format!(
             "failed to resolve icon theme directory {}",
             packages_dir.display()
@@ -575,21 +575,25 @@ fn load_icon_theme_candidates(
             )
         })?
         .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.path().is_dir())
+        .filter(|entry| fs::is_dir(entry.path()))
         .collect::<Vec<_>>();
-    packages.sort_by_key(|entry| entry.file_name());
+    packages.sort_by_key(|entry| entry.path());
 
     let mut candidates = Vec::new();
     for package in packages {
-        let package_root = package.path().canonicalize().with_context(|| {
+        let package_root = fs::canonicalize(package.path()).with_context(|| {
             format!(
                 "failed to resolve icon theme package {}",
                 package.path().display()
             )
         })?;
-        let package_name = package.file_name().to_string_lossy().into_owned();
+        let package_name = package_root
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         let theme_dir = package_root.join("icon_themes");
-        if !theme_dir.is_dir() {
+        if !fs::is_dir(&theme_dir) {
             continue;
         }
 
@@ -608,7 +612,7 @@ fn load_icon_theme_candidates(
                     .is_some_and(|extension| extension == "json")
             })
             .collect::<Vec<_>>();
-        theme_files.sort_by_key(|entry| entry.file_name());
+        theme_files.sort_by_key(|entry| entry.path());
 
         for theme_file in theme_files {
             let contents = fs::read(theme_file.path()).with_context(|| {

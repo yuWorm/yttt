@@ -11,10 +11,7 @@ use yttt_core::model::{
 };
 use yttt_protocol::{
     Request, Response, ServerEvent,
-    ssh::{
-        CredentialAnswer, CredentialChallengeKind, HostKeyDecision, SensitiveBytes,
-        SshAuthentication, SshConnectSpec, SshEndpoint, StoredSshCredential,
-    },
+    ssh::{CredentialAnswer, CredentialChallengeKind, HostKeyDecision},
 };
 
 use crate::config::ssh::{
@@ -289,6 +286,11 @@ impl WorkbenchView {
     }
 
     pub fn open_ssh_connection_manager(&mut self) {
+        if crate::config::storage::is_remote() {
+            self.load_error =
+                Some("Manage SSH targets and credentials in the local yttt window.".into());
+            return;
+        }
         self.ssh.manager_open = true;
         self.ssh.error = None;
         if self.ssh.form.is_none() {
@@ -674,82 +676,41 @@ impl WorkbenchView {
                 )
             })
             .unwrap_or_default();
-        let key_passphrase = (!key_passphrase.is_empty()).then_some(key_passphrase);
-        let authentication = match connection.auth {
-            SshAuthPreference::Auto => SshAuthentication::Auto {
-                identity_file: connection
-                    .identity_file
-                    .as_ref()
-                    .map(|path| path.to_string_lossy().into_owned()),
-                passphrase: key_passphrase.map(|secret| SensitiveBytes::new(secret.into_bytes())),
-                credential: connection
-                    .credential
-                    .as_ref()
-                    .map(stored_credential_from_ref),
-            },
-            SshAuthPreference::Agent => SshAuthentication::Agent,
-            SshAuthPreference::Password if password.is_empty() => {
-                let Some(credential) = connection.credential.as_ref() else {
-                    self.ssh.error = Some("Enter a password before connecting.".to_string());
-                    return;
-                };
-                SshAuthentication::StoredPassword(stored_credential_from_ref(credential))
-            }
-            SshAuthPreference::Password => SshAuthentication::Password {
-                secret: SensitiveBytes::new(password.into_bytes()),
-                save_as: self
+        let Some(local_profile) = self.config_paths.profile().cloned() else {
+            self.ssh.error = Some("Manage remote servers from the local yttt window.".to_string());
+            return;
+        };
+        if connection.auth == SshAuthPreference::Password
+            && password.is_empty()
+            && connection.credential.is_none()
+        {
+            self.ssh.error = Some("Enter a password before connecting.".to_string());
+            return;
+        }
+        let launch = crate::remote_launch::RemoteLaunch {
+            local_profile,
+            target: crate::remote_launch::RemoteTarget::SshServer {
+                connection,
+                password: (!password.is_empty()).then_some(password),
+                passphrase: (!key_passphrase.is_empty()).then_some(key_passphrase),
+                save_password_as: self
                     .ssh
                     .form
                     .as_ref()
-                    .is_some_and(|form| form.remember_password)
-                    .then(|| {
-                        self.ssh
-                            .form
-                            .as_ref()
-                            .expect("form checked above")
-                            .credential_id
-                            .to_string()
-                    }),
+                    .filter(|form| form.remember_password)
+                    .map(|form| form.credential_id.clone()),
             },
-            SshAuthPreference::PublicKey => {
-                let Some(path) = connection.identity_file.as_ref() else {
-                    self.ssh.error =
-                        Some("Private-key authentication requires an identity file.".to_string());
-                    return;
-                };
-                SshAuthentication::PrivateKey {
-                    path: path.to_string_lossy().into_owned(),
-                    passphrase: key_passphrase
-                        .map(|secret| SensitiveBytes::new(secret.into_bytes())),
-                }
-            }
         };
-        let runtime = self.terminal.host_runtime.clone();
-        self.ssh.error = None;
+        let task =
+            cx.background_spawn(async move { crate::remote_launch::spawn_remote_client(launch) });
         cx.spawn_in(window, async move |this, cx| {
-            let result = request_host(
-                runtime,
-                Request::SshConnect(SshConnectSpec {
-                    connection_id: connection_id.as_str().to_string(),
-                    endpoint: SshEndpoint {
-                        host: connection.host,
-                        port: connection.port,
-                        username: connection.user,
-                    },
-                    authentication,
-                    reconnect: false,
-                }),
-            )
-            .await
-            .and_then(|response| match response {
-                Response::SshConnected { .. } => Ok(()),
-                response => Err(format!(
-                    "Host returned an unexpected SSH connect response: {response:?}"
-                )),
-            });
+            let result = task.await;
             let _ = this.update_in(cx, |root, _window, cx| {
-                if let Err(error) = result {
-                    root.ssh.error = Some(error);
+                match result {
+                    Ok(()) => root.close_ssh_connection_manager(),
+                    Err(error) => {
+                        root.ssh.error = Some(format!("Failed to launch remote workspace: {error}"))
+                    }
                 }
                 cx.notify();
             });
@@ -1388,13 +1349,14 @@ pub(super) fn ssh_connections_overlay(
 
     yttt_dialog_overlay(
         yttt_dialog_surface(theme, ui_style)
-            .w(px(920.0))
+            .debug_selector(|| "remote-services-manager".to_string())
+            .w(gpui::relative(0.95))
             .max_w(px(920.0))
-            .h(px(680.0))
+            .h(gpui::relative(0.9))
             .max_h(px(680.0))
             .child(yttt_dialog_header(
                 "close-ssh-connections",
-                root.ui_text.get(UiTextKey::SshConnections),
+                root.ui_text.get(UiTextKey::RemoteServices),
                 theme,
                 ui_style,
                 cx.listener(|this, _, _window, cx| {
@@ -1407,8 +1369,19 @@ pub(super) fn ssh_connections_overlay(
                     .mt(ui_style.spacing.xs)
                     .text_xs()
                     .text_color(dialog.hint)
-                    .child(root.ui_text.get(UiTextKey::SshConnectionsDescription)),
+                    .child("SSH 独立 Server · 连接将在新窗口中恢复远程环境"),
             )
+            .child(yttt_dialog_button(
+                cx,
+                "manage-existing-host",
+                "已有 yttt Host（TLS）",
+                YtttButtonVariant::Secondary,
+                theme,
+                cx.listener(|this, _, window, cx| {
+                    this.close_ssh_connection_manager();
+                    this.on_connect_existing_host(&ConnectExistingHost, window, cx);
+                }),
+            ))
             .child(
                 div()
                     .mt(ui_style.spacing.lg)
@@ -1506,7 +1479,7 @@ pub(super) fn ssh_connections_overlay(
                             .child(yttt_dialog_button(
                                 cx,
                                 "connect-ssh-connection",
-                                root.ui_text.get(UiTextKey::SshConnect),
+                                "在新窗口连接",
                                 YtttButtonVariant::Primary,
                                 theme,
                                 cx.listener(move |this, _, window, cx| {
@@ -1661,14 +1634,6 @@ pub(super) fn ssh_host_key_overlay(root: &WorkbenchView, cx: &mut Context<Workbe
         theme,
         ui_style,
     )
-}
-
-pub(super) fn stored_credential_from_ref(credential: &CredentialRef) -> StoredSshCredential {
-    StoredSshCredential {
-        id: credential.id.to_string(),
-        effective_user: credential.binding.effective_user.clone(),
-        private_key_identity: credential.binding.private_key_identity.clone(),
-    }
 }
 
 pub(super) fn ssh_form_field(

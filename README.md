@@ -6,20 +6,21 @@ project-owned `yttt-terminal` crate based on `alacritty_terminal`.
 The product direction is project-first and terminal-first, with lightweight project-file
 editing built into the same workbench:
 
-- Open a local directory or an SSH-backed remote project.
+- Open local projects, connect to an existing desktop Host, or deploy an independent Host through SSH.
 - Work in unified terminal and file tabs.
 - Browse project files from a lazy tree on the right.
 - Edit and save UTF-8 text files without leaving the terminal workflow.
-- Reuse one verified SSH connection for remote terminal PTYs and SFTP file operations.
+- Keep terminals, files, configuration, drafts, and Agent tasks on their owning Host.
 - Split panes inside a tab.
-- Save personal layouts locally.
+- Save personal layouts in the active environment.
 - Export shareable project layouts explicitly.
 - Track process-level agent CLI exits for tools such as Codex and Claude Code.
 
 The desktop is a client of a profile-isolated headless Host that owns terminal, project, SSH, and
 Agent resources. Closing the last window keeps the native tray/menu-bar control plane available
 without terminating those resources; the tray can reopen windows, show resource counts, manage
-the Host lifecycle, and exit the desktop independently. Environments without a tray can use the
+the Host lifecycle, and confirm the consequences of quitting. Desktop-owned Hosts stop with the desktop;
+explicitly started independent Hosts can outlive it. Environments without a tray can use the
 equivalent `--host-status`, `--start-host`, `--stop-host`, `--restart-host`, and
 `--force-stop-host` commands. Login startup is opt-in under **Settings → Permissions → Background
 Host**, with per-user registration on macOS, Windows, and Linux. See
@@ -90,6 +91,26 @@ work-area panes and groups, and the right project tree. See [Usage](docs/usage.m
 config paths and command IDs. In Global Vim Terminal mode, `Escape` and `Ctrl-[` remain process
 input; use `Ctrl-\ Ctrl-N` to return to Normal mode.
 
+## Connect to an Existing Desktop
+
+On computer A, enable **Settings → Permissions → Remote access to this computer**. The listener
+is off by default and initially binds only `127.0.0.1:43123`. Copy its connection information,
+forward that TCP port with your preferred tunnel, then run **Connect to existing yttt** on B.
+Enter B's forwarded address and A's connection information. This path uses TLS 1.3 and reuses
+A's running desktop Host; it neither needs SSH login on A nor deploys `yttt-server`.
+
+The remote Client opens separately from B's local workspace. It restores A's saved work windows
+and drafts, and reads and writes A's original configuration and project files. Control belongs
+to one Client session for the entire profile, not one terminal or window. Normal takeover asks
+all of the previous Client's windows to publish before transferring input and write authority.
+After five seconds, force takeover requires a separate confirmation and uses only confirmed state.
+
+Connection information grants work access: share it privately. Optional remembered credentials
+use the OS keychain with no plaintext fallback. Disable access or reset credentials on A to
+disconnect all TCP channels without terminating existing tasks. Quitting A's desktop-owned Host
+does terminate them; use an explicitly started independent Host when desktop-independent lifetime
+is required. See [Usage](docs/usage.md#connect-to-an-existing-desktop-host).
+
 ## SSH Projects
 
 Use **Open SSH Project** from the command palette, empty-workbench action, or project sidebar
@@ -105,13 +126,19 @@ If a saved password is missing or rejected, the project picker asks for it again
 choose whether to replace the saved credential before retrying.
 The separate **SSH connections** settings page remains available for managing saved endpoints.
 
-After authentication, the picker opens an SFTP directory browser. Opening the current directory
-creates a normal workbench project whose terminal panes run on SSH and whose lazy file tree and
-editor use SFTP over the same connection. Remote reads, conflict-checked temporary-file saves,
-create, rename, and delete operations enforce the selected remote root. Git status, branch
-switching, and diffs run inside that root over non-PTY SSH command channels. Reconnecting refreshes
-expanded tree directories and Git status. Recent SSH projects are marked **Remote/SSH** and
-reconnect, validate their saved root, and open directly when selected.
+After authentication, yttt opens a separate remote Client window, visibly labeled with its SSH
+endpoint. It deploys the headless `yttt-server` for Linux/macOS on x86_64 or aarch64 and connects
+through SSH to a private Unix socket—no public application port is needed. The remote folder
+picker, project files, Git, terminals, Agent hooks/history, settings, keybindings, and layouts
+all belong to that Host; local configuration is not copied into it.
+
+The Host retains the workspace and unsaved editor drafts. Another Client can explicitly take
+control and restore them; the previous controller can no longer mutate remote state. Closing the
+remote Client leaves Host-owned processes running. After a Host or machine restart, layout and
+drafts return, but lost terminal processes remain exited until explicitly started again.
+Incompatible busy Hosts refuse automatic upgrade rather than terminating work.
+Legacy recent SSH project entries are retained and launch the new remote Client; they are not
+automatically mixed into local workspace restoration. See [Usage](docs/usage.md#ssh-projects).
 
 ## Run
 

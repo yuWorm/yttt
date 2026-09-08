@@ -451,21 +451,23 @@ fn install_staged_import(
     conflict_policy: ZedThemeImportConflictPolicy,
     applied: &mut Vec<AppliedZedImport>,
 ) -> std::io::Result<bool> {
-    if destination.exists() && conflict_policy == ZedThemeImportConflictPolicy::SkipExisting {
+    if crate::config::storage::exists(destination)
+        && conflict_policy == ZedThemeImportConflictPolicy::SkipExisting
+    {
         return Ok(false);
     }
 
-    let backup = if destination.exists() {
+    let backup = if crate::config::storage::exists(destination) {
         let backup = backup_root.join(format!(".backup-{}", applied.len()));
-        fs::rename(destination, &backup)?;
+        crate::config::storage::rename(destination, &backup)?;
         Some(backup)
     } else {
         None
     };
 
-    if let Err(error) = fs::rename(staged_path, destination) {
+    if let Err(error) = crate::config::storage::rename(staged_path, destination) {
         if let Some(backup) = &backup {
-            let _ = fs::rename(backup, destination);
+            let _ = crate::config::storage::rename(backup, destination);
         }
         return Err(error);
     }
@@ -480,21 +482,21 @@ fn rollback_applied_imports(applied: &[AppliedZedImport]) {
     for import in applied.iter().rev() {
         remove_import_path(&import.destination);
         if let Some(backup) = &import.backup {
-            let _ = fs::rename(backup, &import.destination);
+            let _ = crate::config::storage::rename(backup, &import.destination);
         }
     }
 }
 
 fn cleanup_staging_dirs(ui_staging_dir: &Path, icon_staging_dir: &Path) {
-    let _ = fs::remove_dir_all(ui_staging_dir);
-    let _ = fs::remove_dir_all(icon_staging_dir);
+    let _ = crate::config::storage::remove_dir_all(ui_staging_dir);
+    let _ = crate::config::storage::remove_dir_all(icon_staging_dir);
 }
 
 fn remove_import_path(path: &Path) {
-    if path.is_dir() {
-        let _ = fs::remove_dir_all(path);
+    if crate::config::storage::is_dir(path) {
+        let _ = crate::config::storage::remove_dir_all(path);
     } else {
-        let _ = fs::remove_file(path);
+        let _ = crate::config::storage::remove_file(path);
     }
 }
 
@@ -541,13 +543,13 @@ pub fn import_zed_icon_theme_extension(
         })?;
 
     let output_dir = output_dir.as_ref();
-    fs::create_dir_all(output_dir).map_err(|source| {
+    crate::config::storage::create_dir_all(output_dir).map_err(|source| {
         ZedIconThemeImportError::CreateOutputDirectory {
             path: output_dir.to_path_buf(),
             source,
         }
     })?;
-    let output_root = output_dir.canonicalize().map_err(|source| {
+    let output_root = crate::config::storage::canonicalize(output_dir).map_err(|source| {
         ZedIconThemeImportError::CreateOutputDirectory {
             path: output_dir.to_path_buf(),
             source,
@@ -561,7 +563,7 @@ pub fn import_zed_icon_theme_extension(
     }
 
     let destination = output_root.join(slugify(&manifest.id));
-    if destination.exists() {
+    if crate::config::storage::exists(&destination) {
         return Err(ZedIconThemeImportError::OutputExists { path: destination });
     }
     let staging = output_root.join(format!(
@@ -570,14 +572,16 @@ pub fn import_zed_icon_theme_extension(
         uuid::Uuid::new_v4()
     ));
     let copy_result = copy_directory(&extension_root, &staging).and_then(|()| {
-        fs::rename(&staging, &destination).map_err(|source| ZedIconThemeImportError::CopyPackage {
-            source_path: extension_root.clone(),
-            destination: destination.clone(),
-            source,
+        crate::config::storage::rename(&staging, &destination).map_err(|source| {
+            ZedIconThemeImportError::CopyPackage {
+                source_path: extension_root.clone(),
+                destination: destination.clone(),
+                source,
+            }
         })
     });
     if let Err(error) = copy_result {
-        let _ = fs::remove_dir_all(&staging);
+        let _ = crate::config::storage::remove_dir_all(&staging);
         return Err(error);
     }
 
@@ -707,10 +711,12 @@ fn copy_directory(
     source_root: &Path,
     destination_root: &Path,
 ) -> Result<(), ZedIconThemeImportError> {
-    fs::create_dir(destination_root).map_err(|source| ZedIconThemeImportError::CopyPackage {
-        source_path: source_root.to_path_buf(),
-        destination: destination_root.to_path_buf(),
-        source,
+    crate::config::storage::create_dir_all(destination_root).map_err(|source| {
+        ZedIconThemeImportError::CopyPackage {
+            source_path: source_root.to_path_buf(),
+            destination: destination_root.to_path_buf(),
+            source,
+        }
     })?;
     let entries =
         fs::read_dir(source_root).map_err(|source| ZedIconThemeImportError::CopyPackage {
@@ -737,13 +743,13 @@ fn copy_directory(
         if file_type.is_dir() {
             copy_directory(&source_path, &destination)?;
         } else if file_type.is_file() {
-            fs::copy(&source_path, &destination).map_err(|source| {
-                ZedIconThemeImportError::CopyPackage {
+            fs::read(&source_path)
+                .and_then(|bytes| crate::config::storage::write(&destination, bytes))
+                .map_err(|source| ZedIconThemeImportError::CopyPackage {
                     source_path,
                     destination,
                     source,
-                }
-            })?;
+                })?;
         }
     }
     Ok(())
@@ -751,10 +757,10 @@ fn copy_directory(
 
 fn rollback_imports(ui_files: &[PathBuf], icon_packages: &[PathBuf]) {
     for path in ui_files {
-        let _ = fs::remove_file(path);
+        let _ = crate::config::storage::remove_file(path);
     }
     for path in icon_packages {
-        let _ = fs::remove_dir_all(path);
+        let _ = crate::config::storage::remove_dir_all(path);
     }
 }
 
@@ -778,6 +784,7 @@ mod tests {
     #[test]
     fn detects_and_imports_compatible_ui_and_icon_themes() {
         let temp = tempfile::tempdir().expect("temporary directory");
+        crate::config::storage::allow_test_root(temp.path());
         let installed_root = temp.path().join("installed");
         let extension_dir = installed_root.join("test-pack");
         write_combined_extension(&extension_dir);
@@ -819,6 +826,7 @@ mod tests {
     #[test]
     fn conflict_policy_skips_or_overwrites_existing_themes() {
         let temp = tempfile::tempdir().expect("temporary directory");
+        crate::config::storage::allow_test_root(temp.path());
         let installed_root = temp.path().join("installed");
         write_combined_extension(&installed_root.join("test-pack"));
         let detection = detect_zed_themes_in(&installed_root);
@@ -869,6 +877,7 @@ mod tests {
     #[test]
     fn icon_import_refuses_to_replace_an_existing_package() {
         let temp = tempfile::tempdir().expect("temporary directory");
+        crate::config::storage::allow_test_root(temp.path());
         let extension_dir = temp.path().join("test-pack");
         write_combined_extension(&extension_dir);
         let output_dir = temp.path().join("icons");

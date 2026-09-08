@@ -232,6 +232,30 @@ pub struct TransportService {
     inner: Arc<TransportServiceInner>,
 }
 
+/// Opens an independent encrypted stream for each Host protocol lane.
+#[derive(Clone)]
+pub struct StreamLocalConnector {
+    service: TransportService,
+    connection_id: ConnectionId,
+    socket: String,
+}
+
+impl yttt_transport::TransportConnector for StreamLocalConnector {
+    fn connect(
+        &self,
+    ) -> yttt_transport::BoxFuture<
+        '_,
+        Result<yttt_transport::TransportStream, yttt_transport::TransportError>,
+    > {
+        Box::pin(async move {
+            self.service
+                .open_streamlocal(self.connection_id.clone(), self.socket.clone())
+                .await
+                .map_err(|error| yttt_transport::TransportError::Other(error.to_string()))
+        })
+    }
+}
+
 enum TransportServiceInner {
     Direct {
         commands: mpsc::UnboundedSender<RuntimeCommand>,
@@ -347,6 +371,39 @@ impl TransportService {
             TransportServiceInner::Direct { events, .. }
             | TransportServiceInner::Host { events, .. } => events.clone(),
         }
+    }
+
+    pub fn streamlocal_connector(
+        &self,
+        connection_id: ConnectionId,
+        socket: String,
+    ) -> StreamLocalConnector {
+        StreamLocalConnector {
+            service: self.clone(),
+            connection_id,
+            socket,
+        }
+    }
+
+    async fn open_streamlocal(
+        &self,
+        connection_id: ConnectionId,
+        socket: String,
+    ) -> Result<yttt_transport::TransportStream, TransportError> {
+        let TransportServiceInner::Direct { commands, .. } = self.inner.as_ref() else {
+            return Err(TransportError::Connection(
+                "Host channels require a direct SSH connection".to_string(),
+            ));
+        };
+        let (reply, response) = oneshot::channel();
+        commands
+            .send(RuntimeCommand::StreamLocal {
+                connection_id,
+                socket,
+                reply,
+            })
+            .map_err(|_| TransportError::RuntimeStopped)?;
+        response.await.map_err(|_| TransportError::RuntimeStopped)?
     }
 
     pub async fn start_connect(
@@ -993,6 +1050,11 @@ enum RuntimeCommand {
         request: RemoteTerminalRequest,
         endpoint: RemoteTerminalEndpoint,
     },
+    StreamLocal {
+        connection_id: ConnectionId,
+        socket: String,
+        reply: oneshot::Sender<Result<yttt_transport::TransportStream, TransportError>>,
+    },
     Shutdown,
 }
 
@@ -1009,6 +1071,10 @@ enum ConnectionCommand {
     Terminal {
         request: RemoteTerminalRequest,
         endpoint: RemoteTerminalEndpoint,
+    },
+    StreamLocal {
+        socket: String,
+        reply: oneshot::Sender<Result<yttt_transport::TransportStream, TransportError>>,
     },
     CancelReverseForward(RemoteAgentHookForward),
     Disconnect,
@@ -1238,6 +1304,24 @@ async fn runtime_loop(
                         unreachable!("only terminal commands are sent in this branch");
                     };
                     fail_remote_terminal(endpoint, "SSH connection is not connected");
+                }
+            }
+            RuntimeCommand::StreamLocal {
+                connection_id,
+                socket,
+                reply,
+            } => {
+                let Some(actor) = slots
+                    .get(&connection_id)
+                    .and_then(|slot| slot.actor.as_ref())
+                else {
+                    let _ = reply.send(Err(TransportError::NotConnected));
+                    continue;
+                };
+                if let Err(error) = actor.send(ConnectionCommand::StreamLocal { socket, reply }) {
+                    if let ConnectionCommand::StreamLocal { reply, .. } = error.0 {
+                        let _ = reply.send(Err(TransportError::NotConnected));
+                    }
                 }
             }
             RuntimeCommand::Shutdown => {
@@ -1598,6 +1682,12 @@ async fn connection_loop(
                             );
                         }
                     }
+                }
+                Some(ConnectionCommand::StreamLocal { socket, reply }) => {
+                    let result = session.as_ref().get_ref().channel_open_direct_streamlocal(socket).await
+                        .map(|channel| Box::new(channel.into_stream()) as yttt_transport::TransportStream)
+                        .map_err(|error| TransportError::Connection(error.to_string()));
+                    let _ = reply.send(result);
                 }
                 Some(ConnectionCommand::CancelReverseForward(forward)) => {
                     cancel_remote_agent_hook_forward(

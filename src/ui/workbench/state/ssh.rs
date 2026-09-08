@@ -116,9 +116,13 @@ pub(in super::super) struct SshControllerState {
 
 impl SshControllerState {
     pub(in super::super) fn new(paths: &AppConfigPaths) -> (Self, Option<String>) {
-        let (connections, config_error) = match load_ssh_connections(paths) {
-            Ok(config) => (config, None),
-            Err(error) => (SshConnectionsConfig::default(), Some(error.to_string())),
+        let (connections, config_error) = if crate::config::storage::is_remote() {
+            (SshConnectionsConfig::default(), None)
+        } else {
+            match load_ssh_connections(paths) {
+                Ok(config) => (config, None),
+                Err(error) => (SshConnectionsConfig::default(), Some(error.to_string())),
+            }
         };
         let load_error = config_error;
         (

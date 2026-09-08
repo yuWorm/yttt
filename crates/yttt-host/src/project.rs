@@ -1,6 +1,6 @@
 use notify::Watcher as _;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
@@ -13,7 +13,10 @@ use std::{
 };
 use tokio::sync::broadcast;
 
-use yttt_core::model::{ids::ProjectId, project::RemotePathBuf};
+use yttt_core::model::{
+    ids::{ClientInstanceId, ProjectId},
+    project::RemotePathBuf,
+};
 use yttt_project_core::{
     file::{
         CurrentDiskState, DiskFingerprint, SaveMode, SaveProjectFileOutcome, read_project_file,
@@ -62,7 +65,7 @@ impl HostProjectError {
 
 impl From<yttt_project_core::file::ProjectFileIoError> for HostProjectError {
     fn from(error: yttt_project_core::file::ProjectFileIoError) -> Self {
-        let code = match error {
+        let code = match &error {
             yttt_project_core::file::ProjectFileIoError::FileTooLarge { .. } => {
                 yttt_protocol::FailureCode::ResourceLimit
             }
@@ -74,8 +77,14 @@ impl From<yttt_project_core::file::ProjectFileIoError> for HostProjectError {
             | yttt_project_core::file::ProjectFileIoError::InvalidUtf8 { .. } => {
                 yttt_protocol::FailureCode::InvalidRequest
             }
-            yttt_project_core::file::ProjectFileIoError::Io { .. }
-            | yttt_project_core::file::ProjectFileIoError::Remote { .. } => {
+            yttt_project_core::file::ProjectFileIoError::Io { source, .. } => match source.kind() {
+                std::io::ErrorKind::NotFound => yttt_protocol::FailureCode::NotFound,
+                std::io::ErrorKind::PermissionDenied => {
+                    yttt_protocol::FailureCode::PermissionDenied
+                }
+                _ => yttt_protocol::FailureCode::Internal,
+            },
+            yttt_project_core::file::ProjectFileIoError::Remote { .. } => {
                 yttt_protocol::FailureCode::Internal
             }
         };
@@ -110,8 +119,34 @@ struct RegisteredProject {
     root: RegisteredProjectRoot,
     registration_epoch: u64,
     _watcher: Option<notify::RecommendedWatcher>,
+    watch_error: Option<String>,
+    views: HashSet<(ClientInstanceId, String)>,
+    workspace_referenced: bool,
 }
 
+impl RegisteredProject {
+    fn registration_response(&self) -> ProjectResponse {
+        ProjectResponse::Registered {
+            registration_epoch: self.registration_epoch,
+            watch_error: self.watch_error.clone(),
+            null_device: match self.root {
+                RegisteredProjectRoot::Local(_) => null_device_path(),
+                RegisteredProjectRoot::Ssh(_) => "/dev/null",
+            }
+            .to_string(),
+        }
+    }
+}
+
+fn validate_view_id(id: &str) -> Result<(), HostProjectError> {
+    if id.is_empty() || id.len() > 128 {
+        return Err(HostProjectError::with_code(
+            yttt_protocol::FailureCode::InvalidRequest,
+            "project view ID must be 1–128 bytes",
+        ));
+    }
+    Ok(())
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AssignedRevision {
     revision_number: u64,
@@ -260,9 +295,66 @@ impl HostProjectRuntime {
             .collect()
     }
 
-    pub fn handle(&self, request: ProjectRequest) -> Result<ProjectResponse, HostProjectError> {
+    pub fn disconnect(&self, client_id: &ClientInstanceId) {
+        let mut roots = self
+            .roots
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        roots.retain(|_, project| {
+            project.views.retain(|(owner, _)| owner != client_id);
+            project.workspace_referenced || !project.views.is_empty()
+        });
+    }
+
+    pub fn sync_workspaces(&self, projects: Vec<(ProjectId, HostPath)>) {
+        let retained = projects
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect::<HashSet<_>>();
+        let bootstrap = ClientInstanceId::new("host-workspace-restore");
+        for (project_id, root) in projects {
+            if self
+                .roots
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .contains_key(&project_id)
+            {
+                continue;
+            }
+            if let Err(error) = self.handle(
+                &bootstrap,
+                ProjectRequest::Register {
+                    project_id,
+                    root,
+                    view_id: "workspace-restore".to_string(),
+                },
+            ) {
+                eprintln!("saved project is unavailable: {error}");
+            }
+        }
+        let mut roots = self
+            .roots
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        roots.retain(|id, project| {
+            project.workspace_referenced = retained.contains(id);
+            project.views.retain(|(client, _)| client != &bootstrap);
+            project.workspace_referenced || !project.views.is_empty()
+        });
+    }
+
+    pub fn handle(
+        &self,
+        client_id: &ClientInstanceId,
+        request: ProjectRequest,
+    ) -> Result<ProjectResponse, HostProjectError> {
         match request {
-            ProjectRequest::Register { project_id, root } => {
+            ProjectRequest::Register {
+                project_id,
+                root,
+                view_id,
+            } => {
+                validate_view_id(&view_id)?;
                 let root = host_os_path(root)?;
                 let root = fs::canonicalize(&root).map_err(|error| {
                     format!("failed to open project {}: {error}", root.display())
@@ -271,6 +363,21 @@ impl HostProjectRuntime {
                     return Err(
                         format!("project root is not a directory: {}", root.display()).into(),
                     );
+                }
+                let mut roots = self
+                    .roots
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some(project) = roots.get_mut(&project_id) {
+                    if !matches!(&project.root, RegisteredProjectRoot::Local(current) if current == &root)
+                    {
+                        return Err(HostProjectError::with_code(
+                            yttt_protocol::FailureCode::Conflict,
+                            "project ID is already bound to a different root",
+                        ));
+                    }
+                    project.views.insert((client_id.clone(), view_id));
+                    return Ok(project.registration_response());
                 }
                 let registration_epoch = self
                     .next_registration_epoch
@@ -285,17 +392,17 @@ impl HostProjectRuntime {
                     Ok(watcher) => (Some(watcher), None),
                     Err(error) => (None, Some(error)),
                 };
-                self.roots
-                    .write()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .insert(
-                        project_id,
-                        RegisteredProject {
-                            root: RegisteredProjectRoot::Local(root.clone()),
-                            registration_epoch,
-                            _watcher: watcher,
-                        },
-                    );
+                roots.insert(
+                    project_id,
+                    RegisteredProject {
+                        root: RegisteredProjectRoot::Local(root.clone()),
+                        registration_epoch,
+                        _watcher: watcher,
+                        watch_error: watch_error.clone(),
+                        views: HashSet::from([(client_id.clone(), view_id)]),
+                        workspace_referenced: false,
+                    },
+                );
                 Ok(ProjectResponse::Registered {
                     registration_epoch,
                     watch_error,
@@ -306,45 +413,82 @@ impl HostProjectRuntime {
                 project_id,
                 connection_id,
                 root,
+                view_id,
             } => {
+                validate_view_id(&view_id)?;
                 let root = remote_root(root)?;
+                let mut roots = self
+                    .roots
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some(project) = roots.get_mut(&project_id) {
+                    if !matches!(&project.root, RegisteredProjectRoot::Ssh(current) if current.connection_id == connection_id && current.root == root)
+                    {
+                        return Err(HostProjectError::with_code(
+                            yttt_protocol::FailureCode::Conflict,
+                            "project ID is already bound to a different root",
+                        ));
+                    }
+                    project.views.insert((client_id.clone(), view_id));
+                    return Ok(project.registration_response());
+                }
                 let registration_epoch = self
                     .next_registration_epoch
                     .fetch_add(1, Ordering::Relaxed)
                     .saturating_add(1);
-                self.roots
-                    .write()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .insert(
-                        project_id,
-                        RegisteredProject {
-                            root: RegisteredProjectRoot::Ssh(RegisteredSshProject {
-                                connection_id,
-                                root: root.clone(),
-                            }),
-                            registration_epoch,
-                            _watcher: None,
-                        },
-                    );
+                roots.insert(
+                    project_id,
+                    RegisteredProject {
+                        root: RegisteredProjectRoot::Ssh(RegisteredSshProject {
+                            connection_id,
+                            root: root.clone(),
+                        }),
+                        registration_epoch,
+                        _watcher: None,
+                        watch_error: None,
+                        views: HashSet::from([(client_id.clone(), view_id)]),
+                        workspace_referenced: false,
+                    },
+                );
                 Ok(ProjectResponse::Registered {
                     registration_epoch,
                     watch_error: None,
                     null_device: "/dev/null".to_string(),
                 })
             }
+            ProjectRequest::Observe {
+                project_id,
+                view_id,
+            } => {
+                validate_view_id(&view_id)?;
+                let mut roots = self
+                    .roots
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let project = roots.get_mut(&project_id).ok_or_else(|| {
+                    HostProjectError::not_found(format!(
+                        "project is not registered with Host: {project_id}"
+                    ))
+                })?;
+                project.views.insert((client_id.clone(), view_id));
+                Ok(project.registration_response())
+            }
             ProjectRequest::Close {
                 project_id,
                 registration_epoch,
+                view_id,
             } => {
                 let mut roots = self
                     .roots
                     .write()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
-                if roots
-                    .get(&project_id)
-                    .is_some_and(|project| project.registration_epoch == registration_epoch)
+                if let Some(project) = roots.get_mut(&project_id)
+                    && project.registration_epoch == registration_epoch
                 {
-                    roots.remove(&project_id);
+                    project.views.remove(&(client_id.clone(), view_id));
+                    if project.views.is_empty() && !project.workspace_referenced {
+                        roots.remove(&project_id);
+                    }
                 }
                 Ok(ProjectResponse::Closed)
             }
@@ -796,58 +940,105 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ssh_registration_is_epoch_guarded_and_host_owned() {
+    fn missing_project_file_is_reported_as_not_found() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = HostProjectRuntime::new();
+        let project_id = ProjectId::new("missing-file");
+        runtime
+            .handle(
+                &ClientInstanceId::new("test-client"),
+                ProjectRequest::Register {
+                    project_id: project_id.clone(),
+                    root: HostPath::from_path(root.path()).unwrap(),
+                    view_id: "test-view".to_string(),
+                },
+            )
+            .unwrap();
+        let error = runtime
+            .handle(
+                &ClientInstanceId::new("test-client"),
+                ProjectRequest::ReadFile {
+                    project_id,
+                    relative_path: ProjectRelativePath::from_utf8("missing.txt").unwrap(),
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.code, yttt_protocol::FailureCode::NotFound);
+    }
+
+    #[test]
+    fn observing_and_closing_views_preserves_other_views_and_project_identity() {
         let runtime = HostProjectRuntime::new();
         let project_id = ProjectId::new("remote");
+        let owner = ClientInstanceId::new("desktop");
+        let observer = ClientInstanceId::new("observer");
         let ProjectResponse::Registered {
-            registration_epoch: first_epoch,
-            ..
+            registration_epoch, ..
         } = runtime
-            .handle(ProjectRequest::RegisterSsh {
-                project_id: project_id.clone(),
-                connection_id: "first".to_string(),
-                root: ProjectRelativePath::from_utf8("first").unwrap(),
-            })
+            .handle(
+                &owner,
+                ProjectRequest::RegisterSsh {
+                    project_id: project_id.clone(),
+                    connection_id: "first".to_string(),
+                    root: ProjectRelativePath::from_utf8("first").unwrap(),
+                    view_id: "window-a".to_string(),
+                },
+            )
             .unwrap()
         else {
-            panic!("unexpected first SSH registration response");
+            panic!("registered")
         };
-        let ProjectResponse::Registered {
-            registration_epoch: second_epoch,
-            ..
-        } = runtime
-            .handle(ProjectRequest::RegisterSsh {
-                project_id: project_id.clone(),
-                connection_id: "second".to_string(),
-                root: ProjectRelativePath::from_utf8("second").unwrap(),
-            })
-            .unwrap()
-        else {
-            panic!("unexpected second SSH registration response");
-        };
-        assert!(second_epoch > first_epoch);
-
-        runtime
-            .handle(ProjectRequest::Close {
-                project_id: project_id.clone(),
-                registration_epoch: first_epoch,
-            })
-            .unwrap();
-        let registered = runtime.ssh_project(&project_id).unwrap();
-        assert_eq!(registered.connection_id, "second");
-        assert_eq!(registered.root.as_str(), "/second");
-
-        runtime
-            .handle(ProjectRequest::Close {
-                project_id: project_id.clone(),
-                registration_epoch: second_epoch,
-            })
-            .unwrap();
-        let error = runtime.ssh_project(&project_id).err().unwrap();
-        assert_eq!(error.code, yttt_protocol::FailureCode::NotFound);
+        let error = runtime
+            .handle(
+                &owner,
+                ProjectRequest::RegisterSsh {
+                    project_id: project_id.clone(),
+                    connection_id: "second".to_string(),
+                    root: ProjectRelativePath::from_utf8("second").unwrap(),
+                    view_id: "window-b".to_string(),
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.code, yttt_protocol::FailureCode::Conflict);
+        for (client, view) in [(&owner, "window-b"), (&observer, "window-a")] {
+            assert!(matches!(runtime.handle(client, ProjectRequest::Observe {
+                project_id: project_id.clone(), view_id: view.to_string(),
+            }).unwrap(), ProjectResponse::Registered { registration_epoch: epoch, .. } if epoch == registration_epoch));
+        }
+        for view in ["window-a", "window-b"] {
+            runtime
+                .handle(
+                    &owner,
+                    ProjectRequest::Close {
+                        project_id: project_id.clone(),
+                        registration_epoch,
+                        view_id: view.to_string(),
+                    },
+                )
+                .unwrap();
+        }
         assert_eq!(
-            error.to_string(),
-            "project is not registered with Host: remote"
+            runtime.ssh_project(&project_id).unwrap().connection_id,
+            "first"
+        );
+        runtime
+            .handle(
+                &owner,
+                ProjectRequest::Close {
+                    project_id: project_id.clone(),
+                    registration_epoch,
+                    view_id: "window-a".to_string(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            runtime.ssh_project(&project_id).unwrap().root.as_str(),
+            "/first"
+        );
+        runtime.disconnect(&observer);
+        assert_eq!(
+            runtime.ssh_project(&project_id).err().unwrap().code,
+            yttt_protocol::FailureCode::NotFound
         );
     }
 
@@ -858,16 +1049,23 @@ mod tests {
         let first = HostProjectRuntime::new_with_epoch(1);
         let project_id = ProjectId::new("notes");
         first
-            .handle(ProjectRequest::Register {
-                project_id: project_id.clone(),
-                root: HostPath::from_path(root.path()).unwrap(),
-            })
+            .handle(
+                &ClientInstanceId::new("test-client"),
+                ProjectRequest::Register {
+                    project_id: project_id.clone(),
+                    root: HostPath::from_path(root.path()).unwrap(),
+                    view_id: "test-view".to_string(),
+                },
+            )
             .unwrap();
         let ProjectResponse::File(file) = first
-            .handle(ProjectRequest::ReadFile {
-                project_id: project_id.clone(),
-                relative_path: ProjectRelativePath::from_utf8("notes.txt").unwrap(),
-            })
+            .handle(
+                &ClientInstanceId::new("test-client"),
+                ProjectRequest::ReadFile {
+                    project_id: project_id.clone(),
+                    relative_path: ProjectRelativePath::from_utf8("notes.txt").unwrap(),
+                },
+            )
             .unwrap()
         else {
             panic!("expected file response");
@@ -880,19 +1078,26 @@ mod tests {
 
         let second = HostProjectRuntime::new_with_epoch(2);
         second
-            .handle(ProjectRequest::Register {
-                project_id: project_id.clone(),
-                root: HostPath::from_path(root.path()).unwrap(),
-            })
+            .handle(
+                &ClientInstanceId::new("test-client"),
+                ProjectRequest::Register {
+                    project_id: project_id.clone(),
+                    root: HostPath::from_path(root.path()).unwrap(),
+                    view_id: "test-view".to_string(),
+                },
+            )
             .unwrap();
         let ProjectResponse::Save(ProjectSaveResult::Conflict(ProjectFileState::Present(current))) =
             second
-                .handle(ProjectRequest::SaveFile {
-                    project_id: project_id.clone(),
-                    relative_path: ProjectRelativePath::from_utf8("notes.txt").unwrap(),
-                    text: "stale".to_string(),
-                    mode: ProjectSaveMode::Check(file.fingerprint),
-                })
+                .handle(
+                    &ClientInstanceId::new("test-client"),
+                    ProjectRequest::SaveFile {
+                        project_id: project_id.clone(),
+                        relative_path: ProjectRelativePath::from_utf8("notes.txt").unwrap(),
+                        text: "stale".to_string(),
+                        mode: ProjectSaveMode::Check(file.fingerprint),
+                    },
+                )
                 .unwrap()
         else {
             panic!("expected stale epoch conflict");
@@ -910,19 +1115,26 @@ mod tests {
         let runtime = HostProjectRuntime::new();
         let project_id = ProjectId::new("git");
         runtime
-            .handle(ProjectRequest::Register {
-                project_id: project_id.clone(),
-                root: HostPath::from_path(root.path()).unwrap(),
-            })
+            .handle(
+                &ClientInstanceId::new("test-client"),
+                ProjectRequest::Register {
+                    project_id: project_id.clone(),
+                    root: HostPath::from_path(root.path()).unwrap(),
+                    view_id: "test-view".to_string(),
+                },
+            )
             .unwrap();
         let error = runtime
-            .handle(ProjectRequest::Git {
-                project_id,
-                operation: yttt_protocol::ProjectGitOperation::Switch {
-                    name: "-c".to_string(),
-                    track_remote: false,
+            .handle(
+                &ClientInstanceId::new("test-client"),
+                ProjectRequest::Git {
+                    project_id,
+                    operation: yttt_protocol::ProjectGitOperation::Switch {
+                        name: "-c".to_string(),
+                        track_remote: false,
+                    },
                 },
-            })
+            )
             .unwrap_err();
         assert_eq!(error.code, yttt_protocol::FailureCode::InvalidRequest);
     }

@@ -2,14 +2,20 @@
 mod agent_hooks;
 mod agent_processes;
 mod audit;
+mod control;
+mod device_settings;
 pub mod diagnostics;
+mod drafts;
 mod lifecycle;
 mod project;
+mod remote_access;
 pub mod runtime;
 mod ssh_runtime;
 pub mod terminal;
 mod terminal_data;
 pub use terminal_data::SharedTerminalUpdate;
+mod workspace;
+pub use workspace::WorkspaceService;
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -89,6 +95,8 @@ impl HostLifetime {
 pub struct HostBootstrap {
     pub profile_id: ProfileId,
     pub runtime_root: PathBuf,
+    pub state_root: PathBuf,
+    pub config_root: PathBuf,
     pub auth_token_file: PathBuf,
     pub ssh_host_keys_file: PathBuf,
     pub credential_namespace: String,
@@ -143,6 +151,21 @@ pub enum HostError {
     Ssh(String),
 }
 
+/// A private SSH-forwarded work endpoint. Its credential never grants local administration.
+pub struct RemoteWorkListener {
+    listener: Box<dyn TransportListener>,
+    token: Arc<AuthToken>,
+}
+
+impl RemoteWorkListener {
+    pub fn new(listener: impl TransportListener, token: AuthToken) -> Self {
+        Self {
+            listener: Box::new(listener),
+            token: Arc::new(token),
+        }
+    }
+}
+
 /// `bind` runs only after the single-instance guard is held. Binding first would let a
 /// second Host claim the endpoint before losing the lock, unlinking the live socket on
 /// its way out.
@@ -153,10 +176,35 @@ where
     Fut: Future<Output = Result<L, E>>,
     E: Into<yttt_transport::TransportError>,
 {
+    run_with_remote_work(bootstrap, || async move {
+        bind().await.map(|listener| (listener, None))
+    })
+    .await
+}
+
+/// Binds both endpoints under the same profile lock before publishing readiness.
+pub async fn run_with_remote_work<L, B, Fut, E>(
+    bootstrap: HostBootstrap,
+    bind: B,
+) -> Result<(), HostError>
+where
+    L: TransportListener,
+    B: FnOnce() -> Fut,
+    Fut: Future<Output = Result<(L, Option<RemoteWorkListener>), E>>,
+    E: Into<yttt_transport::TransportError>,
+{
     fs::create_dir_all(&bootstrap.runtime_root)?;
     secure_runtime_root(&bootstrap.runtime_root)?;
     let guard = HostInstanceGuard::acquire(&bootstrap)?;
-    let listener = bind()
+    let workspaces = Arc::new(WorkspaceService::new(
+        &bootstrap.state_root,
+        &bootstrap.config_root,
+    )?);
+    let device_settings = Arc::new(Mutex::new(device_settings::DeviceSettingsStore::load(
+        &bootstrap.state_root,
+        &bootstrap.config_root,
+    )?));
+    let (listener, work_listener) = bind()
         .await
         .map_err(|error| HostError::Transport(error.into()))?;
     let token = read_auth_token(&bootstrap.auth_token_file)?;
@@ -180,6 +228,9 @@ where
         lifecycle_supported: ProtocolRange::exact(LIFECYCLE_PROTOCOL_VERSION),
         build: bootstrap.build,
         profile_id: bootstrap.profile_id.clone(),
+        environment_id: workspaces.environment_id().to_string(),
+        credential_generation: 0,
+        ingress: yttt_transport::IngressKind::LocalAdmin,
         host_id,
         host_epoch,
         connection_sequence: 1,
@@ -189,11 +240,15 @@ where
     let next_host_sequence = Arc::new(AtomicU64::new(1));
     let request_journals = Arc::new(Mutex::new(HashMap::new()));
     let client_attachments = Arc::new(Mutex::new(HashMap::new()));
+    let sessions = Arc::new(Mutex::new(HashMap::new()));
+    let mutation_gate = Arc::new(tokio::sync::RwLock::new(()));
+    let (profile_changes, _) = watch::channel(0_u64);
     let audit = Arc::new(HostAuditLog::new());
     let (stop_tx, mut stop_rx) = watch::channel(false);
     let runtime = HostRuntime::new();
     let lifecycle = Arc::new(HostLifecycle::new(stop_tx.clone(), bootstrap.lifetime));
     let projects = Arc::new(HostProjectRuntime::new_with_epoch(host_epoch));
+    projects.sync_workspaces(workspaces.referenced_projects());
     let ssh = HostSshRuntime::start(
         bootstrap.ssh_host_keys_file.clone(),
         bootstrap.credential_namespace.clone(),
@@ -275,6 +330,42 @@ where
             }
         }
     });
+    let (remote_access, remote_commands) = remote_access::RemoteAccessHandle::channel();
+    let connection_context = ConnectionContext {
+        identity: (*identity).clone(),
+        profile_id: bootstrap.profile_id.clone(),
+        host_sequence: next_host_sequence.clone(),
+        ssh: ssh.clone(),
+        agent_hooks: agent_hooks.clone(),
+        projects: projects.clone(),
+        workspaces: workspaces.clone(),
+        device_settings: device_settings.clone(),
+        remote_access,
+        network_admission: None,
+        handshake_permit: None,
+        handshake_deadline: None,
+        mutation_gate: mutation_gate.clone(),
+        request_journals: request_journals.clone(),
+        client_attachments: client_attachments.clone(),
+        sessions: sessions.clone(),
+        profile_changes: profile_changes.clone(),
+        runtime: runtime.clone(),
+        lifecycle: lifecycle.clone(),
+        audit: audit.clone(),
+        stop: stop_rx.clone(),
+    };
+    let remote_task = tokio::spawn(remote_access::run(
+        connection_context.clone(),
+        remote_commands,
+        next_connection.clone(),
+    ));
+    let work_task = work_listener.map(|work| {
+        tokio::spawn(serve_remote_work(
+            work,
+            connection_context.clone(),
+            next_connection.clone(),
+        ))
+    });
     guard.publish_ready(&ready)?;
 
     let mut exit_reaper = tokio::time::interval(Duration::from_secs(60));
@@ -297,24 +388,9 @@ where
             }
             accepted = listener.accept() => {
                 let stream = accepted?;
-                let mut connection_identity = (*identity).clone();
-                connection_identity.connection_sequence =
-                    next_connection.fetch_add(1, Ordering::Relaxed);
+                let mut context = connection_context.clone();
+                context.identity.connection_sequence = next_connection.fetch_add(1, Ordering::Relaxed);
                 let token = token.clone();
-                let context = ConnectionContext {
-                    identity: connection_identity,
-                    profile_id: bootstrap.profile_id.clone(),
-                    host_sequence: next_host_sequence.clone(),
-                    ssh: ssh.clone(),
-                    agent_hooks: agent_hooks.clone(),
-                    projects: projects.clone(),
-                    request_journals: request_journals.clone(),
-                    client_attachments: client_attachments.clone(),
-                    runtime: runtime.clone(),
-                    lifecycle: lifecycle.clone(),
-                    audit: audit.clone(),
-                    stop: stop_rx.clone(),
-                };
                 tokio::spawn(async move {
                     let _ = serve_connection(stream, token, context).await;
                 });
@@ -323,9 +399,38 @@ where
     }
 
     drop(listener);
+    let _ = remote_task.await;
+    if let Some(task) = work_task {
+        let _ = task.await;
+    }
     let _ = diagnostics_task.await;
     drop(guard);
     Ok(())
+}
+
+async fn serve_remote_work(
+    work: RemoteWorkListener,
+    mut context: ConnectionContext,
+    sequence: Arc<AtomicU64>,
+) {
+    context.identity.ingress = yttt_transport::IngressKind::SshWork;
+    let mut stop = context.stop.clone();
+    let mut tasks = tokio::task::JoinSet::new();
+    loop {
+        tokio::select! {
+            changed = stop.changed() => { if changed.is_err() || *stop.borrow() { break; } }
+            _ = tasks.join_next(), if !tasks.is_empty() => {}
+            accepted = work.listener.accept(), if tasks.len() < 256 => {
+                let Ok(stream) = accepted else { break };
+                let mut context = context.clone();
+                context.identity.connection_sequence = sequence.fetch_add(1, Ordering::Relaxed);
+                let token = work.token.clone();
+                tasks.spawn(async move { let _ = serve_connection(stream, token, context).await; });
+            }
+        }
+    }
+    drop(work);
+    while tasks.join_next().await.is_some() {}
 }
 
 fn collect_host_diagnostics(
@@ -359,6 +464,7 @@ fn collect_host_diagnostics(
 type SharedTerminalAttachments =
     Arc<tokio::sync::Mutex<HashMap<TerminalSessionId, TerminalAttachment>>>;
 
+#[derive(Clone)]
 struct ConnectionContext {
     identity: HostIdentity,
     profile_id: ProfileId,
@@ -366,9 +472,18 @@ struct ConnectionContext {
     ssh: Arc<HostSshRuntime>,
     agent_hooks: Arc<HostAgentHookRuntime>,
     projects: Arc<HostProjectRuntime>,
+    workspaces: Arc<WorkspaceService>,
+    device_settings: Arc<Mutex<device_settings::DeviceSettingsStore>>,
+    remote_access: remote_access::RemoteAccessHandle,
+    network_admission: Option<Arc<remote_access::NetworkAdmission>>,
+    handshake_permit: Option<Arc<Mutex<Option<tokio::sync::OwnedSemaphorePermit>>>>,
+    handshake_deadline: Option<tokio::time::Instant>,
+    mutation_gate: Arc<tokio::sync::RwLock<()>>,
     request_journals:
         Arc<Mutex<HashMap<ClientInstanceId, Arc<tokio::sync::Mutex<RequestJournal>>>>>,
     client_attachments: Arc<Mutex<HashMap<ClientInstanceId, SharedTerminalAttachments>>>,
+    sessions: Arc<Mutex<HashMap<ClientInstanceId, SessionBinding>>>,
+    profile_changes: watch::Sender<u64>,
     runtime: Arc<HostRuntime>,
     lifecycle: Arc<HostLifecycle>,
     audit: Arc<HostAuditLog>,
@@ -513,14 +628,33 @@ fn request_is_journalable(request: &Request) -> bool {
     // the replayable request journal, even when a later remote profile exists.
     !matches!(
         request,
-        Request::SshConnect(_) | Request::CredentialAnswer { .. }
+        Request::SshConnect(_)
+            | Request::CredentialAnswer { .. }
+            | Request::ProfileControl(_)
+            | Request::RemoteAccess(_)
     )
 }
 
-fn authorize_local_capability(request: &Request) -> Result<(), ProtocolFailure> {
-    match request.required_capability() {
-        None | Some(_) => Ok(()),
+fn authorize_ingress(
+    request: &Request,
+    ingress: yttt_transport::IngressKind,
+) -> Result<(), ProtocolFailure> {
+    if ingress != yttt_transport::IngressKind::LocalAdmin
+        && matches!(
+            request,
+            Request::DeleteSshCredential { .. }
+                | Request::ReadDeviceSettings
+                | Request::SetLoginStartupConsent { .. }
+                | Request::RemoteAccess(_)
+        )
+    {
+        return Err(ProtocolFailure::new(
+            FailureCode::PermissionDenied,
+            "device administration requires local IPC",
+            false,
+        ));
     }
+    Ok(())
 }
 
 fn record_audit(
@@ -564,14 +698,91 @@ fn request_fingerprint(request: &Request) -> [u8; 32] {
     writer.0.finalize().into()
 }
 
+struct SessionBinding {
+    authentication: yttt_transport::AuthenticatedSession,
+    control_connected: bool,
+}
+
+struct ControlConnectionGuard {
+    sessions: Arc<Mutex<HashMap<ClientInstanceId, SessionBinding>>>,
+    client_id: ClientInstanceId,
+}
+
+impl Drop for ControlConnectionGuard {
+    fn drop(&mut self) {
+        if let Some(binding) = self.sessions.lock().get_mut(&self.client_id) {
+            binding.control_connected = false;
+        }
+    }
+}
+
 async fn serve_connection(
     mut stream: TransportStream,
     token: Arc<AuthToken>,
-    context: ConnectionContext,
+    mut context: ConnectionContext,
 ) -> Result<(), ()> {
-    let authenticated = server_handshake(&mut stream, &context.identity, token.as_ref())
-        .await
-        .map_err(|_| ())?;
+    let mut handshake_stop = context.stop.clone();
+    if *handshake_stop.borrow() {
+        return Err(());
+    }
+    let deadline = context
+        .handshake_deadline
+        .unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(5));
+    let authenticated = tokio::select! {
+        _ = handshake_stop.changed() => return Err(()),
+        result = tokio::time::timeout_at(deadline, server_handshake(&mut stream, &context.identity, token.as_ref())) =>
+            result.map_err(|_| ())?.map_err(|_| ())?,
+    };
+    if let Some(permit) = context.handshake_permit.take() {
+        permit.lock().take();
+    }
+    let _network_session = if let Some(admission) = &context.network_admission {
+        let session = admission.admit(&authenticated.client_instance_id)?;
+        context.stop = session.stop.clone();
+        Some(session)
+    } else {
+        None
+    };
+    let _control_connection = if !matches!(
+        authenticated.channel,
+        yttt_protocol::ConnectionChannel::Lifecycle
+            | yttt_protocol::ConnectionChannel::DesktopOwner
+    ) {
+        let mut sessions = context.sessions.lock();
+        if let Some(binding) = sessions.get(&authenticated.client_instance_id) {
+            if binding.authentication != authenticated.session {
+                return Err(());
+            }
+        } else {
+            if sessions.len() >= 4096 {
+                return Err(());
+            }
+            sessions.insert(
+                authenticated.client_instance_id.clone(),
+                SessionBinding {
+                    authentication: authenticated.session.clone(),
+                    control_connected: false,
+                },
+            );
+        }
+        if authenticated.channel == yttt_protocol::ConnectionChannel::Control {
+            let binding = sessions
+                .get_mut(&authenticated.client_instance_id)
+                .expect("registered session");
+            if binding.control_connected {
+                return Err(());
+            }
+            binding.control_connected = true;
+            Some(ControlConnectionGuard {
+                sessions: context.sessions.clone(),
+                client_id: authenticated.client_instance_id.clone(),
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     if authenticated.channel == yttt_protocol::ConnectionChannel::DesktopOwner {
         if !context.lifecycle.desktop_owner_connected() {
             return Err(());
@@ -625,7 +836,15 @@ async fn serve_connection(
                 &context,
             )
             .await;
-            context.runtime.release_client(&client_id);
+            {
+                let _fence = context.mutation_gate.write().await;
+                context.workspaces.control.disconnect(&client_id);
+                context.runtime.release_client(&client_id);
+                context.projects.disconnect(&client_id);
+                context
+                    .profile_changes
+                    .send_modify(|revision| *revision = revision.wrapping_add(1));
+            }
             context.ssh.abandon_challenges(&client_id);
             attachments.lock().await.clear();
             let mut all_attachments = context.client_attachments.lock();
@@ -779,6 +998,15 @@ async fn process_control_request(
     subscriptions: &mut HashMap<TerminalSessionId, TerminalAttachment>,
     request_journal: &Arc<tokio::sync::Mutex<RequestJournal>>,
 ) -> HostResponse {
+    let mutation_guard = match admit_mutation(&request, context, client_id).await {
+        Ok(guard) => guard,
+        Err(failure) => {
+            return HostResponse {
+                request_id: request.request_id,
+                result: Err(failure),
+            };
+        }
+    };
     let subscription = match &request.body {
         Request::SpawnTerminal(spec) => Some((
             spec.session_id.clone(),
@@ -830,6 +1058,7 @@ async fn process_control_request(
                     client_id,
                     subscriptions,
                     context.host_sequence.fetch_add(1, Ordering::Relaxed),
+                    mutation_guard.blocking.clone(),
                 )
                 .await;
                 journal.insert(fingerprint, response.clone());
@@ -844,6 +1073,7 @@ async fn process_control_request(
                 client_id,
                 subscriptions,
                 context.host_sequence.fetch_add(1, Ordering::Relaxed),
+                mutation_guard.blocking.clone(),
             )
             .await,
             true,
@@ -948,11 +1178,12 @@ async fn serve_terminal_interactive_connection(
             message = receive_terminal_interactive(&mut reader) => {
                 let message = message.map_err(|_| ())?;
                 let (request, reply) = match message {
-                    TerminalInteractiveMessage::Input(input) => (
+                    TerminalInteractiveMessage::Input { input, control } => (
                         ClientRequest {
                             request_id: 0,
                             actor_device_id: Some(client_id.to_string()),
                             lease_epoch: None,
+                            control,
                             body: Request::TerminalInput(input),
                         },
                         false,
@@ -979,14 +1210,14 @@ async fn serve_terminal_interactive_connection(
                     TerminalInteractiveMessage::Response(_) => return Err(()),
                 };
                 let mut attachments = attachments.lock().await;
-                let response = handle_request(
-                    request,
-                    context,
-                    &client_id,
-                    &mut attachments,
-                    context.host_sequence.fetch_add(1, Ordering::Relaxed),
-                )
-                .await;
+                let admission = admit_mutation(&request, context, &client_id).await;
+                let response = match &admission {
+                    Ok(guard) => handle_request(
+                        request, context, &client_id, &mut attachments,
+                        context.host_sequence.fetch_add(1, Ordering::Relaxed), guard.blocking.clone(),
+                    ).await,
+                    Err(failure) => HostResponse { request_id: request.request_id, result: Err(failure.clone()) },
+                };
                 if let Ok(result) = &response.result {
                     apply_terminal_response_effects(
                         result,
@@ -1043,6 +1274,18 @@ async fn serve_state_event_connection(
     let mut project_events = context.projects.subscribe();
     let mut runtime_events = context.runtime.subscribe();
     let mut resource_changes = context.lifecycle.subscribe_resource_changes();
+    let mut profile_changes = context.profile_changes.subscribe();
+    send_host_state_event(
+        &mut stream,
+        context,
+        ServerEvent::ProfileControl(
+            context
+                .workspaces
+                .control
+                .status(context.identity.host_epoch),
+        ),
+    )
+    .await?;
     let mut stop = context.stop.clone();
     for update in context.agent_hooks.snapshots_after(&[]) {
         send_host_state_event(
@@ -1057,6 +1300,11 @@ async fn serve_state_event_connection(
     }
     loop {
         tokio::select! {
+            changed = profile_changes.changed() => {
+                changed.map_err(|_| ())?;
+                send_host_state_event(&mut stream, context,
+                    ServerEvent::ProfileControl(context.workspaces.control.status(context.identity.host_epoch))).await?;
+            }
             event = runtime_events.recv() => {
                 let server_event = {
                     let mut subscriptions = attachments.lock().await;
@@ -1632,12 +1880,108 @@ async fn drain_terminal_data(output: &TerminalDataWriter) -> Result<(), ()> {
         .await
         .map_err(|_| ())?
 }
+fn request_mutates(body: &Request) -> bool {
+    matches!(
+        body.required_capability(),
+        Some(
+            yttt_protocol::Capability::WorkspaceMutate
+                | yttt_protocol::Capability::ProjectMutate
+                | yttt_protocol::Capability::GitMutate
+                | yttt_protocol::Capability::TerminalInteractive
+                | yttt_protocol::Capability::SshConnect
+                | yttt_protocol::Capability::RemoteCommandPrivileged
+        )
+    )
+}
+
+#[derive(Default)]
+struct MutationAdmission {
+    _direct: Option<tokio::sync::OwnedRwLockReadGuard<()>>,
+    blocking: Option<Arc<tokio::sync::OwnedRwLockReadGuard<()>>>,
+}
+
+async fn admit_mutation(
+    request: &ClientRequest,
+    context: &ConnectionContext,
+    client_id: &ClientInstanceId,
+) -> Result<MutationAdmission, ProtocolFailure> {
+    authorize_ingress(&request.body, context.identity.ingress)?;
+    if !request_mutates(&request.body) {
+        return Ok(MutationAdmission::default());
+    }
+    let guard = context.mutation_gate.clone().read_owned().await;
+    let control = request.control.ok_or_else(|| {
+        ProtocolFailure::new(
+            FailureCode::PermissionDenied,
+            "mutation has no authenticated profile control context",
+            false,
+        )
+    })?;
+    context
+        .workspaces
+        .control
+        .authorize(client_id, control, context.identity.host_epoch)?;
+    // Blocking I/O retains a permit even if its awaiting connection disappears.
+    // Interactive input uses the direct guard without a per-keystroke allocation.
+    if matches!(
+        request.body,
+        Request::Project(_)
+            | Request::Workspace(_)
+            | Request::RemoteFile(_)
+            | Request::RemoteCommand(_)
+    ) {
+        Ok(MutationAdmission {
+            _direct: None,
+            blocking: Some(Arc::new(guard)),
+        })
+    } else {
+        Ok(MutationAdmission {
+            _direct: Some(guard),
+            blocking: None,
+        })
+    }
+}
+
+async fn handle_profile_control(
+    context: &ConnectionContext,
+    client_id: &ClientInstanceId,
+    request: yttt_protocol::session::ProfileControlRequest,
+) -> Result<yttt_protocol::session::ControlStatus, ProtocolFailure> {
+    let changes = !matches!(
+        request,
+        yttt_protocol::session::ProfileControlRequest::Status
+    );
+    let fence = context.workspaces.control.request(client_id, request)?;
+    if changes {
+        context
+            .profile_changes
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
+    if let Some(id) = fence {
+        let _guard = context.mutation_gate.write().await;
+        let result = context.workspaces.control.finish(&id, |revisions| {
+            context.workspaces.verify_revisions(revisions)
+        });
+        context
+            .profile_changes
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
+        if let Some(previous) = result? {
+            context.runtime.release_client(&previous);
+        }
+    }
+    Ok(context
+        .workspaces
+        .control
+        .status(context.identity.host_epoch))
+}
+
 async fn handle_request(
     request: ClientRequest,
     context: &ConnectionContext,
     client_id: &ClientInstanceId,
     attachments: &mut HashMap<yttt_core::model::ids::TerminalSessionId, TerminalAttachment>,
     host_sequence: u64,
+    mutation_guard: Option<Arc<tokio::sync::OwnedRwLockReadGuard<()>>>,
 ) -> HostResponse {
     let ConnectionContext {
         identity,
@@ -1656,7 +2000,7 @@ async fn handle_request(
         body,
         ..
     } = request;
-    if let Err(failure) = authorize_local_capability(&body) {
+    if let Err(failure) = authorize_ingress(&body, context.identity.ingress) {
         record_audit(
             audit,
             request_id,
@@ -2006,31 +2350,75 @@ async fn handle_request(
         Request::RemoteFile(request) => {
             let ssh = ssh.clone();
             let projects = projects.clone();
-            tokio::task::spawn_blocking(move || ssh.remote_file(&projects, request))
-                .await
-                .map_err(|error| ssh_failure(error.to_string()))
-                .and_then(|result| result.map_err(project_failure))
+            tokio::task::spawn_blocking(move || {
+                let _guard = mutation_guard;
+                ssh.remote_file(&projects, request)
+            })
+            .await
+            .map_err(|error| ssh_failure(error.to_string()))
+            .and_then(|result| result.map_err(project_failure))
         }
         Request::RemoteCommand(request) => {
             let ssh = ssh.clone();
             let projects = projects.clone();
-            tokio::task::spawn_blocking(move || ssh.remote_command(&projects, request))
-                .await
-                .map_err(|error| ssh_failure(error.to_string()))
-                .and_then(|result| result.map_err(project_failure))
+            tokio::task::spawn_blocking(move || {
+                let _guard = mutation_guard;
+                ssh.remote_command(&projects, request)
+            })
+            .await
+            .map_err(|error| ssh_failure(error.to_string()))
+            .and_then(|result| result.map_err(project_failure))
         }
         Request::Project(request) => {
             let projects = projects.clone();
-            tokio::task::spawn_blocking(move || projects.handle(request))
-                .await
-                .map_err(|error| {
-                    ProtocolFailure::new(FailureCode::Internal, error.to_string(), false)
-                })
-                .and_then(|result| result.map(Response::Project).map_err(project_failure))
+            let client_id = client_id.clone();
+            tokio::task::spawn_blocking(move || {
+                let _guard = mutation_guard;
+                projects.handle(&client_id, request)
+            })
+            .await
+            .map_err(|error| ProtocolFailure::new(FailureCode::Internal, error.to_string(), false))
+            .and_then(|result| result.map(Response::Project).map_err(project_failure))
         }
         Request::ReadAgentSnapshots { acknowledged } => Ok(Response::AgentSnapshots(
             agent_hooks.snapshots_after(&acknowledged),
         )),
+        Request::Workspace(request) => {
+            let workspaces = context.workspaces.clone();
+            let requesting_client = client_id.clone();
+            let projects = context.projects.clone();
+            tokio::task::spawn_blocking(move || {
+                let _guard = mutation_guard;
+                let result = workspaces.handle(&requesting_client, request)?;
+                if matches!(
+                    result,
+                    yttt_protocol::workspace::WorkspaceResponse::Committed { .. }
+                ) {
+                    projects.sync_workspaces(workspaces.referenced_projects());
+                }
+                Ok(result)
+            })
+            .await
+            .map_err(|error| ProtocolFailure::new(FailureCode::Internal, error.to_string(), false))
+            .and_then(|result| result.map(Response::Workspace))
+        }
+        Request::ProfileControl(request) => handle_profile_control(context, client_id, request)
+            .await
+            .map(Response::ProfileControl),
+        Request::ReadDeviceSettings => Ok(Response::DeviceSettings(
+            context.device_settings.lock().settings().clone(),
+        )),
+        Request::SetLoginStartupConsent { granted } => context
+            .device_settings
+            .lock()
+            .set_startup_consent(granted)
+            .map(Response::DeviceSettings)
+            .map_err(|error| ProtocolFailure::new(FailureCode::Internal, error.to_string(), false)),
+        Request::RemoteAccess(request) => context
+            .remote_access
+            .request(client_id.clone(), request)
+            .await
+            .map(Response::RemoteAccess),
     };
     if let Some((action, resource, actor_device_id)) = audit_action {
         audit.record(AuditEntry {
@@ -2515,22 +2903,6 @@ mod request_journal_tests {
         assert!(!request_is_journalable(&sensitive));
         assert!(!request_is_journalable(&ssh));
         assert!(request_is_journalable(&non_secret));
-    }
-
-    #[test]
-    fn mutating_requests_must_pass_the_local_capability_checkpoint() {
-        let mutate = Request::Project(yttt_protocol::project::ProjectRequest::SaveFile {
-            project_id: ProjectId::new("notes"),
-            relative_path: yttt_protocol::ProjectRelativePath::from_utf8("notes.txt").unwrap(),
-            text: "x".to_string(),
-            mode: yttt_protocol::project::ProjectSaveMode::Force,
-        });
-        assert_eq!(
-            mutate.required_capability(),
-            Some(yttt_protocol::Capability::ProjectMutate)
-        );
-        assert!(authorize_local_capability(&mutate).is_ok());
-        assert!(mutate.audit_action().is_some());
     }
 }
 

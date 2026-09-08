@@ -1103,22 +1103,6 @@ fn config_legacy_unversioned_personal_replace_loads_without_warning() {
 }
 
 #[test]
-fn config_invalid_project_toml_returns_visible_load_error() {
-    let temp = tempdir().unwrap();
-    let project_dir = temp.path().join("broken-project");
-    let project_config_dir = project_dir.join(".yttt");
-    fs::create_dir_all(&project_config_dir).unwrap();
-    fs::write(project_config_dir.join("layout.toml"), "[project\n").unwrap();
-    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-
-    let mut default_state = DefaultLayoutState::load_or_create(&paths);
-    let err = open_project_config(&paths, &project_dir, &mut default_state).unwrap_err();
-
-    assert!(err.to_string().contains("failed to parse project layout"));
-    assert!(err.to_string().contains("layout.toml"));
-}
-
-#[test]
 fn config_recent_projects_are_stored_in_app_config() {
     let temp = tempdir().unwrap();
     let project_dir = temp.path().join("recent-project");

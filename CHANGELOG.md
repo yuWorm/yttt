@@ -4,6 +4,29 @@
 
 ### Added
 
+- Added **Remote services** to the homepage, reusing SSH connection management and supporting
+  multiple remembered TLS Host connections without storing their secrets in metadata files.
+- Moved local/remote identity and control status into the bottom status bar instead of a
+  permanent controller/UUID/revision banner.
+- Fixed the first remote window creating a new empty workspace instead of restoring its Host
+  workspace. Local and remote startup now preserve confirmed empty states and restore saved
+  project windows before allowing eager terminal/Agent initialization.
+- Added opt-in TLS 1.3 access to the existing desktop Host and a separate **Connect to existing
+  yttt** Client flow, including certificate-bound connection information, general TCP forwarding,
+  optional OS-keychain credentials, local disconnect/reclaim/reset controls and lifetime-aware quit confirmation.
+- Added profile-wide control handoff across local work windows, execution-time control-epoch
+  fencing, stable multi-workspace publication and separate bounded recoverable draft objects.
+- Unified local and remote shared configuration through the Host's explicit original config root;
+  isolated device preferences and split SSH work credentials from local Host administration.
+
+- Added independent remote workspace Clients over SSH and a standalone, GUI-free `yttt-server`
+  for Linux/macOS x86_64 and aarch64, with authenticated private-socket transport and safe,
+  busy-aware deployment.
+- Added Host-owned remote configuration, project/Git operations, Agent integration, workspace
+  snapshots and editor drafts, with durable revision-checked commits, idempotent retries, and
+  explicit single-controller takeover.
+- Remote Client exit now preserves remote tasks; Host restart restores workspace state without
+  silently rerunning lost terminal processes.
 - Added a unified, live-reloadable GPUI keymap covering commands, palettes, project tree, Git diff, terminal, editor Vim, and modal UI actions, with contextual sequences and per-action unbinding.
 - Added a single `Global` / `Editor only` / `Disabled` Vim setting backed by one window-level mode controller and a persistent mode/context status bar; Global mode spans editors, terminals, project trees, settings, panes, tabs, and command palettes.
 - Added configurable Vim leader expansion, multi-keystroke shortcut recording, alternative shortcut sequences, and an in-app quick-start guide for the unified keymap.
@@ -63,6 +86,9 @@
 
 ### Fixed
 
+- Fixed cold-start default layout creation, saving and reset with Host-backed configuration:
+  submit the final configuration path to the shared atomic writer instead of attempting
+  client-side temporary-file writes rejected by the Host allowlist.
 - Fixed the project-file panel crashing with `hover style already set` by defining menu icon-button hover state only through its custom button variant.
 - Fixed schema-4 `ctrl-w` pane-close overrides shadowing the `ctrl-w h/j/k/l` sequence; migration now removes the obsolete single-key override so pending Vim prefixes resolve correctly.
 - Fixed Vim status-bar key feedback to preserve printable key case, so `g` and `G` remain distinguishable.

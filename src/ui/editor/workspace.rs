@@ -1,4 +1,7 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 use crate::{model::ids::ProjectId, ui::project_tree::ProjectFileTree};
 
@@ -7,13 +10,13 @@ use super::work_area::{
     WorkAreaState,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 pub struct DocumentId {
     pub project_id: ProjectId,
     pub canonical_path: PathBuf,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 pub enum WorkItemId {
     Terminal(String),
     File(DocumentId),
@@ -22,12 +25,66 @@ pub enum WorkItemId {
 #[derive(Clone, Debug)]
 pub struct ProjectWorkItemSession {
     project_id: ProjectId,
+    root: PathBuf,
     file_ids: Vec<DocumentId>,
     work_area: WorkAreaState,
     activation_history: Vec<WorkItemId>,
     file_tree: ProjectFileTree,
     project_panel_visible: bool,
     project_panel_width: f32,
+    unavailable_terminal_ids: HashSet<String>,
+}
+
+/// A serialized editor-session tree. It contains no GPUI entities and is
+/// validated before replacing a live session.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub(crate) struct ProjectWorkItemSessionSnapshot {
+    project_id: ProjectId,
+    root: PathBuf,
+    file_ids: Vec<DocumentId>,
+    work_area: super::work_area::WorkAreaSnapshot,
+    activation_history: Vec<WorkItemId>,
+    project_panel_visible: bool,
+    project_panel_width: f32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+pub(crate) struct ProjectEditorWorkspaceSnapshot {
+    sessions: Vec<ProjectWorkItemSessionSnapshot>,
+}
+
+impl ProjectEditorWorkspaceSnapshot {
+    pub(crate) fn project_ids(&self) -> HashSet<ProjectId> {
+        self.sessions
+            .iter()
+            .map(|session| session.project_id.clone())
+            .collect()
+    }
+
+    pub(crate) fn contains_document(&self, document_id: &DocumentId) -> bool {
+        self.sessions.iter().any(|session| {
+            session.project_id == document_id.project_id && session.file_ids.contains(document_id)
+        })
+    }
+
+    pub(crate) fn validate(
+        &self,
+        project_roots: &HashMap<ProjectId, PathBuf>,
+        terminal_ids: &HashMap<ProjectId, Vec<String>>,
+    ) -> Result<(), String> {
+        if self.project_ids() != project_roots.keys().cloned().collect() {
+            return Err("editor sessions do not match the workspace projects".to_string());
+        }
+        if self.sessions.iter().any(|session| {
+            project_roots
+                .get(&session.project_id)
+                .is_none_or(|root| root != &session.root)
+        }) {
+            return Err("editor session root does not match its workspace project".to_string());
+        }
+        let mut state = ProjectEditorWorkspaceState::default();
+        state.restore_snapshot(self.clone(), terminal_ids, &HashMap::new())
+    }
 }
 
 impl ProjectWorkItemSession {
@@ -40,14 +97,17 @@ impl ProjectWorkItemSession {
     ) -> Self {
         let active_work_item = selected_terminal_id.map(WorkItemId::Terminal);
         let activation_history = active_work_item.iter().cloned().collect();
+        let root = root.into();
         Self {
             project_id,
+            root: root.clone(),
             file_ids: Vec::new(),
             work_area: WorkAreaState::new(active_work_item),
             activation_history,
             file_tree: ProjectFileTree::new(root),
             project_panel_visible,
             project_panel_width,
+            unavailable_terminal_ids: HashSet::new(),
         }
     }
 
@@ -87,6 +147,80 @@ impl ProjectWorkItemSession {
         &self.activation_history
     }
 
+    pub(crate) fn snapshot(&self) -> ProjectWorkItemSessionSnapshot {
+        ProjectWorkItemSessionSnapshot {
+            project_id: self.project_id.clone(),
+            root: self.root.clone(),
+            file_ids: self.file_ids.clone(),
+            work_area: self.work_area.snapshot(),
+            activation_history: self.activation_history.clone(),
+            project_panel_visible: self.project_panel_visible,
+            project_panel_width: self.project_panel_width,
+        }
+    }
+
+    fn restore(
+        snapshot: ProjectWorkItemSessionSnapshot,
+        terminal_ids: &[String],
+        unavailable_terminal_ids: HashSet<String>,
+    ) -> Result<Self, String> {
+        if snapshot
+            .file_ids
+            .iter()
+            .any(|document_id| document_id.project_id != snapshot.project_id)
+        {
+            return Err("editor session file belongs to another project".to_string());
+        }
+        if snapshot.file_ids.iter().any(|document_id| {
+            document_id
+                .canonical_path
+                .strip_prefix(&snapshot.root)
+                .is_err()
+        }) {
+            return Err("editor session file is outside its project root".to_string());
+        }
+        let mut seen_files = HashSet::new();
+        if snapshot
+            .file_ids
+            .iter()
+            .any(|document_id| !seen_files.insert(document_id.clone()))
+        {
+            return Err("editor session contains duplicate files".to_string());
+        }
+        let expected_items = super::work_area::available_items(terminal_ids, &snapshot.file_ids)
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let work_area = WorkAreaState::restore(snapshot.work_area)?;
+        if work_area
+            .items()
+            .iter()
+            .any(|item| !expected_items.contains(item))
+        {
+            return Err("editor work area contains an unavailable project item".to_string());
+        }
+        let mut history_items = HashSet::new();
+        if snapshot
+            .activation_history
+            .iter()
+            .any(|item| !expected_items.contains(item) || !history_items.insert(item.clone()))
+        {
+            return Err("editor activation history contains an unavailable item".to_string());
+        }
+        let mut session = Self {
+            project_id: snapshot.project_id,
+            root: snapshot.root.clone(),
+            file_ids: snapshot.file_ids,
+            work_area,
+            activation_history: snapshot.activation_history,
+            file_tree: ProjectFileTree::new(snapshot.root),
+            project_panel_visible: snapshot.project_panel_visible,
+            project_panel_width: snapshot.project_panel_width,
+            unavailable_terminal_ids,
+        };
+        session.reconcile_work_area(terminal_ids);
+        Ok(session)
+    }
+
     pub fn open_file(&mut self, canonical_path: impl Into<PathBuf>) -> DocumentId {
         let id = DocumentId {
             project_id: self.project_id.clone(),
@@ -102,7 +236,8 @@ impl ProjectWorkItemSession {
     }
 
     pub fn ordered_items(&self, terminal_ids: &[String]) -> Vec<WorkItemId> {
-        self.work_area.ordered_items(terminal_ids, &self.file_ids)
+        let terminal_ids = self.available_terminal_ids(terminal_ids);
+        self.work_area.ordered_items(&terminal_ids, &self.file_ids)
     }
 
     pub fn move_work_item(
@@ -171,8 +306,9 @@ impl ProjectWorkItemSession {
     }
 
     pub fn reconcile_work_area(&mut self, terminal_ids: &[String]) {
-        self.work_area.reconcile(terminal_ids, &self.file_ids);
-        let available = self.ordered_items(terminal_ids);
+        let terminal_ids = self.available_terminal_ids(terminal_ids);
+        self.work_area.reconcile(&terminal_ids, &self.file_ids);
+        let available = self.ordered_items(&terminal_ids);
         self.activation_history
             .retain(|item| available.contains(item));
         self.record_active_item();
@@ -180,7 +316,9 @@ impl ProjectWorkItemSession {
 
     pub fn select_work_item(&mut self, item: WorkItemId, terminal_ids: &[String]) -> bool {
         let exists = match &item {
-            WorkItemId::Terminal(id) => terminal_ids.contains(id),
+            WorkItemId::Terminal(id) => {
+                terminal_ids.contains(id) && !self.unavailable_terminal_ids.contains(id)
+            }
             WorkItemId::File(id) => self.file_ids.contains(id),
         };
         if !exists {
@@ -270,6 +408,14 @@ impl ProjectWorkItemSession {
 
     pub fn set_project_panel_width(&mut self, width: f32) {
         self.project_panel_width = width;
+    }
+
+    fn available_terminal_ids(&self, terminal_ids: &[String]) -> Vec<String> {
+        terminal_ids
+            .iter()
+            .filter(|terminal_id| !self.unavailable_terminal_ids.contains(*terminal_id))
+            .cloned()
+            .collect()
     }
 
     fn select_relative(&mut self, terminal_ids: &[String], offset: isize) -> Option<WorkItemId> {
@@ -393,6 +539,67 @@ impl ProjectEditorWorkspaceState {
             destination.activate(new_item);
         }
         true
+    }
+
+    pub(crate) fn snapshot(&self) -> ProjectEditorWorkspaceSnapshot {
+        let mut sessions = self
+            .sessions
+            .values()
+            .map(ProjectWorkItemSession::snapshot)
+            .collect::<Vec<_>>();
+        sessions.sort_by(|left, right| left.project_id.as_str().cmp(right.project_id.as_str()));
+        ProjectEditorWorkspaceSnapshot { sessions }
+    }
+
+    pub(crate) fn restore_snapshot(
+        &mut self,
+        snapshot: ProjectEditorWorkspaceSnapshot,
+        terminal_ids: &HashMap<ProjectId, Vec<String>>,
+        unavailable_terminal_ids: &HashMap<ProjectId, HashSet<String>>,
+    ) -> Result<(), String> {
+        let mut sessions = HashMap::with_capacity(snapshot.sessions.len());
+        for session_snapshot in snapshot.sessions {
+            let project_id = session_snapshot.project_id.clone();
+            if sessions.contains_key(&project_id) {
+                return Err(format!(
+                    "duplicate editor session for project {}",
+                    project_id.as_str()
+                ));
+            }
+            let session = ProjectWorkItemSession::restore(
+                session_snapshot,
+                terminal_ids
+                    .get(&project_id)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+                unavailable_terminal_ids
+                    .get(&project_id)
+                    .cloned()
+                    .unwrap_or_default(),
+            )?;
+            sessions.insert(project_id, session);
+        }
+        self.sessions = sessions;
+        Ok(())
+    }
+
+    pub(crate) fn set_unavailable_terminal_ids(
+        &mut self,
+        unavailable_terminal_ids: &HashMap<ProjectId, HashSet<String>>,
+        terminal_ids: &HashMap<ProjectId, Vec<String>>,
+    ) {
+        for (project_id, session) in &mut self.sessions {
+            session.unavailable_terminal_ids = unavailable_terminal_ids
+                .get(project_id)
+                .cloned()
+                .unwrap_or_default();
+            session.reconcile_work_area(
+                terminal_ids
+                    .get(project_id)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+            );
+        }
     }
 
     pub fn len(&self) -> usize {

@@ -408,6 +408,30 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
             "This registers a per-user background startup item and keeps terminal, project, SSH, and Agent resources available without an open yttt window. It does not expose a network listener. You can disable it here or in system startup settings."
         }
         UiTextKey::SettingsLoginStartupConfirmAction => "Enable at login",
+        UiTextKey::RemoteAccessTitle => "Remote access to this computer",
+        UiTextKey::RemoteAccessDescription => {
+            "Share this running Host through TLS and optional TCP forwarding. Connection information grants access to all workspaces in this profile; keep it private. Closing a window does not stop sharing."
+        }
+        UiTextKey::RemoteAccessEnable => "Enable",
+        UiTextKey::RemoteAccessDisable => "Disable",
+        UiTextKey::RemoteAccessApply => "Apply address",
+        UiTextKey::RemoteAccessCopy => "Copy connection information",
+        UiTextKey::RemoteAccessReset => "Reset credentials",
+        UiTextKey::RemoteAccessReclaim => "Reclaim control",
+        UiTextKey::RemoteAccessDisconnect => "Disconnect all remote clients",
+        UiTextKey::RemoteAccessRefresh => "Refresh",
+        UiTextKey::RemoteAccessConfirmTitle => "Change remote access?",
+        UiTextKey::RemoteAccessConfirmDescription => {
+            "This may disconnect remote clients. A non-loopback address exposes the port to your network. Forced control uses the last confirmed state; unpublished edits on the previous client may be lost. Continue only if you understand these consequences."
+        }
+        UiTextKey::RemoteAccessConfirm => "Confirm",
+        UiTextKey::RemoteAccessNotReady => {
+            "Wait for every work window to finish publishing its state before enabling remote access."
+        }
+        UiTextKey::RemoteAccessCopied => {
+            "Connection information copied. It contains a secret; share it only with trusted devices."
+        }
+        UiTextKey::ConnectExistingHost => "Connect to existing yttt",
         UiTextKey::SettingsPermissionNotifications => "System notifications",
         UiTextKey::SettingsPermissionNotificationsDescription => {
             "Allow agent completion and attention alerts when yttt is not focused."
@@ -943,6 +967,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::StatusBarsFile => "Bars file",
         UiTextKey::StatusThemesDirectory => "Themes directory",
         UiTextKey::SshConnections => "SSH connections",
+        UiTextKey::RemoteServices => "Remote services",
         UiTextKey::SshConnectionsDescription => {
             "Manage SSH endpoints, credentials, and remote project roots."
         }

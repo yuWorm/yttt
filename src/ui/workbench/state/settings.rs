@@ -21,6 +21,7 @@ use super::super::{
 pub(in super::super) struct ZedThemeImportDialogState {
     pub(in super::super) detection: ZedThemeDetection,
     pub(in super::super) conflict_policy: ZedThemeImportConflictPolicy,
+    pub(in super::super) existing_paths: std::collections::HashSet<std::path::PathBuf>,
 }
 
 pub(in super::super) struct SettingsControllerState {
@@ -89,6 +90,17 @@ pub(in super::super) struct SettingsControllerState {
     pub(in super::super) login_startup_loaded: bool,
     pub(in super::super) login_startup_generation: u64,
     pub(in super::super) login_startup_changing: bool,
+    pub(in super::super) login_startup_consent_granted: bool,
+    pub(in super::super) remote_access: Option<yttt_protocol::remote_access::RemoteAccessStatus>,
+    pub(in super::super) remote_access_busy: bool,
+    pub(in super::super) remote_access_loaded: bool,
+    pub(in super::super) remote_access_error: Option<String>,
+    pub(in super::super) remote_access_address: Option<Entity<InputState>>,
+    pub(in super::super) confirmed_settings: crate::config::settings::AppSettings,
+    pub(in super::super) pending_settings_save:
+        Option<(crate::config::settings::AppSettings, bool)>,
+    pub(in super::super) settings_save_in_flight: bool,
+    pub(in super::super) settings_save_error: Option<String>,
 }
 
 impl SettingsControllerState {
@@ -96,8 +108,13 @@ impl SettingsControllerState {
         keybinding_warning_lines: Vec<String>,
         keybindings_editor: KeybindingsEditorState,
         keybinding_load_error: Option<String>,
+        confirmed_settings: crate::config::settings::AppSettings,
     ) -> Self {
         Self {
+            confirmed_settings,
+            pending_settings_save: None,
+            settings_save_in_flight: false,
+            settings_save_error: None,
             keybinding_warning_lines,
             keybindings_editor,
             keybinding_load_error,
@@ -159,6 +176,12 @@ impl SettingsControllerState {
             login_startup_loaded: false,
             login_startup_generation: 0,
             login_startup_changing: false,
+            login_startup_consent_granted: false,
+            remote_access: None,
+            remote_access_busy: false,
+            remote_access_loaded: false,
+            remote_access_error: None,
+            remote_access_address: None,
             zed_theme_import_dialog: None,
         }
     }

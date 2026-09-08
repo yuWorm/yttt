@@ -1,8 +1,8 @@
 # yttt Host/Client 架构规范
 
-- 状态：Host control-plane isolation 完整实现
-- 更新：2026-08-19
-- 适用协议：`yttt-protocol` 资源 v5、lifecycle v2、desktop-shell v2；帧头 v1
+- 状态：桌面既有 Host 远程访问已接入；平台与实际 UI 验收结果见实施计划
+- 更新：2026-09-06
+- 适用协议：`yttt-protocol` 资源 v7、lifecycle v3、desktop-shell v2；帧头 v1
 - 相关设计：[`p2p-relay-architecture.md`](./p2p-relay-architecture.md)
 
 本文定义 yttt 的标准 Host/Client 边界、资源所有权、终端同步协议、本地安全模型、生命周期和恢复语义。P2P、Relay、移动端等连接路径只能扩展本规范，不能改变资源所有权。
@@ -19,6 +19,9 @@
 8. 慢 Client 不能阻塞 PTY reader、其他 Client 或 Host 资源循环。
 9. 本地 IPC 仍须验证操作系统用户、endpoint 权限、profile、build 和一次性认证材料；“仅本机”不等于“可信”。
 10. Wire 协议不序列化 Rust 进程内对象、GPUI Entity、PTY handle 或 SSH channel。
+11. 一个 profile 只有一个可写认证 Client 会话；同一本机桌面的所有工作窗口共享该会话和控制 epoch。
+12. 共享配置、工作区索引及可恢复草稿由 Host 权威持久化，本机 UI 也不能绕过 Host 写入。
+13. 入口来源由 listener 指定；Client 自报 actor、通道或同 UID 不能把 TLS/SSH 工作入口升级为本机管理入口。
 
 ## 2. 部署拓扑
 
@@ -51,7 +54,11 @@ flowchart LR
 - Windows：拒绝远程客户端的 named pipe，DACL 仅允许 SYSTEM 和 owner。
 - Wire：16-byte header、固定 magic/version/kind/length、最大 frame 8 MiB；header 在分配 payload 前验证。结构化消息使用带字段名的 CBOR；认证握手将连接固定为 control、terminal-interactive、terminal-data、state-events、lifecycle 或 desktop-owner 单一职责，连接建立后不得混用。演进规则见 [`wire-evolution.md`](./wire-evolution.md)。
 
-未来 P2P、Relay 或直接网络连接替换的只是 `IPC` 边，不得把 PTY、文件系统或 Agent 状态移回 Client。
+桌面 Host 可动态开启 TLS 1.3 TCP listener，默认关闭、初始地址 `127.0.0.1:43123`。
+`ExistingHost` 只认证并附着此 Host，不启动第二个 Host 或桥接 daemon。导入证书按固定名称
+进行标准验证，环境身份与转发地址分离；不启用 early data。证书、私钥和专用 TCP 秘密只在
+主动启用时生成并存入设备私有状态，重置递增 credential generation 并撤销旧 TLS 通道。
+本机管理 IPC、TLS 工作入口和独立 Server 的 SSH 工作 IPC 具有独立凭据和取消域。
 
 ## 3. crate 与责任边界
 
@@ -60,7 +67,8 @@ flowchart LR
 | `yttt-protocol` | ID、handshake 后 request/response/event、terminal snapshot/delta、SSH/file/git/agent wire DTO | socket、PTY、GPUI 类型、平台 handle |
 | `yttt-transport` | 可靠双向 stream 抽象、framing、handshake、in-process 内存传输 | 具体 IPC/网络实现、Host 资源策略、UI 状态 |
 | `yttt-transport-local` | Unix socket/named pipe endpoint、peer/permission 检查 | Host 资源策略、UI 状态、应用协议 |
-| `yttt-host` | 资源目录、terminal runtime、lease、checkpoint、退出确认、drain | GPUI Entity、window/focus/theme、具体传输类型 |
+| `yttt-transport-tls` | TLS 1.3 Connector、证书验证与持久证书支持 | GPUI、项目或终端权威状态 |
+| `yttt-host` | 资源目录、terminal runtime、profile 控制屏障、工作区/配置存储、动态 TLS admission、drain | GPUI Entity、window/focus/theme |
 | `yttt-client-core` | 连接 supervisor、请求关联、事件订阅、terminal mirror、重连对账 | PTY child、权威 scrollback、具体传输类型 |
 | `yttt-terminal` | Host 侧 VTE/语义快照能力与 Client 侧 semantic render/input adapter | profile/Host 生命周期 |
 | Desktop app | Host launch/attach、window lifecycle、Client mirror 到 `TerminalView` 的适配 | 长生命周期 PTY 所有权 |
@@ -83,7 +91,8 @@ flowchart LR
                  desktop
 ```
 
-`yttt-host` 与 `yttt-client-core` 只依赖 `yttt-transport` 抽象；`yttt-transport-local` 是 desktop 与测试使用的本地 IPC 实现。
+`yttt-client-core` 通过 `yttt-transport` 抽象连接各入口；Host 的动态网络管理使用
+`yttt-transport-tls`，本机启动器负责绑定 `yttt-transport-local`。传输与 Host 均无 GUI 依赖。
 
 `yttt-host` 与 `yttt-client-core` 不能依赖 Desktop UI。
 
@@ -98,6 +107,7 @@ Host handshake 返回：
 - `profile_id`
 - `host_id`
 - `host_epoch`
+- 持久 `environment_id`、认证 session nonce 和 credential generation
 
 `host_epoch` 每次 Host 进程启动递增。Client 的 session epoch、sequence 或 lease 不能跨 Host epoch 静默复用。
 
@@ -111,7 +121,9 @@ Client handshake 提交：
 - `client_instance_id`
 - 已知 `host_epoch`（重连时）
 
-连接必须同时满足协议相交、build/profile 匹配、OS peer 属于当前用户和认证 token 匹配。失败必须在建立资源访问能力前终止连接。
+连接必须满足协议相交、build/profile/environment 匹配和认证 token 验证。本机管理入口还验证
+OS peer；TLS/SSH 工作入口始终只有工作权限。完整握手 transcript 绑定环境、双方 nonce、通道、
+资源、版本和权限请求。新 session 不能继承同名 actor 的请求日志或终端附着。
 
 ### 4.3 runtime root
 
@@ -149,6 +161,11 @@ control、terminal-interactive、state-event、lifecycle 和 desktop-shell；ter
 Client 为每个 request 分配单调 `request_id`。Host 原样回传该 ID。`ClientCore` 的 pending map 只在收到匹配 response 后完成请求；断线时所有未完成用户请求返回 `NotConnected`，不会假定执行成功并自动重放。
 
 这是 at-most-once Client 语义。调用方若在断线后重试有副作用操作，必须携带资源 ID、epoch/revision 或幂等键。
+
+mutation 在 journal replay **之前**验证认证会话与 `ControlContext`，并在实际变更执行处持有
+profile 写入屏障检查 Host/control epoch。控制交接先允许旧控制者完成发布，随后进入 Fencing，
+排空已准入写入、递增 epoch、撤销旧终端 lease，才授予新 owner。输入、resize、终端启动/终止、
+配置、文件、Git、草稿和 workspace commit 均受此规则约束。
 
 `TerminalInput` 从 resource protocol v3 起使用 one-way message，不分配 `request_id`，也不产生
 逐按键 response。resource protocol v5 将它与 resize/scroll 放入独立的
@@ -218,6 +235,27 @@ terminal 不再无条件请求完整 catalog，而是读取这份缓存；cache 
 4. UI 收到当前 pane 的 `TerminalUnavailable` 后结束旧 generation；AutoRestart pane 以新 session generation 重建。
 
 对账完成前，旧 checkpoint 只是一份可见缓存，不是资源仍存活的证据。
+
+### 6.1 多窗口发布与控制交接
+
+同一 Desktop Client 的 `SessionCoordinator` 为每个逻辑窗口分配独占的 `WorkspaceId` 视图。
+本机和远程使用同一环境绑定、工作区恢复与发布逻辑；关闭窗口仅 detach，不删除持久索引。
+正常交接冻结所有窗口编辑及输入，等待在途设置与草稿提交，聚合所有 Ready revision 后由 Host
+核验。五秒超时只转为需要强制确认；取消或保存失败保留原 owner 和未发布编辑。
+强制确认只恢复最后持久版本；旧 Client 重连仍是观察者，不能重放排队 mutation。
+
+HostBootstrap 显式传入原 `config_root`，不根据 Server descriptor 猜路径。共享配置 RPC 只允许
+已知配置文件与 `projects`、`themes`、`agent-providers` 子树，拒绝设备状态、密钥和 symlink 越界。
+设备远程访问偏好与登录启动授权留在私有状态域；普通配置测试必须显式选择临时文件 backend，
+生产绑定缺失不回退到本地文件系统。
+
+每个 workspace 有原子 CAS manifest（最大 1 MiB）和独立不可变草稿正文。正文每份最大 6 MiB，
+每 workspace 最大 64 MiB；先持久化正文，再提交引用它的 manifest，最后确认幂等操作结果。
+启动只回收未引用正文。旧 `default`/内联草稿迁移在新 manifest 确认前保留原文件，恢复不重跑
+已经丢失的 PTY 或 Agent 进程。
+
+独立 `yttt-server` 的 descriptor 只导出 SSH `work.sock`/工作 token。status、stop-if-idle、
+ensure 的管理连接仍使用另一个本机 socket/token；关闭桌面 TLS 不关闭 SSH 工作会话。
 
 ## 7. 终端资源模型
 

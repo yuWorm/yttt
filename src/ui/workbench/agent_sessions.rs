@@ -165,9 +165,20 @@ impl WorkbenchView {
         let generation = self.agent_sessions.generation;
         let agents = key.agents.clone();
         let agent_session_access = self.config_paths.agent_session_access().clone();
+        let remote_host = self
+            .terminal
+            .host_runtime
+            .clone()
+            .filter(|runtime| runtime.is_remote());
         let task = cx.background_spawn(async move {
-            scan_agent_sessions(&agents, &project_path, &agent_session_access)
-                .map_err(|error| error.to_string())
+            match remote_host {
+                Some(runtime) => crate::runtime::agent_sessions::scan_remote_agent_sessions(
+                    &runtime,
+                    &agents,
+                    &project_path,
+                ),
+                None => scan_agent_sessions(&agents, &project_path, &agent_session_access),
+            }
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;

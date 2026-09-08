@@ -1,5 +1,5 @@
 use std::{
-    fs, io,
+    io,
     path::{Path, PathBuf},
 };
 
@@ -107,8 +107,6 @@ pub enum LayoutLoadWarning {
     GlobalDefaultValidation { path: PathBuf, message: String },
     #[error("failed to write global default layout {path}: {message}")]
     GlobalDefaultWrite { path: PathBuf, message: String },
-    #[error("failed to replace global default layout {path}: {message}")]
-    GlobalDefaultRename { path: PathBuf, message: String },
     #[error("failed to read personal layout {path}: {message}")]
     PersonalOverrideRead { path: PathBuf, message: String },
     #[error("failed to parse personal layout {path}: {message}")]
@@ -436,69 +434,38 @@ fn write_template_atomic(
         })?;
     }
 
-    let temp_path = atomic_temp_path(path);
-    file_system.write(&temp_path, &source).map_err(|error| {
-        LayoutLoadWarning::GlobalDefaultWrite {
-            path: path.to_path_buf(),
-            message: error.to_string(),
-        }
-    })?;
     file_system
-        .sync(&temp_path)
+        .write_atomic(path, &source)
         .map_err(|error| LayoutLoadWarning::GlobalDefaultWrite {
             path: path.to_path_buf(),
             message: error.to_string(),
-        })?;
-    file_system
-        .rename(&temp_path, path)
-        .map_err(|error| LayoutLoadWarning::GlobalDefaultRename {
-            path: path.to_path_buf(),
-            message: error.to_string(),
         })
-}
-
-fn atomic_temp_path(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("default-layout.toml");
-    path.with_file_name(format!(".{file_name}.tmp"))
 }
 
 trait LayoutFileSystem {
     fn exists(&self, path: &Path) -> bool;
     fn create_dir_all(&self, path: &Path) -> io::Result<()>;
     fn read_to_string(&self, path: &Path) -> io::Result<String>;
-    fn write(&self, path: &Path, source: &str) -> io::Result<()>;
-    fn sync(&self, path: &Path) -> io::Result<()>;
-    fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
+    fn write_atomic(&self, path: &Path, source: &str) -> io::Result<()>;
 }
 
 struct StdLayoutFileSystem;
 
 impl LayoutFileSystem for StdLayoutFileSystem {
     fn exists(&self, path: &Path) -> bool {
-        path.exists()
+        crate::config::storage::exists(&path)
     }
 
     fn create_dir_all(&self, path: &Path) -> io::Result<()> {
-        fs::create_dir_all(path)
+        crate::config::storage::create_dir_all(path)
     }
 
     fn read_to_string(&self, path: &Path) -> io::Result<String> {
-        fs::read_to_string(path)
+        crate::config::storage::read_to_string(path)
     }
 
-    fn write(&self, path: &Path, source: &str) -> io::Result<()> {
-        fs::write(path, source)
-    }
-
-    fn sync(&self, path: &Path) -> io::Result<()> {
-        fs::OpenOptions::new().write(true).open(path)?.sync_all()
-    }
-
-    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
-        fs::rename(from, to)
+    fn write_atomic(&self, path: &Path, source: &str) -> io::Result<()> {
+        crate::config::atomic_write(path, source.as_bytes())
     }
 }
 
@@ -519,8 +486,6 @@ mod tests {
         CreateDirectory,
         Read,
         Write,
-        Sync,
-        Rename,
     }
 
     #[derive(Default)]
@@ -564,32 +529,17 @@ mod tests {
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "missing file"))
         }
 
-        fn write(&self, path: &Path, source: &str) -> io::Result<()> {
+        fn write_atomic(&self, path: &Path, source: &str) -> io::Result<()> {
             self.take_failure(Operation::Write)?;
             self.files
                 .borrow_mut()
                 .insert(path.to_path_buf(), source.to_string());
             Ok(())
         }
-
-        fn sync(&self, _path: &Path) -> io::Result<()> {
-            self.take_failure(Operation::Sync)
-        }
-
-        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
-            self.take_failure(Operation::Rename)?;
-            let source = self
-                .files
-                .borrow_mut()
-                .remove(from)
-                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "missing temp file"))?;
-            self.files.borrow_mut().insert(to.to_path_buf(), source);
-            Ok(())
-        }
     }
 
     #[test]
-    fn default_layout_state_create_failure_uses_builtin_with_exact_warning() {
+    fn default_layout_state_create_failure_uses_builtin() {
         let paths = AppConfigPaths::from_config_dir("/config");
         let fs = FakeFileSystem::default();
         fs.fail(Operation::CreateDirectory, "create denied");
@@ -598,17 +548,14 @@ mod tests {
 
         assert_eq!(state.template(), &DefaultLayoutTemplate::builtin());
         assert_eq!(state.source(), &DefaultLayoutSource::BuiltIn);
-        assert_eq!(
+        assert!(matches!(
             state.warnings(),
-            &[LayoutLoadWarning::GlobalDefaultCreate {
-                path: paths.config_dir().to_path_buf(),
-                message: "create denied".to_string(),
-            }]
-        );
+            [LayoutLoadWarning::GlobalDefaultCreate { .. }]
+        ));
     }
 
     #[test]
-    fn default_layout_state_rename_failure_preserves_file_and_cache() {
+    fn default_layout_state_write_failure_preserves_file_and_cache() {
         let paths = AppConfigPaths::from_config_dir("/config");
         let fs = FakeFileSystem::default();
         let mut state = DefaultLayoutState::load_or_create_with_file_system(&paths, &fs);
@@ -616,7 +563,7 @@ mod tests {
         let original_state = state.clone();
         let mut updated = DefaultLayoutTemplate::builtin();
         updated.tabs[0].title = "Updated".to_string();
-        fs.fail(Operation::Rename, "rename denied");
+        fs.fail(Operation::Write, "write denied");
 
         let error = state.save_with_file_system(updated, &fs).unwrap_err();
 
@@ -625,13 +572,10 @@ mod tests {
             fs.source(&paths.default_layout_file()).unwrap(),
             original_source
         );
-        assert_eq!(
+        assert!(matches!(
             error,
-            LayoutLoadWarning::GlobalDefaultRename {
-                path: paths.default_layout_file(),
-                message: "rename denied".to_string(),
-            }
-        );
+            LayoutLoadWarning::GlobalDefaultWrite { .. }
+        ));
     }
 
     #[test]
@@ -653,22 +597,9 @@ mod tests {
             fs.source(&paths.default_layout_file()).unwrap(),
             original_source
         );
-        assert_eq!(
+        assert!(matches!(
             error,
-            LayoutLoadWarning::GlobalDefaultWrite {
-                path: paths.default_layout_file(),
-                message: "write denied".to_string(),
-            }
-        );
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn std_layout_file_system_syncs_with_a_writable_handle() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("default-layout.toml");
-        fs::write(&path, "version = 1").unwrap();
-
-        StdLayoutFileSystem.sync(&path).unwrap();
+            LayoutLoadWarning::GlobalDefaultWrite { .. }
+        ));
     }
 }

@@ -1,3 +1,5 @@
+mod persistence;
+mod remote_access;
 mod view;
 pub(super) use view::{settings_button, settings_overlay};
 
@@ -51,43 +53,69 @@ impl WorkbenchView {
         let pending_reload = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let callback_reload = pending_reload.clone();
         let callback_path = path.clone();
-        let mut watcher =
-            match notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
-                let Ok(event) = result else {
-                    return;
-                };
-                if event.paths.iter().any(|event_path| {
-                    event_path == &callback_path
-                        || event_path.file_name() == callback_path.file_name()
+        let watcher = if crate::config::storage::is_remote() {
+            None
+        } else {
+            let mut watcher =
+                match notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+                    let Ok(event) = result else {
+                        return;
+                    };
+                    if event.paths.iter().any(|event_path| {
+                        event_path == &callback_path
+                            || event_path.file_name() == callback_path.file_name()
+                    }) {
+                        callback_reload.store(true, std::sync::atomic::Ordering::Release);
+                    }
                 }) {
-                    callback_reload.store(true, std::sync::atomic::Ordering::Release);
-                }
-            }) {
-                Ok(watcher) => watcher,
-                Err(error) => {
-                    self.set_keybinding_load_error(format!(
-                        "Failed to watch keybindings at {}: {error}",
-                        path.display()
-                    ));
-                    return;
-                }
-            };
-        use notify::Watcher as _;
-        if let Err(error) = watcher.watch(&parent, notify::RecursiveMode::NonRecursive) {
-            self.set_keybinding_load_error(format!(
-                "Failed to watch keybindings at {}: {error}",
-                path.display()
-            ));
-            return;
-        }
+                    Ok(watcher) => watcher,
+                    Err(error) => {
+                        self.set_keybinding_load_error(format!(
+                            "Failed to watch keybindings at {}: {error}",
+                            path.display()
+                        ));
+                        return;
+                    }
+                };
+            use notify::Watcher as _;
+            if let Err(error) = watcher.watch(&parent, notify::RecursiveMode::NonRecursive) {
+                self.set_keybinding_load_error(format!(
+                    "Failed to watch keybindings at {}: {error}",
+                    path.display()
+                ));
+                return;
+            }
+            Some(watcher)
+        };
 
         let watched_path = path.clone();
         let task = cx.spawn_in(window, async move |this, cx| {
             let _watcher = watcher;
+            let mut remote_source = None;
             loop {
                 cx.background_executor()
-                    .timer(KEYBINDINGS_WATCH_DEBOUNCE)
+                    .timer(if crate::config::storage::is_remote() {
+                        Duration::from_secs(1)
+                    } else {
+                        KEYBINDINGS_WATCH_DEBOUNCE
+                    })
                     .await;
+                if crate::config::storage::is_remote() {
+                    let path = watched_path.clone();
+                    let source = cx
+                        .background_executor()
+                        .spawn(async move {
+                            crate::config::storage::read(path).map_err(|error| error.to_string())
+                        })
+                        .await;
+                    if remote_source
+                        .as_ref()
+                        .is_some_and(|previous| previous != &source)
+                    {
+                        pending_reload.store(true, std::sync::atomic::Ordering::Release);
+                    }
+                    remote_source = Some(source);
+                }
                 if !pending_reload.swap(false, std::sync::atomic::Ordering::AcqRel) {
                     continue;
                 }
@@ -243,7 +271,9 @@ impl WorkbenchView {
         enabled: bool,
     ) -> Result<(), WorkbenchError> {
         self.app_settings.notifications.system = enabled;
-        save_settings(&self.config_paths, &self.app_settings)?;
+        if !self.persist_app_settings(false)? {
+            return Ok(Default::default());
+        }
         self.system_notifications_enabled = enabled;
         Ok(())
     }
@@ -256,7 +286,9 @@ impl WorkbenchView {
         enabled: bool,
     ) -> Result<(), WorkbenchError> {
         self.app_settings.general.restore_last_session = enabled;
-        save_settings(&self.config_paths, &self.app_settings)?;
+        if !self.persist_app_settings(false)? {
+            return Ok(Default::default());
+        }
         Ok(())
     }
 
@@ -267,7 +299,9 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) -> Result<(), WorkbenchError> {
         self.app_settings.vim.mode = mode;
-        save_settings(&self.config_paths, &self.app_settings)?;
+        if !self.persist_app_settings(false)? {
+            return Ok(Default::default());
+        }
         self.vim.set_support(mode);
         self.sync_editor_vim_modes(window, cx);
         if mode != VimModeSetting::Global {
@@ -299,7 +333,9 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) -> Result<(), WorkbenchError> {
         self.app_settings.general.performance_metrics_enabled = enabled;
-        save_settings(&self.config_paths, &self.app_settings)?;
+        if !self.persist_app_settings(false)? {
+            return Ok(Default::default());
+        }
         self.sync_performance_monitoring(cx);
         Ok(())
     }
@@ -313,7 +349,9 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) -> Result<(), WorkbenchError> {
         self.app_settings.general.system_performance_metrics_enabled = enabled;
-        save_settings(&self.config_paths, &self.app_settings)?;
+        if !self.persist_app_settings(false)? {
+            return Ok(Default::default());
+        }
         self.sync_performance_monitoring(cx);
         Ok(())
     }
@@ -331,7 +369,9 @@ impl WorkbenchView {
         enabled: bool,
     ) -> Result<(), WorkbenchError> {
         self.app_settings.general.new_tab_command_picker_enabled = enabled;
-        save_settings(&self.config_paths, &self.app_settings)?;
+        if !self.persist_app_settings(false)? {
+            return Ok(Default::default());
+        }
         Ok(())
     }
 
@@ -352,7 +392,9 @@ impl WorkbenchView {
             .general
             .new_tab_commands
             .push(command.to_string());
-        save_settings(&self.config_paths, &self.app_settings)?;
+        if !self.persist_app_settings(false)? {
+            return Ok(Default::default());
+        }
         self.settings.settings_new_tab_command_input = None;
         Ok(true)
     }
@@ -363,13 +405,17 @@ impl WorkbenchView {
         }
 
         self.app_settings.general.new_tab_commands.remove(index);
-        save_settings(&self.config_paths, &self.app_settings)?;
+        if !self.persist_app_settings(false)? {
+            return Ok(Default::default());
+        }
         Ok(true)
     }
 
     pub fn set_language(&mut self, language: LanguageSetting) -> Result<(), WorkbenchError> {
         self.app_settings.general.language = language;
-        save_settings(&self.config_paths, &self.app_settings)?;
+        if !self.persist_app_settings(false)? {
+            return Ok(Default::default());
+        }
         self.ui_text = ui_text_for_language(language);
         self.settings.keybinding_rows_cache = None;
         if let Ok(loaded) = load_keybindings(&self.config_paths, &self.command_registry) {
@@ -431,7 +477,9 @@ impl WorkbenchView {
             .terminal
             .environment
             .insert(name.to_string(), value.to_string());
-        save_settings(&self.config_paths, &self.app_settings)?;
+        if !self.persist_app_settings(false)? {
+            return Ok(Default::default());
+        }
         self.sync_terminal_environment();
         self.settings.settings_environment_name_input = None;
         self.settings.settings_environment_value_input = None;
@@ -452,7 +500,9 @@ impl WorkbenchView {
             return Ok(false);
         }
 
-        save_settings(&self.config_paths, &self.app_settings)?;
+        if !self.persist_app_settings(false)? {
+            return Ok(Default::default());
+        }
         self.sync_terminal_environment();
         Ok(true)
     }
@@ -494,7 +544,9 @@ impl WorkbenchView {
     ) -> Result<(), WorkbenchError> {
         self.app_settings.window.effect = effect;
         self.save_app_settings_and_refresh_runtime()?;
-        window.set_background_appearance(crate::ui::app::window_background_appearance(effect));
+        if !self.settings_save_pending() {
+            window.set_background_appearance(crate::ui::app::window_background_appearance(effect));
+        }
         Ok(())
     }
 
@@ -523,8 +575,10 @@ impl WorkbenchView {
     ) -> Result<(), WorkbenchError> {
         let mut bars = self.app_settings.bars.clone();
         bars.status.enabled = enabled;
-        save_bars(&self.config_paths, &bars)?;
         self.app_settings.bars = bars;
+        if !self.persist_app_settings(true)? {
+            return Ok(());
+        }
         self.sync_performance_monitoring(cx);
         Ok(())
     }
@@ -578,8 +632,13 @@ impl WorkbenchView {
             ));
         }
 
-        save_bars(&self.config_paths, &bars).map_err(|error| error.to_string())?;
         self.app_settings.bars = bars;
+        if !self
+            .persist_app_settings(true)
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(());
+        }
         self.sync_performance_monitoring(cx);
         Ok(())
     }
@@ -608,13 +667,46 @@ impl WorkbenchView {
             .map(|dialog| dialog.conflict_policy)
     }
 
-    pub fn open_zed_theme_import_dialog(&mut self) -> Result<(), String> {
-        self.open_zed_theme_import_dialog_with_detection(detect_installed_zed_themes())
+    pub fn open_zed_theme_import_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = self.config_paths.clone();
+        let task = cx.background_spawn(async move {
+            let detection = detect_installed_zed_themes();
+            let mut existing_paths = std::collections::HashSet::new();
+            for extension in &detection.extensions {
+                for path in extension
+                    .ui_theme_names
+                    .iter()
+                    .map(|name| zed_ui_theme_output_path(&extension.id, name, paths.themes_dir()))
+                    .chain(std::iter::once(zed_icon_theme_output_path(
+                        &extension.id,
+                        paths.icon_themes_dir(),
+                    )))
+                {
+                    if crate::config::storage::exists(&path) {
+                        existing_paths.insert(path);
+                    }
+                }
+            }
+            (detection, existing_paths)
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let (detection, existing_paths) = task.await;
+            let _ = this.update(cx, |root, cx| {
+                if let Err(error) =
+                    root.open_zed_theme_import_dialog_with_detection(detection, existing_paths)
+                {
+                    root.load_error = Some(error);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub fn open_zed_theme_import_dialog_with_detection(
         &mut self,
         detection: ZedThemeDetection,
+        existing_paths: std::collections::HashSet<PathBuf>,
     ) -> Result<(), String> {
         if detection.is_empty() {
             return Err(self
@@ -624,6 +716,7 @@ impl WorkbenchView {
         }
         self.settings.zed_theme_import_dialog = Some(ZedThemeImportDialogState {
             detection,
+            existing_paths,
             conflict_policy: ZedThemeImportConflictPolicy::SkipExisting,
         });
         self.sync_input_owner_state();
@@ -644,33 +737,82 @@ impl WorkbenchView {
         self.sync_input_owner_state();
     }
 
-    pub fn confirm_zed_theme_import_dialog(&mut self) -> Result<(usize, usize), String> {
+    pub fn confirm_zed_theme_import_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings_save_pending() {
+            return;
+        }
+        if self
+            .terminal
+            .host_runtime
+            .as_ref()
+            .is_some_and(|runtime| !runtime.shared_editing_enabled())
+        {
+            self.load_error = Some("Profile control is required to import shared themes.".into());
+            return;
+        }
         let Some(dialog) = self.settings.zed_theme_import_dialog.clone() else {
-            return Ok((0, 0));
+            return;
         };
-        let imported = import_detected_zed_themes_with_policy(
-            &dialog.detection,
-            &self.config_paths,
-            dialog.conflict_policy,
-        )
-        .map_err(|error| error.to_string())?;
-        let ui_theme_count = imported.ui_themes.len();
-        let icon_theme_count = imported
-            .icon_themes
-            .iter()
-            .map(|package| package.theme_names.len())
-            .sum();
-
-        self.settings.zed_theme_import_dialog = None;
-        self.settings.settings_ui_theme_select = None;
-        self.settings.settings_ui_theme_select_subscription = None;
-        self.settings.settings_terminal_theme_select = None;
-        self.settings.settings_terminal_theme_select_subscription = None;
-        self.settings.settings_icon_theme_select = None;
-        self.settings.settings_icon_theme_select_subscription = None;
-        self.refresh_theme_runtime_from_settings();
-        self.sync_input_owner_state();
-        Ok((ui_theme_count, icon_theme_count))
+        self.settings.settings_save_in_flight = true;
+        let paths = self.config_paths.clone();
+        let settings = self.app_settings.clone();
+        let task = cx.background_spawn(async move {
+            let imported = import_detected_zed_themes_with_policy(
+                &dialog.detection,
+                &paths,
+                dialog.conflict_policy,
+            )
+            .map_err(|error| error.to_string())?;
+            let theme_store = load_theme_store(&paths).map_err(|error| error.to_string())?;
+            let theme = ThemeRuntime::resolve(&settings, &theme_store.store);
+            let icons = load_icon_theme(&paths, settings.theme.icon_theme.as_deref())
+                .map_err(|error| error.to_string())?;
+            Ok::<_, String>((imported, theme, icons))
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |root, window, cx| {
+                root.settings.settings_save_in_flight = false;
+                match result {
+                    Ok((imported, theme, icons)) => {
+                        root.settings.settings_save_error = None;
+                        root.settings.zed_theme_import_dialog = None;
+                        root.settings.settings_ui_theme_select = None;
+                        root.settings.settings_ui_theme_select_subscription = None;
+                        root.settings.settings_terminal_theme_select = None;
+                        root.settings.settings_terminal_theme_select_subscription = None;
+                        root.settings.settings_icon_theme_select = None;
+                        root.settings.settings_icon_theme_select_subscription = None;
+                        root.appearance.replace(theme);
+                        root.icon_theme = icons;
+                        root.sync_input_owner_state();
+                        let count: usize = imported
+                            .icon_themes
+                            .iter()
+                            .map(|package| package.theme_names.len())
+                            .sum();
+                        root.queue_status_notification(
+                            root.ui_text.get(UiTextKey::SettingsImportZedThemesComplete),
+                            format!(
+                                "{}: {}; {}: {}",
+                                root.ui_text.get(UiTextKey::SettingsUiTheme),
+                                imported.ui_themes.len(),
+                                root.ui_text.get(UiTextKey::SettingsIconTheme),
+                                count
+                            ),
+                        );
+                        root.apply_appearance_change(window, cx);
+                    }
+                    Err(error) => {
+                        root.load_error = Some(error.clone());
+                        root.settings.settings_save_error = Some(error);
+                    }
+                }
+                root.flush_pending_status_notifications(window, cx);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub fn set_terminal_font_family(&mut self, font_family: &str) -> Result<(), WorkbenchError> {
@@ -1062,8 +1204,20 @@ impl WorkbenchView {
             self.settings.login_startup_generation.wrapping_add(1);
         let generation = self.settings.login_startup_generation;
         self.settings.login_startup_refreshing = true;
-        let task =
-            cx.background_spawn(async move { manager.status().map_err(|error| error.to_string()) });
+        let runtime = self.terminal.host_runtime.clone();
+        let task = cx.background_spawn(async move {
+            let state = manager.status().map_err(|error| error.to_string())?;
+            let runtime = runtime.ok_or_else(|| "Host is unavailable".to_string())?;
+            let consent = match runtime
+                .request_blocking(yttt_protocol::Request::ReadDeviceSettings)?
+            {
+                yttt_protocol::Response::DeviceSettings(settings) => {
+                    settings.login_startup_consent_granted
+                }
+                _ => return Err("Host returned an unexpected device settings response".to_string()),
+            };
+            Ok::<_, String>((state, consent))
+        });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |root, cx| {
@@ -1073,7 +1227,10 @@ impl WorkbenchView {
                 root.settings.login_startup_refreshing = false;
                 root.settings.login_startup_loaded = true;
                 match result {
-                    Ok(state) => root.settings.login_startup_state = state,
+                    Ok((state, consent)) => {
+                        root.settings.login_startup_state = state;
+                        root.settings.login_startup_consent_granted = consent;
+                    }
                     Err(error) => {
                         root.settings.login_startup_state = LoginStartupState::unavailable();
                         root.load_error = Some(error);
@@ -1094,12 +1251,7 @@ impl WorkbenchView {
         if self.settings.login_startup_changing {
             return;
         }
-        if enabled
-            && !self
-                .app_settings
-                .remote_access
-                .login_startup_consent_granted
-        {
+        if enabled && !self.settings.login_startup_consent_granted {
             self.confirm_login_startup_enable(window, cx);
         } else {
             self.begin_login_startup_change(enabled, true, cx);
@@ -1174,10 +1326,18 @@ impl WorkbenchView {
         let generation = self.settings.login_startup_generation;
         self.settings.login_startup_refreshing = false;
         self.settings.login_startup_changing = true;
+        let runtime = self.terminal.host_runtime.clone();
         let task = cx.background_spawn(async move {
-            manager
+            let state = manager
                 .set_enabled(enabled, user_confirmed)
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string())?;
+            if enabled {
+                let runtime = runtime.ok_or_else(|| "Host is unavailable".to_string())?;
+                runtime.request_blocking(yttt_protocol::Request::SetLoginStartupConsent {
+                    granted: true,
+                })?;
+            }
+            Ok::<_, String>(state)
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -1190,20 +1350,8 @@ impl WorkbenchView {
                 match result {
                     Ok(state) => {
                         root.settings.login_startup_state = state;
-                        if enabled
-                            && !root
-                                .app_settings
-                                .remote_access
-                                .login_startup_consent_granted
-                        {
-                            root.app_settings
-                                .remote_access
-                                .login_startup_consent_granted = true;
-                            if let Err(error) =
-                                save_settings(&root.config_paths, &root.app_settings)
-                            {
-                                root.load_error = Some(error.to_string());
-                            }
+                        if enabled {
+                            root.settings.login_startup_consent_granted = true;
                         }
                     }
                     Err(error) => root.load_error = Some(error),
@@ -1364,7 +1512,9 @@ impl WorkbenchView {
     }
 
     pub(super) fn save_app_settings_and_refresh_runtime(&mut self) -> Result<(), WorkbenchError> {
-        save_settings(&self.config_paths, &self.app_settings)?;
+        if !self.persist_app_settings(false)? {
+            return Ok(Default::default());
+        }
         self.refresh_theme_runtime_from_settings();
         Ok(())
     }

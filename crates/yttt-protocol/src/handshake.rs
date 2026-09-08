@@ -49,7 +49,6 @@ impl fmt::Debug for AuthMac {
     }
 }
 
-/// `#[serde(default)]` 在 CBOR map 编码下生效：旧对端省略的字段使用缺省值。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientHello {
     pub supported: ProtocolRange,
@@ -57,6 +56,8 @@ pub struct ClientHello {
     pub profile_id: ProfileId,
     pub client_instance_id: ClientInstanceId,
     pub host_epoch_hint: Option<u64>,
+    pub session_nonce: Nonce,
+    pub credential_generation: u64,
     #[serde(default)]
     pub can_force_stop: bool,
     pub nonce: Nonce,
@@ -82,6 +83,8 @@ pub struct HostChallenge {
     pub selected_version: u16,
     pub build: BuildIdentity,
     pub profile_id: ProfileId,
+    pub environment_id: String,
+    pub credential_generation: u64,
     pub host_id: HostId,
     pub host_epoch: u64,
     pub client_nonce: Nonce,
@@ -116,6 +119,7 @@ pub enum RejectReason {
     AlreadyConnected,
     InvalidMessage,
     HostShuttingDown,
+    PermissionDenied,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,5 +1,7 @@
 pub mod assets;
+pub(crate) mod existing_host;
 pub mod platform;
+mod remote_connect;
 pub mod startup;
 
 use std::{cell::RefCell, path::PathBuf, rc::Rc, sync::Arc, time::Duration};
@@ -63,6 +65,17 @@ pub fn run(
     } else {
         HostRuntimeGlobal::disabled()
     };
+    if let Some(runtime) = host_runtime.runtime() {
+        if let Err(error) = crate::config::storage::bind_environment(runtime.environment_storage())
+        {
+            eprintln!("failed to bind Host environment storage: {error}");
+            return;
+        }
+    } else if startup_mode != StartupMode::Normal {
+        crate::config::storage::allow_test_root(&profile.paths().config);
+        crate::config::storage::allow_test_root(&profile.paths().state);
+    }
+    let (app_settings, theme_runtime) = load_app_runtime(&config_paths);
     let mut application =
         gpui_platform::application().with_quit_mode(desktop_quit_mode(terminal_performance_mode));
     if !terminal_performance_mode {
@@ -88,7 +101,6 @@ pub fn run(
         cx.bind_keys(gpui_markdown_editor::default_key_bindings());
         crate::ui::editor::register_builtin_editor_languages();
         crate::ui::editor::init_vim_mode(cx);
-        let (app_settings, theme_runtime) = load_app_runtime(&config_paths);
         let appearance = AppearanceState::new(theme_runtime);
         Theme::global_mut(cx).apply_config(&Rc::new(
             appearance.runtime().to_gpui_component_theme_config(),
@@ -121,11 +133,91 @@ pub fn run(
             workbenches: Rc::new(RefCell::new(Vec::new())),
         };
         install_desktop_tray(window_context.clone(), cx);
+        let restore_windows = matches!(&initial_command, DesktopShellCommand::Activate);
         if let Err(error) = handle_desktop_shell_command(initial_command, &window_context, cx) {
             eprintln!("failed to open initial yttt window: {error}");
         }
+        if restore_windows {
+            while cx
+                .global::<HostRuntimeGlobal>()
+                .runtime()
+                .is_some_and(|runtime| runtime.pending_workspace_count() > 0)
+            {
+                if let Err(error) =
+                    open_workbench_window(&window_context, WindowIntent::Restore, cx)
+                {
+                    eprintln!("failed to restore work window: {error}");
+                    break;
+                }
+            }
+        }
         start_desktop_shell_listener(desktop_shell, window_context, cx);
     });
+}
+
+pub fn run_remote(launch: crate::remote_launch::RemoteLaunch) {
+    let profile = launch.local_profile.clone();
+    let assets = assets::app_assets(&profile.config_paths());
+    gpui_platform::application()
+        .with_quit_mode(QuitMode::LastWindowClosed)
+        .with_assets(assets)
+        .run(move |cx| {
+            #[cfg(target_os = "macos")]
+            platform::macos::prepare_macos_app_runtime();
+            gpui_component::init(cx);
+            yttt_terminal::init(cx);
+            crate::ui::editor::register_builtin_editor_languages();
+            crate::ui::editor::init_vim_mode(cx);
+            cx.set_global(HostRuntimeGlobal::disabled());
+            if let Err(error) = remote_connect::open(
+                launch,
+                move |remote, cx| {
+                    let workspace_count = remote.runtime.pending_workspace_count().max(1);
+                    cx.set_global(HostRuntimeGlobal::ready(remote.runtime));
+                    let (app_settings, theme_runtime) = load_app_runtime(&remote.config_paths);
+                    let appearance = AppearanceState::new(theme_runtime);
+                    Theme::global_mut(cx).apply_config(&Rc::new(
+                        appearance.runtime().to_gpui_component_theme_config(),
+                    ));
+                    cx.set_global(appearance.clone());
+                    rebind_application_keybindings(
+                        cx,
+                        &crate::config::keybindings::load_keybindings(
+                            &remote.config_paths,
+                            &bindable_registry(),
+                        )
+                        .map(|loaded| loaded.config)
+                        .unwrap_or_default(),
+                    );
+                    let context = DesktopWindowContext {
+                        profile,
+                        config_paths: remote.config_paths,
+                        app_settings,
+                        login_startup: None,
+                        appearance,
+                        startup_mode: StartupMode::Normal,
+                        workbenches: Rc::new(RefCell::new(Vec::new())),
+                    };
+                    for _ in 0..workspace_count {
+                        if let Err(error) =
+                            open_workbench_window(&context, WindowIntent::Restore, cx)
+                        {
+                            eprintln!("failed to open remote workspace: {error}");
+                            break;
+                        }
+                    }
+                    for window in cx.windows() {
+                        let _ = window.update(cx, |_, window, _| {
+                            window.set_window_title(&format!("yttt — {}", remote.label))
+                        });
+                    }
+                },
+                cx,
+            ) {
+                eprintln!("failed to open remote connection window: {error}");
+                cx.quit();
+            }
+        });
 }
 
 #[derive(Clone)]
@@ -173,11 +265,16 @@ fn handle_desktop_shell_command(
     match command {
         DesktopShellCommand::Activate => {
             if !activate_workbench_window(cx) {
-                open_workbench_window(window_context, None, cx)?;
+                open_workbench_window(window_context, WindowIntent::Restore, cx)?;
             }
         }
         DesktopShellCommand::OpenWindow { project_paths } => {
-            open_workbench_window(window_context, Some(project_paths), cx)?;
+            let intent = if project_paths.is_empty() {
+                WindowIntent::Empty
+            } else {
+                WindowIntent::OpenProjects(project_paths)
+            };
+            open_workbench_window(window_context, intent, cx)?;
         }
     }
     Ok(())
@@ -197,9 +294,15 @@ fn activate_workbench_window(cx: &mut App) -> bool {
         .is_ok()
 }
 
+enum WindowIntent {
+    Restore,
+    Empty,
+    OpenProjects(Vec<PathBuf>),
+}
+
 fn open_workbench_window(
     window_context: &DesktopWindowContext,
-    project_paths: Option<Vec<PathBuf>>,
+    intent: WindowIntent,
     cx: &mut App,
 ) -> anyhow::Result<()> {
     let bounds = Bounds::centered(None, size(px(960.0), px(640.0)), cx);
@@ -208,7 +311,13 @@ fn open_workbench_window(
     let startup_mode = window_context.startup_mode;
     let login_startup = window_context.login_startup.clone();
     let workbenches = window_context.workbenches.clone();
-    let should_check_for_updates = startup_mode == StartupMode::Normal;
+    let restore_existing = matches!(intent, WindowIntent::Restore);
+    let has_host_snapshot = cx
+        .global::<HostRuntimeGlobal>()
+        .runtime()
+        .is_some_and(|runtime| runtime.pending_workspace_count() > 0 || runtime.is_remote());
+    let should_check_for_updates =
+        startup_mode == StartupMode::Normal && !crate::config::storage::is_remote();
     cx.open_window(
         workbench_window_options(bounds, window_context.app_settings.window.effect),
         move |window, cx| {
@@ -218,13 +327,27 @@ fn open_workbench_window(
                 let view = match startup_mode {
                     StartupMode::DevFixture => WorkbenchView::dev_fixture(),
                     StartupMode::AgentExitFixture => WorkbenchView::agent_exit_fixture(),
-                    StartupMode::Normal => match project_paths {
-                        Some(project_paths) => WorkbenchView::from_project_paths(
+                    StartupMode::Normal => match intent {
+                        WindowIntent::OpenProjects(paths) => WorkbenchView::from_project_paths(
                             config_paths.clone(),
                             force_onboarding,
-                            project_paths,
+                            paths,
                         ),
-                        None => WorkbenchView::from_startup(config_paths.clone(), force_onboarding),
+                        WindowIntent::Empty => WorkbenchView::from_project_paths(
+                            config_paths.clone(),
+                            force_onboarding,
+                            Vec::new(),
+                        ),
+                        WindowIntent::Restore if has_host_snapshot => {
+                            WorkbenchView::from_project_paths(
+                                config_paths.clone(),
+                                false,
+                                Vec::new(),
+                            )
+                        }
+                        WindowIntent::Restore => {
+                            WorkbenchView::from_startup(config_paths.clone(), force_onboarding)
+                        }
                     },
                 };
                 let view = match login_startup.clone() {
@@ -237,6 +360,9 @@ fn open_workbench_window(
             let host_runtime = cx.global::<HostRuntimeGlobal>().clone();
             view.update(cx, |view, _cx| {
                 view.set_host_runtime_status(&host_runtime);
+            });
+            view.update(cx, |view, cx| {
+                view.start_workspace_persistence(restore_existing, window, cx)
             });
             view.update(cx, |view, cx| view.sync_performance_monitoring(cx));
             view.update(cx, |view, cx| view.start_ssh_event_listener(cx));
@@ -325,8 +451,16 @@ fn handle_desktop_tray_action(
         DesktopTrayAction::RestartHost => {
             request_host_stop(true, window_context.clone(), cx);
         }
-        DesktopTrayAction::QuitDesktop => quit_desktop(cx),
-        DesktopTrayAction::QuitAll => quit_all(cx),
+        DesktopTrayAction::QuitDesktop | DesktopTrayAction::QuitAll => {
+            if cx.windows().is_empty() {
+                open_workbench_window(window_context, WindowIntent::Restore, cx)?;
+            }
+            if let Some(window) = cx.windows().first().copied() {
+                window.update(cx, |_, window, cx| {
+                    confirm_desktop_quit(matches!(action, DesktopTrayAction::QuitAll), window, cx)
+                })?;
+            }
+        }
     }
     Ok(())
 }
@@ -384,29 +518,59 @@ fn request_host_stop(restart: bool, window_context: DesktopWindowContext, cx: &m
     .detach();
 }
 
-fn quit_desktop(cx: &mut App) {
-    if let Some(runtime) = cx.global::<HostRuntimeGlobal>().runtime().cloned() {
-        runtime.shutdown_client();
-    }
-    cx.quit();
-}
-
-fn quit_all(cx: &mut App) {
+pub(crate) fn confirm_desktop_quit(stop_all: bool, window: &mut Window, cx: &mut App) {
     let Some(runtime) = cx.global::<HostRuntimeGlobal>().runtime().cloned() else {
         cx.quit();
         return;
     };
-    let response = runtime.request_lifecycle(LifecycleRequest::ForceStop, true);
-    cx.spawn(async move |cx| match response.recv_async().await {
-        Ok(Ok(LifecycleResponse::Draining)) => {
-            runtime.shutdown_client();
-            cx.update(|cx| cx.quit());
+    if runtime.preparing_transfer().is_some() {
+        return;
+    }
+    let stops_host = stop_all || runtime.actual_lifetime() == yttt_host::HostLifetime::DesktopOwned;
+    let answer = window.prompt(gpui::PromptLevel::Warning, "Quit yttt?",
+        Some(if stops_host { "This Host is owned by the desktop. Quitting stops its network listener, disconnects remote clients, and terminates running terminals and Agent tasks. Confirmed workspaces and drafts remain saved." }
+            else { "This independently running Host will keep its network listener, remote clients, terminals and Agent tasks. Only this desktop client will disconnect." }),
+        &["Cancel", if stops_host { "Stop Host and quit" } else { "Disconnect desktop" }], cx);
+    let window_handle = window.window_handle();
+    cx.spawn(async move |cx| {
+        if !matches!(answer.await, Ok(1)) { return; }
+        let transfer = runtime.begin_exit_publication();
+        cx.update(|cx| cx.refresh_windows());
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let publication = loop {
+            if !runtime.is_controller() { break Ok(()); }
+            match runtime.exit_publication_ready(&transfer) {
+                Ok(true) => break Ok(()),
+                Err(error) => break Err(error),
+                Ok(false) if std::time::Instant::now() >= deadline => break Err("Some work windows could not finish publishing. Keep them open and resolve their save errors before quitting.".to_string()),
+                Ok(false) => cx.background_executor().timer(Duration::from_millis(50)).await,
+            }
+        };
+        if let Err(error) = publication {
+            runtime.cancel_exit_publication();
+            cx.update(|cx| {
+                let _ = window_handle.update(cx, |_, window, cx| {
+                    let _ = window.prompt(gpui::PromptLevel::Warning, "Desktop remains open", Some(&error), &["OK"], cx);
+                });
+                cx.refresh_windows();
+            });
+            return;
         }
-        Ok(Ok(other)) => eprintln!("unexpected Host force-stop response: {other:?}"),
-        Ok(Err(error)) => eprintln!("Host force-stop failed: {error}"),
-        Err(error) => eprintln!("Host force-stop response channel failed: {error}"),
-    })
-    .detach();
+        if stops_host {
+            let result = runtime.request_lifecycle(LifecycleRequest::ForceStop, true).recv_async().await;
+            if !matches!(result, Ok(Ok(LifecycleResponse::Draining))) {
+                runtime.cancel_exit_publication();
+                cx.update(|cx| {
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        let _ = window.prompt(gpui::PromptLevel::Warning, "Host stop failed", Some("The desktop remains connected. Retry after checking Host status."), &["OK"], cx);
+                    });
+                });
+                return;
+            }
+        }
+        cx.background_executor().spawn(async move { runtime.shutdown_client(); }).await;
+        cx.update(|cx| cx.quit());
+    }).detach();
 }
 
 fn replace_host_runtime(
@@ -414,6 +578,12 @@ fn replace_host_runtime(
     window_context: &DesktopWindowContext,
     cx: &mut App,
 ) {
+    if let Some(runtime) = status.runtime()
+        && let Err(error) = crate::config::storage::bind_environment(runtime.environment_storage())
+    {
+        eprintln!("failed to bind replacement Host environment: {error}");
+        return;
+    }
     cx.set_global(status.clone());
     let workbenches = window_context
         .workbenches
@@ -629,9 +799,15 @@ pub fn register_workbench_focus_restore(
 
 pub fn register_workbench_close_guard(window: &Window, cx: &App, view: &Entity<WorkbenchView>) {
     let view = view.downgrade();
-    window.on_window_should_close(cx, move |_window, cx| {
-        view.update(cx, |root, cx| root.request_window_close(cx))
-            .unwrap_or(true)
+    window.on_window_should_close(cx, move |window, cx| {
+        view.update(cx, |root, cx| {
+            if crate::config::storage::is_remote() {
+                root.flush_workspace_persistence_on_close(window, cx)
+            } else {
+                root.request_window_close(cx)
+            }
+        })
+        .unwrap_or(true)
     });
 }
 

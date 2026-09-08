@@ -177,6 +177,48 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
+  server:
+    name: Package headless Server (${{ matrix.platform }}-${{ matrix.arch }})
+    needs:
+      - metadata
+      - validation
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: aarch64
+          - runner: macos-15
+            platform: macos
+            arch: aarch64
+          - runner: macos-15-intel
+            platform: macos
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.metadata.outputs.ref }}
+      - name: Build headless Server
+        run: cargo build --locked --release -p yttt-server
+      - name: Package Server binary
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p dist
+          cp target/release/yttt-server "dist/yttt-server-$VERSION-$PLATFORM-$ARCH"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-server-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/yttt-server-*
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub release
     needs:
@@ -185,6 +227,7 @@ jobs:
       - macos
       - windows
       - linux
+      - server
     runs-on: ubuntu-24.04
     permissions:
       contents: write

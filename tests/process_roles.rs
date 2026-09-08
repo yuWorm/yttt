@@ -65,6 +65,10 @@ async fn start_previous_build_host(
         OsString::from(profile.id().as_str()),
         OsString::from("--runtime-root"),
         profile.paths().runtime.clone().into_os_string(),
+        OsString::from("--state-root"),
+        profile.paths().state.clone().into_os_string(),
+        OsString::from("--config-root"),
+        profile.paths().config.clone().into_os_string(),
         OsString::from("--auth-token-file"),
         token_file.into_os_string(),
         OsString::from("--ssh-host-keys-file"),
@@ -189,7 +193,18 @@ async fn installer_preflight_stops_idle_host_and_preserves_busy_host() {
 
     let busy_host = launcher.launch_or_attach().await.unwrap();
     assert!(busy_host.spawned());
-    let mut client = busy_host.connect().await.unwrap();
+    let (connector, identity, token) = launcher
+        .client_core_config(ClientInstanceId::new("installer-client"))
+        .unwrap();
+    let client = ClientCore::connect(connector, identity, token)
+        .await
+        .unwrap();
+    client
+        .request(Request::ProfileControl(
+            yttt_protocol::session::ProfileControlRequest::RequestControl,
+        ))
+        .await
+        .unwrap();
     let project_root = temporary.path().join("installer-blocker");
     fs::create_dir_all(&project_root).unwrap();
     let project_id = ProjectId::new("installer-blocker");
@@ -198,6 +213,7 @@ async fn installer_preflight_stops_idle_host_and_preserves_busy_host() {
     }) = client
         .request(Request::Project(ProjectRequest::Register {
             project_id: project_id.clone(),
+            view_id: "installer-window".to_string(),
             root: platform_path(&project_root),
         }))
         .await
@@ -224,12 +240,13 @@ async fn installer_preflight_stops_idle_host_and_preserves_busy_host() {
             .request(Request::Project(ProjectRequest::Close {
                 project_id,
                 registration_epoch,
+                view_id: "installer-window".to_string(),
             }))
             .await
             .unwrap(),
         Response::Project(ProjectResponse::Closed)
     );
-    drop(client);
+    client.shutdown().await;
     busy_host.drain_and_stop().await.unwrap();
 }
 
@@ -283,6 +300,10 @@ async fn host_role_starts_headless_enforces_single_instance_and_stops_cleanly() 
         .arg(profile.id().as_str())
         .arg("--runtime-root")
         .arg(&profile.paths().runtime)
+        .arg("--state-root")
+        .arg(&profile.paths().state)
+        .arg("--config-root")
+        .arg(&profile.paths().config)
         .arg("--auth-token-file")
         .arg(profile.paths().runtime.join("host-auth-token"))
         .arg("--ssh-host-keys-file")
@@ -341,6 +362,9 @@ async fn previous_build_host_is_replaced_only_after_it_becomes_idle() {
     let client = ClientCore::connect(
         LocalConnector::new(launcher.endpoint()),
         ClientIdentity {
+            expected_environment: None,
+            credential_generation: 0,
+            session_nonce: yttt_transport::new_session_nonce(),
             supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
             build: BuildIdentity {
                 product_version: "0.1.0".to_string(),
@@ -358,6 +382,12 @@ async fn previous_build_host_is_replaced_only_after_it_becomes_idle() {
     )
     .await
     .unwrap();
+    client
+        .request(Request::ProfileControl(
+            yttt_protocol::session::ProfileControlRequest::RequestControl,
+        ))
+        .await
+        .unwrap();
     let project_root = temp.path().join("busy-project");
     fs::create_dir_all(&project_root).unwrap();
     let project_id = ProjectId::new("upgrade-blocker");
@@ -366,6 +396,7 @@ async fn previous_build_host_is_replaced_only_after_it_becomes_idle() {
     }) = client
         .request(Request::Project(ProjectRequest::Register {
             project_id: project_id.clone(),
+            view_id: "upgrade-window".to_string(),
             root: platform_path(&project_root),
         }))
         .await
@@ -385,6 +416,7 @@ async fn previous_build_host_is_replaced_only_after_it_becomes_idle() {
             .request(Request::Project(ProjectRequest::Close {
                 project_id,
                 registration_epoch,
+                view_id: "upgrade-window".to_string(),
             }))
             .await
             .unwrap(),

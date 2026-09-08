@@ -22,8 +22,8 @@ use tokio::{
 };
 use yttt_core::model::ids::TerminalSessionId;
 use yttt_protocol::{
-    ClientRequest, ConnectionChannel, ControlMessage, HostEvent, ProtocolFailure, Request,
-    ResourceCatalog, Response, ServerEvent, TerminalInteractiveMessage,
+    ClientRequest, ConnectionChannel, ControlMessage, HostEvent, HostResponse, ProtocolFailure,
+    Request, ResourceCatalog, Response, ServerEvent, TerminalInteractiveMessage,
     agent::{AgentSnapshotCursor, AgentSnapshotUpdate},
     terminal::{TerminalInput, TerminalProcessState, TerminalStreamUpdate},
 };
@@ -85,6 +85,8 @@ struct ClientCoreInner {
     data_channels: Arc<RwLock<HashMap<TerminalSessionId, watch::Sender<bool>>>>,
     shutdown: watch::Sender<bool>,
     diagnostics: Arc<ClientPipelineDiagnostics>,
+    control: Arc<RwLock<Option<yttt_protocol::session::ControlStatus>>>,
+    client_id: yttt_core::model::ids::ClientInstanceId,
 }
 
 impl Drop for ClientCoreInner {
@@ -103,6 +105,7 @@ struct ClientCommand {
     request_id: Option<u64>,
     body: Request,
     reply: Option<oneshot::Sender<Result<Response, ClientCoreError>>>,
+    control: Option<yttt_protocol::session::ControlContext>,
 }
 
 pub struct PendingClientRequest {
@@ -163,6 +166,7 @@ struct ClientSessionContext {
     diagnostics: Arc<ClientPipelineDiagnostics>,
     deferred_terminal_events: Arc<Mutex<HashMap<TerminalSessionId, HostEvent>>>,
     shutdown: watch::Receiver<bool>,
+    control: Arc<RwLock<Option<yttt_protocol::session::ControlStatus>>>,
 }
 
 impl ClientCore {
@@ -185,6 +189,7 @@ impl ClientCore {
         let agent_snapshots = Arc::new(RwLock::new(HashMap::new()));
         let next_request_id = Arc::new(AtomicU64::new(1));
         let diagnostics = Arc::new(ClientPipelineDiagnostics::default());
+        let control = Arc::new(RwLock::new(None));
         let (initial_tx, initial_rx) = oneshot::channel();
         let supervisor = tokio::spawn(run_supervisor(
             connector.clone(),
@@ -205,6 +210,7 @@ impl ClientCore {
             diagnostics.clone(),
             shutdown_rx,
             initial_tx,
+            control.clone(),
         ));
         let inner = Arc::new(ClientCoreInner {
             commands: command_tx,
@@ -219,6 +225,8 @@ impl ClientCore {
             data_channels,
             shutdown,
             diagnostics,
+            control,
+            client_id: identity.client_instance_id.clone(),
             supervisor: Mutex::new(Some(supervisor)),
         });
         let initial = tokio::time::timeout(INITIAL_CONNECT_TIMEOUT, initial_rx)
@@ -231,6 +239,22 @@ impl ClientCore {
 
     pub fn state(&self) -> ConnectionState {
         self.inner.state.borrow().clone()
+    }
+
+    pub fn client_id(&self) -> &yttt_core::model::ids::ClientInstanceId {
+        &self.inner.client_id
+    }
+
+    pub fn control_status(&self) -> Option<yttt_protocol::session::ControlStatus> {
+        self.inner.control.read().clone()
+    }
+
+    pub fn is_controller(&self) -> bool {
+        self.inner
+            .control
+            .read()
+            .as_ref()
+            .is_some_and(|status| status.owner.as_ref() == Some(self.client_id()))
     }
 
     pub fn diagnostics(&self) -> ClientPipelineDiagnosticsSnapshot {
@@ -346,6 +370,12 @@ impl ClientCore {
                 request_id,
                 body,
                 reply,
+                control: self
+                    .inner
+                    .control
+                    .read()
+                    .as_ref()
+                    .map(|status| status.context),
             })
             .map_err(|error| match error {
                 mpsc::error::TrySendError::Full(_) => ClientCoreError::Backpressure,
@@ -396,6 +426,7 @@ async fn run_supervisor(
     diagnostics: Arc<ClientPipelineDiagnostics>,
     mut shutdown: watch::Receiver<bool>,
     initial: oneshot::Sender<Result<(), String>>,
+    profile_control: Arc<RwLock<Option<yttt_protocol::session::ControlStatus>>>,
 ) {
     set_state(&state, &events, ConnectionState::Connecting);
     let mut lanes = match establish_session_lanes(&connector, &identity, &token).await {
@@ -414,6 +445,7 @@ async fn run_supervisor(
         }
     };
     identity.host_epoch_hint = Some(lanes.host.host_epoch);
+    *profile_control.write() = Some(lanes.control_status.clone());
     set_state(
         &state,
         &events,
@@ -443,35 +475,41 @@ async fn run_supervisor(
             diagnostics: diagnostics.clone(),
             deferred_terminal_events: deferred_terminal_events.clone(),
             shutdown: shutdown.clone(),
+            control: profile_control.clone(),
         };
-        let control = connected_control_session(
-            lanes.control,
-            &mut commands,
-            &mut checkpoint_rx,
-            &mut catalog_rx,
-            &session,
-        );
-        let interactive =
-            connected_interactive_session(lanes.interactive, &mut interactive_commands, &session);
-        let state_events = connected_state_event_session(lanes.state_events, &session);
-        tokio::pin!(control, interactive, state_events);
-        let (control_exited, lane_result) = tokio::select! {
-            biased;
-            result = &mut control => (true, result.map(|message| format!("control: {message}"))),
-            result = &mut interactive => {
-                (false, result.map(|message| format!("interactive: {message}")))
-            },
-            result = &mut state_events => {
-                (false, result.map(|message| format!("state events: {message}")))
-            },
-        };
-        let disconnected = if control_exited {
-            lane_result
-        } else {
-            tokio::select! {
+        let disconnected = {
+            let control = connected_control_session(
+                lanes.control,
+                &mut commands,
+                &mut checkpoint_rx,
+                &mut catalog_rx,
+                &session,
+            );
+            let interactive = connected_interactive_session(
+                lanes.interactive,
+                &mut interactive_commands,
+                &session,
+            );
+            let state_events = connected_state_event_session(lanes.state_events, &session);
+            tokio::pin!(control, interactive, state_events);
+            let (control_exited, lane_result) = tokio::select! {
                 biased;
-                result = &mut control => result,
-                _ = tokio::time::sleep(CONTROL_RESPONSE_GRACE) => lane_result,
+                result = &mut control => (true, result.map(|message| format!("control: {message}"))),
+                result = &mut interactive => {
+                    (false, result.map(|message| format!("interactive: {message}")))
+                },
+                result = &mut state_events => {
+                    (false, result.map(|message| format!("state events: {message}")))
+                },
+            };
+            if control_exited {
+                lane_result
+            } else {
+                tokio::select! {
+                    biased;
+                    result = &mut control => result,
+                    _ = tokio::time::sleep(CONTROL_RESPONSE_GRACE) => lane_result,
+                }
             }
         };
         let Some(message) = disconnected else {
@@ -479,6 +517,17 @@ async fn run_supervisor(
             return;
         };
         attempt = attempt.saturating_add(1);
+        *profile_control.write() = None;
+        while let Ok(command) = commands.try_recv() {
+            if let Some(reply) = command.reply {
+                let _ = reply.send(Err(ClientCoreError::NotConnected));
+            }
+        }
+        while let Ok(command) = interactive_commands.try_recv() {
+            if let Some(reply) = command.reply {
+                let _ = reply.send(Err(ClientCoreError::NotConnected));
+            }
+        }
         set_state(
             &state,
             &events,
@@ -503,6 +552,7 @@ async fn run_supervisor(
                 Ok(new_lanes) => {
                     lanes = new_lanes;
                     identity.host_epoch_hint = Some(lanes.host.host_epoch);
+                    *profile_control.write() = Some(lanes.control_status.clone());
                     attempt = 0;
                     set_state(
                         &state,
@@ -546,6 +596,7 @@ struct SessionLanes {
     interactive: TransportStream,
     state_events: TransportStream,
     host: AuthenticatedHost,
+    control_status: yttt_protocol::session::ControlStatus,
 }
 
 async fn establish_session_lanes(
@@ -553,7 +604,28 @@ async fn establish_session_lanes(
     identity: &ClientIdentity,
     token: &AuthToken,
 ) -> Result<SessionLanes, ConnectFailure> {
-    let (control, host) = establish(connector, identity, token).await?;
+    let (mut control, host) = establish(connector, identity, token).await?;
+    send_control(
+        &mut control,
+        &ControlMessage::Request(ClientRequest::new(
+            u64::MAX,
+            Request::ProfileControl(yttt_protocol::session::ProfileControlRequest::Status),
+        )),
+    )
+    .await
+    .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
+    let status = receive_control(&mut control)
+        .await
+        .map_err(|error| ConnectFailure::Retry(error.to_string()))?;
+    let ControlMessage::Response(HostResponse {
+        result: Ok(Response::ProfileControl(control_status)),
+        ..
+    }) = status
+    else {
+        return Err(ConnectFailure::Fatal(
+            "Host did not provide authenticated profile control state".to_string(),
+        ));
+    };
     let mut lane_identity = identity.clone();
     lane_identity.host_epoch_hint = Some(host.host_epoch);
     lane_identity.can_force_stop = false;
@@ -572,6 +644,7 @@ async fn establish_session_lanes(
         interactive,
         state_events,
         host,
+        control_status,
     })
 }
 
@@ -658,6 +731,7 @@ async fn connected_control_session(
                     request_id,
                     body,
                     reply,
+                    control,
                 }) = command else {
                     break None;
                 };
@@ -673,6 +747,7 @@ async fn connected_control_session(
                     request_id,
                     actor_device_id: Some(context.identity.client_instance_id.to_string()),
                     lease_epoch: None,
+                    control,
                     body,
                 });
                 if let Err(error) = send_control(&mut writer, &message).await {
@@ -821,12 +896,13 @@ async fn connected_interactive_session(
                     request_id,
                     body,
                     reply,
+                    control,
                 }) = command else {
                     break None;
                 };
                 let message = match (body, request_id) {
                     (Request::TerminalInput(input), None) => {
-                        TerminalInteractiveMessage::Input(input)
+                        TerminalInteractiveMessage::Input { input, control }
                     }
                     (
                         body @ (
@@ -839,6 +915,7 @@ async fn connected_interactive_session(
                         request_id,
                         actor_device_id: Some(context.identity.client_instance_id.to_string()),
                         lease_epoch: None,
+                        control,
                         body,
                     }),
                     (_, _) => {
@@ -903,6 +980,9 @@ async fn connected_state_event_session(
                     Ok(event) => event,
                     Err(error) => return Some(error.to_string()),
                 };
+                if let ServerEvent::ProfileControl(status) = &event.body {
+                    update_profile_control(&context.control, status);
+                }
                 if matches!(
                     &event.body,
                     ServerEvent::ResourceCatalogChanged
@@ -955,6 +1035,9 @@ fn handle_response(
     result: Result<Response, ProtocolFailure>,
     context: &ClientSessionContext,
 ) -> Vec<TerminalSessionId> {
+    if let Ok(Response::ProfileControl(status)) = &result {
+        update_profile_control(&context.control, status);
+    }
     let mirrors = &context.mirrors;
     let events = &context.events;
     let known_sessions = &context.known_sessions;
@@ -1195,6 +1278,20 @@ fn start_terminal_data_channel(session_id: TerminalSessionId, context: &ClientSe
     });
 }
 
+fn update_profile_control(
+    cache: &RwLock<Option<yttt_protocol::session::ControlStatus>>,
+    status: &yttt_protocol::session::ControlStatus,
+) {
+    let mut current = cache.write();
+    if current.as_ref().is_none_or(|current| {
+        status.context.host_epoch > current.context.host_epoch
+            || (status.context.host_epoch == current.context.host_epoch
+                && status.revision >= current.revision)
+    }) {
+        *current = Some(status.clone());
+    }
+}
+
 fn handle_event(
     event: HostEvent,
     mirrors: &Arc<RwLock<HashMap<TerminalSessionId, TerminalMirror>>>,
@@ -1356,6 +1453,7 @@ async fn send_internal_request(
             request_id,
             actor_device_id,
             lease_epoch: None,
+            control: None,
             body,
         }),
     )

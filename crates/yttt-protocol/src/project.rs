@@ -442,17 +442,24 @@ pub struct ProjectChange {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProjectRequest {
     Register {
+        view_id: String,
         project_id: ProjectId,
         root: HostPath,
     },
     RegisterSsh {
+        view_id: String,
         project_id: ProjectId,
         connection_id: String,
         root: ProjectRelativePath,
     },
     Close {
+        view_id: String,
         project_id: ProjectId,
         registration_epoch: u64,
+    },
+    Observe {
+        project_id: ProjectId,
+        view_id: String,
     },
     ScanDirectory {
         project_id: ProjectId,
@@ -499,14 +506,16 @@ pub enum ProjectRequest {
 impl ProjectRequest {
     pub fn required_capability(&self) -> crate::Capability {
         match self {
-            Self::ScanDirectory { .. } | Self::ReadFile { .. } => crate::Capability::ProjectRead,
+            Self::ScanDirectory { .. }
+            | Self::ReadFile { .. }
+            | Self::Observe { .. }
+            | Self::Close { .. } => crate::Capability::ProjectRead,
             Self::Git { operation, .. } => match operation.access() {
                 GitAccess::Read => crate::Capability::GitRead,
                 GitAccess::Mutate => crate::Capability::GitMutate,
             },
             Self::Register { .. }
             | Self::RegisterSsh { .. }
-            | Self::Close { .. }
             | Self::SaveFile { .. }
             | Self::CreateEntry { .. }
             | Self::RenameEntry { .. }

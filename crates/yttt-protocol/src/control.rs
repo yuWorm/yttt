@@ -16,6 +16,7 @@ use crate::{
         TerminalStreamUpdate, TerminalViewportRead, TerminateTerminalRequest, TerminatedTerminal,
         TerminationMode,
     },
+    workspace::{WorkspaceRequest, WorkspaceResponse},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +29,8 @@ pub enum Capability {
     SshConnect,
     RemoteCommandPrivileged,
     CredentialAnswer,
+    WorkspaceRead,
+    WorkspaceMutate,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,6 +40,7 @@ pub struct ClientRequest {
     pub actor_device_id: Option<String>,
     #[serde(default)]
     pub lease_epoch: Option<u64>,
+    pub control: Option<crate::session::ControlContext>,
     pub body: Request,
 }
 
@@ -46,6 +50,7 @@ impl ClientRequest {
             request_id,
             actor_device_id: None,
             lease_epoch: None,
+            control: None,
             body,
         }
     }
@@ -98,7 +103,10 @@ pub enum ControlMessage {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TerminalInteractiveMessage {
-    Input(TerminalInput),
+    Input {
+        input: TerminalInput,
+        control: Option<crate::session::ControlContext>,
+    },
     Request(ClientRequest),
     Response(HostResponse),
 }
@@ -166,12 +174,23 @@ pub enum Request {
     ReleaseTerminalControl {
         session_id: TerminalSessionId,
     },
+    Workspace(WorkspaceRequest),
+    ProfileControl(crate::session::ProfileControlRequest),
+    ReadDeviceSettings,
+    SetLoginStartupConsent {
+        granted: bool,
+    },
+    RemoteAccess(crate::remote_access::RemoteAccessRequest),
 }
 
 impl Request {
     pub fn required_capability(&self) -> Option<Capability> {
         match self {
             Self::Ping { .. }
+            | Self::ProfileControl(_)
+            | Self::ReadDeviceSettings
+            | Self::SetLoginStartupConsent { .. }
+            | Self::RemoteAccess(_)
             | Self::ListResources
             | Self::DetachTerminal { .. }
             | Self::ScrollTerminal(_)
@@ -206,6 +225,17 @@ impl Request {
             Self::RemoteFile(request) => Some(request.required_capability()),
             Self::RemoteCommand(request) => Some(request.required_capability()),
             Self::Project(request) => Some(request.required_capability()),
+            Self::Workspace(request) => Some(match request {
+                WorkspaceRequest::Environment
+                | WorkspaceRequest::List
+                | WorkspaceRequest::Browse { .. }
+                | WorkspaceRequest::ReadConfig { .. }
+                | WorkspaceRequest::ListConfig { .. }
+                | WorkspaceRequest::AgentSessions { .. }
+                | WorkspaceRequest::Open { .. }
+                | WorkspaceRequest::GetDraft { .. } => Capability::WorkspaceRead,
+                _ => Capability::WorkspaceMutate,
+            }),
         }
     }
 
@@ -219,6 +249,8 @@ impl Request {
             Capability::SshConnect => "ssh.connect",
             Capability::RemoteCommandPrivileged => "remote.privileged",
             Capability::CredentialAnswer => "credential.answer",
+            Capability::WorkspaceRead => "workspace.read",
+            Capability::WorkspaceMutate => "workspace.mutate",
         })
     }
 
@@ -248,6 +280,11 @@ impl Request {
             Self::CredentialAnswer { challenge_id, .. } => challenge_id.to_string(),
             Self::RemoteFile(request) => remote_file_resource(request),
             Self::RemoteCommand(request) => request.project_id.to_string(),
+            Self::Workspace(_)
+            | Self::ProfileControl(_)
+            | Self::ReadDeviceSettings
+            | Self::SetLoginStartupConsent { .. }
+            | Self::RemoteAccess(_) => String::new(),
             Self::Project(request) => project_resource(request),
             Self::TerminateMany { requests } => requests
                 .iter()
@@ -277,6 +314,7 @@ fn remote_file_resource(request: &RemoteFileRequest) -> String {
 fn project_resource(request: &ProjectRequest) -> String {
     match request {
         ProjectRequest::Register { project_id, .. }
+        | ProjectRequest::Observe { project_id, .. }
         | ProjectRequest::RegisterSsh { project_id, .. }
         | ProjectRequest::Close { project_id, .. }
         | ProjectRequest::ScanDirectory { project_id, .. }
@@ -343,11 +381,16 @@ pub enum Response {
         session_id: TerminalSessionId,
         holder: ClientInstanceId,
     },
+    Workspace(WorkspaceResponse),
+    ProfileControl(crate::session::ControlStatus),
+    RemoteAccess(crate::remote_access::RemoteAccessResponse),
+    DeviceSettings(crate::remote_access::RemoteAccessSettings),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ServerEvent {
     Terminal(TerminalStreamUpdate),
+    ProfileControl(crate::session::ControlStatus),
     TerminalLeaseRevoked {
         session_id: TerminalSessionId,
         previous_owner: ClientInstanceId,

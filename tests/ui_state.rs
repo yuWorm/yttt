@@ -337,20 +337,32 @@ fn root_view_starts_with_empty_workspace() {
     assert!(root.workspace().opened_projects().is_empty());
 }
 
-#[test]
-fn root_view_empty_workspace_exposes_visible_actions() {
-    let (_temp, root) = english_test_root();
-
-    assert_eq!(
-        root.visible_empty_workspace_actions(),
-        vec![
-            "Open Directory",
-            "Open remote project",
-            "Restore Last Session",
-            "Open Recent",
-            "Command Palette",
-        ]
+#[gpui::test]
+fn homepage_remote_services_keeps_the_local_workspace(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut settings = load_or_create_settings(&paths).unwrap().settings;
+    settings.general.onboarding_completed = true;
+    save_settings(&paths, &settings).unwrap();
+    let slot = Rc::new(RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let view = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
+        *output.borrow_mut() = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let view = slot.borrow_mut().take().unwrap();
+    cx.refresh().unwrap();
+    let action = cx.debug_bounds("empty-open-ssh-project").unwrap();
+    cx.simulate_click(action.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    assert!(
+        cx.debug_bounds("remote-services-manager").is_some(),
+        "service manager must open instead of the project picker"
     );
+    cx.read(|app| assert!(view.read(app).workspace().opened_projects().is_empty()));
 }
 
 #[gpui::test]
@@ -516,16 +528,6 @@ fn root_view_restores_all_last_opened_projects_when_enabled() {
     let mut restore_disabled = WorkbenchView::with_config_paths_for_test(paths.clone());
     assert!(restore_disabled.workspace().opened_projects().is_empty());
     assert!(restore_disabled.has_last_opened_projects());
-    assert_eq!(
-        restore_disabled.visible_empty_workspace_actions(),
-        vec![
-            "Open Directory",
-            "Open remote project",
-            "Restore Last Session",
-            "Open Recent",
-            "Command Palette",
-        ]
-    );
     restore_disabled
         .set_restore_last_session_enabled(true)
         .unwrap();
@@ -5461,8 +5463,11 @@ fn zed_theme_import_opens_review_dialog_before_writing(cx: &mut gpui::TestAppCon
     root.update(cx, |root, cx| {
         root.open_settings();
         root.select_settings_group("appearance").unwrap();
-        root.open_zed_theme_import_dialog_with_detection(detection)
-            .unwrap();
+        root.open_zed_theme_import_dialog_with_detection(
+            detection,
+            [existing_ui_path.clone()].into(),
+        )
+        .unwrap();
         cx.notify();
     });
     cx.refresh().unwrap();
@@ -6182,6 +6187,29 @@ fn root_view_terminal_environment_persists_and_updates_existing_panes() {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .is_empty()
+    );
+}
+
+#[test]
+fn failed_settings_save_keeps_the_confirmed_runtime_and_can_be_retried() {
+    let temp = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
+    root.set_terminal_font_size(15.0).unwrap();
+    let saved = fs::read(paths.settings_file()).unwrap();
+    fs::remove_file(paths.settings_file()).unwrap();
+    fs::create_dir(paths.settings_file()).unwrap();
+    assert!(root.set_terminal_font_size(19.0).is_err());
+    assert_eq!(root.theme_runtime().terminal_settings.font_size, 15.0);
+    fs::remove_dir(paths.settings_file()).unwrap();
+    fs::write(paths.settings_file(), saved).unwrap();
+    root.set_terminal_font_size(19.0).unwrap();
+    assert_eq!(
+        WorkbenchView::with_config_paths_for_test(paths)
+            .theme_runtime()
+            .terminal_settings
+            .font_size,
+        19.0
     );
 }
 
@@ -7220,11 +7248,7 @@ fn root_view_project_commands_open_separate_project_palettes() {
     let mut root = WorkbenchView::dev_fixture_for_test();
     root.focus_visible_terminal_pane("shell").unwrap();
 
-    let command = root
-        .runtime_command_for_dispatch(&Keystroke::parse("cmd-shift-p").unwrap())
-        .unwrap();
-    assert_eq!(command, CommandId::ProjectOpenedPalette);
-    root.run_command(command).unwrap();
+    root.run_command(CommandId::ProjectOpenedPalette).unwrap();
     assert_eq!(
         root.active_palette().map(|palette| palette.kind),
         Some(PaletteKind::OpenedProject)

@@ -311,6 +311,10 @@ fn submit_pending_host_resize(
     next_geometry_epoch: &Arc<AtomicU64>,
     pending_geometry: &Arc<RwLock<Option<TerminalGeometry>>>,
 ) {
+    if !runtime.shared_editing_enabled() {
+        pending_geometry.write().unwrap().take();
+        return;
+    }
     let Some(geometry) = pending_geometry.write().unwrap().take() else {
         return;
     };
@@ -329,6 +333,12 @@ fn submit_pending_host_resize(
 
 impl Write for HostTerminalWriter {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if !self.runtime.shared_editing_enabled() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "this Client is observing or publishing a control transfer",
+            ));
+        }
         if !matches!(self.runtime.state(), ConnectionState::Ready { .. }) {
             return Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
@@ -721,10 +731,14 @@ impl TerminalPaneView {
         let scroll_mutation_context = mutation_context.clone();
         let scroll_mutation_sequence = next_mutation_sequence.clone();
         let error_parent = cx.weak_entity();
+        let input_runtime = host_runtime.clone();
         let initial_config = self.terminal_config.clone();
         let terminal = cx.new(|cx| {
             TerminalView::new_semantic(writer, initial_config, cx)
-                .with_key_handler(move |_event| !terminal_input_allowed.load(Ordering::SeqCst))
+                .with_key_handler(move |_event| {
+                    !input_runtime.shared_editing_enabled()
+                        || !terminal_input_allowed.load(Ordering::SeqCst)
+                })
                 .with_resize_callback(move |cols, rows| {
                     if !matches!(resize_runtime.state(), ConnectionState::Ready { .. }) {
                         return Err("Host terminal connection is not ready".to_string());
@@ -873,6 +887,33 @@ impl TerminalPaneView {
                         )
                     })?
                     .map_err(|error| TerminalStartAttemptError::Message(error.to_string()))?;
+                if request_runtime.is_controller() {
+                    let binding = match &response {
+                        Response::TerminalSpawned {
+                            lease,
+                            session_epoch,
+                        } => Some((lease.session_id.clone(), *session_epoch)),
+                        Response::TerminalAttached { lease, checkpoint } => {
+                            Some((lease.session_id.clone(), checkpoint.viewport.session_epoch))
+                        }
+                        _ => None,
+                    };
+                    if let Some((session_id, session_epoch)) = binding {
+                        let runtime = request_runtime.clone();
+                        let catalog = catalog.clone();
+                        cx.background_executor()
+                            .spawn(async move {
+                                runtime.bind_terminal(
+                                    &catalog,
+                                    session_id,
+                                    session_epoch,
+                                    spawn_fingerprint,
+                                )
+                            })
+                            .await
+                            .map_err(TerminalStartAttemptError::Message)?;
+                    }
+                }
                 Ok((response, catalog, spawn_fingerprint))
             }
             .await;
@@ -886,18 +927,9 @@ impl TerminalPaneView {
                             lease,
                             session_epoch,
                         },
-                        catalog,
-                        spawn_fingerprint,
+                        _catalog,
+                        _spawn_fingerprint,
                     )) if lease.session_id == session_id => {
-                        if let Err(error) = request_runtime.bind_terminal(
-                            &catalog,
-                            lease.session_id.clone(),
-                            session_epoch,
-                            spawn_fingerprint,
-                        ) {
-                            pane.set_spawn_failure(error, cx);
-                            return;
-                        }
                         {
                             let mut context = response_mutation_context.write().unwrap();
                             context.session_epoch = session_epoch;
@@ -924,19 +956,10 @@ impl TerminalPaneView {
                     }
                     Ok((
                         Response::TerminalAttached { lease, checkpoint },
-                        catalog,
-                        spawn_fingerprint,
+                        _catalog,
+                        _spawn_fingerprint,
                     )) if lease.session_id == session_id => {
                         let session_epoch = checkpoint.viewport.session_epoch;
-                        if let Err(error) = request_runtime.bind_terminal(
-                            &catalog,
-                            lease.session_id,
-                            session_epoch,
-                            spawn_fingerprint,
-                        ) {
-                            pane.set_spawn_failure(error, cx);
-                            return;
-                        }
                         response_geometry_epoch
                             .store(checkpoint.viewport.geometry_epoch, Ordering::Relaxed);
                         {

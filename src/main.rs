@@ -363,6 +363,16 @@ fn run_installer_host_preflight(profile: AppProfile, report: PathBuf) -> i32 {
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
+    if args
+        .iter()
+        .any(|argument| argument == OsStr::new("--remote-client"))
+    {
+        match yttt::remote_launch::read_remote_launch() {
+            Ok(launch) => yttt::ui::app::run_remote(launch),
+            Err(error) => eprintln!("invalid remote Client launch: {error}"),
+        }
+        return;
+    }
     match installer_host_preflight_report(&args) {
         Ok(Some(report)) => {
             std::process::exit(run_installer_host_preflight(desktop_profile(), report));

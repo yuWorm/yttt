@@ -20,7 +20,7 @@ use gpui_component::{
 };
 use yttt_agent_core::{AgentSnapshot, AgentViewState};
 use yttt_core::model::ids::TerminalSessionId;
-use yttt_protocol::{LifecycleRequest, LifecycleResponse, ServerEvent, project::ProjectChange};
+use yttt_protocol::{ServerEvent, project::ProjectChange};
 use yttt_terminal::input::{KeyState, TerminalKeyEvent};
 use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
 
@@ -40,6 +40,7 @@ mod non_destructive_tests;
 mod onboarding;
 mod palette;
 mod performance;
+mod persistence;
 mod project_files;
 mod render;
 mod resize;
@@ -56,6 +57,7 @@ use dialogs::*;
 use git::*;
 use helpers::*;
 use onboarding::*;
+use persistence::WorkspacePersistenceState;
 use render::{push_component_notification, split_child};
 use settings::{settings_button, settings_overlay};
 use ssh_connections::{ssh_connections_overlay, ssh_host_key_overlay};
@@ -211,9 +213,9 @@ use crate::{
         },
         i18n::{Locale, UiText, UiTextKey},
         interaction::actions::{
-            ApplicationQuit, BindableActionId, CreateProject, FileSave, FocusProjects,
-            GIT_DIFF_CONTEXT, GitBranchSwitch, GitDiffClose, GitDiffCopySelected, GitDiffOpen,
-            GitDiffSelectNextFile, GitDiffSelectPreviousFile, GitDiffToggleStageMode,
+            ApplicationQuit, BindableActionId, ConnectExistingHost, CreateProject, FileSave,
+            FocusProjects, GIT_DIFF_CONTEXT, GitBranchSwitch, GitDiffClose, GitDiffCopySelected,
+            GitDiffOpen, GitDiffSelectNextFile, GitDiffSelectPreviousFile, GitDiffToggleStageMode,
             GitDiffToggleViewMode, GitDiffToggleWhitespace, LayoutDefaultEdit, LayoutDefaultReload,
             LayoutDefaultReset, LayoutExportProjectConfig, LayoutOpenFile, LayoutProjectEdit,
             LayoutResetLocalOverride, LayoutSaveCurrent, OpenCommandPalette, OpenFileFinder,
@@ -339,8 +341,10 @@ pub struct WorkbenchView {
     last_opened_keybindings_file: Option<PathBuf>,
     overlays: OverlayControllerState,
     documents: DocumentLifecycleState,
+    workspace_persistence: WorkspacePersistenceState,
     pending_create_project_request: bool,
     pending_open_project_request: bool,
+    pending_existing_host_request: bool,
     pending_status_notifications: Vec<ToastItem>,
     focus_handle: Option<FocusHandle>,
     projects_focus_active: bool,
@@ -385,7 +389,7 @@ struct ActiveKeybindingsWatcher {
 
 const EMPTY_WORKSPACE_ACTIONS: [UiTextKey; 4] = [
     UiTextKey::OpenDirectory,
-    UiTextKey::SshOpenRemoteProject,
+    UiTextKey::RemoteServices,
     UiTextKey::OpenRecent,
     UiTextKey::CommandPalette,
 ];
@@ -758,15 +762,10 @@ impl WorkbenchView {
                 ProjectLocation::Local { path } => {
                     self.open_project_path_with_mode(path, ProjectOpenMode::RestoreLastSession)
                 }
-                ProjectLocation::Ssh {
-                    connection_id,
-                    root,
-                } => self.open_ssh_project_location_with_mode(
-                    connection_id,
-                    root,
-                    false,
-                    ProjectOpenMode::RestoreLastSession,
-                ),
+                ProjectLocation::Ssh { .. } => {
+                    push_unique_string(&mut messages, "Previous SSH projects remain in Recent Projects; open them in an isolated remote workspace.".into());
+                    continue;
+                }
             };
             if result.is_ok() {
                 restored += 1;
@@ -780,6 +779,14 @@ impl WorkbenchView {
     }
 
     fn restore_project_agent_snapshots(&mut self, project_id: &ProjectId) {
+        if self
+            .terminal
+            .host_runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.is_remote())
+        {
+            return;
+        }
         self.agent_manager
             .enable_project_session_restore(project_id.as_str());
         for (address, snapshot) in self.agent_manager.retained_snapshots() {
@@ -933,6 +940,7 @@ impl WorkbenchView {
                 keybinding_warning_lines,
                 keybindings_editor,
                 keybinding_load_error,
+                app_settings.clone(),
             ),
             update: UpdateControllerState::default(),
             performance: performance::PerformanceMonitorState::default(),
@@ -940,8 +948,10 @@ impl WorkbenchView {
             last_opened_keybindings_file: None,
             overlays: OverlayControllerState::default(),
             documents: DocumentLifecycleState::default(),
+            workspace_persistence: WorkspacePersistenceState::default(),
             pending_create_project_request: false,
             pending_open_project_request: false,
+            pending_existing_host_request: false,
             pending_status_notifications: Vec::new(),
             focus_handle: None,
             projects_focus_active: false,
@@ -2288,7 +2298,15 @@ impl WorkbenchView {
                 Ok(())
             }
             CommandId::ProjectOpenSsh => {
-                self.open_ssh_project_picker();
+                if crate::config::storage::is_remote() {
+                    self.request_open_project();
+                } else {
+                    self.open_ssh_project_picker();
+                }
+                Ok(())
+            }
+            CommandId::ConnectExistingHost => {
+                self.pending_existing_host_request = true;
                 Ok(())
             }
             CommandId::ProjectOpenRecent => {
@@ -2606,7 +2624,20 @@ impl WorkbenchView {
     }
 
     fn handle_pending_open_project_request(&mut self, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.pending_existing_host_request) {
+            if let Some(profile) = self.config_paths.profile().cloned() {
+                if let Err(error) = crate::ui::app::existing_host::open(profile, self.ui_text, cx) {
+                    self.load_error = Some(error.to_string());
+                }
+            } else {
+                self.load_error = Some("Open connections from your local yttt window.".into());
+            }
+        }
         if !self.take_pending_open_project_request() {
+            return;
+        }
+        if crate::config::storage::is_remote() {
+            self.open_remote_host_directory_picker(cx);
             return;
         }
 
@@ -3726,6 +3757,8 @@ pub enum WorkbenchError {
     Keybindings(Box<KeybindingsLoadError>),
     #[error("{0}")]
     SettingsSave(Box<SettingsSaveError>),
+    #[error("{0}")]
+    SettingsUnavailable(String),
     #[error("{0}")]
     BarsSave(Box<BarsSaveError>),
     #[error("{0}")]

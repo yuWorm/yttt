@@ -413,6 +413,7 @@ pub(super) fn zed_theme_import_dialog(
     cx: &mut Context<WorkbenchView>,
     ui_text: &UiText,
     detection: &ZedThemeDetection,
+    existing_paths: &std::collections::HashSet<PathBuf>,
     conflict_policy: ZedThemeImportConflictPolicy,
     config_paths: &AppConfigPaths,
     theme: WorkbenchTheme,
@@ -421,8 +422,12 @@ pub(super) fn zed_theme_import_dialog(
     let dialog = yttt_dialog_style(theme, ui_style);
     let ui_output_dir = config_paths.themes_dir();
     let icon_output_dir = config_paths.icon_themes_dir();
-    let existing_count =
-        detected_zed_theme_existing_count(detection, &ui_output_dir, &icon_output_dir);
+    let existing_count = detected_zed_theme_existing_count(
+        detection,
+        &ui_output_dir,
+        &icon_output_dir,
+        existing_paths,
+    );
 
     yttt_dialog_overlay(
         yttt_dialog_surface(theme, ui_style)
@@ -446,6 +451,7 @@ pub(super) fn zed_theme_import_dialog(
                             false,
                             &ui_output_dir,
                             &icon_output_dir,
+                            existing_paths,
                             ui_text,
                             theme,
                             ui_style,
@@ -458,6 +464,7 @@ pub(super) fn zed_theme_import_dialog(
                             true,
                             &ui_output_dir,
                             &icon_output_dir,
+                            existing_paths,
                             ui_text,
                             theme,
                             ui_style,
@@ -588,24 +595,7 @@ pub(super) fn zed_theme_import_dialog(
                                 YtttButtonVariant::Primary,
                                 theme,
                                 cx.listener(|this, _, window, cx| {
-                                    match this.confirm_zed_theme_import_dialog() {
-                                        Ok((ui_theme_count, icon_theme_count)) => {
-                                            let context = format!(
-                                                "{}: {}; {}: {}",
-                                                this.ui_text.get(UiTextKey::SettingsUiTheme),
-                                                ui_theme_count,
-                                                this.ui_text.get(UiTextKey::SettingsIconTheme),
-                                                icon_theme_count
-                                            );
-                                            this.queue_status_notification(
-                                                this.ui_text.get(
-                                                    UiTextKey::SettingsImportZedThemesComplete,
-                                                ),
-                                                context,
-                                            );
-                                        }
-                                        Err(error) => this.load_error = Some(error),
-                                    }
+                                    this.confirm_zed_theme_import_dialog(window, cx);
                                     this.flush_pending_status_notifications(window, cx);
                                     cx.notify();
                                 }),
@@ -623,6 +613,7 @@ fn detected_zed_theme_existing_count(
     detection: &ZedThemeDetection,
     ui_output_dir: &Path,
     icon_output_dir: &Path,
+    existing_paths: &std::collections::HashSet<PathBuf>,
 ) -> usize {
     detection
         .extensions
@@ -632,10 +623,16 @@ fn detected_zed_theme_existing_count(
                 .ui_theme_names
                 .iter()
                 .filter(|name| {
-                    zed_ui_theme_output_path(&extension.id, name, ui_output_dir).exists()
+                    existing_paths.contains(&zed_ui_theme_output_path(
+                        &extension.id,
+                        name,
+                        ui_output_dir,
+                    ))
                 })
                 .count()
-                + if zed_icon_theme_output_path(&extension.id, icon_output_dir).exists() {
+                + if existing_paths
+                    .contains(&zed_icon_theme_output_path(&extension.id, icon_output_dir))
+                {
                     extension.icon_theme_names.len()
                 } else {
                     0
@@ -650,6 +647,7 @@ fn zed_theme_import_panel(
     icon_themes: bool,
     ui_output_dir: &Path,
     icon_output_dir: &Path,
+    existing_paths: &std::collections::HashSet<PathBuf>,
     ui_text: &UiText,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
@@ -671,9 +669,13 @@ fn zed_theme_import_panel(
             let row_index = index;
             index += 1;
             let imported = if icon_themes {
-                zed_icon_theme_output_path(&extension.id, icon_output_dir).exists()
+                existing_paths.contains(&zed_icon_theme_output_path(&extension.id, icon_output_dir))
             } else {
-                zed_ui_theme_output_path(&extension.id, name, ui_output_dir).exists()
+                existing_paths.contains(&zed_ui_theme_output_path(
+                    &extension.id,
+                    name,
+                    ui_output_dir,
+                ))
             };
             let row_selector = format!("{id_prefix}-{row_index}");
             let imported_selector = format!("{id_prefix}-imported-{row_index}");
@@ -1230,7 +1232,7 @@ pub(super) fn empty_workspace(
                             empty_workspace_action(
                                 "empty-open-ssh-project",
                                 IconName::Globe,
-                                ui_text.get(UiTextKey::SshOpenRemoteProject),
+                                ui_text.get(UiTextKey::RemoteServices),
                                 None,
                                 false,
                                 theme,
@@ -1239,8 +1241,9 @@ pub(super) fn empty_workspace(
                                 cx,
                             )
                             .on_click(cx.listener(
-                                |this, _, window, cx| {
-                                    this.on_open_ssh_project(&OpenSshProject, window, cx);
+                                |this, _, _window, cx| {
+                                    this.open_ssh_connection_manager();
+                                    cx.notify();
                                 },
                             )),
                         )

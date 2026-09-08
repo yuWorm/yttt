@@ -99,6 +99,13 @@ pub struct SaveRequest {
     pub expected_fingerprint: DiskFingerprint,
 }
 
+/// Stable source-editor selection offsets captured without serializing a GPUI input entity.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct EditorSelectionSnapshot {
+    pub anchor: usize,
+    pub head: usize,
+}
+
 #[derive(Clone, Debug)]
 pub struct ProjectEditorModel {
     document_id: DocumentId,
@@ -197,6 +204,21 @@ impl ProjectEditorModel {
 
     fn sync_external_value(&mut self, value: impl Into<String>) {
         self.editor.set_value(value);
+    }
+
+    pub fn restore_draft(
+        &mut self,
+        value: impl Into<String>,
+        generation: u64,
+        conflict: Option<String>,
+    ) {
+        self.editor.set_value(value);
+        self.generation = self.generation.max(generation);
+        self.external_dirty = true;
+        self.save_state = ProjectEditorSaveState::Idle;
+        if let Some(conflict) = conflict {
+            self.editor.set_error(conflict);
+        }
     }
 
     pub fn begin_save(&mut self) -> SaveRequest {
@@ -337,6 +359,7 @@ pub struct ProjectEditorDocument {
     vim_enabled: bool,
     vim: Option<VimState>,
     _vim_keystroke_subscription: Subscription,
+    read_only_preview: Option<(u64, Entity<InputState>)>,
 }
 
 impl ProjectEditorDocument {
@@ -384,6 +407,7 @@ impl ProjectEditorDocument {
             vim_enabled: false,
             vim: None,
             _vim_keystroke_subscription: vim_keystroke_subscription,
+            read_only_preview: None,
         }
     }
     pub fn with_vim_mode(
@@ -640,9 +664,84 @@ impl ProjectEditorDocument {
                     &self.appearance,
                     &self.markdown_config,
                 );
+
                 editor.update(cx, |editor, editor_cx| {
                     editor.set_environment(environment, editor_cx);
                 });
+            }
+        }
+        cx.notify();
+    }
+    pub fn selection_snapshot(&self, cx: &gpui::App) -> EditorSelectionSnapshot {
+        let Some(input) = self.code_input() else {
+            return EditorSelectionSnapshot::default();
+        };
+        let input = input.read(cx);
+        let selected = input.selected_range();
+        let head = input.selection_head();
+        EditorSelectionSnapshot {
+            anchor: if head == selected.start {
+                selected.end
+            } else {
+                selected.start
+            },
+            head,
+        }
+    }
+
+    pub fn current_text(&self, cx: &gpui::App) -> String {
+        match &self.surface {
+            ProjectEditorSurface::Code { .. } => self.model.value().to_string(),
+            ProjectEditorSurface::Markdown { editor, .. } => editor.read(cx).markdown(cx),
+        }
+    }
+
+    pub fn restore_selection(
+        &mut self,
+        selection: &EditorSelectionSnapshot,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(input) = self.code_input().cloned() else {
+            return;
+        };
+        let length = self.model.value().len();
+        let anchor = selection.anchor.min(length);
+        let head = selection.head.min(length);
+        input.update(cx, |input, input_cx| {
+            input.set_selection(anchor, head, input_cx);
+        });
+    }
+
+    pub fn restore_recovered_draft(
+        &mut self,
+        value: String,
+        generation: u64,
+        selection: &EditorSelectionSnapshot,
+        conflict: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.model
+            .restore_draft(value.clone(), generation, conflict.clone());
+        match &self.surface {
+            ProjectEditorSurface::Code { input, .. } => {
+                let length = value.len();
+                let anchor = selection.anchor.min(length);
+                let head = selection.head.min(length);
+                input.update(cx, |input, input_cx| {
+                    input.set_value(value, window, input_cx);
+                    input.set_selection(anchor, head, input_cx);
+                });
+                self.refresh_breadcrumbs(0);
+            }
+            ProjectEditorSurface::Markdown { editor, .. } => {
+                editor.update(cx, |editor, editor_cx| {
+                    editor.replace_markdown(value, editor_cx);
+                });
+                self.symbols.clear();
+                self.breadcrumbs.clear();
+                self.breadcrumb_cursor_line = 0;
             }
         }
         cx.notify();
@@ -1017,7 +1116,49 @@ impl ProjectEditorDocument {
 impl EventEmitter<ProjectEditorDocumentEvent> for ProjectEditorDocument {}
 
 impl Render for ProjectEditorDocument {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let read_only = cx
+            .try_global::<crate::host_runtime::HostRuntimeGlobal>()
+            .and_then(crate::host_runtime::HostRuntimeGlobal::runtime)
+            .is_some_and(|runtime| !runtime.shared_editing_enabled());
+        if read_only {
+            let generation = self.model.generation();
+            if self
+                .read_only_preview
+                .as_ref()
+                .is_none_or(|(captured, _)| *captured != generation)
+            {
+                let editor = CodeEditorState::new(
+                    &self.model.document_id().canonical_path,
+                    self.model.editor().config().clone(),
+                    self.current_text(cx),
+                );
+                let input = cx.new(|input_cx| {
+                    let mut input = code_editor_input_state(window, input_cx, &editor);
+                    input.set_text_input_enabled(false, input_cx);
+                    input
+                });
+                self.read_only_preview = Some((generation, input));
+            }
+            let input = &self
+                .read_only_preview
+                .as_ref()
+                .expect("read-only document")
+                .1;
+            return div()
+                .id("observed-document")
+                .flex()
+                .flex_col()
+                .size_full()
+                .child(
+                    styled_code_editor_input(input, &self.appearance)
+                        .flex_1()
+                        .min_h_0()
+                        .w_full(),
+                )
+                .into_any_element();
+        }
+        self.read_only_preview = None;
         let vim_key_context = self
             .vim
             .as_ref()
@@ -1190,6 +1331,7 @@ impl Render for ProjectEditorDocument {
             .on_action(cx.listener(Self::on_vim_search_previous))
             .child(breadcrumbs)
             .child(body)
+            .into_any_element()
     }
 }
 

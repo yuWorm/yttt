@@ -125,13 +125,17 @@ impl WorkbenchView {
         let mut identity = self.render_fixed_window_identity(&data, cx);
         identity.append(&mut window.left);
         window.left = identity;
-        let status = self.app_settings.bars.status.enabled.then(|| {
-            self.render_bar_sections(
+        let status = Some({
+            let mut sections = self.render_bar_sections(
                 BarHost::Status,
                 &self.app_settings.bars.status.layout,
                 &data,
                 cx,
-            )
+            );
+            sections
+                .left
+                .insert(0, self.profile_control_banner(cx).into_any_element());
+            sections
         });
         (window, status)
     }

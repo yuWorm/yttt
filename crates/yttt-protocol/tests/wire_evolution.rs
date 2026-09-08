@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use yttt_core::model::ids::{ClientInstanceId, ProfileId};
 use yttt_protocol::{
-    BuildIdentity, ClientHello, ConnectionChannel, ControlMessage, FrameKind, Nonce, ProtocolRange,
+    BuildIdentity, ClientHello, ControlMessage, FrameKind, Nonce, ProtocolRange,
     RESOURCE_PROTOCOL_VERSION, Request, decode_frame, decode_message, encode_message,
 };
 
@@ -85,7 +85,7 @@ fn unknown_tagged_enum_variants_are_rejected_instead_of_shifted() {
 }
 
 #[test]
-fn client_hello_defaults_apply_when_optional_fields_are_omitted() {
+fn client_hello_without_session_binding_is_rejected() {
     let encoded = encode_cbor(&SlimClientHello {
         supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
         build: BuildIdentity {
@@ -98,10 +98,7 @@ fn client_hello_defaults_apply_when_optional_fields_are_omitted() {
         host_epoch_hint: None,
         nonce: Nonce([3; 32]),
     });
-    let hello: ClientHello = decode_cbor(&encoded);
-    assert!(!hello.can_force_stop);
-    assert_eq!(hello.channel, ConnectionChannel::Control);
-    assert_eq!(hello.terminal_session_id, None);
+    assert!(ciborium::from_reader::<ClientHello, _>(encoded.as_slice()).is_err());
 }
 
 #[test]

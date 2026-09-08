@@ -63,6 +63,7 @@ struct RunningHost {
     bootstrap: HostBootstrap,
     token: [u8; 32],
     task: tokio::task::JoinHandle<Result<(), yttt_host::HostError>>,
+    session_nonces: std::sync::Mutex<std::collections::HashMap<String, yttt_protocol::Nonce>>,
 }
 
 impl RunningHost {
@@ -78,6 +79,8 @@ impl RunningHost {
         let bootstrap = HostBootstrap {
             profile_id: ProfileId::new("integration"),
             runtime_root,
+            state_root: temp.path().join("state"),
+            config_root: temp.path().join("state/config"),
             auth_token_file,
             ssh_host_keys_file: temp.path().join("ssh-host-keys.toml"),
             credential_namespace: "dev.yttt.ssh.integration-test".to_string(),
@@ -102,13 +105,26 @@ impl RunningHost {
             bootstrap,
             token,
             task,
+            session_nonces: Default::default(),
         }
     }
 
+    fn session_nonce(&self, id: &str) -> yttt_protocol::Nonce {
+        *self
+            .session_nonces
+            .lock()
+            .unwrap()
+            .entry(id.to_string())
+            .or_insert_with(yttt_transport::new_session_nonce)
+    }
+
     async fn client(&self, id: &str) -> ClientCore {
-        ClientCore::connect(
+        let client = ClientCore::connect(
             LocalConnector::new(host_endpoint(&self.bootstrap)),
             ClientIdentity {
+                expected_environment: None,
+                credential_generation: 0,
+                session_nonce: self.session_nonce(id),
                 supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
                 build: self.bootstrap.build.clone(),
                 profile_id: self.bootstrap.profile_id.clone(),
@@ -121,7 +137,16 @@ impl RunningHost {
             AuthToken::from_bytes(self.token),
         )
         .await
-        .unwrap()
+        .unwrap();
+        if client.control_status().unwrap().owner.is_none() {
+            client
+                .request(Request::ProfileControl(
+                    yttt_protocol::session::ProfileControlRequest::RequestControl,
+                ))
+                .await
+                .unwrap();
+        }
+        client
     }
 
     async fn lifecycle_request(
@@ -139,6 +164,9 @@ async fn raw_client(host: &RunningHost, id: &str) -> yttt_transport_local::Local
     client_handshake(
         &mut stream,
         &ClientIdentity {
+            expected_environment: None,
+            credential_generation: 0,
+            session_nonce: host.session_nonce(id),
             supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
             build: host.bootstrap.build.clone(),
             profile_id: host.bootstrap.profile_id.clone(),
@@ -173,6 +201,9 @@ async fn raw_lifecycle_client_for(
     client_handshake(
         &mut stream,
         &ClientIdentity {
+            expected_environment: None,
+            credential_generation: 0,
+            session_nonce: yttt_transport::new_session_nonce(),
             supported: ProtocolRange::exact(LIFECYCLE_PROTOCOL_VERSION),
             build: BuildIdentity {
                 product_version: "0.3.0".to_string(),
@@ -202,6 +233,9 @@ async fn raw_terminal_data_client(
     client_handshake(
         &mut stream,
         &ClientIdentity {
+            expected_environment: None,
+            credential_generation: 0,
+            session_nonce: host.session_nonce(id),
             supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
             build: host.bootstrap.build.clone(),
             profile_id: host.bootstrap.profile_id.clone(),
@@ -226,6 +260,9 @@ async fn raw_terminal_interactive_client(
     client_handshake(
         &mut stream,
         &ClientIdentity {
+            expected_environment: None,
+            credential_generation: 0,
+            session_nonce: host.session_nonce(id),
             supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
             build: host.bootstrap.build.clone(),
             profile_id: host.bootstrap.profile_id.clone(),
@@ -246,13 +283,13 @@ async fn raw_interactive_request(
     stream: &mut yttt_transport_local::LocalStream,
     request_id: u64,
     body: Request,
+    control: Option<yttt_protocol::session::ControlContext>,
 ) -> Result<Response, yttt_protocol::ProtocolFailure> {
-    send_terminal_interactive(
-        stream,
-        &TerminalInteractiveMessage::Request(ClientRequest::new(request_id, body)),
-    )
-    .await
-    .unwrap();
+    let mut request = ClientRequest::new(request_id, body);
+    request.control = control;
+    send_terminal_interactive(stream, &TerminalInteractiveMessage::Request(request))
+        .await
+        .unwrap();
     let TerminalInteractiveMessage::Response(response) =
         receive_terminal_interactive(stream).await.unwrap()
     else {
@@ -267,12 +304,53 @@ async fn raw_request(
     request_id: u64,
     body: Request,
 ) -> Result<Response, yttt_protocol::ProtocolFailure> {
-    send_control(
-        stream,
-        &ControlMessage::Request(ClientRequest::new(request_id, body)),
-    )
-    .await
-    .unwrap();
+    let mut request = ClientRequest::new(request_id, body);
+    if matches!(
+        request.body,
+        Request::SpawnTerminal(_)
+            | Request::TerminateTerminal { .. }
+            | Request::AcknowledgeTerminalExit { .. }
+    ) {
+        let Response::ProfileControl(mut status) = raw_send(
+            stream,
+            ClientRequest::new(
+                u64::MAX,
+                Request::ProfileControl(yttt_protocol::session::ProfileControlRequest::Status),
+            ),
+        )
+        .await?
+        else {
+            panic!("profile status")
+        };
+        if status.owner.is_none() {
+            let Response::ProfileControl(acquired) = raw_send(
+                stream,
+                ClientRequest::new(
+                    u64::MAX,
+                    Request::ProfileControl(
+                        yttt_protocol::session::ProfileControlRequest::RequestControl,
+                    ),
+                ),
+            )
+            .await?
+            else {
+                panic!("profile control")
+            };
+            status = acquired;
+        }
+        request.control = Some(status.context);
+    }
+    raw_send(stream, request).await
+}
+
+async fn raw_send(
+    stream: &mut yttt_transport_local::LocalStream,
+    request: ClientRequest,
+) -> Result<Response, yttt_protocol::ProtocolFailure> {
+    let request_id = request.request_id;
+    send_control(stream, &ControlMessage::Request(request))
+        .await
+        .unwrap();
     loop {
         match receive_control(stream).await.unwrap() {
             ControlMessage::Response(response) if response.request_id == request_id => {
@@ -420,6 +498,15 @@ async fn terminal_output_uses_a_dedicated_data_connection() {
     };
     let geometry_epoch = viewport.geometry_epoch;
     let mut mirror = TerminalMirror::new(viewport);
+    let Response::ProfileControl(control_status) = raw_request(
+        &mut control,
+        99,
+        Request::ProfileControl(yttt_protocol::session::ProfileControlRequest::Status),
+    )
+    .await
+    .unwrap() else {
+        panic!("control status")
+    };
     assert_eq!(
         raw_interactive_request(
             &mut interactive,
@@ -435,6 +522,7 @@ async fn terminal_output_uses_a_dedicated_data_connection() {
                 },
                 bytes: b"separate\r".to_vec(),
             }),
+            Some(control_status.context),
         )
         .await
         .unwrap(),
@@ -537,6 +625,7 @@ async fn blocked_project_request_does_not_delay_terminal_input() {
     assert!(matches!(
         client
             .request(Request::Project(ProjectRequest::Register {
+                view_id: "test-view".to_string(),
                 project_id: project_id.clone(),
                 root: host_path(&project_root),
             }))
@@ -1012,6 +1101,131 @@ async fn force_capable_control_client_uses_restricted_terminal_data_channel_and_
         .unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn forced_takeover_waits_for_an_admitted_git_write_to_finish() {
+    use yttt_protocol::session::{ProfileControlRequest, TransferPhase};
+    let host = RunningHost::start().await;
+    let owner = host.client("slow-writer").await;
+    let successor = host.client("waiting-writer").await;
+    let project_root = host._temp.path().join("fenced-git");
+    fs::create_dir_all(&project_root).unwrap();
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.name", "Smoke"],
+        vec!["config", "user.email", "smoke@example.invalid"],
+        vec!["commit", "--allow-empty", "-qm", "initial"],
+        vec!["branch", "next"],
+    ] {
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(&project_root)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let hook = project_root.join(".git/hooks/post-checkout");
+    fs::write(&hook, "#!/bin/sh\ntouch .git/write-entered\ni=0\nwhile [ ! -f .git/write-release ]; do i=$((i + 1)); [ \"$i\" -lt 400 ] || exit 1; sleep 0.05; done\n").unwrap();
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o700)).unwrap();
+    let project_id = ProjectId::new("fenced-git");
+    owner
+        .request(Request::Project(ProjectRequest::Register {
+            view_id: "writer".into(),
+            project_id: project_id.clone(),
+            root: host_path(&project_root),
+        }))
+        .await
+        .unwrap();
+    let write = owner
+        .enqueue_request(Request::Project(ProjectRequest::Git {
+            project_id,
+            operation: ProjectGitOperation::Switch {
+                name: "next".into(),
+                track_remote: false,
+            },
+        }))
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !project_root.join(".git/write-entered").exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("real Git hook must enter the admitted mutation");
+    let Response::ProfileControl(preparing) = successor
+        .request(Request::ProfileControl(
+            ProfileControlRequest::RequestControl,
+        ))
+        .await
+        .unwrap()
+    else {
+        panic!("preparing")
+    };
+    let transfer_id = preparing.transfer.unwrap().id;
+    tokio::time::timeout(Duration::from_secs(6), async {
+        loop {
+            let Response::ProfileControl(status) = successor
+                .request(Request::ProfileControl(ProfileControlRequest::Status))
+                .await
+                .unwrap()
+            else {
+                panic!("status")
+            };
+            assert_eq!(
+                status.owner.as_ref(),
+                Some(owner.client_id()),
+                "deadline alone must not grant control"
+            );
+            if status.transfer.unwrap().phase == TransferPhase::ForceConfirmationRequired {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("force confirmation deadline");
+    let forced = successor
+        .enqueue_request(Request::ProfileControl(
+            ProfileControlRequest::ConfirmForce { transfer_id },
+        ))
+        .unwrap();
+    let mut forced = Box::pin(forced.wait());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut forced)
+            .await
+            .is_err(),
+        "takeover must drain the in-flight Git mutation"
+    );
+    fs::write(project_root.join(".git/write-release"), "").unwrap();
+    write.wait().await.unwrap();
+    let Response::ProfileControl(granted) = tokio::time::timeout(Duration::from_secs(5), forced)
+        .await
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("granted")
+    };
+    assert_eq!(granted.owner.as_ref(), Some(successor.client_id()));
+    assert_eq!(
+        fs::read_to_string(project_root.join(".git/HEAD"))
+            .unwrap()
+            .trim(),
+        "ref: refs/heads/next"
+    );
+    assert_eq!(
+        host.lifecycle_request(LifecycleRequest::ForceStop, true)
+            .await,
+        LifecycleResponse::Draining
+    );
+    tokio::time::timeout(Duration::from_secs(5), host.task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
 #[tokio::test]
 async fn request_journal_replays_mutations_without_repeating_side_effects() {
     let host = RunningHost::start().await;
@@ -1095,6 +1309,57 @@ async fn request_journal_replays_mutations_without_repeating_side_effects() {
         .await
         .unwrap(),
         acknowledged
+    );
+
+    let Response::ProfileControl(old_control) = raw_request(
+        &mut client,
+        70,
+        Request::ProfileControl(yttt_protocol::session::ProfileControlRequest::Status),
+    )
+    .await
+    .unwrap() else {
+        panic!("old control")
+    };
+    let successor = host.client("journal-successor").await;
+    let Response::ProfileControl(preparing) = successor
+        .request(Request::ProfileControl(
+            yttt_protocol::session::ProfileControlRequest::RequestControl,
+        ))
+        .await
+        .unwrap()
+    else {
+        panic!("preparing")
+    };
+    raw_request(
+        &mut client,
+        71,
+        Request::ProfileControl(yttt_protocol::session::ProfileControlRequest::Ready {
+            transfer_id: preparing.transfer.unwrap().id,
+            revisions: vec![],
+        }),
+    )
+    .await
+    .unwrap();
+    let mut stale_replay = ClientRequest::new(41, Request::SpawnTerminal(spec.clone()));
+    stale_replay.control = Some(old_control.context);
+    assert_eq!(
+        raw_send(&mut client, stale_replay).await.unwrap_err().code,
+        FailureCode::StaleEpoch
+    );
+    assert_eq!(
+        raw_request(&mut client, 41, Request::SpawnTerminal(spec))
+            .await
+            .unwrap_err()
+            .code,
+        FailureCode::PermissionDenied
+    );
+    let Response::Resources(resources) = successor.request(Request::ListResources).await.unwrap()
+    else {
+        panic!("resources")
+    };
+    assert!(
+        resources.terminals.is_empty(),
+        "denied replay must not respawn acknowledged terminals"
     );
 
     assert_eq!(
@@ -1869,8 +2134,6 @@ async fn multiple_clients_keep_independent_viewports_and_a_single_input_owner() 
         ClientCoreError::Protocol(failure) if failure.code == FailureCode::StaleEpoch
     ));
 
-    let mut owner_events = owner.subscribe_events();
-    let mut observer_events = observer.subscribe_events();
     let conflict = observer
         .request(Request::AcquireTerminalLease {
             session_id: session_id.clone(),
@@ -1880,63 +2143,42 @@ async fn multiple_clients_keep_independent_viewports_and_a_single_input_owner() 
         .unwrap_err();
     assert!(matches!(
         conflict,
-        ClientCoreError::Protocol(failure) if failure.code == FailureCode::Conflict
+        ClientCoreError::Protocol(failure) if failure.code == FailureCode::PermissionDenied
     ));
-    let pending = observer
-        .request(Request::RequestTerminalControl {
-            session_id: session_id.clone(),
-        })
+    use yttt_protocol::session::ProfileControlRequest;
+    let Response::ProfileControl(preparing) = observer
+        .request(Request::ProfileControl(
+            ProfileControlRequest::RequestControl,
+        ))
+        .await
+        .unwrap()
+    else {
+        panic!("profile transfer")
+    };
+    let transfer = preparing
+        .transfer
+        .expect("previous controller must publish");
+    owner
+        .request(Request::ProfileControl(ProfileControlRequest::Ready {
+            transfer_id: transfer.id,
+            revisions: Vec::new(),
+        }))
         .await
         .unwrap();
-    let Response::TerminalControlPending { holder, .. } = pending else {
-        panic!("unexpected control request response: {pending:?}");
+    observer
+        .request(Request::ProfileControl(ProfileControlRequest::Status))
+        .await
+        .unwrap();
+    let Response::TerminalLease(new_owner_lease) = observer
+        .request(Request::AcquireTerminalLease {
+            session_id: session_id.clone(),
+            mode: TerminalLeaseMode::Interactive,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("new controller must attach the existing terminal")
     };
-    assert_eq!(holder.as_str(), "viewport-owner");
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let event = owner_events.recv().await.unwrap();
-            if matches!(
-                &event,
-                ClientEvent::Server(yttt_protocol::HostEvent {
-                    body: yttt_protocol::ServerEvent::TerminalControlRequested {
-                        session_id,
-                        requester,
-                    },
-                    ..
-                }) if *session_id == TerminalSessionId::new("shared-terminal")
-                    && requester.as_str() == "viewport-observer"
-            ) {
-                break;
-            }
-        }
-    })
-    .await
-    .expect("control request event timeout");
-    assert_eq!(
-        owner
-            .request(Request::ReleaseTerminalControl {
-                session_id: session_id.clone(),
-            })
-            .await
-            .unwrap(),
-        Response::Applied
-    );
-    let new_owner_lease = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let event = observer_events.recv().await.unwrap();
-            if let ClientEvent::Server(yttt_protocol::HostEvent {
-                body: yttt_protocol::ServerEvent::TerminalControlGranted { lease },
-                ..
-            }) = event
-                && lease.session_id == TerminalSessionId::new("shared-terminal")
-                && lease.owner.as_str() == "viewport-observer"
-            {
-                break lease;
-            }
-        }
-    })
-    .await
-    .expect("control granted event timeout");
     let former_owner_input = owner
         .request(Request::TerminalInput(TerminalInput {
             session_id: session_id.clone(),
@@ -2075,6 +2317,7 @@ async fn slow_observer_does_not_block_the_owner_or_change_canonical_geometry() {
             context: mutation_context(&owner, session_epoch, observer_lease.lease_epoch, 100, 1),
             geometry: observer_geometry,
         }),
+        None,
     )
     .await
     .unwrap_err();
@@ -2403,6 +2646,23 @@ async fn host_owns_authenticated_agent_state_and_resyncs_snapshots() {
     else {
         panic!("unexpected terminal terminate response");
     };
+    let Response::AgentSnapshots(after_exit) = observer
+        .request(Request::ReadAgentSnapshots {
+            acknowledged: Vec::new(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected Agent snapshot after process termination");
+    };
+    let after_exit = after_exit
+        .iter()
+        .find(|update| update.terminal_session_id == session_id)
+        .expect("terminated Agent snapshot must remain available for reconnect");
+    assert_eq!(
+        after_exit.snapshot.process_state,
+        yttt_agent_core::AgentProcessState::Exited
+    );
     assert_eq!(
         observer
             .request(Request::AcknowledgeTerminalExit {
@@ -2466,6 +2726,7 @@ async fn host_owns_project_files_and_publishes_watcher_events() {
         .request(Request::Project(ProjectRequest::Register {
             project_id: project_id.clone(),
             root: host_path(&project_root),
+            view_id: "test-view".to_string(),
         }))
         .await
         .unwrap()
@@ -2555,6 +2816,7 @@ async fn host_owns_project_files_and_publishes_watcher_events() {
     assert_eq!(
         client
             .request(Request::Project(ProjectRequest::Close {
+                view_id: "test-view".to_string(),
                 project_id: project_id.clone(),
                 registration_epoch,
             }))
@@ -2616,6 +2878,7 @@ async fn remote_project_operations_require_a_host_registration() {
             project_id: project_id.clone(),
             connection_id: "connection".to_string(),
             root: remote_rel("/remote"),
+            view_id: "test-view".to_string(),
         }))
         .await
         .unwrap()
@@ -2631,6 +2894,7 @@ async fn remote_project_operations_require_a_host_registration() {
     assert_eq!(
         client
             .request(Request::Project(ProjectRequest::Close {
+                view_id: "test-view".to_string(),
                 project_id: project_id.clone(),
                 registration_epoch,
             }))
@@ -2808,6 +3072,7 @@ async fn host_ssh_product_smoke_covers_host_key_sftp_git_and_terminal() {
             project_id: project_id.clone(),
             connection_id: "ssh-smoke".to_string(),
             root: remote_rel(&home),
+            view_id: "test-view".to_string(),
         }))
         .await
         .unwrap()
@@ -3038,6 +3303,7 @@ async fn host_ssh_product_smoke_covers_host_key_sftp_git_and_terminal() {
     assert_eq!(
         client
             .request(Request::Project(ProjectRequest::Close {
+                view_id: "test-view".to_string(),
                 project_id,
                 registration_epoch,
             }))
@@ -3307,6 +3573,7 @@ async fn project_file_limit_is_frame_safe_and_oversized_files_return_resource_li
         .request(Request::Project(ProjectRequest::Register {
             project_id: project_id.clone(),
             root: host_path(&project_root),
+            view_id: "test-view".to_string(),
         }))
         .await
         .unwrap()
@@ -3380,6 +3647,7 @@ async fn project_file_limit_is_frame_safe_and_oversized_files_return_resource_li
 
     client
         .request(Request::Project(ProjectRequest::Close {
+            view_id: "test-view".to_string(),
             project_id,
             registration_epoch,
         }))

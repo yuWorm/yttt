@@ -13,8 +13,8 @@ mod workspace;
 
 pub use breadcrumbs::{EditorSymbol, EditorSymbolKind, breadcrumbs_at, document_symbols};
 pub use document::{
-    EditorAppearance, MarkdownDocumentConfig, ProjectEditorDocument, ProjectEditorDocumentEvent,
-    ProjectEditorModel, ProjectEditorSaveState, SaveRequest,
+    EditorAppearance, EditorSelectionSnapshot, MarkdownDocumentConfig, ProjectEditorDocument,
+    ProjectEditorDocumentEvent, ProjectEditorModel, ProjectEditorSaveState, SaveRequest,
 };
 pub use file_io::{
     CurrentDiskState, DiskFingerprint, LoadedProjectFile, MAX_PROJECT_FILE_BYTES,
@@ -42,4 +42,5 @@ pub use work_area::{
     TabGroup, TabGroupId, WorkAreaDropEdge, WorkAreaDropPlacement, WorkAreaNode, WorkAreaSplitAxis,
     WorkAreaSplitId,
 };
+pub(crate) use workspace::ProjectEditorWorkspaceSnapshot;
 pub use workspace::{DocumentId, ProjectEditorWorkspaceState, ProjectWorkItemSession, WorkItemId};

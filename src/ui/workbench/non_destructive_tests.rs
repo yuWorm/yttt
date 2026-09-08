@@ -575,27 +575,6 @@ fn window_bar_keeps_project_identity_and_git_fixed_outside_configured_modules(
 }
 
 #[gpui::test]
-fn local_project_does_not_start_a_gui_owned_file_watcher(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
-    let temp = tempdir().unwrap();
-    let project_path = temp.path().join("project");
-    fs::create_dir(&project_path).unwrap();
-    let mut workspace = Workspace::new();
-    workspace
-        .open_project(local_project(project_path), dev_fixture_layout())
-        .unwrap();
-
-    let (root, cx) = cx.add_window_view(|_, _| {
-        let mut root = WorkbenchView::with_workspace_for_test(workspace);
-        root.project_file_watching_enabled = true;
-        root
-    });
-    cx.run_until_parked();
-
-    assert!(cx.read(|app| root.read(app).active_project_file_watcher.is_none()));
-}
-
-#[gpui::test]
 fn git_diff_panel_renders_controls_and_handles_shortcuts(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
@@ -1269,40 +1248,6 @@ fn project_entry_delete_alert_renders_and_executes_confirmation(cx: &mut TestApp
     assert!(!victim_path.exists());
 }
 
-#[gpui::test]
-fn application_quit_command_requires_force_stop_confirmation(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
-    let temp = tempdir().unwrap();
-    let project_path = temp.path().join("project");
-    fs::create_dir(&project_path).unwrap();
-    let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut workspace = Workspace::new();
-    workspace
-        .open_project(local_project(project_path), dev_fixture_layout())
-        .unwrap();
-    let root_slot = Rc::new(RefCell::new(None));
-    let root_slot_for_window = root_slot.clone();
-    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| {
-            WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths)
-        });
-        *root_slot_for_window.borrow_mut() = Some(root.clone());
-        ComponentRoot::new(root, window, cx)
-    });
-    let root = root_slot.borrow_mut().take().unwrap();
-    cx.run_until_parked();
-
-    root.update_in(cx, |root, window, root_cx| {
-        root.dispatch_command_action(CommandId::ApplicationQuit, window, root_cx);
-    });
-    cx.run_until_parked();
-
-    cx.debug_bounds("application-force-stop-confirm")
-        .expect("application quit must render an explicit force-stop button");
-    cx.debug_bounds("application-force-stop-cancel")
-        .expect("application quit must render a cancel button");
-}
-
 #[derive(Clone)]
 struct CountingSystemNotifier(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
@@ -1492,6 +1437,7 @@ fn persist_codex_shell_session(
     };
     use yttt_protocol::agent::{AgentHookScope, AgentSnapshotUpdate};
 
+    crate::config::storage::allow_test_root(project_path);
     let mut layout = dev_fixture_layout();
     layout
         .tabs

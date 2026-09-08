@@ -5,7 +5,9 @@ use std::sync::Arc;
 use yttt_agent_core::AgentProvider;
 
 mod command;
+pub mod installer;
 mod omp;
+pub mod sessions;
 mod sources;
 
 pub use command::{

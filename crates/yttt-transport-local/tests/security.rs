@@ -27,6 +27,9 @@ fn identities() -> (ClientIdentity, HostIdentity) {
     let profile_id = ProfileId::new("security-test");
     (
         ClientIdentity {
+            expected_environment: None,
+            credential_generation: 0,
+            session_nonce: yttt_transport::new_session_nonce(),
             supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
             build: build_identity("test-build", "resource-v1"),
             profile_id: profile_id.clone(),
@@ -41,6 +44,9 @@ fn identities() -> (ClientIdentity, HostIdentity) {
             lifecycle_supported: ProtocolRange::exact(LIFECYCLE_PROTOCOL_VERSION),
             build: build_identity("test-build", "resource-v1"),
             profile_id,
+            environment_id: "test-environment".to_string(),
+            credential_generation: 0,
+            ingress: yttt_transport::IngressKind::LocalAdmin,
             host_id: HostId::new("host-1"),
             host_epoch: 7,
             connection_sequence: 11,
@@ -221,6 +227,8 @@ async fn invalid_client_proof_is_rejected_without_exposing_secret() {
             profile_id: client_identity.profile_id.clone(),
             client_instance_id: client_identity.client_instance_id.clone(),
             host_epoch_hint: None,
+            session_nonce: client_identity.session_nonce,
+            credential_generation: 0,
             can_force_stop: false,
             nonce: yttt_protocol::Nonce([8; 32]),
             channel: ConnectionChannel::Control,
@@ -390,4 +398,85 @@ async fn compatible_resource_builds_can_have_different_fingerprints() {
 
     assert!(client_result.is_ok());
     assert!(server_result.is_ok());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn work_ingress_cannot_claim_device_administration() {
+    for ingress in [
+        yttt_transport::IngressKind::TlsWork,
+        yttt_transport::IngressKind::SshWork,
+    ] {
+        for (channel, force) in [
+            (ConnectionChannel::DesktopOwner, false),
+            (ConnectionChannel::Lifecycle, false),
+            (ConnectionChannel::Control, true),
+        ] {
+            let (mut client, mut host) = identities();
+            host.ingress = ingress;
+            client.channel = channel;
+            client.can_force_stop = force;
+            let token = AuthToken::generate();
+            let (mut left, mut right) = tokio::io::duplex(4096);
+            let (client_result, host_result) = tokio::join!(
+                client_handshake(&mut left, &client, &token),
+                server_handshake(&mut right, &host, &token),
+            );
+            assert!(matches!(
+                client_result,
+                Err(HandshakeError::Rejected(
+                    yttt_protocol::RejectReason::PermissionDenied
+                ))
+            ));
+            assert!(matches!(
+                host_result,
+                Err(HandshakeError::Rejected(
+                    yttt_protocol::RejectReason::PermissionDenied
+                ))
+            ));
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn changing_negotiated_permissions_invalidates_the_host_proof() {
+    let (client, host) = identities();
+    let token = AuthToken::generate();
+    let (mut client_stream, mut proxy_client) = tokio::io::duplex(4096);
+    let (mut proxy_host, mut host_stream) = tokio::io::duplex(4096);
+    let proxy = async move {
+        let yttt_protocol::HandshakeMessage::ClientHello(mut hello) =
+            yttt_transport::receive_handshake(&mut proxy_client)
+                .await
+                .unwrap()
+        else {
+            panic!("hello")
+        };
+        hello.can_force_stop = true;
+        yttt_transport::send_handshake(
+            &mut proxy_host,
+            &yttt_protocol::HandshakeMessage::ClientHello(hello),
+        )
+        .await
+        .unwrap();
+        let challenge = yttt_transport::receive_handshake(&mut proxy_host)
+            .await
+            .unwrap();
+        yttt_transport::send_handshake(&mut proxy_client, &challenge)
+            .await
+            .unwrap();
+    };
+    let client_run = async {
+        let result = client_handshake(&mut client_stream, &client, &token).await;
+        drop(client_stream);
+        result
+    };
+    let host_run = async {
+        let result = server_handshake(&mut host_stream, &host, &token).await;
+        drop(host_stream);
+        result
+    };
+    let (result, _, ()) = tokio::join!(client_run, host_run, proxy);
+    assert!(matches!(result, Err(HandshakeError::AuthenticationFailed)));
 }

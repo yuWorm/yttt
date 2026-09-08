@@ -27,6 +27,7 @@ pub enum CommandId {
     ProjectCreate,
     ProjectOpen,
     ProjectOpenSsh,
+    ConnectExistingHost,
     ProjectOpenRecent,
     ProjectClose,
     ProjectPalette,
@@ -76,6 +77,7 @@ impl CommandId {
         Self::ProjectCreate,
         Self::ProjectOpen,
         Self::ProjectOpenSsh,
+        Self::ConnectExistingHost,
         Self::ProjectOpenRecent,
         Self::ProjectClose,
         Self::ProjectPalette,
@@ -125,6 +127,7 @@ impl CommandId {
             Self::ProjectCreate => "project.create",
             Self::ProjectOpen => "project.open",
             Self::ProjectOpenSsh => "project.open_ssh",
+            Self::ConnectExistingHost => "environment.connect_existing_host",
             Self::ProjectOpenRecent => "project.open_recent",
             Self::ProjectClose => "project.close",
             Self::ProjectPalette => "project.palette",
@@ -189,6 +192,10 @@ impl CommandId {
             Self::ProjectOpenSsh => {
                 presentation("Open SSH Project", "Connect to and open a remote project")
             }
+            Self::ConnectExistingHost => presentation(
+                "Connect to existing yttt",
+                "Connect to a running desktop Host without SSH or deployment",
+            ),
             Self::ProjectOpenRecent => {
                 presentation("Open Recent Project", "Choose a recent project")
             }
@@ -328,6 +335,7 @@ impl CommandId {
             | Self::ProjectCreate
             | Self::ProjectOpen
             | Self::ProjectOpenSsh
+            | Self::ConnectExistingHost
             | Self::ProjectOpenRecent
             | Self::ProjectPalette
             | Self::SettingsOpen

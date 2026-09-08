@@ -6,10 +6,12 @@ members = [
     "crates/yttt-agent-runtime",
     "crates/yttt-client-core",
     "crates/yttt-host",
+    "crates/yttt-server",
     "crates/yttt-protocol",
     "crates/yttt-project-core",
     "crates/yttt-transport",
     "crates/yttt-transport-local",
+    "crates/yttt-transport-tls",
     "crates/yttt-core",
     "crates/yttt-terminal-core",
     "crates/yttt-ssh",
@@ -37,6 +39,7 @@ anyhow = "1"
 base64 = "0.22"
 dunce = "1"
 fs2 = "0.4"
+parking_lot = "0.12"
 futures-lite = "2"
 gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
 gpui-component = { path = "vendor/gpui-component/crates/ui", features = ["tree-sitter-languages"] }
@@ -47,6 +50,7 @@ yttt-agent-core = { path = "crates/yttt-agent-core" }
 yttt-agent-providers = { path = "crates/yttt-agent-providers" }
 yttt-agent-runtime = { path = "crates/yttt-agent-runtime" }
 zeroize = "1"
+yttt-transport-tls = { path = "crates/yttt-transport-tls" }
 notify = "7.0.0"
 notify-rust = "4.18"
 nucleo-matcher = "0.3.1"
@@ -82,6 +86,9 @@ yttt-client-core = { path = "crates/yttt-client-core" }
 yttt-protocol = { path = "crates/yttt-protocol" }
 yttt-project-core = { path = "crates/yttt-project-core" }
 yttt-transport-local = { path = "crates/yttt-transport-local" }
+yttt-transport = { path = "crates/yttt-transport" }
+yttt-ssh = { path = "crates/yttt-ssh" }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 yttt-terminal = { path = "crates/yttt-terminal" }
 yttt-ui = { path = "crates/yttt-ui" }
 serde = { version = "1", features = ["derive"] }

@@ -362,6 +362,26 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
             "这会注册当前用户的后台启动项，让终端、项目、SSH 和 Agent 资源在没有打开 yttt 窗口时仍可用。它不会开放网络监听。你可以随时在此处或系统启动项设置中关闭。"
         }
         UiTextKey::SettingsLoginStartupConfirmAction => "启用登录启动",
+        UiTextKey::RemoteAccessTitle => "远程访问此电脑",
+        UiTextKey::RemoteAccessDescription => {
+            "通过 TLS 和可选的 TCP 端口转发共享当前 Host。连接信息可访问此 profile 的全部工作区，请保密。关闭工作窗口不会停止共享。"
+        }
+        UiTextKey::RemoteAccessEnable => "开启",
+        UiTextKey::RemoteAccessDisable => "关闭",
+        UiTextKey::RemoteAccessApply => "应用地址",
+        UiTextKey::RemoteAccessCopy => "复制连接信息",
+        UiTextKey::RemoteAccessReset => "重置凭据",
+        UiTextKey::RemoteAccessReclaim => "收回控制",
+        UiTextKey::RemoteAccessDisconnect => "断开全部远程会话",
+        UiTextKey::RemoteAccessRefresh => "刷新",
+        UiTextKey::RemoteAccessConfirmTitle => "更改远程访问？",
+        UiTextKey::RemoteAccessConfirmDescription => {
+            "此操作可能断开远程会话。非回环地址会向网络开放端口。强制收回使用最后确认状态，原控制端未发布的编辑可能丢失。请确认已了解这些后果。"
+        }
+        UiTextKey::RemoteAccessConfirm => "确认",
+        UiTextKey::RemoteAccessNotReady => "请等待全部工作窗口完成状态发布，再开启远程访问。",
+        UiTextKey::RemoteAccessCopied => "已复制连接信息。其中包含秘密，请仅分享给可信设备。",
+        UiTextKey::ConnectExistingHost => "连接已有 yttt",
         UiTextKey::SettingsPermissionNotifications => "系统通知",
         UiTextKey::SettingsPermissionNotificationsDescription => {
             "允许 yttt 在后台发送 Agent 任务完成或等待处理的提醒。"
@@ -779,6 +799,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::StatusBarsFile => "栏位配置文件",
         UiTextKey::StatusThemesDirectory => "主题目录",
         UiTextKey::SshConnections => "SSH 连接",
+        UiTextKey::RemoteServices => "远程服务管理",
         UiTextKey::SshConnectionsDescription => "管理 SSH 端点、凭据和远程项目根目录。",
         UiTextKey::SshNoConnections => "尚未配置 SSH 连接。",
         UiTextKey::SshNewConnection => "新建连接",

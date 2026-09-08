@@ -307,6 +307,10 @@ impl HostLauncher {
             .arg(self.profile.id().as_str())
             .arg("--runtime-root")
             .arg(&self.profile.paths().runtime)
+            .arg("--state-root")
+            .arg(&self.profile.paths().state)
+            .arg("--config-root")
+            .arg(&self.profile.paths().config)
             .arg("--auth-token-file")
             .arg(&token_file)
             .arg("--ssh-host-keys-file")
@@ -371,6 +375,9 @@ impl HostLauncher {
         Ok((
             LocalConnector::new(self.endpoint()),
             ClientIdentity {
+                expected_environment: None,
+                credential_generation: 0,
+                session_nonce: yttt_transport::new_session_nonce(),
                 supported: ProtocolRange::exact(RESOURCE_PROTOCOL_VERSION),
                 build: self.build.clone(),
                 profile_id: self.profile.id().clone(),
@@ -461,6 +468,9 @@ impl HostLauncher {
         let authenticated = client_handshake(
             &mut stream,
             &ClientIdentity {
+                expected_environment: None,
+                credential_generation: 0,
+                session_nonce: yttt_transport::new_session_nonce(),
                 supported,
                 build: self.build.clone(),
                 profile_id: self.profile.id().clone(),
@@ -613,6 +623,10 @@ pub struct ManagedHostProcess {
 impl ManagedHostProcess {
     pub fn spawned(&self) -> bool {
         self.child.is_some()
+    }
+
+    pub(crate) fn actual_lifetime(&self) -> yttt_host::HostLifetime {
+        self.actual_lifetime
     }
 
     pub fn child_id(&self) -> Option<u32> {
@@ -821,6 +835,8 @@ pub async fn run_host_process(
     let bootstrap = yttt_host::HostBootstrap {
         profile_id: parsed.profile_id,
         runtime_root: parsed.runtime_root,
+        state_root: parsed.state_root,
+        config_root: parsed.config_root,
         auth_token_file: parsed.auth_token_file,
         ssh_host_keys_file: parsed.ssh_host_keys_file,
         credential_namespace: parsed.credential_namespace,
@@ -836,6 +852,8 @@ pub async fn run_host_process(
 struct ParsedHostArgs {
     profile_id: ProfileId,
     runtime_root: PathBuf,
+    state_root: PathBuf,
+    config_root: PathBuf,
     auth_token_file: PathBuf,
     ssh_host_keys_file: PathBuf,
     credential_namespace: String,
@@ -886,6 +904,8 @@ impl ParsedHostArgs {
         Ok(Self {
             profile_id: ProfileId::new(profile_id),
             runtime_root: PathBuf::from(value("--runtime-root")?),
+            state_root: PathBuf::from(value("--state-root")?),
+            config_root: PathBuf::from(value("--config-root")?),
             ssh_host_keys_file: PathBuf::from(value("--ssh-host-keys-file")?),
             auth_token_file: PathBuf::from(value("--auth-token-file")?),
             credential_namespace,

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf};
 
 use gpui::{Rgba, rgb, rgba};
 use gpui_component::ThemeMode;
@@ -64,12 +64,14 @@ pub fn load_theme_store(paths: &AppConfigPaths) -> Result<LoadedThemeStore, Them
     let mut warnings = Vec::new();
     let themes_dir = paths.themes_dir();
 
-    fs::create_dir_all(&themes_dir).map_err(|source| ThemeLoadError::CreateThemeDirectory {
-        path: themes_dir.clone(),
-        source,
+    crate::config::storage::create_dir_all(&themes_dir).map_err(|source| {
+        ThemeLoadError::CreateThemeDirectory {
+            path: themes_dir.clone(),
+            source,
+        }
     })?;
 
-    let entries = match fs::read_dir(&themes_dir) {
+    let entries = match crate::config::storage::read_dir(&themes_dir) {
         Ok(entries) => entries,
         Err(error) => {
             warnings.push(ThemeLoadWarning::ReadDir {
@@ -85,7 +87,7 @@ pub fn load_theme_store(paths: &AppConfigPaths) -> Result<LoadedThemeStore, Them
         if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
             continue;
         }
-        let source = match fs::read_to_string(&path) {
+        let source = match crate::config::storage::read_to_string(&path) {
             Ok(source) => source,
             Err(error) => {
                 warnings.push(ThemeLoadWarning::ReadFile {

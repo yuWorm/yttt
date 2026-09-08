@@ -49,6 +49,22 @@ impl LocalEndpoint {
         }
     }
 
+    pub fn for_remote_work(profile_id: ProfileId, runtime_root: impl Into<PathBuf>) -> Self {
+        let runtime_root = runtime_root.into();
+        #[cfg(unix)]
+        let address = EndpointAddress::Unix(runtime_root.join("work.sock"));
+        #[cfg(windows)]
+        let address = {
+            let profile_hash = crc32fast::hash(profile_id.as_str().as_bytes());
+            EndpointAddress::WindowsPipe(format!(r"\\.\pipe\yttt-{profile_hash:08x}-work"))
+        };
+        Self {
+            profile_id,
+            runtime_root,
+            address,
+        }
+    }
+
     pub fn profile_id(&self) -> &ProfileId {
         &self.profile_id
     }

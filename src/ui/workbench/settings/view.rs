@@ -250,7 +250,7 @@ fn settings_rows(
         SettingsGroupId::Editor => settings_editor_rows(root, style, window, cx),
         SettingsGroupId::Terminal => settings_terminal_rows(root, style, window, cx),
         SettingsGroupId::Agent => settings_agent_rows(root, style, cx),
-        SettingsGroupId::Permissions => settings_permission_rows(root, style, cx),
+        SettingsGroupId::Permissions => settings_permission_rows(root, style, window, cx),
         SettingsGroupId::DefaultLayout => settings_default_layout_rows(root, style, cx),
         SettingsGroupId::Keybindings => settings_keybinding_rows(root, style, window, cx),
     }
@@ -983,9 +983,7 @@ fn settings_appearance_rows(
                 theme,
                 cx,
                 cx.listener(move |this, _, window, cx| {
-                    if let Err(error) = this.open_zed_theme_import_dialog() {
-                        this.load_error = Some(error);
-                    }
+                    this.open_zed_theme_import_dialog(window, cx);
                     this.flush_pending_status_notifications(window, cx);
                     cx.notify();
                 }),
@@ -1831,6 +1829,7 @@ fn settings_agent_rows(
 fn settings_permission_rows(
     root: &mut WorkbenchView,
     style: YtttSettingsLayout,
+    window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
     root.ensure_permission_status_refresh(cx);
@@ -1930,6 +1929,7 @@ fn settings_permission_rows(
     div()
         .flex()
         .flex_col()
+        .child(root.remote_access_settings(window, cx))
         .child(settings_section_header(
             style,
             theme,

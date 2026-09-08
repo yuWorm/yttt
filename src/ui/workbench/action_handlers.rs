@@ -15,70 +15,18 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let appearance = self.theme_runtime();
-        let theme = appearance.ui;
-        let ui_style = appearance.style;
-        let workbench = cx.weak_entity();
-        window.open_alert_dialog(cx, move |alert, _, cx| {
-            let workbench = workbench.clone();
-            alert
-                .title("Quit yttt and stop all Host resources?")
-                .description(
-                    "This terminates every running terminal and remote resource. This action cannot be undone.",
-                )
-                .footer(
-                    DialogFooter::new()
-                        .child(
-                            yttt_button(
-                                "application-force-stop-cancel",
-                                "Cancel",
-                                YtttButtonVariant::Secondary,
-                                theme,
-                                ui_style,
-                                cx,
-                            )
-                            .debug_selector(|| {
-                                "application-force-stop-cancel".to_string()
-                            })
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
-                        )
-                        .child(
-                            yttt_button(
-                                "application-force-stop-confirm",
-                                "Stop All and Quit",
-                                YtttButtonVariant::Danger,
-                                theme,
-                                ui_style,
-                                cx,
-                            )
-                            .debug_selector(|| {
-                                "application-force-stop-confirm".to_string()
-                            })
-                            .on_click(move |_, window, cx| {
-                                let _ = workbench.update(cx, |root, root_cx| {
-                                    root.begin_application_quit(root_cx);
-                                });
-                                window.close_dialog(cx);
-                            }),
-                        ),
-                )
-        });
-    }
-
-    pub(super) fn begin_application_quit(&mut self, cx: &mut Context<Self>) {
-        let Some(host_runtime) = self.terminal.host_runtime.clone() else {
-            cx.quit();
-            return;
-        };
-        let response = host_runtime.request_lifecycle(LifecycleRequest::ForceStop, true);
-        cx.spawn(async move |_, cx| {
-            let result = response.recv_async().await;
-            if matches!(result, Ok(Ok(LifecycleResponse::Draining))) {
-                host_runtime.shutdown_client();
-                cx.update(|cx| cx.quit());
+        if self
+            .terminal
+            .host_runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.is_remote())
+        {
+            if self.flush_workspace_persistence_on_close(window, cx) {
+                window.remove_window();
             }
-        })
-        .detach();
+            return;
+        }
+        crate::ui::app::confirm_desktop_quit(false, window, cx);
     }
 
     pub(super) fn on_open_command_palette(
@@ -270,11 +218,35 @@ impl WorkbenchView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_ssh_project_picker();
+        if crate::config::storage::is_remote() {
+            self.open_remote_host_directory_picker(cx);
+        } else {
+            self.open_ssh_project_picker();
+        }
+        cx.notify();
+    }
+
+    pub(super) fn on_connect_existing_host(
+        &mut self,
+        _: &ConnectExistingHost,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending_existing_host_request = true;
+        self.handle_pending_open_project_request(cx);
         cx.notify();
     }
 
     pub(super) fn prompt_for_new_project_directory(&mut self, cx: &mut Context<Self>) {
+        if self
+            .terminal
+            .host_runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.is_remote())
+        {
+            self.open_remote_host_directory_picker(cx);
+            return;
+        }
         let parent_directory = self
             .workspace
             .selected_project_id()
@@ -332,6 +304,15 @@ impl WorkbenchView {
     }
 
     pub(super) fn prompt_for_project_directory(&mut self, cx: &mut Context<Self>) {
+        if self
+            .terminal
+            .host_runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.is_remote())
+        {
+            self.open_remote_host_directory_picker(cx);
+            return;
+        }
         let picked_paths = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,

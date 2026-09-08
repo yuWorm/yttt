@@ -335,6 +335,33 @@ mod tests {
     }
 
     #[test]
+    fn six_mib_draft_with_json_escapes_roundtrips_in_one_control_frame() {
+        use crate::workspace::{
+            DraftBase, DraftContentRevision, DraftRef, MAX_DRAFT_CONTENT_BYTES, WorkspaceId,
+            WorkspaceRequest,
+        };
+        let draft = DraftContentRevision {
+            revision: 1,
+            base: DraftBase::Json {
+                metadata: serde_json::json!({}),
+            },
+            content: "\0".repeat(MAX_DRAFT_CONTENT_BYTES),
+        };
+        let reference = DraftRef::for_document(b"document", &draft);
+        let request = ControlMessage::Request(crate::ClientRequest::new(
+            1,
+            crate::Request::Workspace(WorkspaceRequest::PutDraft {
+                workspace_id: WorkspaceId::new("window").unwrap(),
+                reference,
+                content: draft.content.into_bytes(),
+            }),
+        ));
+        let encoded = encode_message(FrameKind::Control, &request).unwrap();
+        let decoded: ControlMessage = decode_message(&decode_frame(&encoded).unwrap()).unwrap();
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
     fn project_file_response_at_editor_limit_fits_the_control_frame() {
         let text = "a".repeat(6 * 1024 * 1024);
         let encoded = encode_message(

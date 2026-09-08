@@ -118,6 +118,7 @@ fn register_uses_host_path_segments_instead_of_platform_split() {
     let root = HostPath::from_path(&std::env::temp_dir()).unwrap();
     let request = serde_json::to_value(ProjectRequest::Register {
         project_id: ProjectId::new("project"),
+        view_id: "window".to_string(),
         root,
     })
     .unwrap();

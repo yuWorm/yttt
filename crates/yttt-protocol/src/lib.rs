@@ -8,8 +8,11 @@ pub mod handshake;
 pub mod lifecycle;
 pub mod path;
 pub mod project;
+pub mod remote_access;
+pub mod session;
 pub mod ssh;
 pub mod terminal;
+pub mod workspace;
 
 pub use codec::{
     DecodedFrame, FrameHeader, FrameKind, ProtocolCodecError, decode_frame, decode_header,
@@ -40,8 +43,8 @@ pub use project::{
 
 pub const PROTOCOL_MAGIC: [u8; 4] = *b"YTTT";
 pub const FRAME_FORMAT_VERSION: u16 = 1;
-pub const RESOURCE_PROTOCOL_VERSION: u16 = 5;
-pub const LIFECYCLE_PROTOCOL_VERSION: u16 = 2;
+pub const RESOURCE_PROTOCOL_VERSION: u16 = 7;
+pub const LIFECYCLE_PROTOCOL_VERSION: u16 = 3;
 pub const DESKTOP_SHELL_PROTOCOL_VERSION: u16 = 2;
 pub const MAX_DESKTOP_SHELL_FRAME_BYTES: usize = 256 * 1024;
 pub const MAX_DESKTOP_OPEN_PATHS: usize = 64;

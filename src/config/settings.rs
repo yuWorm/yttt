@@ -1,6 +1,5 @@
 use std::{
     collections::BTreeMap,
-    fs,
     path::{Path, PathBuf},
 };
 
@@ -29,7 +28,6 @@ pub struct AppSettings {
     pub window: WindowSettings,
     pub theme: ThemeSettings,
     pub notifications: NotificationSettings,
-    pub remote_access: RemoteAccessSettings,
     pub agent: AgentSettings,
     pub terminal: TerminalSettings,
     pub editor: EditorSettings,
@@ -111,11 +109,6 @@ impl Default for GeneralSettings {
             ],
         }
     }
-}
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-pub struct RemoteAccessSettings {
-    pub login_startup_consent_granted: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -443,15 +436,17 @@ pub fn load_or_create_settings(
     paths: &AppConfigPaths,
 ) -> Result<LoadedSettings, SettingsLoadError> {
     let path = ensure_settings_file(paths)?;
-    let source = fs::read_to_string(&path).map_err(|source| SettingsLoadError::Read {
-        path: path.clone(),
-        source,
+    let source = crate::config::storage::read_to_string(&path).map_err(|source| {
+        SettingsLoadError::Read {
+            path: path.clone(),
+            source,
+        }
     })?;
 
     let mut warnings = Vec::new();
     let (mut settings, migrated, legacy_bars) =
         parse_settings_source(&source, &path, &mut warnings);
-    if !paths.bars_file().exists()
+    if !crate::config::storage::exists(&paths.bars_file())
         && let Some(mut legacy_bars) = legacy_bars
     {
         warnings.extend(legacy_bars.validate().into_iter().map(|issue| {
@@ -708,9 +703,11 @@ pub fn save_settings(
 ) -> Result<PathBuf, SettingsSaveError> {
     let path = paths.settings_file();
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| SettingsSaveError::CreateConfigDirectory {
-            path: parent.to_path_buf(),
-            source,
+        crate::config::storage::create_dir_all(parent).map_err(|source| {
+            SettingsSaveError::CreateConfigDirectory {
+                path: parent.to_path_buf(),
+                source,
+            }
         })?;
     }
 
@@ -747,6 +744,9 @@ impl ShellPlatform {
 }
 
 pub fn detect_shell_candidates() -> Vec<String> {
+    if let Some(storage) = crate::config::storage::environment_storage() {
+        return storage.environment().shell_candidates.clone();
+    }
     let shell_env = std::env::var("SHELL").ok();
     let comspec_env = std::env::var("COMSPEC").ok();
     let path_entries = std::env::var_os("PATH")
@@ -876,14 +876,16 @@ pub fn resolve_default_shell(shell: &str, candidates: &[String]) -> String {
 
 fn ensure_settings_file(paths: &AppConfigPaths) -> Result<PathBuf, SettingsLoadError> {
     let path = paths.settings_file();
-    if path.exists() {
+    if crate::config::storage::exists(&path) {
         return Ok(path);
     }
 
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| SettingsLoadError::CreateConfigDirectory {
-            path: parent.to_path_buf(),
-            source,
+        crate::config::storage::create_dir_all(parent).map_err(|source| {
+            SettingsLoadError::CreateConfigDirectory {
+                path: parent.to_path_buf(),
+                source,
+            }
         })?;
     }
 

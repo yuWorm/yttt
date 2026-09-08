@@ -79,6 +79,11 @@ pub struct YtttAssets {
 impl AssetSource for YtttAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         if let Some(relative_path) = path.strip_prefix(EXTERNAL_ICON_ASSET_PREFIX) {
+            if let Some(storage) = crate::config::storage::environment_storage() {
+                let relative = yttt_protocol::ProjectRelativePath::from_utf8(relative_path)?;
+                let path = relative.join_under(&storage.config_root().join("themes/icons"));
+                return Ok(Some(Cow::Owned(storage.read(&path)?)));
+            }
             let root = self
                 .icon_themes_root
                 .canonicalize()

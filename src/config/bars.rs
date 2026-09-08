@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, HashSet},
-    fs, mem,
+    mem,
     path::PathBuf,
 };
 
@@ -101,10 +101,11 @@ impl ShellBarsSettings {
 
 pub fn load_or_create_bars(paths: &AppConfigPaths) -> Result<LoadedBars, BarsLoadError> {
     let path = ensure_bars_file(paths)?;
-    let source = fs::read_to_string(&path).map_err(|source| BarsLoadError::Read {
-        path: path.clone(),
-        source,
-    })?;
+    let source =
+        crate::config::storage::read_to_string(&path).map_err(|source| BarsLoadError::Read {
+            path: path.clone(),
+            source,
+        })?;
     let mut warnings = Vec::new();
     let mut settings = match toml::from_str::<ShellBarsSettings>(&source) {
         Ok(settings) => settings,
@@ -137,9 +138,11 @@ pub fn save_bars(
 ) -> Result<PathBuf, BarsSaveError> {
     let path = paths.bars_file();
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| BarsSaveError::CreateConfigDirectory {
-            path: parent.to_path_buf(),
-            source,
+        crate::config::storage::create_dir_all(parent).map_err(|source| {
+            BarsSaveError::CreateConfigDirectory {
+                path: parent.to_path_buf(),
+                source,
+            }
         })?;
     }
     let source = toml::to_string_pretty(settings).map_err(|source| BarsSaveError::Serialize {
@@ -155,13 +158,15 @@ pub fn save_bars(
 
 fn ensure_bars_file(paths: &AppConfigPaths) -> Result<PathBuf, BarsLoadError> {
     let path = paths.bars_file();
-    if path.exists() {
+    if crate::config::storage::exists(&path) {
         return Ok(path);
     }
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| BarsLoadError::CreateConfigDirectory {
-            path: parent.to_path_buf(),
-            source,
+        crate::config::storage::create_dir_all(parent).map_err(|source| {
+            BarsLoadError::CreateConfigDirectory {
+                path: parent.to_path_buf(),
+                source,
+            }
         })?;
     }
     let source = toml::to_string_pretty(&ShellBarsSettings::default()).map_err(|source| {

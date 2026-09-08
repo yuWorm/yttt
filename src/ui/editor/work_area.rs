@@ -115,6 +115,40 @@ pub enum WorkAreaNode {
     },
 }
 
+/// A validated, entity-free representation of the editor work-area tree.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub(crate) struct WorkAreaSnapshot {
+    root: WorkAreaSnapshotNode,
+    active_group_id: u64,
+    next_group_id: u64,
+    next_split_id: u64,
+    order_customized: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum WorkAreaSnapshotNode {
+    Group {
+        id: u64,
+        items: Vec<WorkItemId>,
+        active_item: Option<WorkItemId>,
+    },
+    Split {
+        id: u64,
+        axis: WorkAreaSplitAxisSnapshot,
+        ratio: f32,
+        first: Box<WorkAreaSnapshotNode>,
+        second: Box<WorkAreaSnapshotNode>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum WorkAreaSplitAxisSnapshot {
+    Row,
+    Column,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct WorkAreaRect {
     x: f32,
@@ -465,6 +499,52 @@ impl WorkAreaState {
         }
     }
 
+    pub(crate) fn snapshot(&self) -> WorkAreaSnapshot {
+        WorkAreaSnapshot {
+            root: work_area_snapshot_node(&self.root),
+            active_group_id: self.active_group_id.raw(),
+            next_group_id: self.next_group_id,
+            next_split_id: self.next_split_id,
+            order_customized: self.order_customized,
+        }
+    }
+    pub(crate) fn items(&self) -> Vec<WorkItemId> {
+        let mut items = Vec::new();
+        self.root.collect_items(&mut items);
+        items
+    }
+
+    pub(crate) fn restore(snapshot: WorkAreaSnapshot) -> Result<Self, String> {
+        let mut group_ids = HashSet::new();
+        let mut split_ids = HashSet::new();
+        let mut item_ids = HashSet::new();
+        let mut largest_group_id = 0;
+        let mut largest_split_id = 0;
+        let root = work_area_node_from_snapshot(
+            snapshot.root,
+            &mut group_ids,
+            &mut split_ids,
+            &mut item_ids,
+            &mut largest_group_id,
+            &mut largest_split_id,
+        )?;
+        let active_group_id = TabGroupId(snapshot.active_group_id);
+        if !group_ids.contains(&active_group_id) {
+            return Err("active work-area group does not exist".to_string());
+        }
+        Ok(Self {
+            root,
+            active_group_id,
+            next_group_id: snapshot
+                .next_group_id
+                .max(largest_group_id.saturating_add(1)),
+            next_split_id: snapshot
+                .next_split_id
+                .max(largest_split_id.saturating_add(1)),
+            order_customized: snapshot.order_customized,
+        })
+    }
+
     pub(crate) fn root(&self) -> &WorkAreaNode {
         &self.root
     }
@@ -774,7 +854,110 @@ impl WorkAreaState {
     }
 }
 
-fn available_items(terminal_ids: &[String], file_ids: &[DocumentId]) -> Vec<WorkItemId> {
+fn work_area_snapshot_node(node: &WorkAreaNode) -> WorkAreaSnapshotNode {
+    match node {
+        WorkAreaNode::Group(group) => WorkAreaSnapshotNode::Group {
+            id: group.id.raw(),
+            items: group.items.clone(),
+            active_item: group.active_item.clone(),
+        },
+        WorkAreaNode::Split {
+            id,
+            axis,
+            ratio,
+            first,
+            second,
+        } => WorkAreaSnapshotNode::Split {
+            id: id.raw(),
+            axis: match axis {
+                WorkAreaSplitAxis::Row => WorkAreaSplitAxisSnapshot::Row,
+                WorkAreaSplitAxis::Column => WorkAreaSplitAxisSnapshot::Column,
+            },
+            ratio: *ratio,
+            first: Box::new(work_area_snapshot_node(first)),
+            second: Box::new(work_area_snapshot_node(second)),
+        },
+    }
+}
+
+fn work_area_node_from_snapshot(
+    snapshot: WorkAreaSnapshotNode,
+    group_ids: &mut HashSet<TabGroupId>,
+    split_ids: &mut HashSet<WorkAreaSplitId>,
+    item_ids: &mut HashSet<WorkItemId>,
+    largest_group_id: &mut u64,
+    largest_split_id: &mut u64,
+) -> Result<WorkAreaNode, String> {
+    match snapshot {
+        WorkAreaSnapshotNode::Group {
+            id,
+            items,
+            active_item,
+        } => {
+            let group_id = TabGroupId(id);
+            if !group_ids.insert(group_id) {
+                return Err(format!("duplicate work-area group id: {id}"));
+            }
+            *largest_group_id = (*largest_group_id).max(id);
+            if items.iter().any(|item| !item_ids.insert(item.clone())) {
+                return Err("a work item appears in multiple work-area groups".to_string());
+            }
+            if active_item
+                .as_ref()
+                .is_some_and(|item| !items.contains(item))
+            {
+                return Err("work-area group active item is not in the group".to_string());
+            }
+            Ok(WorkAreaNode::Group(TabGroup::new(
+                group_id,
+                items,
+                active_item,
+            )))
+        }
+        WorkAreaSnapshotNode::Split {
+            id,
+            axis,
+            ratio,
+            first,
+            second,
+        } => {
+            if !ratio.is_finite() || !(MIN_SPLIT_RATIO..=MAX_SPLIT_RATIO).contains(&ratio) {
+                return Err(format!("work-area split ratio is invalid: {ratio}"));
+            }
+            let split_id = WorkAreaSplitId(id);
+            if !split_ids.insert(split_id) {
+                return Err(format!("duplicate work-area split id: {id}"));
+            }
+            *largest_split_id = (*largest_split_id).max(id);
+            Ok(WorkAreaNode::Split {
+                id: split_id,
+                axis: match axis {
+                    WorkAreaSplitAxisSnapshot::Row => WorkAreaSplitAxis::Row,
+                    WorkAreaSplitAxisSnapshot::Column => WorkAreaSplitAxis::Column,
+                },
+                ratio,
+                first: Box::new(work_area_node_from_snapshot(
+                    *first,
+                    group_ids,
+                    split_ids,
+                    item_ids,
+                    largest_group_id,
+                    largest_split_id,
+                )?),
+                second: Box::new(work_area_node_from_snapshot(
+                    *second,
+                    group_ids,
+                    split_ids,
+                    item_ids,
+                    largest_group_id,
+                    largest_split_id,
+                )?),
+            })
+        }
+    }
+}
+
+pub(super) fn available_items(terminal_ids: &[String], file_ids: &[DocumentId]) -> Vec<WorkItemId> {
     terminal_ids
         .iter()
         .cloned()

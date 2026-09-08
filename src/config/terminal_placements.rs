@@ -1,14 +1,13 @@
 use std::{
     collections::BTreeMap,
-    fs,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 use serde::{Deserialize, Serialize};
 use yttt_core::model::ids::{HostId, TerminalSessionId};
 
-use crate::config::atomic_write;
+use crate::config::storage::ConfigStorage;
 
 const TERMINAL_PLACEMENTS_VERSION: u32 = 1;
 
@@ -93,16 +92,61 @@ fn first_request_id() -> u64 {
     1
 }
 
-#[derive(Debug)]
 pub struct TerminalPlacementStore {
     path: PathBuf,
     state: Mutex<TerminalPlacementFile>,
+    storage: PlacementStorage,
+}
+
+enum PlacementStorage {
+    Host(Arc<dyn ConfigStorage>),
+    #[cfg(test)]
+    Local,
+}
+
+impl PlacementStorage {
+    fn read(&self, path: &Path) -> std::io::Result<Vec<u8>> {
+        match self {
+            Self::Host(storage) => storage.read(path),
+            #[cfg(test)]
+            Self::Local => std::fs::read(path),
+        }
+    }
+
+    fn write(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        match self {
+            Self::Host(storage) => storage.write(path, bytes),
+            #[cfg(test)]
+            Self::Local => {
+                std::fs::create_dir_all(path.parent().unwrap())?;
+                crate::config::atomic_write(path, bytes)
+            }
+        }
+    }
 }
 
 impl TerminalPlacementStore {
-    pub fn load(path: impl Into<PathBuf>) -> Result<Self, TerminalPlacementStoreError> {
+    pub fn load(
+        path: impl Into<PathBuf>,
+        storage: Arc<dyn ConfigStorage>,
+    ) -> Result<Self, TerminalPlacementStoreError> {
+        Self::load_with_storage(path.into(), PlacementStorage::Host(storage))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn load_local(
+        path: impl Into<PathBuf>,
+    ) -> Result<Self, TerminalPlacementStoreError> {
         let path = path.into();
-        let state = match fs::read(&path) {
+        crate::config::storage::allow_test_root(path.parent().unwrap());
+        Self::load_with_storage(path, PlacementStorage::Local)
+    }
+
+    fn load_with_storage(
+        path: PathBuf,
+        storage: PlacementStorage,
+    ) -> Result<Self, TerminalPlacementStoreError> {
+        let state = match storage.read(&path) {
             Ok(bytes) => {
                 let state: TerminalPlacementFile =
                     serde_json::from_slice(&bytes).map_err(|source| {
@@ -132,6 +176,7 @@ impl TerminalPlacementStore {
         Ok(Self {
             path,
             state: Mutex::new(state),
+            storage,
         })
     }
 
@@ -296,18 +341,17 @@ impl TerminalPlacementStore {
             .state
             .lock()
             .expect("terminal placement store mutex poisoned");
-        let result = mutation(&mut state);
+        let mut next = state.clone();
+        let result = mutation(&mut next);
         let bytes =
-            serde_json::to_vec_pretty(&*state).map_err(TerminalPlacementStoreError::Encode)?;
-        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
-        fs::create_dir_all(parent).map_err(|source| TerminalPlacementStoreError::Write {
-            path: self.path.clone(),
-            source,
+            serde_json::to_vec_pretty(&next).map_err(TerminalPlacementStoreError::Encode)?;
+        self.storage.write(&self.path, &bytes).map_err(|source| {
+            TerminalPlacementStoreError::Write {
+                path: self.path.clone(),
+                source,
+            }
         })?;
-        atomic_write(&self.path, &bytes).map_err(|source| TerminalPlacementStoreError::Write {
-            path: self.path.clone(),
-            source,
-        })?;
+        *state = next;
         Ok(result)
     }
 }
@@ -356,7 +400,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("terminal-placements.json");
         let session_id = TerminalSessionId::new("project:tab:pane");
-        let store = TerminalPlacementStore::load(&path).unwrap();
+        let store = TerminalPlacementStore::load_local(&path).unwrap();
         let open_request = store.begin_open(&session_id, 41).unwrap();
         assert_eq!(open_request, 1);
         store
@@ -370,7 +414,7 @@ mod tests {
         ));
         store.mark_closed(&session_id).unwrap();
 
-        let reloaded = TerminalPlacementStore::load(path).unwrap();
+        let reloaded = TerminalPlacementStore::load_local(path).unwrap();
         assert_eq!(
             reloaded.placement(&session_id),
             Some(DurableTerminalPlacement::Closed)
@@ -382,7 +426,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("terminal-placements.json");
         let session_id = TerminalSessionId::new("project:tab:pane");
-        let store = TerminalPlacementStore::load(path).unwrap();
+        let store = TerminalPlacementStore::load_local(path).unwrap();
         store
             .bind(HostId::new("host"), 7, session_id.clone(), 3, 41)
             .unwrap();
@@ -413,7 +457,8 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let session_id = TerminalSessionId::new("project:agent:omp");
         let store =
-            TerminalPlacementStore::load(temp.path().join("terminal-placements.json")).unwrap();
+            TerminalPlacementStore::load_local(temp.path().join("terminal-placements.json"))
+                .unwrap();
         store.mark_closed(&session_id).unwrap();
 
         assert_eq!(
