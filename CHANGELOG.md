@@ -68,6 +68,12 @@
   Git diff toolbar, aligned file/code headers, and softened change backgrounds and footer hints.
 - Replaced the status bar's fixed height with content-driven sizing and font-relative vertical
   insets; compact action buttons and text now stay centered without touching or crossing its edges.
+- Moved layout TOML editing into an independent single-file window with a compact path strip,
+  save shortcut, and inline validation errors; closing Settings no longer discards its buffer.
+- Moved local remote-access controls out of Permissions into a dedicated Remote services page,
+  with localized listener status, address controls, and connected-device management.
+- Replaced blue settings section accents with muted headings and fine separators, and aligned
+  notification icons, titles, close controls, and wrapping body text in normal layout flow.
 - Removed decorative outlines from work-area groups, including terminal surfaces, and from every icon-button variant while retaining structural separators and focus indicators.
 - Moved the tab-bar baseline behind tab items so the selected tab covers its segment and merges visually with the active content surface, matching Zed.
 - Replaced the Project Panel title/action toolbar with icon tabs and a stateful right-side-panel toggle in the workbench tab bar; create, refresh, hidden-file, and project-layout actions now live in row or empty-area context menus.

@@ -74,6 +74,7 @@ fn workbench_notification(
     yttt_toast_notification(tone, theme, ui_style).content(move |_, _, cx| {
         let action = action.clone().map(|(label, on_action)| {
             Button::new("notification-action")
+                .debug_selector(|| "notification-action".into())
                 .primary()
                 .outline()
                 .xsmall()
@@ -121,8 +122,15 @@ fn notification_content(
         .gap(style.gap)
         .min_h(style.min_height)
         .w_full()
-        .pr_8()
-        .child(Icon::new(icon).size(style.icon_size).text_color(style.tone))
+        .child(
+            div()
+                .debug_selector(|| "notification-icon".into())
+                .flex_none()
+                .flex()
+                .items_center()
+                .h(gpui::rems(1.25))
+                .child(Icon::new(icon).size(style.icon_size).text_color(style.tone)),
+        )
         .child(
             div()
                 .flex()
@@ -130,6 +138,14 @@ fn notification_content(
                 .gap_1()
                 .min_w_0()
                 .flex_1()
+                .child(
+                    div()
+                        .debug_selector(|| "notification-title".into())
+                        .text_sm()
+                        .line_height(gpui::rems(1.25))
+                        .text_color(style.title)
+                        .child(title),
+                )
                 .when_some(status, |this, status| {
                     this.child(
                         div()
@@ -142,17 +158,10 @@ fn notification_content(
                 })
                 .child(
                     div()
+                        .debug_selector(|| "notification-body".into())
                         .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(style.title)
-                        .truncate()
-                        .child(title),
-                )
-                .child(
-                    div()
-                        .text_xs()
+                        .line_height(gpui::rems(1.25))
                         .text_color(style.context)
-                        .truncate()
                         .child(context),
                 )
                 .when_some(action, |this, action| {

@@ -303,12 +303,6 @@ impl Render for WorkbenchView {
                 appearance.ui,
             ));
         }
-        if !self.settings.settings_page.is_open
-            && self.overlays.layout_toml_editor.is_some()
-            && let Some(input) = self.layout_toml_input(window, cx)
-        {
-            root = root.child(layout_toml_editor_overlay(self, &input, cx));
-        }
         if let Some(panel) = self.render_git_diff_panel(window, cx) {
             root = root.child(panel);
         }
@@ -513,143 +507,96 @@ pub(super) fn split_child(child: Div, basis: f32) -> Div {
         .child(child)
 }
 
-pub(super) fn layout_toml_editor_overlay(
+pub(super) fn layout_toml_editor_window_content(
     root: &WorkbenchView,
     input: &Entity<InputState>,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
     let appearance = root.theme_runtime();
-    let ui_style = appearance.style;
     let theme = appearance.ui;
-    let editor_theme = appearance.editor;
+    let style = appearance.style;
     let Some(session) = root.overlays.layout_toml_editor.as_ref() else {
         return div();
     };
-    let editor_appearance = session.appearance();
     let editor = session.editor();
-    let title = editor.config().title().to_string();
-    let path = editor.path().display().to_string();
-    let error = editor.error().map(ToOwned::to_owned);
-
-    yttt_panel_overlay(
-        yttt_panel(YtttPanelKind::Editor, theme, ui_style)
-            .w(relative(0.72))
-            .max_w(px(1040.))
-            .h(px(680.))
-            .max_h(relative(0.86))
-            .p_0()
-            .overflow_hidden()
-            .child(
+    div()
+        .flex()
+        .flex_col()
+        .size_full()
+        .bg(appearance.editor.background)
+        .child(
+            div()
+                .flex_none()
+                .px(gpui::rems(1.0))
+                .py(gpui::rems(0.375))
+                .border_b(style.border.hairline)
+                .border_color(theme.border_variant)
+                .text_xs()
+                .text_color(theme.text_muted)
+                .truncate()
+                .child(editor.path().display().to_string()),
+        )
+        .child(
+            div()
+                .debug_selector(|| "layout-editor-content".into())
+                .flex_1()
+                .min_h_0()
+                .overflow_hidden()
+                .child(styled_code_editor_input(input, session.appearance()).h_full()),
+        )
+        .when_some(editor.error(), |this, error| {
+            this.child(
                 div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .border_b(ui_style.border.hairline)
-                    .border_color(theme.border)
-                    .px(ui_style.spacing.xl + ui_style.spacing.xs)
-                    .py(ui_style.spacing.xl)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(ui_style.spacing.xs)
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_lg()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(title),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.text_subtle)
-                                    .truncate()
-                                    .child(path),
-                            ),
-                    )
-                    .child(settings_button(
-                        "layout-toml-editor-close",
-                        root.ui_text.get(UiTextKey::Cancel),
-                        false,
-                        theme,
-                        cx,
-                        cx.listener(|this, _, _window, cx| {
-                            this.cancel_layout_toml_editor();
-                            cx.notify();
-                        }),
-                    )),
+                    .px(gpui::rems(1.0))
+                    .py(gpui::rems(0.5))
+                    .border_t(style.border.hairline)
+                    .border_color(theme.border_variant)
+                    .text_sm()
+                    .text_color(theme.danger)
+                    .child(error.to_string()),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .p(ui_style.spacing.xl)
-                    .gap(ui_style.spacing.lg)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_h_0()
-                            .rounded(ui_style.radius.compact)
-                            .bg(editor_theme.background)
-                            .overflow_hidden()
-                            .child(styled_code_editor_input(input, editor_appearance).h_full()),
-                    )
-                    .when_some(error, |this, error| {
-                        this.child(
-                            div()
-                                .rounded(ui_style.radius.compact)
-                                .border(ui_style.border.hairline)
-                                .border_color(theme.danger)
-                                .bg(theme.surface_elevated)
-                                .px(ui_style.spacing.lg)
-                                .py(ui_style.spacing.md)
-                                .text_xs()
-                                .text_color(theme.danger)
-                                .child(error),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .gap(ui_style.spacing.md)
-                    .border_t(ui_style.border.hairline)
-                    .border_color(theme.border)
-                    .px(ui_style.spacing.xl + ui_style.spacing.xs)
-                    .py(ui_style.spacing.lg)
-                    .child(settings_button(
-                        "layout-toml-editor-cancel",
-                        root.ui_text.get(UiTextKey::Cancel),
-                        false,
-                        theme,
-                        cx,
-                        cx.listener(|this, _, _window, cx| {
-                            this.cancel_layout_toml_editor();
-                            cx.notify();
-                        }),
-                    ))
-                    .child(settings_button(
-                        "layout-toml-editor-save",
-                        root.ui_text.get(UiTextKey::SettingsSave),
-                        true,
-                        theme,
-                        cx,
-                        cx.listener(|this, _, _window, cx| {
-                            let _ = this.save_layout_toml_editor();
-                            cx.notify();
-                        }),
-                    )),
-            ),
-        YtttPanelKind::Editor,
-        YtttOverlayPlacement::Center,
-        theme,
-        ui_style,
-    )
+        })
+        .child(
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_between()
+                .px(gpui::rems(0.75))
+                .py(gpui::rems(0.375))
+                .border_t(style.border.hairline)
+                .border_color(theme.border_variant)
+                .bg(theme.statusbar_background)
+                .child(div().text_xs().text_color(theme.text_muted).child("TOML"))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(style.spacing.sm)
+                        .child(settings_button(
+                            "layout-toml-editor-cancel",
+                            root.ui_text.get(UiTextKey::Cancel),
+                            false,
+                            theme,
+                            cx,
+                            cx.listener(|this, _, _window, cx| {
+                                this.cancel_layout_toml_editor();
+                                cx.notify();
+                            }),
+                        ))
+                        .child(settings_button(
+                            "layout-toml-editor-save",
+                            root.ui_text.get(UiTextKey::SettingsSave),
+                            true,
+                            theme,
+                            cx,
+                            cx.listener(|this, _, _window, cx| {
+                                let _ = this.save_layout_toml_editor();
+                                cx.notify();
+                            }),
+                        )),
+                ),
+        )
 }
 
 pub(super) fn push_component_notification(

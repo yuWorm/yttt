@@ -35,9 +35,9 @@ provide a project or personal layout override.
 
 Normal application launches remain local. The bottom status bar identifies the current
 environment; connecting a remote service never replaces the current local window.
-Use **Remote services** on the homepage to open a separate management window for SSH Server
-connections or the remembered TLS Host connection list. The workbench stays usable behind it;
-connecting opens an independent Client window.
+Use **Remote services** on the homepage to open a separate management window. Its pages manage
+SSH Server connections and remembered TLS Host connections, or remote access to this computer.
+The workbench stays usable behind it; connecting opens an independent Client window.
 
 Both local and remote windows restore their Host's confirmed workspace state before starting
 terminal/Agent views. A workspace with opened projects goes directly to its project page; a
@@ -159,7 +159,7 @@ by `project_panel.show_hidden`.
 
 Use this path to access computer A's already-running yttt from B without deploying another Host:
 
-1. On A, open **Settings → Permissions → Remote access to this computer**. Access is off by
+1. On A, open **Remote services → Remote access to this computer**. Access is off by
    default; the initial address is `127.0.0.1:43123`. Enable only after the work windows have
    published their state. A port conflict leaves the listener disabled.
 2. Copy connection information on A and transfer it privately. It includes the Host certificate,
@@ -192,7 +192,7 @@ unpublished edits are not advertised as saved. Host restart restores confirmed w
 but shows lost terminal processes as exited instead of rerunning them.
 
 **Local management.** A can reclaim control, disconnect all TCP sessions, change the address, reset
-credentials or disable access. Closing the settings page or a work window does not close the
+credentials or disable access. Closing the management window or a work window does not close the
 listener. Disable and reset revoke every TCP channel but preserve existing tasks and do not affect
 the separate SSH work entrance. If persisting a disable fails, the effective closed state and the
 unsaved preference are reported separately; the previous preference may apply after restart.
@@ -316,6 +316,12 @@ retains the search and selected category for that workbench session.
 Use the native close control or `Cmd+W` / `Ctrl+W` to close the settings window without closing
 workbench tabs. Settings navigation, shortcut recording, and nested dialogs stay in this window;
 Global Vim settings navigation does not switch tabs in the background workbench.
+
+**Edit Default Layout** and **Edit Project Layout** open the TOML file in a separate editor window
+with its filename in the title bar. Use **Save** or `Cmd+S` / `Ctrl+S` to validate and save.
+Invalid TOML stays open with an error below the editor and leaves the file unchanged. Closing
+Settings does not close this editor or discard its buffer. **Cancel**, the native close control,
+or `Cmd+W` / `Ctrl+W` discards unsaved edits; Escape leaves the editor open.
 
 ## Desktop Permissions
 

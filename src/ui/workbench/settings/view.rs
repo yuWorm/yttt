@@ -230,7 +230,7 @@ fn settings_rows(
         SettingsGroupId::Editor => settings_editor_rows(root, style, window, cx),
         SettingsGroupId::Terminal => settings_terminal_rows(root, style, window, cx),
         SettingsGroupId::Agent => settings_agent_rows(root, style, cx),
-        SettingsGroupId::Permissions => settings_permission_rows(root, style, window, cx),
+        SettingsGroupId::Permissions => settings_permission_rows(root, style, cx),
         SettingsGroupId::DefaultLayout => settings_default_layout_rows(root, style, cx),
         SettingsGroupId::Keybindings => settings_keybinding_rows(root, style, window, cx),
     }
@@ -578,10 +578,10 @@ fn settings_general_rows(
             setting_row(
                 style,
                 theme,
-                text.get(UiTextKey::SshConnections),
-                text.get(UiTextKey::SshConnectionsDescription),
+                text.get(UiTextKey::RemoteServices),
+                text.get(UiTextKey::RemoteServicesDescription),
                 settings_button(
-                    "settings-open-ssh-connections",
+                    "settings-open-remote-services",
                     text.get(UiTextKey::SettingsOpen),
                     false,
                     theme,
@@ -593,7 +593,7 @@ fn settings_general_rows(
                 )
                 .into_any_element(),
             )
-            .debug_selector(|| "settings-ssh-connections-row".to_string()),
+            .debug_selector(|| "settings-remote-services-row".to_string()),
         )
         .child(settings_section_header(
             style,
@@ -1809,7 +1809,6 @@ fn settings_agent_rows(
 fn settings_permission_rows(
     root: &mut WorkbenchView,
     style: YtttSettingsLayout,
-    window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
     root.ensure_permission_status_refresh(cx);
@@ -1909,7 +1908,6 @@ fn settings_permission_rows(
     div()
         .flex()
         .flex_col()
-        .child(root.remote_access_settings(window, cx))
         .child(settings_section_header(
             style,
             theme,
@@ -2673,18 +2671,21 @@ fn settings_section_header(
 ) -> Div {
     div()
         .flex()
-        .items_center()
-        .gap(style.ui_style.spacing.md)
+        .flex_col()
+        .gap(style.ui_style.spacing.sm)
         .when(!first, |this| this.pt(style.section_gap))
         .pb(style.ui_style.spacing.sm)
-        .px(style.ui_style.spacing.xxs)
-        .child(div().w(px(3.0)).h_4().rounded_full().bg(theme.accent))
         .child(
             div()
-                .text_sm()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme.text)
+                .text_xs()
+                .text_color(theme.text_muted)
                 .child(title.into()),
+        )
+        .child(
+            div()
+                .w_full()
+                .h(style.ui_style.border.hairline)
+                .bg(theme.border_variant),
         )
 }
 

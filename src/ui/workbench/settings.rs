@@ -1,5 +1,4 @@
 mod persistence;
-mod remote_access;
 mod view;
 pub(super) use view::{settings_button, settings_window_content};
 
@@ -266,7 +265,6 @@ impl WorkbenchView {
         self.settings.zed_theme_import_dialog = None;
         self.reset_settings_search_input();
         self.overlays.pending_keybinding_edit = None;
-        self.cancel_layout_toml_editor();
         if self.auxiliary_windows.active == Some(AuxiliaryWindowKind::Settings) {
             self.auxiliary_windows.active = None;
         }

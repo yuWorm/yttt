@@ -91,11 +91,6 @@ pub(in super::super) struct SettingsControllerState {
     pub(in super::super) login_startup_generation: u64,
     pub(in super::super) login_startup_changing: bool,
     pub(in super::super) login_startup_consent_granted: bool,
-    pub(in super::super) remote_access: Option<yttt_protocol::remote_access::RemoteAccessStatus>,
-    pub(in super::super) remote_access_busy: bool,
-    pub(in super::super) remote_access_loaded: bool,
-    pub(in super::super) remote_access_error: Option<String>,
-    pub(in super::super) remote_access_address: Option<Entity<InputState>>,
     pub(in super::super) confirmed_settings: crate::config::settings::AppSettings,
     pub(in super::super) pending_settings_save:
         Option<(crate::config::settings::AppSettings, bool)>,
@@ -177,11 +172,6 @@ impl SettingsControllerState {
             login_startup_generation: 0,
             login_startup_changing: false,
             login_startup_consent_granted: false,
-            remote_access: None,
-            remote_access_busy: false,
-            remote_access_loaded: false,
-            remote_access_error: None,
-            remote_access_address: None,
             zed_theme_import_dialog: None,
         }
     }

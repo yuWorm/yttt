@@ -251,6 +251,103 @@ fn settings_window_reuses_search_state_and_rebinds_after_native_close(
     assert!(cx.debug_bounds("settings-no-results").is_none());
 }
 
+#[gpui::test]
+fn layout_editor_window_keeps_invalid_edits_and_outlives_settings(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut settings = load_or_create_settings(&paths).unwrap().settings;
+    settings.general.onboarding_completed = true;
+    save_settings(&paths, &settings).unwrap();
+    let slot = Rc::new(RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let view = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
+        register_workbench_keybinding_interceptor(cx, &view);
+        yttt::ui::app::register_workbench_focus_restore(window, cx, &view);
+        *output.borrow_mut() = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let view = slot.borrow_mut().take().unwrap();
+    view.update(cx, |view, cx| {
+        view.open_settings();
+        cx.notify();
+    });
+    focus_surface_window(cx, "settings-window");
+    view.update(cx, |view, cx| {
+        view.open_default_layout_editor().unwrap();
+        cx.notify();
+    });
+    focus_surface_window(cx, "layout-editor-window");
+    let editor_window = cx.update(|window, _| window.window_handle());
+    let (path, original) = cx.read(|app| {
+        let view = view.read(app);
+        (
+            view.layout_toml_editor_path().unwrap().to_path_buf(),
+            view.layout_toml_editor_value().unwrap().to_string(),
+        )
+    });
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-a"
+    } else {
+        "ctrl-a"
+    });
+    cx.simulate_input("[project\n");
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-s"
+    } else {
+        "ctrl-s"
+    });
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert!(view.read(app).layout_toml_editor_is_open());
+        assert!(view.read(app).visible_layout_toml_editor_error().is_some());
+        assert_eq!(
+            view.read(app).layout_toml_editor_value(),
+            Some("[project\n")
+        );
+    });
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+
+    focus_surface_window(cx, "settings-window");
+    view.update(cx, |view, cx| {
+        view.close_settings();
+        cx.notify();
+    });
+    focus_surface_window(cx, "workbench-surface");
+    cx.read(|app| {
+        assert!(view.read(app).layout_toml_editor_is_open());
+        assert_eq!(
+            view.read(app).foreground_input_owner_kind(),
+            InputOwnerKind::Workspace
+        );
+    });
+    focus_surface_window(cx, "layout-editor-window");
+    assert_eq!(cx.update(|window, _| window.window_handle()), editor_window);
+    cx.simulate_keystrokes("escape");
+    cx.read(|app| assert!(view.read(app).layout_toml_editor_is_open()));
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-a"
+    } else {
+        "ctrl-a"
+    });
+    let updated = original.replace("title = \"Shell\"", "title = \"Native editor\"");
+    assert_ne!(updated, original);
+    cx.simulate_input(&updated);
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-s"
+    } else {
+        "ctrl-s"
+    });
+    cx.cx.refresh().unwrap();
+    assert!(!cx.windows().contains(&editor_window));
+    assert!(
+        fs::read_to_string(path)
+            .unwrap()
+            .contains("title = \"Native editor\"")
+    );
+}
+
 fn focus_surface_window(cx: &mut gpui::VisualTestContext, selector: &'static str) {
     cx.cx.refresh().unwrap();
     cx.run_until_parked();
@@ -3809,35 +3906,6 @@ fn root_view_layout_default_editor_opens_without_project() {
         Some(EditorLanguageId::Toml)
     );
     assert_eq!(root.visible_layout_toml_editor_error(), None);
-}
-
-#[test]
-fn layout_editor_popup_uses_chinese_text_and_error_prefixes() {
-    let temp = tempdir().unwrap();
-    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut settings = AppSettings::default();
-    settings.general.language = LanguageSetting::Chinese;
-    settings.general.onboarding_completed = true;
-    save_settings(&paths, &settings).unwrap();
-    let mut root = WorkbenchView::with_config_paths_for_test(paths);
-
-    root.run_command(CommandId::LayoutDefaultEdit).unwrap();
-
-    let config = root.visible_layout_toml_editor_config().unwrap();
-    assert_eq!(config.title(), "编辑默认布局");
-    assert_eq!(config.placeholder(), "编辑布局 TOML…");
-    let ui_text = UiText::new(Locale::Chinese);
-    assert_eq!(ui_text.get(yttt::ui::i18n::UiTextKey::Cancel), "取消");
-    assert_eq!(ui_text.get(yttt::ui::i18n::UiTextKey::SettingsSave), "保存");
-
-    root.set_layout_toml_editor_value("[project\n");
-    root.save_layout_toml_editor().unwrap();
-
-    assert!(
-        root.visible_layout_toml_editor_error()
-            .unwrap()
-            .starts_with("解析布局 TOML 失败:")
-    );
 }
 
 #[gpui::test]

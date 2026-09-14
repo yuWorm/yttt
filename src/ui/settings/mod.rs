@@ -140,8 +140,8 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 UiTextKey::SettingsNewTabCommandsDescription,
             ),
             row(
-                UiTextKey::SshConnections,
-                UiTextKey::SshConnectionsDescription,
+                UiTextKey::RemoteServices,
+                UiTextKey::RemoteServicesDescription,
             ),
         ],
         SettingsGroupId::Appearance => vec![

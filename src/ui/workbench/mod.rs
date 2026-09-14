@@ -43,6 +43,7 @@ mod palette;
 mod performance;
 mod persistence;
 mod project_files;
+mod remote_access;
 mod render;
 mod resize;
 mod settings;
@@ -254,7 +255,7 @@ use crate::{
             notification::{YtttNotificationTone, yttt_alert},
             panel::{
                 YtttOverlayPlacement, YtttPanelKind, YtttSettingsLayout, yttt_fullscreen_panel,
-                yttt_panel, yttt_panel_overlay, yttt_settings_layout,
+                yttt_panel_overlay, yttt_settings_layout,
             },
             radio::yttt_radio,
             row::{YtttRowKind, yttt_row, yttt_settings_row},
@@ -3330,7 +3331,6 @@ impl WorkbenchView {
         self.settings.settings_custom_shell_input = None;
         self.settings.settings_environment_name_input = None;
         self.settings.settings_environment_value_input = None;
-        self.settings.remote_access_address = None;
         self.settings.settings_language_select = None;
         self.settings.settings_language_select_subscription = None;
         self.settings.settings_shell_select = None;
@@ -3625,7 +3625,7 @@ impl WorkbenchView {
                 InputScopeId::new("dialog.close_project"),
             )
         } else if self.overlays.layout_toml_editor.is_some()
-            && self.settings_dialogs_are_foreground()
+            && self.auxiliary_windows.active == Some(AuxiliaryWindowKind::LayoutEditor)
         {
             let scope = self
                 .overlays

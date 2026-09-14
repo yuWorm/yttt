@@ -367,6 +367,17 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteAccessDescription => {
             "通过 TLS 和可选的 TCP 端口转发共享当前 Host。连接信息可访问此 profile 的全部工作区，请保密。关闭工作窗口不会停止共享。"
         }
+        UiTextKey::RemoteAccessListening => "正在监听",
+        UiTextKey::RemoteAccessStarting => "正在启动…",
+        UiTextKey::RemoteAccessStopping => "正在停止…",
+        UiTextKey::RemoteAccessFailed => "无法启动共享",
+        UiTextKey::RemoteAccessDisabled => "远程访问已关闭",
+        UiTextKey::RemoteAccessUnavailable => "正在等待本机 Host",
+        UiTextKey::RemoteAccessAddress => "监听地址",
+        UiTextKey::RemoteAccessClients => "已连接设备",
+        UiTextKey::RemoteAccessNoClients => "尚无远程设备连接",
+        UiTextKey::RemoteAccessStreams => "条数据流",
+        UiTextKey::RemoteAccessControlOwner => "当前控制端",
         UiTextKey::RemoteAccessEnable => "开启",
         UiTextKey::RemoteAccessDisable => "关闭",
         UiTextKey::RemoteAccessApply => "应用地址",
@@ -801,6 +812,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::StatusThemesDirectory => "主题目录",
         UiTextKey::SshConnections => "SSH 连接",
         UiTextKey::RemoteServices => "远程服务管理",
+        UiTextKey::RemoteServicesDescription => "管理远程连接和此电脑的远程访问。",
         UiTextKey::SshConnectionsDescription => "管理 SSH 端点、凭据和远程项目根目录。",
         UiTextKey::SshNoConnections => "尚未配置 SSH 连接。",
         UiTextKey::SshNewConnection => "新建连接",

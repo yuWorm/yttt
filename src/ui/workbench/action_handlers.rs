@@ -478,11 +478,6 @@ impl WorkbenchView {
             cx.notify();
             return;
         }
-        if self.overlays.layout_toml_editor.is_some() && self.settings_dialogs_are_foreground() {
-            self.cancel_layout_toml_editor();
-            cx.notify();
-            return;
-        }
 
         if self.overlays.pending_tab_rename.is_some() {
             self.cancel_tab_rename_dialog();

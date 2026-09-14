@@ -6,6 +6,7 @@ use super::*;
 pub(super) enum AuxiliaryWindowKind {
     Settings,
     RemoteServices,
+    LayoutEditor,
 }
 
 #[derive(Default)]
@@ -19,6 +20,8 @@ struct WindowSlot {
 pub(super) struct AuxiliaryWindows {
     settings: WindowSlot,
     remote_services: WindowSlot,
+    layout_editor: WindowSlot,
+    pub(super) remote_access_page: bool,
     pub(super) active: Option<AuxiliaryWindowKind>,
 }
 
@@ -27,6 +30,7 @@ impl AuxiliaryWindows {
         match kind {
             AuxiliaryWindowKind::Settings => &mut self.settings,
             AuxiliaryWindowKind::RemoteServices => &mut self.remote_services,
+            AuxiliaryWindowKind::LayoutEditor => &mut self.layout_editor,
         }
     }
 
@@ -44,9 +48,13 @@ impl WorkbenchView {
             Some(AuxiliaryWindowKind::RemoteServices) => {
                 self.auxiliary_windows.remote_services.window == handle
             }
+            Some(AuxiliaryWindowKind::LayoutEditor) => {
+                self.auxiliary_windows.layout_editor.window == handle
+            }
             None => {
                 self.auxiliary_windows.settings.window != handle
                     && self.auxiliary_windows.remote_services.window != handle
+                    && self.auxiliary_windows.layout_editor.window != handle
             }
         }
     }
@@ -54,7 +62,7 @@ impl WorkbenchView {
     pub(super) fn settings_dialogs_are_foreground(&self) -> bool {
         match self.auxiliary_windows.active {
             Some(AuxiliaryWindowKind::Settings) => true,
-            Some(AuxiliaryWindowKind::RemoteServices) => false,
+            Some(AuxiliaryWindowKind::RemoteServices | AuxiliaryWindowKind::LayoutEditor) => false,
             None => !self.settings.settings_page.is_open,
         }
     }
@@ -63,6 +71,7 @@ impl WorkbenchView {
         match kind {
             AuxiliaryWindowKind::Settings => self.settings.settings_page.is_open,
             AuxiliaryWindowKind::RemoteServices => self.ssh.manager_open,
+            AuxiliaryWindowKind::LayoutEditor => self.layout_toml_editor_is_open(),
         }
     }
 
@@ -70,6 +79,7 @@ impl WorkbenchView {
         match kind {
             AuxiliaryWindowKind::Settings => self.close_settings(),
             AuxiliaryWindowKind::RemoteServices => self.close_ssh_connection_manager(),
+            AuxiliaryWindowKind::LayoutEditor => self.cancel_layout_toml_editor(),
         }
     }
 
@@ -77,6 +87,7 @@ impl WorkbenchView {
         for kind in [
             AuxiliaryWindowKind::Settings,
             AuxiliaryWindowKind::RemoteServices,
+            AuxiliaryWindowKind::LayoutEditor,
         ] {
             let is_open = self.auxiliary_window_is_open(kind);
             let slot = self.auxiliary_windows.slot(kind);
@@ -121,6 +132,7 @@ fn open_auxiliary_window(
     let dimensions = match kind {
         AuxiliaryWindowKind::Settings => size(px(1080.0 * scale), px(760.0 * scale)),
         AuxiliaryWindowKind::RemoteServices => size(px(960.0 * scale), px(720.0 * scale)),
+        AuxiliaryWindowKind::LayoutEditor => size(px(960.0 * scale), px(720.0 * scale)),
     };
     let bounds = Bounds::centered(None, dimensions, cx);
     let mut options =
@@ -128,6 +140,7 @@ fn open_auxiliary_window(
     options.window_min_size = Some(match kind {
         AuxiliaryWindowKind::Settings => size(px(900.0), px(480.0)),
         AuxiliaryWindowKind::RemoteServices => size(px(720.0), px(480.0)),
+        AuxiliaryWindowKind::LayoutEditor => size(px(560.0), px(360.0)),
     });
     let window_owner = owner.clone();
     let result = cx.open_window(options, move |window, cx| {
@@ -236,11 +249,20 @@ impl Render for AuxiliaryWindow {
             let appearance = root.theme_runtime();
             window.set_rem_size(px(appearance.typography.font_size));
             root.sync_vim_controller(window, cx);
-            let title = root.ui_text.get(match kind {
-                AuxiliaryWindowKind::Settings => UiTextKey::SettingsWindowTitle,
-                AuxiliaryWindowKind::RemoteServices => UiTextKey::RemoteServices,
-            });
-            window.set_window_title(&format!("yttt — {title}"));
+            let title = match kind {
+                AuxiliaryWindowKind::Settings => {
+                    root.ui_text.get(UiTextKey::SettingsWindowTitle).to_string()
+                }
+                AuxiliaryWindowKind::RemoteServices => {
+                    root.ui_text.get(UiTextKey::RemoteServices).to_string()
+                }
+                AuxiliaryWindowKind::LayoutEditor => root
+                    .layout_toml_editor_path()
+                    .and_then(|path| path.file_name())
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            };
+            window.set_window_title(&format!("{title} — yttt"));
             let body = match kind {
                 AuxiliaryWindowKind::Settings => root
                     .settings_search_input(window, cx)
@@ -249,11 +271,16 @@ impl Render for AuxiliaryWindow {
                 AuxiliaryWindowKind::RemoteServices => {
                     remote_services_window_content(root, window, cx)
                 }
+                AuxiliaryWindowKind::LayoutEditor => root
+                    .layout_toml_input(window, cx)
+                    .map(|input| render::layout_toml_editor_window_content(root, &input, cx))
+                    .unwrap_or_else(div),
             };
             let mut content = div()
                 .debug_selector(move || match kind {
                     AuxiliaryWindowKind::Settings => "settings-window".into(),
                     AuxiliaryWindowKind::RemoteServices => "remote-services-window".into(),
+                    AuxiliaryWindowKind::LayoutEditor => "layout-editor-window".into(),
                 })
                 .relative()
                 .flex()
@@ -286,9 +313,6 @@ impl Render for AuxiliaryWindow {
                         appearance.ui,
                     ));
                 }
-                if let Some(input) = root.layout_toml_input(window, cx) {
-                    content = content.child(render::layout_toml_editor_overlay(root, &input, cx));
-                }
                 content = root.render_keybinding_dialog(content, &self.focus_handle, window, cx);
             }
             if kind == AuxiliaryWindowKind::RemoteServices && !root.ssh.pending_host_keys.is_empty()
@@ -316,6 +340,19 @@ impl Render for AuxiliaryWindow {
                         root.on_key_down(event, window, cx);
                         return;
                     }
+                    if kind == AuxiliaryWindowKind::LayoutEditor
+                        && event.keystroke.key == "s"
+                        && if cfg!(target_os = "macos") {
+                            event.keystroke.modifiers.platform
+                        } else {
+                            event.keystroke.modifiers.control
+                        }
+                    {
+                        let _ = root.save_layout_toml_editor();
+                        cx.stop_propagation();
+                        cx.notify();
+                        return;
+                    }
                     let close_shortcut = event.keystroke.key == "w"
                         && if cfg!(target_os = "macos") {
                             event.keystroke.modifiers.platform
@@ -328,7 +365,8 @@ impl Render for AuxiliaryWindow {
                         cx.notify();
                         return;
                     }
-                    if event.keystroke.key == "escape" {
+                    if event.keystroke.key == "escape" && kind != AuxiliaryWindowKind::LayoutEditor
+                    {
                         if kind == AuxiliaryWindowKind::Settings
                             && root.vim.support() == VimModeSetting::Global
                             && root.settings_text_input_is_focused(window, cx)
@@ -340,10 +378,6 @@ impl Render for AuxiliaryWindow {
                             && root.zed_theme_import_dialog_is_open()
                         {
                             root.cancel_zed_theme_import_dialog();
-                        } else if kind == AuxiliaryWindowKind::Settings
-                            && root.overlays.layout_toml_editor.is_some()
-                        {
-                            root.cancel_layout_toml_editor();
                         } else {
                             root.close_auxiliary_window(kind);
                         }

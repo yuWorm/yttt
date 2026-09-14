@@ -192,6 +192,8 @@ impl WorkbenchView {
         self.reset_layout_toml_input();
         self.overlays.layout_toml_input_needs_focus = true;
         self.load_error = None;
+        self.auxiliary_windows
+            .request(AuxiliaryWindowKind::LayoutEditor);
         self.sync_input_owner_state();
     }
 
@@ -265,6 +267,7 @@ impl WorkbenchView {
         self.overlays.layout_toml_editor = None;
         self.reset_layout_toml_input();
         self.load_error = None;
+        self.restore_layout_editor_owner();
         self.sync_input_owner_state();
         Ok(())
     }
@@ -272,8 +275,18 @@ impl WorkbenchView {
     pub fn cancel_layout_toml_editor(&mut self) {
         self.overlays.layout_toml_editor = None;
         self.reset_layout_toml_input();
-        self.queue_selected_terminal_focus();
+        self.restore_layout_editor_owner();
         self.sync_input_owner_state();
+    }
+
+    fn restore_layout_editor_owner(&mut self) {
+        if self.auxiliary_windows.active == Some(AuxiliaryWindowKind::LayoutEditor) {
+            self.auxiliary_windows.active = self
+                .settings
+                .settings_page
+                .is_open
+                .then_some(AuxiliaryWindowKind::Settings);
+        }
     }
 
     pub(super) fn layout_toml_input(

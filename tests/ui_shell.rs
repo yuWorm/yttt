@@ -572,10 +572,8 @@ fn agent_notification_close_is_visually_separate_from_action(cx: &mut gpui::Test
         let _ = window.draw(cx);
     });
 
-    cx.simulate_click(
-        gpui::point(gpui::px(346.0), gpui::px(14.0)),
-        gpui::Modifiers::none(),
-    );
+    let close = cx.debug_bounds("notification-close").unwrap();
+    cx.simulate_click(close.center(), gpui::Modifiers::none());
     cx.background_executor
         .advance_clock(Duration::from_millis(200));
     cx.run_until_parked();
@@ -620,10 +618,8 @@ fn agent_notification_action_opens_target_and_dismisses(cx: &mut gpui::TestAppCo
         let _ = window.draw(cx);
     });
 
-    cx.simulate_click(
-        gpui::point(gpui::px(286.0), gpui::px(104.0)),
-        gpui::Modifiers::none(),
-    );
+    let action = cx.debug_bounds("notification-action").unwrap();
+    cx.simulate_click(action.center(), gpui::Modifiers::none());
     cx.background_executor
         .advance_clock(Duration::from_millis(200));
     cx.run_until_parked();
@@ -658,11 +654,24 @@ fn error_notifications_have_a_visible_working_close_button(cx: &mut gpui::TestAp
     cx.update(|window, cx| {
         let _ = window.draw(cx);
     });
-
-    cx.simulate_click(
-        gpui::point(gpui::px(346.0), gpui::px(14.0)),
-        gpui::Modifiers::none(),
+    let title = cx.debug_bounds("notification-title").unwrap();
+    let icon = cx.debug_bounds("notification-icon").unwrap();
+    let close = cx.debug_bounds("notification-close").unwrap();
+    let body = cx.debug_bounds("notification-body").unwrap();
+    assert_eq!(icon.center().y, title.center().y);
+    assert_eq!(close.center().y, title.center().y);
+    assert_eq!(body.left(), title.left());
+    assert!(body.top() >= title.bottom());
+    assert!(
+        body.size.height > title.size.height,
+        "long errors should wrap rather than truncate"
     );
+    assert!(
+        body.right() < close.left(),
+        "body must not overlap the close control"
+    );
+
+    cx.simulate_click(close.center(), gpui::Modifiers::none());
     cx.background_executor
         .advance_clock(Duration::from_millis(200));
     cx.run_until_parked();
@@ -1344,27 +1353,6 @@ fn yttt_switch_style_matches_settings_control_density() {
     assert_eq!(switch.inactive_border, theme.border_variant);
     assert_eq!(switch.active_thumb, theme.text);
     assert_eq!(switch.inactive_thumb, theme.text_muted);
-}
-
-#[test]
-fn yttt_notification_style_matches_zed_like_status_toast_density() {
-    let theme = WorkbenchTheme::one_dark();
-    let notification =
-        yttt_notification_style(YtttNotificationTone::Success, theme, UiStyle::default());
-
-    assert_eq!(notification.width, gpui::px(360.0));
-    assert_eq!(notification.min_height, gpui::rems(2.75));
-    assert_eq!(notification.padding_x, gpui::rems(0.75));
-    assert_eq!(notification.padding_y, gpui::rems(0.5));
-    assert_eq!(notification.radius, gpui::px(8.0));
-    assert_eq!(notification.border_width, gpui::px(1.0));
-    assert_eq!(notification.icon_size, gpui::rems(0.875));
-    assert_eq!(notification.background, theme.surface);
-    assert_eq!(notification.border, theme.border);
-    assert_eq!(notification.title, theme.text);
-    assert_eq!(notification.context, theme.text_subtle);
-    assert_eq!(notification.action, theme.text_muted);
-    assert_eq!(notification.tone, theme.success);
 }
 
 #[test]

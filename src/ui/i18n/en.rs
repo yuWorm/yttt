@@ -413,6 +413,17 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteAccessDescription => {
             "Share this running Host through TLS and optional TCP forwarding. Connection information grants access to all workspaces in this profile; keep it private. Closing a window does not stop sharing."
         }
+        UiTextKey::RemoteAccessListening => "Listening",
+        UiTextKey::RemoteAccessStarting => "Starting…",
+        UiTextKey::RemoteAccessStopping => "Stopping…",
+        UiTextKey::RemoteAccessFailed => "Unable to start sharing",
+        UiTextKey::RemoteAccessDisabled => "Remote access is off",
+        UiTextKey::RemoteAccessUnavailable => "Waiting for the local Host",
+        UiTextKey::RemoteAccessAddress => "Listen address",
+        UiTextKey::RemoteAccessClients => "Connected devices",
+        UiTextKey::RemoteAccessNoClients => "No remote devices connected",
+        UiTextKey::RemoteAccessStreams => "streams",
+        UiTextKey::RemoteAccessControlOwner => "Current controller",
         UiTextKey::RemoteAccessEnable => "Enable",
         UiTextKey::RemoteAccessDisable => "Disable",
         UiTextKey::RemoteAccessApply => "Apply address",
@@ -969,6 +980,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::StatusThemesDirectory => "Themes directory",
         UiTextKey::SshConnections => "SSH connections",
         UiTextKey::RemoteServices => "Remote services",
+        UiTextKey::RemoteServicesDescription => {
+            "Manage remote connections and access to this computer."
+        }
         UiTextKey::SshConnectionsDescription => {
             "Manage SSH endpoints, credentials, and remote project roots."
         }

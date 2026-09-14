@@ -310,6 +310,7 @@ impl WorkbenchView {
         self.ssh.form = None;
         self.ssh.manager_connection_list = None;
         self.ssh.manager_connection_list_subscription = None;
+        self.ssh.remote_access_address = None;
         if self.auxiliary_windows.active == Some(AuxiliaryWindowKind::RemoteServices) {
             self.auxiliary_windows.active = None;
         }
@@ -1151,6 +1152,23 @@ pub(super) fn remote_services_window_content(
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
+    if root.auxiliary_windows.remote_access_page {
+        return div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .bg(root.theme_runtime().ui.editor_background)
+            .child(remote_services_navigation(root, cx))
+            .child(
+                div()
+                    .id("remote-access-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .p(gpui::rems(2.0))
+                    .child(root.remote_access_settings(window, cx)),
+            );
+    }
     let theme = root.theme_runtime().ui;
     let ui_style = current_ui_style(cx);
     let dialog = yttt_dialog_style(theme, ui_style);
@@ -1376,6 +1394,7 @@ pub(super) fn remote_services_window_content(
         .size_full()
         .overflow_hidden()
         .bg(theme.editor_background)
+        .child(remote_services_navigation(root, cx))
         .child(
             div()
                 .flex()
@@ -1543,6 +1562,60 @@ pub(super) fn remote_services_window_content(
                             }),
                         )),
                 ),
+        )
+}
+
+fn remote_services_navigation(root: &WorkbenchView, cx: &mut Context<WorkbenchView>) -> Div {
+    let theme = root.theme_runtime().ui;
+    let style = current_ui_style(cx);
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .px(gpui::rems(1.0))
+        .gap(style.spacing.lg)
+        .border_b(style.border.hairline)
+        .border_color(theme.border_variant)
+        .children(
+            [
+                (
+                    false,
+                    "remote-services-connections",
+                    UiTextKey::SshConnections,
+                ),
+                (
+                    true,
+                    "remote-services-this-computer",
+                    UiTextKey::RemoteAccessTitle,
+                ),
+            ]
+            .into_iter()
+            .map(|(remote_access, id, key)| {
+                let selected = root.auxiliary_windows.remote_access_page == remote_access;
+                div()
+                    .id(id)
+                    .debug_selector(move || id.to_string())
+                    .py(gpui::rems(0.625))
+                    .border_b(px(2.0))
+                    .border_color(if selected {
+                        theme.text_muted
+                    } else {
+                        theme.text_muted.alpha(0.0)
+                    })
+                    .text_sm()
+                    .text_color(if selected {
+                        theme.text
+                    } else {
+                        theme.text_muted
+                    })
+                    .cursor_pointer()
+                    .hover(|this| this.text_color(theme.text))
+                    .child(root.ui_text.get(key))
+                    .on_click(cx.listener(move |root, _, _, cx| {
+                        root.auxiliary_windows.remote_access_page = remote_access;
+                        cx.notify();
+                    }))
+            }),
         )
 }
 
