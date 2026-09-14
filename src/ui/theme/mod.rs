@@ -10,7 +10,7 @@ use gpui_component::{
     ThemeConfig, ThemeConfigColors, ThemeMode,
     highlighter::{HighlightThemeStyle, SyntaxColors, ThemeStyle},
 };
-use yttt_terminal::{ColorPalette, TerminalConfig};
+use yttt_terminal::{ColorPalette, TerminalConfig, TerminalLineHeightBasis};
 pub use yttt_ui::style::{UiStyle, UiStyleId};
 pub use yttt_ui::theme::WorkbenchTheme;
 
@@ -153,7 +153,11 @@ pub struct UiTypography {
 impl UiTypography {
     fn resolve(settings: &AppSettings) -> Self {
         let font_family = if settings.general.ui_font_family.is_empty() {
-            ".SystemUIFont".to_string()
+            match settings.theme.ui_style {
+                UiStyleId::Zed => "IBM Plex Sans",
+                UiStyleId::Rounded => ".SystemUIFont",
+            }
+            .to_string()
         } else {
             settings.general.ui_font_family.clone()
         };
@@ -217,6 +221,9 @@ fn apply_window_material(
     for color in [
         &mut ui.surface,
         &mut ui.titlebar_background,
+        &mut ui.titlebar_inactive_background,
+        &mut ui.toolbar_background,
+        &mut ui.statusbar_background,
         &mut ui.sidebar_background,
         &mut ui.tabbar_background,
         &mut ui.terminal_background,
@@ -307,7 +314,10 @@ impl ThemeRuntime {
             window_material,
             ui,
             style_id,
-            style: UiStyle::resolve(style_id),
+            style: UiStyle::resolve(style_id).with_typography(
+                settings.general.ui_font_size,
+                settings.general.ui_line_height,
+            ),
             typography: UiTypography::resolve(settings),
             editor,
             terminal,
@@ -358,7 +368,8 @@ impl ThemeRuntime {
         colors.button_warning_hover = Some(color_hex(theme.warning).into());
         colors.button_warning_active = Some(color_hex(theme.warning).into());
         colors.muted = Some(color_hex(theme.element_background).into());
-        colors.muted_foreground = Some(color_hex(theme.text_subtle).into());
+        colors.muted_foreground = Some(color_hex(theme.text_muted).into());
+        colors.placeholder_foreground = Some(color_hex(theme.text_subtle).into());
         colors.overlay = Some(color_hex(self.window_material.scrim).into());
         colors.primary = Some(color_hex(theme.element_selected).into());
         colors.primary_foreground = Some(color_hex(theme.text).into());
@@ -447,7 +458,7 @@ impl ThemeRuntime {
         colors.danger_active = Some(color_hex(theme.danger).into());
         colors.title_bar = Some(color_hex(theme.titlebar_background).into());
         colors.title_bar_border = Some(color_hex(theme.border_variant).into());
-        colors.status_bar = Some(color_hex(theme.surface).into());
+        colors.status_bar = Some(color_hex(theme.statusbar_background).into());
         colors.status_bar_border = Some(color_hex(theme.border_variant).into());
         colors.tiles = Some(color_hex(theme.element_background).into());
         colors.window_border = Some(color_hex(theme.border_variant).into());
@@ -483,6 +494,10 @@ impl ThemeRuntime {
             font_size: px(self.terminal_settings.font_size),
             scrollback: self.terminal_settings.scrollback,
             line_height_multiplier: self.terminal_settings.line_height,
+            line_height_basis: match self.style_id {
+                UiStyleId::Zed => TerminalLineHeightBasis::FontSize,
+                UiStyleId::Rounded => TerminalLineHeightBasis::FontMetrics,
+            },
             padding: Edges::all(px(self.terminal_settings.padding)),
             show_scrollbar: self.terminal_settings.show_scrollbar,
             cursor_shape: self.terminal_settings.cursor_shape,

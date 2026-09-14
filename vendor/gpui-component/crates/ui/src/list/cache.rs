@@ -11,10 +11,10 @@ pub(crate) enum RowEntry {
     SectionFooter(usize),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct MeasuredEntrySize {
     pub(crate) item_size: Size<Pixels>,
-    pub(crate) section_header_size: Size<Pixels>,
+    pub(crate) section_header_sizes: Vec<Size<Pixels>>,
     pub(crate) section_footer_size: Size<Pixels>,
 }
 
@@ -186,7 +186,6 @@ impl RowsCache {
 
         let mut entries_sizes = vec![];
         let mut total_items_count = 0;
-        self.measured_size = measured_size;
         self.sections = Rc::new(new_sections);
         self.entities = Rc::new(
             self.sections
@@ -200,7 +199,7 @@ impl RowsCache {
                     }
 
                     children.push(RowEntry::SectionHeader(section));
-                    entries_sizes.push(measured_size.section_header_size);
+                    entries_sizes.push(measured_size.section_header_sizes[section]);
                     for row in 0..*items_count {
                         children.push(RowEntry::Entry(IndexPath {
                             section,
@@ -217,6 +216,7 @@ impl RowsCache {
         );
         self.entries_sizes = Rc::new(entries_sizes);
         self.items_count = total_items_count;
+        self.measured_size = measured_size;
     }
 }
 

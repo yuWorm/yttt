@@ -289,6 +289,9 @@ pub struct ThemeConfigColors {
     /// Muted text color, as used in disabled text.
     #[serde(rename = "muted.foreground")]
     pub muted_foreground: Option<SharedString>,
+    /// Placeholder text, independently configurable from muted labels.
+    #[serde(rename = "placeholder.foreground")]
+    pub placeholder_foreground: Option<SharedString>,
     /// Background color for Popover.
     #[serde(rename = "popover.background")]
     pub popover: Option<SharedString>,
@@ -613,6 +616,7 @@ impl ThemeColor {
             muted_foreground,
             fallback = self.muted.blend(self.foreground.opacity(0.7))
         );
+        apply_color!(placeholder_foreground, fallback = self.muted_foreground);
 
         // Button colors
         let active_darken = if config.mode.is_dark() { 0.2 } else { 0.1 };

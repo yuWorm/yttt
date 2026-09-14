@@ -109,9 +109,9 @@ pub fn yttt_row_style(
             background,
             hover_background: background,
             border: background,
-            title: theme.text_subtle,
-            subtitle: theme.text_subtle,
-            status: theme.text_subtle,
+            title: theme.text_disabled,
+            subtitle: theme.text_disabled,
+            status: theme.text_disabled,
         };
     }
 

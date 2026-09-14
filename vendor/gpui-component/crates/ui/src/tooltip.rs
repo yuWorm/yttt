@@ -2,9 +2,9 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 
 use gpui::{
     Action, AnyElement, AnyView, App, AppContext, Bounds, Context, Display, Element, ElementId,
-    GlobalElementId, Half, InspectorElementId, IntoElement, LayoutId, MouseButton, ParentElement,
-    Pixels, Point, Position, Render, SharedString, Size, StatefulInteractiveElement, Style,
-    StyleRefinement, Styled, Task, Window, deferred, div, point, prelude::FluentBuilder, px,
+    GlobalElementId, Half, Hsla, InspectorElementId, IntoElement, LayoutId, MouseButton,
+    ParentElement, Pixels, Point, Position, Render, SharedString, Size, StatefulInteractiveElement,
+    Style, StyleRefinement, Styled, Task, Window, deferred, div, point, prelude::FluentBuilder, px,
 };
 
 use crate::{
@@ -20,11 +20,30 @@ pub(crate) fn init(_cx: &mut App) {
     // No app-level init needed — TooltipOverlay is per-window via Root.
 }
 
-// ── Tooltip view (unchanged API) ────────────────────────────────────────────
+// ── Tooltip view ────────────────────────────────────────────────────────────
 
 enum TooltipContext {
     Text(Text),
     Element(Box<dyn Fn(&mut Window, &mut App) -> AnyElement>),
+}
+
+/// Optional visual overrides for a [`Tooltip`].
+///
+/// Unspecified properties retain the active component theme's values.
+#[derive(Clone, Default)]
+pub struct TooltipAppearance {
+    key_binding_foreground: Option<Hsla>,
+}
+
+impl TooltipAppearance {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn key_binding_foreground(mut self, color: impl Into<Hsla>) -> Self {
+        self.key_binding_foreground = Some(color.into());
+        self
+    }
 }
 
 /// A Tooltip element that can display text or custom content,
@@ -34,6 +53,7 @@ pub struct Tooltip {
     content: TooltipContext,
     key_binding: Option<Kbd>,
     action: Option<(Box<dyn Action>, Option<SharedString>)>,
+    appearance: TooltipAppearance,
 }
 
 impl Tooltip {
@@ -44,6 +64,7 @@ impl Tooltip {
             content: TooltipContext::Text(text.into()),
             key_binding: None,
             action: None,
+            appearance: TooltipAppearance::default(),
         }
     }
 
@@ -60,6 +81,7 @@ impl Tooltip {
             content: TooltipContext::Element(Box::new(move |window, cx| {
                 builder(window, cx).into_any_element()
             })),
+            appearance: TooltipAppearance::default(),
         }
     }
 
@@ -72,6 +94,12 @@ impl Tooltip {
     /// Set KeyBinding information for the tooltip.
     pub fn key_binding(mut self, key_binding: Option<Kbd>) -> Self {
         self.key_binding = key_binding;
+        self
+    }
+
+    /// Apply optional visual overrides without changing tooltip content or behavior.
+    pub fn appearance(mut self, appearance: TooltipAppearance) -> Self {
+        self.appearance = appearance;
         self
     }
 
@@ -102,6 +130,10 @@ impl Render for Tooltip {
                 None
             }
         };
+        let key_binding_foreground = self
+            .appearance
+            .key_binding_foreground
+            .unwrap_or(cx.theme().muted_foreground);
 
         div().child(
             // Wrap in a child, to ensure the left margin is applied to the tooltip
@@ -132,7 +164,7 @@ impl Render for Tooltip {
                         div()
                             .text_xs()
                             .flex_shrink_0()
-                            .text_color(cx.theme().muted_foreground)
+                            .text_color(key_binding_foreground)
                             .child(kbd.appearance(false)),
                     )
                 }),

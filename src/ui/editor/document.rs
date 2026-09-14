@@ -8,7 +8,6 @@ use gpui::{
 use gpui_component::{
     ActiveTheme as _, IconName,
     input::{InputEvent, InputState, Position, Search},
-    tooltip::Tooltip,
 };
 use gpui_markdown_editor::{
     MarkdownEditor, MarkdownEditorEnvironment, MarkdownEditorEvent, MarkdownEditorMode,
@@ -1258,7 +1257,14 @@ impl Render for ProjectEditorDocument {
                                 });
                             },
                         )
-                        .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx)),
+                        .tooltip(move |window, cx| {
+                            yttt_ui::primitives::tooltip::yttt_tooltip(
+                                tooltip,
+                                crate::ui::theme::current_workbench_theme(cx),
+                                crate::ui::theme::current_ui_style(cx),
+                            )
+                            .build(window, cx)
+                        }),
                     )
                     .into_any_element()
             }
@@ -1268,12 +1274,12 @@ impl Render for ProjectEditorDocument {
             .debug_selector(|| "editor-breadcrumbs".to_string())
             .flex()
             .flex_none()
-            .h_8()
+            .h(ui_style.controls.toolbar_height)
             .items_center()
             .gap(ui_style.spacing.md)
             .px(ui_style.spacing.md)
             .overflow_hidden()
-            .bg(cx.theme().tokens.popover)
+            .bg(current_workbench_theme(cx).toolbar_background)
             .text_sm()
             .child(breadcrumb_items)
             .child(header_action);

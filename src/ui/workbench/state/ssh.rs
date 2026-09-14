@@ -1,8 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 
 use gpui::{
-    App, Context, Entity, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _,
-    SharedString, Styled as _, Subscription, Task, Window, div,
+    App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
+    Styled as _, Subscription, Task, Window, div, prelude::FluentBuilder as _,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, IndexPath,
@@ -215,6 +215,7 @@ pub(in super::super) struct SshConnectionFormInputs {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in super::super) enum SshConnectionListAction {
+    New,
     Edit(ConnectionId),
     Open(ConnectionId),
     OpenRecent {
@@ -248,7 +249,9 @@ pub(in super::super) struct SshConnectionListSection {
 }
 
 pub(in super::super) struct SshConnectionListDelegate {
-    sections: Vec<SshConnectionListSection>,
+    sections: Option<Vec<SshConnectionListSection>>,
+    all_sections: Vec<SshConnectionListSection>,
+    query: String,
     selected_index: Option<IndexPath>,
     empty_message: SharedString,
     ui_style: UiStyle,
@@ -261,7 +264,9 @@ impl SshConnectionListDelegate {
         ui_style: UiStyle,
     ) -> Self {
         Self {
-            sections,
+            all_sections: sections,
+            query: String::new(),
+            sections: None,
             selected_index: None,
             empty_message: empty_message.into(),
             ui_style,
@@ -273,14 +278,18 @@ impl SshConnectionListDelegate {
         sections: Vec<SshConnectionListSection>,
         ui_style: UiStyle,
     ) {
-        self.sections = sections;
-        self.ui_style = ui_style;
-        if self
-            .selected_index
-            .is_some_and(|index| self.entry(index).is_none())
-        {
-            self.selected_index = None;
+        if self.all_sections == sections && self.ui_style == ui_style {
+            return;
         }
+        let selected_action = self
+            .selected_index
+            .and_then(|index| self.action(index).cloned());
+        self.all_sections = sections;
+        self.filter_sections();
+        self.ui_style = ui_style;
+        self.selected_index = selected_action
+            .as_ref()
+            .and_then(|action| self.index_of(action));
     }
 
     pub(in super::super) fn action(&self, index: IndexPath) -> Option<&SshConnectionListAction> {
@@ -288,7 +297,7 @@ impl SshConnectionListDelegate {
     }
 
     pub(in super::super) fn index_of(&self, action: &SshConnectionListAction) -> Option<IndexPath> {
-        self.sections
+        self.visible_sections()
             .iter()
             .enumerate()
             .find_map(|(section, entries)| {
@@ -300,8 +309,41 @@ impl SshConnectionListDelegate {
             })
     }
 
+    fn visible_sections(&self) -> &[SshConnectionListSection] {
+        self.sections.as_deref().unwrap_or(&self.all_sections)
+    }
+
+    fn filter_sections(&mut self) {
+        if self.query.is_empty() {
+            self.sections = None;
+            return;
+        }
+        self.sections = Some(
+            self.all_sections
+                .iter()
+                .filter_map(|section| {
+                    let matches_section = section.title.to_lowercase().contains(&self.query);
+                    let entries = section
+                        .entries
+                        .iter()
+                        .filter(|entry| {
+                            matches_section
+                                || entry.title.to_lowercase().contains(&self.query)
+                                || entry.subtitle.to_lowercase().contains(&self.query)
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    (!entries.is_empty()).then(|| SshConnectionListSection {
+                        title: section.title.clone(),
+                        entries,
+                    })
+                })
+                .collect(),
+        );
+    }
+
     fn entry(&self, index: IndexPath) -> Option<&SshConnectionListEntry> {
-        self.sections
+        self.visible_sections()
             .get(index.section)
             .and_then(|section| section.entries.get(index.row))
     }
@@ -310,12 +352,24 @@ impl SshConnectionListDelegate {
 impl ListDelegate for SshConnectionListDelegate {
     type Item = ListItem;
 
+    fn perform_search(
+        &mut self,
+        query: &str,
+        _: &mut Window,
+        _: &mut Context<ListState<Self>>,
+    ) -> Task<()> {
+        self.query = query.trim().to_lowercase();
+        self.filter_sections();
+        self.selected_index = None;
+        Task::ready(())
+    }
+
     fn sections_count(&self, _: &App) -> usize {
-        self.sections.len().max(1)
+        self.visible_sections().len().max(1)
     }
 
     fn items_count(&self, section: usize, _: &App) -> usize {
-        self.sections
+        self.visible_sections()
             .get(section)
             .map(|section| section.entries.len())
             .unwrap_or(0)
@@ -335,14 +389,20 @@ impl ListDelegate for SshConnectionListDelegate {
             SshConnectionListTone::Danger => cx.theme().danger,
         };
         let icon = match &entry.action {
+            SshConnectionListAction::New => IconName::Plus,
             SshConnectionListAction::OpenRecent { .. } => IconName::FolderClosed,
-            SshConnectionListAction::Edit(_) | SshConnectionListAction::Open(_) => IconName::Globe,
+            SshConnectionListAction::Open(_) => IconName::Plus,
+            SshConnectionListAction::Edit(_) => IconName::Settings,
         };
         let ui_style = self.ui_style;
 
         Some(
             ListItem::new(index)
-                .min_h(ui_style.rows.palette_height)
+                .min_h(if entry.subtitle.is_empty() {
+                    ui_style.rows.palette_compact_height
+                } else {
+                    ui_style.rows.palette_height
+                })
                 .mx(ui_style.palette.list_padding_x)
                 .mb(ui_style.palette.list_gap)
                 .px(ui_style.rows.palette_padding_x)
@@ -383,20 +443,16 @@ impl ListDelegate for SshConnectionListDelegate {
                                         .flex()
                                         .flex_col()
                                         .gap_0p5()
-                                        .child(
-                                            div()
-                                                .truncate()
-                                                .text_sm()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .child(entry.title),
-                                        )
-                                        .child(
-                                            div()
-                                                .truncate()
-                                                .text_xs()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(entry.subtitle),
-                                        ),
+                                        .child(div().truncate().text_sm().child(entry.title))
+                                        .when(!entry.subtitle.is_empty(), |this| {
+                                            this.child(
+                                                div()
+                                                    .truncate()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(entry.subtitle),
+                                            )
+                                        }),
                                 ),
                         )
                         .child(
@@ -416,16 +472,19 @@ impl ListDelegate for SshConnectionListDelegate {
         _: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<impl IntoElement> {
-        let title = self.sections.get(section)?.title.clone();
+        let title = self.visible_sections().get(section)?.title.clone();
+        if title.is_empty() {
+            return None;
+        }
         let ui_style = self.ui_style;
         Some(
             div()
                 .w_full()
                 .px(ui_style.rows.palette_padding_x)
-                .pt(ui_style.spacing.md)
-                .pb(ui_style.spacing.xs)
-                .text_xs()
-                .font_weight(FontWeight::SEMIBOLD)
+                .border_t_1()
+                .border_color(cx.theme().border)
+                .py(ui_style.spacing.sm)
+                .text_sm()
                 .text_color(cx.theme().muted_foreground)
                 .child(title),
         )
@@ -455,5 +514,57 @@ impl ListDelegate for SshConnectionListDelegate {
         _: &mut Context<ListState<Self>>,
     ) {
         self.selected_index = index;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filtering_keeps_server_context_and_refresh_preserves_selected_action() {
+        let connection = ConnectionId::random();
+        let open = SshConnectionListEntry {
+            action: SshConnectionListAction::Open(connection.clone()),
+            title: "Open Project".into(),
+            subtitle: "".into(),
+            status: "".into(),
+            tone: SshConnectionListTone::Neutral,
+        };
+        let edit = SshConnectionListEntry {
+            action: SshConnectionListAction::Edit(connection),
+            title: "Edit connection".into(),
+            ..open.clone()
+        };
+        let mut delegate = SshConnectionListDelegate::new(
+            vec![SshConnectionListSection {
+                title: "Production (host)".into(),
+                entries: vec![open.clone(), edit.clone()],
+            }],
+            "No results",
+            UiStyle::default(),
+        );
+        delegate.query = "production".into();
+        delegate.filter_sections();
+        assert_eq!(delegate.action(IndexPath::new(1)), Some(&edit.action));
+        delegate.query = "edit".into();
+        delegate.filter_sections();
+        assert_eq!(delegate.action(IndexPath::new(0)), Some(&edit.action));
+        assert_eq!(delegate.action(IndexPath::new(1)), None);
+        delegate.query.clear();
+        delegate.filter_sections();
+        delegate.selected_index = Some(IndexPath::new(1));
+        delegate.replace_sections(
+            vec![SshConnectionListSection {
+                title: "Production (host)".into(),
+                entries: vec![edit.clone(), open],
+            }],
+            UiStyle::default(),
+        );
+        assert_eq!(delegate.selected_index, Some(IndexPath::new(0)));
+        assert_eq!(
+            delegate.action(delegate.selected_index.unwrap()),
+            Some(&edit.action)
+        );
     }
 }

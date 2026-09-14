@@ -6,6 +6,7 @@ impl Render for WorkbenchView {
         let appearance = self.appearance.runtime();
         self.app_settings.theme.ui_style = appearance.style_id;
         window.set_rem_size(px(appearance.typography.font_size));
+        self.sync_auxiliary_windows(cx);
         self.sync_error_notification(window, cx);
         self.ensure_active_project_file_watcher(window, cx);
         self.ensure_keybindings_watcher(window, cx);
@@ -226,6 +227,7 @@ impl Render for WorkbenchView {
                 window_bar_sections,
                 appearance.ui,
                 appearance.style,
+                window,
             ))
             .child(body)
             .when_some(status_bar_sections, |root, sections| {
@@ -285,18 +287,12 @@ impl Render for WorkbenchView {
                 }
             }
         }
-        if self.settings.settings_page.is_open
-            && let Some(search_input) = self.settings_search_input(window, cx)
-        {
-            root = root.child(settings_overlay(self, &search_input, window, cx));
-        }
         if self.ssh.project_picker.open {
             root = root.child(ssh_project_picker_overlay(self, window, cx));
         }
-        if self.ssh.manager_open {
-            root = root.child(ssh_connections_overlay(self, window, cx));
-        }
-        if let Some(dialog) = self.settings.zed_theme_import_dialog.clone() {
+        if !self.settings.settings_page.is_open
+            && let Some(dialog) = self.settings.zed_theme_import_dialog.clone()
+        {
             root = root.child(zed_theme_import_dialog(
                 cx,
                 &self.ui_text,
@@ -307,7 +303,8 @@ impl Render for WorkbenchView {
                 appearance.ui,
             ));
         }
-        if self.overlays.layout_toml_editor.is_some()
+        if !self.settings.settings_page.is_open
+            && self.overlays.layout_toml_editor.is_some()
             && let Some(input) = self.layout_toml_input(window, cx)
         {
             root = root.child(layout_toml_editor_overlay(self, &input, cx));
@@ -320,25 +317,8 @@ impl Render for WorkbenchView {
         {
             root = root.child(tab_rename_dialog(cx, &self.ui_text, &input, appearance.ui));
         }
-        if self.overlays.pending_keybinding_edit.is_some() {
-            if self.overlays.keybinding_recorder_needs_focus {
-                focus_handle.focus(window, cx);
-                self.overlays.keybinding_recorder_needs_focus = false;
-            }
-            if let Some(edit) = self.overlays.pending_keybinding_edit.as_ref() {
-                root = root.child(keybinding_edit_dialog(
-                    cx,
-                    &self.ui_text,
-                    edit.action,
-                    edit.profile,
-                    &edit.keys,
-                    &edit.original_keys,
-                    edit.is_recording,
-                    edit.recording_index,
-                    edit.error.as_deref(),
-                    appearance.ui,
-                ));
-            }
+        if !self.settings.settings_page.is_open {
+            root = self.render_keybinding_dialog(root, &focus_handle, window, cx);
         }
         if let Some(text) = self.visible_dirty_close_dialog_text() {
             let mut lines = text.lines();
@@ -370,7 +350,7 @@ impl Render for WorkbenchView {
                 conflict.document_id.canonical_path.display().to_string(),
             ));
         }
-        if !self.ssh.pending_host_keys.is_empty() {
+        if !self.ssh.pending_host_keys.is_empty() && !self.ssh.manager_open {
             root = root.child(ssh_host_key_overlay(self, cx));
         }
         if let Some(notification_layer) = ComponentRoot::render_notification_layer(window, cx) {
@@ -491,6 +471,38 @@ impl Render for WorkbenchView {
     }
 }
 
+impl WorkbenchView {
+    pub(super) fn render_keybinding_dialog(
+        &mut self,
+        mut root: Div,
+        focus_handle: &FocusHandle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        if self.overlays.pending_keybinding_edit.is_some() {
+            if self.overlays.keybinding_recorder_needs_focus {
+                focus_handle.focus(window, cx);
+                self.overlays.keybinding_recorder_needs_focus = false;
+            }
+            if let Some(edit) = self.overlays.pending_keybinding_edit.as_ref() {
+                root = root.child(keybinding_edit_dialog(
+                    cx,
+                    &self.ui_text,
+                    edit.action,
+                    edit.profile,
+                    &edit.keys,
+                    &edit.original_keys,
+                    edit.is_recording,
+                    edit.recording_index,
+                    edit.error.as_deref(),
+                    self.theme_runtime().ui,
+                ));
+            }
+        }
+        root
+    }
+}
+
 pub(super) fn split_child(child: Div, basis: f32) -> Div {
     div()
         .flex()
@@ -501,7 +513,7 @@ pub(super) fn split_child(child: Div, basis: f32) -> Div {
         .child(child)
 }
 
-fn layout_toml_editor_overlay(
+pub(super) fn layout_toml_editor_overlay(
     root: &WorkbenchView,
     input: &Entity<InputState>,
     cx: &mut Context<WorkbenchView>,

@@ -1,16 +1,17 @@
 use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
 use crate::actions::{SelectLeft, SelectRight};
-use crate::menu::menu_item::MenuItemElement;
+use crate::menu::menu_item::{MenuItemAppearance, MenuItemElement};
 use crate::scroll::ScrollableElement;
 use crate::{ActiveTheme, ElementExt, Icon, IconName, Sizable as _, h_flex, v_flex};
 use crate::{Side, Size, StyledExt, kbd::Kbd};
 use gpui::{
-    Action, Anchor, AnyElement, App, AppContext, Bounds, Context, DismissEvent, Edges, Entity,
-    EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding,
-    ParentElement, Pixels, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
-    WeakEntity, Window, anchored, div, prelude::FluentBuilder, px, rems,
+    AbsoluteLength, Action, Anchor, AnyElement, App, AppContext, Bounds, BoxShadow, Context,
+    DefiniteLength, DismissEvent, Edges, Entity, EventEmitter, FocusHandle, Focusable, Hsla,
+    InteractiveElement, IntoElement, KeyBinding, ParentElement, Pixels, Render, ScrollHandle,
+    SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window, anchored, div,
+    prelude::FluentBuilder, px, rems,
 };
-use gpui::{ClickEvent, Half, MouseDownEvent, OwnedMenuItem, Point, Subscription};
+use gpui::{ClickEvent, MouseDownEvent, OwnedMenuItem, Point, Subscription};
 
 use std::rc::Rc;
 
@@ -270,6 +271,148 @@ impl PopupMenuItem {
     }
 }
 
+/// Optional visual overrides for a [`PopupMenu`].
+///
+/// Unspecified properties keep the active component theme's existing values.
+/// This changes presentation only; menu selection, focus, and dispatch behavior
+/// remain owned by [`PopupMenu`].
+#[derive(Clone, Default)]
+pub struct PopupMenuStyle {
+    background: Option<Hsla>,
+    border_color: Option<Hsla>,
+    foreground: Option<Hsla>,
+    muted_foreground: Option<Hsla>,
+    hover_background: Option<Hsla>,
+    hover_foreground: Option<Hsla>,
+    selected_background: Option<Hsla>,
+    selected_foreground: Option<Hsla>,
+    disabled_foreground: Option<Hsla>,
+    shadows: Option<Vec<BoxShadow>>,
+    radius: Option<Pixels>,
+    min_width: Option<Pixels>,
+    padding: Option<DefiniteLength>,
+    gap: Option<DefiniteLength>,
+    item_height: Option<DefiniteLength>,
+    item_padding_x: Option<DefiniteLength>,
+    item_gap: Option<DefiniteLength>,
+    end_slot_gap: Option<DefiniteLength>,
+    text_size: Option<AbsoluteLength>,
+    separator_margin_y: Option<DefiniteLength>,
+    separator_width: Option<Pixels>,
+    separator_color: Option<Hsla>,
+    reserve_icon_column: Option<bool>,
+}
+
+impl PopupMenuStyle {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn background(mut self, color: impl Into<Hsla>) -> Self {
+        self.background = Some(color.into());
+        self
+    }
+
+    pub fn border_color(mut self, color: impl Into<Hsla>) -> Self {
+        self.border_color = Some(color.into());
+        self
+    }
+
+    pub fn foreground(mut self, color: impl Into<Hsla>) -> Self {
+        self.foreground = Some(color.into());
+        self
+    }
+
+    pub fn muted_foreground(mut self, color: impl Into<Hsla>) -> Self {
+        self.muted_foreground = Some(color.into());
+        self
+    }
+
+    pub fn hover(mut self, background: impl Into<Hsla>, foreground: impl Into<Hsla>) -> Self {
+        self.hover_background = Some(background.into());
+        self.hover_foreground = Some(foreground.into());
+        self
+    }
+
+    pub fn selected(mut self, background: impl Into<Hsla>, foreground: impl Into<Hsla>) -> Self {
+        self.selected_background = Some(background.into());
+        self.selected_foreground = Some(foreground.into());
+        self
+    }
+
+    pub fn disabled_foreground(mut self, color: impl Into<Hsla>) -> Self {
+        self.disabled_foreground = Some(color.into());
+        self
+    }
+
+    pub fn shadows(mut self, shadows: impl IntoIterator<Item = BoxShadow>) -> Self {
+        self.shadows = Some(shadows.into_iter().collect());
+        self
+    }
+
+    pub fn radius(mut self, radius: impl Into<Pixels>) -> Self {
+        self.radius = Some(radius.into());
+        self
+    }
+
+    pub fn min_width(mut self, width: impl Into<Pixels>) -> Self {
+        self.min_width = Some(width.into());
+        self
+    }
+
+    pub fn padding(mut self, padding: impl Into<DefiniteLength>) -> Self {
+        self.padding = Some(padding.into());
+        self
+    }
+
+    pub fn gap(mut self, gap: impl Into<DefiniteLength>) -> Self {
+        self.gap = Some(gap.into());
+        self
+    }
+
+    pub fn item_height(mut self, height: impl Into<DefiniteLength>) -> Self {
+        self.item_height = Some(height.into());
+        self
+    }
+
+    pub fn item_padding_x(mut self, padding: impl Into<DefiniteLength>) -> Self {
+        self.item_padding_x = Some(padding.into());
+        self
+    }
+
+    pub fn item_gap(mut self, gap: impl Into<DefiniteLength>) -> Self {
+        self.item_gap = Some(gap.into());
+        self
+    }
+
+    pub fn end_slot_gap(mut self, gap: impl Into<DefiniteLength>) -> Self {
+        self.end_slot_gap = Some(gap.into());
+        self
+    }
+
+    pub fn text_size(mut self, size: impl Into<AbsoluteLength>) -> Self {
+        self.text_size = Some(size.into());
+        self
+    }
+
+    pub fn separator(
+        mut self,
+        margin_y: impl Into<DefiniteLength>,
+        width: impl Into<Pixels>,
+        color: impl Into<Hsla>,
+    ) -> Self {
+        self.separator_margin_y = Some(margin_y.into());
+        self.separator_width = Some(width.into());
+        self.separator_color = Some(color.into());
+        self
+    }
+
+    pub fn reserve_icon_column(mut self, reserve: bool) -> Self {
+        self.reserve_icon_column = Some(reserve);
+        self
+    }
+}
+
 pub struct PopupMenu {
     pub(crate) focus_handle: FocusHandle,
     pub(crate) menu_items: Vec<PopupMenuItem>,
@@ -282,6 +425,7 @@ pub struct PopupMenu {
     bounds: Bounds<Pixels>,
     size: Size,
     check_side: Side,
+    style: Option<PopupMenuStyle>,
 
     /// The parent menu of this menu, if this is a submenu
     parent_menu: Option<WeakEntity<Self>>,
@@ -311,6 +455,7 @@ impl PopupMenu {
             scroll_handle: ScrollHandle::default(),
             external_link_icon: true,
             size: Size::default(),
+            style: None,
             submenu_anchor: (Anchor::TopLeft, Pixels::ZERO),
             _subscriptions: vec![],
         }
@@ -348,6 +493,11 @@ impl PopupMenu {
                 });
             }
         }
+    }
+    /// Apply optional visual overrides without changing menu behavior.
+    pub fn style(mut self, style: PopupMenuStyle) -> Self {
+        self.style = Some(style);
+        self
     }
 
     /// Set min width of the popup menu, default is 120px
@@ -1070,7 +1220,9 @@ impl PopupMenu {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> MenuItemElement {
-        let has_left_icon = options.has_left_icon;
+        let style = options.style.as_ref();
+        let has_left_icon = (options.reserve_icon_column && options.has_left_icon)
+            || item.has_left_icon(options.check_side);
         let is_left_check = options.check_side.is_left() && item.is_checked();
         let right_check_icon = if options.check_side.is_right() && item.is_checked() {
             Some(Icon::new(IconName::Check).xsmall())
@@ -1080,24 +1232,69 @@ impl PopupMenu {
 
         let selected = self.selected_index == Some(ix);
         const EDGE_PADDING: Pixels = px(4.);
-        const INNER_PADDING: Pixels = px(8.);
 
         let is_submenu = matches!(item, PopupMenuItem::Submenu { .. });
         let group_name = format!("{}:item-{}", cx.entity().entity_id(), ix);
 
-        let (item_height, radius) = match self.size {
-            Size::Small => (px(20.), options.radius.half()),
-            _ => (px(26.), options.radius),
-        };
-
+        let item_height = style
+            .and_then(|style| style.item_height.clone())
+            .unwrap_or_else(|| match self.size {
+                Size::Small => px(20.).into(),
+                _ => px(26.).into(),
+            });
+        let radius = style
+            .and_then(|style| style.radius)
+            .unwrap_or(options.radius);
+        let item_padding_x = style
+            .and_then(|style| style.item_padding_x.clone())
+            .unwrap_or_else(|| px(8.).into());
+        let item_gap = style
+            .and_then(|style| style.item_gap.clone())
+            .unwrap_or_else(|| px(4.).into());
+        let end_slot_gap = style
+            .and_then(|style| style.end_slot_gap.clone())
+            .unwrap_or_else(|| px(12.).into());
+        let text_size = style.and_then(|style| style.text_size.clone());
+        let separator_margin_y = style
+            .and_then(|style| style.separator_margin_y.clone())
+            .unwrap_or_else(|| px(2.).into());
+        let separator_width = style
+            .and_then(|style| style.separator_width)
+            .unwrap_or(px(2.));
+        let separator_color = style
+            .and_then(|style| style.separator_color)
+            .unwrap_or(cx.theme().border);
+        let muted_foreground = style
+            .and_then(|style| style.muted_foreground)
+            .unwrap_or(cx.theme().muted_foreground);
+        let item_appearance = style.map(|style| MenuItemAppearance {
+            foreground: style.foreground.unwrap_or(cx.theme().foreground),
+            hover_background: style.hover_background.unwrap_or(*cx.theme().tokens.accent),
+            hover_foreground: style
+                .hover_foreground
+                .unwrap_or(cx.theme().accent_foreground),
+            selected_background: style
+                .selected_background
+                .unwrap_or(*cx.theme().tokens.accent),
+            selected_foreground: style
+                .selected_foreground
+                .unwrap_or(cx.theme().accent_foreground),
+            disabled_foreground: style
+                .disabled_foreground
+                .unwrap_or(cx.theme().muted_foreground),
+        });
         let this = MenuItemElement::new(ix, &group_name)
             .relative()
             .text_sm()
+            .when_some(text_size, |this, text_size| this.text_size(text_size))
             .py_0()
-            .px(INNER_PADDING)
+            .px(item_padding_x)
             .rounded(radius)
             .items_center()
             .selected(selected)
+            .when_some(item_appearance, |this, appearance| {
+                this.appearance(appearance)
+            })
             .on_hover(cx.listener(move |this, hovered, _, cx| {
                 if *hovered {
                     this.selected_index = Some(ix);
@@ -1113,16 +1310,16 @@ impl PopupMenu {
             PopupMenuItem::Separator => this
                 .h_auto()
                 .p_0()
-                .my_0p5()
+                .my(separator_margin_y)
                 .mx_neg_1()
-                .border_b(px(2.))
-                .border_color(cx.theme().border)
+                .border_b(separator_width)
+                .border_color(separator_color)
                 .disabled(true),
             PopupMenuItem::Label(label) => this.disabled(true).cursor_default().child(
                 h_flex()
                     .cursor_default()
                     .items_center()
-                    .gap_x_1()
+                    .gap_x(item_gap)
                     .children(Self::render_icon(has_left_icon, false, None, window, cx))
                     .child(div().flex_1().child(label.clone())),
             ),
@@ -1143,7 +1340,7 @@ impl PopupMenu {
                         .flex_1()
                         .min_h(item_height)
                         .items_center()
-                        .gap_x_1()
+                        .gap_x(item_gap)
                         .children(Self::render_icon(
                             has_left_icon,
                             is_left_check,
@@ -1152,7 +1349,7 @@ impl PopupMenu {
                             cx,
                         ))
                         .child((render)(window, cx))
-                        .children(right_check_icon.map(|icon| icon.ml_3())),
+                        .children(right_check_icon.map(|icon| icon.ml(end_slot_gap))),
                 ),
             PopupMenuItem::Item {
                 icon,
@@ -1173,7 +1370,7 @@ impl PopupMenu {
                 })
                 .disabled(*disabled)
                 .h(item_height)
-                .gap_x_1()
+                .gap_x(item_gap)
                 .children(Self::render_icon(
                     has_left_icon,
                     is_left_check,
@@ -1184,7 +1381,7 @@ impl PopupMenu {
                 .child(
                     h_flex()
                         .w_full()
-                        .gap_3()
+                        .gap(end_slot_gap)
                         .items_center()
                         .justify_between()
                         .when(!show_link_icon, |this| this.child(label.clone()))
@@ -1194,12 +1391,12 @@ impl PopupMenu {
                                 h_flex()
                                     .w_full()
                                     .justify_between()
-                                    .gap_1p5()
+                                    .gap(end_slot_gap)
                                     .child(label.clone())
                                     .child(
                                         Icon::new(IconName::ExternalLink)
                                             .xsmall()
-                                            .text_color(cx.theme().muted_foreground),
+                                            .text_color(muted_foreground),
                                     ),
                             )
                         })
@@ -1220,7 +1417,7 @@ impl PopupMenu {
                         .min_h(item_height)
                         .size_full()
                         .items_center()
-                        .gap_x_1()
+                        .gap_x(item_gap)
                         .children(Self::render_icon(
                             has_left_icon,
                             false,
@@ -1231,14 +1428,14 @@ impl PopupMenu {
                         .child(
                             h_flex()
                                 .flex_1()
-                                .gap_2()
+                                .gap(end_slot_gap)
                                 .items_center()
                                 .justify_between()
                                 .child(label.clone())
                                 .child(
                                     Icon::new(IconName::ChevronRight)
                                         .xsmall()
-                                        .text_color(cx.theme().muted_foreground),
+                                        .text_color(muted_foreground),
                                 ),
                         ),
                 )
@@ -1273,11 +1470,13 @@ impl Focusable for PopupMenu {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct RenderOptions {
     has_left_icon: bool,
+    reserve_icon_column: bool,
     check_side: Side,
     radius: Pixels,
+    style: Option<PopupMenuStyle>,
 }
 
 impl Render for PopupMenu {
@@ -1286,6 +1485,35 @@ impl Render for PopupMenu {
 
         let view = cx.entity().clone();
         let items_count = self.menu_items.len();
+        let inherited_style = self
+            .parent_menu
+            .as_ref()
+            .and_then(|parent| parent.upgrade())
+            .and_then(|parent| parent.read(cx).style.clone());
+        let style = self.style.as_ref().or(inherited_style.as_ref());
+        let background = style
+            .and_then(|style| style.background)
+            .unwrap_or(*cx.theme().tokens.popover);
+        let border_color = style
+            .and_then(|style| style.border_color)
+            .unwrap_or(cx.theme().border);
+        let foreground = style
+            .and_then(|style| style.foreground)
+            .unwrap_or(cx.theme().popover_foreground);
+        let radius = style
+            .and_then(|style| style.radius)
+            .unwrap_or_else(|| cx.theme().radius.min(px(8.)));
+        let shadows = style.and_then(|style| style.shadows.clone());
+        let padding = style
+            .and_then(|style| style.padding.clone())
+            .unwrap_or_else(|| px(4.).into());
+        let gap = style
+            .and_then(|style| style.gap.clone())
+            .unwrap_or_else(|| px(2.).into());
+        let min_width = self
+            .min_width
+            .or_else(|| style.and_then(|style| style.min_width))
+            .unwrap_or_else(|| rems(8.).to_pixels(window.rem_size()));
 
         let max_height = self.max_height.unwrap_or_else(|| {
             let window_half_height = window.window_bounds().get_bounds().size.height * 0.5;
@@ -1296,13 +1524,16 @@ impl Render for PopupMenu {
             .menu_items
             .iter()
             .any(|item| item.has_left_icon(self.check_side));
-
-        let max_width = self.max_width();
         let options = RenderOptions {
             has_left_icon,
+            reserve_icon_column: style
+                .and_then(|style| style.reserve_icon_column)
+                .unwrap_or(true),
             check_side: self.check_side,
-            radius: cx.theme().radius.min(px(8.)),
+            radius,
+            style: style.cloned(),
         };
+        let max_width = self.max_width();
 
         v_flex()
             .id("popup-menu")
@@ -1316,16 +1547,19 @@ impl Render for PopupMenu {
             .on_action(cx.listener(Self::dismiss))
             .on_mouse_down_out(cx.listener(Self::on_mouse_down_out))
             .popover_style(cx)
-            .text_color(cx.theme().popover_foreground)
+            .bg(background)
+            .text_color(foreground)
+            .border_color(border_color)
+            .rounded(radius)
+            .when_some(shadows, |this, shadows| this.shadow(shadows))
             .relative()
             .occlude()
             .child(
                 v_flex()
                     .id("items")
-                    .p_1()
-                    .gap_y_0p5()
-                    .min_w(rems(8.))
-                    .when_some(self.min_width, |this, min_width| this.min_w(min_width))
+                    .p(padding)
+                    .gap_y(gap)
+                    .min_w(min_width)
                     .max_w(max_width)
                     .when(self.scrollable, |this| {
                         this.max_h(max_height)
@@ -1338,7 +1572,9 @@ impl Render for PopupMenu {
                             .enumerate()
                             // Ignore last separator
                             .filter(|(ix, item)| !(*ix + 1 == items_count && item.is_separator()))
-                            .map(|(ix, item)| self.render_item(ix, item, options, window, cx)),
+                            .map(|(ix, item)| {
+                                self.render_item(ix, item, options.clone(), window, cx)
+                            }),
                     )
                     .on_prepaint(move |bounds, _, cx| view.update(cx, |r, _| r.bounds = bounds)),
             )

@@ -245,6 +245,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandPaletteOpenTitle => "打开命令面板",
         UiTextKey::CommandPaletteOpenDescription => "搜索并运行命令",
         UiTextKey::CommandSettingsOpenTitle => "打开设置",
+        UiTextKey::SettingsWindowTitle => "设置",
         UiTextKey::CommandSettingsOpenDescription => "配置 YTTT",
         UiTextKey::CommandSettingsKeybindingsTitle => "打开快捷键文件",
         UiTextKey::CommandSettingsKeybindingsDescription => "打开或创建可编辑的快捷键 TOML",

@@ -459,13 +459,15 @@ impl WorkbenchView {
             return;
         }
 
-        if self.ssh.manager_open {
+        if self.ssh.manager_open
+            && self.auxiliary_windows.active == Some(AuxiliaryWindowKind::RemoteServices)
+        {
             self.close_ssh_connection_manager();
             cx.notify();
             return;
         }
 
-        if self.zed_theme_import_dialog_is_open() {
+        if self.zed_theme_import_dialog_is_open() && self.settings_dialogs_are_foreground() {
             self.cancel_zed_theme_import_dialog();
             cx.notify();
             return;
@@ -476,7 +478,7 @@ impl WorkbenchView {
             cx.notify();
             return;
         }
-        if self.overlays.layout_toml_editor.is_some() {
+        if self.overlays.layout_toml_editor.is_some() && self.settings_dialogs_are_foreground() {
             self.cancel_layout_toml_editor();
             cx.notify();
             return;
@@ -497,7 +499,9 @@ impl WorkbenchView {
         if self.palette.active_palette.is_some() {
             self.close_palette();
             cx.notify();
-        } else if self.settings.settings_page.is_open {
+        } else if self.settings.settings_page.is_open
+            && self.auxiliary_windows.active == Some(AuxiliaryWindowKind::Settings)
+        {
             self.close_settings();
             cx.notify();
         } else {
@@ -879,10 +883,12 @@ impl WorkbenchView {
         }
         if self.palette.active_palette.is_some()
             || self.overlays.pending_tab_rename.is_some()
-            || self.overlays.pending_keybinding_edit.is_some()
-            || self.overlays.layout_toml_editor.is_some()
+            || (self.overlays.pending_keybinding_edit.is_some()
+                && self.settings_dialogs_are_foreground())
+            || (self.overlays.layout_toml_editor.is_some()
+                && self.settings_dialogs_are_foreground())
             || self.overlays.git_diff_panel.is_some()
-            || self.zed_theme_import_dialog_is_open()
+            || (self.zed_theme_import_dialog_is_open() && self.settings_dialogs_are_foreground())
         {
             cx.propagate();
             return;
@@ -909,7 +915,8 @@ impl WorkbenchView {
             cx.notify();
         }
 
-        if self.overlays.pending_keybinding_edit.is_some() {
+        if self.overlays.pending_keybinding_edit.is_some() && self.settings_dialogs_are_foreground()
+        {
             if event.keystroke.key == "escape" {
                 self.dismiss_keybinding_edit_recording_or_dialog();
                 cx.stop_propagation();

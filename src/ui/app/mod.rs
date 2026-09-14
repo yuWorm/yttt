@@ -98,6 +98,7 @@ pub fn run(
         }
 
         gpui_component::init(cx);
+        assets::load_ui_fonts(cx);
         cx.bind_keys(gpui_markdown_editor::default_key_bindings());
         crate::ui::editor::register_builtin_editor_languages();
         crate::ui::editor::init_vim_mode(cx);
@@ -165,6 +166,7 @@ pub fn run_remote(launch: crate::remote_launch::RemoteLaunch) {
             #[cfg(target_os = "macos")]
             platform::macos::prepare_macos_app_runtime();
             gpui_component::init(cx);
+            assets::load_ui_fonts(cx);
             yttt_terminal::init(cx);
             crate::ui::editor::register_builtin_editor_languages();
             crate::ui::editor::init_vim_mode(cx);
@@ -283,8 +285,21 @@ fn handle_desktop_shell_command(
 fn activate_workbench_window(cx: &mut App) -> bool {
     let window = cx
         .window_stack()
-        .and_then(|windows| windows.into_iter().next())
-        .or_else(|| cx.windows().into_iter().next());
+        .unwrap_or_else(|| cx.windows())
+        .into_iter()
+        .find(|handle| {
+            handle
+                .update(cx, |_, window, cx| {
+                    window
+                        .root::<ComponentRoot>()
+                        .flatten()
+                        .is_some_and(|root| {
+                            root.read(cx).view().entity_type()
+                                == std::any::TypeId::of::<WorkbenchView>()
+                        })
+                })
+                .unwrap_or(false)
+        });
     let Some(window) = window else {
         return false;
     };
@@ -766,8 +781,18 @@ fn terminal_performance_contexts() -> Vec<crate::ui::terminal::pane::TerminalPan
 }
 
 pub fn register_workbench_keybinding_interceptor(cx: &mut App, view: &Entity<WorkbenchView>) {
-    let runtime_keybinding_view = view.clone();
+    let runtime_keybinding_view = view.downgrade();
     let keybinding_subscription = cx.intercept_keystrokes(move |event, window, cx| {
+        let Some(runtime_keybinding_view) = runtime_keybinding_view.upgrade() else {
+            return;
+        };
+        // Each workbench owns only its native window's command interception.
+        // Utility windows have their own focus and shortcut dispatch.
+        if window.root::<ComponentRoot>().flatten().is_none_or(|root| {
+            root.read(cx).view().entity_id() != runtime_keybinding_view.entity_id()
+        }) {
+            return;
+        }
         if window
             .pending_input_keystrokes()
             .is_some_and(|pending| !pending.is_empty())

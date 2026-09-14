@@ -279,6 +279,7 @@ fn render_readonly_code_row(
     border: Rgba,
     ui_style: UiStyle,
 ) -> Stateful<Div> {
+    let gutter_width = px((appearance.font_size * 4.0).max(48.0));
     let row_height =
         px((appearance.font_size * appearance.line_height).max(appearance.font_size + 2.0));
     let foreground = row.foreground.unwrap_or(theme.foreground);
@@ -303,7 +304,7 @@ fn render_readonly_code_row(
             for line_number in row.line_numbers.iter().take(number_columns) {
                 element = element.child(
                     div()
-                        .w(px((appearance.font_size * 3.7).max(44.0)))
+                        .w(gutter_width)
                         .pr_2()
                         .flex_none()
                         .text_right()
@@ -325,8 +326,10 @@ fn render_readonly_code_row(
     element.child(
         div()
             .flex_1()
+            .min_w_0()
             .overflow_hidden()
             .whitespace_nowrap()
+            .pl(ui_style.spacing.sm)
             .text_color(foreground)
             .child(
                 StyledText::new(row.content.clone())

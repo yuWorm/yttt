@@ -5,7 +5,7 @@ use std::{ops::Range, rc::Rc};
 use gpui::{
     App, AppContext as _, Context, Empty, Entity, FocusHandle, Focusable, Half,
     InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, Styled, Subscription,
-    Window, actions, div, prelude::FluentBuilder as _,
+    Window, actions, div, prelude::FluentBuilder as _, relative,
 };
 use ropey::Rope;
 
@@ -532,6 +532,13 @@ impl Render for SearchPanel {
                 this.rounded(cx.theme().radius.half())
             })
             .border_color(cx.theme().border)
+            .when(flush_search_panel, |this| {
+                this.py_1()
+                    .px_2()
+                    .bg(cx.theme().background)
+                    .text_sm()
+                    .line_height(relative(1.3))
+            })
             .child(
                 h_flex()
                     .w_full()
@@ -558,6 +565,9 @@ impl Render for SearchPanel {
                                             })),
                                     )
                                     .small()
+                                    .when(flush_search_panel, |this| {
+                                        this.h_8().text_sm().line_height(relative(1.3))
+                                    })
                                     .w_full()
                                     .shadow_none(),
                             )
@@ -642,6 +652,9 @@ impl Render for SearchPanel {
                             Input::new(&self.replace_input)
                                 .focus_bordered(false)
                                 .small()
+                                .when(flush_search_panel, |this| {
+                                    this.h_8().text_sm().line_height(relative(1.3))
+                                })
                                 .w(self.input_width)
                                 .shadow_none(),
                         )

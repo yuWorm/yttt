@@ -136,12 +136,24 @@ pub(crate) struct TerminalFontMetrics {
     pub descent: Pixels,
     pub scale_factor: f32,
 }
+/// Source used to calculate the terminal grid's line height.
+///
+/// [`FontMetrics`](Self::FontMetrics) preserves the terminal's historical
+/// metric-based sizing. [`FontSize`](Self::FontSize) matches Zed's terminal
+/// geometry by deriving each row directly from the configured font size.
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+pub enum TerminalLineHeightBasis {
+    #[default]
+    FontMetrics,
+    FontSize,
+}
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct FontMetricsKey {
     family: String,
     font_size_bits: u32,
     line_height_bits: u32,
+    line_height_basis: TerminalLineHeightBasis,
     scale_factor_bits: u32,
 }
 
@@ -252,6 +264,7 @@ pub struct TerminalRenderer {
     pub cell_width: Pixels,
     pub cell_height: Pixels,
     pub line_height_multiplier: f32,
+    pub line_height_basis: TerminalLineHeightBasis,
     pub palette: ColorPalette,
     pub cursor_thickness: f32,
     shared: Arc<Mutex<RendererShared>>,
@@ -265,12 +278,29 @@ impl TerminalRenderer {
         line_height_multiplier: f32,
         palette: ColorPalette,
     ) -> Self {
+        Self::new_with_line_height_basis(
+            font_family,
+            font_size,
+            line_height_multiplier,
+            TerminalLineHeightBasis::default(),
+            palette,
+        )
+    }
+
+    pub fn new_with_line_height_basis(
+        font_family: String,
+        font_size: Pixels,
+        line_height_multiplier: f32,
+        line_height_basis: TerminalLineHeightBasis,
+        palette: ColorPalette,
+    ) -> Self {
         Self {
             font_family,
             font_size,
             cell_width: font_size * 0.6,
             cell_height: font_size * 1.4,
             line_height_multiplier,
+            line_height_basis,
             palette,
             cursor_thickness: 0.15,
             shared: Arc::new(Mutex::new(RendererShared::new())),
@@ -288,6 +318,7 @@ impl TerminalRenderer {
             family: self.font_family.clone(),
             font_size_bits: font_size.to_bits(),
             line_height_bits: self.line_height_multiplier.to_bits(),
+            line_height_basis: self.line_height_basis,
             scale_factor_bits: window.scale_factor().to_bits(),
         };
         if let Some(metrics) = {
@@ -301,9 +332,10 @@ impl TerminalRenderer {
             return metrics;
         }
 
+        let font = self.font(TerminalFontStyle::default());
         let run = TextRun {
             len: 1,
-            font: self.font(TerminalFontStyle::default()),
+            font: font.clone(),
             color: gpui::black(),
             background_color: None,
             underline: None,
@@ -312,16 +344,32 @@ impl TerminalRenderer {
         let shaped = window
             .text_system()
             .shape_line("M".into(), self.font_size, &[run], None);
-        let cell_width = if shaped.width > px(0.0) {
+        let fallback_cell_width = if shaped.width > px(0.0) {
             shaped.width
         } else {
             self.font_size * 0.6
         };
+        let cell_width = match self.line_height_basis {
+            TerminalLineHeightBasis::FontMetrics => fallback_cell_width,
+            TerminalLineHeightBasis::FontSize => window
+                .text_system()
+                .advance(
+                    window.text_system().resolve_font(&font),
+                    self.font_size,
+                    'm',
+                )
+                .ok()
+                .map(|advance| advance.width)
+                .filter(|width| *width > px(0.0))
+                .unwrap_or(fallback_cell_width),
+        };
         let natural_height = shaped.ascent + shaped.descent;
-        let cell_height = if natural_height > px(0.0) {
-            natural_height * self.line_height_multiplier
-        } else {
-            self.font_size * 1.4
+        let cell_height = match self.line_height_basis {
+            TerminalLineHeightBasis::FontMetrics if natural_height > px(0.0) => {
+                natural_height * self.line_height_multiplier
+            }
+            TerminalLineHeightBasis::FontMetrics => self.font_size * 1.4,
+            TerminalLineHeightBasis::FontSize => self.font_size * self.line_height_multiplier,
         };
         let metrics = TerminalFontMetrics {
             cell_width,
@@ -337,6 +385,34 @@ impl TerminalRenderer {
         shared.metrics = Some(metrics);
         shared.rows.clear();
         metrics
+    }
+    pub(crate) fn grid_origin(
+        &self,
+        bounds: Bounds<Pixels>,
+        padding: Edges<Pixels>,
+        scale_factor: f32,
+    ) -> Point<Pixels> {
+        let origin = Point {
+            x: bounds.origin.x + padding.left,
+            y: bounds.origin.y + padding.top,
+        };
+        match self.line_height_basis {
+            TerminalLineHeightBasis::FontMetrics => origin,
+            TerminalLineHeightBasis::FontSize => Point {
+                x: px((f32::from(origin.x) * scale_factor).floor() / scale_factor),
+                y: px((f32::from(origin.y) * scale_factor).floor() / scale_factor),
+            },
+        }
+    }
+
+    fn text_vertical_offset(&self) -> Pixels {
+        match self.line_height_basis {
+            TerminalLineHeightBasis::FontMetrics => {
+                let base_height = self.cell_height / self.line_height_multiplier;
+                (self.cell_height - base_height) / 2.0
+            }
+            TerminalLineHeightBasis::FontSize => px(0.0),
+        }
     }
 
     fn font(&self, style: TerminalFontStyle) -> Font {
@@ -679,14 +755,13 @@ impl TerminalRenderer {
 
     pub(crate) fn cursor_bounds(
         &self,
-        bounds: Bounds<Pixels>,
-        padding: Edges<Pixels>,
+        origin: Point<Pixels>,
         cursor: RenderableCursor,
     ) -> Option<Bounds<Pixels>> {
         Some(Bounds {
             origin: Point {
-                x: bounds.origin.x + padding.left + self.cell_width * cursor.point.column.0 as f32,
-                y: bounds.origin.y + padding.top + self.cell_height * cursor.point.line as f32,
+                x: origin.x + self.cell_width * cursor.point.column.0 as f32,
+                y: origin.y + self.cell_height * cursor.point.line as f32,
             },
             size: Size {
                 width: self.cell_width * cursor.width.get() as f32,
@@ -748,8 +823,7 @@ impl TerminalRenderer {
             transparent_black(),
             Default::default(),
         ));
-        let base_height = self.cell_height / self.line_height_multiplier;
-        let vertical_offset = (self.cell_height - base_height) / 2.0;
+        let vertical_offset = self.text_vertical_offset();
         let _ = prepared.shaped.paint(
             Point {
                 x: prepared.cursor_bounds.origin.x,
@@ -810,6 +884,7 @@ impl TerminalRenderer {
     pub(crate) fn paint(
         &self,
         bounds: Bounds<Pixels>,
+        origin: Point<Pixels>,
         padding: Edges<Pixels>,
         show_scrollbar: bool,
         prepared: &PreparedTerminalFrame,
@@ -827,12 +902,7 @@ impl TerminalRenderer {
             Default::default(),
         ));
 
-        let origin = Point {
-            x: bounds.origin.x + padding.left,
-            y: bounds.origin.y + padding.top,
-        };
-        let base_height = self.cell_height / self.line_height_multiplier;
-        let vertical_offset = (self.cell_height - base_height) / 2.0;
+        let vertical_offset = self.text_vertical_offset();
 
         let mut painted_text_runs = 0_u64;
         let mut painted_text_cells = 0_u64;
@@ -891,7 +961,7 @@ impl TerminalRenderer {
             window,
         );
 
-        self.paint_cursor(bounds, padding, snapshot.cursor, window);
+        self.paint_cursor(origin, snapshot.cursor, window);
         if show_scrollbar {
             self.paint_scrollbar(bounds, padding, snapshot, window);
         }
@@ -1035,14 +1105,8 @@ impl TerminalRenderer {
         }
     }
 
-    fn paint_cursor(
-        &self,
-        bounds: Bounds<Pixels>,
-        padding: Edges<Pixels>,
-        cursor: RenderableCursor,
-        window: &mut Window,
-    ) {
-        let Some(cursor_bounds) = self.cursor_bounds(bounds, padding, cursor) else {
+    fn paint_cursor(&self, origin: Point<Pixels>, cursor: RenderableCursor, window: &mut Window) {
+        let Some(cursor_bounds) = self.cursor_bounds(origin, cursor) else {
             return;
         };
         let thickness = (self.cell_width * self.cursor_thickness.clamp(0.05, 1.0)).max(px(1.0));
@@ -1167,6 +1231,24 @@ mod tests {
                 },
             )
         })
+    }
+    #[test]
+    fn zed_grid_origin_snaps_padding_to_device_pixels() {
+        let renderer = TerminalRenderer::new_with_line_height_basis(
+            "monospace".into(),
+            px(15.0),
+            1.25,
+            TerminalLineHeightBasis::FontSize,
+            ColorPalette::default(),
+        );
+        let bounds = Bounds::new(
+            gpui::point(px(0.2), px(0.8)),
+            gpui::size(px(100.0), px(100.0)),
+        );
+        assert_eq!(
+            renderer.grid_origin(bounds, Edges::all(px(0.4)), 2.0),
+            gpui::point(px(0.5), px(1.0)),
+        );
     }
 
     #[test]

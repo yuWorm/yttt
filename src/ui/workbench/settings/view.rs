@@ -1,6 +1,6 @@
 use super::super::*;
 
-pub(in super::super) fn settings_overlay(
+pub(in super::super) fn settings_window_content(
     root: &mut WorkbenchView,
     search_input: &Entity<InputState>,
     window: &mut Window,
@@ -10,23 +10,14 @@ pub(in super::super) fn settings_overlay(
     let theme = appearance.ui;
     let style = yttt_settings_layout(appearance.style, window.viewport_size());
 
-    yttt_panel_overlay(
-        yttt_panel(YtttPanelKind::Settings, theme, appearance.style)
-            .w(style.panel_width)
-            .max_w(style.panel_width)
-            .h(style.panel_height)
-            .max_h(style.panel_height)
-            .debug_selector(|| "settings-panel".to_string())
-            .flex_row()
-            .p_0()
-            .overflow_hidden()
-            .child(settings_sidebar(root, search_input, style, cx))
-            .child(settings_content(root, style, window, cx)),
-        YtttPanelKind::Settings,
-        YtttOverlayPlacement::Center,
-        theme,
-        appearance.style,
-    )
+    div()
+        .debug_selector(|| "settings-panel".to_string())
+        .flex()
+        .size_full()
+        .overflow_hidden()
+        .bg(theme.editor_background)
+        .child(settings_sidebar(root, search_input, style, cx))
+        .child(settings_content(root, style, window, cx))
 }
 
 fn settings_sidebar(
@@ -220,18 +211,7 @@ fn settings_content(
                                 .text_color(theme.text_subtle)
                                 .child(description),
                         ),
-                )
-                .child(yttt_icon_button(
-                    "settings-close",
-                    IconName::Close,
-                    YtttIconButtonKind::OverlayClose,
-                    theme,
-                    style.ui_style,
-                    cx.listener(|this, _, _window, cx| {
-                        this.close_settings();
-                        cx.notify();
-                    }),
-                )),
+                ),
         )
         .child(div().flex_1().min_h_0().child(rows))
 }

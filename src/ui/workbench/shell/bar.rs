@@ -30,7 +30,8 @@ pub fn bar_sections_content(sections: BarSections, host: BarHost, ui_style: UiSt
         .items_center()
         .size_full()
         .min_w_0()
-        .overflow_hidden();
+        .overflow_hidden()
+        .gap(ui_style.shell.bar_section_gap);
     if center_is_empty {
         content
             .child(left.flex_1())
@@ -50,6 +51,6 @@ fn bar_group(id: &'static str, modules: Vec<AnyElement>, ui_style: UiStyle) -> D
         .items_center()
         .min_w_0()
         .overflow_hidden()
-        .gap(ui_style.spacing.sm)
+        .gap(ui_style.shell.bar_module_gap)
         .children(modules)
 }

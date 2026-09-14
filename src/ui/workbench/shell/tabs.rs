@@ -6,7 +6,6 @@ use gpui::{
 use gpui_component::{
     Icon, IconName,
     menu::{ContextMenuExt as _, PopupMenuItem},
-    tooltip::Tooltip,
 };
 
 use crate::{
@@ -23,7 +22,7 @@ use crate::{
             TabCloseBefore,
         },
         primitives::{
-            icon_button::{YtttIconButtonKind, yttt_icon_button},
+            icon_button::{YtttIconButtonKind, yttt_icon_button, yttt_toolbar_icon_group},
             row::{YtttRowKind, yttt_row_style},
             status::{YtttStatusTone, yttt_status_dot_style},
             tabs::{YtttTabBarStyle, yttt_tab, yttt_tabbar_style},
@@ -517,7 +516,14 @@ where
             cx.stop_propagation();
             on_move_tab(drag, window, cx);
         })
-        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+        .tooltip(move |window, cx| {
+            yttt_ui::primitives::tooltip::yttt_tooltip(
+                tooltip.clone(),
+                crate::ui::theme::current_workbench_theme(cx),
+                crate::ui::theme::current_ui_style(cx),
+            )
+            .build(window, cx)
+        })
         .child(icon)
         .child(
             div()
@@ -549,7 +555,12 @@ where
         )),
     };
 
-    tab.context_menu(move |menu, _, _| {
+    tab.context_menu(move |menu, _window, cx| {
+        let menu = yttt_ui::primitives::menu::yttt_popup_menu(
+            menu,
+            crate::ui::theme::current_workbench_theme(cx),
+            crate::ui::theme::current_ui_style(cx),
+        );
         menu.item(
             PopupMenuItem::new(text.get(UiTextKey::TabCloseCurrent)).action(Box::new(TabClose)),
         )
@@ -676,36 +687,23 @@ where
     SplitHH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ToggleTreeH: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 {
-    div()
-        .flex()
-        .items_center()
-        .h_full()
-        .border_l(ui_style.border.hairline)
-        .border_b(ui_style.border.hairline)
-        .border_color(theme.border_variant)
-        .bg(rgba(0x00000000))
-        .child(tab_toolbar_button(
-            "tab-new",
-            IconName::Plus,
-            theme,
-            ui_style,
-            on_new_tab,
-        ))
-        .child(tab_toolbar_button(
-            "pane-split-vertical",
-            tab_toolbar_icon(crate::model::layout::SplitDirection::Vertical),
-            theme,
-            ui_style,
-            on_split_vertical,
-        ))
-        .child(tab_toolbar_button(
-            "pane-split-horizontal",
-            tab_toolbar_icon(crate::model::layout::SplitDirection::Horizontal),
-            theme,
-            ui_style,
-            on_split_horizontal,
-        ))
-        .child(
+    yttt_toolbar_icon_group(
+        [
+            tab_toolbar_button("tab-new", IconName::Plus, theme, ui_style, on_new_tab),
+            tab_toolbar_button(
+                "pane-split-vertical",
+                tab_toolbar_icon(crate::model::layout::SplitDirection::Vertical),
+                theme,
+                ui_style,
+                on_split_vertical,
+            ),
+            tab_toolbar_button(
+                "pane-split-horizontal",
+                tab_toolbar_icon(crate::model::layout::SplitDirection::Horizontal),
+                theme,
+                ui_style,
+                on_split_horizontal,
+            ),
             tab_toolbar_button(
                 "project-tree-toggle",
                 project_tree_toggle_icon(project_tree_open),
@@ -716,8 +714,22 @@ where
             .when(project_tree_open, |this| {
                 this.bg(theme.ghost_element_selected).text_color(theme.text)
             })
-            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx)),
-        )
+            .tooltip(move |window, cx| {
+                yttt_ui::primitives::tooltip::yttt_tooltip(
+                    tooltip.clone(),
+                    crate::ui::theme::current_workbench_theme(cx),
+                    crate::ui::theme::current_ui_style(cx),
+                )
+                .build(window, cx)
+            }),
+        ],
+        ui_style,
+    )
+    .h_full()
+    .border_l(ui_style.border.hairline)
+    .border_b(ui_style.border.hairline)
+    .border_color(theme.border_variant)
+    .bg(rgba(0x00000000))
 }
 
 pub fn tab_toolbar_icon(direction: crate::model::layout::SplitDirection) -> IconName {

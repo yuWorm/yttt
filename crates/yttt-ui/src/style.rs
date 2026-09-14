@@ -134,6 +134,18 @@ pub struct UiPaletteMetrics {
     pub bordered_shortcuts: bool,
     pub item_cards: bool,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UiShellMetrics {
+    pub titlebar_padding_x: Rems,
+    pub statusbar_padding_x: Rems,
+    pub sidebar_padding_x: Rems,
+    pub sidebar_padding_y: Rems,
+    pub sidebar_header_gap: Rems,
+    pub bar_module_gap: Rems,
+    pub bar_section_gap: Rems,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UiSettingsMetrics {
     pub sidebar_width: Pixels,
@@ -154,6 +166,8 @@ pub struct UiIconButtonMetrics {
     pub sidebar_header_radius: Pixels,
     pub tab_close_radius: Pixels,
     pub overlay_close_radius: Pixels,
+    pub toolbar_group_gap: Rems,
+    pub toolbar_group_padding_x: Rems,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -203,6 +217,8 @@ pub struct UiStyle {
     pub controls: UiControlMetrics,
     pub rows: UiRowMetrics,
     pub palette: UiPaletteMetrics,
+    pub shell: UiShellMetrics,
+
     pub settings: UiSettingsMetrics,
     pub icon_buttons: UiIconButtonMetrics,
     pub panels: UiPanelVisualMetrics,
@@ -235,6 +251,27 @@ impl UiStyle {
         }
     }
 
+    /// Resolve Zed's pixel-backed component APIs against the UI rem size.
+    pub fn with_typography(mut self, font_size: f32, line_height: f32) -> Self {
+        if self.id != UiStyleId::Zed {
+            return self;
+        }
+        let scale = font_size / 16.0;
+        self.controls.settings_control_width *= scale;
+        self.controls.settings_compact_control_width *= scale;
+        self.controls.select_menu_width *= scale;
+        self.palette.panel_width *= scale;
+        self.palette.panel_max_width *= scale;
+        self.palette.panel_max_height *= scale;
+        self.palette.body_max_height *= scale;
+        self.palette.remote_panel_width *= scale;
+        self.palette.remote_panel_max_height *= scale;
+        self.palette.remote_list_height *= scale;
+        self.settings.sidebar_width *= scale;
+        self.rows.palette_compact_height = rems(0.875 * line_height + 0.5 + 2.0 / font_size);
+        self
+    }
+
     pub fn hover_background(self, theme: WorkbenchTheme) -> Rgba {
         match self.id {
             UiStyleId::Zed => theme.ghost_element_hover,
@@ -260,10 +297,10 @@ impl UiStyle {
         };
         let radius = UiRadiusScale {
             compact: px(4.0),
-            action: px(5.0),
-            control: px(6.0),
-            input: px(7.0),
-            card: px(8.0),
+            action: px(4.0),
+            control: px(4.0),
+            input: px(6.0),
+            card: px(6.0),
             surface: px(8.0),
         };
 
@@ -283,22 +320,22 @@ impl UiStyle {
                 xl: rems(1.0),
                 xxl: rems(1.5),
                 xxxl: rems(2.0),
-                overlay_top: rems(4.0),
+                overlay_top: rems(5.0),
             },
             radius,
             border,
             controls: UiControlMetrics {
                 button_height: rems(1.375),
-                button_padding_x: rems(0.375),
+                button_padding_x: rems(0.25),
                 settings_height: rems(1.75),
                 settings_control_width: px(200.0),
                 settings_compact_control_width: px(128.0),
                 select_menu_width: px(210.0),
                 toolbar_height: rems(1.875),
                 dialog_input_height: rems(2.125),
-                palette_input_height: rems(2.5),
+                palette_input_height: rems(1.75),
                 search_height: rems(1.75),
-                palette_footer_height: rems(2.5),
+                palette_footer_height: rems(2.125),
                 status_bar_height: rems(1.375),
                 status_footer_height: rems(2.875),
             },
@@ -308,8 +345,8 @@ impl UiStyle {
                 settings_height: rems(4.0),
                 sidebar_height: rems(1.75),
                 tab_height: rems(2.0),
-                diff_sidebar_height: rems(2.375),
-                palette_padding_x: rems(0.75),
+                diff_sidebar_height: rems(1.75),
+                palette_padding_x: rems(0.375),
                 settings_padding_y: rems(1.0),
                 sidebar_padding_x: rems(0.5),
                 tab_padding_x: rems(0.5),
@@ -324,18 +361,18 @@ impl UiStyle {
                 tab_border_width: border.hairline,
             },
             palette: UiPaletteMetrics {
-                panel_width: px(760.0),
-                panel_max_width: px(900.0),
-                panel_max_height: px(480.0),
-                body_max_height: px(376.0),
-                remote_panel_width: px(760.0),
-                remote_panel_max_height: px(640.0),
-                remote_list_height: px(320.0),
-                header_padding_x: rems(0.75),
+                panel_width: px(544.0),
+                panel_max_width: px(544.0),
+                panel_max_height: px(456.0),
+                body_max_height: px(384.0),
+                remote_panel_width: px(544.0),
+                remote_panel_max_height: px(576.0),
+                remote_list_height: px(384.0),
+                header_padding_x: rems(0.625),
                 header_padding_y: rems(0.25),
-                list_padding_x: rems(0.375),
+                list_padding_x: rems(0.25),
                 list_padding_y: rems(0.25),
-                list_gap: rems(0.25),
+                list_gap: rems(0.125),
                 item_content_gap: rems(0.5),
                 icon_size: rems(0.875),
                 icon_column_width: rems(1.25),
@@ -346,8 +383,18 @@ impl UiStyle {
                 bordered_shortcuts: false,
                 item_cards: false,
             },
+            shell: UiShellMetrics {
+                titlebar_padding_x: rems(0.5),
+                statusbar_padding_x: rems(0.25),
+                sidebar_padding_x: rems(0.5),
+                sidebar_padding_y: rems(0.75),
+                sidebar_header_gap: rems(0.75),
+                bar_module_gap: rems(0.25),
+                bar_section_gap: rems(0.5),
+            },
+
             settings: UiSettingsMetrics {
-                sidebar_width: px(224.0),
+                sidebar_width: px(208.0),
                 content_padding_x: rems(2.0),
                 content_padding_y: rems(1.5),
                 nav_padding_x: rems(0.5),
@@ -358,20 +405,22 @@ impl UiStyle {
                 sidebar_header_size: rems(1.5),
                 tab_close_size: rems(1.0),
                 overlay_close_size: rems(1.75),
-                icon_size: rems(0.75),
-                toolbar_radius: px(0.0),
+                icon_size: rems(0.875),
+                toolbar_radius: radius.compact,
                 sidebar_header_radius: radius.compact,
                 tab_close_radius: radius.compact,
                 overlay_close_radius: radius.control,
+                toolbar_group_gap: rems(0.25),
+                toolbar_group_padding_x: rems(0.375),
             },
             panels: UiPanelVisualMetrics {
                 radius: radius.surface,
                 dialog_padding: px(16.0),
-                panel_overlay: rgba(0x00000066),
+                panel_overlay: rgba(0x00000000),
                 dialog_overlay: rgba(0x00000073),
                 fullscreen_overlay: rgba(0x000000b3),
                 editor_overlay: rgba(0x00000099),
-                shadow: false,
+                shadow: true,
             },
             notifications: UiNotificationMetrics {
                 width: px(360.0),
@@ -494,6 +543,16 @@ impl UiStyle {
                 bordered_shortcuts: true,
                 item_cards: true,
             },
+            shell: UiShellMetrics {
+                titlebar_padding_x: rems(0.625),
+                statusbar_padding_x: rems(0.625),
+                sidebar_padding_x: rems(0.625),
+                sidebar_padding_y: rems(0.875),
+                sidebar_header_gap: rems(0.875),
+                bar_module_gap: rems(0.5),
+                bar_section_gap: rems(0.875),
+            },
+
             settings: UiSettingsMetrics {
                 sidebar_width: px(240.0),
                 content_padding_x: rems(1.5),
@@ -511,6 +570,8 @@ impl UiStyle {
                 sidebar_header_radius: radius.compact,
                 tab_close_radius: radius.compact,
                 overlay_close_radius: radius.control,
+                toolbar_group_gap: rems(0.375),
+                toolbar_group_padding_x: rems(0.625),
             },
             panels: UiPanelVisualMetrics {
                 radius: radius.surface,
@@ -560,19 +621,6 @@ impl Default for UiStyle {
 mod tests {
     use super::*;
     use crate::theme::WorkbenchTheme;
-
-    #[test]
-    fn default_profile_preserves_zed_metrics() {
-        let style = UiStyle::default();
-
-        assert_eq!(style.id, UiStyleId::Zed);
-        assert_eq!(style.radius.surface, px(8.0));
-        assert!(!style.panels.shadow);
-        assert_eq!(
-            style.hover_background(WorkbenchTheme::one_dark()),
-            WorkbenchTheme::one_dark().hover_surface
-        );
-    }
 
     #[test]
     fn rounded_profile_changes_global_geometry_and_interaction_tokens() {

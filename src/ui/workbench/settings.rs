@@ -1,7 +1,7 @@
 mod persistence;
 mod remote_access;
 mod view;
-pub(super) use view::{settings_button, settings_overlay};
+pub(super) use view::{settings_button, settings_window_content};
 
 use super::*;
 
@@ -253,8 +253,10 @@ impl WorkbenchView {
 
     pub fn open_settings(&mut self) {
         self.close_palette();
+        self.settings.settings_search_input_needs_focus = !self.settings.settings_page.is_open;
         self.settings.settings_page.is_open = true;
-        self.settings.settings_search_input_needs_focus = true;
+        self.auxiliary_windows
+            .request(AuxiliaryWindowKind::Settings);
         self.load_error = None;
         self.sync_input_owner_state();
     }
@@ -263,6 +265,11 @@ impl WorkbenchView {
         self.settings.settings_page.is_open = false;
         self.settings.zed_theme_import_dialog = None;
         self.reset_settings_search_input();
+        self.overlays.pending_keybinding_edit = None;
+        self.cancel_layout_toml_editor();
+        if self.auxiliary_windows.active == Some(AuxiliaryWindowKind::Settings) {
+            self.auxiliary_windows.active = None;
+        }
         self.sync_input_owner_state();
     }
 

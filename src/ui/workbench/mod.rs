@@ -27,6 +27,7 @@ use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
 mod action_handlers;
 mod agent_process_monitor;
 mod agent_sessions;
+mod auxiliary_windows;
 mod bars;
 mod dialogs;
 mod document_lifecycle;
@@ -53,14 +54,15 @@ mod surface;
 mod update;
 mod vim_controller;
 mod work_area;
+use auxiliary_windows::{AuxiliaryWindowKind, AuxiliaryWindows};
 use dialogs::*;
 use git::*;
 use helpers::*;
 use onboarding::*;
 use persistence::WorkspacePersistenceState;
 use render::{push_component_notification, split_child};
-use settings::{settings_button, settings_overlay};
-use ssh_connections::{ssh_connections_overlay, ssh_host_key_overlay};
+use settings::{settings_button, settings_window_content};
+use ssh_connections::{remote_services_window_content, ssh_host_key_overlay};
 use ssh_project_picker::ssh_project_picker_overlay;
 pub use state::update::UpdateStatus;
 use state::{
@@ -335,6 +337,7 @@ pub struct WorkbenchView {
     agent_manager: AgentManager,
     agent_sessions: AgentSessionsControllerState,
     settings: SettingsControllerState,
+    auxiliary_windows: AuxiliaryWindows,
     update: UpdateControllerState,
     performance: performance::PerformanceMonitorState,
     last_opened_layout_file: Option<PathBuf>,
@@ -942,6 +945,7 @@ impl WorkbenchView {
                 keybinding_load_error,
                 app_settings.clone(),
             ),
+            auxiliary_windows: AuxiliaryWindows::default(),
             update: UpdateControllerState::default(),
             performance: performance::PerformanceMonitorState::default(),
             last_opened_layout_file: None,
@@ -3290,6 +3294,10 @@ impl WorkbenchView {
 
     fn on_window_activation_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let is_active = window.is_window_active();
+        if is_active {
+            self.auxiliary_windows.active = None;
+            self.sync_input_owner_state();
+        }
         if is_active
             && self.settings.settings_page.is_open
             && self.settings.settings_page.selected_group == SettingsGroupId::Permissions
@@ -3313,6 +3321,16 @@ impl WorkbenchView {
         self.settings.settings_search_input = None;
         self.settings.settings_search_input_subscription = None;
         self.settings.settings_search_input_needs_focus = false;
+        self.settings.settings_vim_mode_select = None;
+        self.settings.settings_vim_mode_select_subscription = None;
+        self.settings.settings_window_effect_select = None;
+        self.settings.settings_window_effect_select_subscription = None;
+        self.settings.settings_ui_style_select = None;
+        self.settings.settings_ui_style_select_subscription = None;
+        self.settings.settings_custom_shell_input = None;
+        self.settings.settings_environment_name_input = None;
+        self.settings.settings_environment_value_input = None;
+        self.settings.remote_access_address = None;
         self.settings.settings_language_select = None;
         self.settings.settings_language_select_subscription = None;
         self.settings.settings_shell_select = None;
@@ -3579,7 +3597,9 @@ impl WorkbenchView {
                 InputOwnerKind::Dialog,
                 InputScopeId::new("dialog.ssh_host_key"),
             )
-        } else if self.overlays.pending_keybinding_edit.is_some() {
+        } else if self.overlays.pending_keybinding_edit.is_some()
+            && self.settings_dialogs_are_foreground()
+        {
             InputOwnerRegistration::blocking(
                 InputOwnerKind::KeybindingRecorder,
                 InputScopeId::new("recorder.keybinding"),
@@ -3604,7 +3624,9 @@ impl WorkbenchView {
                 InputOwnerKind::Dialog,
                 InputScopeId::new("dialog.close_project"),
             )
-        } else if self.overlays.layout_toml_editor.is_some() {
+        } else if self.overlays.layout_toml_editor.is_some()
+            && self.settings_dialogs_are_foreground()
+        {
             let scope = self
                 .overlays
                 .layout_toml_editor
@@ -3617,7 +3639,9 @@ impl WorkbenchView {
                 InputOwnerKind::Dialog,
                 InputScopeId::new("overlay.git_diff"),
             )
-        } else if self.settings.zed_theme_import_dialog.is_some() {
+        } else if self.settings.zed_theme_import_dialog.is_some()
+            && self.settings_dialogs_are_foreground()
+        {
             InputOwnerRegistration::blocking(
                 InputOwnerKind::Dialog,
                 InputScopeId::new("dialog.zed_theme_import"),
@@ -3627,12 +3651,16 @@ impl WorkbenchView {
                 InputOwnerKind::Dialog,
                 InputScopeId::new("dialog.ssh_project_picker"),
             )
-        } else if self.ssh.manager_open {
+        } else if self.ssh.manager_open
+            && self.auxiliary_windows.active == Some(AuxiliaryWindowKind::RemoteServices)
+        {
             InputOwnerRegistration::blocking(
                 InputOwnerKind::Dialog,
                 InputScopeId::new("dialog.ssh_connections"),
             )
-        } else if self.settings.settings_page.is_open {
+        } else if self.settings.settings_page.is_open
+            && self.auxiliary_windows.active == Some(AuxiliaryWindowKind::Settings)
+        {
             InputOwnerRegistration::blocking(
                 InputOwnerKind::Settings,
                 InputScopeId::new("settings"),

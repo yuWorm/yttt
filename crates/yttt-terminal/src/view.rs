@@ -62,8 +62,8 @@ use crate::pty::{ExitReason, PtyEvent, PtyIoDriver, PtyIoHandle, PtyIoOperation}
 #[cfg(any(test, debug_assertions))]
 use crate::render::TerminalDiagnosticsSnapshot;
 use crate::render::{
-    RenderOverlayState, TerminalRenderCache, TerminalRenderOptions, TerminalRenderSnapshot,
-    TerminalRenderer,
+    RenderOverlayState, TerminalLineHeightBasis, TerminalRenderCache, TerminalRenderOptions,
+    TerminalRenderSnapshot, TerminalRenderer,
 };
 use crate::semantic_selection::SemanticSelection;
 use crate::terminal::{TerminalScrollbarMetrics, TerminalState};
@@ -332,6 +332,7 @@ fn tab_key_down_event(shift: bool) -> &'static KeyDownEvent {
 /// | `font_size` | 14px |
 /// | `scrollback` | 10000 |
 /// | `line_height_multiplier` | 1.2 |
+/// | `line_height_basis` | `FontMetrics` |
 /// | `padding` | 0px all sides |
 /// | `show_scrollbar` | true |
 /// | `colors` | Default palette |
@@ -391,6 +392,9 @@ pub struct TerminalConfig {
     /// Multiplier for line height to accommodate tall glyphs (e.g., nerd fonts)
     /// Default is 1.2 (20% extra height)
     pub line_height_multiplier: f32,
+
+    /// Source used to calculate the terminal grid's line height.
+    pub line_height_basis: TerminalLineHeightBasis,
 
     /// Padding around the terminal content (top, right, bottom, left)
     /// The padding area renders with the terminal's background color
@@ -455,6 +459,7 @@ impl Default for TerminalConfig {
             font_size: px(14.0),
             scrollback: 10000,
             line_height_multiplier: 1.2,
+            line_height_basis: TerminalLineHeightBasis::FontMetrics,
             padding: Edges::all(px(0.0)),
             show_scrollbar: true,
             cursor_shape: TerminalCursorShape::Block,
@@ -917,6 +922,7 @@ pub struct TerminalView {
 struct TerminalViewport {
     bounds: Bounds<Pixels>,
     padding: Edges<Pixels>,
+    origin: Point<Pixels>,
     cell_width: Pixels,
     cell_height: Pixels,
     cols: usize,
@@ -1085,10 +1091,11 @@ impl TerminalView {
 
         let io = io_driver.handle();
 
-        let mut renderer = TerminalRenderer::new(
+        let mut renderer = TerminalRenderer::new_with_line_height_basis(
             config.font_family.clone(),
             config.font_size,
             config.line_height_multiplier,
+            config.line_height_basis,
             config.colors.clone(),
         );
         renderer.cursor_thickness = config.cursor_thickness;
@@ -2105,10 +2112,7 @@ impl TerminalView {
 
     fn point_and_side_for_position(&self, position: Point<Pixels>) -> Option<(AlacPoint, Side)> {
         let viewport = (*self.viewport.lock())?;
-        let origin = point(
-            viewport.bounds.origin.x + viewport.padding.left,
-            viewport.bounds.origin.y + viewport.padding.top,
-        );
+        let origin = viewport.origin;
         let display_offset = self.display_offset() as i32;
         let raw = pixel_to_cell(position, origin, viewport.cell_width, viewport.cell_height);
         let row = raw.line.0.clamp(0, viewport.rows.saturating_sub(1) as i32);
@@ -2270,7 +2274,7 @@ impl TerminalView {
         let Some(viewport) = *self.viewport.lock() else {
             return 0;
         };
-        let top: f32 = (viewport.bounds.origin.y + viewport.padding.top).into();
+        let top: f32 = viewport.origin.y.into();
         let cell_height: f32 = viewport.cell_height.into();
         let bottom = top + cell_height * viewport.rows as f32;
         let y: f32 = position.y.into();
@@ -3389,7 +3393,8 @@ impl TerminalView {
         let config = config.normalized();
         let font_changed = config.font_family != self.config.font_family
             || config.font_size != self.config.font_size
-            || config.line_height_multiplier != self.config.line_height_multiplier;
+            || config.line_height_multiplier != self.config.line_height_multiplier
+            || config.line_height_basis != self.config.line_height_basis;
         let palette_changed = config.colors != self.config.colors;
         let core_changed = config.scrollback != self.config.scrollback
             || config.cursor_shape != self.config.cursor_shape
@@ -3414,6 +3419,7 @@ impl TerminalView {
         self.renderer.font_family = config.font_family.clone();
         self.renderer.font_size = config.font_size;
         self.renderer.line_height_multiplier = config.line_height_multiplier;
+        self.renderer.line_height_basis = config.line_height_basis;
         self.renderer.palette = config.colors.clone();
         self.renderer.cursor_thickness = config.cursor_thickness;
         if font_changed {
@@ -3751,6 +3757,11 @@ impl Render for TerminalView {
                         } else {
                             padding
                         };
+                        let origin = measured_renderer.grid_origin(
+                            bounds,
+                            effective_padding,
+                            window.scale_factor(),
+                        );
                         let available_width: f32 =
                             (bounds.size.width - effective_padding.left - effective_padding.right)
                                 .into();
@@ -3765,6 +3776,7 @@ impl Render for TerminalView {
                             viewport_for_layout.lock().as_ref().is_none_or(|viewport| {
                                 viewport.bounds != bounds
                                     || viewport.padding != effective_padding
+                                    || viewport.origin != origin
                                     || viewport.cell_width != metrics.cell_width
                                     || viewport.cell_height != metrics.cell_height
                                     || viewport.cols != cols
@@ -3778,6 +3790,7 @@ impl Render for TerminalView {
                                         TerminalViewport {
                                             bounds,
                                             padding: effective_padding,
+                                            origin,
                                             cell_width: metrics.cell_width,
                                             cell_height: metrics.cell_height,
                                             cols,
@@ -3878,11 +3891,8 @@ impl Render for TerminalView {
                                 .frame()
                                 .expect("a merged terminal snapshot must produce a frame")
                         };
-                        let cursor_bounds = measured_renderer.cursor_bounds(
-                            bounds,
-                            effective_padding,
-                            snapshot.cursor,
-                        );
+                        let cursor_bounds =
+                            measured_renderer.cursor_bounds(origin, snapshot.cursor);
                         if let Some(viewport) = viewport_for_layout.lock().as_mut() {
                             viewport.cursor_bounds = cursor_bounds;
                         }
@@ -3905,6 +3915,7 @@ impl Render for TerminalView {
 
                         (
                             measured_renderer,
+                            origin,
                             effective_padding,
                             prepared_frame,
                             prepared_ime,
@@ -3914,6 +3925,7 @@ impl Render for TerminalView {
                     move |bounds,
                           (
                         measured_renderer,
+                        origin,
                         effective_padding,
                         prepared_frame,
                         prepared_ime,
@@ -3925,6 +3937,7 @@ impl Render for TerminalView {
 
                         measured_renderer.paint(
                             bounds,
+                            origin,
                             effective_padding,
                             show_scrollbar,
                             &prepared_frame,
@@ -4146,6 +4159,49 @@ mod tests {
             config.hints[0].regex.as_deref(),
             Some(DEFAULT_TERMINAL_URL_REGEX)
         );
+    }
+
+    #[gpui::test]
+    fn font_size_rows_keep_pointer_mapping_aligned_after_font_changes(cx: &mut TestAppContext) {
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new_semantic(
+                io::sink(),
+                TerminalConfig {
+                    font_size: px(15.0),
+                    line_height_multiplier: 1.25,
+                    line_height_basis: crate::TerminalLineHeightBasis::FontSize,
+                    ..TerminalConfig::default()
+                },
+                cx,
+            )
+        });
+        for (font_size, boundary) in [(15.0, 18.75), (20.0, 25.0)] {
+            terminal.update(cx, |terminal, cx| {
+                let mut config = terminal.config().clone();
+                config.font_size = px(font_size);
+                terminal.update_config(config, cx);
+            });
+            cx.refresh().unwrap();
+            cx.read(|cx| {
+                let terminal = terminal.read(cx);
+                let viewport = terminal.viewport.lock().expect("painted viewport");
+                let x = viewport.origin.x + viewport.cell_width * 0.25;
+                assert_eq!(
+                    terminal
+                        .point_for_position(point(x, viewport.origin.y + px(boundary - 0.1)))
+                        .unwrap()
+                        .line,
+                    Line(0),
+                );
+                assert_eq!(
+                    terminal
+                        .point_for_position(point(x, viewport.origin.y + px(boundary + 0.1)))
+                        .unwrap()
+                        .line,
+                    Line(1),
+                );
+            });
+        }
     }
 
     #[gpui::test]

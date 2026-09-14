@@ -5,7 +5,6 @@ use crate::{style::UiStyle, theme::WorkbenchTheme};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum YtttPanelKind {
     Palette,
-    Settings,
     Dialog,
     Editor,
     Fullscreen,
@@ -85,24 +84,8 @@ pub struct YtttPanelStyle {
     pub shadow: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum YtttSettingsWidthClass {
-    Compact,
-    Regular,
-    Wide,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum YtttSettingsHeightClass {
-    Compact,
-    Regular,
-    Tall,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct YtttSettingsLayout {
-    pub panel_width: Pixels,
-    pub panel_height: Pixels,
     pub sidebar_width: Pixels,
     pub control_width: Pixels,
     pub compact_control_width: Pixels,
@@ -111,62 +94,38 @@ pub struct YtttSettingsLayout {
     pub content_padding_x: gpui::Rems,
     pub content_padding_y: gpui::Rems,
     pub section_gap: gpui::Rems,
-    pub width_class: YtttSettingsWidthClass,
-    pub height_class: YtttSettingsHeightClass,
     pub stack_rows: bool,
     pub ui_style: UiStyle,
 }
 
 pub fn yttt_settings_layout(ui_style: UiStyle, viewport: gpui::Size<Pixels>) -> YtttSettingsLayout {
     let viewport_width = f32::from(viewport.width);
-    let viewport_height = f32::from(viewport.height);
-    let panel_width_value = (viewport_width * 0.92)
-        .clamp(860.0, 1_240.0)
-        .min((viewport_width - 32.0).max(0.0));
-    let panel_height_value = (viewport_height * 0.90)
-        .clamp(520.0, 820.0)
-        .min((viewport_height - 24.0).max(0.0));
-    let width_class = if panel_width_value < 980.0 {
-        YtttSettingsWidthClass::Compact
-    } else if panel_width_value < 1_180.0 {
-        YtttSettingsWidthClass::Regular
-    } else {
-        YtttSettingsWidthClass::Wide
-    };
-    let height_class = if panel_height_value < 620.0 {
-        YtttSettingsHeightClass::Compact
-    } else if panel_height_value < 780.0 {
-        YtttSettingsHeightClass::Regular
-    } else {
-        YtttSettingsHeightClass::Tall
-    };
-    let (sidebar_width, control_width, content_padding_x) = match width_class {
-        YtttSettingsWidthClass::Compact => (
+    let (sidebar_width, control_width, content_padding_x) = if viewport_width < 980.0 {
+        (
             px(192.0),
             px(f32::from(ui_style.controls.settings_control_width).min(200.0)),
             ui_style.spacing.xl,
-        ),
-        YtttSettingsWidthClass::Regular => (
+        )
+    } else if viewport_width < 1_180.0 {
+        (
             px(208.0),
             ui_style.controls.settings_control_width,
             ui_style.spacing.xxl,
-        ),
-        YtttSettingsWidthClass::Wide => (
+        )
+    } else {
+        (
             px(224.0),
             ui_style.controls.settings_control_width,
             ui_style.settings.content_padding_x,
-        ),
+        )
     };
-    let (content_padding_y, section_gap) = match height_class {
-        YtttSettingsHeightClass::Compact => (ui_style.spacing.lg, ui_style.spacing.xxl),
-        YtttSettingsHeightClass::Regular | YtttSettingsHeightClass::Tall => {
-            (ui_style.settings.content_padding_y, ui_style.spacing.xxxl)
-        }
+    let (content_padding_y, section_gap) = if f32::from(viewport.height) < 620.0 {
+        (ui_style.spacing.lg, ui_style.spacing.xxl)
+    } else {
+        (ui_style.settings.content_padding_y, ui_style.spacing.xxxl)
     };
 
     YtttSettingsLayout {
-        panel_width: px(panel_width_value),
-        panel_height: px(panel_height_value),
         sidebar_width,
         control_width,
         compact_control_width: ui_style.controls.settings_compact_control_width,
@@ -175,9 +134,7 @@ pub fn yttt_settings_layout(ui_style: UiStyle, viewport: gpui::Size<Pixels>) -> 
         content_padding_x,
         content_padding_y,
         section_gap,
-        width_class,
-        height_class,
-        stack_rows: panel_width_value < 920.0,
+        stack_rows: viewport_width < 920.0,
         ui_style,
     }
 }
@@ -191,7 +148,7 @@ pub fn yttt_panel_style(
         YtttPanelKind::Dialog => ui_style.panels.dialog_overlay,
         YtttPanelKind::Editor => ui_style.panels.editor_overlay,
         YtttPanelKind::Fullscreen => ui_style.panels.fullscreen_overlay,
-        YtttPanelKind::Palette | YtttPanelKind::Settings => ui_style.panels.panel_overlay,
+        YtttPanelKind::Palette => ui_style.panels.panel_overlay,
     };
     let (width, height, max_width, max_height, body_max_height, padding) = match kind {
         YtttPanelKind::Palette => (
@@ -200,14 +157,6 @@ pub fn yttt_panel_style(
             ui_style.palette.panel_max_width,
             ui_style.palette.panel_max_height,
             ui_style.palette.body_max_height,
-            px(0.0),
-        ),
-        YtttPanelKind::Settings => (
-            px(900.0),
-            Some(px(560.0)),
-            px(940.0),
-            px(600.0),
-            px(600.0),
             px(0.0),
         ),
         YtttPanelKind::Dialog => (
@@ -238,13 +187,9 @@ pub fn yttt_panel_style(
         body_max_height,
         padding,
         overlay,
-        background: if kind == YtttPanelKind::Settings {
-            theme.editor_background.alpha(1.0)
-        } else {
-            theme.surface.alpha(1.0)
-        },
+        background: theme.surface_elevated.alpha(1.0),
         border_width: ui_style.border.hairline,
-        border: theme.border_variant,
+        border: theme.border,
         shadow: ui_style.panels.shadow,
     }
 }

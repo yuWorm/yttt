@@ -88,6 +88,13 @@ pub fn workbench_keybinding_badge(
     ui_style: UiStyle,
 ) -> AnyElement {
     let keybinding = keybinding.into();
+    if !ui_style.palette.bordered_shortcuts {
+        return div()
+            .text_sm()
+            .text_color(theme.text_muted)
+            .child(keybinding)
+            .into_any_element();
+    }
     if let Some(keystroke) = parse_keybinding_for_display(&keybinding) {
         Kbd::new(keystroke)
             .border_color(theme.border)

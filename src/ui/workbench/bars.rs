@@ -1,5 +1,5 @@
 use gpui::{AnyElement, Context, IntoElement as _, div, prelude::*, px};
-use gpui_component::{Icon, IconName, StyledExt, tooltip::Tooltip};
+use gpui_component::{Icon, IconName, StyledExt};
 use yttt_agent_core::AgentViewState;
 use yttt_protocol::ssh::SshConnectionState as ConnectionState;
 
@@ -635,7 +635,14 @@ fn render_bar_module(
         )
         .debug_selector(move || debug_selector.clone())
         .when(host == BarHost::Window, |button| button.occlude())
-        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+        .tooltip(move |window, cx| {
+            yttt_ui::primitives::tooltip::yttt_tooltip(
+                tooltip.clone(),
+                crate::ui::theme::current_workbench_theme(cx),
+                crate::ui::theme::current_ui_style(cx),
+            )
+            .build(window, cx)
+        })
         .into_any_element();
     }
 
@@ -695,8 +702,14 @@ fn render_bar_module(
             }));
     }
     if let Some(tooltip) = tooltip {
-        element =
-            element.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx));
+        element = element.tooltip(move |window, cx| {
+            yttt_ui::primitives::tooltip::yttt_tooltip(
+                tooltip.clone(),
+                crate::ui::theme::current_workbench_theme(cx),
+                crate::ui::theme::current_ui_style(cx),
+            )
+            .build(window, cx)
+        });
     }
     element.into_any_element()
 }

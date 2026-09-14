@@ -3,7 +3,6 @@ use std::path::Path;
 use crate::config::ssh::SshAuthPreference;
 use crate::ui::theme::icons::icon_for_visual;
 use gpui_component::{
-    Icon,
     list::{List, ListEvent, ListState},
     radio::RadioGroup,
 };
@@ -20,8 +19,7 @@ use zeroize::Zeroizing;
 
 use super::{
     ssh_connections::{
-        disconnect_host_ssh, request_host, ssh_connection_state_text, ssh_connection_status,
-        ssh_form_field,
+        disconnect_host_ssh, request_host, ssh_connection_state_text, ssh_form_field,
     },
     *,
 };
@@ -959,84 +957,64 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) -> Entity<ListState<SshConnectionListDelegate>> {
         let ui_style = current_ui_style(cx);
-        let recent_entries = self
-            .palette
-            .recent_projects
-            .iter()
-            .filter_map(|project| match &project.location {
-                ProjectLocation::Ssh {
-                    connection_id,
-                    root,
-                } => {
-                    let endpoint = self
-                        .ssh
-                        .connections
-                        .connections
-                        .iter()
-                        .find(|connection| connection.id == *connection_id)
-                        .map(|connection| {
-                            format!("{}@{} · {}", connection.user, connection.host, root)
-                        })
-                        .unwrap_or_else(|| format!("{} · {}", connection_id, root));
-                    let (status, tone) = ssh_connection_status(
-                        self.ssh
-                            .statuses
-                            .get(connection_id)
-                            .map(|status| status.state),
-                        &self.ui_text,
-                    );
-                    Some(SshConnectionListEntry {
+        let mut sections = vec![SshConnectionListSection {
+            title: "".into(),
+            entries: vec![SshConnectionListEntry {
+                action: SshConnectionListAction::New,
+                title: self.ui_text.get(UiTextKey::SshNewConnection).into(),
+                subtitle: "".into(),
+                status: "".into(),
+                tone: SshConnectionListTone::Neutral,
+            }],
+        }];
+        for connection in &self.ssh.connections.connections {
+            let mut entries = self
+                .palette
+                .recent_projects
+                .iter()
+                .filter_map(|project| {
+                    let ProjectLocation::Ssh {
+                        connection_id,
+                        root,
+                    } = &project.location
+                    else {
+                        return None;
+                    };
+                    (connection_id == &connection.id).then(|| SshConnectionListEntry {
                         action: SshConnectionListAction::OpenRecent {
                             connection_id: connection_id.clone(),
                             root: root.clone(),
                         },
-                        title: project.title.clone().into(),
-                        subtitle: endpoint.into(),
-                        status: status.into(),
-                        tone,
+                        title: root.to_string().into(),
+                        subtitle: "".into(),
+                        status: "".into(),
+                        tone: SshConnectionListTone::Neutral,
                     })
-                }
-                ProjectLocation::Local { .. } => None,
-            })
-            .take(5)
-            .collect::<Vec<_>>();
-        let connection_entries = self
-            .ssh
-            .connections
-            .connections
-            .iter()
-            .map(|connection| {
-                let (status, tone) = ssh_connection_status(
-                    self.ssh
-                        .statuses
-                        .get(&connection.id)
-                        .map(|status| status.state),
-                    &self.ui_text,
-                );
-                SshConnectionListEntry {
-                    action: SshConnectionListAction::Open(connection.id.clone()),
-                    title: connection.name.clone().into(),
-                    subtitle: format!(
-                        "{}@{}:{}",
-                        connection.user, connection.host, connection.port
-                    )
-                    .into(),
-                    status: status.into(),
-                    tone,
-                }
-            })
-            .collect::<Vec<_>>();
-        let mut sections = Vec::with_capacity(2);
-        if !recent_entries.is_empty() {
+                })
+                .collect::<Vec<_>>();
+            entries.push(SshConnectionListEntry {
+                action: SshConnectionListAction::Open(connection.id.clone()),
+                title: self.ui_text.get(UiTextKey::CommandProjectOpenTitle).into(),
+                subtitle: "".into(),
+                status: "".into(),
+                tone: SshConnectionListTone::Neutral,
+            });
+            entries.push(SshConnectionListEntry {
+                action: SshConnectionListAction::Edit(connection.id.clone()),
+                title: self.ui_text.get(UiTextKey::SshEditConnection).into(),
+                subtitle: "".into(),
+                status: "".into(),
+                tone: SshConnectionListTone::Neutral,
+            });
             sections.push(SshConnectionListSection {
-                title: self.ui_text.get(UiTextKey::SshProjectRecent).into(),
-                entries: recent_entries,
+                title: format!(
+                    "{} ({}@{}:{})",
+                    connection.name, connection.user, connection.host, connection.port
+                )
+                .into(),
+                entries,
             });
         }
-        sections.push(SshConnectionListSection {
-            title: self.ui_text.get(UiTextKey::SshConnections).into(),
-            entries: connection_entries,
-        });
 
         if let Some(list) = self.ssh.project_picker.connection_list.clone() {
             list.update(cx, |list, cx| {
@@ -1053,15 +1031,22 @@ impl WorkbenchView {
                 window,
                 cx,
             )
+            .searchable(true)
         });
         let subscription = cx.subscribe(
             &list,
             |this, list: Entity<ListState<SshConnectionListDelegate>>, event, cx| {
+                if matches!(event, ListEvent::Cancel) {
+                    this.close_ssh_project_picker(cx);
+                    cx.notify();
+                    return;
+                }
                 let ListEvent::Confirm(index) = event else {
                     return;
                 };
                 let action = list.read(cx).delegate().action(*index).cloned();
                 match action {
+                    Some(SshConnectionListAction::New) => this.new_ssh_project_connection(),
                     Some(SshConnectionListAction::Open(connection_id)) => {
                         this.select_ssh_project_connection(connection_id, cx);
                     }
@@ -1071,13 +1056,18 @@ impl WorkbenchView {
                     }) => {
                         this.open_recent_ssh_project(connection_id, root, cx);
                     }
-                    Some(SshConnectionListAction::Edit(_)) | None => {}
+                    Some(SshConnectionListAction::Edit(connection_id)) => {
+                        this.edit_ssh_connection(&connection_id);
+                        this.ssh.project_picker.view = SshProjectPickerView::QuickConnect;
+                    }
+                    None => {}
                 }
                 cx.notify();
             },
         );
         self.ssh.project_picker.connection_list = Some(list.clone());
         self.ssh.project_picker.connection_list_subscription = Some(subscription);
+        list.update(cx, |list, cx| list.focus(window, cx));
         list
     }
 }
@@ -1175,6 +1165,10 @@ pub(super) fn ssh_project_picker_overlay(
             .w(ui_style.palette.remote_panel_width)
             .max_w(ui_style.palette.remote_panel_width)
             .max_h(ui_style.palette.remote_panel_max_height)
+            .when(
+                root.ssh.project_picker.view == SshProjectPickerView::Connections,
+                |this| this.p_0(),
+            )
             .child(content),
         YtttDialogPlacement::Top,
         theme,
@@ -1190,71 +1184,20 @@ fn ssh_project_connections(
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
     let connection_list = root.ssh_project_connection_list(window, cx);
-    let new_connection = yttt_row(
-        YtttRowKind::PaletteCompact,
-        SelectableState::Inactive,
-        true,
-        theme,
-        ui_style,
-    )
-    .id("ssh-project-new-connection")
-    .debug_selector(|| "ssh-project-new-connection".to_string())
-    .mx(ui_style.palette.list_padding_x)
-    .flex()
-    .items_center()
-    .gap(ui_style.palette.item_content_gap)
-    .on_click(cx.listener(|this, _, _window, cx| {
-        this.new_ssh_project_connection();
-        cx.notify();
-    }))
-    .child(
-        div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .justify_center()
-            .w(ui_style.palette.icon_column_width)
-            .child(
-                Icon::new(IconName::Plus)
-                    .size(ui_style.palette.icon_size)
-                    .text_color(theme.text_muted),
-            ),
-    )
-    .child(
-        div()
-            .text_sm()
-            .text_color(theme.text)
-            .child(root.ui_text.get(UiTextKey::SshNewConnection)),
-    );
 
-    let mut body = div()
-        .flex()
-        .flex_col()
-        .gap(ui_style.spacing.md)
-        .child(yttt_dialog_header(
-            "close-ssh-project-picker",
-            root.ui_text.get(UiTextKey::SshOpenRemoteProject),
-            theme,
-            ui_style,
-            cx.listener(|this, _, _window, cx| {
-                this.close_ssh_project_picker(cx);
-                cx.notify();
-            }),
-        ))
-        .child(new_connection)
-        .child(
-            div()
-                .debug_selector(|| "ssh-project-connection-list".to_string())
-                .h(ui_style.palette.remote_list_height)
-                .min_h_0()
-                .overflow_hidden()
-                .when(ui_style.palette.item_cards, |this| {
-                    this.rounded(ui_style.radius.control)
-                        .border(ui_style.border.hairline)
-                        .border_color(theme.border)
-                })
-                .child(List::new(&connection_list).size_full()),
-        );
+    let mut body = div().flex().flex_col().child(
+        div()
+            .debug_selector(|| "ssh-project-connection-list".to_string())
+            .h(ui_style.palette.remote_list_height)
+            .min_h_0()
+            .overflow_hidden()
+            .when(ui_style.palette.item_cards, |this| {
+                this.rounded(ui_style.radius.control)
+                    .border(ui_style.border.hairline)
+                    .border_color(theme.border)
+            })
+            .child(List::new(&connection_list).size_full()),
+    );
     if let Some(error) = root.ssh.project_picker.error.clone() {
         body = body.child(
             yttt_alert(
@@ -1273,7 +1216,7 @@ fn ssh_project_connections(
             .justify_end()
             .border_t(ui_style.border.hairline)
             .border_color(theme.border)
-            .pt(ui_style.spacing.md)
+            .p(ui_style.spacing.sm)
             .child(yttt_dialog_button(
                 cx,
                 "ssh-project-cancel",

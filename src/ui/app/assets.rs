@@ -143,3 +143,28 @@ pub(crate) fn external_icon_asset_path(relative_path: &Path) -> SharedString {
     )
     .into()
 }
+
+pub(crate) fn load_ui_fonts(cx: &gpui::App) {
+    cx.text_system()
+        .add_fonts(vec![
+            Cow::Borrowed(
+                include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf")
+                    .as_slice(),
+            ),
+            Cow::Borrowed(
+                include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Italic.ttf")
+                    .as_slice(),
+            ),
+            Cow::Borrowed(
+                include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-SemiBold.ttf")
+                    .as_slice(),
+            ),
+            Cow::Borrowed(
+                include_bytes!(
+                    "../../../assets/fonts/ibm-plex-sans/IBMPlexSans-SemiBoldItalic.ttf"
+                )
+                .as_slice(),
+            ),
+        ])
+        .expect("bundled IBM Plex Sans fonts must be valid");
+}

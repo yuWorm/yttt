@@ -1,7 +1,8 @@
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
 use gpui::{
-    App, ClickEvent, Div, ElementId, Pixels, Rems, Rgba, Stateful, Window, div, prelude::*,
+    App, ClickEvent, Div, ElementId, IntoElement, Pixels, Rems, Rgba, Stateful, Window, div,
+    prelude::*,
 };
 use gpui_component::{
     Icon, IconName, Sizable as _,
@@ -40,22 +41,22 @@ pub fn yttt_icon_button_style(
         YtttIconButtonKind::Toolbar => (
             ui_style.icon_buttons.toolbar_size,
             ui_style.icon_buttons.toolbar_radius,
-            theme.text_muted,
+            theme.icon,
         ),
         YtttIconButtonKind::SidebarHeader => (
             ui_style.icon_buttons.sidebar_header_size,
             ui_style.icon_buttons.sidebar_header_radius,
-            theme.text_subtle,
+            theme.icon_muted,
         ),
         YtttIconButtonKind::TabClose => (
             ui_style.icon_buttons.tab_close_size,
             ui_style.icon_buttons.tab_close_radius,
-            theme.text_subtle,
+            theme.icon_muted,
         ),
         YtttIconButtonKind::OverlayClose => (
             ui_style.icon_buttons.overlay_close_size,
             ui_style.icon_buttons.overlay_close_radius,
-            theme.text_muted,
+            theme.icon,
         ),
     };
 
@@ -67,8 +68,8 @@ pub fn yttt_icon_button_style(
         hover_background: theme.ghost_element_hover,
         active_background: theme.ghost_element_active,
         text,
-        hover_text: theme.text,
-        active_text: theme.accent,
+        hover_text: theme.icon,
+        active_text: theme.icon_accent,
     }
 }
 
@@ -101,6 +102,18 @@ where
         })
         .on_click(on_click)
         .child(Icon::new(icon).size(style.icon_size))
+}
+
+pub fn yttt_toolbar_icon_group(
+    buttons: impl IntoIterator<Item = impl IntoElement>,
+    ui_style: UiStyle,
+) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(ui_style.icon_buttons.toolbar_group_gap)
+        .px(ui_style.icon_buttons.toolbar_group_padding_x)
+        .children(buttons)
 }
 
 pub fn yttt_menu_icon_button(

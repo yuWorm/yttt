@@ -583,7 +583,12 @@ impl WorkbenchView {
                     .text_sm()
                     .text_color(theme.text_subtle)
                     .child(self.ui_text.get(UiTextKey::ProjectFilesEmptyDirectory))
-                    .context_menu(move |menu, _, _| {
+                    .context_menu(move |menu, _window, cx| {
+                        let menu = yttt_ui::primitives::menu::yttt_popup_menu(
+                            menu,
+                            crate::ui::theme::current_workbench_theme(cx),
+                            crate::ui::theme::current_ui_style(cx),
+                        );
                         let new_file_tree = empty_tree.clone();
                         let new_directory_tree = empty_tree.clone();
                         let refresh_tree = empty_tree.clone();
@@ -675,8 +680,20 @@ impl WorkbenchView {
             this.bg(theme.ghost_element_selected)
                 .text_color(panel_tab_style.active_text)
         })
-        .tooltip(move |window, cx| Tooltip::new(files_tab_tooltip).build(window, cx))
-        .context_menu(move |menu, _, _| {
+        .tooltip(move |window, cx| {
+            yttt_ui::primitives::tooltip::yttt_tooltip(
+                files_tab_tooltip,
+                crate::ui::theme::current_workbench_theme(cx),
+                crate::ui::theme::current_ui_style(cx),
+            )
+            .build(window, cx)
+        })
+        .context_menu(move |menu, _window, cx| {
+            let menu = yttt_ui::primitives::menu::yttt_popup_menu(
+                menu,
+                crate::ui::theme::current_workbench_theme(cx),
+                crate::ui::theme::current_ui_style(cx),
+            );
             menu.item(PopupMenuItem::new(files_refresh_label).action(Box::new(ProjectPanelRefresh)))
         });
         let agent_sessions_tab = self.agent_sessions_enabled().then(|| {
@@ -707,8 +724,20 @@ impl WorkbenchView {
                         .text_color(panel_tab_style.active_text)
                 },
             )
-            .tooltip(move |window, cx| Tooltip::new(sessions_tab_tooltip).build(window, cx))
-            .context_menu(move |menu, _, _| {
+            .tooltip(move |window, cx| {
+                yttt_ui::primitives::tooltip::yttt_tooltip(
+                    sessions_tab_tooltip,
+                    crate::ui::theme::current_workbench_theme(cx),
+                    crate::ui::theme::current_ui_style(cx),
+                )
+                .build(window, cx)
+            })
+            .context_menu(move |menu, _window, cx| {
+                let menu = yttt_ui::primitives::menu::yttt_popup_menu(
+                    menu,
+                    crate::ui::theme::current_workbench_theme(cx),
+                    crate::ui::theme::current_ui_style(cx),
+                );
                 let sessions_refresh_workbench = sessions_refresh_workbench.clone();
                 menu.item(
                     PopupMenuItem::new(sessions_refresh_label).on_click(move |_, _, cx| {

@@ -138,6 +138,9 @@ struct UiThemeFile {
     tab_active_background: Option<String>,
     tab_inactive_background: Option<String>,
     titlebar: Option<String>,
+    titlebar_inactive_background: Option<String>,
+    toolbar_background: Option<String>,
+    statusbar_background: Option<String>,
     sidebar: Option<String>,
     tabbar: Option<String>,
     terminal_background: Option<String>,
@@ -150,6 +153,11 @@ struct UiThemeFile {
     text: Option<String>,
     text_muted: Option<String>,
     text_subtle: Option<String>,
+    text_disabled: Option<String>,
+    icon: Option<String>,
+    icon_muted: Option<String>,
+    icon_disabled: Option<String>,
+    icon_accent: Option<String>,
     accent: Option<String>,
     active_surface: Option<String>,
     hover_surface: Option<String>,
@@ -273,6 +281,9 @@ pub(crate) fn serialize_theme_file(theme: &AppTheme) -> Result<String, toml::ser
             tab_active_background: color_string(ui.tab_active_background),
             tab_inactive_background: color_string(ui.tab_inactive_background),
             titlebar: color_string(ui.titlebar_background),
+            titlebar_inactive_background: color_string(ui.titlebar_inactive_background),
+            toolbar_background: color_string(ui.toolbar_background),
+            statusbar_background: color_string(ui.statusbar_background),
             sidebar: color_string(ui.sidebar_background),
             tabbar: color_string(ui.tabbar_background),
             terminal_background: color_string(ui.terminal_background),
@@ -285,6 +296,11 @@ pub(crate) fn serialize_theme_file(theme: &AppTheme) -> Result<String, toml::ser
             text: color_string(ui.text),
             text_muted: color_string(ui.text_muted),
             text_subtle: color_string(ui.text_subtle),
+            text_disabled: color_string(ui.text_disabled),
+            icon: color_string(ui.icon),
+            icon_muted: color_string(ui.icon_muted),
+            icon_disabled: color_string(ui.icon_disabled),
+            icon_accent: color_string(ui.icon_accent),
             accent: color_string(ui.accent),
             active_surface: color_string(ui.active_surface),
             hover_surface: color_string(ui.hover_surface),
@@ -428,6 +444,27 @@ fn theme_from_file(file: ThemeFile, warnings: &mut Vec<ThemeLoadWarning>) -> Opt
         warnings,
     );
     apply_color(
+        &mut ui.titlebar_inactive_background,
+        file.ui.titlebar_inactive_background,
+        &theme_name,
+        "ui.titlebar_inactive_background",
+        warnings,
+    );
+    apply_color(
+        &mut ui.toolbar_background,
+        file.ui.toolbar_background,
+        &theme_name,
+        "ui.toolbar_background",
+        warnings,
+    );
+    apply_color(
+        &mut ui.statusbar_background,
+        file.ui.statusbar_background,
+        &theme_name,
+        "ui.statusbar_background",
+        warnings,
+    );
+    apply_color(
         &mut ui.border,
         file.ui.border,
         &theme_name,
@@ -468,6 +505,35 @@ fn theme_from_file(file: ThemeFile, warnings: &mut Vec<ThemeLoadWarning>) -> Opt
         file.ui.text_subtle,
         &theme_name,
         "ui.text_subtle",
+        warnings,
+    );
+    apply_color(
+        &mut ui.text_disabled,
+        file.ui.text_disabled,
+        &theme_name,
+        "ui.text_disabled",
+        warnings,
+    );
+    apply_color(&mut ui.icon, file.ui.icon, &theme_name, "ui.icon", warnings);
+    apply_color(
+        &mut ui.icon_muted,
+        file.ui.icon_muted,
+        &theme_name,
+        "ui.icon_muted",
+        warnings,
+    );
+    apply_color(
+        &mut ui.icon_disabled,
+        file.ui.icon_disabled,
+        &theme_name,
+        "ui.icon_disabled",
+        warnings,
+    );
+    apply_color(
+        &mut ui.icon_accent,
+        file.ui.icon_accent,
+        &theme_name,
+        "ui.icon_accent",
         warnings,
     );
     apply_color(

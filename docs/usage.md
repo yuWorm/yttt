@@ -35,8 +35,9 @@ provide a project or personal layout override.
 
 Normal application launches remain local. The bottom status bar identifies the current
 environment; connecting a remote service never replaces the current local window.
-Use **Remote services** on the homepage to manage SSH Server connections or open the
-remembered TLS Host connection list. Connecting opens an independent Client window.
+Use **Remote services** on the homepage to open a separate management window for SSH Server
+connections or the remembered TLS Host connection list. The workbench stays usable behind it;
+connecting opens an independent Client window.
 
 Both local and remote windows restore their Host's confirmed workspace state before starting
 terminal/Agent views. A workspace with opened projects goes directly to its project page; a
@@ -305,6 +306,17 @@ Discard and Continue, or Cancel. A save failure leaves the file, project, or win
 - Create, rename, delete and copy/move operate within one Host environment. Local and remote
   Clients do not perform implicit cross-environment file transfers.
 
+## Settings Window
+
+Open Settings with `Cmd+,` on macOS or `Ctrl+,` on other platforms. Settings opens in its own
+native window, with a searchable category sidebar and a scrollable content area. Repeating the
+command focuses the existing window instead of opening a duplicate. Closing and reopening it
+retains the search and selected category for that workbench session.
+
+Use the native close control or `Cmd+W` / `Ctrl+W` to close the settings window without closing
+workbench tabs. Settings navigation, shortcut recording, and nested dialogs stay in this window;
+Global Vim settings navigation does not switch tabs in the background workbench.
+
 ## Desktop Permissions
 
 Open **Settings → Permissions** to inspect and request desktop access used by development
@@ -503,6 +515,20 @@ selection = "#3f5f9f"
 `ui.selection` is the global text-selection color for inputs and code editors. It is independent
 from `ui.focus_ring`; if omitted, it defaults to the resolved `ui.focus_ring` value for
 backward-compatible existing themes.
+
+With `[theme].ui_style = "zed"`, an empty `general.ui_font_family` uses bundled **IBM Plex Sans**;
+the Rounded style retains the system UI font. An explicit family overrides either fallback.
+UI controls and picker geometry scale with `general.ui_font_size`. In the Zed style, terminal
+row height is `terminal.font_size × terminal.line_height`; Rounded retains font-metric-based
+row height. Terminal grid origins are snapped to device pixels in the Zed style.
+
+Imported Zed themes resolve missing or `null` color roles from Zed's dark/light defaults.
+Muted, placeholder, disabled, and icon colors remain independent, as do the title bar,
+inactive title bar, toolbar, and status bar surfaces.
+
+**Open SSH Project** groups recent remote paths and connection actions under each saved server.
+Search matches server names, connection details, and paths while retaining the matching server
+heading. Press `Escape` to close the picker without opening a connection.
 
 ## Icon Themes
 

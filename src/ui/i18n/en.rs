@@ -275,6 +275,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::CommandPaletteOpenTitle => "Open Command Palette",
         UiTextKey::CommandPaletteOpenDescription => "Search and run commands",
         UiTextKey::CommandSettingsOpenTitle => "Open Settings",
+        UiTextKey::SettingsWindowTitle => "Settings",
         UiTextKey::CommandSettingsOpenDescription => "Configure YTTT",
         UiTextKey::CommandSettingsKeybindingsTitle => "Open Keybindings File",
         UiTextKey::CommandSettingsKeybindingsDescription => {

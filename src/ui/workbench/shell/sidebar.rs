@@ -8,7 +8,6 @@ use gpui_component::{
     Icon, IconName, Sizable as _,
     menu::{ContextMenuExt as _, PopupMenuItem},
     spinner::Spinner,
-    tooltip::Tooltip,
 };
 
 use crate::commands::CommandId;
@@ -300,8 +299,8 @@ where
         .when(collapsed, |this| {
             this.border_r(style.border_width).border_color(theme.border)
         })
-        .px(ui_style.spacing.md)
-        .py(ui_style.spacing.lg)
+        .px(ui_style.shell.sidebar_padding_x)
+        .py(ui_style.shell.sidebar_padding_y)
         .child(project_sidebar_header(
             collapsed,
             theme,
@@ -373,7 +372,7 @@ where
         .flex()
         .items_center()
         .justify_between()
-        .pb(ui_style.spacing.lg)
+        .pb(ui_style.shell.sidebar_header_gap)
         .text_xs()
         .text_color(theme.text_subtle);
 
@@ -438,7 +437,14 @@ fn agent_state_icon(
         .items_center()
         .justify_center()
         .size(gpui::px(14.0))
-        .tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx))
+        .tooltip(move |window, cx| {
+            yttt_ui::primitives::tooltip::yttt_tooltip(
+                label.clone(),
+                crate::ui::theme::current_workbench_theme(cx),
+                crate::ui::theme::current_ui_style(cx),
+            )
+            .build(window, cx)
+        })
         .child(glyph)
         .into_any_element()
 }
@@ -511,7 +517,14 @@ pub(in super::super) fn agent_type_icon(
         .items_center()
         .justify_center()
         .size(gpui::px(16.0))
-        .tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx))
+        .tooltip(move |window, cx| {
+            yttt_ui::primitives::tooltip::yttt_tooltip(
+                label.clone(),
+                crate::ui::theme::current_workbench_theme(cx),
+                crate::ui::theme::current_ui_style(cx),
+            )
+            .build(window, cx)
+        })
         .child(glyph)
         .into_any_element()
 }
@@ -579,7 +592,14 @@ fn child_agent_row(
                 .text_xs()
                 .text_color(theme.text_subtle)
                 .truncate()
-                .tooltip(move |window, cx| Tooltip::new(tooltip_label.clone()).build(window, cx))
+                .tooltip(move |window, cx| {
+                    yttt_ui::primitives::tooltip::yttt_tooltip(
+                        tooltip_label.clone(),
+                        crate::ui::theme::current_workbench_theme(cx),
+                        crate::ui::theme::current_ui_style(cx),
+                    )
+                    .build(window, cx)
+                })
                 .child(label),
         )
         .child(agent_state_icon(state_id, child.state, theme))
@@ -644,7 +664,12 @@ where
                         .text_color(row_style.title)
                         .truncate()
                         .tooltip(move |window, cx| {
-                            Tooltip::new(tooltip_label.clone()).build(window, cx)
+                            yttt_ui::primitives::tooltip::yttt_tooltip(
+                                tooltip_label.clone(),
+                                crate::ui::theme::current_workbench_theme(cx),
+                                crate::ui::theme::current_ui_style(cx),
+                            )
+                            .build(window, cx)
                         })
                         .child(label),
                 )
@@ -781,7 +806,12 @@ where
                     )
                 }))
         }))
-        .context_menu(move |menu, _, _| {
+        .context_menu(move |menu, _window, cx| {
+            let menu = yttt_ui::primitives::menu::yttt_popup_menu(
+                menu,
+                crate::ui::theme::current_workbench_theme(cx),
+                crate::ui::theme::current_ui_style(cx),
+            );
             menu.action_context(action_context.clone())
                 .item(
                     PopupMenuItem::new(text.get(UiTextKey::CommandProjectCreateTitle))

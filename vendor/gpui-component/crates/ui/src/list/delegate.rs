@@ -48,7 +48,7 @@ pub trait ListDelegate: Sized + 'static {
 
     /// Render the section header at the given index, default is None.
     ///
-    /// NOTE: Every header should have same height.
+    /// Each section is measured independently; absent headers occupy no space.
     fn render_section_header(
         &mut self,
         section: usize,

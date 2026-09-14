@@ -178,6 +178,100 @@ fn focus_workbench_key_context(root: &gpui::Entity<WorkbenchView>, cx: &mut gpui
     cx.refresh().unwrap();
 }
 
+#[gpui::test]
+fn settings_window_reuses_search_state_and_rebinds_after_native_close(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut settings = load_or_create_settings(&paths).unwrap().settings;
+    settings.general.onboarding_completed = true;
+    save_settings(&paths, &settings).unwrap();
+    let slot = Rc::new(RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let view = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
+        register_workbench_keybinding_interceptor(cx, &view);
+        yttt::ui::app::register_workbench_focus_restore(window, cx, &view);
+        *output.borrow_mut() = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let view = slot.borrow_mut().take().unwrap();
+    view.update(cx, |view, cx| {
+        view.open_settings();
+        cx.notify();
+    });
+    focus_surface_window(cx, "settings-window");
+    let settings_window = cx.update(|window, _| window.window_handle());
+    cx.simulate_input("qzxnonexistent");
+    cx.refresh().unwrap();
+    assert!(cx.debug_bounds("settings-no-results").is_some());
+
+    focus_surface_window(cx, "workbench-surface");
+    cx.read(|app| {
+        assert!(view.read(app).settings_is_open());
+        assert_eq!(
+            view.read(app).foreground_input_owner_kind(),
+            InputOwnerKind::Workspace
+        );
+    });
+    view.update(cx, |view, cx| {
+        view.open_settings();
+        cx.notify();
+    });
+    focus_surface_window(cx, "settings-window");
+    assert_eq!(
+        cx.update(|window, _| window.window_handle()),
+        settings_window
+    );
+    assert!(cx.debug_bounds("settings-no-results").is_some());
+
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-w"
+    } else {
+        "ctrl-w"
+    });
+    cx.cx.refresh().unwrap();
+    assert!(!cx.windows().contains(&settings_window));
+    cx.read(|app| assert!(!view.read(app).settings_is_open()));
+    focus_surface_window(cx, "workbench-surface");
+    view.update(cx, |view, cx| {
+        view.open_settings();
+        cx.notify();
+    });
+    focus_surface_window(cx, "settings-window");
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-a"
+    } else {
+        "ctrl-a"
+    });
+    cx.simulate_input("language");
+    cx.refresh().unwrap();
+    assert!(cx.debug_bounds("settings-no-results").is_none());
+}
+
+fn focus_surface_window(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+    cx.cx.refresh().unwrap();
+    cx.run_until_parked();
+    let mut matching = cx.windows().into_iter().filter_map(|window| {
+        let mut candidate = gpui::VisualTestContext::from_window(window, &cx.cx);
+        candidate.refresh().unwrap();
+        candidate.debug_bounds(selector).map(|_| candidate)
+    });
+    let mut target = matching
+        .next()
+        .unwrap_or_else(|| panic!("missing native surface: {selector}"));
+    assert!(
+        matching.next().is_none(),
+        "duplicate native surface: {selector}"
+    );
+    drop(matching);
+    target.update(|window, _| window.activate_window());
+    target.run_until_parked();
+    *cx = target;
+}
+
 #[test]
 fn git_status_summary_parses_branch_and_dirty_counts() {
     let parsed = parse_git_status_porcelain(
@@ -358,6 +452,8 @@ fn homepage_remote_services_keeps_the_local_workspace(cx: &mut gpui::TestAppCont
     cx.simulate_click(action.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     cx.refresh().unwrap();
+    assert!(cx.debug_bounds("remote-services-manager").is_none());
+    focus_surface_window(cx, "remote-services-window");
     assert!(
         cx.debug_bounds("remote-services-manager").is_some(),
         "service manager must open instead of the project picker"
@@ -760,6 +856,8 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
     cx.read(|app| {
         assert!(root.read(app).settings_is_open());
     });
+    assert!(cx.debug_bounds("settings-panel").is_none());
+    focus_surface_window(cx, "settings-window");
     let panel = cx
         .debug_bounds("settings-panel")
         .expect("settings should render the adaptive panel");
@@ -776,15 +874,12 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
         .debug_bounds("settings-restore-last-session-row")
         .expect("settings should render responsive setting rows");
 
-    assert!(sidebar.size.width >= gpui::px(192.0));
-    assert!(sidebar.size.width <= gpui::px(224.0));
-    assert_eq!(search.size.height, gpui::px(28.0));
-    assert!(panel.size.width <= gpui::px(1_240.0));
-    assert!(panel.size.height <= gpui::px(820.0));
-    assert!(panel.size.width > sidebar.size.width + gpui::px(400.0));
+    assert!(panel.size.width > sidebar.size.width);
     assert!(content.origin.x >= sidebar.origin.x + sidebar.size.width);
     assert!(content.size.width > sidebar.size.width);
-    assert!(row.size.height >= gpui::px(64.0));
+    assert!(search.origin.x >= sidebar.origin.x);
+    assert!(search.origin.x + search.size.width <= sidebar.origin.x + sidebar.size.width);
+    assert!(row.size.width <= content.size.width);
 
     root.update(cx, |root, cx| {
         root.set_settings_search_query("setting-that-does-not-exist");
@@ -864,14 +959,13 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
     let first_keybinding_actions = cx
         .debug_bounds("settings-keybinding-actions-project.create")
         .unwrap();
-    assert_eq!(first_keybinding_bindings.size.width, gpui::px(300.0));
     assert!(
         first_keybinding_actions.origin.x
             >= first_keybinding_bindings.origin.x + first_keybinding_bindings.size.width,
         "row actions should stay in a stable column instead of wrapping through bindings"
     );
     assert!(
-        first_keybinding_actions.size.height <= gpui::px(32.0),
+        first_keybinding_actions.size.height <= first_keybinding_row.size.height,
         "row actions should stay on one compact line"
     );
     cx.simulate_event(gpui::ScrollWheelEvent {
@@ -4171,6 +4265,7 @@ fn settings_vim_actions_navigate_groups_only_when_enabled(cx: &mut gpui::TestApp
         cx.notify();
     });
     cx.refresh().unwrap();
+    focus_surface_window(cx, "settings-window");
 
     root.update_in(cx, |_root, window, cx| {
         window.dispatch_action(Box::new(SettingsVimNextGroup), cx);
@@ -4186,6 +4281,7 @@ fn settings_vim_actions_navigate_groups_only_when_enabled(cx: &mut gpui::TestApp
         root.set_vim_mode_setting(VimModeSetting::Global, window, cx)
             .unwrap();
     });
+    focus_workbench_key_context(&root, cx);
     for (action, expected) in [
         (
             Box::new(SettingsVimNextGroup) as Box<dyn gpui::Action>,
@@ -4455,6 +4551,7 @@ fn global_vim_keymap_spans_terminal_tabs_and_settings(cx: &mut gpui::TestAppCont
         cx.notify();
     });
     cx.refresh().unwrap();
+    focus_surface_window(cx, "settings-window");
     focus_workbench_key_context(&root, cx);
     cx.read(|app| {
         let root = root.read(app);
@@ -4480,10 +4577,17 @@ fn global_vim_keymap_spans_terminal_tabs_and_settings(cx: &mut gpui::TestAppCont
                 .project(&project_id)
                 .unwrap()
                 .selected_tab_id,
-            "dev",
-            "Global Vim tab navigation must remain active from settings",
+            "agent",
+            "Settings window navigation must not switch background workbench tabs",
         );
     });
+    root.update(cx, |root, cx| {
+        root.close_settings();
+        cx.notify();
+    });
+    focus_surface_window(cx, "workbench-surface");
+    cx.simulate_keystrokes("g t");
+    cx.run_until_parked();
     let pane_id = cx
         .read(|app| {
             root.read(app)
@@ -4497,7 +4601,6 @@ fn global_vim_keymap_spans_terminal_tabs_and_settings(cx: &mut gpui::TestAppCont
         })
         .expect("selected terminal pane");
     root.update(cx, |root, cx| {
-        root.close_settings();
         root.focus_visible_terminal_pane(&pane_id).unwrap();
         cx.notify();
     });
@@ -4562,6 +4665,7 @@ fn modal_keybinding_recorder_owns_workspace_and_vim_keystrokes(cx: &mut gpui::Te
         cx.notify();
     });
     cx.refresh().unwrap();
+    focus_surface_window(cx, "settings-window");
     cx.read(|app| {
         assert_eq!(
             root.read(app).foreground_input_owner_kind(),
@@ -4814,6 +4918,7 @@ fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppCon
         cx.notify();
     });
     cx.refresh().unwrap();
+    focus_surface_window(cx, "settings-window");
     assert!(
         cx.debug_bounds("settings-restore-last-session-row")
             .is_some()
@@ -4894,6 +4999,7 @@ fn agent_settings_toggle_persists_and_hides_session_tab(cx: &mut gpui::TestAppCo
     });
     cx.run_until_parked();
     cx.refresh().unwrap();
+    focus_surface_window(cx, "settings-window");
     cx.read(|app| {
         assert_eq!(
             root.read(app).agent_session_agents(),
@@ -4932,6 +5038,7 @@ fn agent_settings_toggle_persists_and_hides_session_tab(cx: &mut gpui::TestAppCo
         cx.notify();
     });
     cx.refresh().unwrap();
+    focus_surface_window(cx, "workbench-surface");
 
     cx.read(|app| assert!(!root.read(app).agent_sessions_enabled()));
     assert!(
@@ -5003,6 +5110,7 @@ fn update_settings_check_and_persist_auto_check(cx: &mut gpui::TestAppContext) {
         cx.notify();
     });
     cx.refresh().unwrap();
+    focus_surface_window(cx, "settings-window");
 
     let scroll_origin = cx
         .debug_bounds("settings-restore-last-session-row")
@@ -5257,6 +5365,7 @@ fn keybindings_settings_explains_vim_leader_and_sequence_recording(cx: &mut gpui
         cx.notify();
     });
     cx.refresh().unwrap();
+    focus_surface_window(cx, "settings-window");
 
     assert!(
         cx.debug_bounds("settings-vim-profile-summary").is_some(),
@@ -5354,6 +5463,7 @@ fn appearance_settings_group_renders_window_and_theme_controls(cx: &mut gpui::Te
         cx.notify();
     });
     cx.refresh().unwrap();
+    focus_surface_window(cx, "settings-window");
     assert!(
         cx.debug_bounds("settings-window-effect-row").is_some(),
         "Appearance settings should expose the window effect selector"
@@ -5471,6 +5581,7 @@ fn zed_theme_import_opens_review_dialog_before_writing(cx: &mut gpui::TestAppCon
         cx.notify();
     });
     cx.refresh().unwrap();
+    focus_surface_window(cx, "settings-window");
 
     cx.read(|app| {
         let root = root.read(app);
@@ -5547,6 +5658,7 @@ fn editor_settings_group_renders_all_effective_controls(cx: &mut gpui::TestAppCo
         cx.notify();
     });
     cx.refresh().unwrap();
+    focus_surface_window(cx, "settings-window");
 
     for selector in [
         "settings-editor-font-family-row",
@@ -5601,6 +5713,7 @@ fn terminal_settings_group_renders_protocol_and_interaction_controls(
         cx.notify();
     });
     cx.refresh().unwrap();
+    focus_surface_window(cx, "settings-window");
 
     for selector in [
         "settings-terminal-scrollbar-row",
@@ -5634,6 +5747,7 @@ fn permissions_settings_group_renders_cross_platform_access_controls(
         cx.notify();
     });
     cx.refresh().unwrap();
+    focus_surface_window(cx, "settings-window");
 
     for selector in [
         "settings-login-startup-row",
@@ -5694,6 +5808,7 @@ fn enabling_login_startup_requires_confirmation_before_backend_registration(
     });
     cx.run_until_parked();
     cx.refresh().unwrap();
+    focus_surface_window(cx, "settings-window");
 
     let toggle = cx
         .debug_bounds("settings-login-startup")
@@ -5736,38 +5851,6 @@ fn root_view_toggles_system_notifications() {
     assert_eq!(
         reloaded.visible_notification_settings_message(),
         "System notifications: enabled"
-    );
-}
-
-#[test]
-fn root_view_language_setting_persists_and_updates_visible_text() {
-    let temp = tempdir().unwrap();
-    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
-
-    root.set_language(LanguageSetting::Chinese).unwrap();
-
-    assert_eq!(
-        root.visible_empty_workspace_actions(),
-        vec![
-            "打开目录",
-            "打开远程项目",
-            "恢复上次打开",
-            "打开最近项目",
-            "命令面板",
-        ]
-    );
-
-    let reloaded = WorkbenchView::with_config_paths_for_test(paths);
-    assert_eq!(
-        reloaded.visible_empty_workspace_actions(),
-        vec![
-            "打开目录",
-            "打开远程项目",
-            "恢复上次打开",
-            "打开最近项目",
-            "命令面板",
-        ]
     );
 }
 

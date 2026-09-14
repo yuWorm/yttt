@@ -171,7 +171,7 @@ pub use pty::{
     PortablePtySession, ProcessHandle, ProcessStatus, PtyEvent, PtyIoOperation, TerminalExecution,
     TerminalRuntime, TerminalSpawnRequest, spawn_portable_pty_session,
 };
-pub use render::TerminalRenderer;
+pub use render::{TerminalLineHeightBasis, TerminalRenderer};
 pub use terminal::TerminalState;
 pub use view::{
     BellCallback, CancelSearch, Copy, DEFAULT_TERMINAL_URL_REGEX, ExitCallback, IoErrorCallback,

@@ -233,6 +233,7 @@ pub enum UiTextKey {
     CommandPaletteOpenTitle,
     CommandPaletteOpenDescription,
     CommandSettingsOpenTitle,
+    SettingsWindowTitle,
     CommandSettingsOpenDescription,
     CommandSettingsKeybindingsTitle,
     CommandSettingsKeybindingsDescription,

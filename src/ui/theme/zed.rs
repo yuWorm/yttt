@@ -297,339 +297,183 @@ fn convert_theme(
     metadata: ThemeMetadata,
 ) -> Result<AppTheme, ZedThemeImportError> {
     let fallback = AppTheme::one_dark();
-    let mut ui = fallback.ui;
+    let mut ui =
+        super::WorkbenchTheme::zed_defaults(!definition.appearance.eq_ignore_ascii_case("light"));
     let mut editor = fallback.editor;
     let mut terminal = fallback.terminal;
     let style = definition.style;
     let theme_name = definition.name;
 
-    ui.app_background = resolve_color(
-        &theme_name,
-        &[
-            ("background", style.background.as_deref()),
-            ("surface.background", style.surface_background.as_deref()),
-            ("editor.background", style.editor_background.as_deref()),
-        ],
-        ui.app_background,
-    )?;
-    ui.surface = resolve_color(
-        &theme_name,
-        &[
-            ("surface.background", style.surface_background.as_deref()),
-            ("background", style.background.as_deref()),
-        ],
-        ui.app_background,
-    )?;
-    ui.surface_elevated = resolve_color(
-        &theme_name,
-        &[
-            (
-                "elevated_surface.background",
-                style.elevated_surface_background.as_deref(),
-            ),
-            (
-                "status_bar.background",
-                style.status_bar_background.as_deref(),
-            ),
-        ],
+    // Missing/null roles retain Zed's appearance defaults. In particular, UI
+    // text must not inherit editor.foreground, hint, or syntax colors.
+    let color =
+        |key, value: Option<&str>, fallback| resolve_color(&theme_name, &[(key, value)], fallback);
+    ui.app_background = color("background", style.background.as_deref(), ui.app_background)?;
+    ui.surface = color(
+        "surface.background",
+        style.surface_background.as_deref(),
         ui.surface,
     )?;
-    ui.editor_background = resolve_color(
-        &theme_name,
-        &[
-            ("editor.background", style.editor_background.as_deref()),
-            ("background", style.background.as_deref()),
-        ],
-        ui.app_background,
-    )?;
-    ui.titlebar_background = resolve_color(
-        &theme_name,
-        &[
-            (
-                "title_bar.background",
-                style.title_bar_background.as_deref(),
-            ),
-            ("toolbar.background", style.toolbar_background.as_deref()),
-        ],
-        ui.app_background,
-    )?;
-    ui.sidebar_background = resolve_color(
-        &theme_name,
-        &[
-            ("panel.background", style.panel_background.as_deref()),
-            ("surface.background", style.surface_background.as_deref()),
-        ],
-        ui.surface,
-    )?;
-    ui.panel_background = resolve_color(
-        &theme_name,
-        &[
-            ("panel.background", style.panel_background.as_deref()),
-            ("surface.background", style.surface_background.as_deref()),
-        ],
-        ui.sidebar_background,
-    )?;
-    ui.tabbar_background = resolve_color(
-        &theme_name,
-        &[
-            ("tab_bar.background", style.tab_bar_background.as_deref()),
-            (
-                "tab.inactive_background",
-                style.tab_inactive_background.as_deref(),
-            ),
-        ],
+    ui.surface_elevated = color(
+        "elevated_surface.background",
+        style.elevated_surface_background.as_deref(),
         ui.surface_elevated,
     )?;
-    ui.tab_inactive_background = resolve_color(
-        &theme_name,
-        &[
-            (
-                "tab.inactive_background",
-                style.tab_inactive_background.as_deref(),
-            ),
-            ("tab_bar.background", style.tab_bar_background.as_deref()),
-        ],
-        ui.tabbar_background,
-    )?;
-    ui.tab_active_background = resolve_color(
-        &theme_name,
-        &[
-            (
-                "tab.active_background",
-                style.tab_active_background.as_deref(),
-            ),
-            ("editor.background", style.editor_background.as_deref()),
-        ],
+    ui.editor_background = color(
+        "editor.background",
+        style.editor_background.as_deref(),
         ui.editor_background,
     )?;
-    ui.terminal_background = resolve_color(
-        &theme_name,
-        &[
-            ("terminal.background", style.terminal_background.as_deref()),
-            ("editor.background", style.editor_background.as_deref()),
-        ],
-        ui.app_background,
+    ui.titlebar_background = color(
+        "title_bar.background",
+        style.title_bar_background.as_deref(),
+        ui.titlebar_background,
     )?;
-    ui.border = resolve_color(
-        &theme_name,
-        &[
-            ("border", style.border.as_deref()),
-            ("border.variant", style.border_variant.as_deref()),
-        ],
-        ui.border,
+    ui.titlebar_inactive_background = color(
+        "title_bar.inactive_background",
+        style.title_bar_inactive_background.as_deref(),
+        ui.titlebar_inactive_background,
     )?;
-    ui.border_strong = resolve_color(
-        &theme_name,
-        &[
-            (
-                "scrollbar.thumb.border",
-                style.scrollbar_thumb_border.as_deref(),
-            ),
-            ("border.selected", style.border_selected.as_deref()),
-        ],
-        ui.border,
+    ui.toolbar_background = color(
+        "toolbar.background",
+        style.toolbar_background.as_deref(),
+        ui.toolbar_background,
     )?;
-    ui.split_line = resolve_color(
-        &theme_name,
-        &[
-            ("border.variant", style.border_variant.as_deref()),
-            ("border", style.border.as_deref()),
-        ],
-        ui.border,
+    ui.statusbar_background = color(
+        "status_bar.background",
+        style.status_bar_background.as_deref(),
+        ui.statusbar_background,
     )?;
-    ui.split_line_active = resolve_color(
-        &theme_name,
-        &[
-            ("border.focused", style.border_focused.as_deref()),
-            (
-                "scrollbar.thumb.hover_background",
-                style.scrollbar_thumb_hover_background.as_deref(),
-            ),
-        ],
+    ui.panel_background = color(
+        "panel.background",
+        style.panel_background.as_deref(),
+        ui.panel_background,
+    )?;
+    ui.sidebar_background = ui.panel_background;
+    ui.tabbar_background = color(
+        "tab_bar.background",
+        style.tab_bar_background.as_deref(),
+        ui.tabbar_background,
+    )?;
+    ui.tab_inactive_background = color(
+        "tab.inactive_background",
+        style.tab_inactive_background.as_deref(),
+        ui.tab_inactive_background,
+    )?;
+    ui.tab_active_background = color(
+        "tab.active_background",
+        style.tab_active_background.as_deref(),
+        ui.tab_active_background,
+    )?;
+    ui.terminal_background = color(
+        "terminal.background",
+        style.terminal_background.as_deref(),
+        ui.terminal_background,
+    )?;
+    ui.border = color("border", style.border.as_deref(), ui.border)?;
+    ui.border_variant = color(
+        "border.variant",
+        style.border_variant.as_deref(),
+        ui.border_variant,
+    )?;
+    ui.border_focused = color(
+        "border.focused",
+        style.border_focused.as_deref(),
+        ui.border_focused,
+    )?;
+    ui.border_strong = color(
+        "scrollbar.thumb.border",
+        style.scrollbar_thumb_border.as_deref(),
         ui.border_strong,
     )?;
-    ui.text = resolve_color(
-        &theme_name,
-        &[
-            ("text", style.text.as_deref()),
-            ("editor.foreground", style.editor_foreground.as_deref()),
-        ],
-        ui.text,
-    )?;
-    ui.text_muted = resolve_color(
-        &theme_name,
-        &[
-            ("text.muted", style.text_muted.as_deref()),
-            ("hint", style.hint.as_deref()),
-            ("editor.line_number", style.editor_line_number.as_deref()),
-        ],
-        ui.text_muted,
-    )?;
-    ui.text_subtle = resolve_color(
-        &theme_name,
-        &[
-            ("text.placeholder", style.text_placeholder.as_deref()),
-            ("ignored", style.ignored.as_deref()),
-            ("editor.line_number", style.editor_line_number.as_deref()),
-        ],
+    ui.split_line = ui.border_variant;
+    ui.split_line_active = ui.border_focused;
+    ui.text = color("text", style.text.as_deref(), ui.text)?;
+    ui.text_muted = color("text.muted", style.text_muted.as_deref(), ui.text_muted)?;
+    ui.text_subtle = color(
+        "text.placeholder",
+        style.text_placeholder.as_deref(),
         ui.text_subtle,
     )?;
-    ui.accent = resolve_color(
-        &theme_name,
-        &[
-            ("text.accent", style.text_accent.as_deref()),
-            ("syntax.function.color", syntax_value(&style, "function")),
-            ("players[0].cursor", player_cursor(&style)),
-        ],
-        ui.accent,
+    ui.text_disabled = color(
+        "text.disabled",
+        style.text_disabled.as_deref(),
+        ui.text_disabled,
     )?;
-    ui.active_surface = resolve_color(
-        &theme_name,
-        &[
-            ("element.selected", style.element_selected.as_deref()),
-            (
-                "ghost_element.selected",
-                style.ghost_element_selected.as_deref(),
-            ),
-            (
-                "tab.active_background",
-                style.tab_active_background.as_deref(),
-            ),
-        ],
-        ui.active_surface,
+    ui.accent = color("text.accent", style.text_accent.as_deref(), ui.accent)?;
+    ui.icon = color("icon", style.icon.as_deref(), ui.icon)?;
+    ui.icon_muted = color("icon.muted", style.icon_muted.as_deref(), ui.icon_muted)?;
+    ui.icon_disabled = color(
+        "icon.disabled",
+        style.icon_disabled.as_deref(),
+        ui.icon_disabled,
     )?;
-    ui.hover_surface = resolve_color(
-        &theme_name,
-        &[
-            ("element.hover", style.element_hover.as_deref()),
-            ("ghost_element.hover", style.ghost_element_hover.as_deref()),
-        ],
-        ui.active_surface,
-    )?;
-    ui.element_background = resolve_color(
-        &theme_name,
-        &[
-            ("element.background", style.element_background.as_deref()),
-            (
-                "elevated_surface.background",
-                style.elevated_surface_background.as_deref(),
-            ),
-        ],
-        ui.surface_elevated,
-    )?;
-    ui.element_hover = resolve_color(
-        &theme_name,
-        &[("element.hover", style.element_hover.as_deref())],
-        ui.hover_surface,
-    )?;
-    ui.element_active = resolve_color(
-        &theme_name,
-        &[("element.active", style.element_active.as_deref())],
-        ui.active_surface,
-    )?;
-    ui.element_selected = resolve_color(
-        &theme_name,
-        &[("element.selected", style.element_selected.as_deref())],
-        ui.active_surface,
-    )?;
-    ui.element_disabled = resolve_color(
-        &theme_name,
-        &[("element.disabled", style.element_disabled.as_deref())],
+    ui.icon_accent = color("icon.accent", style.icon_accent.as_deref(), ui.icon_accent)?;
+    ui.element_background = color(
+        "element.background",
+        style.element_background.as_deref(),
         ui.element_background,
     )?;
-    ui.ghost_element_background = resolve_color(
-        &theme_name,
-        &[(
-            "ghost_element.background",
-            style.ghost_element_background.as_deref(),
-        )],
+    ui.element_hover = color(
+        "element.hover",
+        style.element_hover.as_deref(),
+        ui.element_hover,
+    )?;
+    ui.element_active = color(
+        "element.active",
+        style.element_active.as_deref(),
+        ui.element_active,
+    )?;
+    ui.element_selected = color(
+        "element.selected",
+        style.element_selected.as_deref(),
+        ui.element_selected,
+    )?;
+    ui.element_disabled = color(
+        "element.disabled",
+        style.element_disabled.as_deref(),
+        ui.element_disabled,
+    )?;
+    ui.ghost_element_background = color(
+        "ghost_element.background",
+        style.ghost_element_background.as_deref(),
         ui.ghost_element_background,
     )?;
-    ui.ghost_element_hover = resolve_color(
-        &theme_name,
-        &[("ghost_element.hover", style.ghost_element_hover.as_deref())],
-        ui.hover_surface,
+    ui.ghost_element_hover = color(
+        "ghost_element.hover",
+        style.ghost_element_hover.as_deref(),
+        ui.ghost_element_hover,
     )?;
-    ui.ghost_element_active = resolve_color(
-        &theme_name,
-        &[(
-            "ghost_element.active",
-            style.ghost_element_active.as_deref(),
-        )],
-        ui.active_surface,
+    ui.ghost_element_active = color(
+        "ghost_element.active",
+        style.ghost_element_active.as_deref(),
+        ui.ghost_element_active,
     )?;
-    ui.ghost_element_selected = resolve_color(
-        &theme_name,
-        &[(
-            "ghost_element.selected",
-            style.ghost_element_selected.as_deref(),
-        )],
-        ui.active_surface,
+    ui.ghost_element_selected = color(
+        "ghost_element.selected",
+        style.ghost_element_selected.as_deref(),
+        ui.ghost_element_selected,
     )?;
-    ui.ghost_element_disabled = resolve_color(
-        &theme_name,
-        &[(
-            "ghost_element.disabled",
-            style.ghost_element_disabled.as_deref(),
-        )],
-        ui.ghost_element_background,
+    ui.ghost_element_disabled = color(
+        "ghost_element.disabled",
+        style.ghost_element_disabled.as_deref(),
+        ui.ghost_element_disabled,
     )?;
-    ui.danger = resolve_color(&theme_name, &[("error", style.error.as_deref())], ui.danger)?;
-    ui.success = resolve_color(
-        &theme_name,
-        &[
-            ("success", style.success.as_deref()),
-            ("created", style.created.as_deref()),
-        ],
-        ui.success,
-    )?;
-    ui.warning = resolve_color(
-        &theme_name,
-        &[
-            ("warning", style.warning.as_deref()),
-            ("modified", style.modified.as_deref()),
-        ],
-        ui.warning,
-    )?;
-    ui.focus_ring = resolve_color(
-        &theme_name,
-        &[
-            ("border.focused", style.border_focused.as_deref()),
-            ("border.selected", style.border_selected.as_deref()),
-        ],
-        ui.border,
-    )?;
-    ui.border_variant = resolve_color(
-        &theme_name,
-        &[
-            ("border.variant", style.border_variant.as_deref()),
-            ("border", style.border.as_deref()),
-        ],
-        ui.border,
-    )?;
-    ui.border_focused = resolve_color(
-        &theme_name,
-        &[
-            ("border.focused", style.border_focused.as_deref()),
-            ("border.selected", style.border_selected.as_deref()),
-        ],
-        ui.focus_ring,
-    )?;
-    ui.selection = resolve_color(
-        &theme_name,
-        &[("players[0].selection", player_selection(&style))],
+    ui.active_surface = ui.ghost_element_selected;
+    ui.hover_surface = ui.ghost_element_hover;
+    ui.danger = color("error", style.error.as_deref(), ui.danger)?;
+    ui.success = color("success", style.success.as_deref(), ui.success)?;
+    ui.warning = color("warning", style.warning.as_deref(), ui.warning)?;
+    ui.focus_ring = ui.border_focused;
+    ui.selection = color(
+        "players[0].selection",
+        player_selection(&style),
         ui.selection,
     )?;
-    ui.focused_pane_border = resolve_color(
-        &theme_name,
-        &[
-            (
-                "panel.focused_border",
-                style.panel_focused_border.as_deref(),
-            ),
-            ("border.focused", style.border_focused.as_deref()),
-        ],
-        ui.focus_ring,
+    ui.focused_pane_border = color(
+        "panel.focused_border",
+        style.panel_focused_border.as_deref(),
+        ui.focused_pane_border,
     )?;
 
     editor.background = resolve_color(
@@ -932,13 +776,6 @@ fn syntax_value<'a>(style: &'a ZedStyle, key: &str) -> Option<&'a str> {
         .and_then(|entry| entry.color.as_deref())
 }
 
-fn player_cursor(style: &ZedStyle) -> Option<&str> {
-    style
-        .players
-        .first()
-        .and_then(|player| player.cursor.as_deref())
-}
-
 fn player_selection(style: &ZedStyle) -> Option<&str> {
     style
         .players
@@ -1060,10 +897,21 @@ struct ZedStyle {
     text_placeholder: Option<String>,
     #[serde(rename = "text.accent")]
     text_accent: Option<String>,
+    #[serde(rename = "text.disabled")]
+    text_disabled: Option<String>,
+    icon: Option<String>,
+    #[serde(rename = "icon.muted")]
+    icon_muted: Option<String>,
+    #[serde(rename = "icon.disabled")]
+    icon_disabled: Option<String>,
+    #[serde(rename = "icon.accent")]
+    icon_accent: Option<String>,
     #[serde(rename = "status_bar.background")]
     status_bar_background: Option<String>,
     #[serde(rename = "title_bar.background")]
     title_bar_background: Option<String>,
+    #[serde(rename = "title_bar.inactive_background")]
+    title_bar_inactive_background: Option<String>,
     #[serde(rename = "toolbar.background")]
     toolbar_background: Option<String>,
     #[serde(rename = "tab_bar.background")]
@@ -1211,6 +1059,15 @@ mod tests {
         assert_eq!(color_hex(theme.ui.ghost_element_hover), "#888888");
         assert_eq!(color_hex(theme.ui.ghost_element_active), "#999999");
         assert_eq!(color_hex(theme.ui.ghost_element_selected), "#aaaaaa");
+        // Null UI roles must not inherit unrelated editor/diagnostic colors,
+        // and the independent roles must survive native-theme serialization.
+        assert_eq!(color_hex(theme.ui.text), "#eeeeec");
+        assert_eq!(color_hex(theme.ui.text_muted), "#b5b3ad");
+        assert_eq!(color_hex(theme.ui.text_subtle), "#7c7b74");
+        assert_eq!(color_hex(theme.ui.icon), "#abcdef");
+        assert_eq!(color_hex(theme.ui.text_disabled), "#123123");
+        assert_eq!(color_hex(theme.ui.toolbar_background), "#212223");
+        assert_eq!(color_hex(theme.ui.statusbar_background), "#313233");
         assert_eq!(
             theme
                 .terminal
@@ -1315,6 +1172,14 @@ themes = ["themes/test.json"]
         "ghost_element.active": "#999999",
         "ghost_element.selected": "#aaaaaa",
         "editor.foreground": "#eeeeee",
+        "text": null,
+        "text.muted": null,
+        "text.placeholder": null,
+        "hint": "#ff0000",
+        "icon": "#abcdef",
+        "text.disabled": "#123123",
+        "toolbar.background": "#212223",
+        "status_bar.background": "#313233",
         "terminal.ansi.red": "#aa0000",
         "players": [
           {

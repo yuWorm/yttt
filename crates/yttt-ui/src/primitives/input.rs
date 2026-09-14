@@ -41,6 +41,13 @@ pub fn yttt_input_style(
             theme.text,
             theme.text_subtle,
         ),
+        YtttInputKind::Palette if ui_style.palette.embedded_input => (
+            theme.surface_elevated.alpha(0.0),
+            theme.border,
+            theme.border_focused,
+            theme.text,
+            theme.text_subtle,
+        ),
         YtttInputKind::Palette | YtttInputKind::Search => (
             theme.editor_background,
             theme.border_variant,
@@ -79,7 +86,9 @@ pub fn yttt_input(
     let style = yttt_input_style(kind, theme, ui_style);
     Input::new(state)
         .appearance(style.appearance)
+        .text_sm()
         .h(style.height)
+        .when(!style.appearance, |this| this.p_0())
         .rounded(style.radius)
         .border_color(style.border)
         .bg(style.background)

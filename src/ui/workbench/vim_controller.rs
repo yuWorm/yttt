@@ -24,6 +24,9 @@ const VIM_KEY_FEEDBACK_TIMEOUT: Duration = Duration::from_millis(1_200);
 
 impl WorkbenchView {
     pub(super) fn sync_vim_controller(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.is_foreground_keyboard_window(window) {
+            return;
+        }
         let surface = self.detect_workbench_surface(window, cx);
         let capture = self.detect_vim_capture(surface, window, cx);
         self.vim.sync_surface(surface);
@@ -272,7 +275,7 @@ impl WorkbenchView {
         VimCapture::Inherit
     }
 
-    fn settings_text_input_is_focused(&self, window: &Window, cx: &App) -> bool {
+    pub(super) fn settings_text_input_is_focused(&self, window: &Window, cx: &App) -> bool {
         fn focused(input: &Entity<InputState>, window: &Window, cx: &App) -> bool {
             input.read(cx).focus_handle(cx).is_focused(window)
         }

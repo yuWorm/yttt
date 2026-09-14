@@ -1,7 +1,7 @@
-use gpui::{IntoElement, div, prelude::*};
+use gpui::{IntoElement, Window, div, prelude::*, px};
 use gpui_component::TitleBar;
 
-use crate::ui::theme::{UiStyle, WorkbenchTheme};
+use crate::ui::theme::{UiStyle, UiStyleId, WorkbenchTheme};
 
 use super::bar::{BarHost, BarSections, bar_sections_content};
 
@@ -17,9 +17,21 @@ pub fn workbench_titlebar(
     sections: BarSections,
     theme: WorkbenchTheme,
     ui_style: UiStyle,
+    window: &Window,
 ) -> impl IntoElement {
     TitleBar::new()
-        .bg(theme.titlebar_background)
+        .bg(if window.is_window_active() {
+            theme.titlebar_background
+        } else {
+            theme.titlebar_inactive_background
+        })
+        .when(ui_style.id == UiStyleId::Zed, |this| {
+            this.h(if cfg!(target_os = "windows") {
+                px(32.0)
+            } else {
+                (window.rem_size() * 1.75).max(px(34.0))
+            })
+        })
         .border_color(theme.border)
         .child(
             div()
@@ -28,7 +40,7 @@ pub fn workbench_titlebar(
                 .items_center()
                 .size_full()
                 .min_w_0()
-                .px(ui_style.spacing.lg)
+                .px(ui_style.shell.titlebar_padding_x)
                 .text_sm()
                 .text_color(theme.text)
                 .child(bar_sections_content(sections, BarHost::Window, ui_style)),

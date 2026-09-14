@@ -288,7 +288,7 @@ fn picker_footer(ui_text: &UiText, theme: WorkbenchTheme, ui_style: UiStyle) -> 
         .border_t(ui_style.border.hairline)
         .border_color(theme.border)
         .px(ui_style.spacing.lg)
-        .text_xs()
+        .text_sm()
         .text_color(theme.text_muted)
         .children(
             palette_footer_actions(ui_text)
@@ -309,7 +309,7 @@ fn picker_footer_action(
         .child(div().text_color(theme.text).child(action.label))
         .child(
             div()
-                .text_color(theme.text_subtle)
+                .text_color(theme.text_muted)
                 .when(ui_style.palette.bordered_shortcuts, |this| {
                     this.rounded(ui_style.radius.compact)
                         .border(ui_style.border.hairline)

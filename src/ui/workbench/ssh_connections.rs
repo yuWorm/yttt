@@ -292,6 +292,8 @@ impl WorkbenchView {
             return;
         }
         self.ssh.manager_open = true;
+        self.auxiliary_windows
+            .request(AuxiliaryWindowKind::RemoteServices);
         self.ssh.error = None;
         if self.ssh.form.is_none() {
             if let Some(connection) = self.ssh.connections.connections.first().cloned() {
@@ -306,6 +308,11 @@ impl WorkbenchView {
     pub fn close_ssh_connection_manager(&mut self) {
         self.ssh.manager_open = false;
         self.ssh.form = None;
+        self.ssh.manager_connection_list = None;
+        self.ssh.manager_connection_list_subscription = None;
+        if self.auxiliary_windows.active == Some(AuxiliaryWindowKind::RemoteServices) {
+            self.auxiliary_windows.active = None;
+        }
         self.sync_input_owner_state();
     }
 
@@ -1139,7 +1146,7 @@ pub(super) fn ssh_connection_status(
     }
 }
 
-pub(super) fn ssh_connections_overlay(
+pub(super) fn remote_services_window_content(
     root: &mut WorkbenchView,
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
@@ -1347,96 +1354,137 @@ pub(super) fn ssh_connections_overlay(
         );
     }
 
-    yttt_dialog_overlay(
-        yttt_dialog_surface(theme, ui_style)
-            .debug_selector(|| "remote-services-manager".to_string())
-            .w(gpui::relative(0.95))
-            .max_w(px(920.0))
-            .h(gpui::relative(0.9))
-            .max_h(px(680.0))
-            .child(yttt_dialog_header(
-                "close-ssh-connections",
-                root.ui_text.get(UiTextKey::RemoteServices),
-                theme,
-                ui_style,
-                cx.listener(|this, _, _window, cx| {
-                    this.close_ssh_connection_manager();
-                    cx.notify();
-                }),
-            ))
-            .child(
-                div()
-                    .mt(ui_style.spacing.xs)
-                    .text_xs()
-                    .text_color(dialog.hint)
-                    .child("SSH 独立 Server · 连接将在新窗口中恢复远程环境"),
+    let selected_saved = selected_id_for_delete.as_ref().is_some_and(|id| {
+        root.ssh
+            .connections
+            .connections
+            .iter()
+            .any(|connection| &connection.id == id)
+    });
+    let selected_connected = selected_id_for_disconnect.as_ref().is_some_and(|id| {
+        root.ssh.statuses.get(id).is_some_and(|status| {
+            !matches!(
+                status.state,
+                ConnectionState::Disconnected | ConnectionState::Failed
             )
-            .child(yttt_dialog_button(
-                cx,
-                "manage-existing-host",
-                "已有 yttt Host（TLS）",
-                YtttButtonVariant::Secondary,
-                theme,
-                cx.listener(|this, _, window, cx| {
-                    this.close_ssh_connection_manager();
-                    this.on_connect_existing_host(&ConnectExistingHost, window, cx);
-                }),
-            ))
-            .child(
-                div()
-                    .mt(ui_style.spacing.lg)
-                    .flex()
-                    .flex_1()
-                    .min_h_0()
-                    .gap(ui_style.spacing.lg)
-                    .child(
-                        div()
-                            .w(px(285.0))
-                            .min_h_0()
-                            .flex()
-                            .flex_col()
-                            .gap(ui_style.spacing.md)
-                            .pr(ui_style.spacing.md)
-                            .border_r_1()
-                            .border_color(dialog.border)
-                            .child(
-                                div()
-                                    .min_h_0()
-                                    .flex_1()
-                                    .child(List::new(&connection_list).size_full()),
-                            )
-                            .child(yttt_dialog_button(
-                                cx,
-                                "new-ssh-connection",
-                                root.ui_text.get(UiTextKey::SshNewConnection),
-                                YtttButtonVariant::Secondary,
-                                theme,
-                                cx.listener(|this, _, _window, cx| {
-                                    this.new_ssh_connection_form();
-                                    cx.notify();
-                                }),
-                            )),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .min_h_0()
-                            .flex_1()
-                            .overflow_y_scrollbar()
-                            .pr(ui_style.spacing.sm)
-                            .child(form_fields),
-                    ),
-            )
-            .child(
-                div()
-                    .mt(ui_style.spacing.lg)
-                    .pt(ui_style.spacing.md)
-                    .border_t_1()
-                    .border_color(dialog.border)
-                    .flex()
-                    .justify_between()
-                    .gap(ui_style.spacing.md)
-                    .child(yttt_dialog_button(
+        })
+    });
+    div()
+        .debug_selector(|| "remote-services-manager".to_string())
+        .flex()
+        .flex_col()
+        .size_full()
+        .overflow_hidden()
+        .bg(theme.editor_background)
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_between()
+                .gap(ui_style.spacing.lg)
+                .px(gpui::rems(1.0))
+                .py(gpui::rems(0.75))
+                .border_b_1()
+                .border_color(dialog.border)
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .min_w_0()
+                        .gap(ui_style.spacing.xs)
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(root.ui_text.get(UiTextKey::SshConnections)),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(root.ui_text.get(UiTextKey::SshConnectionsDescription)),
+                        ),
+                )
+                .child(yttt_dialog_button(
+                    cx,
+                    "manage-existing-host",
+                    root.ui_text.get(UiTextKey::ConnectExistingHost),
+                    YtttButtonVariant::Ghost,
+                    theme,
+                    cx.listener(|this, _, window, cx| {
+                        this.on_connect_existing_host(&ConnectExistingHost, window, cx);
+                    }),
+                )),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_1()
+                .min_h_0()
+                .child(
+                    div()
+                        .w(gpui::rems(14.0))
+                        .flex_none()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .bg(theme.sidebar_background)
+                        .border_r_1()
+                        .border_color(dialog.border)
+                        .child(
+                            div()
+                                .min_h_0()
+                                .flex_1()
+                                .py(ui_style.spacing.sm)
+                                .child(List::new(&connection_list).size_full()),
+                        )
+                        .child(
+                            div()
+                                .p(gpui::rems(0.75))
+                                .border_t_1()
+                                .border_color(dialog.border)
+                                .child(
+                                    yttt_dialog_button(
+                                        cx,
+                                        "new-ssh-connection",
+                                        root.ui_text.get(UiTextKey::SshNewConnection),
+                                        YtttButtonVariant::Ghost,
+                                        theme,
+                                        cx.listener(|this, _, _window, cx| {
+                                            this.new_ssh_connection_form();
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .w_full(),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("remote-service-form-scroll")
+                        .min_w_0()
+                        .min_h_0()
+                        .flex_1()
+                        .overflow_y_scrollbar()
+                        .p(gpui::rems(1.5))
+                        .child(form_fields.w_full().max_w(gpui::rems(44.0))),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_between()
+                .min_h(gpui::rems(3.0))
+                .px(gpui::rems(1.0))
+                .py(gpui::rems(0.5))
+                .border_t_1()
+                .border_color(dialog.border)
+                .gap(ui_style.spacing.md)
+                .child(
+                    yttt_dialog_button(
                         cx,
                         "delete-ssh-connection",
                         root.ui_text.get(UiTextKey::SshDeleteConnection),
@@ -1447,27 +1495,31 @@ pub(super) fn ssh_connections_overlay(
                                 this.delete_ssh_connection(connection_id, window, cx);
                             }
                         }),
-                    ))
-                    .child(
-                        div()
-                            .flex()
-                            .gap(ui_style.spacing.md)
-                            .child(yttt_dialog_button(
-                                cx,
-                                "save-ssh-connection",
-                                root.ui_text.get(UiTextKey::SettingsSave),
-                                YtttButtonVariant::Secondary,
-                                theme,
-                                cx.listener(|this, _, _window, cx| {
-                                    this.save_ssh_connection(cx);
-                                    cx.notify();
-                                }),
-                            ))
-                            .child(yttt_dialog_button(
+                    )
+                    .disabled(!selected_saved),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(ui_style.spacing.sm)
+                        .child(yttt_dialog_button(
+                            cx,
+                            "save-ssh-connection",
+                            root.ui_text.get(UiTextKey::SettingsSave),
+                            YtttButtonVariant::Secondary,
+                            theme,
+                            cx.listener(|this, _, _window, cx| {
+                                this.save_ssh_connection(cx);
+                                cx.notify();
+                            }),
+                        ))
+                        .child(
+                            yttt_dialog_button(
                                 cx,
                                 "disconnect-ssh-connection",
                                 root.ui_text.get(UiTextKey::SshDisconnect),
-                                YtttButtonVariant::Secondary,
+                                YtttButtonVariant::Ghost,
                                 theme,
                                 cx.listener(move |this, _, window, cx| {
                                     if let Some(connection_id) = selected_id_for_disconnect.clone()
@@ -1475,25 +1527,23 @@ pub(super) fn ssh_connections_overlay(
                                         this.disconnect_ssh_connection(connection_id, window, cx);
                                     }
                                 }),
-                            ))
-                            .child(yttt_dialog_button(
-                                cx,
-                                "connect-ssh-connection",
-                                "在新窗口连接",
-                                YtttButtonVariant::Primary,
-                                theme,
-                                cx.listener(move |this, _, window, cx| {
-                                    if let Some(connection_id) = selected_id_for_connect.clone() {
-                                        this.connect_ssh_connection(connection_id, window, cx);
-                                    }
-                                }),
-                            )),
-                    ),
-            ),
-        YtttDialogPlacement::Top,
-        theme,
-        ui_style,
-    )
+                            )
+                            .disabled(!selected_connected),
+                        )
+                        .child(yttt_dialog_button(
+                            cx,
+                            "connect-ssh-connection",
+                            root.ui_text.get(UiTextKey::SshConnect),
+                            YtttButtonVariant::Primary,
+                            theme,
+                            cx.listener(move |this, _, window, cx| {
+                                if let Some(connection_id) = selected_id_for_connect.clone() {
+                                    this.connect_ssh_connection(connection_id, window, cx);
+                                }
+                            }),
+                        )),
+                ),
+        )
 }
 
 pub(super) fn ssh_host_key_overlay(root: &WorkbenchView, cx: &mut Context<WorkbenchView>) -> Div {

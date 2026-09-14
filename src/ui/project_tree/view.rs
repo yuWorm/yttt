@@ -1086,6 +1086,11 @@ impl Render for ProjectTreeView {
             )
         })
         .context_menu(move |_ix, entry, menu, _window, cx| {
+            let menu = yttt_ui::primitives::menu::yttt_popup_menu(
+                menu,
+                crate::ui::theme::current_workbench_theme(cx),
+                crate::ui::theme::current_ui_style(cx),
+            );
             let id = entry.item().id.as_str();
             let Some(row) = menu_rows.get(id).cloned() else {
                 return menu;

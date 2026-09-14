@@ -3,7 +3,7 @@ use gpui::{Div, Pixels, Rems, Rgba, div, prelude::*, px};
 use crate::{
     SelectableState,
     primitives::row::{YtttRowKind, yttt_row_style},
-    style::UiStyle,
+    style::{UiStyle, UiStyleId},
     theme::WorkbenchTheme,
 };
 
@@ -25,7 +25,11 @@ pub fn yttt_tabbar_style(theme: WorkbenchTheme, ui_style: UiStyle) -> YtttTabBar
         height: ui_style.rows.tab_height,
         item_height: ui_style.rows.tab_height,
         border_width: ui_style.rows.tab_border_width,
-        min_width: px(128.0),
+        min_width: if ui_style.id == UiStyleId::Zed {
+            px(0.0)
+        } else {
+            px(128.0)
+        },
         max_width: px(220.0),
         close_slot_size: ui_style.icon_buttons.tab_close_size,
         active_background: theme.tab_active_background,

@@ -734,11 +734,14 @@ impl WorkbenchView {
                 .child(
                     div()
                         .flex()
+                        .flex_none()
+                        .flex_wrap()
                         .items_center()
                         .justify_between()
-                        .gap(ui_style.spacing.xl)
-                        .px(ui_style.spacing.xl + ui_style.spacing.xs)
-                        .py(ui_style.spacing.lg)
+                        .gap(ui_style.spacing.md)
+                        .min_h(ui_style.controls.status_footer_height)
+                        .px(ui_style.spacing.lg)
+                        .py(ui_style.spacing.sm)
                         .border_b(ui_style.border.hairline)
                         .border_color(theme.border)
                         .bg(theme.surface_elevated)
@@ -746,7 +749,7 @@ impl WorkbenchView {
                             div()
                                 .flex()
                                 .items_center()
-                                .gap(ui_style.spacing.lg)
+                                .gap(ui_style.spacing.md)
                                 .min_w_0()
                                 .child(
                                     div()
@@ -763,7 +766,7 @@ impl WorkbenchView {
                                     )
                                     .child(div().text_sm().text_color(theme.text_muted).child(
                                         format!(
-                                            "{} {} ·",
+                                            "{} {}",
                                             file_count,
                                             self.ui_text.get(if file_count == 1 {
                                                 UiTextKey::GitDiffFile
@@ -789,44 +792,43 @@ impl WorkbenchView {
                         .child(
                             div()
                                 .flex()
+                                .flex_none()
                                 .items_center()
-                                .gap(ui_style.spacing.md)
+                                .gap(ui_style.spacing.lg)
                                 .when(file_count > 0, |this| {
-                                    this.child(git_diff_header_button(
-                                        "git-diff-copy",
-                                        self.ui_text.get(UiTextKey::GitDiffCopyHint),
-                                        false,
+                                    this.child(git_diff_header_control_group(ui_style).child(
+                                        git_diff_header_button(
+                                            "git-diff-copy",
+                                            self.ui_text.get(UiTextKey::GitDiffCopyHint),
+                                            false,
+                                            theme,
+                                            ui_style,
+                                            cx.listener(|this, _, _window, cx| {
+                                                if let Some(text) = this.selected_git_diff_text() {
+                                                    cx.write_to_clipboard(
+                                                        ClipboardItem::new_string(text),
+                                                    );
+                                                }
+                                            }),
+                                        ),
+                                    ))
+                                })
+                                .child(git_diff_header_control_group(ui_style).child(
+                                    git_diff_header_button(
+                                        "git-diff-whitespace",
+                                        self.ui_text.get(UiTextKey::GitDiffWhitespace),
+                                        ignore_whitespace,
                                         theme,
                                         ui_style,
                                         cx.listener(|this, _, _window, cx| {
-                                            if let Some(text) = this.selected_git_diff_text() {
-                                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                                    text,
-                                                ));
+                                            if this.toggle_git_diff_whitespace() {
+                                                cx.notify();
                                             }
                                         }),
-                                    ))
-                                    .child(git_diff_separator(theme, ui_style))
-                                })
-                                .child(git_diff_header_button(
-                                    "git-diff-whitespace",
-                                    self.ui_text.get(UiTextKey::GitDiffWhitespace),
-                                    ignore_whitespace,
-                                    theme,
-                                    ui_style,
-                                    cx.listener(|this, _, _window, cx| {
-                                        if this.toggle_git_diff_whitespace() {
-                                            cx.notify();
-                                        }
-                                    }),
+                                    ),
                                 ))
-                                .child(git_diff_separator(theme, ui_style))
                                 .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .rounded(ui_style.radius.control)
-                                        .bg(theme.app_background)
+                                    git_diff_header_control_group(ui_style)
                                         .child(git_diff_header_button(
                                             "git-diff-unified",
                                             self.ui_text.get(UiTextKey::GitDiffUnified),
@@ -857,11 +859,7 @@ impl WorkbenchView {
                                         )),
                                 )
                                 .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .rounded(ui_style.radius.control)
-                                        .bg(theme.app_background)
+                                    git_diff_header_control_group(ui_style)
                                         .child(git_diff_header_button(
                                             "git-diff-unstaged",
                                             self.ui_text.get(UiTextKey::GitDiffUnstaged),
@@ -887,7 +885,6 @@ impl WorkbenchView {
                                             }),
                                         )),
                                 )
-                                .child(git_diff_separator(theme, ui_style))
                                 .child(
                                     yttt_icon_button(
                                         "git-diff-close",
@@ -930,21 +927,22 @@ impl WorkbenchView {
             .flex()
             .flex_col()
             .flex_none()
-            .w(px(288.0))
+            .w(gpui::rems(16.0))
             .h_full()
             .min_h_0()
             .border_r(ui_style.border.hairline)
             .border_color(theme.border)
-            .bg(theme.app_background)
+            .bg(theme.sidebar_background)
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .h(ui_style.controls.palette_input_height)
+                    .h(ui_style.rows.tab_height)
                     .px(ui_style.spacing.xl)
                     .border_b(ui_style.border.hairline)
                     .border_color(theme.border)
                     .text_sm()
+                    .font_semibold()
                     .text_color(theme.text_muted)
                     .child(self.ui_text.get(UiTextKey::GitDiffFilesHeading)),
             )
@@ -978,11 +976,12 @@ impl WorkbenchView {
                                                         format!("git-diff-folder-{group_index}")
                                                     })
                                                     .flex()
+                                                    .w_full()
                                                     .items_center()
                                                     .gap(ui_style.spacing.md)
                                                     .h(ui_style.rows.diff_sidebar_height)
                                                     .rounded(ui_style.rows.diff_sidebar_radius)
-                                                    .px(ui_style.spacing.lg)
+                                                    .px(ui_style.spacing.xl)
                                                     .cursor_pointer()
                                                     .text_xs()
                                                     .text_color(theme.text_muted)
@@ -1013,7 +1012,7 @@ impl WorkbenchView {
                                             let (status, status_color) = match file.change_kind() {
                                                 GitFileChangeKind::Added => ("A", theme.success),
                                                 GitFileChangeKind::Modified => {
-                                                    ("M", theme.text_muted)
+                                                    ("M", theme.warning)
                                                 }
                                                 GitFileChangeKind::Deleted => ("D", theme.danger),
                                             };
@@ -1027,12 +1026,12 @@ impl WorkbenchView {
                                                         format!("git-diff-file-{file_index}")
                                                     })
                                                     .flex()
+                                                    .w_full()
                                                     .items_center()
-                                                    .justify_between()
-                                                    .gap(ui_style.spacing.md)
+                                                    .gap(ui_style.spacing.lg)
                                                     .h(ui_style.rows.diff_sidebar_height)
                                                     .rounded(ui_style.rows.diff_sidebar_radius)
-                                                    .px(ui_style.spacing.lg)
+                                                    .px(ui_style.spacing.xl)
                                                     .cursor_pointer()
                                                     .when(selected, |this| {
                                                         this.bg(ui_style.active_background(theme))
@@ -1056,18 +1055,23 @@ impl WorkbenchView {
                                                     .child(
                                                         div()
                                                             .flex()
+                                                            .flex_1()
+                                                            .min_w_0()
                                                             .items_center()
                                                             .gap(ui_style.spacing.md)
-                                                            .min_w_0()
                                                             .child(
                                                                 div()
                                                                     .w_4()
+                                                                    .flex_none()
+                                                                    .text_center()
                                                                     .text_xs()
                                                                     .text_color(status_color)
                                                                     .child(status),
                                                             )
                                                             .child(
                                                                 div()
+                                                                    .flex_1()
+                                                                    .min_w_0()
                                                                     .truncate()
                                                                     .text_sm()
                                                                     .text_color(theme.text)
@@ -1078,7 +1082,7 @@ impl WorkbenchView {
                                                         div()
                                                             .flex()
                                                             .items_center()
-                                                            .gap(ui_style.spacing.xs)
+                                                            .gap(ui_style.spacing.md)
                                                             .flex_none()
                                                             .children((added > 0).then(|| {
                                                                 div()
@@ -1227,7 +1231,7 @@ fn sync_selected_git_diff(panel: &mut GitDiffPanel) {
     panel.selected_file = panel.selected_file.min(result.files.len() - 1);
     let file = &result.files[panel.selected_file];
     let max_line_chars = file.max_line_chars() as f32;
-    panel.unified_content_width = (max_line_chars * 8.0 + 150.0).max(900.0);
+    panel.unified_content_width = (max_line_chars * 8.0 + 164.0).max(900.0);
     panel.split_content_width = (max_line_chars * 8.0 + 100.0).max(700.0);
     panel.split_rows = Arc::new(git_split_rows(file.line_count(), |index| {
         file.line(index).map(|line| line.kind)
@@ -1498,18 +1502,26 @@ fn git_diff_code_pane(
     let unified_content_width = (unified_content_width * font_scale).max(900.0);
     let split_content_width = (split_content_width * font_scale).max(700.0);
     let file_header = div()
+        .debug_selector(|| "git-diff-file-header".to_string())
         .flex()
         .items_center()
-        .h(px(42.0 * editor_density_scale))
-        .px(ui_style.spacing.xl + ui_style.spacing.xs)
+        .flex_none()
+        .h(ui_style.rows.tab_height)
+        .min_w_0()
+        .px(ui_style.spacing.lg)
         .border_b(ui_style.border.hairline)
         .border_color(theme.border)
-        .bg(editor_theme.active_line)
-        .text_size(px(editor_appearance.font_size))
-        .line_height(relative(editor_appearance.line_height))
-        .font_family(editor_appearance.resolved_font_family())
-        .text_color(editor_theme.line_number)
-        .child(file_path);
+        .bg(theme.surface_elevated)
+        .text_sm()
+        .text_color(editor_theme.foreground)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .font_semibold()
+                .child(file_path),
+        );
 
     div()
         .flex()
@@ -1798,13 +1810,13 @@ fn git_diff_source_header(
         .flex()
         .items_center()
         .min_w_0()
-        .px(ui_style.spacing.xl)
+        .px(ui_style.spacing.xl + ui_style.spacing.xs)
         .bg(theme.active_line)
         .text_size(px(appearance.font_size))
         .line_height(relative(appearance.line_height))
         .font_family(appearance.resolved_font_family())
         .text_color(theme.active_line_number)
-        .child(label)
+        .child(div().flex_1().min_w_0().truncate().child(label))
 }
 
 fn git_diff_line_background(
@@ -1813,16 +1825,16 @@ fn git_diff_line_background(
     editor_theme: EditorTheme,
 ) -> Rgba {
     match kind {
-        GitDiffLineKind::Added => with_alpha(theme.success, 0.13),
-        GitDiffLineKind::Removed => with_alpha(theme.danger, 0.13),
+        GitDiffLineKind::Added => with_alpha(theme.success, 0.08),
+        GitDiffLineKind::Removed => with_alpha(theme.danger, 0.08),
         GitDiffLineKind::Context | GitDiffLineKind::Hunk => editor_theme.background,
     }
 }
 
 fn git_diff_line_accent(kind: GitDiffLineKind, theme: WorkbenchTheme) -> Rgba {
     match kind {
-        GitDiffLineKind::Added => theme.success,
-        GitDiffLineKind::Removed => theme.danger,
+        GitDiffLineKind::Added => with_alpha(theme.success, 0.78),
+        GitDiffLineKind::Removed => with_alpha(theme.danger, 0.78),
         GitDiffLineKind::Context | GitDiffLineKind::Hunk => rgba(0x00000000),
     }
 }
@@ -1865,8 +1877,8 @@ where
         .flex()
         .items_center()
         .justify_center()
-        .h(ui_style.controls.toolbar_height)
-        .px(ui_style.spacing.lg)
+        .h(ui_style.controls.settings_height)
+        .px(ui_style.spacing.md)
         .rounded(ui_style.radius.control)
         .cursor_pointer()
         .bg(if active {
@@ -1888,24 +1900,23 @@ where
         .child(label)
 }
 
-fn git_diff_separator(theme: WorkbenchTheme, ui_style: UiStyle) -> Div {
-    div()
-        .w(ui_style.border.hairline)
-        .h(rems(1.375))
-        .mx(ui_style.spacing.xs)
-        .bg(theme.border)
+fn git_diff_header_control_group(ui_style: UiStyle) -> Div {
+    div().flex().items_center().gap(ui_style.spacing.xs)
 }
 
 fn git_diff_footer(text: &UiText, theme: WorkbenchTheme, ui_style: UiStyle) -> Div {
     div()
         .flex()
+        .flex_none()
+        .flex_wrap()
         .items_center()
-        .gap(ui_style.spacing.xl + ui_style.spacing.xs)
-        .h(ui_style.controls.status_footer_height)
-        .px(ui_style.spacing.xl)
+        .gap(ui_style.spacing.lg)
+        .min_h(ui_style.controls.palette_footer_height)
+        .px(ui_style.spacing.lg)
+        .py(ui_style.spacing.xs)
         .border_t(ui_style.border.hairline)
         .border_color(theme.border)
-        .bg(theme.surface_elevated)
+        .bg(theme.statusbar_background)
         .child(git_diff_hint(
             "Esc",
             text.get(UiTextKey::GitDiffCloseHint),
@@ -1949,12 +1960,7 @@ fn git_diff_hint(key: &str, action: &'static str, theme: WorkbenchTheme, ui_styl
         .gap(ui_style.spacing.xs)
         .child(
             div()
-                .px(ui_style.spacing.md)
-                .py(ui_style.spacing.xs)
-                .rounded(ui_style.radius.compact)
-                .border(ui_style.border.hairline)
-                .border_color(theme.border)
-                .bg(theme.app_background)
+                .px(ui_style.spacing.xs)
                 .text_xs()
                 .text_color(theme.text_muted)
                 .child(key.to_string()),
