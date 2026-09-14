@@ -5432,6 +5432,50 @@ fn keybindings_settings_explains_vim_leader_and_sequence_recording(cx: &mut gpui
 }
 
 #[gpui::test]
+fn status_bar_keeps_text_and_actions_inside_vertical_insets(cx: &mut gpui::TestAppContext) {
+    use yttt::config::bars::{ShellBarModule, ShellBarsSettings, save_bars};
+
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut settings = load_or_create_settings(&paths).unwrap().settings;
+    settings.general.onboarding_completed = true;
+    settings.general.ui_font_size = 24.0;
+    settings.general.ui_line_height = 2.0;
+    save_settings(&paths, &settings).unwrap();
+    let mut bars = ShellBarsSettings::default();
+    bars.status.layout.left = vec![ShellBarModule::Surface];
+    bars.status.layout.center = vec![ShellBarModule::Settings];
+    bars.status.layout.right = vec![ShellBarModule::CommandPalette];
+    save_bars(&paths, &bars).unwrap();
+
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
+        gpui_component::Root::new(root, window, cx)
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    let bar = cx.debug_bounds("status-bar").unwrap();
+    for selector in [
+        "status-bar-surface",
+        "status-bar-settings",
+        "status-bar-command-palette",
+    ] {
+        let item = cx.debug_bounds(selector).unwrap();
+        let top = item.top() - bar.top();
+        let bottom = bar.bottom() - item.bottom();
+        assert!(
+            top > px(0.0) && bottom > px(0.0),
+            "{selector} must not touch or cross the bar edges: {top:?}, {bottom:?}"
+        );
+        assert!(
+            (f32::from(top - bottom)).abs() <= 1.0,
+            "{selector} must be vertically centered inside the top border"
+        );
+    }
+}
+
+#[gpui::test]
 fn appearance_settings_group_renders_window_and_theme_controls(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();

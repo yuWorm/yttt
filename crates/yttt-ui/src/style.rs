@@ -83,7 +83,6 @@ pub struct UiControlMetrics {
     pub palette_input_height: Rems,
     pub search_height: Rems,
     pub palette_footer_height: Rems,
-    pub status_bar_height: Rems,
     pub status_footer_height: Rems,
 }
 
@@ -139,6 +138,7 @@ pub struct UiPaletteMetrics {
 pub struct UiShellMetrics {
     pub titlebar_padding_x: Rems,
     pub statusbar_padding_x: Rems,
+    pub statusbar_padding_y: Rems,
     pub sidebar_padding_x: Rems,
     pub sidebar_padding_y: Rems,
     pub sidebar_header_gap: Rems,
@@ -336,7 +336,6 @@ impl UiStyle {
                 palette_input_height: rems(1.75),
                 search_height: rems(1.75),
                 palette_footer_height: rems(2.125),
-                status_bar_height: rems(1.375),
                 status_footer_height: rems(2.875),
             },
             rows: UiRowMetrics {
@@ -386,6 +385,7 @@ impl UiStyle {
             shell: UiShellMetrics {
                 titlebar_padding_x: rems(0.5),
                 statusbar_padding_x: rems(0.25),
+                statusbar_padding_y: rems(0.25),
                 sidebar_padding_x: rems(0.5),
                 sidebar_padding_y: rems(0.75),
                 sidebar_header_gap: rems(0.75),
@@ -496,7 +496,6 @@ impl UiStyle {
                 palette_input_height: rems(2.875),
                 search_height: rems(2.5),
                 palette_footer_height: rems(3.25),
-                status_bar_height: rems(1.5),
                 status_footer_height: rems(3.25),
             },
             rows: UiRowMetrics {
@@ -546,6 +545,7 @@ impl UiStyle {
             shell: UiShellMetrics {
                 titlebar_padding_x: rems(0.625),
                 statusbar_padding_x: rems(0.625),
+                statusbar_padding_y: rems(0.25),
                 sidebar_padding_x: rems(0.625),
                 sidebar_padding_y: rems(0.875),
                 sidebar_header_gap: rems(0.875),

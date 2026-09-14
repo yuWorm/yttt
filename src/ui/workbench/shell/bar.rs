@@ -28,7 +28,11 @@ pub fn bar_sections_content(sections: BarSections, host: BarHost, ui_style: UiSt
     let content = div()
         .flex()
         .items_center()
-        .size_full()
+        .w_full()
+        .when(host == BarHost::Window, |this| this.h_full())
+        .when(host == BarHost::Status, |this| {
+            this.min_h(ui_style.controls.button_height)
+        })
         .min_w_0()
         .overflow_hidden()
         .gap(ui_style.shell.bar_section_gap);

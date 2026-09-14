@@ -634,6 +634,9 @@ fn render_bar_module(
             }),
         )
         .debug_selector(move || debug_selector.clone())
+        .when(host == BarHost::Status, |button| {
+            button.size(ui_style.controls.button_height)
+        })
         .when(host == BarHost::Window, |button| button.occlude())
         .tooltip(move |window, cx| {
             yttt_ui::primitives::tooltip::yttt_tooltip(
@@ -666,7 +669,12 @@ fn render_bar_module(
         .flex_none()
         .items_center()
         .min_w_0()
-        .h_full()
+        .when(host == BarHost::Window, |element| element.h_full())
+        .when(host == BarHost::Status, |element| {
+            element
+                .min_h(ui_style.controls.button_height)
+                .rounded(ui_style.radius.compact)
+        })
         .gap(ui_style.spacing.xs)
         .whitespace_nowrap()
         .text_color(color)
