@@ -213,6 +213,18 @@ sidebar menu. This opens a dedicated picker instead of the SSH settings page:
 3. Accept or reject an unknown server fingerprint.
 4. Continue in the separate remote Client, browse Host directories, and open a project.
 
+The remote directory picker starts in the **Host user's home directory**, not the local Client's
+home, and includes hidden folders such as `.config`. The compact picker shows the connection
+name/endpoint, path input, **Open Current Folder** action, and directory rows.
+
+- Click a folder to enter it; `..` returns to its parent.
+- Use `Up`/`Down` to select a row and `Tab` to enter the selected directory.
+- Enter an absolute path or `~/…` and press `Enter` to browse it. With the current path unchanged,
+  `Enter` activates the selected row; the first row opens the current directory as a project.
+- `Escape` closes the picker. **New folder** creates the path entered in the Host picker.
+
+Directory loads keep the input synchronized with the Host's returned path.
+
 Authentication modes:
 
 - **Auto**: try SSH agent, then the configured private key, then a previously saved password.

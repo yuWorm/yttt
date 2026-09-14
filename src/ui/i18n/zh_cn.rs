@@ -859,7 +859,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SshOpenRemoteProject => "打开远程项目",
         UiTextKey::SshProjectRecent => "最近远程项目",
         UiTextKey::SshProjectPath => "远程路径",
-        UiTextKey::SshProjectGo => "前往",
         UiTextKey::SshProjectOpenCurrentFolder => "打开当前文件夹",
         UiTextKey::SshProjectLoadingDirectory => "正在加载远程目录…",
         UiTextKey::SshProjectEmptyDirectory => "当前目录没有子目录。",

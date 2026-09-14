@@ -56,6 +56,8 @@
 
 ### Changed
 
+- Reworked remote directory selection into a compact, connection-labelled picker with the Host home
+  as its default, hidden folders, an inline open-current action, and keyboard directory navigation.
 - Unified workbench controls, dialogs, overlays, rows, panels, tabs, sidebars, notifications, and split handles behind the `yttt-ui` primitive layer; one live appearance runtime now drives application colors, typography, spacing, radii, shadows, density, and the complete `gpui-component` theme bridge.
 - Reworked the Zed UI style around imported Zed semantic state colors and compact control geometry, with a full-size flat settings layout, precise button/select/menu states, focused project-tree rows, and native active/inactive tab surfaces.
 - Aligned the Zed style's independent text/icon and shell-surface colors, bundled IBM Plex Sans
@@ -102,6 +104,8 @@
 
 ### Fixed
 
+- Fixed remote directory names collapsing to ellipses and asynchronous directory results leaving
+  the path input stale; remote `~` expansion now uses the connected user's home.
 - Fixed cold-start default layout creation, saving and reset with Host-backed configuration:
   submit the final configuration path to the shared atomic writer instead of attempting
   client-side temporary-file writes rejected by the Host allowlist.

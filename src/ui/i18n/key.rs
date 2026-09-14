@@ -763,7 +763,6 @@ pub enum UiTextKey {
     SshOpenRemoteProject,
     SshProjectRecent,
     SshProjectPath,
-    SshProjectGo,
     SshProjectOpenCurrentFolder,
     SshProjectLoadingDirectory,
     SshProjectEmptyDirectory,

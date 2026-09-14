@@ -190,7 +190,14 @@ fn ssh_project_directory_rows_show_icons_align_left_and_scroll(cx: &mut TestAppC
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let config_paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let (root, cx) = cx.add_window_view(|_, _| WorkbenchView::with_config_paths(config_paths));
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths(config_paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        ComponentRoot::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
 
     root.update_in(cx, |root, _window, cx| {
         root.open_ssh_project_picker();
@@ -205,6 +212,36 @@ fn ssh_project_directory_rows_show_icons_align_left_and_scroll(cx: &mut TestAppC
         cx.notify();
     });
     cx.run_until_parked();
+    cx.update(|window, app| {
+        let input = root
+            .read(app)
+            .ssh
+            .project_picker
+            .path_input
+            .as_ref()
+            .unwrap();
+        assert!(
+            input.read(app).focus_handle(app).is_focused(window),
+            "the path must accept typing immediately"
+        );
+    });
+    cx.simulate_keystrokes("down down");
+    cx.update(|window, app| {
+        let picker = &root.read(app).ssh.project_picker;
+        assert_eq!(
+            picker.selected_directory, 2,
+            "input actions must select directory rows"
+        );
+        assert!(
+            picker
+                .path_input
+                .as_ref()
+                .unwrap()
+                .read(app)
+                .focus_handle(app)
+                .is_focused(window)
+        );
+    });
 
     let list = cx
         .debug_bounds("ssh-project-directory-list")
@@ -215,6 +252,13 @@ fn ssh_project_directory_rows_show_icons_align_left_and_scroll(cx: &mut TestAppC
     let icon = cx
         .debug_bounds("ssh-project-directory-icon-/directory-00")
         .expect("directory row must render an icon");
+    let name = cx
+        .debug_bounds("ssh-project-directory-name")
+        .expect("directory name must render");
+    assert!(
+        name.size.width > px(120.0),
+        "directory names must have room for text, not just an ellipsis: {name:?}"
+    );
     assert!(
         icon.size.width > px(0.0) && icon.size.height > px(0.0),
         "directory icon must occupy visible space: icon={icon:?}"

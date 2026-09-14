@@ -1039,7 +1039,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SshOpenRemoteProject => "Open remote project",
         UiTextKey::SshProjectRecent => "Recent remote projects",
         UiTextKey::SshProjectPath => "Remote path",
-        UiTextKey::SshProjectGo => "Go",
         UiTextKey::SshProjectOpenCurrentFolder => "Open Current Folder",
         UiTextKey::SshProjectLoadingDirectory => "Loading remote directories…",
         UiTextKey::SshProjectEmptyDirectory => "This directory has no subdirectories.",

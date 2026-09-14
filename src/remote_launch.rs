@@ -40,7 +40,17 @@ impl RemoteTarget {
         match self {
             Self::ExistingHost { address, .. } => address.clone(),
             Self::SshServer { connection, .. } => {
-                format!("{}:{}", connection.host, connection.port)
+                if connection.name.trim().is_empty() || connection.name == connection.host {
+                    format!(
+                        "{}@{}:{}",
+                        connection.user, connection.host, connection.port
+                    )
+                } else {
+                    format!(
+                        "{} ({}@{}:{})",
+                        connection.name, connection.user, connection.host, connection.port
+                    )
+                }
             }
         }
     }

@@ -158,8 +158,9 @@ pub fn connect(
     launch: RemoteLaunch,
     events: flume::Sender<RemoteConnectEvent>,
 ) -> Result<RemoteEnvironment, String> {
+    let label = launch.target.label();
     match &launch.target {
-        RemoteTarget::SshServer { .. } => connect_ssh(launch, events),
+        RemoteTarget::SshServer { .. } => connect_ssh(launch, events, label),
         RemoteTarget::ExistingHost {
             address,
             connection_info,
@@ -217,6 +218,7 @@ pub fn connect(
                 identity,
                 AuthToken::from_bytes(connection_info.work_secret),
                 events,
+                label,
             )
         }
     }
@@ -225,6 +227,7 @@ pub fn connect(
 fn connect_ssh(
     mut launch: RemoteLaunch,
     events: flume::Sender<RemoteConnectEvent>,
+    label: String,
 ) -> Result<RemoteEnvironment, String> {
     let RemoteTarget::SshServer {
         connection,
@@ -358,7 +361,7 @@ fn connect_ssh(
         channel: ConnectionChannel::Control,
         terminal_session_id: None,
     };
-    initialize_environment(runtime, connector, identity, token, events)
+    initialize_environment(runtime, connector, identity, token, events, label)
 }
 
 fn initialize_environment(
@@ -367,6 +370,7 @@ fn initialize_environment(
     identity: ClientIdentity,
     token: AuthToken,
     events: flume::Sender<RemoteConnectEvent>,
+    label: String,
 ) -> Result<RemoteEnvironment, String> {
     let client = Arc::new(
         runtime
@@ -479,7 +483,6 @@ fn initialize_environment(
         .home
         .to_path()
         .map_err(|error| error.to_string())?;
-    let label = format!("{} · {}", environment.environment_id, identity.profile_id);
     let host = DesktopHostRuntime::from_remote(
         runtime,
         client,

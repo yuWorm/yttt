@@ -6,6 +6,10 @@ use gpui_component::{
     list::{List, ListEvent, ListState},
     radio::RadioGroup,
 };
+use yttt_ui::primitives::{
+    input::{YtttInputKind, yttt_input},
+    row::{YtttRowKind, yttt_row},
+};
 
 use yttt_core::model::{
     ids::{ConnectionId, CredentialId},
@@ -42,19 +46,39 @@ impl WorkbenchView {
         };
         let home = environment.home.clone();
         self.open_ssh_project_picker();
+        self.ssh.project_picker.home_path = home
+            .to_path()
+            .ok()
+            .and_then(|path| RemotePathBuf::new(path.to_string_lossy().into_owned()).ok());
         self.load_remote_host_directory(home, cx);
     }
 
     fn create_remote_host_directory(&mut self, cx: &mut Context<Self>) {
+        if self.ssh.project_picker.loading {
+            return;
+        }
         let Some(input) = self.ssh.project_picker.path_input.as_ref() else {
             return;
         };
-        let path = PathBuf::from(input.read(cx).value().trim());
+        let path = match remote_picker_input_path(
+            &input.read(cx).value(),
+            self.ssh.project_picker.home_path.as_ref(),
+        ) {
+            Ok(path) => PathBuf::from(path.as_str()),
+            Err(error) => {
+                self.ssh.project_picker.error = Some(error);
+                cx.notify();
+                return;
+            }
+        };
         if let Err(error) = yttt_protocol::HostPath::from_path(&path) {
             self.ssh.project_picker.error = Some(error.to_string());
+            cx.notify();
             return;
         }
         self.ssh.project_picker.loading = true;
+        self.ssh.project_picker.generation = self.ssh.project_picker.generation.wrapping_add(1);
+        let generation = self.ssh.project_picker.generation;
         let task = cx.background_spawn(async move {
             crate::config::storage::create_dir_all(&path)
                 .map(|_| path)
@@ -63,6 +87,10 @@ impl WorkbenchView {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |root, cx| {
+                if !root.ssh.project_picker.open || root.ssh.project_picker.generation != generation
+                {
+                    return;
+                }
                 root.ssh.project_picker.loading = false;
                 match result {
                     Ok(path) => match yttt_protocol::HostPath::from_path(&path) {
@@ -85,17 +113,38 @@ impl WorkbenchView {
         let Some(runtime) = self.terminal.host_runtime.clone() else {
             return;
         };
+        let current_path =
+            match path
+                .to_path()
+                .map_err(|error| error.to_string())
+                .and_then(|path| {
+                    RemotePathBuf::new(path.to_string_lossy().into_owned())
+                        .map_err(|error| error.to_string())
+                }) {
+                Ok(path) => path,
+                Err(error) => {
+                    self.ssh.project_picker.error = Some(error);
+                    cx.notify();
+                    return;
+                }
+            };
+        self.ssh.project_picker.current_path = Some(current_path);
+        self.ssh.project_picker.directories.clear();
+        self.ssh.project_picker.selected_directory = 0;
+        self.ssh
+            .project_picker
+            .directory_scroll
+            .set_offset(gpui::point(px(0.0), px(0.0)));
         self.ssh.project_picker.view = SshProjectPickerView::Browsing;
         self.ssh.project_picker.loading = true;
         self.ssh.project_picker.error = None;
-        self.ssh.project_picker.path_input = None;
-        self.ssh.project_picker.path_input_subscription = None;
+        self.ssh.project_picker.path_input_needs_sync = true;
         self.ssh.project_picker.generation = self.ssh.project_picker.generation.wrapping_add(1);
         let generation = self.ssh.project_picker.generation;
         let task = cx.background_spawn(async move {
             runtime.workspace_request(yttt_protocol::workspace::WorkspaceRequest::Browse {
                 path,
-                include_hidden: false,
+                include_hidden: true,
             })
         });
         cx.spawn(async move |this, cx| {
@@ -110,7 +159,10 @@ impl WorkbenchView {
                         let result = directory.path.to_path().map_err(|error| error.to_string())
                             .and_then(|path| RemotePathBuf::new(path.to_string_lossy().into_owned()).map_err(|error| error.to_string()));
                         match result {
-                            Ok(path) => root.ssh.project_picker.current_path = Some(path),
+                            Ok(path) => {
+                                root.ssh.project_picker.current_path = Some(path);
+                                root.ssh.project_picker.path_input_needs_sync = true;
+                            }
                             Err(error) => root.ssh.project_picker.error = Some(error),
                         }
                         root.ssh.project_picker.directories = directory.entries.into_iter()
@@ -499,10 +551,6 @@ impl WorkbenchView {
         initial_root: Option<RemotePathBuf>,
         cx: &mut Context<Self>,
     ) {
-        if let Some(root) = initial_root {
-            self.load_ssh_project_directory(connection_id, root, cx);
-            return;
-        }
         let Some(runtime) = self.terminal.host_runtime.clone() else {
             self.ssh.project_picker.error = Some(
                 self.ui_text
@@ -527,7 +575,14 @@ impl WorkbenchView {
                     return;
                 }
                 match result {
-                    Ok(home) => root.load_ssh_project_directory(connection_id, home, cx),
+                    Ok(home) => {
+                        root.ssh.project_picker.home_path = Some(home.clone());
+                        root.load_ssh_project_directory(
+                            connection_id,
+                            initial_root.unwrap_or(home),
+                            cx,
+                        );
+                    }
                     Err(error) => {
                         root.ssh.project_picker.loading = false;
                         root.ssh.project_picker.error = Some(error.to_string());
@@ -561,10 +616,14 @@ impl WorkbenchView {
             initial_root: Some(path.clone()),
         });
         self.ssh.project_picker.directories.clear();
+        self.ssh.project_picker.selected_directory = 0;
+        self.ssh
+            .project_picker
+            .directory_scroll
+            .set_offset(gpui::point(px(0.0), px(0.0)));
         self.ssh.project_picker.loading = true;
         self.ssh.project_picker.error = None;
-        self.ssh.project_picker.path_input = None;
-        self.ssh.project_picker.path_input_subscription = None;
+        self.ssh.project_picker.path_input_needs_sync = true;
         self.ssh.project_picker.generation = self.ssh.project_picker.generation.wrapping_add(1);
         let generation = self.ssh.project_picker.generation;
         let task = cx.background_spawn(scan_ssh_directory(
@@ -642,17 +701,75 @@ impl WorkbenchView {
     }
 
     pub(super) fn navigate_ssh_project_path_input(&mut self, cx: &mut Context<Self>) {
+        if self.ssh.project_picker.loading {
+            return;
+        }
         let Some(input) = self.ssh.project_picker.path_input.as_ref() else {
             return;
         };
-        let value = input.read(cx).value().trim().to_string();
-        match RemotePathBuf::new(value) {
+        let value = input.read(cx).value();
+        match remote_picker_input_path(&value, self.ssh.project_picker.home_path.as_ref()) {
+            Ok(path)
+                if self.ssh.project_picker.current_path.as_ref() == Some(&path)
+                    && self.ssh.project_picker.error.is_none() =>
+            {
+                if let Some(path) = self.selected_ssh_project_directory() {
+                    self.navigate_ssh_project_directory(path, cx);
+                } else {
+                    self.open_current_ssh_project_directory(cx);
+                }
+            }
             Ok(path) => self.navigate_ssh_project_directory(path, cx),
             Err(error) => {
                 self.ssh.project_picker.error = Some(error.to_string());
                 cx.notify();
             }
         }
+    }
+
+    fn selected_ssh_project_directory(&self) -> Option<RemotePathBuf> {
+        let index = self.ssh.project_picker.selected_directory.checked_sub(1)?;
+        let parent = self
+            .ssh
+            .project_picker
+            .current_path
+            .as_ref()
+            .and_then(remote_parent_path);
+        if index == 0 && parent.is_some() {
+            return parent;
+        }
+        self.ssh
+            .project_picker
+            .directories
+            .get(index - usize::from(parent.is_some()))
+            .map(|directory| directory.path.clone())
+    }
+
+    fn move_ssh_project_selection(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if self.ssh.project_picker.loading {
+            return;
+        }
+        let count = self.ssh.project_picker.directories.len()
+            + usize::from(
+                self.ssh
+                    .project_picker
+                    .current_path
+                    .as_ref()
+                    .is_some_and(|path| path.as_str() != "/"),
+            )
+            + 1;
+        let selected = &mut self.ssh.project_picker.selected_directory;
+        *selected = if forward {
+            (*selected + 1) % count
+        } else {
+            (*selected + count - 1) % count
+        };
+        self.ssh
+            .project_picker
+            .directory_scroll
+            .scroll_to_item(selected.saturating_sub(1));
+        cx.stop_propagation();
+        cx.notify();
     }
 
     pub(super) fn retry_ssh_project_picker(&mut self, cx: &mut Context<Self>) {
@@ -769,6 +886,9 @@ impl WorkbenchView {
         self.ssh.project_picker.connection_epoch = None;
         self.ssh.project_picker.continuation = None;
         self.ssh.project_picker.current_path = None;
+        self.ssh.project_picker.home_path = None;
+        self.ssh.project_picker.selected_directory = 0;
+        self.ssh.project_picker.path_input_needs_sync = false;
         self.ssh.project_picker.directories.clear();
         self.ssh.project_picker.loading = false;
         self.ssh.project_picker.error = None;
@@ -830,7 +950,9 @@ impl WorkbenchView {
         if self.ssh.project_picker.view != SshProjectPickerView::Browsing {
             return None;
         }
-        if let Some(input) = &self.ssh.project_picker.path_input {
+        if !self.ssh.project_picker.path_input_needs_sync
+            && let Some(input) = &self.ssh.project_picker.path_input
+        {
             return Some(input.clone());
         }
         let value = self
@@ -838,9 +960,17 @@ impl WorkbenchView {
             .project_picker
             .current_path
             .as_ref()
-            .map(RemotePathBuf::as_str)
-            .unwrap_or("/")
-            .to_string();
+            .map(remote_picker_path_label)
+            .unwrap_or_default();
+        if let Some(input) = &self.ssh.project_picker.path_input {
+            if std::mem::take(&mut self.ssh.project_picker.path_input_needs_sync) {
+                input.update(cx, |input, cx| {
+                    input.set_value(value, window, cx);
+                    input.focus(window, cx);
+                });
+            }
+            return Some(input.clone());
+        }
         let input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(self.ui_text.get(UiTextKey::SshProjectPath))
@@ -849,6 +979,8 @@ impl WorkbenchView {
         let subscription = cx.subscribe_in(&input, window, Self::on_ssh_project_path_input_event);
         self.ssh.project_picker.path_input = Some(input.clone());
         self.ssh.project_picker.path_input_subscription = Some(subscription);
+        self.ssh.project_picker.path_input_needs_sync = false;
+        input.update(cx, |input, cx| input.focus(window, cx));
         Some(input)
     }
 
@@ -861,6 +993,9 @@ impl WorkbenchView {
     ) {
         if matches!(event, InputEvent::PressEnter { .. }) {
             self.navigate_ssh_project_path_input(cx);
+        } else if matches!(event, InputEvent::Change) {
+            self.ssh.project_picker.selected_directory = 0;
+            cx.notify();
         }
     }
     pub(super) fn ssh_project_password_input(
@@ -1137,6 +1272,30 @@ fn remote_parent_path(path: &RemotePathBuf) -> Option<RemotePathBuf> {
     RemotePathBuf::new(parent).ok()
 }
 
+fn remote_picker_path_label(path: &RemotePathBuf) -> String {
+    if path.as_str() == "/" {
+        "/".into()
+    } else {
+        format!("{path}/")
+    }
+}
+
+fn remote_picker_input_path(
+    value: &str,
+    home: Option<&RemotePathBuf>,
+) -> Result<RemotePathBuf, String> {
+    let value = value.trim();
+    let expanded;
+    let value = if value == "~" || value.starts_with("~/") {
+        let home = home.ok_or_else(|| "Remote home directory is not available yet.".to_string())?;
+        expanded = format!("{}{}", home.as_str().trim_end_matches('/'), &value[1..]);
+        if expanded.is_empty() { "/" } else { &expanded }
+    } else {
+        value
+    };
+    RemotePathBuf::new(value).map_err(|error| error.to_string())
+}
+
 pub(super) fn ssh_project_picker_overlay(
     root: &mut WorkbenchView,
     window: &mut Window,
@@ -1166,7 +1325,10 @@ pub(super) fn ssh_project_picker_overlay(
             .max_w(ui_style.palette.remote_panel_width)
             .max_h(ui_style.palette.remote_panel_max_height)
             .when(
-                root.ssh.project_picker.view == SshProjectPickerView::Connections,
+                matches!(
+                    root.ssh.project_picker.view,
+                    SshProjectPickerView::Connections | SshProjectPickerView::Browsing
+                ),
                 |this| this.p_0(),
             )
             .child(content),
@@ -1673,234 +1835,321 @@ fn ssh_project_browser(
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
     let path_input = root.ssh_project_path_input(window, cx);
-    let current_path = root.ssh.project_picker.current_path.clone();
-    let current_path_label = current_path
-        .as_ref()
-        .map(|path| path.as_str().to_string())
-        .unwrap_or_else(|| "/".to_string());
-    let directories = root.ssh.project_picker.directories.clone();
-    let loading = root.ssh.project_picker.loading;
-    let error = root.ssh.project_picker.error.clone();
-    let directory_empty = directories.is_empty();
+    let picker = &root.ssh.project_picker;
+    let current_path = picker.current_path.as_ref();
+    let loading = picker.loading;
+    let error = picker.error.clone();
+    let selected = picker.selected_directory;
+    let has_parent = current_path.is_some_and(|path| path.as_str() != "/");
     let can_open = current_path.is_some() && !loading && error.is_none();
-    let has_parent = current_path
+    let directory_row_count = picker.directories.len() + usize::from(has_parent);
+    let host_label = root
+        .terminal
+        .host_runtime
         .as_ref()
-        .is_some_and(|path| path.as_str() != "/");
-    let directory_row_count = directories.len() + usize::from(has_parent);
+        .and_then(|runtime| runtime.remote_label())
+        .map(str::to_owned)
+        .or_else(|| {
+            let id = picker.connection_id.as_ref()?;
+            root.ssh
+                .connections
+                .connections
+                .iter()
+                .find(|connection| &connection.id == id)
+                .map(|connection| connection.name.clone())
+        })
+        .unwrap_or_else(|| {
+            root.ui_text
+                .get(UiTextKey::SshOpenRemoteProject)
+                .to_string()
+        });
+
     let mut list_rows = div()
-        .debug_selector(|| "ssh-project-directory-list".to_string())
+        .id("ssh-project-directory-scroll")
+        .debug_selector(|| "ssh-project-directory-list".into())
+        .relative()
+        .w_full()
+        .min_h_0()
         .flex()
         .flex_col()
-        .gap(ui_style.spacing.xs);
+        .gap(ui_style.palette.list_gap)
+        .track_scroll(&picker.directory_scroll);
     if has_parent {
         list_rows = list_rows.child(
-            yttt_button_base(
+            ssh_project_directory_row(
                 "ssh-project-parent-directory",
-                YtttButtonVariant::Ghost,
+                selected == 1,
+                !loading,
                 theme,
                 ui_style,
-                cx,
             )
-            .w_full()
-            .child(
-                div()
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .gap(ui_style.spacing.sm)
-                    .text_left()
-                    .child(icon_for_visual(
-                        root.icon_theme.resolve_directory(Path::new(".."), true),
-                        theme.text_muted,
-                    ))
-                    .child(".."),
-            )
-            .on_click(cx.listener(|this, _, _window, cx| {
-                this.navigate_ssh_project_parent(cx);
+            .child(Icon::new(IconName::ArrowUp).size(ui_style.palette.icon_size))
+            .child(div().flex_1().min_w_0().child(".."))
+            .on_click(cx.listener(|this, _, _, cx| {
+                if !this.ssh.project_picker.loading {
+                    this.navigate_ssh_project_parent(cx);
+                }
             })),
         );
     }
-    for directory in directories {
+    for (index, directory) in picker.directories.iter().enumerate() {
         let path = directory.path.clone();
-        let debug_path = directory.path.to_string();
+        let debug_path = path.to_string();
         let icon_debug_path = debug_path.clone();
-        let directory_icon = icon_for_visual(
-            root.icon_theme
-                .resolve_directory(Path::new(directory.path.as_str()), false),
-            theme.text_muted,
-        );
-        let chevron_icon =
-            icon_for_visual(root.icon_theme.resolve_chevron(false), theme.text_muted);
         list_rows = list_rows.child(
-            yttt_button_base(
-                SharedString::from(format!("ssh-project-directory-{}", directory.path)),
-                YtttButtonVariant::Ghost,
+            ssh_project_directory_row(
+                SharedString::from(format!("ssh-project-directory-{path}")),
+                selected == index + 1 + usize::from(has_parent),
+                !loading,
                 theme,
                 ui_style,
-                cx,
             )
-            .w_full()
+            .debug_selector(move || format!("ssh-project-directory-content-{debug_path}"))
             .child(
                 div()
-                    .debug_selector(move || format!("ssh-project-directory-content-{debug_path}"))
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(ui_style.spacing.md)
-                    .text_left()
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex()
-                            .items_center()
-                            .gap(ui_style.spacing.sm)
-                            .child(
-                                div()
-                                    .debug_selector(move || {
-                                        format!("ssh-project-directory-icon-{icon_debug_path}")
-                                    })
-                                    .flex_none()
-                                    .child(directory_icon),
-                            )
-                            .child(div().min_w_0().truncate().child(directory.name)),
-                    )
-                    .child(div().flex_none().child(chevron_icon)),
+                    .debug_selector(move || format!("ssh-project-directory-icon-{icon_debug_path}"))
+                    .flex_none()
+                    .child(icon_for_visual(
+                        root.icon_theme
+                            .resolve_directory(Path::new(path.as_str()), false),
+                        theme.text_muted,
+                    )),
             )
-            .on_click(cx.listener(move |this, _, _window, cx| {
-                this.navigate_ssh_project_directory(path.clone(), cx);
+            .child(
+                div()
+                    .debug_selector(|| "ssh-project-directory-name".into())
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(directory.name.clone()),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if !this.ssh.project_picker.loading {
+                    this.navigate_ssh_project_directory(path.clone(), cx);
+                }
             })),
         );
     }
-    if loading {
+    if loading || (picker.directories.is_empty() && error.is_none()) {
         list_rows = list_rows.child(
             div()
                 .p(ui_style.spacing.lg)
                 .text_sm()
                 .text_color(theme.text_muted)
-                .child(root.ui_text.get(UiTextKey::SshProjectLoadingDirectory)),
-        );
-    } else if directory_empty && error.is_none() {
-        list_rows = list_rows.child(
-            div()
-                .p(ui_style.spacing.lg)
-                .text_sm()
-                .text_color(theme.text_muted)
-                .child(root.ui_text.get(UiTextKey::SshProjectEmptyDirectory)),
+                .child(root.ui_text.get(if loading {
+                    UiTextKey::SshProjectLoadingDirectory
+                } else {
+                    UiTextKey::SshProjectEmptyDirectory
+                })),
         );
     }
-    let list = if directory_row_count > SSH_PROJECT_DIRECTORY_SCROLL_ROW_LIMIT {
-        list_rows
-            .h(px(350.0))
-            .overflow_y_scrollbar()
-            .into_any_element()
-    } else {
-        list_rows.into_any_element()
-    };
+    let list = list_rows
+        .when(
+            directory_row_count > SSH_PROJECT_DIRECTORY_SCROLL_ROW_LIMIT,
+            |list| list.h(px(350.0)),
+        )
+        .overflow_y_scroll()
+        .vertical_scrollbar(&picker.directory_scroll);
 
     let mut body = div()
+        .w_full()
+        .min_h_0()
         .flex()
         .flex_col()
-        .gap(ui_style.spacing.lg)
-        .child(ssh_project_back_header(root, theme, ui_style, cx));
+        .capture_action(
+            cx.listener(|this, _: &gpui_component::input::MoveDown, _, cx| {
+                this.move_ssh_project_selection(true, cx);
+            }),
+        )
+        .capture_action(
+            cx.listener(|this, _: &gpui_component::input::MoveUp, _, cx| {
+                this.move_ssh_project_selection(false, cx);
+            }),
+        )
+        .capture_action(
+            cx.listener(|this, _: &gpui_component::input::IndentInline, _, cx| {
+                if !this.ssh.project_picker.loading
+                    && let Some(path) = this.selected_ssh_project_directory()
+                {
+                    this.navigate_ssh_project_directory(path, cx);
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }),
+        )
+        .capture_action(
+            cx.listener(|this, _: &gpui_component::input::Escape, _, cx| {
+                this.close_ssh_project_picker(cx);
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(ui_style.spacing.sm)
+                .px(ui_style.rows.palette_padding_x)
+                .py(ui_style.spacing.sm)
+                .border_b(ui_style.border.hairline)
+                .border_color(theme.border)
+                .child(Icon::new(IconName::Network).size(ui_style.palette.icon_size))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_sm()
+                        .child(host_label),
+                )
+                .child(
+                    yttt_button(
+                        "ssh-project-back",
+                        "←",
+                        YtttButtonVariant::Ghost,
+                        theme,
+                        ui_style,
+                        cx,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.back_ssh_project_picker(cx);
+                        cx.notify();
+                    })),
+                )
+                .child(
+                    yttt_button(
+                        "ssh-project-close",
+                        "×",
+                        YtttButtonVariant::Ghost,
+                        theme,
+                        ui_style,
+                        cx,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.close_ssh_project_picker(cx);
+                        cx.notify();
+                    })),
+                ),
+        );
     if let Some(input) = path_input {
         body = body.child(
             div()
-                .flex()
-                .items_end()
-                .gap(ui_style.spacing.sm)
+                .debug_selector(|| "ssh-project-path-input".into())
+                .flex_none()
+                .px(ui_style.rows.palette_padding_x)
+                .py(ui_style.spacing.sm)
+                .border_b(ui_style.border.hairline)
+                .border_color(theme.border)
                 .child(
-                    ssh_form_field(
-                        root.ui_text.get(UiTextKey::SshProjectPath),
-                        &input,
-                        theme,
-                        ui_style,
-                    )
-                    .flex_1(),
-                )
-                .child(yttt_dialog_button(
-                    cx,
-                    "ssh-project-path-go",
-                    root.ui_text.get(UiTextKey::SshProjectGo),
-                    YtttButtonVariant::Secondary,
-                    theme,
-                    cx.listener(|this, _, _window, cx| {
-                        this.navigate_ssh_project_path_input(cx);
-                    }),
-                ))
-                .when(crate::config::storage::is_remote(), |row| {
-                    row.child(
-                        yttt_dialog_button(
-                            cx,
-                            "remote-project-create-directory",
-                            "Create folder",
-                            YtttButtonVariant::Secondary,
-                            theme,
-                            cx.listener(|this, _, _, cx| this.create_remote_host_directory(cx)),
-                        )
-                        .disabled(loading),
-                    )
-                }),
+                    yttt_input(&input, YtttInputKind::Palette, theme, ui_style).disabled(loading),
+                ),
         );
     }
-    body = body.child(list);
-    if let Some(message) = error.clone() {
-        body = body.child(div().text_xs().text_color(theme.danger).child(message));
-    }
-    body.child(
-        div()
-            .flex()
-            .justify_between()
-            .gap(ui_style.spacing.md)
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.text_muted)
-                    .child(current_path_label),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap(ui_style.spacing.md)
-                    .when(error.is_some(), |footer| {
-                        footer.child(yttt_dialog_button(
-                            cx,
-                            "ssh-project-directory-retry",
-                            root.ui_text.get(UiTextKey::Retry),
-                            YtttButtonVariant::Secondary,
-                            theme,
-                            cx.listener(|this, _, _window, cx| {
-                                this.retry_ssh_project_picker(cx);
-                            }),
-                        ))
-                    })
-                    .child(yttt_dialog_button(
-                        cx,
-                        "ssh-project-browser-cancel",
-                        root.ui_text.get(UiTextKey::Cancel),
-                        YtttButtonVariant::Secondary,
-                        theme,
-                        cx.listener(|this, _, _window, cx| {
-                            this.close_ssh_project_picker(cx);
-                            cx.notify();
-                        }),
-                    ))
-                    .child(
-                        yttt_dialog_button(
-                            cx,
-                            "ssh-project-open-current",
-                            root.ui_text.get(UiTextKey::SshProjectOpenCurrentFolder),
-                            YtttButtonVariant::Primary,
-                            theme,
-                            cx.listener(|this, _, _window, cx| {
-                                this.open_current_ssh_project_directory(cx);
-                            }),
-                        )
-                        .disabled(!can_open)
-                        .tab_stop(can_open),
-                    ),
+    body = body
+        .child(
+            div().flex_none().p(ui_style.palette.list_padding_x).child(
+                ssh_project_directory_row(
+                    "ssh-project-open-current",
+                    selected == 0,
+                    can_open,
+                    theme,
+                    ui_style,
+                )
+                .debug_selector(|| "ssh-project-open-current".into())
+                .child(Icon::new(IconName::ArrowRight).size(ui_style.palette.icon_size))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(root.ui_text.get(UiTextKey::SshProjectOpenCurrentFolder)),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if can_open {
+                        this.ssh.project_picker.selected_directory = 0;
+                        this.navigate_ssh_project_path_input(cx);
+                    }
+                })),
             ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .min_h_0()
+                .px(ui_style.palette.list_padding_x)
+                .pb(ui_style.palette.list_padding_x)
+                .child(list),
+        );
+    if let Some(message) = error {
+        body = body.child(
+            div()
+                .flex_none()
+                .p(ui_style.spacing.sm)
+                .text_xs()
+                .text_color(theme.danger)
+                .child(message)
+                .child(yttt_dialog_button(
+                    cx,
+                    "ssh-project-directory-retry",
+                    root.ui_text.get(UiTextKey::Retry),
+                    YtttButtonVariant::Ghost,
+                    theme,
+                    cx.listener(|this, _, _, cx| this.retry_ssh_project_picker(cx)),
+                )),
+        );
+    }
+    if crate::config::storage::is_remote() {
+        body = body.child(
+            div()
+                .flex()
+                .flex_none()
+                .justify_end()
+                .border_t(ui_style.border.hairline)
+                .border_color(theme.border)
+                .p(ui_style.spacing.xs)
+                .child(
+                    yttt_dialog_button(
+                        cx,
+                        "remote-project-create-directory",
+                        root.ui_text.get(UiTextKey::ProjectFilesNewDirectory),
+                        YtttButtonVariant::Ghost,
+                        theme,
+                        cx.listener(|this, _, _, cx| this.create_remote_host_directory(cx)),
+                    )
+                    .disabled(loading),
+                ),
+        );
+    }
+    body
+}
+
+fn ssh_project_directory_row(
+    id: impl Into<gpui::ElementId>,
+    selected: bool,
+    enabled: bool,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+) -> Stateful<Div> {
+    yttt_row(
+        YtttRowKind::PaletteCompact,
+        if selected {
+            SelectableState::Active
+        } else {
+            SelectableState::Inactive
+        },
+        enabled,
+        theme,
+        ui_style,
     )
+    .id(id)
+    .w_full()
+    .flex_none()
+    .flex()
+    .items_center()
+    .gap(ui_style.palette.item_content_gap)
+    .text_sm()
+    .when(enabled, |row| row.cursor_pointer())
 }
 
 fn ssh_project_back_header(
@@ -1946,7 +2195,7 @@ fn ssh_project_back_header(
 
 #[cfg(test)]
 mod tests {
-    use super::{remote_child_path, remote_parent_path};
+    use super::{remote_child_path, remote_parent_path, remote_picker_input_path};
     use yttt_core::model::project::RemotePathBuf;
 
     #[test]
@@ -1959,5 +2208,24 @@ mod tests {
         assert_eq!(remote_parent_path(&nested).unwrap().as_str(), "/project");
         assert_eq!(remote_parent_path(&project).unwrap().as_str(), "/");
         assert!(remote_parent_path(&root).is_none());
+    }
+
+    #[test]
+    fn remote_picker_expands_only_the_connected_users_home() {
+        let home = RemotePathBuf::new("/home/remote-user").unwrap();
+        assert_eq!(remote_picker_input_path("~", Some(&home)).unwrap(), home);
+        assert_eq!(
+            remote_picker_input_path("~/Project with spaces/../.config/", Some(&home))
+                .unwrap()
+                .as_str(),
+            "/home/remote-user/.config"
+        );
+        assert!(remote_picker_input_path("~", None).is_err());
+        assert!(remote_picker_input_path("~other/project", Some(&home)).is_err());
+        let root_home = RemotePathBuf::new("/").unwrap();
+        assert_eq!(
+            remote_picker_input_path("~", Some(&root_home)).unwrap(),
+            root_home
+        );
     }
 }
