@@ -944,6 +944,7 @@ fn browse(path: HostPath, include_hidden: bool) -> Result<WorkspaceDirectory, Pr
                 false,
             ));
         }
+        let entry_path = entry.path();
         let file_type = entry
             .file_type()
             .map_err(|error| filesystem_failure("inspect Host directory entry", error))?;
@@ -952,11 +953,15 @@ fn browse(path: HostPath, include_hidden: bool) -> Result<WorkspaceDirectory, Pr
         } else if file_type.is_file() {
             WorkspaceDirectoryEntryKind::File
         } else if file_type.is_symlink() {
-            WorkspaceDirectoryEntryKind::Symlink
+            if fs::metadata(&entry_path).is_ok_and(|target| target.is_dir()) {
+                WorkspaceDirectoryEntryKind::SymlinkDirectory
+            } else {
+                WorkspaceDirectoryEntryKind::Symlink
+            }
         } else {
             WorkspaceDirectoryEntryKind::Other
         };
-        let entry_path = HostPath::from_path(&entry.path()).map_err(|error| {
+        let entry_path = HostPath::from_path(&entry_path).map_err(|error| {
             failure(
                 FailureCode::Internal,
                 format!("Host directory entry path is invalid: {error}"),
@@ -1362,11 +1367,14 @@ mod tests {
     use tempfile::tempdir;
     use yttt_core::model::ids::ClientInstanceId;
     use yttt_protocol::{
-        FailureCode, ProjectRelativePath,
-        workspace::{WorkspaceId, WorkspaceOperationId, WorkspaceRequest, WorkspaceSnapshot},
+        FailureCode, HostPath, ProjectRelativePath,
+        workspace::{
+            WorkspaceDirectoryEntryKind, WorkspaceId, WorkspaceOperationId, WorkspaceRequest,
+            WorkspaceSnapshot,
+        },
     };
 
-    use super::WorkspaceService;
+    use super::{WorkspaceService, browse};
 
     fn client(name: &str) -> ClientInstanceId {
         ClientInstanceId::new(name)
@@ -1534,6 +1542,60 @@ mod tests {
             panic!("opened workspace")
         };
         assert_eq!(saved, snapshot("saved"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn browse_classifies_directory_symlinks_without_following_other_links() {
+        let root = tempdir().unwrap();
+        let directory = root.path().join("directory");
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("nested"), b"nested").unwrap();
+        let file = root.path().join("file");
+        fs::write(&file, b"file").unwrap();
+        let directory_link = root.path().join("directory-link");
+        let file_link = root.path().join("file-link");
+        let broken_link = root.path().join("broken-link");
+        symlink(&directory, &directory_link).unwrap();
+        symlink(&file, &file_link).unwrap();
+        symlink(root.path().join("missing"), &broken_link).unwrap();
+        symlink("cycle-b", root.path().join("cycle-a")).unwrap();
+        symlink("cycle-a", root.path().join("cycle-b")).unwrap();
+
+        let snapshot = browse(HostPath::from_path(root.path()).unwrap(), true).unwrap();
+        let entry = |name| {
+            snapshot
+                .entries
+                .iter()
+                .find(|entry| entry.name.to_os_string() == name)
+                .unwrap()
+        };
+        let directory_entry = entry("directory-link");
+        assert_eq!(
+            directory_entry.kind,
+            WorkspaceDirectoryEntryKind::SymlinkDirectory
+        );
+        assert_eq!(
+            directory_entry.path.to_path().unwrap(),
+            root.path().canonicalize().unwrap().join("directory-link")
+        );
+        assert_eq!(
+            entry("file-link").kind,
+            WorkspaceDirectoryEntryKind::Symlink
+        );
+        assert_eq!(
+            entry("broken-link").kind,
+            WorkspaceDirectoryEntryKind::Symlink
+        );
+        assert_eq!(entry("cycle-a").kind, WorkspaceDirectoryEntryKind::Symlink);
+        assert_eq!(entry("cycle-b").kind, WorkspaceDirectoryEntryKind::Symlink);
+
+        let linked_directory = browse(directory_entry.path.clone(), true).unwrap();
+        assert_eq!(linked_directory.entries.len(), 1);
+        assert_eq!(
+            linked_directory.entries[0].name.to_os_string(),
+            std::ffi::OsString::from("nested")
+        );
     }
 
     #[cfg(unix)]

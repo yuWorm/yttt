@@ -58,12 +58,13 @@ fn scan_filters_hidden_entries_and_keeps_empty_directories() {
 
 #[cfg(unix)]
 #[test]
-fn scan_classifies_symlinks_without_traversing_symlink_directories() {
+fn scan_and_expand_directory_symlinks_preserves_logical_paths() {
     use std::os::unix::fs::symlink;
 
     let root = tempdir().unwrap();
     fs::create_dir(root.path().join("real-dir")).unwrap();
     fs::write(root.path().join("real.txt"), "text").unwrap();
+    fs::write(root.path().join("real-dir/child.txt"), "child").unwrap();
     symlink("real-dir", root.path().join("dir-link")).unwrap();
     symlink("real.txt", root.path().join("file-link")).unwrap();
 
@@ -81,10 +82,19 @@ fn scan_classifies_symlinks_without_traversing_symlink_directories() {
 
     assert_eq!(dir_link.kind, ProjectTreeEntryKind::SymlinkDirectory);
     assert_eq!(file_link.kind, ProjectTreeEntryKind::SymlinkFile);
-    assert!(matches!(
-        scan_project_directory(root.path(), Path::new("dir-link"), false),
-        Err(ProjectTreeFsError::SymlinkDirectory { .. })
-    ));
+    let mut tree = ProjectFileTree::new(root.path());
+    let request = tree.request_expand(Path::new("")).unwrap();
+    tree.apply_snapshot(request.generation, snapshot);
+    let request = tree
+        .request_expand(Path::new("dir-link"))
+        .expect("directory links must be expandable");
+    let children = scan_project_directory(root.path(), &request.relative_directory, false).unwrap();
+    tree.apply_snapshot(request.generation, children);
+    assert!(
+        tree.visible_rows()
+            .iter()
+            .any(|row| row.relative_path == Path::new("dir-link/child.txt"))
+    );
 }
 
 #[test]

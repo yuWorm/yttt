@@ -360,24 +360,29 @@ async fn create_entry(
     if relative_path.as_str().is_empty() {
         return Err(SftpError::ProjectRootMutation);
     }
-    let root = canonical_root(sftp, root).await?;
+    let canonical_root = canonical_root(sftp, root).await?;
     let components = relative_path.as_str().split('/').collect::<Vec<_>>();
     let (name, parents) = components
         .split_last()
         .ok_or(SftpError::ProjectRootMutation)?;
-    let mut parent = root;
+    let mut parent = canonical_root.clone();
+    let mut ancestors = vec![canonical_root.clone()];
     for component in parents {
-        parent = join_absolute(&parent, component)?;
-        match sftp.symlink_metadata(parent.as_str()).await {
-            Ok(metadata) if metadata.is_dir() => {}
-            Ok(_) => return Err(SftpError::NotDirectory(relative_path.clone())),
+        let next = join_absolute(&parent, component)?;
+        match sftp.symlink_metadata(next.as_str()).await {
+            Ok(metadata) => {
+                parent = canonical_directory_target(sftp, &next, metadata, &relative_path).await?;
+            }
             Err(error) if is_not_found(&error) => {
-                sftp.create_dir(parent.as_str())
+                sftp.create_dir(next.as_str())
                     .await
                     .map_err(protocol_error)?;
+                parent = canonicalize_path(sftp, &next).await?;
             }
             Err(error) => return Err(protocol_error(error)),
         }
+        validate_directory_target(&canonical_root, &ancestors, &parent, &relative_path)?;
+        ancestors.push(parent.clone());
     }
     let path = join_absolute(&parent, name)?;
     if sftp
@@ -550,8 +555,15 @@ async fn canonical_root(
     sftp: &SftpSession,
     root: &RemotePathBuf,
 ) -> Result<RemotePathBuf, SftpError> {
+    canonicalize_path(sftp, root).await
+}
+
+async fn canonicalize_path(
+    sftp: &SftpSession,
+    path: &RemotePathBuf,
+) -> Result<RemotePathBuf, SftpError> {
     let canonical = sftp
-        .canonicalize(root.as_str())
+        .canonicalize(path.as_str())
         .await
         .map_err(protocol_error)?;
     RemotePathBuf::new(canonical).map_err(|error| SftpError::InvalidPath(error.to_string()))
@@ -563,7 +575,16 @@ async fn resolve_directory(
     relative: &RemoteRelativePathBuf,
 ) -> Result<RemotePathBuf, SftpError> {
     let canonical_root = canonical_root(sftp, root).await?;
+    resolve_directory_from(sftp, &canonical_root, relative).await
+}
+
+async fn resolve_directory_from(
+    sftp: &SftpSession,
+    canonical_root: &RemotePathBuf,
+    relative: &RemoteRelativePathBuf,
+) -> Result<RemotePathBuf, SftpError> {
     let mut current = canonical_root.clone();
+    let mut ancestors = vec![canonical_root.clone()];
     for component in relative
         .as_str()
         .split('/')
@@ -574,23 +595,39 @@ async fn resolve_directory(
             .symlink_metadata(next.as_str())
             .await
             .map_err(protocol_error)?;
-        if metadata.is_symlink() {
-            return Err(SftpError::SymlinkDirectory(relative.clone()));
-        }
-        if !metadata.is_dir() {
-            return Err(SftpError::NotDirectory(relative.clone()));
-        }
-        let canonical = sftp
-            .canonicalize(next.as_str())
-            .await
-            .map_err(protocol_error)?;
-        current = RemotePathBuf::new(canonical)
-            .map_err(|error| SftpError::InvalidPath(error.to_string()))?;
-        if !is_within(&canonical_root, &current) {
-            return Err(SftpError::PathOutsideRoot(relative.clone()));
-        }
+        current = canonical_directory_target(sftp, &next, metadata, relative).await?;
+        validate_directory_target(canonical_root, &ancestors, &current, relative)?;
+        ancestors.push(current.clone());
     }
     Ok(current)
+}
+
+async fn canonical_directory_target(
+    sftp: &SftpSession,
+    path: &RemotePathBuf,
+    mut metadata: FileAttributes,
+    relative: &RemoteRelativePathBuf,
+) -> Result<RemotePathBuf, SftpError> {
+    if metadata.is_symlink() {
+        metadata = sftp.metadata(path.as_str()).await.map_err(protocol_error)?;
+    }
+    if !metadata.is_dir() {
+        return Err(SftpError::NotDirectory(relative.clone()));
+    }
+    canonicalize_path(sftp, path).await
+}
+
+fn validate_directory_target(
+    canonical_root: &RemotePathBuf,
+    ancestors: &[RemotePathBuf],
+    target: &RemotePathBuf,
+    relative: &RemoteRelativePathBuf,
+) -> Result<(), SftpError> {
+    ensure_within_root(canonical_root, target, relative)?;
+    if ancestors.contains(target) {
+        return Err(SftpError::SymlinkCycle(relative.clone()));
+    }
+    Ok(())
 }
 
 async fn resolve_entry_no_follow(
@@ -624,21 +661,26 @@ async fn resolve_existing(
         };
     }
     let canonical_root = canonical_root(sftp, root).await?;
-    let parent = resolve_directory(sftp, root, &relative.parent()).await?;
+    let parent = resolve_directory_from(sftp, &canonical_root, &relative.parent()).await?;
     let requested = join_absolute(
         &parent,
         relative.file_name().ok_or(SftpError::ProjectRootMutation)?,
     )?;
-    let canonical = sftp
-        .canonicalize(requested.as_str())
-        .await
-        .map_err(protocol_error)?;
-    let canonical =
-        RemotePathBuf::new(canonical).map_err(|error| SftpError::InvalidPath(error.to_string()))?;
-    if !is_within(&canonical_root, &canonical) {
-        return Err(SftpError::PathOutsideRoot(relative.clone()));
-    }
+    let canonical = canonicalize_path(sftp, &requested).await?;
+    ensure_within_root(&canonical_root, &canonical, relative)?;
     Ok(canonical)
+}
+
+fn ensure_within_root(
+    root: &RemotePathBuf,
+    path: &RemotePathBuf,
+    relative: &RemoteRelativePathBuf,
+) -> Result<(), SftpError> {
+    if is_within(root, path) {
+        Ok(())
+    } else {
+        Err(SftpError::PathOutsideRoot(relative.clone()))
+    }
 }
 
 fn is_within(root: &RemotePathBuf, path: &RemotePathBuf) -> bool {
@@ -755,8 +797,8 @@ pub enum SftpError {
     PathOutsideRoot(RemoteRelativePathBuf),
     #[error("remote path is not a directory: {0}")]
     NotDirectory(RemoteRelativePathBuf),
-    #[error("remote project tree does not traverse symlink directories: {0}")]
-    SymlinkDirectory(RemoteRelativePathBuf),
+    #[error("remote directory resolves to a canonical ancestor: {0}")]
+    SymlinkCycle(RemoteRelativePathBuf),
     #[error("remote path is not a regular file: {0}")]
     NotFile(RemoteRelativePathBuf),
     #[error("remote file is {size} bytes, exceeding the {limit} byte limit: {path}")]
@@ -793,6 +835,18 @@ mod tests {
             &root,
             &RemotePathBuf::new("/srv/application/secret").unwrap()
         ));
+    }
+
+    #[test]
+    fn canonical_directories_reject_ancestor_cycles() {
+        let root = RemotePathBuf::new("/srv/app").unwrap();
+        let ancestor = RemotePathBuf::new("/srv/app/src").unwrap();
+        let relative = RemoteRelativePathBuf::new("src/alias").unwrap();
+
+        assert_eq!(
+            validate_directory_target(&root, &[root.clone(), ancestor], &root, &relative),
+            Err(SftpError::SymlinkCycle(relative))
+        );
     }
 
     #[test]

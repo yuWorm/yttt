@@ -715,7 +715,7 @@ impl ProjectTreeView {
         let (parent, placement) = match row {
             Some(ProjectTreeRenderRow {
                 relative_path: Some(path),
-                kind: Some(ProjectTreeEntryKind::Directory),
+                kind: Some(ProjectTreeEntryKind::Directory | ProjectTreeEntryKind::SymlinkDirectory),
                 expanded,
                 ..
             }) => {
@@ -1232,7 +1232,7 @@ impl Render for ProjectTreeView {
 }
 
 fn operation_destination_directory(row: &ProjectTreeRenderRow) -> PathBuf {
-    if row.kind == Some(ProjectTreeEntryKind::Directory) {
+    if row.kind.is_some_and(ProjectTreeEntryKind::is_directory) {
         row.relative_path.clone().unwrap_or_default()
     } else {
         row.relative_path
@@ -1426,7 +1426,7 @@ fn render_component_row(
     };
     let id = row.id.clone();
     let expanded = row.expanded;
-    let is_directory = row.kind == Some(ProjectTreeEntryKind::Directory);
+    let is_directory = row.kind.is_some_and(ProjectTreeEntryKind::is_directory);
     let row_background = if selected && !focused_selection {
         cx.theme().list_active
     } else {

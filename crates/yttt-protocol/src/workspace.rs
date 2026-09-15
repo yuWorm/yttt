@@ -201,17 +201,22 @@ pub struct WorkspaceDirectoryEntry {
     pub kind: WorkspaceDirectoryEntryKind,
 }
 
-/// The non-following filesystem kind of a browsed Host entry.
+/// The filesystem kind of a browsed Host entry.
+///
+/// Directory symlinks are classified by following their target so clients can offer them as
+/// browsable project roots while retaining the link path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkspaceDirectoryEntryKind {
     /// A regular file.
     File,
     /// A directory that can be browsed or selected as a project root.
     Directory,
-    /// A symbolic link, reported without following it.
+    /// A symbolic link that does not resolve to a directory.
     Symlink,
     /// A device, socket, FIFO, or another non-file filesystem object.
     Other,
+    /// A symbolic link to a directory that can be browsed or selected as a project root.
+    SymlinkDirectory,
 }
 
 /// A single, bounded page of Host directory entries.

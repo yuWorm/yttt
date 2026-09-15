@@ -4,6 +4,9 @@
 
 ### Added
 
+- Fixed directory symlinks being omitted from remote directory pickers and blocked in project
+  trees. Local and SSH trees now follow in-project directory aliases with cycle and root-boundary
+  checks; directory actions treat links as folders while deletion still removes only the link.
 - Added live path-prefix filtering to the remote directory picker, with automatic first-match
   selection, keyboard completion, and editable input while remote directories load.
 - Added **Remote services** to the homepage, reusing SSH connection management and supporting

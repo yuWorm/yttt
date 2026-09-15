@@ -18,6 +18,7 @@ use yttt_core::model::{
 use yttt_protocol::{
     Request, Response,
     ssh::{RemoteFileEntry, RemoteFileKind, RemoteFileRequest, RemoteFileResponse},
+    workspace::WorkspaceDirectoryEntryKind,
 };
 use zeroize::Zeroizing;
 
@@ -152,35 +153,64 @@ impl WorkbenchView {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |root, cx| {
-                if !root.ssh.project_picker.open || root.ssh.project_picker.generation != generation {
+                if !root.ssh.project_picker.open || root.ssh.project_picker.generation != generation
+                {
                     return;
                 }
                 root.ssh.project_picker.loading = false;
                 match result {
                     Ok(yttt_protocol::workspace::WorkspaceResponse::Directory(directory)) => {
-                        let result = directory.path.to_path().map_err(|error| error.to_string())
-                            .and_then(|path| RemotePathBuf::new(path.to_string_lossy().into_owned()).map_err(|error| error.to_string()));
+                        let result = directory
+                            .path
+                            .to_path()
+                            .map_err(|error| error.to_string())
+                            .and_then(|path| {
+                                RemotePathBuf::new(path.to_string_lossy().into_owned())
+                                    .map_err(|error| error.to_string())
+                            });
                         match result {
                             Ok(path) => {
                                 root.ssh.project_picker.current_path = Some(path);
-                                root.ssh.project_picker.path_input_needs_sync = !root.ssh.project_picker.preserve_path_input;
+                                root.ssh.project_picker.path_input_needs_sync =
+                                    !root.ssh.project_picker.preserve_path_input;
                             }
                             Err(error) => root.ssh.project_picker.error = Some(error),
                         }
-                        root.ssh.project_picker.directories = directory.entries.into_iter()
-                            .filter(|entry| entry.kind == yttt_protocol::workspace::WorkspaceDirectoryEntryKind::Directory)
-                            .filter_map(|entry| Some(SshProjectDirectory {
-                                name: entry.name.to_os_string().to_string_lossy().into_owned(),
-                                path: RemotePathBuf::new(entry.path.to_path().ok()?.to_string_lossy().into_owned()).ok()?,
-                            })).collect();
+                        root.ssh.project_picker.directories = directory
+                            .entries
+                            .into_iter()
+                            .filter(|entry| {
+                                matches!(
+                                    entry.kind,
+                                    WorkspaceDirectoryEntryKind::Directory
+                                        | WorkspaceDirectoryEntryKind::SymlinkDirectory
+                                )
+                            })
+                            .filter_map(|entry| {
+                                Some(SshProjectDirectory {
+                                    name: entry.name.to_os_string().to_string_lossy().into_owned(),
+                                    path: RemotePathBuf::new(
+                                        entry.path.to_path().ok()?.to_string_lossy().into_owned(),
+                                    )
+                                    .ok()?,
+                                })
+                            })
+                            .collect();
                     }
-                    Ok(_) => root.ssh.project_picker.error = Some(root.ui_text.get(UiTextKey::RemoteDirectoryUnexpected).into()),
+                    Ok(_) => {
+                        root.ssh.project_picker.error = Some(
+                            root.ui_text
+                                .get(UiTextKey::RemoteDirectoryUnexpected)
+                                .into(),
+                        )
+                    }
                     Err(error) => root.ssh.project_picker.error = Some(error.to_string()),
                 }
                 root.ssh.project_picker.reset_directory_selection();
                 cx.notify();
             });
-        }).detach();
+        })
+        .detach();
         cx.notify();
     }
 
@@ -655,7 +685,12 @@ impl WorkbenchView {
                     Ok(snapshot) => {
                         root.ssh.project_picker.directories = snapshot
                             .into_iter()
-                            .filter(|entry| entry.kind == RemoteFileKind::Directory)
+                            .filter(|entry| {
+                                matches!(
+                                    entry.kind,
+                                    RemoteFileKind::Directory | RemoteFileKind::SymlinkDirectory
+                                )
+                            })
                             .filter_map(|entry| {
                                 remote_child_path(&path, &entry.name).map(|child| {
                                     SshProjectDirectory {

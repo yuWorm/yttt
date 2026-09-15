@@ -254,6 +254,8 @@ name/endpoint, path input, **Open Current Folder** action, and directory rows.
 
 Filtering within the same parent reuses the loaded directory list; it does not recursively search
 the Host. The input remains editable during loading, and incoming results preserve your typed prefix.
+Directory symlinks appear alongside ordinary directories and can be browsed or selected as project
+roots. File links, broken links, and unresolvable cycles are not offered as directories.
 
 Authentication modes:
 
@@ -342,7 +344,10 @@ Discard and Continue, or Cancel. A save failure leaves the file, project, or win
 - Only regular UTF-8 text files are opened.
 - The maximum file size is 6 MiB.
 - Canonical paths must remain inside the local or configured remote project root.
-- Symlinked directories are shown but not traversed.
+- Directory symlinks can be expanded when their targets remain inside the project root.
+  The tree keeps the link-relative paths; ancestor cycles and broken targets report an error
+  instead of recursively expanding. Deleting a link removes the link, not its target.
+  To use a directory link targeting outside the current project, open it as a separate project.
 - Active projects are watched recursively by their Host. Create, modify, and remove events
   refresh expanded tree directories, open-document disk state, and Git status.
 - Create, rename, delete and copy/move operate within one Host environment. Local and remote

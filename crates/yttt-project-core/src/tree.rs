@@ -19,7 +19,7 @@ impl ProjectTreeEntryKind {
     }
 
     pub fn is_traversable(self) -> bool {
-        matches!(self, Self::Directory)
+        self.is_directory()
     }
 }
 
@@ -42,8 +42,8 @@ pub enum ProjectTreeFsError {
     PathOutsideProject { path: PathBuf },
     #[error("project tree path is not a directory: {path}")]
     NotDirectory { path: PathBuf },
-    #[error("project tree does not traverse symlink directories: {path}")]
-    SymlinkDirectory { path: PathBuf },
+    #[error("directory symlink creates a traversal cycle: {path}")]
+    SymlinkCycle { path: PathBuf },
     #[error("failed to scan project tree path {path}: {source}")]
     Io {
         path: PathBuf,
@@ -265,32 +265,26 @@ pub fn scan_project_directory(
         path: root.to_path_buf(),
         source,
     })?;
-    let requested_path = canonical_root.join(&relative_directory);
-
-    if !relative_directory.as_os_str().is_empty() {
-        let link_metadata =
-            fs::symlink_metadata(&requested_path).map_err(|source| ProjectTreeFsError::Io {
-                path: requested_path.clone(),
+    let mut canonical_directory = canonical_root.clone();
+    let mut ancestors = vec![canonical_root.clone()];
+    for component in relative_directory.components() {
+        let requested_path = canonical_directory.join(component.as_os_str());
+        canonical_directory =
+            fs::canonicalize(&requested_path).map_err(|source| ProjectTreeFsError::Io {
+                path: requested_path,
                 source,
             })?;
-        if link_metadata.file_type().is_symlink()
-            && fs::metadata(&requested_path).is_ok_and(|metadata| metadata.is_dir())
-        {
-            return Err(ProjectTreeFsError::SymlinkDirectory {
+        if !canonical_directory.starts_with(&canonical_root) {
+            return Err(ProjectTreeFsError::PathOutsideProject {
                 path: relative_directory,
             });
         }
-    }
-
-    let canonical_directory =
-        fs::canonicalize(&requested_path).map_err(|source| ProjectTreeFsError::Io {
-            path: requested_path.clone(),
-            source,
-        })?;
-    if !canonical_directory.starts_with(&canonical_root) {
-        return Err(ProjectTreeFsError::PathOutsideProject {
-            path: relative_directory,
-        });
+        if ancestors.contains(&canonical_directory) {
+            return Err(ProjectTreeFsError::SymlinkCycle {
+                path: relative_directory,
+            });
+        }
+        ancestors.push(canonical_directory.clone());
     }
     if !fs::metadata(&canonical_directory)
         .map_err(|source| ProjectTreeFsError::Io {
@@ -679,6 +673,65 @@ fn mutation_io(operation: &'static str, path: &Path, source: io::Error) -> Proje
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_symlinks_preserve_alias_paths_and_unlink_only_the_alias() {
+        use std::os::unix::fs::symlink;
+        let root = tempdir().unwrap();
+        fs::create_dir_all(root.path().join("real/nested")).unwrap();
+        fs::write(root.path().join("real/nested/data.txt"), "contents").unwrap();
+        symlink("real", root.path().join("alias")).unwrap();
+        let listing =
+            scan_project_directory(root.path(), Path::new("alias/nested"), false).unwrap();
+        assert_eq!(
+            listing.entries[0].relative_path,
+            Path::new("alias/nested/data.txt")
+        );
+        let alias = scan_project_directory(root.path(), Path::new("alias"), false).unwrap();
+        assert_eq!(alias.entries[0].relative_path, Path::new("alias/nested"));
+        delete_project_entry(root.path(), Path::new("alias")).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.path().join("real/nested/data.txt")).unwrap(),
+            "contents"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_symlinks_reject_cycles_and_project_escapes() {
+        use std::os::unix::fs::symlink;
+        let root = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        fs::create_dir(root.path().join("real")).unwrap();
+        symlink("real", root.path().join("alias")).unwrap();
+        symlink(".", root.path().join("real/self")).unwrap();
+        symlink("..", root.path().join("real/parent")).unwrap();
+        symlink(outside.path(), root.path().join("outside")).unwrap();
+        symlink("missing", root.path().join("broken")).unwrap();
+        for path in ["alias/self", "alias/parent", "alias/self/self"] {
+            assert!(
+                matches!(
+                    scan_project_directory(root.path(), Path::new(path), false),
+                    Err(ProjectTreeFsError::SymlinkCycle { .. })
+                ),
+                "{path}"
+            );
+        }
+        assert!(matches!(
+            scan_project_directory(root.path(), Path::new("outside"), false),
+            Err(ProjectTreeFsError::PathOutsideProject { .. })
+        ));
+        assert!(scan_project_directory(root.path(), Path::new("broken"), false).is_err());
+        assert!(
+            scan_project_directory(root.path(), Path::new(""), false)
+                .unwrap()
+                .entries
+                .iter()
+                .any(|entry| entry.name == "broken"
+                    && entry.kind == ProjectTreeEntryKind::SymlinkFile)
+        );
+    }
 
     #[test]
     fn create_entry_uses_trailing_slash_as_directory_contract() {
