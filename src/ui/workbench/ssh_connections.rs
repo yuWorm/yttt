@@ -311,6 +311,7 @@ impl WorkbenchView {
         self.ssh.manager_connection_list = None;
         self.ssh.manager_connection_list_subscription = None;
         self.ssh.remote_access_address = None;
+        self.auxiliary_windows.existing_host = None;
         if self.auxiliary_windows.active == Some(AuxiliaryWindowKind::RemoteServices) {
             self.auxiliary_windows.active = None;
         }
@@ -1152,7 +1153,33 @@ pub(super) fn remote_services_window_content(
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
-    if root.auxiliary_windows.remote_access_page {
+    use super::auxiliary_windows::RemoteServicesPage;
+    if root.auxiliary_windows.remote_page == RemoteServicesPage::ExistingHost {
+        if root.auxiliary_windows.existing_host.is_none() {
+            if let Some(profile) = root.config_paths.profile().cloned() {
+                root.auxiliary_windows.existing_host = Some(crate::ui::app::existing_host::create(
+                    profile,
+                    root.ui_text,
+                    window,
+                    cx,
+                ));
+            }
+        }
+        return div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .overflow_hidden()
+            .bg(root.theme_runtime().ui.editor_background)
+            .child(remote_services_navigation(root, cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .children(root.auxiliary_windows.existing_host.clone()),
+            );
+    }
+    if root.auxiliary_windows.remote_page == RemoteServicesPage::ThisComputer {
         return div()
             .flex()
             .flex_col()
@@ -1164,7 +1191,8 @@ pub(super) fn remote_services_window_content(
                     .id("remote-access-scroll")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scrollbar()
+                    .overflow_y_scroll()
+                    .vertical_scrollbar(&root.auxiliary_windows.remote_access_scroll)
                     .p(gpui::rems(2.0))
                     .child(root.remote_access_settings(window, cx)),
             );
@@ -1208,6 +1236,7 @@ pub(super) fn remote_services_window_content(
         .gap(ui_style.spacing.md)
         .child(
             div()
+                .debug_selector(|| "ssh-command-field".into())
                 .flex()
                 .flex_col()
                 .gap(ui_style.spacing.xs)
@@ -1424,17 +1453,7 @@ pub(super) fn remote_services_window_content(
                                 .text_color(theme.text_muted)
                                 .child(root.ui_text.get(UiTextKey::SshConnectionsDescription)),
                         ),
-                )
-                .child(yttt_dialog_button(
-                    cx,
-                    "manage-existing-host",
-                    root.ui_text.get(UiTextKey::ConnectExistingHost),
-                    YtttButtonVariant::Ghost,
-                    theme,
-                    cx.listener(|this, _, window, cx| {
-                        this.on_connect_existing_host(&ConnectExistingHost, window, cx);
-                    }),
-                )),
+                ),
         )
         .child(
             div()
@@ -1482,16 +1501,19 @@ pub(super) fn remote_services_window_content(
                 .child(
                     div()
                         .id("remote-service-form-scroll")
+                        .debug_selector(|| "ssh-form-viewport".into())
                         .min_w_0()
                         .min_h_0()
                         .flex_1()
-                        .overflow_y_scrollbar()
+                        .overflow_y_scroll()
+                        .vertical_scrollbar(&root.auxiliary_windows.ssh_form_scroll)
                         .p(gpui::rems(1.5))
                         .child(form_fields.w_full().max_w(gpui::rems(44.0))),
                 ),
         )
         .child(
             div()
+                .debug_selector(|| "ssh-form-footer".into())
                 .flex()
                 .flex_none()
                 .items_center()
@@ -1566,6 +1588,7 @@ pub(super) fn remote_services_window_content(
 }
 
 fn remote_services_navigation(root: &WorkbenchView, cx: &mut Context<WorkbenchView>) -> Div {
+    use super::auxiliary_windows::RemoteServicesPage;
     let theme = root.theme_runtime().ui;
     let style = current_ui_style(cx);
     div()
@@ -1579,19 +1602,24 @@ fn remote_services_navigation(root: &WorkbenchView, cx: &mut Context<WorkbenchVi
         .children(
             [
                 (
-                    false,
+                    RemoteServicesPage::Ssh,
                     "remote-services-connections",
                     UiTextKey::SshConnections,
                 ),
                 (
-                    true,
+                    RemoteServicesPage::ExistingHost,
+                    "remote-services-existing-host",
+                    UiTextKey::ConnectExistingHost,
+                ),
+                (
+                    RemoteServicesPage::ThisComputer,
                     "remote-services-this-computer",
                     UiTextKey::RemoteAccessTitle,
                 ),
             ]
             .into_iter()
-            .map(|(remote_access, id, key)| {
-                let selected = root.auxiliary_windows.remote_access_page == remote_access;
+            .map(|(page, id, key)| {
+                let selected = root.auxiliary_windows.remote_page == page;
                 div()
                     .id(id)
                     .debug_selector(move || id.to_string())
@@ -1612,7 +1640,7 @@ fn remote_services_navigation(root: &WorkbenchView, cx: &mut Context<WorkbenchVi
                     .hover(|this| this.text_color(theme.text))
                     .child(root.ui_text.get(key))
                     .on_click(cx.listener(move |root, _, _, cx| {
-                        root.auxiliary_windows.remote_access_page = remote_access;
+                        root.auxiliary_windows.remote_page = page;
                         cx.notify();
                     }))
             }),

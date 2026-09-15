@@ -392,8 +392,24 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::RemoteAccessConfirm => "确认",
         UiTextKey::RemoteAccessNotReady => "请等待全部工作窗口完成状态发布，再开启远程访问。",
-        UiTextKey::RemoteAccessCopied => "已复制连接信息。其中包含秘密，请仅分享给可信设备。",
+        UiTextKey::RemoteAccessCopied => "已复制 Base64 连接码，包含地址和访问密钥，请妥善保密。",
         UiTextKey::ConnectExistingHost => "连接已有 yttt",
+        UiTextKey::ExistingHostDescription => {
+            "粘贴另一台电脑导出的连接码，通过 TLS 直接连接，无需 SSH 或部署 Server。"
+        }
+        UiTextKey::ConnectionCodeLabel => "连接码",
+        UiTextKey::ConnectionCodePlaceholder => "粘贴 Base64 连接码，自动填入地址和凭据",
+        UiTextKey::ConnectionCodeSecurity => {
+            "包含地址、证书和访问密钥。Base64 不加密，请仅分享给可信设备。"
+        }
+        UiTextKey::ConnectionCodeInvalid => "连接码无效，请从另一台电脑的远程访问设置重新复制。",
+        UiTextKey::ConnectionAddressLabel => "连接地址",
+        UiTextKey::ConnectionAddressHint => {
+            "从连接码自动填入。跨电脑访问或使用端口转发时，请改为可达的主机:端口。"
+        }
+        UiTextKey::ConnectionAddressInvalid => "请输入主机:端口或 [IPv6]:端口，不要填写 URL。",
+        UiTextKey::ConnectionRemember => "记住凭据",
+        UiTextKey::ConnectionRemembered => "已选择保存到系统钥匙串",
         UiTextKey::SettingsPermissionNotifications => "系统通知",
         UiTextKey::SettingsPermissionNotificationsDescription => {
             "允许 yttt 在后台发送 Agent 任务完成或等待处理的提醒。"

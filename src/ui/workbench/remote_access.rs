@@ -499,16 +499,24 @@ impl WorkbenchView {
                 }
                 match result {
                     Ok(Response::RemoteAccess(RemoteAccessResponse::ConnectionInfo(info))) => {
-                        match serde_json::to_string(&info) {
-                            Ok(payload) if payload.len() <= MAX_CONNECTION_INFO_BYTES => {
+                        let payload = root
+                            .ssh
+                            .remote_access
+                            .as_ref()
+                            .and_then(|status| status.bound_address)
+                            .ok_or("Remote access is not listening")
+                            .and_then(|address| {
+                                crate::remote_launch::ConnectionCode::encode(
+                                    address.to_string(),
+                                    info,
+                                )
+                            });
+                        match payload {
+                            Ok(payload) => {
                                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(payload));
                                 root.ssh.remote_access_error = Some(
                                     root.ui_text.get(UiTextKey::RemoteAccessCopied).to_string(),
                                 );
-                            }
-                            Ok(_) => {
-                                root.ssh.remote_access_error =
-                                    Some("Connection information exceeds 8 KiB".into())
                             }
                             Err(error) => root.ssh.remote_access_error = Some(error.to_string()),
                         }

@@ -56,6 +56,10 @@
 
 ### Changed
 
+- Consolidated SSH, existing TLS Host connections, and local remote-access settings into peer
+  tabs in one management window, with scrolling forms and fixed bottom actions.
+- Changed connection-info copying to a Base64 code containing the endpoint, certificate and
+  access key; pasting it fills the connection address and credentials automatically.
 - Reworked remote directory selection into a compact, connection-labelled picker with the Host home
   as its default, hidden folders, an inline open-current action, and keyboard directory navigation.
 - Unified workbench controls, dialogs, overlays, rows, panels, tabs, sidebars, notifications, and split handles behind the `yttt-ui` primitive layer; one live appearance runtime now drives application colors, typography, spacing, radii, shadows, density, and the complete `gpui-component` theme bridge.

@@ -1,6 +1,9 @@
 use crate::{
     config::profile::AppProfile,
-    remote_launch::{RemoteLaunch, RemoteTarget},
+    remote_launch::{
+        ConnectionCode, MAX_CONNECTION_CODE_BYTES, RemoteLaunch, RemoteTarget,
+        validate_connection_address,
+    },
     ui::{
         i18n::{UiText, UiTextKey},
         primitives::{
@@ -11,13 +14,18 @@ use crate::{
     },
 };
 use gpui::{
-    App, AppContext as _, Bounds, Context, Entity, IntoElement, ParentElement as _, Render,
-    Styled as _, Window, WindowBounds, WindowOptions, div, px, size,
+    AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+    Render, ScrollHandle, StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
+    px,
 };
-use gpui_component::{Disableable as _, Root, input::InputState, scroll::ScrollableElement as _};
+use gpui_component::{
+    Disableable as _,
+    input::{InputEvent, InputState},
+    scroll::ScrollableElement as _,
+};
 use serde::{Deserialize, Serialize};
 use std::io::{Read as _, Write as _};
-use yttt_protocol::remote_access::{MAX_CONNECTION_INFO_BYTES, RemoteConnectionInfo};
+use yttt_protocol::remote_access::RemoteConnectionInfo;
 use zeroize::Zeroizing;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -79,43 +87,51 @@ fn save_connections(profile: &AppProfile, records: &[RememberedConnection]) -> R
     Ok(())
 }
 
-pub(crate) fn open(profile: AppProfile, text: UiText, cx: &mut App) -> anyhow::Result<()> {
-    let bounds = Bounds::centered(None, size(px(620.0), px(620.0)), cx);
-    cx.open_window(
-        WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            ..Default::default()
-        },
-        move |window, cx| {
-            window.set_window_title(text.get(UiTextKey::ConnectExistingHost));
-            let view = cx.new(|cx| ExistingHostForm {
-                profile,
-                text,
-                address: cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .placeholder("127.0.0.1:43123")
-                        .validate(|value, _| value.len() <= 1024)
-                }),
-                info: cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .masked(true)
-                        .placeholder("Connection information / 连接信息 (≤ 8 KiB)")
-                        .validate(|value, _| value.len() <= MAX_CONNECTION_INFO_BYTES)
-                }),
-                remember: false,
-                busy: false,
-                error: None,
-                saved: Vec::new(),
-                selected: None,
-            });
-            view.update(cx, |view, cx| view.load_remembered(window, cx));
-            cx.new(|cx| Root::new(view, window, cx))
-        },
-    )?;
-    Ok(())
+pub(crate) fn create(
+    profile: AppProfile,
+    text: UiText,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) -> Entity<ExistingHostForm> {
+    let view = cx.new(|cx| {
+        let info = cx.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder(text.get(UiTextKey::ConnectionCodePlaceholder))
+                .validate(|value, _| value.len() <= MAX_CONNECTION_CODE_BYTES)
+        });
+        let subscription = cx.subscribe_in(
+            &info,
+            window,
+            |view: &mut ExistingHostForm, _, event, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    view.import_code(window, cx);
+                }
+            },
+        );
+        ExistingHostForm {
+            profile,
+            text,
+            address: cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("host:port")
+                    .validate(|value, _| value.len() <= 1024)
+            }),
+            info,
+            remember: false,
+            busy: false,
+            error: None,
+            saved: Vec::new(),
+            selected: None,
+            scroll: ScrollHandle::new(),
+            _subscription: subscription,
+        }
+    });
+    view.update(cx, |view, cx| view.load_remembered(window, cx));
+    view
 }
 
-struct ExistingHostForm {
+pub(crate) struct ExistingHostForm {
     profile: AppProfile,
     text: UiText,
     address: Entity<InputState>,
@@ -125,9 +141,28 @@ struct ExistingHostForm {
     error: Option<String>,
     saved: Vec<RememberedConnection>,
     selected: Option<yttt_core::model::ids::CredentialId>,
+    scroll: ScrollHandle,
+    _subscription: Subscription,
 }
 
 impl ExistingHostForm {
+    fn import_code(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let value = self.info.read(cx).value();
+        if value.is_empty() {
+            self.error = None;
+            cx.notify();
+            return;
+        }
+        match ConnectionCode::decode(&value) {
+            Ok(code) => {
+                self.address
+                    .update(cx, |input, cx| input.set_value(code.address, window, cx));
+                self.error = None;
+            }
+            Err(_) => self.error = Some(self.text.get(UiTextKey::ConnectionCodeInvalid).into()),
+        }
+        cx.notify();
+    }
     fn load_remembered(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let profile = self.profile.clone();
         self.busy = true;
@@ -175,16 +210,27 @@ impl ExistingHostForm {
                         view.remember = true;
                         view.address
                             .update(cx, |input, cx| input.set_value(record.address, window, cx));
-                        view.info.update(cx, |input, cx| {
-                            input.set_value(
-                                secret
-                                    .as_ref()
-                                    .map(|value| value.to_string())
-                                    .unwrap_or_default(),
-                                window,
-                                cx,
-                            )
-                        });
+                        let payload = secret
+                            .as_ref()
+                            .and_then(|value| {
+                                if ConnectionCode::decode(value).is_ok() {
+                                    Some(value.to_string())
+                                } else {
+                                    // Migrate credentials saved before connection codes included an address.
+                                    serde_json::from_str::<RemoteConnectionInfo>(value)
+                                        .ok()
+                                        .and_then(|info| {
+                                            ConnectionCode::encode(
+                                                view.address.read(cx).value().to_string(),
+                                                info,
+                                            )
+                                            .ok()
+                                        })
+                                }
+                            })
+                            .unwrap_or_default();
+                        view.info
+                            .update(cx, |input, cx| input.set_value(payload, window, cx));
                         if secret.is_none() {
                             view.error = Some("凭据不可用，请重新粘贴连接信息。".into());
                         }
@@ -242,24 +288,15 @@ impl ExistingHostForm {
         }
         let address = self.address.read(cx).value().trim().to_string();
         let payload = Zeroizing::new(self.info.read(cx).value().to_string());
-        if payload.len() > MAX_CONNECTION_INFO_BYTES {
-            self.error = Some("Connection information exceeds 8 KiB".into());
+        if validate_connection_address(&address).is_err() {
+            self.error = Some(self.text.get(UiTextKey::ConnectionAddressInvalid).into());
             cx.notify();
             return;
         }
-        if address.is_empty()
-            || address.len() > 1024
-            || address.contains(['/', '\\', '\n', '\r', ' '])
-            || !address.contains(':')
-        {
-            self.error = Some("Enter a forwarded host:port or [IPv6]:port, not a URL.".into());
-            cx.notify();
-            return;
-        }
-        let connection_info: RemoteConnectionInfo = match serde_json::from_str(&payload) {
-            Ok(info) => info,
+        let connection_info = match ConnectionCode::decode(&payload) {
+            Ok(code) => code.connection_info,
             Err(_) => {
-                self.error = Some("Invalid connection information. Copy it again from the target computer's remote-access settings.".into());
+                self.error = Some(self.text.get(UiTextKey::ConnectionCodeInvalid).into());
                 cx.notify();
                 return;
             }
@@ -292,7 +329,7 @@ impl ExistingHostForm {
                     Ok(()) if connect => {
                         view.info
                             .update(cx, |input, cx| input.set_value("", window, cx));
-                        window.remove_window();
+                        view.load_remembered(window, cx);
                     }
                     Ok(()) => {
                         view.remember = true;
@@ -312,28 +349,25 @@ impl Render for ExistingHostForm {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = current_workbench_theme(cx);
         let style = current_ui_style(cx);
-        div()
-            .size_full()
+        let fields = div()
             .flex()
             .flex_col()
-            .p(px(24.0))
             .gap(style.spacing.md)
-            .bg(theme.panel_background)
-            .text_color(theme.text)
-            .child(div().child(self.text.get(UiTextKey::ConnectExistingHost)))
             .child(
                 div()
                     .text_sm()
                     .text_color(theme.text_muted)
-                    .child("TLS · No SSH or Server deployment / 无需 SSH 或部署 Server"),
+                    .child(self.text.get(UiTextKey::ExistingHostDescription)),
             )
             .child(
                 div()
+                    .id("saved-hosts")
                     .flex()
                     .flex_col()
+                    .flex_none()
                     .gap(style.spacing.xs)
                     .max_h(px(160.0))
-                    .overflow_y_scrollbar()
+                    .overflow_y_scroll()
                     .children(self.saved.iter().enumerate().map(|(index, record)| {
                         let record = record.clone();
                         yttt_button(
@@ -359,7 +393,7 @@ impl Render for ExistingHostForm {
                     .child(
                         yttt_button(
                             "new-saved-host",
-                            "新建连接",
+                            self.text.get(UiTextKey::SshNewConnection),
                             YtttButtonVariant::Secondary,
                             theme,
                             style,
@@ -372,16 +406,18 @@ impl Render for ExistingHostForm {
                             view.remember = false;
                             view.address
                                 .update(cx, |input, cx| input.set_value("", window, cx));
-                            view.info
-                                .update(cx, |input, cx| input.set_value("", window, cx));
+                            view.info.update(cx, |input, cx| {
+                                input.set_value("", window, cx);
+                                input.focus(window, cx);
+                            });
                             cx.notify();
                         })),
                     )
                     .child(
                         yttt_button(
                             "delete-saved-host",
-                            "删除选中的连接",
-                            YtttButtonVariant::Secondary,
+                            self.text.get(UiTextKey::SshDeleteConnection),
+                            YtttButtonVariant::Danger,
                             theme,
                             style,
                             cx,
@@ -393,24 +429,74 @@ impl Render for ExistingHostForm {
                     ),
             )
             .child(
-                yttt_input(&self.address, YtttInputKind::Settings, theme, style)
-                    .disabled(self.busy),
+                div()
+                    .text_sm()
+                    .child(self.text.get(UiTextKey::ConnectionCodeLabel)),
             )
             .child(
                 yttt_input(&self.info, YtttInputKind::Settings, theme, style).disabled(self.busy),
             )
             .child(
                 div()
+                    .text_xs()
+                    .text_color(theme.text_muted)
+                    .child(self.text.get(UiTextKey::ConnectionCodeSecurity)),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .child(self.text.get(UiTextKey::ConnectionAddressLabel)),
+            )
+            .child(
+                yttt_input(&self.address, YtttInputKind::Settings, theme, style)
+                    .disabled(self.busy),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.text_muted)
+                    .child(self.text.get(UiTextKey::ConnectionAddressHint)),
+            )
+            .children(self.error.clone().map(|error| div().text_sm().child(error)));
+        div()
+            .debug_selector(|| "existing-host-manager".into())
+            .size_full()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .bg(theme.editor_background)
+            .text_color(theme.text)
+            .child(
+                div().flex_1().min_h_0().flex().flex_col().child(
+                    div()
+                        .id("existing-host-form-scroll")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .vertical_scrollbar(&self.scroll)
+                        .p(px(24.0))
+                        .child(fields),
+                ),
+            )
+            .child(
+                div()
                     .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_between()
+                    .p(px(12.0))
                     .gap(style.spacing.sm)
+                    .border_t_1()
+                    .border_color(theme.border_variant)
                     .child(
                         yttt_button(
                             "existing-host-remember",
-                            if self.remember {
-                                "Remember: OS keychain / 已记住"
+                            self.text.get(if self.remember {
+                                UiTextKey::ConnectionRemembered
                             } else {
-                                "Remember credentials / 记住凭据"
-                            },
+                                UiTextKey::ConnectionRemember
+                            }),
                             YtttButtonVariant::Secondary,
                             theme,
                             style,
@@ -423,43 +509,122 @@ impl Render for ExistingHostForm {
                         })),
                     )
                     .child(
-                        yttt_button(
-                            "save-host-connection",
-                            "保存",
-                            YtttButtonVariant::Secondary,
-                            theme,
-                            style,
-                            cx,
-                        )
-                        .disabled(self.busy)
-                        .on_click(cx.listener(|view, _, window, cx| {
-                            view.save_or_connect(false, window, cx)
-                        })),
-                    )
-                    .child(
-                        yttt_button(
-                            "existing-host-connect",
-                            self.text.get(UiTextKey::ConnectExistingHost),
-                            YtttButtonVariant::Primary,
-                            theme,
-                            style,
-                            cx,
-                        )
-                        .disabled(self.busy)
-                        .on_click(
-                            cx.listener(|view, _, window, cx| {
-                                view.save_or_connect(true, window, cx)
-                            }),
-                        ),
+                        div()
+                            .flex()
+                            .gap(style.spacing.sm)
+                            .child(
+                                yttt_button(
+                                    "save-host-connection",
+                                    self.text.get(UiTextKey::SettingsSave),
+                                    YtttButtonVariant::Secondary,
+                                    theme,
+                                    style,
+                                    cx,
+                                )
+                                .disabled(self.busy)
+                                .on_click(cx.listener(
+                                    |view, _, window, cx| view.save_or_connect(false, window, cx),
+                                )),
+                            )
+                            .child(
+                                yttt_button(
+                                    "existing-host-connect",
+                                    self.text.get(UiTextKey::SshConnect),
+                                    YtttButtonVariant::Primary,
+                                    theme,
+                                    style,
+                                    cx,
+                                )
+                                .disabled(self.busy)
+                                .on_click(cx.listener(
+                                    |view, _, window, cx| view.save_or_connect(true, window, cx),
+                                )),
+                            ),
                     ),
             )
-            .children(self.error.clone().map(|error| div().text_sm().child(error)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn pasting_connection_code_fills_address_and_rejects_bad_credentials(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::config::profile::{
+            EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
+        };
+        use std::{cell::RefCell, rc::Rc};
+        cx.update(gpui_component::init);
+        let temporary = tempfile::tempdir().unwrap();
+        let profile = AppProfile::scoped(
+            yttt_core::model::ids::ProfileId::new("paste-test"),
+            EnvironmentKind::Test,
+            ProfilePersistence::Ephemeral,
+            temporary.path(),
+            ProjectConfigPolicy::Overlay,
+            HostConnectPolicy::ProfileDiscovery,
+        );
+        let slot = Rc::new(RefCell::new(None));
+        let window_slot = slot.clone();
+        let (_root, cx) = cx.add_window_view(|window, cx| {
+            let form = create(profile, crate::ui::i18n::UiText::english(), window, cx);
+            *window_slot.borrow_mut() = Some(form.clone());
+            gpui_component::Root::new(form, window, cx)
+        });
+        let form = slot.borrow_mut().take().unwrap();
+        cx.run_until_parked();
+        let info = RemoteConnectionInfo {
+            environment_id: "paste-environment".into(),
+            profile_id: yttt_core::model::ids::ProfileId::new("paste-profile"),
+            server_name: "yttt-host.local".into(),
+            certificate_der: vec![1, 2, 3],
+            certificate_sha256: "ab".repeat(32),
+            credential_generation: 1,
+            work_secret: [37; 32],
+        };
+        let code = ConnectionCode::encode("remote.example:43123".into(), info).unwrap();
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(code));
+        form.update_in(cx, |form, window, cx| {
+            form.info.update(cx, |input, cx| input.focus(window, cx));
+        });
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-v"
+        } else {
+            "ctrl-v"
+        });
+        cx.run_until_parked();
+        form.read_with(cx, |form, cx| {
+            assert_eq!(
+                form.address.read(cx).value().as_str(),
+                "remote.example:43123"
+            );
+            assert!(form.error.is_none());
+            assert_eq!(
+                ConnectionCode::decode(&form.info.read(cx).value())
+                    .unwrap()
+                    .connection_info
+                    .work_secret,
+                [37; 32]
+            );
+        });
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+            "not-a-connection-code".into(),
+        ));
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-a cmd-v"
+        } else {
+            "ctrl-a ctrl-v"
+        });
+        cx.run_until_parked();
+        form.update_in(cx, |form, window, cx| {
+            assert!(form.error.is_some());
+            form.save_or_connect(true, window, cx);
+            assert!(!form.busy, "invalid credentials must not launch a client");
+        });
+    }
 
     #[test]
     fn legacy_connection_survives_adding_another_host() {

@@ -17,6 +17,71 @@ use crate::model::{
     workspace::{PaneProcessState, TabStartState},
 };
 
+struct RemoteManagerTestSurface(Entity<WorkbenchView>);
+
+impl Render for RemoteManagerTestSurface {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .w(px(800.0))
+            .h(px(400.0))
+            .child(self.0.update(cx, |root, cx| {
+                ssh_connections::remote_services_window_content(root, window, cx)
+            }))
+    }
+}
+
+#[gpui::test]
+fn remote_manager_scrolls_form_and_switches_connection_pages_inline(cx: &mut TestAppContext) {
+    use crate::config::profile::{
+        AppProfile, EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
+    };
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let profile = AppProfile::scoped(
+        yttt_core::model::ids::ProfileId::new("remote-manager-test"),
+        EnvironmentKind::Test,
+        ProfilePersistence::Ephemeral,
+        temp.path(),
+        ProjectConfigPolicy::Overlay,
+        HostConnectPolicy::ProfileDiscovery,
+    );
+    let paths = AppConfigPaths::from_profile(&profile);
+    let (_view, cx) = cx.add_window_view(|window, cx| {
+        let root = cx.new(|_| {
+            let mut root = WorkbenchView::with_config_paths(paths);
+            root.open_ssh_connection_manager();
+            root
+        });
+        let surface = cx.new(|_| RemoteManagerTestSurface(root));
+        ComponentRoot::new(surface, window, cx)
+    });
+    cx.run_until_parked();
+    let viewport = cx.debug_bounds("ssh-form-viewport").unwrap();
+    let field = cx.debug_bounds("ssh-command-field").unwrap();
+    let footer = cx.debug_bounds("ssh-form-footer").unwrap();
+    assert!(viewport.bottom() <= footer.top());
+    for _ in 0..4 {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: viewport.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-100.0))),
+            ..Default::default()
+        });
+    }
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("ssh-command-field").unwrap().top() < field.top() - px(50.0));
+    assert_eq!(cx.debug_bounds("ssh-form-footer").unwrap(), footer);
+    let existing = cx.debug_bounds("remote-services-existing-host").unwrap();
+    cx.simulate_click(existing.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("existing-host-manager").is_some());
+    assert!(cx.debug_bounds("ssh-form-viewport").is_none());
+    let ssh = cx.debug_bounds("remote-services-connections").unwrap();
+    cx.simulate_click(ssh.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("ssh-form-viewport").is_some());
+    assert!(cx.debug_bounds("existing-host-manager").is_none());
+}
+
 #[derive(Clone)]
 struct RuntimeSnapshot {
     layout: ProjectLayout,

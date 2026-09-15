@@ -35,9 +35,10 @@ provide a project or personal layout override.
 
 Normal application launches remain local. The bottom status bar identifies the current
 environment; connecting a remote service never replaces the current local window.
-Use **Remote services** on the homepage to open a separate management window. Its pages manage
-SSH Server connections and remembered TLS Host connections, or remote access to this computer.
-The workbench stays usable behind it; connecting opens an independent Client window.
+Use **Remote services** on the homepage to open one management window with three peer tabs:
+**SSH connections**, **Connect to existing yttt**, and **Remote access to this computer**.
+Switching tabs stays in this window; the SSH and TLS forms scroll independently of their fixed
+bottom actions. The workbench stays usable behind it; connecting opens an independent Client window.
 
 Both local and remote windows restore their Host's confirmed workspace state before starting
 terminal/Agent views. A workspace with opened projects goes directly to its project page; a
@@ -162,15 +163,19 @@ Use this path to access computer A's already-running yttt from B without deployi
 1. On A, open **Remote services → Remote access to this computer**. Access is off by
    default; the initial address is `127.0.0.1:43123`. Enable only after the work windows have
    published their state. A port conflict leaves the listener disabled.
-2. Copy connection information on A and transfer it privately. It includes the Host certificate,
-   stable environment/profile identity and a work credential—not A's local administration token.
+2. Copy connection information on A and transfer the resulting Base64 connection code privately.
+   It includes the listening address, Host certificate, stable environment/profile identity and
+   a work credential—not A's local administration token. Base64 is not encryption.
 3. Forward A's listening TCP port using a general-purpose TCP tunnel. Keep the loopback bind when
    the forwarder's endpoint runs on A. Binding another interface requires explicit confirmation
    and appropriate firewall protection.
-4. On B, run **Connect to existing yttt** from the command palette. Enter the address reachable on
-   B (for example `127.0.0.1:54321`) and paste A's connection information, limited to 8 KiB.
-   Optional remembered credentials use the OS keychain. A keychain error does not fall back to
-   plaintext storage.
+4. On B, open **Remote services → Connect to existing yttt**, or use the command-palette action
+   to select that same tab. Paste A's code into **Connection code**: the address and authentication
+   information are filled automatically. The decoded payload is limited to 8 KiB.
+   Replace the address with one reachable on B when needed (for example a forwarded
+   `127.0.0.1:54321`, or A's LAN address instead of its loopback/wildcard listening address).
+   The code stays masked. Optional remembered credentials use the OS keychain; a keychain error
+   does not fall back to plaintext storage. Previously saved credentials remain usable.
 5. The separate Client verifies TLS 1.3, the imported certificate and environment before using
    the work credential. The address is a route, not Host identity: a forwarded `localhost`
    address is valid. No SSH login, binary deployment, or Server startup happens on this path.

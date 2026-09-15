@@ -2630,10 +2630,10 @@ impl WorkbenchView {
 
     fn handle_pending_open_project_request(&mut self, cx: &mut Context<Self>) {
         if std::mem::take(&mut self.pending_existing_host_request) {
-            if let Some(profile) = self.config_paths.profile().cloned() {
-                if let Err(error) = crate::ui::app::existing_host::open(profile, self.ui_text, cx) {
-                    self.load_error = Some(error.to_string());
-                }
+            if self.config_paths.profile().is_some() {
+                self.open_ssh_connection_manager();
+                self.auxiliary_windows.remote_page =
+                    auxiliary_windows::RemoteServicesPage::ExistingHost;
             } else {
                 self.load_error = Some("Open connections from your local yttt window.".into());
             }

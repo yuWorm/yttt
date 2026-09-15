@@ -441,9 +441,29 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
             "Wait for every work window to finish publishing its state before enabling remote access."
         }
         UiTextKey::RemoteAccessCopied => {
-            "Connection information copied. It contains a secret; share it only with trusted devices."
+            "Base64 connection code copied, including the address and access key. Keep it private."
         }
         UiTextKey::ConnectExistingHost => "Connect to existing yttt",
+        UiTextKey::ExistingHostDescription => {
+            "Paste a connection code from the other computer. Connect directly over TLS; no SSH or Server deployment required."
+        }
+        UiTextKey::ConnectionCodeLabel => "Connection code",
+        UiTextKey::ConnectionCodePlaceholder => {
+            "Paste Base64 connection code to fill in the address and credentials"
+        }
+        UiTextKey::ConnectionCodeSecurity => {
+            "Contains the address, certificate and access key. Base64 is not encryption; share only with trusted devices."
+        }
+        UiTextKey::ConnectionCodeInvalid => {
+            "Invalid connection code. Copy it again from the other computer's remote-access settings."
+        }
+        UiTextKey::ConnectionAddressLabel => "Connection address",
+        UiTextKey::ConnectionAddressHint => {
+            "Filled from the code. For another computer or port forwarding, replace this with a reachable host:port."
+        }
+        UiTextKey::ConnectionAddressInvalid => "Enter host:port or [IPv6]:port, not a URL.",
+        UiTextKey::ConnectionRemember => "Remember credentials",
+        UiTextKey::ConnectionRemembered => "Remember: OS keychain",
         UiTextKey::SettingsPermissionNotifications => "System notifications",
         UiTextKey::SettingsPermissionNotificationsDescription => {
             "Allow agent completion and attention alerts when yttt is not focused."

@@ -10,6 +10,137 @@ use crate::config::{profile::AppProfile, ssh::SshConnectionConfig};
 
 const MAX_REMOTE_LAUNCH_BYTES: usize = 128 * 1024;
 
+/// A clipboard code contains credentials. Base64 is transport encoding, not encryption.
+pub(crate) const MAX_CONNECTION_CODE_BYTES: usize =
+    yttt_protocol::remote_access::MAX_CONNECTION_INFO_BYTES.div_ceil(3) * 4;
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ConnectionCode {
+    version: u8,
+    pub address: String,
+    pub connection_info: yttt_protocol::remote_access::RemoteConnectionInfo,
+}
+
+impl ConnectionCode {
+    pub(crate) fn encode(
+        address: String,
+        connection_info: yttt_protocol::remote_access::RemoteConnectionInfo,
+    ) -> Result<String, &'static str> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        validate_connection_address(&address)?;
+        let code = Self {
+            version: 1,
+            address,
+            connection_info,
+        };
+        let json = Zeroizing::new(
+            serde_json::to_vec(&code).map_err(|_| "Cannot encode connection information")?,
+        );
+        if json.len() > yttt_protocol::remote_access::MAX_CONNECTION_INFO_BYTES {
+            return Err("Connection information exceeds 8 KiB");
+        }
+        Ok(STANDARD.encode(&*json))
+    }
+
+    pub(crate) fn decode(value: &str) -> Result<Self, &'static str> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let value = value.trim();
+        if value.len() > MAX_CONNECTION_CODE_BYTES {
+            return Err("Connection code is too large");
+        }
+        let bytes = Zeroizing::new(
+            STANDARD
+                .decode(value)
+                .map_err(|_| "Invalid Base64 connection code")?,
+        );
+        if bytes.len() > yttt_protocol::remote_access::MAX_CONNECTION_INFO_BYTES {
+            return Err("Connection information exceeds 8 KiB");
+        }
+        let code: Self = serde_json::from_slice(&bytes).map_err(|_| "Invalid connection code")?;
+        if code.version != 1 {
+            return Err("Unsupported connection code version");
+        }
+        validate_connection_address(&code.address)?;
+        Ok(code)
+    }
+}
+
+pub(crate) fn validate_connection_address(address: &str) -> Result<(), &'static str> {
+    let valid = address.rsplit_once(':').is_some_and(|(host, port)| {
+        !host.is_empty()
+            && port.parse::<u16>().is_ok_and(|port| port != 0)
+            && if host.starts_with('[') {
+                host.strip_prefix('[')
+                    .and_then(|host| host.strip_suffix(']'))
+                    .is_some_and(|host| host.parse::<std::net::Ipv6Addr>().is_ok())
+            } else {
+                !host.contains([':', '[', ']'])
+            }
+    });
+    if address.len() > 1024
+        || address
+            .chars()
+            .any(|ch| ch.is_whitespace() || ch.is_control() || matches!(ch, '/' | '\\' | '@'))
+        || !valid
+    {
+        return Err("Enter host:port or [IPv6]:port, not a URL");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod connection_code_tests {
+    use super::*;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use yttt_protocol::remote_access::RemoteConnectionInfo;
+
+    fn info() -> RemoteConnectionInfo {
+        RemoteConnectionInfo {
+            environment_id: "remote-machine".into(),
+            profile_id: yttt_core::model::ids::ProfileId::new("remote-profile"),
+            server_name: "yttt-host.local".into(),
+            certificate_der: vec![1, 2, 3, 255],
+            certificate_sha256: "ab".repeat(32),
+            credential_generation: 7,
+            work_secret: [42; 32],
+        }
+    }
+
+    #[test]
+    fn connection_code_round_trip_preserves_endpoint_and_authentication() {
+        let expected = info();
+        let encoded =
+            ConnectionCode::encode("[2001:db8::1]:43123".into(), expected.clone()).unwrap();
+        let decoded = ConnectionCode::decode(&format!("\n{encoded}\n")).unwrap();
+        assert_eq!(decoded.address, "[2001:db8::1]:43123");
+        assert_eq!(decoded.connection_info, expected);
+    }
+
+    #[test]
+    fn connection_code_rejects_malformed_oversized_and_future_payloads() {
+        assert!(ConnectionCode::decode("not-base64!").is_err());
+        assert!(ConnectionCode::decode(&"A".repeat(MAX_CONNECTION_CODE_BYTES + 1)).is_err());
+        let future = ConnectionCode {
+            version: 2,
+            address: "example.test:43123".into(),
+            connection_info: info(),
+        };
+        assert!(
+            ConnectionCode::decode(&STANDARD.encode(serde_json::to_vec(&future).unwrap())).is_err()
+        );
+        for address in [
+            "https://example.test:443",
+            "host:0",
+            "host:65536",
+            "::1:43123",
+            "host:\n22",
+        ] {
+            assert!(ConnectionCode::encode(address.into(), info()).is_err());
+        }
+    }
+}
+
 /// The authenticated connection information passed privately from the launcher to a remote Client.
 ///
 /// This type deliberately does not implement `Debug`: password material must never reach logs.

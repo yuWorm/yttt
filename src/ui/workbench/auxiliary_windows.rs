@@ -16,12 +16,23 @@ struct WindowSlot {
     focus_requested: bool,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum RemoteServicesPage {
+    #[default]
+    Ssh,
+    ExistingHost,
+    ThisComputer,
+}
+
 #[derive(Default)]
 pub(super) struct AuxiliaryWindows {
     settings: WindowSlot,
     remote_services: WindowSlot,
     layout_editor: WindowSlot,
-    pub(super) remote_access_page: bool,
+    pub(super) remote_page: RemoteServicesPage,
+    pub(super) existing_host: Option<Entity<crate::ui::app::existing_host::ExistingHostForm>>,
+    pub(super) ssh_form_scroll: ScrollHandle,
+    pub(super) remote_access_scroll: ScrollHandle,
     pub(super) active: Option<AuxiliaryWindowKind>,
 }
 
