@@ -828,6 +828,7 @@ pub enum UiTextKey {
     SshProjectOpenCurrentFolder,
     SshProjectLoadingDirectory,
     SshProjectEmptyDirectory,
+    SshProjectNoMatchingDirectories,
     SshProjectConnectionMissing,
     SshProjectConnectionFailed,
     SshRuntimeUnavailable,

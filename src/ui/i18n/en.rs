@@ -1128,6 +1128,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SshProjectOpenCurrentFolder => "Open Current Folder",
         UiTextKey::SshProjectLoadingDirectory => "Loading remote directories…",
         UiTextKey::SshProjectEmptyDirectory => "This directory has no subdirectories.",
+        UiTextKey::SshProjectNoMatchingDirectories => "No matching directories.",
         UiTextKey::SshProjectConnectionMissing => "The saved SSH connection no longer exists.",
         UiTextKey::SshProjectConnectionFailed => "Could not connect to the SSH host.",
         UiTextKey::SshRuntimeUnavailable => "SSH runtime is unavailable.",

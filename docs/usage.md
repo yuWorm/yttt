@@ -244,11 +244,16 @@ name/endpoint, path input, **Open Current Folder** action, and directory rows.
 
 - Click a folder to enter it; `..` returns to its parent.
 - Use `Up`/`Down` to select a row and `Tab` to enter the selected directory.
-- Enter an absolute path or `~/…` and press `Enter` to browse it. With the current path unchanged,
-  `Enter` activates the selected row; the first row opens the current directory as a project.
+- Type an absolute path or `~/…` to filter directory names by their case-sensitive prefix.
+  For example, `/Volumes/WorkSpace/Pro` browses `/Volumes/WorkSpace/` and shows matching
+  directories such as `Projects`. A trailing `/` lists that directory's children.
+- The first match is selected automatically; `Enter` or `Tab` enters the selected directory.
+  With no prefix, selecting the first row and pressing `Enter` opens the current folder as a project.
+  With no matches, `Enter` does nothing; **Open Current Folder** still opens the browsed parent.
 - `Escape` closes the picker. **New folder** creates the path entered in the Host picker.
 
-Directory loads keep the input synchronized with the Host's returned path.
+Filtering within the same parent reuses the loaded directory list; it does not recursively search
+the Host. The input remains editable during loading, and incoming results preserve your typed prefix.
 
 Authentication modes:
 

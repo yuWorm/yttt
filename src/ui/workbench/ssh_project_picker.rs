@@ -129,6 +129,8 @@ impl WorkbenchView {
                 }
             };
         self.ssh.project_picker.current_path = Some(current_path);
+        self.ssh.project_picker.directory_prefix.clear();
+        self.ssh.project_picker.preserve_path_input = false;
         self.ssh.project_picker.directories.clear();
         self.ssh.project_picker.selected_directory = 0;
         self.ssh
@@ -161,7 +163,7 @@ impl WorkbenchView {
                         match result {
                             Ok(path) => {
                                 root.ssh.project_picker.current_path = Some(path);
-                                root.ssh.project_picker.path_input_needs_sync = true;
+                                root.ssh.project_picker.path_input_needs_sync = !root.ssh.project_picker.preserve_path_input;
                             }
                             Err(error) => root.ssh.project_picker.error = Some(error),
                         }
@@ -175,6 +177,7 @@ impl WorkbenchView {
                     Ok(_) => root.ssh.project_picker.error = Some(root.ui_text.get(UiTextKey::RemoteDirectoryUnexpected).into()),
                     Err(error) => root.ssh.project_picker.error = Some(error.to_string()),
                 }
+                root.ssh.project_picker.reset_directory_selection();
                 cx.notify();
             });
         }).detach();
@@ -616,6 +619,8 @@ impl WorkbenchView {
         self.ssh.project_picker.view = SshProjectPickerView::Browsing;
         self.ssh.project_picker.connection_id = Some(connection_id.clone());
         self.ssh.project_picker.current_path = Some(path.clone());
+        self.ssh.project_picker.directory_prefix.clear();
+        self.ssh.project_picker.preserve_path_input = false;
         self.ssh.project_picker.continuation = Some(SshProjectConnectContinuation::Browse {
             initial_root: Some(path.clone()),
         });
@@ -666,6 +671,7 @@ impl WorkbenchView {
                         root.ssh.project_picker.error = Some(error.to_string());
                     }
                 }
+                root.ssh.project_picker.reset_directory_selection();
                 cx.notify();
             });
         })
@@ -708,26 +714,13 @@ impl WorkbenchView {
         if self.ssh.project_picker.loading {
             return;
         }
-        let Some(input) = self.ssh.project_picker.path_input.as_ref() else {
+        if self.ssh.project_picker.error.is_some() {
             return;
-        };
-        let value = input.read(cx).value();
-        match remote_picker_input_path(&value, self.ssh.project_picker.home_path.as_ref()) {
-            Ok(path)
-                if self.ssh.project_picker.current_path.as_ref() == Some(&path)
-                    && self.ssh.project_picker.error.is_none() =>
-            {
-                if let Some(path) = self.selected_ssh_project_directory() {
-                    self.navigate_ssh_project_directory(path, cx);
-                } else {
-                    self.open_current_ssh_project_directory(cx);
-                }
-            }
-            Ok(path) => self.navigate_ssh_project_directory(path, cx),
-            Err(error) => {
-                self.ssh.project_picker.error = Some(error.to_string());
-                cx.notify();
-            }
+        }
+        if let Some(path) = self.selected_ssh_project_directory() {
+            self.navigate_ssh_project_directory(path, cx);
+        } else if self.ssh.project_picker.directory_prefix.is_empty() {
+            self.open_current_ssh_project_directory(cx);
         }
     }
 
@@ -736,16 +729,22 @@ impl WorkbenchView {
         let parent = self
             .ssh
             .project_picker
-            .current_path
-            .as_ref()
-            .and_then(remote_parent_path);
+            .shows_parent()
+            .then(|| {
+                self.ssh
+                    .project_picker
+                    .current_path
+                    .as_ref()
+                    .and_then(remote_parent_path)
+            })
+            .flatten();
         if index == 0 && parent.is_some() {
             return parent;
         }
         self.ssh
             .project_picker
-            .directories
-            .get(index - usize::from(parent.is_some()))
+            .filtered_directories()
+            .nth(index - usize::from(parent.is_some()))
             .map(|directory| directory.path.clone())
     }
 
@@ -753,14 +752,8 @@ impl WorkbenchView {
         if self.ssh.project_picker.loading {
             return;
         }
-        let count = self.ssh.project_picker.directories.len()
-            + usize::from(
-                self.ssh
-                    .project_picker
-                    .current_path
-                    .as_ref()
-                    .is_some_and(|path| path.as_str() != "/"),
-            )
+        let count = self.ssh.project_picker.filtered_directories().count()
+            + usize::from(self.ssh.project_picker.shows_parent())
             + 1;
         let selected = &mut self.ssh.project_picker.selected_directory;
         *selected = if forward {
@@ -894,6 +887,8 @@ impl WorkbenchView {
         self.ssh.project_picker.selected_directory = 0;
         self.ssh.project_picker.path_input_needs_sync = false;
         self.ssh.project_picker.directories.clear();
+        self.ssh.project_picker.directory_prefix.clear();
+        self.ssh.project_picker.preserve_path_input = false;
         self.ssh.project_picker.loading = false;
         self.ssh.project_picker.error = None;
         self.ssh.project_picker.path_input = None;
@@ -990,7 +985,7 @@ impl WorkbenchView {
 
     fn on_ssh_project_path_input_event(
         &mut self,
-        _input: &Entity<InputState>,
+        input: &Entity<InputState>,
         event: &InputEvent,
         _window: &mut Window,
         cx: &mut Context<Self>,
@@ -998,7 +993,31 @@ impl WorkbenchView {
         if matches!(event, InputEvent::PressEnter { .. }) {
             self.navigate_ssh_project_path_input(cx);
         } else if matches!(event, InputEvent::Change) {
-            self.ssh.project_picker.selected_directory = 0;
+            let value = input.read(cx).value();
+            match remote_picker_directory_query(&value, self.ssh.project_picker.home_path.as_ref())
+            {
+                Ok((parent, prefix)) => {
+                    if self.ssh.project_picker.current_path.as_ref() != Some(&parent)
+                        || self.ssh.project_picker.error.is_some()
+                    {
+                        self.navigate_ssh_project_directory(parent, cx);
+                    }
+                    let picker = &mut self.ssh.project_picker;
+                    picker.directory_prefix = prefix;
+                    picker.preserve_path_input = true;
+                    picker.path_input_needs_sync = false;
+                    picker.reset_directory_selection();
+                }
+                Err(error) => {
+                    let picker = &mut self.ssh.project_picker;
+                    picker.generation = picker.generation.wrapping_add(1);
+                    picker.loading = false;
+                    picker.directories.clear();
+                    picker.selected_directory = 0;
+                    picker.error = Some(error);
+                    picker.path_input_needs_sync = false;
+                }
+            }
             cx.notify();
         }
     }
@@ -1298,6 +1317,22 @@ fn remote_picker_input_path(
         value
     };
     RemotePathBuf::new(value).map_err(|error| error.to_string())
+}
+
+fn remote_picker_directory_query(
+    value: &str,
+    home: Option<&RemotePathBuf>,
+) -> Result<(RemotePathBuf, String), String> {
+    let value = value.trim();
+    let path = remote_picker_input_path(value, home)?;
+    // A trailing separator (or an explicit dot component) requests the directory itself.
+    let last = value.rsplit('/').next().unwrap_or_default();
+    if value.ends_with('/') || value == "~" || matches!(last, "." | "..") {
+        return Ok((path, String::new()));
+    }
+    let parent = remote_parent_path(&path)
+        .ok_or_else(|| "Expected an absolute directory path.".to_string())?;
+    Ok((parent, last.to_string()))
 }
 
 pub(super) fn ssh_project_picker_overlay(
@@ -1844,9 +1879,10 @@ fn ssh_project_browser(
     let loading = picker.loading;
     let error = picker.error.clone();
     let selected = picker.selected_directory;
-    let has_parent = current_path.is_some_and(|path| path.as_str() != "/");
+    let has_parent = picker.shows_parent();
     let can_open = current_path.is_some() && !loading && error.is_none();
-    let directory_row_count = picker.directories.len() + usize::from(has_parent);
+    let filtered_count = picker.filtered_directories().count();
+    let directory_row_count = filtered_count + usize::from(has_parent);
     let host_label = root
         .terminal
         .host_runtime
@@ -1896,7 +1932,7 @@ fn ssh_project_browser(
             })),
         );
     }
-    for (index, directory) in picker.directories.iter().enumerate() {
+    for (index, directory) in picker.filtered_directories().enumerate() {
         let path = directory.path.clone();
         let debug_path = path.to_string();
         let icon_debug_path = debug_path.clone();
@@ -1934,7 +1970,7 @@ fn ssh_project_browser(
             })),
         );
     }
-    if loading || (picker.directories.is_empty() && error.is_none()) {
+    if loading || (filtered_count == 0 && error.is_none()) {
         list_rows = list_rows.child(
             div()
                 .p(ui_style.spacing.lg)
@@ -1942,6 +1978,8 @@ fn ssh_project_browser(
                 .text_color(theme.text_muted)
                 .child(root.ui_text.get(if loading {
                     UiTextKey::SshProjectLoadingDirectory
+                } else if !picker.directory_prefix.is_empty() {
+                    UiTextKey::SshProjectNoMatchingDirectories
                 } else {
                     UiTextKey::SshProjectEmptyDirectory
                 })),
@@ -2045,9 +2083,7 @@ fn ssh_project_browser(
                 .py(ui_style.spacing.sm)
                 .border_b(ui_style.border.hairline)
                 .border_color(theme.border)
-                .child(
-                    yttt_input(&input, YtttInputKind::Palette, theme, ui_style).disabled(loading),
-                ),
+                .child(yttt_input(&input, YtttInputKind::Palette, theme, ui_style)),
         );
     }
     body = body
@@ -2071,7 +2107,7 @@ fn ssh_project_browser(
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if can_open {
                         this.ssh.project_picker.selected_directory = 0;
-                        this.navigate_ssh_project_path_input(cx);
+                        this.open_current_ssh_project_directory(cx);
                     }
                 })),
             ),
@@ -2199,8 +2235,44 @@ fn ssh_project_back_header(
 
 #[cfg(test)]
 mod tests {
-    use super::{remote_child_path, remote_parent_path, remote_picker_input_path};
+    use super::{
+        remote_child_path, remote_parent_path, remote_picker_directory_query,
+        remote_picker_input_path,
+    };
     use yttt_core::model::project::RemotePathBuf;
+
+    #[test]
+    fn remote_directory_query_distinguishes_prefixes_from_directory_navigation() {
+        let home = RemotePathBuf::new("/home/remote").unwrap();
+        for (input, parent, prefix) in [
+            ("/Volumes/WorkSpace/Pro", "/Volumes/WorkSpace", "Pro"),
+            (
+                "/Volumes/WorkSpace/Projects/",
+                "/Volumes/WorkSpace/Projects",
+                "",
+            ),
+            (
+                "~/Project with spaces",
+                "/home/remote",
+                "Project with spaces",
+            ),
+            ("~", "/home/remote", ""),
+            ("~/../", "/home", ""),
+            ("/", "/", ""),
+            ("/tmp/..", "/", ""),
+            ("/tmp/~", "/tmp", "~"),
+        ] {
+            let (actual_parent, actual_prefix) =
+                remote_picker_directory_query(input, Some(&home)).unwrap();
+            assert_eq!(
+                (actual_parent.as_str(), actual_prefix.as_str()),
+                (parent, prefix),
+                "{input}"
+            );
+        }
+        assert!(remote_picker_directory_query("~/Pro", None).is_err());
+        assert!(remote_picker_directory_query("relative/Pro", Some(&home)).is_err());
+    }
 
     #[test]
     fn remote_picker_path_navigation_stays_absolute_and_normalized() {

@@ -77,6 +77,8 @@ pub(in super::super) struct SshProjectPickerState {
     pub(in super::super) selected_directory: usize,
     pub(in super::super) directory_scroll: gpui::ScrollHandle,
     pub(in super::super) directories: Vec<SshProjectDirectory>,
+    pub(in super::super) directory_prefix: String,
+    pub(in super::super) preserve_path_input: bool,
     pub(in super::super) loading: bool,
     pub(in super::super) generation: u64,
     pub(in super::super) connection_generation: u64,
@@ -94,6 +96,30 @@ pub(in super::super) struct SshProjectPickerState {
 }
 
 impl SshProjectPickerState {
+    pub(in super::super) fn filtered_directories(
+        &self,
+    ) -> impl Iterator<Item = &SshProjectDirectory> {
+        self.directories
+            .iter()
+            .filter(|directory| directory.name.starts_with(&self.directory_prefix))
+    }
+
+    pub(in super::super) fn shows_parent(&self) -> bool {
+        self.directory_prefix.is_empty()
+            && self
+                .current_path
+                .as_ref()
+                .is_some_and(|path| path.as_str() != "/")
+    }
+
+    pub(in super::super) fn reset_directory_selection(&mut self) {
+        self.selected_directory = usize::from(
+            !self.directory_prefix.is_empty() && self.filtered_directories().next().is_some(),
+        );
+        self.directory_scroll
+            .set_offset(gpui::point(gpui::px(0.0), gpui::px(0.0)));
+    }
+
     pub(in super::super) fn reset(&mut self) {
         let generation = self.generation.wrapping_add(1);
         let connection_generation = self.connection_generation.wrapping_add(1);

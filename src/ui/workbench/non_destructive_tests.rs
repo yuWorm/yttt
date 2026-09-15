@@ -391,6 +391,68 @@ fn ssh_project_directory_rows_show_icons_align_left_and_scroll(cx: &mut TestAppC
         row_after_scroll.origin.y < row.origin.y - px(1.0),
         "directory list must move rows in response to wheel input: before={row:?}, after={row_after_scroll:?}"
     );
+
+    let input = root.read_with(cx, |root, _| {
+        root.ssh.project_picker.path_input.clone().unwrap()
+    });
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("/directory-2");
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("ssh-project-directory-content-/directory-00")
+            .is_none()
+    );
+    assert!(
+        cx.debug_bounds("ssh-project-directory-content-/directory-20")
+            .is_some()
+    );
+    assert!(
+        cx.debug_bounds("ssh-project-directory-content-/directory-23")
+            .is_some()
+    );
+    cx.simulate_keystrokes("down");
+    cx.update(|_, app| {
+        let picker = &root.read(app).ssh.project_picker;
+        let selected = picker
+            .filtered_directories()
+            .nth(picker.selected_directory - 1)
+            .unwrap();
+        assert_eq!(selected.path.as_str(), "/directory-21");
+    });
+    // Typing remains active while an asynchronous listing is in flight.
+    root.update_in(cx, |root, _, cx| {
+        root.ssh.project_picker.loading = true;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("/directory-23");
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        assert_eq!(input.read(app).value().as_str(), "/directory-23");
+    });
+    root.update_in(cx, |root, _, cx| {
+        root.ssh.project_picker.loading = false;
+        cx.notify();
+    });
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("/missing");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("ssh-project-directory-name").is_none());
+    root.update_in(cx, |root, _, cx| root.navigate_ssh_project_path_input(cx));
+    cx.update(|_, app| {
+        assert!(
+            root.read(app).ssh.project_picker.open,
+            "no matches must not open the parent project"
+        );
+    });
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("/");
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("ssh-project-directory-content-/directory-00")
+            .is_some()
+    );
 }
 
 fn assert_runtime_unchanged(root: &WorkbenchView, expected: &RuntimeSnapshot) {

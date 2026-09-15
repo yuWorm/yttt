@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added live path-prefix filtering to the remote directory picker, with automatic first-match
+  selection, keyboard completion, and editable input while remote directories load.
 - Added **Remote services** to the homepage, reusing SSH connection management and supporting
   multiple remembered TLS Host connections without storing their secrets in metadata files.
 - Moved local/remote identity and control status into the bottom status bar instead of a

@@ -936,6 +936,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SshProjectOpenCurrentFolder => "打开当前文件夹",
         UiTextKey::SshProjectLoadingDirectory => "正在加载远程目录…",
         UiTextKey::SshProjectEmptyDirectory => "当前目录没有子目录。",
+        UiTextKey::SshProjectNoMatchingDirectories => "没有匹配的目录。",
         UiTextKey::SshProjectConnectionMissing => "保存的 SSH 连接已不存在。",
         UiTextKey::SshProjectConnectionFailed => "无法连接 SSH 主机。",
         UiTextKey::SshRuntimeUnavailable => "SSH 运行时不可用。",
