@@ -476,6 +476,60 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteConnecting => "Connecting…",
         UiTextKey::RemoteConnectionName => "Connection name",
         UiTextKey::RemoteCredentialsRequired => "Credentials required",
+        UiTextKey::RemoteConnectTitle => "Connect to remote workspace",
+        UiTextKey::RemoteConnectPreparing => "Preparing connection…",
+        UiTextKey::RemoteConnectFailed => "Unable to connect",
+        UiTextKey::RemoteConnectCancel => "Cancel connection",
+        UiTextKey::RemoteConnectDetails => "Connection details",
+        UiTextKey::RemoteConnectHideDetails => "Hide details",
+        UiTextKey::RemoteConnectErrorDetails => "Technical details",
+        UiTextKey::RemoteConnectVerifyingHost => "Verifying the Host certificate and environment…",
+        UiTextKey::RemoteConnectCheckingServer => {
+            "Checking the remote platform and Server installation…"
+        }
+        UiTextKey::RemoteConnectStartingHost => "Starting or attaching to the remote Host…",
+        UiTextKey::RemoteConnectSshDisconnected => "SSH disconnected",
+        UiTextKey::RemoteConnectSshConnecting => "Establishing SSH connection…",
+        UiTextKey::RemoteConnectSshAuthenticating => "Authenticating SSH credentials…",
+        UiTextKey::RemoteConnectSshConnected => "SSH connected",
+        UiTextKey::RemoteConnectSshReconnecting => "Reconnecting to SSH…",
+        UiTextKey::RemoteConnectSshRejected => "SSH host key rejected",
+        UiTextKey::RemoteConnectContinuing => "Continuing connection…",
+        UiTextKey::RemoteConnectTakingControl => "Transferring workspace control…",
+        UiTextKey::RemoteConnectObserving => "Opening read-only workspace…",
+        UiTextKey::RemoteTakeoverTitle => "Continue this workspace here?",
+        UiTextKey::RemoteTakeoverDescription => {
+            "Continue here to transfer control of all workspaces to this window. The previous Client will save its state and become read-only. Running terminals and tasks will not stop."
+        }
+        UiTextKey::RemoteTakeoverForceTitle => "The previous Client could not save its state",
+        UiTextKey::RemoteTakeoverForceDescription => {
+            "Force continuation uses only the last confirmed state. Unpublished edits on the previous Client may be lost. Cancel to leave control with that Client."
+        }
+        UiTextKey::RemoteObserveOnly => "Open read-only",
+        UiTextKey::RemoteContinueHere => "Continue here",
+        UiTextKey::RemoteForceContinue => "Force continue",
+        UiTextKey::RemoteCancelTransfer => "Cancel transfer",
+        UiTextKey::RemoteProfile => "Profile",
+        UiTextKey::RemoteWorkspaceCount => "Workspaces",
+        UiTextKey::RemoteEnvironment => "Environment ID",
+        UiTextKey::RemoteClient => "Current Client",
+        UiTextKey::RemoteUnowned => "No current controller",
+        UiTextKey::RemoteKeyAlgorithm => "Key algorithm",
+        UiTextKey::RemoteManageLocally => {
+            "Manage remote connections and credentials from the local yttt window."
+        }
+        UiTextKey::RemoteRecordMissing => "This saved connection no longer exists.",
+        UiTextKey::RemoteInvalidPort => "The SSH port must be between 1 and 65535.",
+        UiTextKey::RemoteInvalidRoot => "The remote root must be an absolute POSIX path.",
+        UiTextKey::RemoteLaunchFailed => "Could not open the remote workspace",
+        UiTextKey::RemoteWrongHostCode => "This connection code belongs to a different Host.",
+        UiTextKey::RemoteCredentialStoreFailed => {
+            "The OS credential store is unavailable. Nothing was saved in plaintext. Turn off Remember to save only the connection"
+        }
+        UiTextKey::RemoteRuntimeUnavailable => "The Host runtime is unavailable.",
+        UiTextKey::RemoteDirectoryUnexpected => {
+            "The Host returned an unexpected directory response."
+        }
         UiTextKey::SettingsPermissionNotifications => "System notifications",
         UiTextKey::SettingsPermissionNotificationsDescription => {
             "Allow agent completion and attention alerts when yttt is not focused."

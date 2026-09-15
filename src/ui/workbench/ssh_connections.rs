@@ -289,8 +289,7 @@ impl WorkbenchView {
 
     pub fn open_ssh_connection_manager(&mut self) {
         if crate::config::storage::is_remote() {
-            self.load_error =
-                Some("Manage SSH targets and credentials in the local yttt window.".into());
+            self.load_error = Some(self.ui_text.get(UiTextKey::RemoteManageLocally).into());
             return;
         }
         self.ssh.manager_open = true;
@@ -325,8 +324,7 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) {
         if crate::config::storage::is_remote() {
-            self.load_error =
-                Some("Manage SSH targets and credentials in the local yttt window.".into());
+            self.load_error = Some(self.ui_text.get(UiTextKey::RemoteManageLocally).into());
             return;
         }
         let connection = match connection_id {
@@ -348,7 +346,7 @@ impl WorkbenchView {
             }
         };
         let Some(connection) = connection else {
-            self.ssh.error = Some("SSH connection is no longer configured.".to_string());
+            self.ssh.error = Some(self.ui_text.get(UiTextKey::RemoteRecordMissing).into());
             cx.notify();
             return;
         };
@@ -572,14 +570,14 @@ impl WorkbenchView {
         let port = match input_value(&inputs.port, cx).parse::<u16>() {
             Ok(port) if port > 0 => port,
             _ => {
-                self.ssh.error = Some("SSH port must be between 1 and 65535.".to_string());
+                self.ssh.error = Some(self.ui_text.get(UiTextKey::RemoteInvalidPort).into());
                 return None;
             }
         };
         let remote_root = match RemotePathBuf::new(input_value(&inputs.remote_root, cx)) {
             Ok(path) if path.as_str().starts_with('/') => path,
             Ok(_) => {
-                self.ssh.error = Some("Remote root must be an absolute POSIX path.".to_string());
+                self.ssh.error = Some(self.ui_text.get(UiTextKey::RemoteInvalidRoot).into());
                 return None;
             }
             Err(error) => {
@@ -832,7 +830,7 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) {
         let Some(local_profile) = self.config_paths.profile().cloned() else {
-            self.ssh.error = Some("Manage remote servers from the local yttt window.".to_string());
+            self.ssh.error = Some(self.ui_text.get(UiTextKey::RemoteManageLocally).into());
             cx.notify();
             return;
         };
@@ -939,7 +937,7 @@ impl WorkbenchView {
             .find(|connection| connection.id == connection_id)
             .cloned()
         else {
-            self.ssh.error = Some("SSH connection is no longer configured.".to_string());
+            self.ssh.error = Some(self.ui_text.get(UiTextKey::RemoteRecordMissing).into());
             cx.notify();
             return;
         };
@@ -972,15 +970,17 @@ impl WorkbenchView {
             return;
         }
         let Some(local_profile) = self.config_paths.profile().cloned() else {
-            self.ssh.error = Some("Manage remote servers from the local yttt window.".to_string());
+            self.ssh.error = Some(self.ui_text.get(UiTextKey::RemoteManageLocally).into());
             cx.notify();
             return;
         };
         self.ssh.connecting = Some(connection_id.clone());
         self.ssh.error = None;
         cx.notify();
+        let appearance = crate::remote_launch::RemoteAppearance::capture(cx, self.ui_text);
         let launch = crate::remote_launch::RemoteLaunch {
             local_profile,
+            appearance,
             target: crate::remote_launch::RemoteTarget::SshServer {
                 connection,
                 password,
@@ -1000,7 +1000,10 @@ impl WorkbenchView {
                 match result {
                     Ok(()) => root.close_ssh_connection_manager(),
                     Err(error) => {
-                        root.ssh.error = Some(format!("Failed to launch remote workspace: {error}"))
+                        root.ssh.error = Some(format!(
+                            "{}: {error}",
+                            root.ui_text.get(UiTextKey::RemoteLaunchFailed)
+                        ))
                     }
                 }
                 cx.notify();
@@ -1267,7 +1270,7 @@ impl WorkbenchView {
             HostKeyDecision::AcceptOnce
         };
         let Some(runtime) = self.terminal.host_runtime.as_ref() else {
-            self.ssh.error = Some("Host runtime is unavailable.".to_string());
+            self.ssh.error = Some(self.ui_text.get(UiTextKey::RemoteRuntimeUnavailable).into());
             return;
         };
         if let Err(error) = runtime.request_detached(Request::CredentialAnswer {

@@ -127,6 +127,44 @@ struct ThemeFile {
     terminal: TerminalThemeFile,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ThemeSnapshotError {
+    #[error("theme snapshot TOML is invalid: {0}")]
+    Parse(#[from] toml::de::Error),
+    #[error("theme snapshot has no theme name")]
+    MissingName,
+    #[error("theme snapshot has unsupported mode {mode:?}")]
+    UnsupportedMode { mode: String },
+    #[error("theme snapshot contains invalid colors: {fields:?}")]
+    InvalidColors { fields: Vec<String> },
+}
+
+/// Parses the complete theme representation embedded in a remote launch snapshot.
+pub(crate) fn parse_theme_snapshot(source: &str) -> Result<AppTheme, ThemeSnapshotError> {
+    let file = toml::from_str::<ThemeFile>(source)?;
+    if file.name.trim().is_empty() {
+        return Err(ThemeSnapshotError::MissingName);
+    }
+    if !matches!(file.mode.as_str(), "light" | "dark") {
+        return Err(ThemeSnapshotError::UnsupportedMode { mode: file.mode });
+    }
+
+    let mut warnings = Vec::new();
+    let theme = theme_from_file(file, &mut warnings).ok_or(ThemeSnapshotError::MissingName)?;
+    let fields: Vec<String> = warnings
+        .into_iter()
+        .filter_map(|warning| match warning {
+            ThemeLoadWarning::InvalidColor { field, .. } => Some(field),
+            _ => None,
+        })
+        .collect();
+    if fields.is_empty() {
+        Ok(theme)
+    } else {
+        Err(ThemeSnapshotError::InvalidColors { fields })
+    }
+}
+
 #[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 struct UiThemeFile {

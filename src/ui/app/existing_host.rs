@@ -1,7 +1,7 @@
 use crate::{
     config::profile::AppProfile,
     remote_launch::{
-        ConnectionCode, MAX_CONNECTION_CODE_BYTES, RemoteLaunch, RemoteTarget,
+        ConnectionCode, MAX_CONNECTION_CODE_BYTES, RemoteAppearance, RemoteLaunch, RemoteTarget,
         validate_connection_address,
     },
     ui::{
@@ -321,7 +321,7 @@ impl ExistingHostForm {
             .find(|record| record.credential_id == id)
             .cloned()
         else {
-            self.error = Some("Saved connection no longer exists.".into());
+            self.error = Some(self.text.get(UiTextKey::RemoteRecordMissing).into());
             cx.notify();
             return;
         };
@@ -399,7 +399,7 @@ impl ExistingHostForm {
             .find(|record| record.credential_id == id)
             .cloned()
         else {
-            self.error = Some("Saved connection no longer exists.".into());
+            self.error = Some(self.text.get(UiTextKey::RemoteRecordMissing).into());
             cx.notify();
             return;
         };
@@ -484,7 +484,7 @@ impl ExistingHostForm {
             return;
         }
         if !self.saved.iter().any(|record| record.credential_id == id) {
-            self.error = Some("Saved connection no longer exists.".into());
+            self.error = Some(self.text.get(UiTextKey::RemoteRecordMissing).into());
             cx.notify();
             return;
         }
@@ -634,7 +634,7 @@ impl ExistingHostForm {
                 .iter()
                 .find(|record| record.credential_id == *editing_id)
             else {
-                self.error = Some("Saved connection no longer exists.".into());
+                self.error = Some(self.text.get(UiTextKey::RemoteRecordMissing).into());
                 cx.notify();
                 return;
             };
@@ -681,6 +681,7 @@ impl ExistingHostForm {
         self.error = None;
         let profile = self.profile.clone();
         let editing_for_task = editing.clone();
+        let text = self.text;
         let task = cx.background_spawn(async move {
             let mut records = read_connections(&profile)?;
             let store = yttt_ssh::CredentialStore::new(format!(
@@ -689,11 +690,14 @@ impl ExistingHostForm {
             ));
             match credential_persistence {
                 CredentialPersistence::Save(payload) => {
-                    store.save(&record.credential_id, &payload).map_err(|error| {
-                        format!(
-                            "OS credential store failed; nothing was saved in plaintext. Uncheck Remember to save the connection without its credentials: {error}"
-                        )
-                    })?;
+                    store
+                        .save(&record.credential_id, &payload)
+                        .map_err(|error| {
+                            format!(
+                                "{}: {error}",
+                                text.get(UiTextKey::RemoteCredentialStoreFailed)
+                            )
+                        })?;
                 }
                 CredentialPersistence::Delete => {
                     store
@@ -757,7 +761,7 @@ impl ExistingHostForm {
             }
         };
         if !connection_code_matches_record(&target, &connection_info) {
-            self.error = Some("Connection code belongs to a different saved Host.".into());
+            self.error = Some(self.text.get(UiTextKey::RemoteWrongHostCode).into());
             cx.notify();
             return;
         }
@@ -771,7 +775,7 @@ impl ExistingHostForm {
             .iter()
             .any(|record| record.credential_id == target.credential_id)
         {
-            self.error = Some("Saved connection no longer exists.".into());
+            self.error = Some(self.text.get(UiTextKey::RemoteRecordMissing).into());
             cx.notify();
             return;
         }
@@ -800,9 +804,11 @@ impl ExistingHostForm {
         cx: &mut Context<Self>,
     ) {
         let profile = self.profile.clone();
+        let appearance = RemoteAppearance::capture(cx, self.text);
         let task = cx.background_spawn(async move {
             crate::remote_launch::spawn_remote_client(RemoteLaunch {
                 local_profile: profile,
+                appearance,
                 target: RemoteTarget::ExistingHost {
                     address,
                     connection_info,

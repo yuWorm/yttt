@@ -141,7 +141,7 @@ pub fn current_workbench_theme(cx: &App) -> WorkbenchTheme {
         .unwrap_or_else(WorkbenchTheme::one_dark)
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct UiTypography {
     pub font_family: String,
     pub font_size: f32,
@@ -189,6 +189,7 @@ pub struct ThemeRuntime {
     pub generation: u64,
     pub theme_name: String,
     pub mode: ThemeMode,
+    pub window: WindowSettings,
     pub window_material: WindowMaterialTheme,
     pub ui: WorkbenchTheme,
     pub style_id: UiStyleId,
@@ -285,6 +286,42 @@ fn apply_window_material(
 }
 
 impl ThemeRuntime {
+    pub(crate) fn snapshot_theme(&self) -> AppTheme {
+        AppTheme {
+            name: self.theme_name.clone(),
+            mode: self.mode,
+            metadata: ThemeMetadata::default(),
+            ui: self.ui,
+            editor: self.editor,
+            terminal: self.terminal.clone(),
+        }
+    }
+
+    pub(crate) fn from_snapshot(
+        theme: AppTheme,
+        style_id: UiStyleId,
+        typography: UiTypography,
+        window: WindowSettings,
+    ) -> Self {
+        // Snapshot colors come from the resolved runtime, including window material.
+        // Applying it again would compound transparency in the remote Client.
+        Self {
+            generation: 0,
+            theme_name: theme.name,
+            mode: theme.mode,
+            window_material: WindowMaterialTheme::resolve(&window),
+            window,
+            ui: theme.ui,
+            style_id,
+            style: UiStyle::resolve(style_id)
+                .with_typography(typography.font_size, typography.line_height),
+            typography,
+            editor: theme.editor,
+            terminal: theme.terminal,
+            terminal_settings: TerminalSettings::default(),
+        }
+    }
+
     pub fn resolve(settings: &AppSettings, store: &ThemeStore) -> Self {
         let selected = store
             .theme(&settings.theme.name)
@@ -303,7 +340,8 @@ impl ThemeRuntime {
         if terminal.selection_background.is_none() {
             terminal.selection_background = Some(ui.selection);
         }
-        let window_material = WindowMaterialTheme::resolve(&settings.window);
+        let window = settings.window;
+        let window_material = WindowMaterialTheme::resolve(&window);
         apply_window_material(&mut ui, &mut editor, &mut terminal, window_material);
 
         let style_id = settings.theme.ui_style;
@@ -311,6 +349,7 @@ impl ThemeRuntime {
             generation: 0,
             theme_name: selected.name,
             mode: selected.mode,
+            window,
             window_material,
             ui,
             style_id,

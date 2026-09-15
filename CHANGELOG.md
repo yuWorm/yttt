@@ -56,6 +56,11 @@
 
 ### Changed
 
+- Integrated the remote connection window with the launching window's live theme, typography,
+  window effect, and UI style from its first frame. Replaced oversized warning cards with compact
+  workbench layouts, expandable connection details, and fixed bottom actions.
+- Localized connection progress, SSH verification, takeover/force-transfer decisions, retry,
+  cancellation, and connection-form validation in English and Chinese.
 - Replaced the separate SSH and TLS Host tabs with one saved **Remote connections** list beside
   **Remote access to this computer**. Rows connect directly; type-specific add/edit modals use
   separate Save and Save-and-connect actions, with small prompts for missing credentials.

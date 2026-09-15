@@ -1,16 +1,24 @@
 use std::collections::VecDeque;
 
+use crate::ui::{
+    i18n::{UiText, UiTextKey},
+    theme::{AppearanceState, current_ui_style, current_workbench_theme},
+    workbench::shell::{bar::BarSections, titlebar::workbench_titlebar},
+};
 use gpui::{
-    App, AppContext as _, Bounds, ClickEvent, Context, IntoElement, ParentElement as _, Render,
-    Styled as _, Window, WindowBounds, WindowOptions, div, px, size,
+    App, AppContext as _, Bounds, ClickEvent, Context, FocusHandle, InteractiveElement as _,
+    IntoElement, KeyDownEvent, ParentElement as _, Render, ScrollHandle,
+    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    relative, size,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Root as ComponentRoot,
-    button::{Button, ButtonVariants as _},
+    Icon, IconName, Root as ComponentRoot, Sizable as _, scroll::ScrollableElement as _,
+    spinner::Spinner,
 };
+use yttt_ui::primitives::button::{YtttButtonVariant, yttt_button};
 
 use crate::{
-    remote_host::{RemoteConnectEvent, RemoteEnvironment},
+    remote_host::{RemoteConnectEvent, RemoteConnectStatus, RemoteControlOwner, RemoteEnvironment},
     remote_launch::RemoteLaunch,
 };
 
@@ -21,33 +29,39 @@ pub(super) fn open(
     on_ready: impl FnOnce(RemoteEnvironment, &mut App) + 'static,
     cx: &mut App,
 ) -> anyhow::Result<()> {
-    let bounds = Bounds::centered(None, size(px(600.0), px(440.0)), cx);
-    cx.open_window(
-        WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            window_min_size: Some(size(px(520.0), px(360.0))),
-            ..Default::default()
-        },
-        move |window, cx| {
-            let view = cx.new(|_| RemoteConnectView::new(launch, Box::new(on_ready)));
-            view.update(cx, |view, cx| view.begin_connect(window, cx));
+    let scale = cx
+        .global::<AppearanceState>()
+        .runtime()
+        .typography
+        .font_size
+        / 16.0;
+    let bounds = Bounds::centered(None, size(px(600.0 * scale), px(440.0 * scale)), cx);
+    let mut options = super::workbench_window_options(bounds, launch.appearance.window.effect);
+    options.window_min_size = Some(size(px(480.0), px(320.0)));
+    cx.open_window(options, move |window, cx| {
+        let view = cx.new(|cx| RemoteConnectView::new(launch, Box::new(on_ready), window, cx));
+        view.update(cx, |view, cx| view.begin_connect(window, cx));
 
-            let on_close = view.downgrade();
-            window.on_window_should_close(cx, move |_window, cx| {
-                let _ = on_close.update(cx, |view, _| view.cancel());
-                true
-            });
+        let on_close = view.downgrade();
+        window.on_window_should_close(cx, move |_window, cx| {
+            let _ = on_close.update(cx, |view, _| view.cancel());
+            true
+        });
 
-            cx.new(|cx| ComponentRoot::new(view, window, cx))
-        },
-    )?;
+        cx.new(|cx| ComponentRoot::new(view, window, cx))
+    })?;
     Ok(())
 }
 
 struct RemoteConnectView {
     launch: RemoteLaunch,
     on_ready: Option<ReadyCallback>,
-    status: String,
+    text: UiText,
+    status: UiTextKey,
+    status_detail: Option<String>,
+    show_details: bool,
+    scroll: ScrollHandle,
+    focus: FocusHandle,
     error: Option<String>,
     prompts: VecDeque<ConnectPrompt>,
     connecting: bool,
@@ -57,7 +71,7 @@ struct RemoteConnectView {
 enum ConnectPrompt {
     HostKey(yttt_ssh::HostKeyChallenge),
     Takeover {
-        owner: String,
+        owner: RemoteControlOwner,
         force: bool,
         answer: flume::Sender<bool>,
     },
@@ -80,11 +94,23 @@ impl ConnectPrompt {
 }
 
 impl RemoteConnectView {
-    fn new(launch: RemoteLaunch, on_ready: ReadyCallback) -> Self {
+    fn new(
+        launch: RemoteLaunch,
+        on_ready: ReadyCallback,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let focus = cx.focus_handle();
+        focus.focus(window, cx);
         Self {
+            text: UiText::new(launch.appearance.locale),
             launch,
             on_ready: Some(on_ready),
-            status: "Preparing remote connection…".to_string(),
+            status: UiTextKey::RemoteConnectPreparing,
+            status_detail: None,
+            show_details: false,
+            scroll: ScrollHandle::new(),
+            focus,
             error: None,
             prompts: VecDeque::new(),
             connecting: false,
@@ -99,7 +125,8 @@ impl RemoteConnectView {
 
         self.connecting = true;
         self.error = None;
-        self.status = format!("Connecting to {}…", self.launch.target.label());
+        self.status = UiTextKey::RemoteConnecting;
+        self.status_detail = None;
         let (events, receiver) = flume::unbounded();
         let launch = self.launch.clone();
         let connect = cx
@@ -153,9 +180,40 @@ impl RemoteConnectView {
         }
 
         match event {
-            RemoteConnectEvent::Status(status) => self.status = status,
+            RemoteConnectEvent::Status(status) => {
+                self.status_detail = None;
+                self.status = match status {
+                    RemoteConnectStatus::VerifyingHost => UiTextKey::RemoteConnectVerifyingHost,
+                    RemoteConnectStatus::CheckingServer => UiTextKey::RemoteConnectCheckingServer,
+                    RemoteConnectStatus::StartingHost => UiTextKey::RemoteConnectStartingHost,
+                    RemoteConnectStatus::Ssh { state, error } => {
+                        self.status_detail = error;
+                        match state {
+                            yttt_ssh::ConnectionState::Disconnected => {
+                                UiTextKey::RemoteConnectSshDisconnected
+                            }
+                            yttt_ssh::ConnectionState::Connecting => {
+                                UiTextKey::RemoteConnectSshConnecting
+                            }
+                            yttt_ssh::ConnectionState::VerifyingHostKey => {
+                                UiTextKey::SshHostKeyTitle
+                            }
+                            yttt_ssh::ConnectionState::Authenticating => {
+                                UiTextKey::RemoteConnectSshAuthenticating
+                            }
+                            yttt_ssh::ConnectionState::Connected => {
+                                UiTextKey::RemoteConnectSshConnected
+                            }
+                            yttt_ssh::ConnectionState::Reconnecting => {
+                                UiTextKey::RemoteConnectSshReconnecting
+                            }
+                            yttt_ssh::ConnectionState::Failed => UiTextKey::RemoteConnectFailed,
+                        }
+                    }
+                };
+            }
             RemoteConnectEvent::HostKey(challenge) => {
-                self.status = "SSH host key verification requires your approval.".to_string();
+                self.status = UiTextKey::SshHostKeyTitle;
                 self.prompts.push_back(ConnectPrompt::HostKey(challenge));
             }
             RemoteConnectEvent::Takeover {
@@ -163,7 +221,7 @@ impl RemoteConnectView {
                 force,
                 answer,
             } => {
-                self.status = "Remote workspace takeover requires your approval.".to_string();
+                self.status = UiTextKey::RemoteTakeoverTitle;
                 self.prompts.push_back(ConnectPrompt::Takeover {
                     owner,
                     force,
@@ -196,7 +254,7 @@ impl RemoteConnectView {
             }
             Err(error) => {
                 self.reject_prompts();
-                self.status = "Remote connection failed.".to_string();
+                self.status = UiTextKey::RemoteConnectFailed;
                 self.error = Some(error);
                 cx.notify();
             }
@@ -253,9 +311,9 @@ impl RemoteConnectView {
         };
         let _ = challenge.respond(yttt_ssh::HostKeyDecision { accept, remember });
         self.status = if accept {
-            "Continuing SSH connection…".to_string()
+            UiTextKey::RemoteConnectContinuing
         } else {
-            "SSH host key rejected.".to_string()
+            UiTextKey::RemoteConnectSshRejected
         };
         cx.notify();
     }
@@ -277,9 +335,9 @@ impl RemoteConnectView {
         };
         let _ = answer.send(take_over);
         self.status = if take_over {
-            "Taking over the remote workspace…".to_string()
+            UiTextKey::RemoteConnectTakingControl
         } else {
-            "Remote workspace takeover cancelled.".to_string()
+            UiTextKey::RemoteConnectObserving
         };
         cx.notify();
     }
@@ -288,108 +346,258 @@ impl RemoteConnectView {
         self.launch.target.label()
     }
 
-    fn host_key_prompt(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let Some(ConnectPrompt::HostKey(challenge)) = self.prompts.front() else {
-            return div();
-        };
-
-        let mut prompt = div()
-            .flex()
-            .flex_col()
-            .gap(px(8.0))
-            .p(px(16.0))
-            .border(px(1.0))
-            .border_color(cx.theme().warning)
-            .rounded(px(8.0))
-            .child(
-                div()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(cx.theme().warning_foreground)
-                    .child("Verify SSH Host Key"),
-            )
-            .child(div().child(format!("Host: {}", challenge.host)))
-            .child(div().child(format!("Port: {}", challenge.port)))
-            .child(div().child(format!("Algorithm: {}", challenge.algorithm)))
-            .child(div().child(format!("Fingerprint: {}", challenge.fingerprint)));
-        if let Some(previous_fingerprint) = &challenge.previous_fingerprint {
-            prompt = prompt.child(
-                div()
-                    .text_color(cx.theme().danger_foreground)
-                    .child(format!(
-                        "Changed key — previous fingerprint: {previous_fingerprint}"
-                    )),
-            );
-        }
-        prompt.child(
-            div()
-                .flex()
-                .flex_wrap()
-                .gap(px(8.0))
-                .mt(px(8.0))
-                .child(
-                    Button::new("remote-host-key-reject")
-                        .danger()
-                        .label("Reject")
-                        .on_click(cx.listener(Self::reject_host_key)),
-                )
-                .child(
-                    Button::new("remote-host-key-trust-once")
-                        .secondary()
-                        .label("Trust Once")
-                        .on_click(cx.listener(Self::trust_host_key_once)),
-                )
-                .child(
-                    Button::new("remote-host-key-trust-remember")
-                        .primary()
-                        .label("Trust and Remember")
-                        .on_click(cx.listener(Self::trust_host_key_and_remember)),
-                ),
-        )
-    }
-
-    fn takeover_prompt(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let Some(ConnectPrompt::Takeover { owner, force, .. }) = self.prompts.front() else {
-            return div();
-        };
-
+    fn detail(&self, label: UiTextKey, value: String, cx: &App) -> gpui::Div {
+        let theme = current_workbench_theme(cx);
+        let style = current_ui_style(cx);
         div()
             .flex()
             .flex_col()
-            .gap(px(8.0))
-            .p(px(16.0))
-            .border(px(1.0))
-            .border_color(cx.theme().warning)
-            .rounded(px(8.0))
+            .min_w_0()
+            .gap(style.spacing.xs)
             .child(
                 div()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(cx.theme().warning_foreground)
-                    .child(if *force { "Previous Client Could Not Publish" } else { "Continue This Profile Here?" }),
+                    .text_xs()
+                    .text_color(theme.text_muted)
+                    .child(self.text.get(label)),
             )
-            .child(div().child(format!("Current owner: {owner}")))
-            .child(div().child(if *force {
-                "Force continuation restores only the last confirmed state. Unpublished edits on the previous Client may be missing."
-            } else {
-                "The previous Client will publish all workspaces automatically. All of its windows will become observers; existing terminal processes keep running."
-            }))
-            .child(
-                div()
-                    .flex()
-                    .gap(px(8.0))
-                    .mt(px(8.0))
+            .child(div().text_sm().child(value))
+    }
+
+    fn prompt_body(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = current_workbench_theme(cx);
+        let style = current_ui_style(cx);
+        let text = self.text;
+        let body = div().flex().flex_col().min_w_0().gap(style.spacing.lg);
+        match self.prompts.front() {
+            Some(ConnectPrompt::HostKey(challenge)) => {
+                let changed = challenge.previous_fingerprint.is_some();
+                body.child(
+                    div()
+                        .text_sm()
+                        .text_color(if changed {
+                            theme.danger
+                        } else {
+                            theme.text_muted
+                        })
+                        .child(text.get(if changed {
+                            UiTextKey::SshHostKeyChangedDescription
+                        } else {
+                            UiTextKey::SshHostKeyDescription
+                        })),
+                )
+                .child(self.detail(
+                    UiTextKey::RemoteKeyAlgorithm,
+                    challenge.algorithm.clone(),
+                    cx,
+                ))
+                .child(self.detail(
+                    UiTextKey::SshHostKeyReceivedFingerprint,
+                    challenge.fingerprint.clone(),
+                    cx,
+                ))
+                .children(challenge.previous_fingerprint.as_ref().map(|previous| {
+                    self.detail(UiTextKey::SshHostKeySavedFingerprint, previous.clone(), cx)
+                }))
+            }
+            Some(ConnectPrompt::Takeover { owner, force, .. }) => {
+                let body = body
                     .child(
-                        Button::new("remote-workspace-takeover-cancel")
-                            .secondary()
-                            .label(if *force { "Cancel Transfer" } else { "Observe Only" })
-                            .on_click(cx.listener(Self::decline_takeover)),
+                        div()
+                            .text_sm()
+                            .text_color(if *force {
+                                theme.danger
+                            } else {
+                                theme.text_muted
+                            })
+                            .child(text.get(if *force {
+                                UiTextKey::RemoteTakeoverForceDescription
+                            } else {
+                                UiTextKey::RemoteTakeoverDescription
+                            })),
                     )
                     .child(
-                        Button::new("remote-workspace-takeover-confirm")
-                            .danger()
-                            .label(if *force { "Force Continue" } else { "Continue Here" })
-                            .on_click(cx.listener(Self::approve_takeover)),
-                    ),
-            )
+                        div()
+                            .flex()
+                            .gap(style.spacing.xl)
+                            .child(
+                                self.detail(UiTextKey::RemoteProfile, owner.profile_id.clone(), cx)
+                                    .flex_1(),
+                            )
+                            .child(self.detail(
+                                UiTextKey::RemoteWorkspaceCount,
+                                owner.workspace_count.to_string(),
+                                cx,
+                            )),
+                    )
+                    .child(
+                        div().flex().child(
+                            yttt_button(
+                                "remote-connect-details",
+                                text.get(if self.show_details {
+                                    UiTextKey::RemoteConnectHideDetails
+                                } else {
+                                    UiTextKey::RemoteConnectDetails
+                                }),
+                                YtttButtonVariant::Ghost,
+                                theme,
+                                style,
+                                cx,
+                            )
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.show_details = !view.show_details;
+                                cx.notify();
+                            })),
+                        ),
+                    );
+                if self.show_details {
+                    body.child(self.detail(
+                        UiTextKey::RemoteEnvironment,
+                        owner.environment_id.clone(),
+                        cx,
+                    ))
+                    .child(
+                        self.detail(
+                            UiTextKey::RemoteClient,
+                            owner
+                                .client_id
+                                .clone()
+                                .unwrap_or_else(|| text.get(UiTextKey::RemoteUnowned).into()),
+                            cx,
+                        ),
+                    )
+                } else {
+                    body
+                }
+            }
+            None => body.children(
+                self.error
+                    .as_ref()
+                    .or(self.status_detail.as_ref())
+                    .map(|error| {
+                        self.detail(UiTextKey::RemoteConnectErrorDetails, error.clone(), cx)
+                    }),
+            ),
+        }
+    }
+
+    fn footer(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = current_workbench_theme(cx);
+        let style = current_ui_style(cx);
+        let text = self.text;
+        let cancel = yttt_button(
+            "remote-connect-cancel",
+            text.get(UiTextKey::RemoteConnectCancel),
+            YtttButtonVariant::Ghost,
+            theme,
+            style,
+            cx,
+        )
+        .on_click(cx.listener(Self::cancel_window));
+        let actions = div().flex().flex_wrap().justify_end().gap(style.spacing.sm);
+        let actions = match self.prompts.front() {
+            Some(ConnectPrompt::HostKey(challenge)) => actions
+                .child(
+                    yttt_button(
+                        "remote-host-key-reject",
+                        text.get(UiTextKey::SshHostKeyReject),
+                        YtttButtonVariant::Secondary,
+                        theme,
+                        style,
+                        cx,
+                    )
+                    .on_click(cx.listener(Self::reject_host_key)),
+                )
+                .child(
+                    yttt_button(
+                        "remote-host-key-trust-once",
+                        text.get(UiTextKey::SshHostKeyTrustOnce),
+                        YtttButtonVariant::Secondary,
+                        theme,
+                        style,
+                        cx,
+                    )
+                    .on_click(cx.listener(Self::trust_host_key_once)),
+                )
+                .child(
+                    yttt_button(
+                        "remote-host-key-trust-remember",
+                        text.get(if challenge.previous_fingerprint.is_some() {
+                            UiTextKey::SshHostKeyReplace
+                        } else {
+                            UiTextKey::SshHostKeyTrustAndSave
+                        }),
+                        if challenge.previous_fingerprint.is_some() {
+                            YtttButtonVariant::Danger
+                        } else {
+                            YtttButtonVariant::Primary
+                        },
+                        theme,
+                        style,
+                        cx,
+                    )
+                    .on_click(cx.listener(Self::trust_host_key_and_remember)),
+                ),
+            Some(ConnectPrompt::Takeover { force, .. }) => actions
+                .child(
+                    yttt_button(
+                        "remote-workspace-takeover-cancel",
+                        text.get(if *force {
+                            UiTextKey::RemoteCancelTransfer
+                        } else {
+                            UiTextKey::RemoteObserveOnly
+                        }),
+                        YtttButtonVariant::Secondary,
+                        theme,
+                        style,
+                        cx,
+                    )
+                    .on_click(cx.listener(Self::decline_takeover)),
+                )
+                .child(
+                    yttt_button(
+                        "remote-workspace-takeover-confirm",
+                        text.get(if *force {
+                            UiTextKey::RemoteForceContinue
+                        } else {
+                            UiTextKey::RemoteContinueHere
+                        }),
+                        if *force {
+                            YtttButtonVariant::Danger
+                        } else {
+                            YtttButtonVariant::Primary
+                        },
+                        theme,
+                        style,
+                        cx,
+                    )
+                    .on_click(cx.listener(Self::approve_takeover)),
+                ),
+            None => actions.when(self.error.is_some() && !self.connecting, |actions| {
+                actions.child(
+                    yttt_button(
+                        "remote-connect-retry",
+                        text.get(UiTextKey::Retry),
+                        YtttButtonVariant::Primary,
+                        theme,
+                        style,
+                        cx,
+                    )
+                    .on_click(cx.listener(Self::retry)),
+                )
+            }),
+        };
+        div()
+            .flex()
+            .flex_none()
+            .flex_wrap()
+            .items_center()
+            .justify_between()
+            .gap(style.spacing.sm)
+            .p(style.spacing.lg)
+            .border_t_1()
+            .border_color(theme.border_variant)
+            .child(cancel)
+            .child(actions)
     }
 }
 
@@ -400,78 +608,118 @@ impl Drop for RemoteConnectView {
 }
 
 impl Render for RemoteConnectView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let endpoint = self.host_label();
-        let mut card = div()
-            .w_full()
-            .max_w(px(640.0))
-            .flex()
-            .flex_col()
-            .gap(px(16.0))
-            .p(px(28.0))
-            .border(px(1.0))
-            .border_color(cx.theme().border)
-            .rounded(px(12.0))
-            .bg(cx.theme().secondary)
-            .child(
-                div()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child("Connecting to Remote Workspace"),
-            )
-            .child(
-                div()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(endpoint),
-            )
-            .child(div().child(self.status.clone()));
-
-        if let Some(error) = &self.error {
-            card = card
-                .child(
-                    div()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(cx.theme().danger_foreground)
-                        .child("Connection error"),
-                )
-                .child(
-                    div()
-                        .text_color(cx.theme().danger_foreground)
-                        .child(error.clone()),
-                );
-        }
-
-        match self.prompts.front() {
-            Some(ConnectPrompt::HostKey(_)) => card = card.child(self.host_key_prompt(cx)),
-            Some(ConnectPrompt::Takeover { .. }) => card = card.child(self.takeover_prompt(cx)),
-            None => {}
-        }
-
-        let retry_available = self.error.is_some() && !self.connecting;
-        card = card.child(
-            div()
-                .flex()
-                .gap(px(8.0))
-                .child(
-                    Button::new("remote-connect-retry")
-                        .primary()
-                        .label("Retry")
-                        .disabled(!retry_available)
-                        .on_click(cx.listener(Self::retry)),
-                )
-                .child(
-                    Button::new("remote-connect-cancel")
-                        .secondary()
-                        .label("Cancel Connection")
-                        .on_click(cx.listener(Self::cancel_window)),
-                ),
-        );
-
-        div()
-            .size_full()
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let appearance = cx.global::<AppearanceState>().runtime();
+        let theme = appearance.ui;
+        let style = appearance.style;
+        window.set_rem_size(px(appearance.typography.font_size));
+        let title = self.text.get(UiTextKey::RemoteConnectTitle);
+        window.set_window_title(&format!("{title} — yttt"));
+        let heading = match self.prompts.front() {
+            Some(ConnectPrompt::HostKey(challenge)) => {
+                if challenge.previous_fingerprint.is_some() {
+                    UiTextKey::SshHostKeyChangedTitle
+                } else {
+                    UiTextKey::SshHostKeyTitle
+                }
+            }
+            Some(ConnectPrompt::Takeover { force, .. }) => {
+                if *force {
+                    UiTextKey::RemoteTakeoverForceTitle
+                } else {
+                    UiTextKey::RemoteTakeoverTitle
+                }
+            }
+            None => self.status,
+        };
+        let pending = self.connecting && self.prompts.is_empty();
+        let heading_row = div()
             .flex()
             .items_center()
-            .justify_center()
-            .p(px(24.0))
-            .child(card)
+            .gap(style.spacing.sm)
+            .when(pending, |row| row.child(Spinner::new().small()))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(self.text.get(heading)),
+            );
+        let body = self.prompt_body(cx);
+        let footer = self.footer(cx);
+        div()
+            .debug_selector(|| "remote-connect-window".into())
+            .size_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .bg(theme.app_background)
+            .text_color(theme.text)
+            .font_family(appearance.typography.font_family.clone())
+            .line_height(relative(appearance.typography.line_height))
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" {
+                    view.cancel();
+                    window.remove_window();
+                    cx.stop_propagation();
+                }
+            }))
+            .child(workbench_titlebar(
+                BarSections {
+                    left: vec![div().child(title).into_any_element()],
+                    ..Default::default()
+                },
+                theme,
+                style,
+                window,
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(style.spacing.md)
+                    .p(style.spacing.lg)
+                    .border_b_1()
+                    .border_color(theme.border_variant)
+                    .child(
+                        Icon::new(IconName::Globe)
+                            .size(px(18.0))
+                            .text_color(theme.icon_muted),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_sm()
+                            .truncate()
+                            .child(self.host_label()),
+                    )
+                    .child(div().text_xs().text_color(theme.text_muted).child(
+                        match &self.launch.target {
+                            crate::remote_launch::RemoteTarget::SshServer { .. } => "SSH",
+                            crate::remote_launch::RemoteTarget::ExistingHost { .. } => "TLS",
+                        },
+                    )),
+            )
+            .child(
+                div()
+                    .id("remote-connect-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .vertical_scrollbar(&self.scroll)
+                    .p(style.spacing.lg)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .w_full()
+                            .gap(style.spacing.lg)
+                            .child(heading_row)
+                            .child(body),
+                    ),
+            )
+            .child(footer)
     }
 }

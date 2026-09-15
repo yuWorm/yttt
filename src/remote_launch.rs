@@ -6,7 +6,18 @@ use std::{
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize as _, Zeroizing};
 
-use crate::config::{profile::AppProfile, ssh::SshConnectionConfig};
+use crate::{
+    config::{
+        profile::AppProfile,
+        settings::WindowSettings,
+        ssh::SshConnectionConfig,
+        theme::{parse_theme_snapshot, serialize_theme_file},
+    },
+    ui::{
+        i18n::Locale,
+        theme::{AppearanceState, ThemeRuntime, UiTypography},
+    },
+};
 
 const MAX_REMOTE_LAUNCH_BYTES: usize = 128 * 1024;
 
@@ -141,6 +152,42 @@ mod connection_code_tests {
     }
 }
 
+/// The rendered appearance inherited by a remote Client before it connects to the Host.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteAppearance {
+    theme_file: String,
+    style_id: yttt_ui::style::UiStyleId,
+    typography: UiTypography,
+    pub window: WindowSettings,
+    pub locale: Locale,
+}
+
+impl RemoteAppearance {
+    pub fn capture(cx: &gpui::App, text: crate::ui::i18n::UiText) -> Self {
+        let runtime = cx.global::<AppearanceState>().runtime();
+        Self {
+            theme_file: serialize_theme_file(&runtime.snapshot_theme())
+                .expect("appearance theme must be serializable"),
+            style_id: runtime.style_id,
+            typography: runtime.typography.clone(),
+            window: runtime.window,
+            locale: text.locale(),
+        }
+    }
+
+    pub(crate) fn theme_runtime(&self) -> Result<ThemeRuntime, String> {
+        let theme = parse_theme_snapshot(&self.theme_file)
+            .map_err(|error| format!("invalid embedded theme snapshot: {error}"))?;
+        Ok(ThemeRuntime::from_snapshot(
+            theme,
+            self.style_id,
+            self.typography.clone(),
+            self.window,
+        ))
+    }
+}
+
 /// The authenticated connection information passed privately from the launcher to a remote Client.
 ///
 /// This type deliberately does not implement `Debug`: password material must never reach logs.
@@ -148,6 +195,7 @@ mod connection_code_tests {
 #[serde(deny_unknown_fields)]
 pub struct RemoteLaunch {
     pub local_profile: AppProfile,
+    pub appearance: RemoteAppearance,
     pub target: RemoteTarget,
 }
 

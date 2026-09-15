@@ -157,6 +157,14 @@ pub fn run(
 }
 
 pub fn run_remote(launch: crate::remote_launch::RemoteLaunch) {
+    let appearance = match launch.appearance.theme_runtime() {
+        Ok(runtime) => AppearanceState::new(runtime),
+        Err(error) => {
+            eprintln!("invalid remote Client appearance: {error}");
+            return;
+        }
+    };
+
     let profile = launch.local_profile.clone();
     let assets = assets::app_assets(&profile.config_paths());
     gpui_platform::application()
@@ -171,6 +179,10 @@ pub fn run_remote(launch: crate::remote_launch::RemoteLaunch) {
             crate::ui::editor::register_builtin_editor_languages();
             crate::ui::editor::init_vim_mode(cx);
             cx.set_global(HostRuntimeGlobal::disabled());
+            Theme::global_mut(cx).apply_config(&Rc::new(
+                appearance.runtime().to_gpui_component_theme_config(),
+            ));
+            cx.set_global(appearance);
             if let Err(error) = remote_connect::open(
                 launch,
                 move |remote, cx| {

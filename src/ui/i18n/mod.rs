@@ -6,7 +6,7 @@ use en::text as english;
 pub use key::UiTextKey;
 use zh_cn::text as chinese;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Locale {
     English,
     Chinese,
@@ -24,6 +24,9 @@ impl UiText {
 
     pub fn english() -> Self {
         Self::new(Locale::English)
+    }
+    pub fn locale(&self) -> Locale {
+        self.locale
     }
 
     pub fn get(&self, key: UiTextKey) -> &'static str {

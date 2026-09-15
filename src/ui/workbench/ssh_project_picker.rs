@@ -172,7 +172,7 @@ impl WorkbenchView {
                                 path: RemotePathBuf::new(entry.path.to_path().ok()?.to_string_lossy().into_owned()).ok()?,
                             })).collect();
                     }
-                    Ok(_) => root.ssh.project_picker.error = Some("Unexpected Host directory response".into()),
+                    Ok(_) => root.ssh.project_picker.error = Some(root.ui_text.get(UiTextKey::RemoteDirectoryUnexpected).into()),
                     Err(error) => root.ssh.project_picker.error = Some(error.to_string()),
                 }
                 cx.notify();
@@ -342,7 +342,7 @@ impl WorkbenchView {
         }
         let Some(local_profile) = self.config_paths.profile().cloned() else {
             self.ssh.project_picker.error =
-                Some("Manage remote servers from the local yttt window.".into());
+                Some(self.ui_text.get(UiTextKey::RemoteManageLocally).into());
             return;
         };
         match continuation {
@@ -355,8 +355,10 @@ impl WorkbenchView {
                 connection.default_remote_root = Some(root)
             }
         }
+        let appearance = crate::remote_launch::RemoteAppearance::capture(cx, self.ui_text);
         let launch = crate::remote_launch::RemoteLaunch {
             local_profile,
+            appearance,
             target: crate::remote_launch::RemoteTarget::SshServer {
                 connection,
                 save_password_as: password
@@ -374,8 +376,10 @@ impl WorkbenchView {
                 match result {
                     Ok(()) => root.close_ssh_project_picker(cx),
                     Err(error) => {
-                        root.ssh.project_picker.error =
-                            Some(format!("Failed to launch remote workspace: {error}"))
+                        root.ssh.project_picker.error = Some(format!(
+                            "{}: {error}",
+                            root.ui_text.get(UiTextKey::RemoteLaunchFailed)
+                        ))
                     }
                 }
                 cx.notify();

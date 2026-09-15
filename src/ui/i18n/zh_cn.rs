@@ -420,6 +420,54 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::RemoteConnecting => "正在连接…",
         UiTextKey::RemoteConnectionName => "连接名称",
         UiTextKey::RemoteCredentialsRequired => "补充连接凭据",
+        UiTextKey::RemoteConnectTitle => "连接远程工作区",
+        UiTextKey::RemoteConnectPreparing => "正在准备连接…",
+        UiTextKey::RemoteConnectFailed => "无法建立连接",
+        UiTextKey::RemoteConnectCancel => "取消连接",
+        UiTextKey::RemoteConnectDetails => "连接详情",
+        UiTextKey::RemoteConnectHideDetails => "收起详情",
+        UiTextKey::RemoteConnectErrorDetails => "技术详情",
+        UiTextKey::RemoteConnectVerifyingHost => "正在验证 Host 证书和环境…",
+        UiTextKey::RemoteConnectCheckingServer => "正在检查远程平台和 Server 安装…",
+        UiTextKey::RemoteConnectStartingHost => "正在启动或连接远程 Host…",
+        UiTextKey::RemoteConnectSshDisconnected => "SSH 连接已断开",
+        UiTextKey::RemoteConnectSshConnecting => "正在建立 SSH 连接…",
+        UiTextKey::RemoteConnectSshAuthenticating => "正在验证 SSH 凭据…",
+        UiTextKey::RemoteConnectSshConnected => "SSH 已连接",
+        UiTextKey::RemoteConnectSshReconnecting => "正在重新连接 SSH…",
+        UiTextKey::RemoteConnectSshRejected => "已拒绝 SSH 主机密钥",
+        UiTextKey::RemoteConnectContinuing => "正在继续连接…",
+        UiTextKey::RemoteConnectTakingControl => "正在移交工作区控制权…",
+        UiTextKey::RemoteConnectObserving => "正在打开只读工作区…",
+        UiTextKey::RemoteTakeoverTitle => "在此继续远程工作区？",
+        UiTextKey::RemoteTakeoverDescription => {
+            "在此继续会将全部工作区的控制权移交到本窗口。原客户端会保存状态并转为只读，正在运行的终端和任务不会停止。"
+        }
+        UiTextKey::RemoteTakeoverForceTitle => "原客户端未能保存状态",
+        UiTextKey::RemoteTakeoverForceDescription => {
+            "强制继续只会恢复最后确认的状态，原客户端尚未发布的编辑可能丢失。取消可将控制权保留在原客户端。"
+        }
+        UiTextKey::RemoteObserveOnly => "只读打开",
+        UiTextKey::RemoteContinueHere => "在此继续",
+        UiTextKey::RemoteForceContinue => "强制继续",
+        UiTextKey::RemoteCancelTransfer => "取消接管",
+        UiTextKey::RemoteProfile => "配置档",
+        UiTextKey::RemoteWorkspaceCount => "工作区数量",
+        UiTextKey::RemoteEnvironment => "环境标识",
+        UiTextKey::RemoteClient => "当前客户端",
+        UiTextKey::RemoteUnowned => "暂无控制端",
+        UiTextKey::RemoteKeyAlgorithm => "密钥算法",
+        UiTextKey::RemoteManageLocally => "请在本地 yttt 窗口中管理远程连接和凭据。",
+        UiTextKey::RemoteRecordMissing => "此连接记录已不存在。",
+        UiTextKey::RemoteInvalidPort => "SSH 端口必须介于 1 和 65535 之间。",
+        UiTextKey::RemoteInvalidRoot => "远程根目录必须是绝对 POSIX 路径。",
+        UiTextKey::RemoteLaunchFailed => "无法打开远程工作区",
+        UiTextKey::RemoteWrongHostCode => "此连接码属于另一个 Host。",
+        UiTextKey::RemoteCredentialStoreFailed => {
+            "系统凭据库不可用，未保存任何明文凭据。关闭「记住凭据」可仅保存连接"
+        }
+        UiTextKey::RemoteRuntimeUnavailable => "Host 运行时不可用。",
+        UiTextKey::RemoteDirectoryUnexpected => "Host 返回了非预期的目录响应。",
         UiTextKey::SettingsPermissionNotifications => "系统通知",
         UiTextKey::SettingsPermissionNotificationsDescription => {
             "允许 yttt 在后台发送 Agent 任务完成或等待处理的提醒。"

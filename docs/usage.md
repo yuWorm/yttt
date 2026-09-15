@@ -43,6 +43,13 @@ Forms scroll independently of their fixed bottom actions; **Escape** or **Cancel
 unsaved input and returns to the list. **Save** only updates the record; **Save and connect**
 explicitly does both. Missing credentials open a small credential-only prompt instead of the
 full editor. The workbench stays usable behind the manager; connecting opens an independent Client window.
+The connecting window inherits the launching window's theme, UI style, fonts, window effect,
+and language before its first frame, including imported Zed themes. Progress, SSH fingerprint
+verification, takeover decisions, retry, and cancellation use the same workbench controls.
+**Connection details** expands environment and Client identifiers; the bottom actions stay visible
+when the content scrolls. Normal takeover uses **Continue here**; only forced takeover is marked
+as destructive. Interface text is available in English and Chinese; underlying diagnostic errors
+remain in their original language under **Technical details**.
 
 Both local and remote windows restore their Host's confirmed workspace state before starting
 terminal/Agent views. A workspace with opened projects goes directly to its project page; a

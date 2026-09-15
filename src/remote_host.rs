@@ -31,13 +31,31 @@ use yttt_transport::{AuthToken, ClientIdentity, SharedConnector, TransportConnec
 use zeroize::{Zeroize, Zeroizing};
 
 pub enum RemoteConnectEvent {
-    Status(String),
+    Status(RemoteConnectStatus),
     HostKey(yttt_ssh::HostKeyChallenge),
     Takeover {
-        owner: String,
+        owner: RemoteControlOwner,
         force: bool,
         answer: flume::Sender<bool>,
     },
+}
+
+pub enum RemoteConnectStatus {
+    VerifyingHost,
+    CheckingServer,
+    StartingHost,
+    Ssh {
+        state: yttt_ssh::ConnectionState,
+        error: Option<String>,
+    },
+}
+
+#[derive(Clone)]
+pub struct RemoteControlOwner {
+    pub environment_id: String,
+    pub profile_id: String,
+    pub workspace_count: usize,
+    pub client_id: Option<String>,
 }
 pub struct RemoteEnvironment {
     pub runtime: Arc<DesktopHostRuntime>,
@@ -174,8 +192,7 @@ pub fn connect(
                 return Err("Imported Host identity or certificate fingerprint is invalid".into());
             }
             let _ = events.send(RemoteConnectEvent::Status(
-                "Verifying the existing Host certificate and environment; no Server is deployed"
-                    .into(),
+                RemoteConnectStatus::VerifyingHost,
             ));
             let connector = SharedConnector::new(
                 yttt_transport_tls::TlsConnector::new(
@@ -267,14 +284,11 @@ fn connect_ssh(
                         }
                     }
                     TransportEvent::StateChanged(status) => {
-                        let _ = ui_events.send(RemoteConnectEvent::Status(format!(
-                            "SSH {:?}{}",
-                            status.state,
-                            status
-                                .error
-                                .map(|error| format!(": {error}"))
-                                .unwrap_or_default()
-                        )));
+                        let _ =
+                            ui_events.send(RemoteConnectEvent::Status(RemoteConnectStatus::Ssh {
+                                state: status.state,
+                                error: status.error,
+                            }));
                     }
                     TransportEvent::CredentialSaved { credential, .. } => {
                         if let Ok(mut connections) =
@@ -316,11 +330,11 @@ fn connect_ssh(
         .block_on(service.connect(credentials.request(false)))
         .map_err(|error| error.to_string())?;
     let _ = events.send(RemoteConnectEvent::Status(
-        "Checking remote platform and Server installation".to_string(),
+        RemoteConnectStatus::CheckingServer,
     ));
     let server = deploy_server(&service, &credentials.connection)?;
     let _ = events.send(RemoteConnectEvent::Status(
-        "Starting or attaching independent remote Host".to_string(),
+        RemoteConnectStatus::StartingHost,
     ));
     let descriptor = ensure_server(&service, credentials.connection.id.clone(), &server)?;
     if descriptor.resource_protocol != yttt_protocol::RESOURCE_PROTOCOL_VERSION
@@ -398,22 +412,13 @@ fn initialize_environment(
     let mut control = client
         .control_status()
         .ok_or_else(|| "Host control state is unavailable".to_string())?;
-    let take_control = confirm_transfer(
-        &events,
-        format!(
-            "{} · {} · {} workspaces · {}",
-            environment.environment_id,
-            identity.profile_id,
-            index.len(),
-            control
-                .owner
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "unowned".into())
-        ),
-        false,
-    )
-    .is_ok();
+    let takeover_owner = RemoteControlOwner {
+        environment_id: environment.environment_id.clone(),
+        profile_id: identity.profile_id.to_string(),
+        workspace_count: index.len(),
+        client_id: control.owner.as_ref().map(ToString::to_string),
+    };
+    let take_control = confirm_transfer(&events, takeover_owner.clone(), false).is_ok();
     let request_control = |request| -> Result<yttt_protocol::session::ControlStatus, String> {
         match runtime
             .block_on(client.request(Request::ProfileControl(request)))
@@ -442,11 +447,10 @@ fn initialize_environment(
         if transfer.phase == yttt_protocol::session::TransferPhase::ForceConfirmationRequired {
             if confirm_transfer(
                 &events,
-                transfer
-                    .previous_owner
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .unwrap_or_default(),
+                RemoteControlOwner {
+                    client_id: transfer.previous_owner.as_ref().map(ToString::to_string),
+                    ..takeover_owner.clone()
+                },
                 true,
             )
             .is_err()
@@ -723,7 +727,7 @@ fn server_bytes(target: &str) -> Result<Vec<u8>, String> {
 
 fn confirm_transfer(
     events: &flume::Sender<RemoteConnectEvent>,
-    owner: String,
+    owner: RemoteControlOwner,
     force: bool,
 ) -> Result<(), String> {
     let (answer, receiver) = flume::bounded(1);
