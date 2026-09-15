@@ -52,27 +52,23 @@ pub enum ThemeLoadWarning {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ThemeLoadError {
-    #[error("failed to create theme directory {path}: {source}")]
-    CreateThemeDirectory {
-        path: PathBuf,
-        source: std::io::Error,
-    },
+    #[error("Device preferences are not bound; cannot load themes")]
+    DevicePreferencesUnbound,
 }
 
 pub fn load_theme_store(paths: &AppConfigPaths) -> Result<LoadedThemeStore, ThemeLoadError> {
+    let Some(paths) = device_theme_paths(paths) else {
+        return Err(ThemeLoadError::DevicePreferencesUnbound);
+    };
     let mut store = ThemeStore::builtin();
     let mut warnings = Vec::new();
     let themes_dir = paths.themes_dir();
 
-    crate::config::storage::create_dir_all(&themes_dir).map_err(|source| {
-        ThemeLoadError::CreateThemeDirectory {
-            path: themes_dir.clone(),
-            source,
-        }
-    })?;
-
     let entries = match crate::config::storage::read_dir(&themes_dir) {
         Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(LoadedThemeStore { store, warnings });
+        }
         Err(error) => {
             warnings.push(ThemeLoadWarning::ReadDir {
                 path: themes_dir,
@@ -114,6 +110,13 @@ pub fn load_theme_store(paths: &AppConfigPaths) -> Result<LoadedThemeStore, Them
     }
 
     Ok(LoadedThemeStore { store, warnings })
+}
+
+fn device_theme_paths(paths: &AppConfigPaths) -> Option<AppConfigPaths> {
+    paths
+        .is_test_fixture()
+        .then(|| paths.clone())
+        .or_else(crate::config::scope::device_preferences_config_paths)
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]

@@ -10,6 +10,7 @@ use yttt_protocol::{
         AttachTerminal, TerminalExecutionSpec, TerminalGeometry, TerminalLeaseMode,
         TerminalSpawnSpec,
     },
+    workspace::WorkspaceProjectConfig,
 };
 use yttt_transport::{
     AuthToken, ClientIdentity, TransportConnector, TransportListener, memory_pair,
@@ -60,6 +61,7 @@ async fn start_host_with_work<L: TransportListener, C: TransportConnector + Clon
         runtime_root,
         state_root: temp.path().join("state"),
         config_root: temp.path().join("state/config"),
+        project_config: WorkspaceProjectConfig::Project,
         auth_token_file,
         ssh_host_keys_file: temp.path().join("ssh-host-keys.toml"),
         credential_namespace: "dev.yttt.ssh.transport-contract".to_string(),
@@ -243,6 +245,7 @@ async fn local_transport_satisfies_host_contract() {
         runtime_root: runtime_root.clone(),
         state_root: temp.path().join("state"),
         config_root: temp.path().join("state/config"),
+        project_config: WorkspaceProjectConfig::Project,
         auth_token_file,
         ssh_host_keys_file: temp.path().join("ssh-host-keys.toml"),
         credential_namespace: "dev.yttt.ssh.transport-contract-local".to_string(),

@@ -64,6 +64,7 @@ use yttt_protocol::{
         AttachTerminal, TerminalLeaseMode, TerminalStreamApply, TerminalStreamUpdate,
         TerminalViewportAnchor, TerminalViewportRead, TerminationMode,
     },
+    workspace::WorkspaceProjectConfig,
 };
 use yttt_transport::{
     AuthToken, HostIdentity, TransportListener, TransportStream, receive_control,
@@ -97,6 +98,7 @@ pub struct HostBootstrap {
     pub runtime_root: PathBuf,
     pub state_root: PathBuf,
     pub config_root: PathBuf,
+    pub project_config: WorkspaceProjectConfig,
     pub auth_token_file: PathBuf,
     pub ssh_host_keys_file: PathBuf,
     pub credential_namespace: String,
@@ -199,6 +201,7 @@ where
     let workspaces = Arc::new(WorkspaceService::new(
         &bootstrap.state_root,
         &bootstrap.config_root,
+        bootstrap.project_config.clone(),
     )?);
     let device_settings = Arc::new(Mutex::new(device_settings::DeviceSettingsStore::load(
         &bootstrap.state_root,

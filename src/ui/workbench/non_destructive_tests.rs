@@ -12,6 +12,7 @@ use gpui::{EntityId, TestAppContext};
 use tempfile::tempdir;
 
 use super::*;
+use crate::config::settings::save_settings;
 use crate::model::{
     layout::TabStartup,
     workspace::{PaneProcessState, TabStartState},
@@ -1552,7 +1553,7 @@ fn agent_state_transitions_enqueue_attention_and_completion_notifications(cx: &m
 }
 
 #[gpui::test]
-fn failed_agent_start_does_not_leave_a_running_snapshot(cx: &mut TestAppContext) {
+fn agent_launch_waits_for_host_initialization_without_marking_it_running(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
@@ -1616,19 +1617,6 @@ fn failed_agent_start_does_not_leave_a_running_snapshot(cx: &mut TestAppContext)
                         | yttt_agent_core::AgentProcessState::Running
                 ))
         );
-        assert!(
-            !root
-                .terminal
-                .terminal_panes
-                .get(&terminal_pane_key(
-                    view_project_id.as_str(),
-                    "agent",
-                    "codex",
-                ))
-                .unwrap()
-                .read(app)
-                .is_running()
-        );
     });
 }
 
@@ -1636,12 +1624,11 @@ fn persist_codex_shell_session(
     config_paths: &AppConfigPaths,
     project_path: &Path,
 ) -> ProjectReferenceConfig {
-    use crate::runtime::agent_manager::AgentPaneExitOutcome;
     use yttt_agent_core::{
         AgentEventKind, AgentInstanceId, AgentReducer, AgentSessionMetadata, AgentTask,
         AgentTaskSource, ProviderId,
     };
-    use yttt_protocol::agent::{AgentHookScope, AgentSnapshotUpdate};
+    use yttt_protocol::agent::AgentHookScope;
 
     crate::config::storage::allow_test_root(project_path);
     let mut layout = dev_fixture_layout();
@@ -1655,7 +1642,7 @@ fn persist_codex_shell_session(
     let opened = open_project_config(
         config_paths,
         project_path,
-        &mut DefaultLayoutState::load_or_create(config_paths),
+        &mut DefaultLayoutState::load(config_paths),
     )
     .unwrap();
     let project = ProjectReferenceConfig::new(
@@ -1696,21 +1683,15 @@ fn persist_codex_shell_session(
         },
         4,
     );
-    let mut manager = AgentManager::new(config_paths);
-    assert!(matches!(
-        manager.apply_host_snapshot(
-            address,
-            AgentSnapshotUpdate {
-                scope,
-                terminal_session_id: TerminalSessionId::new("terminal"),
-                host_epoch: 1,
-                sequence: 1,
-                snapshot: reducer.snapshot().clone(),
-            }
-        ),
-        Some(AgentPaneExitOutcome::Snapshot { .. })
-    ));
-    drop(manager);
+    fs::write(
+        config_paths.agent_state_path(),
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "entries": [{"address": address, "snapshot": reducer.snapshot()}],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let restored = AgentManager::new(config_paths).retained_snapshots();
     assert_eq!(restored.len(), 1);
     assert_eq!(

@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, LazyLock},
 };
+use yttt_protocol::workspace::WorkspaceProjectConfigFile;
 
 /// Shared configuration belongs to the bound Host, including for a local desktop.
 pub trait ConfigStorage: Send + Sync {
@@ -12,6 +13,12 @@ pub trait ConfigStorage: Send + Sync {
     fn install_agent_hooks(&self) -> io::Result<()>;
     fn environment(&self) -> &yttt_protocol::workspace::WorkspaceEnvironment;
     fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
+    fn read_project_config(
+        &self,
+        project_root: &Path,
+        file: WorkspaceProjectConfigFile,
+        path: &Path,
+    ) -> io::Result<Vec<u8>>;
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()>;
     fn create_dir_all(&self, path: &Path) -> io::Result<()>;
     fn remove_file(&self, path: &Path) -> io::Result<()>;
@@ -25,6 +32,8 @@ pub trait ConfigStorage: Send + Sync {
 
 static ENVIRONMENT: LazyLock<RwLock<Option<Arc<dyn ConfigStorage>>>> =
     LazyLock::new(|| RwLock::new(None));
+static DEVICE_PREFERENCES_ROOT: LazyLock<RwLock<Option<PathBuf>>> =
+    LazyLock::new(|| RwLock::new(None));
 static TEST_ROOTS: LazyLock<RwLock<Vec<PathBuf>>> = LazyLock::new(|| RwLock::new(Vec::new()));
 
 /// Pure configuration tests and explicit UI fixtures may opt into their own local files.
@@ -36,6 +45,32 @@ pub(crate) fn allow_test_root(path: &Path) {
             roots.push(root);
         }
     }
+}
+
+/// Bind the explicit local root used for preferences that must never be delegated to a Host.
+///
+/// Binding is intentionally process-wide and immutable. A Client process represents one local
+/// profile, while the Host it is connected to may be unavailable or replaced.
+pub(crate) fn bind_device_preferences_root(root: PathBuf) -> io::Result<()> {
+    let mut current = DEVICE_PREFERENCES_ROOT.write();
+    if let Some(current) = current.as_ref() {
+        if current != &root {
+            return Err(io::Error::other(
+                "a Client process cannot switch device preference profiles",
+            ));
+        }
+        return Ok(());
+    }
+    *current = Some(root);
+    Ok(())
+}
+
+pub(crate) fn device_preferences_root() -> Option<PathBuf> {
+    DEVICE_PREFERENCES_ROOT.read().clone()
+}
+
+fn is_device_preferences_path(path: &Path) -> bool {
+    device_preferences_root().is_some_and(|root| path.starts_with(root))
 }
 
 pub fn bind_environment(storage: Arc<dyn ConfigStorage>) -> io::Result<()> {
@@ -56,6 +91,9 @@ pub fn environment_storage() -> Option<Arc<dyn ConfigStorage>> {
 }
 
 pub(crate) fn storage_for(path: &Path) -> io::Result<Option<Arc<dyn ConfigStorage>>> {
+    if is_device_preferences_path(path) {
+        return Ok(None);
+    }
     if let Some(storage) = environment_storage() {
         return Ok(Some(storage));
     }
@@ -64,7 +102,7 @@ pub(crate) fn storage_for(path: &Path) -> io::Result<Option<Arc<dyn ConfigStorag
     }
     Err(io::Error::new(
         io::ErrorKind::NotConnected,
-        "environment storage is not bound to its Host",
+        "configuration path is neither in the bound Device preferences root nor bound to a Host",
     ))
 }
 
@@ -81,6 +119,19 @@ pub fn read(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
 pub fn read_to_string(path: impl AsRef<Path>) -> io::Result<String> {
     String::from_utf8(read(path)?)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
+/// Reads a fixed project configuration document without registering a mutable project resource.
+pub fn read_project_config(
+    project_root: &Path,
+    file: WorkspaceProjectConfigFile,
+    path: &Path,
+) -> io::Result<String> {
+    let bytes = match storage_for(path)? {
+        Some(storage) => storage.read_project_config(project_root, file, path)?,
+        None => std::fs::read(path)?,
+    };
+    String::from_utf8(bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 pub fn write(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> io::Result<()> {
     match storage_for(path.as_ref())? {

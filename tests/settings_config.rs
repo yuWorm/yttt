@@ -2,17 +2,17 @@ use std::path::{Path, PathBuf};
 
 use tempfile::tempdir;
 use yttt::config::{
-    bars::{BarModuleSettings, ShellBarModule, ShellBarsSettings, save_bars},
+    bars::{BarModuleSettings, BarsLoadWarning, ShellBarModule, ShellBarsSettings, load_bars},
     default_layout::BuiltinAgent,
     paths::AppConfigPaths,
+    scope::save_scoped_settings,
     settings::{
         AUTO_SHELL, AppSettings, EditorAutosave, LanguageSetting, SettingsLoadWarning,
         ShellPlatform, VimModeSetting, WindowBackgroundEffect, detect_shell_candidates_with,
-        language_setting_for_locale, load_or_create_settings, resolve_default_shell, save_settings,
+        language_setting_for_locale, load_settings, resolve_default_shell, save_settings,
     },
 };
 use yttt::ui::theme::UiStyleId;
-use yttt_terminal::{TerminalCursorShape, TerminalOsc52Policy};
 
 #[test]
 fn system_locale_maps_supported_chinese_variants() {
@@ -49,95 +49,31 @@ fn app_config_paths_expose_settings_and_theme_dir() {
 }
 
 #[test]
-fn missing_settings_file_writes_defaults() {
+fn missing_settings_file_loads_defaults_without_creating_files() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
 
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_settings(&paths).unwrap();
 
-    assert_eq!(loaded.settings.general.language, LanguageSetting::System);
-    assert_eq!(loaded.settings.general.ui_font_family, "");
-    assert_eq!(loaded.settings.general.ui_font_size, 16.0);
-    assert_eq!(loaded.settings.general.ui_line_height, 1.618_034);
-    assert!(!loaded.settings.general.onboarding_completed);
-    assert!(loaded.settings.general.performance_metrics_enabled);
-    assert!(!loaded.settings.general.system_performance_metrics_enabled);
-    assert!(!loaded.settings.general.restore_last_session);
-    assert!(!loaded.settings.general.new_tab_command_picker_enabled);
-    assert_eq!(
-        loaded.settings.general.new_tab_commands,
-        vec!["lazygit", "nvim", "codex"]
-    );
-    assert_eq!(
-        loaded.settings.window.effect,
-        WindowBackgroundEffect::Blurred
-    );
-    assert_eq!(loaded.settings.window.opacity, 0.72);
-    assert_eq!(loaded.settings.theme.name, "one-dark-theme");
-    assert_eq!(loaded.settings.theme.terminal, None);
-    assert!(!loaded.settings.notifications.system);
-    assert_eq!(loaded.settings.agent.primary, None);
-    assert!(loaded.settings.agent.sessions_enabled);
-    assert!(loaded.settings.agent.additional_session_agents.is_empty());
-    assert_eq!(loaded.settings.terminal.font_family, "");
-    assert_eq!(loaded.settings.terminal.shell, AUTO_SHELL);
-    assert!(loaded.settings.terminal.custom_shells.is_empty());
-    assert!(loaded.settings.terminal.environment.is_empty());
-    assert_eq!(loaded.settings.terminal.font_size, 13.0);
-    assert_eq!(loaded.settings.terminal.line_height, 1.15);
-    assert_eq!(loaded.settings.terminal.padding, 6.0);
-    assert_eq!(loaded.settings.terminal.scrollback, 10000);
-    assert!(loaded.settings.terminal.show_scrollbar);
-    assert_eq!(
-        loaded.settings.terminal.cursor_shape,
-        TerminalCursorShape::Block
-    );
-    assert!(!loaded.settings.terminal.cursor_blinking);
-    assert_eq!(loaded.settings.terminal.cursor_blink_interval_ms, 750);
-    assert_eq!(loaded.settings.terminal.cursor_blink_timeout_secs, 5);
-    assert_eq!(loaded.settings.terminal.cursor_thickness, 0.15);
-    assert!(loaded.settings.terminal.cursor_unfocused_hollow);
-    assert!(!loaded.settings.terminal.hide_mouse_when_typing);
-    assert!(!loaded.settings.terminal.copy_on_select);
-    assert_eq!(
-        loaded.settings.terminal.osc52_policy,
-        TerminalOsc52Policy::CopyOnly
-    );
-    assert!(!loaded.settings.terminal.kitty_keyboard);
-    assert_eq!(
-        loaded.settings.terminal.semantic_escape_chars,
-        ",│`|:\"' ()[]{}<>\t"
-    );
-    assert_eq!(loaded.settings.terminal.hint_alphabet, "jfkdls;ahgurieowpq");
-    assert_eq!(loaded.settings.terminal.hints.len(), 1);
-    assert!(loaded.settings.editor.auto_detect_language);
-    assert_eq!(loaded.settings.vim.mode, VimModeSetting::Disabled);
-    assert_eq!(loaded.settings.editor.default_language, "plain_text");
-    assert!(!loaded.settings.editor.lsp.enabled);
-    assert_eq!(loaded.settings.editor.lsp.command, "");
-    assert!(paths.settings_file().exists());
-    assert!(paths.bars_file().exists());
+    assert_eq!(loaded.settings, AppSettings::default());
     assert!(loaded.warnings.is_empty());
+    assert!(!paths.settings_file().exists());
+    assert!(!paths.bars_file().exists());
+    assert!(!paths.config_dir().join("device/settings.toml").exists());
 }
 
 #[test]
-fn settings_default_language_is_system() {
-    let settings = AppSettings::default();
-
-    assert_eq!(settings.general.language, LanguageSetting::System);
-}
-
-#[test]
-fn agent_session_settings_round_trip() {
+fn host_settings_save_persists_agent_fields_only() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
     let mut settings = AppSettings::default();
     settings.agent.primary = Some(BuiltinAgent::OhMyPi);
     settings.agent.sessions_enabled = false;
     settings.agent.additional_session_agents = vec![BuiltinAgent::Claude, BuiltinAgent::Pi];
+    settings.notifications.system = true;
 
     save_settings(&paths, &settings).unwrap();
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_settings(&paths).unwrap();
 
     assert_eq!(loaded.settings.agent.primary, Some(BuiltinAgent::OhMyPi));
     assert!(!loaded.settings.agent.sessions_enabled);
@@ -145,12 +81,19 @@ fn agent_session_settings_round_trip() {
         loaded.settings.agent.additional_session_agents,
         vec![BuiltinAgent::Claude, BuiltinAgent::Pi]
     );
+    assert!(!loaded.settings.notifications.system);
+    let source: toml::Value =
+        toml::from_str(&std::fs::read_to_string(paths.settings_file()).unwrap()).unwrap();
+    let source = source.as_table().unwrap();
+    assert!(source.contains_key("agent"));
+    assert!(!source.contains_key("notifications"));
 }
 
 #[test]
 fn window_background_settings_load_without_touching_other_defaults() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
     std::fs::write(
         paths.settings_file(),
         r#"
@@ -164,31 +107,13 @@ opacity = 0.42
     )
     .unwrap();
 
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_settings(&paths).unwrap();
 
     assert_eq!(loaded.settings.window.effect, WindowBackgroundEffect::None);
     assert_eq!(loaded.settings.window.opacity, 0.42);
     assert!(loaded.settings.general.onboarding_completed);
     assert_eq!(loaded.settings.theme.name, "one-dark-theme");
     assert!(loaded.warnings.is_empty());
-}
-
-#[test]
-fn editor_and_project_panel_defaults_match_the_design() {
-    let settings = AppSettings::default();
-
-    assert_eq!(settings.editor.font_family, "");
-    assert_eq!(settings.editor.font_size, 14.0);
-    assert_eq!(settings.editor.line_height, 1.4);
-    assert_eq!(settings.editor.tab_size, 4);
-    assert!(!settings.editor.soft_wrap);
-    assert!(settings.editor.line_numbers);
-    assert_eq!(settings.editor.autosave, EditorAutosave::Off);
-    assert_eq!(settings.editor.autosave_delay_ms, 1000);
-    assert!(settings.project_panel.default_open);
-    assert!(!settings.project_panel.show_hidden);
-    assert_eq!(settings.project_panel.width, 280.0);
-    assert_eq!(settings.project_panel.project_sidebar_width, 320.0);
 }
 
 #[test]
@@ -208,7 +133,7 @@ scrollback = 0
     )
     .unwrap();
 
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_settings(&paths).unwrap();
 
     assert_eq!(loaded.settings.terminal.font_size, 13.0);
     assert_eq!(loaded.settings.terminal.line_height, 1.15);
@@ -234,7 +159,7 @@ hint_alphabet = "界"
     )
     .unwrap();
 
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_settings(&paths).unwrap();
     let terminal = loaded.settings.terminal;
     assert_eq!(terminal.cursor_blink_interval_ms, 750);
     assert_eq!(terminal.cursor_blink_timeout_secs, 5);
@@ -260,7 +185,7 @@ VALID_NAME = "kept"
     )
     .unwrap();
 
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_settings(&paths).unwrap();
 
     assert_eq!(
         loaded.settings.terminal.environment.get("VALID_NAME"),
@@ -289,7 +214,7 @@ language = "xx"
     )
     .unwrap();
 
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_settings(&paths).unwrap();
 
     assert_eq!(loaded.settings.general.language, LanguageSetting::System);
     assert_eq!(
@@ -299,7 +224,7 @@ language = "xx"
 }
 
 #[test]
-fn settings_persist_notification_and_terminal_shell_choices() {
+fn host_settings_save_persists_shared_terminal_choices_only() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
     let mut settings = AppSettings::default();
@@ -314,26 +239,32 @@ fn settings_persist_notification_and_terminal_shell_choices() {
         .insert("RUST_LOG".to_string(), "yttt=debug".to_string());
 
     save_settings(&paths, &settings).unwrap();
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_settings(&paths).unwrap();
 
-    assert!(loaded.settings.notifications.system);
+    assert!(!loaded.settings.notifications.system);
     assert_eq!(loaded.settings.terminal.shell, "/bin/zsh");
     assert_eq!(
         loaded.settings.terminal.custom_shells,
         vec!["/opt/homebrew/bin/fish", "/bin/zsh"]
     );
-    assert_eq!(loaded.settings.terminal.font_size, 15.0);
+    assert_eq!(loaded.settings.terminal.font_size, 13.0);
     assert_eq!(
         loaded.settings.terminal.environment.get("RUST_LOG"),
         Some(&"yttt=debug".to_string())
     );
+    let source: toml::Value =
+        toml::from_str(&std::fs::read_to_string(paths.settings_file()).unwrap()).unwrap();
+    let source = source.as_table().unwrap();
+    assert!(!source.contains_key("notifications"));
+    assert!(source["terminal"].get("font_size").is_none());
 }
 
 #[test]
-fn settings_persist_language_and_terminal_scrollbar() {
+fn device_settings_persist_language_and_terminal_scrollbar() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
-    let mut settings = AppSettings::default();
+    let confirmed = AppSettings::default();
+    let mut settings = confirmed.clone();
     settings.general.language = LanguageSetting::Chinese;
     settings.general.ui_font_family = "  Menlo  ".to_string();
     settings.general.ui_font_size = 20.0;
@@ -343,11 +274,13 @@ fn settings_persist_language_and_terminal_scrollbar() {
     settings.general.system_performance_metrics_enabled = true;
     settings.general.restore_last_session = true;
     settings.general.new_tab_command_picker_enabled = true;
-    settings.general.new_tab_commands = vec!["nvim .".to_string(), "codex --resume".to_string()];
+    settings.notifications.system = true;
     settings.terminal.show_scrollbar = false;
 
-    save_settings(&paths, &settings).unwrap();
-    let loaded = load_or_create_settings(&paths).unwrap();
+    save_scoped_settings(&paths, &settings, &confirmed, false).unwrap();
+    assert!(!paths.settings_file().exists());
+    assert!(paths.config_dir().join("device/settings.toml").exists());
+    let loaded = load_settings(&paths).unwrap();
 
     assert_eq!(loaded.settings.general.language, LanguageSetting::Chinese);
     assert_eq!(loaded.settings.general.ui_font_family, "Menlo");
@@ -358,10 +291,7 @@ fn settings_persist_language_and_terminal_scrollbar() {
     assert!(loaded.settings.general.system_performance_metrics_enabled);
     assert!(loaded.settings.general.restore_last_session);
     assert!(loaded.settings.general.new_tab_command_picker_enabled);
-    assert_eq!(
-        loaded.settings.general.new_tab_commands,
-        vec!["nvim .", "codex --resume"]
-    );
+    assert!(loaded.settings.notifications.system);
     assert!(!loaded.settings.terminal.show_scrollbar);
 }
 
@@ -376,7 +306,7 @@ fn settings_persist_editor_language_and_lsp_choices() {
     settings.editor.lsp.command = "taplo lsp stdio".to_string();
 
     save_settings(&paths, &settings).unwrap();
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_settings(&paths).unwrap();
 
     assert!(!loaded.settings.editor.auto_detect_language);
     assert_eq!(loaded.settings.editor.default_language, "toml");
@@ -391,15 +321,15 @@ fn settings_persist_selected_ui_style() {
     let mut settings = AppSettings::default();
     settings.theme.ui_style = UiStyleId::Rounded;
 
-    save_settings(&paths, &settings).unwrap();
-    let loaded = load_or_create_settings(&paths).unwrap();
+    save_scoped_settings(&paths, &settings, &AppSettings::default(), false).unwrap();
+    let loaded = load_settings(&paths).unwrap();
 
     assert_eq!(loaded.settings.theme.ui_style, UiStyleId::Rounded);
     assert!(loaded.warnings.is_empty());
 }
 
 #[test]
-fn settings_persist_editor_and_project_panel_choices() {
+fn device_settings_persist_editor_and_project_panel_choices() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
 
@@ -408,11 +338,11 @@ fn settings_persist_editor_and_project_panel_choices() {
         EditorAutosave::OnFocusChange,
         EditorAutosave::AfterDelay,
     ] {
-        let mut settings = AppSettings::default();
+        let confirmed = load_settings(&paths).unwrap().settings;
+        let mut settings = confirmed.clone();
         settings.editor.font_family = "JetBrains Mono".to_string();
         settings.editor.font_size = 16.0;
         settings.editor.line_height = 1.6;
-        settings.editor.tab_size = 2;
         settings.editor.soft_wrap = true;
         settings.editor.line_numbers = false;
         settings.editor.autosave = autosave;
@@ -422,42 +352,51 @@ fn settings_persist_editor_and_project_panel_choices() {
         settings.project_panel.width = 320.0;
         settings.project_panel.project_sidebar_width = 240.0;
 
-        save_settings(&paths, &settings).unwrap();
-        let loaded = load_or_create_settings(&paths).unwrap();
+        save_scoped_settings(&paths, &settings, &confirmed, false).unwrap();
+        let loaded = load_settings(&paths).unwrap();
 
-        assert_eq!(loaded.settings, settings);
+        assert_eq!(loaded.settings.editor.font_family, "JetBrains Mono");
+        assert_eq!(loaded.settings.editor.font_size, 16.0);
+        assert_eq!(loaded.settings.editor.line_height, 1.6);
+        assert!(loaded.settings.editor.soft_wrap);
+        assert!(!loaded.settings.editor.line_numbers);
+        assert_eq!(loaded.settings.editor.autosave, autosave);
+        assert_eq!(loaded.settings.editor.autosave_delay_ms, 750);
+        assert!(!loaded.settings.project_panel.default_open);
+        assert!(loaded.settings.project_panel.show_hidden);
+        assert_eq!(loaded.settings.project_panel.width, 320.0);
+        assert_eq!(loaded.settings.project_panel.project_sidebar_width, 240.0);
         assert!(loaded.warnings.is_empty());
     }
 }
 
 #[test]
-fn vim_mode_setting_persists_each_scope() {
+fn vim_mode_persists_as_device_preference() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
 
+    let mut confirmed = AppSettings::default();
     for mode in [
         VimModeSetting::Global,
         VimModeSetting::Editor,
         VimModeSetting::Disabled,
     ] {
-        let mut settings = AppSettings::default();
+        let mut settings = confirmed.clone();
         settings.vim.mode = mode;
-        save_settings(&paths, &settings).unwrap();
+        save_scoped_settings(&paths, &settings, &confirmed, false).unwrap();
 
-        let loaded = load_or_create_settings(&paths).unwrap();
+        let loaded = load_settings(&paths).unwrap();
         assert_eq!(loaded.settings.vim.mode, mode);
         assert!(loaded.warnings.is_empty());
+        confirmed = loaded.settings;
     }
 }
 
 #[test]
-fn legacy_vim_toggles_migrate_to_one_mode_and_are_removed() {
+fn legacy_vim_toggles_load_as_one_mode_without_rewriting_source() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
-    std::fs::create_dir_all(paths.config_dir()).unwrap();
-    std::fs::write(
-        paths.settings_file(),
-        r#"
+    let legacy_source = r#"
 [general]
 workspace_vim_navigation = false
 settings_vim_navigation = false
@@ -467,34 +406,32 @@ vim_mode = true
 
 [terminal]
 start_in_vim_mode = false
-"#,
-    )
-    .unwrap();
+"#;
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(paths.settings_file(), legacy_source).unwrap();
 
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_settings(&paths).unwrap();
     assert_eq!(loaded.settings.vim.mode, VimModeSetting::Editor);
-    let migrated = std::fs::read_to_string(paths.settings_file()).unwrap();
-    assert!(migrated.contains("[vim]"));
-    assert!(migrated.contains("mode = \"editor\""));
-    assert!(!migrated.contains("workspace_vim_navigation"));
-    assert!(!migrated.contains("settings_vim_navigation"));
-    assert!(!migrated.contains("vim_mode"));
-    assert!(!migrated.contains("start_in_vim_mode"));
+    assert_eq!(
+        std::fs::read_to_string(paths.settings_file()).unwrap(),
+        legacy_source
+    );
 }
 
 #[test]
-fn any_legacy_non_editor_vim_toggle_migrates_to_global() {
+fn legacy_non_editor_vim_toggle_loads_as_global_without_rewriting_source() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
+    let legacy_source = "[terminal]\nstart_in_vim_mode = true\n";
     std::fs::create_dir_all(paths.config_dir()).unwrap();
-    std::fs::write(
-        paths.settings_file(),
-        "[terminal]\nstart_in_vim_mode = true\n",
-    )
-    .unwrap();
+    std::fs::write(paths.settings_file(), legacy_source).unwrap();
 
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_settings(&paths).unwrap();
     assert_eq!(loaded.settings.vim.mode, VimModeSetting::Global);
+    assert_eq!(
+        std::fs::read_to_string(paths.settings_file()).unwrap(),
+        legacy_source
+    );
 }
 
 #[test]
@@ -502,9 +439,7 @@ fn invalid_general_window_theme_editor_and_project_panel_values_are_normalized()
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
     std::fs::create_dir_all(paths.config_dir()).unwrap();
-    std::fs::write(
-        paths.settings_file(),
-        r#"
+    let invalid_source = r#"
 [general]
 language = "zh-CN"
 ui_font_size = nan
@@ -534,11 +469,10 @@ autosave_delay_ms = 0
 [project_panel]
 width = 10000.0
 project_sidebar_width = 1.0
-"#,
-    )
-    .unwrap();
+"#;
+    std::fs::write(paths.settings_file(), invalid_source).unwrap();
 
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_settings(&paths).unwrap();
 
     assert_eq!(loaded.settings.general.language, LanguageSetting::Chinese);
     assert_eq!(loaded.settings.general.ui_font_size, 16.0);
@@ -589,6 +523,10 @@ project_sidebar_width = 1.0
             "missing warning: {warning:?}"
         );
     }
+    assert_eq!(
+        std::fs::read_to_string(paths.settings_file()).unwrap(),
+        invalid_source
+    );
 }
 
 #[test]
@@ -599,7 +537,7 @@ fn settings_allow_lsp_enabled_without_command_for_reserved_slot() {
     settings.editor.lsp.enabled = true;
 
     save_settings(&paths, &settings).unwrap();
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_settings(&paths).unwrap();
 
     assert!(loaded.settings.editor.lsp.enabled);
     assert_eq!(loaded.settings.editor.lsp.command, "");
@@ -693,7 +631,6 @@ fn resolve_default_shell_uses_auto_or_manual_choice() {
 fn shell_bar_layout_and_module_options_round_trip_in_standalone_file() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
-    let settings = AppSettings::default();
     let mut bars = ShellBarsSettings::default();
     bars.window.layout.left = vec![ShellBarModule::ActiveItem];
     bars.window.layout.center = vec![ShellBarModule::Surface];
@@ -707,17 +644,14 @@ fn shell_bar_layout_and_module_options_round_trip_in_standalone_file() {
         },
     );
 
-    save_settings(&paths, &settings).unwrap();
-    save_bars(&paths, &bars).unwrap();
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let confirmed = AppSettings::default();
+    let mut candidate = confirmed.clone();
+    candidate.bars = bars.clone();
+    save_scoped_settings(&paths, &candidate, &confirmed, false).unwrap();
+    let loaded = load_bars(&paths).unwrap();
 
-    assert_eq!(loaded.settings.bars, bars);
+    assert_eq!(loaded.settings, bars);
     assert!(loaded.warnings.is_empty());
-    let settings_source = std::fs::read_to_string(paths.settings_file()).unwrap();
-    assert!(!settings_source.contains("[bars"));
-    let bars_source = std::fs::read_to_string(paths.bars_file()).unwrap();
-    assert!(bars_source.contains("[status]"));
-    assert!(bars_source.contains("[status.modules.active-item]"));
 }
 
 #[test]
@@ -725,9 +659,7 @@ fn invalid_fixed_and_unknown_window_modules_are_removed_and_aliases_are_canonica
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
     std::fs::create_dir_all(paths.config_dir()).unwrap();
-    std::fs::write(
-        paths.bars_file(),
-        r#"
+    let source = r#"
 [window]
 left = ["project-name", "missing-module", "project-name"]
 center = ["project-name", "active_item"]
@@ -739,25 +671,23 @@ hide_when_empty = false
 
 [window.modules.missing-module]
 max_width = 120.0
-"#,
-    )
-    .unwrap();
+"#;
+    std::fs::write(paths.bars_file(), source).unwrap();
 
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_bars(&paths).unwrap();
 
-    assert!(loaded.settings.bars.window.layout.left.is_empty());
+    assert!(loaded.settings.window.layout.left.is_empty());
     assert_eq!(
-        loaded.settings.bars.window.layout.center,
+        loaded.settings.window.layout.center,
         vec![ShellBarModule::ActiveItem]
     );
     assert_eq!(
-        loaded.settings.bars.window.layout.right,
+        loaded.settings.window.layout.right,
         vec![ShellBarModule::Settings]
     );
     assert!(
         !loaded
             .settings
-            .bars
             .window
             .layout
             .modules
@@ -766,7 +696,6 @@ max_width = 120.0
     assert!(
         !loaded
             .settings
-            .bars
             .window
             .layout
             .modules
@@ -774,21 +703,19 @@ max_width = 120.0
     );
     assert!(loaded.warnings.iter().any(|warning| matches!(
         warning,
-        SettingsLoadWarning::InvalidBarsValue {
+        BarsLoadWarning::InvalidValue {
             field: "window.left",
             value,
         } if value == "missing-module"
     )));
+    assert_eq!(std::fs::read_to_string(paths.bars_file()).unwrap(), source);
 }
 
 #[test]
-fn legacy_bars_in_settings_are_migrated_to_standalone_file() {
+fn legacy_bars_load_in_memory_without_rewriting_source() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
-    std::fs::create_dir_all(paths.config_dir()).unwrap();
-    std::fs::write(
-        paths.settings_file(),
-        r#"
+    let legacy_source = r#"
 [general]
 language = "en"
 
@@ -806,11 +733,11 @@ right = ["git-branch"]
 [bars.status.modules.active_item]
 max_width = 280.0
 hide_when_empty = false
-"#,
-    )
-    .unwrap();
+"#;
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(paths.settings_file(), legacy_source).unwrap();
 
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_settings(&paths).unwrap();
 
     assert!(!loaded.settings.bars.status.enabled);
     assert_eq!(
@@ -818,41 +745,36 @@ hide_when_empty = false
         vec![ShellBarModule::ActiveItem]
     );
     assert!(loaded.warnings.is_empty());
-    let settings_source = std::fs::read_to_string(paths.settings_file()).unwrap();
-    assert!(!settings_source.contains("[bars"));
-    let bars_source = std::fs::read_to_string(paths.bars_file()).unwrap();
-    assert!(bars_source.contains("[status]"));
-    assert!(bars_source.contains("[status.modules.active-item]"));
+    assert_eq!(
+        std::fs::read_to_string(paths.settings_file()).unwrap(),
+        legacy_source
+    );
+    assert!(!paths.bars_file().exists());
 }
 
 #[test]
-fn existing_standalone_bars_win_over_legacy_settings_section() {
+fn standalone_bars_take_precedence_without_rewriting_legacy_settings() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
-    std::fs::create_dir_all(paths.config_dir()).unwrap();
-    std::fs::write(
-        paths.settings_file(),
-        r#"
-[bars.status]
-enabled = false
-left = ["vim-mode"]
-center = []
-right = []
-"#,
-    )
-    .unwrap();
-    let mut standalone = ShellBarsSettings::default();
-    standalone.status.enabled = true;
-    standalone.status.layout.left = vec![ShellBarModule::Surface];
-    save_bars(&paths, &standalone).unwrap();
+    let legacy = "[bars.status]\nenabled = false\nleft = [\"surface\"]\n";
+    let standalone = "[status]\nenabled = true\nleft = [\"active-item\"]\n";
+    std::fs::write(paths.settings_file(), legacy).unwrap();
+    std::fs::write(paths.bars_file(), standalone).unwrap();
 
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_settings(&paths).unwrap();
 
-    assert_eq!(loaded.settings.bars, standalone);
-    assert!(
-        !std::fs::read_to_string(paths.settings_file())
-            .unwrap()
-            .contains("[bars")
+    assert!(loaded.settings.bars.status.enabled);
+    assert_eq!(
+        loaded.settings.bars.status.layout.left,
+        vec![ShellBarModule::ActiveItem]
+    );
+    assert_eq!(
+        std::fs::read_to_string(paths.settings_file()).unwrap(),
+        legacy
+    );
+    assert_eq!(
+        std::fs::read_to_string(paths.bars_file()).unwrap(),
+        standalone
     );
 }
 
@@ -861,18 +783,17 @@ fn invalid_standalone_bars_fall_back_without_rewriting_source() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
     std::fs::create_dir_all(paths.config_dir()).unwrap();
-    save_settings(&paths, &AppSettings::default()).unwrap();
     let invalid_source = "[status";
     std::fs::write(paths.bars_file(), invalid_source).unwrap();
 
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_bars(&paths).unwrap();
 
-    assert_eq!(loaded.settings.bars, ShellBarsSettings::default());
-    assert!(loaded.warnings.iter().any(|warning| matches!(
-        warning,
-        SettingsLoadWarning::InvalidToml { path, message }
+    assert_eq!(loaded.settings, ShellBarsSettings::default());
+    assert!(matches!(
+        loaded.warnings.as_slice(),
+        [BarsLoadWarning::InvalidToml { path, message }]
             if path == &paths.bars_file() && !message.is_empty()
-    )));
+    ));
     assert_eq!(
         std::fs::read_to_string(paths.bars_file()).unwrap(),
         invalid_source

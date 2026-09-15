@@ -98,22 +98,10 @@ fn file_and_project_panel_commands_are_registered() {
 
 #[test]
 fn command_availability_tracks_active_surface() {
-    let no_project = CommandContext {
-        has_selected_project: false,
-        active_surface: ActiveSurface::None,
-    };
-    let no_surface = CommandContext {
-        has_selected_project: true,
-        active_surface: ActiveSurface::None,
-    };
-    let terminal = CommandContext {
-        has_selected_project: true,
-        active_surface: ActiveSurface::Terminal,
-    };
-    let file = CommandContext {
-        has_selected_project: true,
-        active_surface: ActiveSurface::File,
-    };
+    let no_project = CommandContext::local_controller(false, ActiveSurface::None);
+    let no_surface = CommandContext::local_controller(true, ActiveSurface::None);
+    let terminal = CommandContext::local_controller(true, ActiveSurface::Terminal);
+    let file = CommandContext::local_controller(true, ActiveSurface::File);
 
     assert!(
         !CommandId::FileSave
@@ -192,14 +180,12 @@ fn command_availability_tracks_active_surface() {
 
 #[test]
 fn editor_owner_dispatches_every_command_available_for_files() {
-    let file_context = CommandContext {
-        has_selected_project: true,
-        active_surface: ActiveSurface::File,
-    };
+    let file_context = CommandContext::local_controller(true, ActiveSurface::File);
 
     for &command in CommandId::ALL {
         let actual = workspace_command_for_keystroke(
             InputOwnerKind::Editor,
+            file_context,
             &Keystroke::parse("cmd-s").unwrap(),
             |_| Some(command),
             |_| true,
@@ -225,6 +211,7 @@ fn modal_input_owners_block_project_file_save() {
     ] {
         let actual = workspace_command_for_keystroke(
             owner,
+            CommandContext::local_controller(true, ActiveSurface::File),
             &Keystroke::parse("cmd-s").unwrap(),
             |_| Some(CommandId::FileSave),
             |_| false,
@@ -858,7 +845,7 @@ fn load_app_keybindings_missing_file_compiles_complete_defaults() {
     let bindings =
         yttt::ui::interaction::actions::load_app_keybindings(&paths, &bindable_registry());
 
-    assert!(paths.keybindings_file().exists());
+    assert!(!paths.config_dir().exists());
     assert_eq!(bindings.len(), app_startup_keybindings().len());
 }
 
@@ -892,7 +879,7 @@ fn load_app_keybindings_with_warnings_uses_complete_defaults() {
 }
 
 #[test]
-fn missing_keybindings_file_writes_sparse_overrides() {
+fn missing_keybindings_file_loads_without_creating_overrides() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
 
@@ -900,10 +887,7 @@ fn missing_keybindings_file_writes_sparse_overrides() {
 
     assert_eq!(loaded.config, KeybindingsConfig::default());
     assert!(loaded.warnings.is_empty());
-    assert!(paths.keybindings_file().exists());
-    let persisted: KeybindingsConfig =
-        toml::from_str(&std::fs::read_to_string(paths.keybindings_file()).unwrap()).unwrap();
-    assert_eq!(persisted, KeybindingsConfig::default());
+    assert!(!paths.config_dir().exists());
 }
 
 #[test]
@@ -930,7 +914,7 @@ fn legacy_default_keybindings_migrate_to_sparse_overrides() {
     assert_eq!(loaded.config, KeybindingsConfig::default());
     let persisted: KeybindingsConfig =
         toml::from_str(&std::fs::read_to_string(paths.keybindings_file()).unwrap()).unwrap();
-    assert_eq!(persisted, loaded.config);
+    assert_eq!(persisted, legacy);
 }
 
 #[test]
@@ -949,7 +933,7 @@ fn schema_one_defaults_migrate_to_sparse_overrides() {
     assert_eq!(loaded.config, KeybindingsConfig::default());
     let persisted: KeybindingsConfig =
         toml::from_str(&std::fs::read_to_string(paths.keybindings_file()).unwrap()).unwrap();
-    assert_eq!(persisted, loaded.config);
+    assert_eq!(persisted, legacy);
 }
 
 #[test]
@@ -997,7 +981,9 @@ fn schema_four_sparse_config_remains_sparse() {
     assert!(loaded.config.bindings.is_empty());
     let persisted: KeybindingsConfig =
         toml::from_str(&std::fs::read_to_string(paths.keybindings_file()).unwrap()).unwrap();
-    assert_eq!(persisted, loaded.config);
+    assert_eq!(persisted.schema_version, 4);
+    assert_eq!(persisted.leader, "comma");
+    assert!(persisted.bindings.is_empty());
 }
 
 #[test]
@@ -1073,7 +1059,7 @@ fn schema_four_ctrl_w_close_is_removed_for_vim_sequences() {
     );
     let persisted: KeybindingsConfig =
         toml::from_str(&std::fs::read_to_string(paths.keybindings_file()).unwrap()).unwrap();
-    assert_eq!(persisted, loaded.config);
+    assert_eq!(persisted, stale);
 }
 
 #[test]

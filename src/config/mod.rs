@@ -26,6 +26,8 @@ pub mod layout_loader;
 pub mod paths;
 pub mod personal_layout;
 pub mod profile;
+pub mod project_settings;
+pub mod scope;
 pub mod settings;
 pub mod ssh;
 pub mod ssh_command;

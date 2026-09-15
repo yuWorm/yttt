@@ -25,6 +25,8 @@ pub enum BarsLoadWarning {
 
 #[derive(Debug, thiserror::Error)]
 pub enum BarsLoadError {
+    #[error("Device preferences are not bound; cannot load bars")]
+    DevicePreferencesUnbound,
     #[error("failed to create bars config directory {path}: {source}")]
     CreateConfigDirectory {
         path: PathBuf,
@@ -49,6 +51,8 @@ pub enum BarsLoadError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum BarsSaveError {
+    #[error("Device preferences are not bound; cannot save bars")]
+    DevicePreferencesUnbound,
     #[error("failed to create bars config directory {path}: {source}")]
     CreateConfigDirectory {
         path: PathBuf,
@@ -99,36 +103,40 @@ impl ShellBarsSettings {
     }
 }
 
-pub fn load_or_create_bars(paths: &AppConfigPaths) -> Result<LoadedBars, BarsLoadError> {
-    let path = ensure_bars_file(paths)?;
-    let source =
-        crate::config::storage::read_to_string(&path).map_err(|source| BarsLoadError::Read {
-            path: path.clone(),
-            source,
-        })?;
-    let mut warnings = Vec::new();
+/// Load bars without creating a preferences file. Missing bars retain builtin defaults.
+pub fn load_bars(paths: &AppConfigPaths) -> Result<LoadedBars, BarsLoadError> {
+    let paths = device_bar_paths(paths).ok_or(BarsLoadError::DevicePreferencesUnbound)?;
+    let path = paths.bars_file();
+    let source = match crate::config::storage::read_to_string(&path) {
+        Ok(source) => source,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(LoadedBars {
+                settings: ShellBarsSettings::default(),
+                warnings: Vec::new(),
+            });
+        }
+        Err(source) => return Err(BarsLoadError::Read { path, source }),
+    };
     let mut settings = match toml::from_str::<ShellBarsSettings>(&source) {
         Ok(settings) => settings,
         Err(error) => {
-            warnings.push(BarsLoadWarning::InvalidToml {
-                path,
-                message: error.to_string(),
-            });
             return Ok(LoadedBars {
                 settings: ShellBarsSettings::default(),
-                warnings,
+                warnings: vec![BarsLoadWarning::InvalidToml {
+                    path,
+                    message: error.to_string(),
+                }],
             });
         }
     };
-    warnings.extend(
-        settings
-            .validate()
-            .into_iter()
-            .map(|issue| BarsLoadWarning::InvalidValue {
-                field: issue.field,
-                value: issue.value,
-            }),
-    );
+    let warnings = settings
+        .validate()
+        .into_iter()
+        .map(|issue| BarsLoadWarning::InvalidValue {
+            field: issue.field,
+            value: issue.value,
+        })
+        .collect();
     Ok(LoadedBars { settings, warnings })
 }
 
@@ -136,6 +144,7 @@ pub fn save_bars(
     paths: &AppConfigPaths,
     settings: &ShellBarsSettings,
 ) -> Result<PathBuf, BarsSaveError> {
+    let paths = device_bar_paths(paths).ok_or(BarsSaveError::DevicePreferencesUnbound)?;
     let path = paths.bars_file();
     if let Some(parent) = path.parent() {
         crate::config::storage::create_dir_all(parent).map_err(|source| {
@@ -156,30 +165,11 @@ pub fn save_bars(
     Ok(path)
 }
 
-fn ensure_bars_file(paths: &AppConfigPaths) -> Result<PathBuf, BarsLoadError> {
-    let path = paths.bars_file();
-    if crate::config::storage::exists(&path) {
-        return Ok(path);
-    }
-    if let Some(parent) = path.parent() {
-        crate::config::storage::create_dir_all(parent).map_err(|source| {
-            BarsLoadError::CreateConfigDirectory {
-                path: parent.to_path_buf(),
-                source,
-            }
-        })?;
-    }
-    let source = toml::to_string_pretty(&ShellBarsSettings::default()).map_err(|source| {
-        BarsLoadError::SerializeDefaults {
-            path: path.clone(),
-            source,
-        }
-    })?;
-    atomic_write(&path, source.as_bytes()).map_err(|source| BarsLoadError::WriteDefaults {
-        path: path.clone(),
-        source,
-    })?;
-    Ok(path)
+fn device_bar_paths(paths: &AppConfigPaths) -> Option<AppConfigPaths> {
+    paths
+        .is_test_fixture()
+        .then(|| paths.clone())
+        .or_else(crate::config::scope::device_preferences_config_paths)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -512,4 +502,41 @@ fn validate_section(
             true
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_device_bars_use_builtins_without_creating_a_file() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = AppConfigPaths::from_config_dir(root.path().join("device"));
+
+        let loaded = load_bars(&paths).unwrap();
+
+        assert_eq!(loaded.settings, ShellBarsSettings::default());
+        assert!(loaded.warnings.is_empty());
+        assert!(!paths.bars_file().exists());
+    }
+
+    #[test]
+    fn malformed_device_bars_are_reported_without_rewriting_the_file() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = AppConfigPaths::from_config_dir(root.path().join("device"));
+        std::fs::create_dir_all(paths.config_dir()).unwrap();
+        std::fs::write(paths.bars_file(), "[window\n").unwrap();
+
+        let loaded = load_bars(&paths).unwrap();
+
+        assert_eq!(loaded.settings, ShellBarsSettings::default());
+        assert!(matches!(
+            loaded.warnings.as_slice(),
+            [BarsLoadWarning::InvalidToml { .. }]
+        ));
+        assert_eq!(
+            std::fs::read_to_string(paths.bars_file()).unwrap(),
+            "[window\n"
+        );
+    }
 }

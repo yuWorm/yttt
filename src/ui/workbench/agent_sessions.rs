@@ -64,7 +64,9 @@ impl WorkbenchView {
                     .position(|candidate| candidate == agent)
                     .unwrap_or(usize::MAX)
             });
-        save_settings(&self.config_paths, &self.app_settings)?;
+        if !self.persist_app_settings(false)? {
+            return Ok(());
+        }
         if self.agent_sessions_enabled() {
             self.refresh_agent_sessions();
         }
@@ -73,7 +75,9 @@ impl WorkbenchView {
 
     pub fn set_agent_sessions_enabled(&mut self, enabled: bool) -> Result<(), WorkbenchError> {
         self.app_settings.agent.sessions_enabled = enabled;
-        save_settings(&self.config_paths, &self.app_settings)?;
+        if !self.persist_app_settings(false)? {
+            return Ok(());
+        }
         if !enabled {
             self.agent_sessions.clear();
             if self.project.active_panel_page == ProjectPanelPage::AgentSessions {

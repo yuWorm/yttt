@@ -49,6 +49,15 @@ const THEME_JSON: &str = r#"
 "#;
 
 #[test]
+fn listing_missing_icon_themes_does_not_create_configuration() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("absent");
+    let paths = AppConfigPaths::from_config_dir(root.clone());
+    assert!(available_icon_theme_names(&paths).unwrap().is_empty());
+    assert!(!root.exists());
+}
+
+#[test]
 fn default_icon_theme_detects_windows_development_files() {
     let theme = load_icon_theme(
         &AppConfigPaths::from_config_dir(tempdir().unwrap().path()),

@@ -11,7 +11,7 @@ use gpui::http_client::{AsyncBody, FakeHttpClient, Response};
 use gpui::{AppContext as _, Keystroke, Subscription, px, size};
 use tempfile::tempdir;
 use yttt::{
-    commands::CommandId,
+    commands::{ActiveSurface, CommandContext, CommandId},
     config::{
         default_layout::{BuiltinAgent, DefaultLayoutKind, DefaultLayoutTemplate},
         keybindings::{
@@ -22,9 +22,10 @@ use yttt::{
         profile::{
             AppProfile, EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
         },
+        scope::{SettingsScope, save_scoped_settings},
         settings::{
             AppSettings, EditorAutosave, LanguageSetting, VimModeSetting, WindowBackgroundEffect,
-            load_or_create_settings, save_settings,
+            load_settings, save_settings,
         },
     },
     login_startup::{
@@ -185,9 +186,6 @@ fn settings_window_reuses_search_state_and_rebinds_after_native_close(
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    let mut settings = load_or_create_settings(&paths).unwrap().settings;
-    settings.general.onboarding_completed = true;
-    save_settings(&paths, &settings).unwrap();
     let slot = Rc::new(RefCell::new(None));
     let output = slot.clone();
     let (_, cx) = cx.add_window_view(move |window, cx| {
@@ -203,6 +201,7 @@ fn settings_window_reuses_search_state_and_rebinds_after_native_close(
         cx.notify();
     });
     focus_surface_window(cx, "settings-window");
+    select_settings_scope(cx, SettingsScope::Device);
     let settings_window = cx.update(|window, _| window.window_handle());
     cx.simulate_input("qzxnonexistent");
     cx.refresh().unwrap();
@@ -256,9 +255,6 @@ fn layout_editor_window_keeps_invalid_edits_and_outlives_settings(cx: &mut gpui:
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    let mut settings = load_or_create_settings(&paths).unwrap().settings;
-    settings.general.onboarding_completed = true;
-    save_settings(&paths, &settings).unwrap();
     let slot = Rc::new(RefCell::new(None));
     let output = slot.clone();
     let (_, cx) = cx.add_window_view(move |window, cx| {
@@ -287,6 +283,7 @@ fn layout_editor_window_keeps_invalid_edits_and_outlives_settings(cx: &mut gpui:
             view.layout_toml_editor_value().unwrap().to_string(),
         )
     });
+    assert!(!path.exists());
     cx.simulate_keystrokes(if cfg!(target_os = "macos") {
         "cmd-a"
     } else {
@@ -307,7 +304,7 @@ fn layout_editor_window_keeps_invalid_edits_and_outlives_settings(cx: &mut gpui:
             Some("[project\n")
         );
     });
-    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+    assert!(!path.exists());
 
     focus_surface_window(cx, "settings-window");
     view.update(cx, |view, cx| {
@@ -367,6 +364,20 @@ fn focus_surface_window(cx: &mut gpui::VisualTestContext, selector: &'static str
     target.update(|window, _| window.activate_window());
     target.run_until_parked();
     *cx = target;
+}
+
+fn select_settings_scope(cx: &mut gpui::VisualTestContext, scope: SettingsScope) {
+    let selector = match scope {
+        SettingsScope::Device => "settings-scope-device",
+        SettingsScope::Host => "settings-scope-host",
+        SettingsScope::Project => "settings-scope-project",
+    };
+    let scope_tab = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("settings should expose the {scope:?} scope selector"));
+    cx.simulate_click(scope_tab.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.refresh().unwrap();
 }
 
 #[test]
@@ -517,7 +528,7 @@ fn app_paths_are_injected_from_the_selected_profile() {
 
     let _root = WorkbenchView::with_config_paths_for_test(profile.config_paths());
 
-    assert!(expected_layout.is_file());
+    assert!(!expected_layout.exists());
     assert!(!temp.path().join("default-layout.toml").exists());
 }
 
@@ -533,9 +544,6 @@ fn homepage_remote_services_keeps_the_local_workspace(cx: &mut gpui::TestAppCont
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    let mut settings = load_or_create_settings(&paths).unwrap().settings;
-    settings.general.onboarding_completed = true;
-    save_settings(&paths, &settings).unwrap();
     let slot = Rc::new(RefCell::new(None));
     let output = slot.clone();
     let (_, cx) = cx.add_window_view(move |window, cx| {
@@ -563,9 +571,6 @@ fn empty_workspace_renders_responsive_action_dashboard(cx: &mut gpui::TestAppCon
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    let mut settings = load_or_create_settings(&paths).unwrap().settings;
-    settings.general.onboarding_completed = true;
-    save_settings(&paths, &settings).unwrap();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
@@ -653,7 +658,7 @@ fn legacy_recent_project_is_available_for_manual_restore() {
     .unwrap();
     let mut settings = AppSettings::default();
     settings.general.onboarding_completed = true;
-    save_settings(&paths, &settings).unwrap();
+    save_scoped_settings(&paths, &settings, &AppSettings::default(), false).unwrap();
 
     let mut root = WorkbenchView::with_config_paths_for_test(paths);
     assert!(root.workspace().opened_projects().is_empty());
@@ -674,7 +679,7 @@ fn closing_last_project_preserves_manual_restore_without_startup_reopen() {
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut settings = AppSettings::default();
     settings.general.onboarding_completed = true;
-    save_settings(&paths, &settings).unwrap();
+    save_scoped_settings(&paths, &settings, &AppSettings::default(), false).unwrap();
 
     let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
     root.open_project_path(&project).unwrap();
@@ -711,7 +716,7 @@ fn root_view_restores_all_last_opened_projects_when_enabled() {
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut settings = AppSettings::default();
     settings.general.onboarding_completed = true;
-    save_settings(&paths, &settings).unwrap();
+    save_scoped_settings(&paths, &settings, &AppSettings::default(), false).unwrap();
 
     let mut initial = WorkbenchView::with_config_paths_for_test(paths.clone());
     initial.open_project_path(&first_project).unwrap();
@@ -753,7 +758,7 @@ fn empty_workspace_restore_button_opens_last_session(cx: &mut gpui::TestAppConte
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut settings = AppSettings::default();
     settings.general.onboarding_completed = true;
-    save_settings(&paths, &settings).unwrap();
+    save_scoped_settings(&paths, &settings, &AppSettings::default(), false).unwrap();
 
     let mut initial = WorkbenchView::with_config_paths_for_test(paths.clone());
     initial.open_project_path(&first_project).unwrap();
@@ -875,11 +880,11 @@ fn root_view_sidebar_release_persists_defaults_without_rewriting_other_sessions(
         WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths.clone());
 
     root.resize_sidebar_from_pointer_delta(SidebarSide::Right, -50.0);
-    let before_right_release = yttt::config::settings::load_or_create_settings(&paths).unwrap();
+    let before_right_release = yttt::config::settings::load_settings(&paths).unwrap();
     assert_eq!(before_right_release.settings.project_panel.width, 280.0);
     root.persist_sidebar_width(SidebarSide::Right).unwrap();
     root.resize_sidebar_from_pointer_delta(SidebarSide::Left, 34.0);
-    let before_left_release = yttt::config::settings::load_or_create_settings(&paths).unwrap();
+    let before_left_release = yttt::config::settings::load_settings(&paths).unwrap();
     assert_eq!(
         before_left_release
             .settings
@@ -903,7 +908,7 @@ fn root_view_sidebar_release_persists_defaults_without_rewriting_other_sessions(
     root.open_project_path(&future_project).unwrap();
     assert_eq!(root.selected_project_panel_width(), Some(330.0));
 
-    let loaded = yttt::config::settings::load_or_create_settings(&paths).unwrap();
+    let loaded = yttt::config::settings::load_settings(&paths).unwrap();
     assert_eq!(loaded.settings.project_panel.width, 330.0);
     assert_eq!(loaded.settings.project_panel.project_sidebar_width, 354.0);
 }
@@ -915,7 +920,7 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut settings = AppSettings::default();
     settings.general.onboarding_completed = true;
-    save_settings(&paths, &settings).unwrap();
+    save_scoped_settings(&paths, &settings, &AppSettings::default(), false).unwrap();
     let view_paths = paths.clone();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
@@ -955,6 +960,7 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
     });
     assert!(cx.debug_bounds("settings-panel").is_none());
     focus_surface_window(cx, "settings-window");
+    select_settings_scope(cx, SettingsScope::Device);
     let panel = cx
         .debug_bounds("settings-panel")
         .expect("settings should render the adaptive panel");
@@ -1252,10 +1258,14 @@ fn project_panel_uses_compact_local_tabs_without_legacy_actions(cx: &mut gpui::T
 #[gpui::test]
 fn project_sidebar_context_menu_can_create_project(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let workspace = workspace_with_sample_project();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
+        let root =
+            cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -1286,10 +1296,14 @@ fn project_sidebar_context_menu_can_create_project(cx: &mut gpui::TestAppContext
 #[gpui::test]
 fn root_view_error_notification_auto_dismisses(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let workspace = workspace_with_sample_project();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
+        let root =
+            cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
     });
@@ -1460,7 +1474,7 @@ fn root_view_double_clicking_tab_opens_rename_dialog() {
 
 #[test]
 fn root_view_confirming_tab_rename_uses_entered_title() {
-    let mut root = WorkbenchView::dev_fixture_for_test();
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
 
     root.handle_project_tab_click("dev", 2).unwrap();
     root.confirm_tab_rename_dialog("Runtime").unwrap();
@@ -1513,18 +1527,14 @@ fn first_run_onboarding_persists_separate_tabs_and_does_not_repeat() {
     assert_eq!(root.onboarding_agent(), None);
     assert_eq!(root.onboarding_layout_kind(), None);
     assert!(
-        load_or_create_settings(&paths)
+        load_settings(&paths)
             .unwrap()
             .settings
             .general
             .onboarding_completed
     );
     assert_eq!(
-        load_or_create_settings(&paths)
-            .unwrap()
-            .settings
-            .agent
-            .primary,
+        load_settings(&paths).unwrap().settings.agent.primary,
         Some(BuiltinAgent::OpenCode)
     );
 
@@ -1573,7 +1583,7 @@ fn force_onboarding_overrides_the_persisted_completion_marker() {
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut settings = AppSettings::default();
     settings.general.onboarding_completed = true;
-    save_settings(&paths, &settings).unwrap();
+    save_scoped_settings(&paths, &settings, &AppSettings::default(), false).unwrap();
 
     let normal = WorkbenchView::with_config_paths_for_test(paths.clone());
     assert_eq!(normal.onboarding_layout_kind(), None);
@@ -1584,16 +1594,12 @@ fn force_onboarding_overrides_the_persisted_completion_marker() {
         Some(DefaultLayoutKind::SplitPane)
     );
     assert_eq!(
-        load_or_create_settings(&paths)
-            .unwrap()
-            .settings
-            .general
-            .language,
-        LanguageSetting::System,
-        "forced onboarding must not rerun first-launch language detection"
+        forced.onboarding_language(),
+        Some(LanguageSetting::English),
+        "forced onboarding must keep the persisted System language rather than detecting it again"
     );
     assert!(
-        load_or_create_settings(&paths)
+        load_settings(&paths)
             .unwrap()
             .settings
             .general
@@ -1608,7 +1614,7 @@ fn first_run_onboarding_selects_font_then_layout_before_agent(cx: &mut gpui::Tes
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut settings = AppSettings::default();
     settings.terminal.font_family = "Onboarding Test Font".to_string();
-    save_settings(&paths, &settings).unwrap();
+    save_scoped_settings(&paths, &settings, &AppSettings::default(), false).unwrap();
     let view_paths = paths.clone();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
@@ -1625,17 +1631,16 @@ fn first_run_onboarding_selects_font_then_layout_before_agent(cx: &mut gpui::Tes
     assert!(cx.debug_bounds("onboarding-language-zh-cn").is_some());
     assert!(cx.debug_bounds("onboarding-layout-split").is_none());
     assert!(cx.debug_bounds("onboarding-agent-codex").is_none());
-    let detected_language = load_or_create_settings(&paths)
-        .unwrap()
-        .settings
-        .general
-        .language;
-    assert_ne!(detected_language, LanguageSetting::System);
+    assert_eq!(
+        load_settings(&paths).unwrap().settings.general.language,
+        LanguageSetting::System,
+        "constructing onboarding must not persist the detected system language"
+    );
     cx.read(|app| {
-        assert_eq!(
+        assert!(matches!(
             root.read(app).onboarding_language(),
-            Some(detected_language)
-        );
+            Some(LanguageSetting::English | LanguageSetting::Chinese)
+        ));
     });
 
     let command_palette = cx
@@ -1666,13 +1671,14 @@ fn first_run_onboarding_selects_font_then_layout_before_agent(cx: &mut gpui::Tes
             Some(LanguageSetting::Chinese)
         );
     });
+    let saved_device: AppSettings = toml::from_str(
+        &fs::read_to_string(paths.config_dir().join("device/settings.toml")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(
-        load_or_create_settings(&paths)
-            .unwrap()
-            .settings
-            .general
-            .language,
-        LanguageSetting::Chinese
+        saved_device.general.language,
+        LanguageSetting::System,
+        "onboarding language selection must remain staged until completion"
     );
     let language_next = cx
         .debug_bounds("onboarding-language-next")
@@ -1703,12 +1709,13 @@ fn first_run_onboarding_selects_font_then_layout_before_agent(cx: &mut gpui::Tes
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     assert_eq!(
-        load_or_create_settings(&paths)
-            .unwrap()
-            .settings
-            .terminal
-            .font_family,
+        load_settings(&paths).unwrap().settings.terminal.font_family,
         ""
+    );
+    assert_eq!(
+        load_settings(&paths).unwrap().settings.general.language,
+        LanguageSetting::System,
+        "saving the selected font must not publish the onboarding language preview",
     );
     cx.read(|app| {
         assert_eq!(
@@ -1813,11 +1820,20 @@ fn first_run_onboarding_selects_font_then_layout_before_agent(cx: &mut gpui::Tes
     cx.run_until_parked();
     cx.read(|app| assert_eq!(root.read(app).onboarding_agent(), None));
     assert!(
-        load_or_create_settings(&paths)
+        load_settings(&paths)
             .unwrap()
             .settings
             .general
             .onboarding_completed
+    );
+    let saved_device: AppSettings = toml::from_str(
+        &fs::read_to_string(paths.config_dir().join("device/settings.toml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        saved_device.general.language,
+        LanguageSetting::Chinese,
+        "completion must persist the selected language in Device settings"
     );
 }
 
@@ -1854,7 +1870,7 @@ fn root_view_creates_project_work_item_session_on_open() {
     let mut settings = AppSettings::default();
     settings.project_panel.default_open = false;
     settings.project_panel.width = 336.0;
-    save_settings(&paths, &settings).unwrap();
+    save_scoped_settings(&paths, &settings, &AppSettings::default(), false).unwrap();
     let mut root = WorkbenchView::with_config_paths_for_test(paths);
 
     root.open_project_path(&project_dir).unwrap();
@@ -3031,7 +3047,7 @@ fn editor_display_settings_update_open_documents_without_replacing_state(
     });
 
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let loaded = yttt::config::settings::load_or_create_settings(&paths).unwrap();
+    let loaded = yttt::config::settings::load_settings(&paths).unwrap();
     assert_eq!(loaded.settings.editor.font_family, "JetBrains Mono");
     assert_eq!(loaded.settings.editor.font_size, 17.0);
     assert_eq!(loaded.settings.editor.line_height, 1.65);
@@ -3176,7 +3192,7 @@ fn disabling_autosave_cancels_pending_delayed_tasks(cx: &mut gpui::TestAppContex
         );
     });
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let loaded = yttt::config::settings::load_or_create_settings(&paths).unwrap();
+    let loaded = yttt::config::settings::load_settings(&paths).unwrap();
     assert_eq!(loaded.settings.editor.autosave, EditorAutosave::Off);
     assert_eq!(loaded.settings.editor.autosave_delay_ms, 250);
 }
@@ -3240,7 +3256,7 @@ fn project_panel_settings_update_selected_and_future_sessions_only() {
     assert_eq!(future_session.project_panel_width(), 360.0);
     assert_eq!(future_root.project_sidebar_width(), 250.0);
 
-    let loaded = yttt::config::settings::load_or_create_settings(&paths).unwrap();
+    let loaded = yttt::config::settings::load_settings(&paths).unwrap();
     assert!(!loaded.settings.project_panel.default_open);
     assert_eq!(loaded.settings.project_panel.width, 360.0);
     assert_eq!(loaded.settings.project_panel.project_sidebar_width, 250.0);
@@ -3906,6 +3922,7 @@ fn root_view_layout_default_editor_opens_without_project() {
         Some(EditorLanguageId::Toml)
     );
     assert_eq!(root.visible_layout_toml_editor_error(), None);
+    assert!(!expected_layout_file.exists());
 }
 
 #[gpui::test]
@@ -3915,23 +3932,20 @@ fn layout_default_editor_uses_editor_settings_and_updates_appearance(
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    fs::write(
-        paths.settings_file(),
-        r#"
-[general]
-language = "en"
-onboarding_completed = true
+    let confirmed = load_settings(&paths).unwrap().settings;
+    let mut device_settings = confirmed.clone();
+    device_settings.general.language = LanguageSetting::English;
+    device_settings.general.onboarding_completed = true;
+    device_settings.editor.font_family = "Menlo".to_string();
+    device_settings.editor.font_size = 18.0;
+    device_settings.editor.line_height = 1.6;
+    device_settings.editor.soft_wrap = true;
+    device_settings.editor.line_numbers = false;
+    save_scoped_settings(&paths, &device_settings, &confirmed, false).unwrap();
 
-[editor]
-font_family = "Menlo"
-font_size = 18.0
-line_height = 1.6
-tab_size = 2
-soft_wrap = true
-line_numbers = false
-"#,
-    )
-    .unwrap();
+    let mut host_settings = AppSettings::default();
+    host_settings.editor.tab_size = 2;
+    save_scoped_settings(&paths, &host_settings, &AppSettings::default(), true).unwrap();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
@@ -3999,16 +4013,12 @@ fn root_view_persists_editor_language_settings() {
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
 
-    assert!(root.editor_auto_detect_language());
-    assert_eq!(root.editor_default_language(), "plain_text");
-    assert!(!root.editor_lsp_enabled());
-
     root.set_editor_auto_detect_language(false).unwrap();
     root.set_editor_default_language("toml").unwrap();
     root.set_editor_lsp_enabled(true).unwrap();
     root.set_editor_lsp_command("taplo lsp stdio").unwrap();
 
-    let loaded = yttt::config::settings::load_or_create_settings(&paths).unwrap();
+    let loaded = yttt::config::settings::load_settings(&paths).unwrap();
     assert!(!loaded.settings.editor.auto_detect_language);
     assert_eq!(loaded.settings.editor.default_language, "toml");
     assert!(loaded.settings.editor.lsp.enabled);
@@ -4148,7 +4158,7 @@ fn root_view_layout_project_editor_selects_project_and_personal_formats() {
 }
 
 #[test]
-fn root_view_layout_project_editor_creates_personal_replace_for_inherited_project() {
+fn root_view_layout_project_editor_creates_personal_replace_only_on_save() {
     let temp = tempdir().unwrap();
     let project_dir = temp.path().join("inherited-project");
     fs::create_dir(&project_dir).unwrap();
@@ -4161,14 +4171,24 @@ fn root_view_layout_project_editor_creates_personal_replace_for_inherited_projec
 
     assert_eq!(root.layout_editor_target_kind(), Some("personal_replace"));
     assert_eq!(root.layout_toml_editor_path(), Some(expected.as_path()));
+    assert!(!expected.exists());
     assert!(
-        fs::read_to_string(expected)
+        root.layout_toml_editor_value()
             .unwrap()
             .contains("mode = \"replace\"")
     );
     assert_eq!(
         root.foreground_input_scope_id().as_deref(),
         Some("editor.project_layout")
+    );
+
+    root.save_layout_toml_editor().unwrap();
+
+    assert!(!root.layout_toml_editor_is_open());
+    assert!(
+        fs::read_to_string(expected)
+            .unwrap()
+            .contains("mode = \"replace\"")
     );
 }
 
@@ -4254,21 +4274,6 @@ fn root_view_settings_open_command_opens_settings_page() {
     root.run_command(CommandId::SettingsOpen).unwrap();
 
     assert!(root.settings_is_open());
-    assert_eq!(
-        root.visible_settings_group_titles(),
-        vec![
-            "General",
-            "Appearance",
-            "Languages",
-            "Editor",
-            "Terminal",
-            "Agent",
-            "Permissions",
-            "Default Layout",
-            "Keybindings"
-        ]
-    );
-    assert_eq!(root.selected_settings_group_title(), Some("General"));
 }
 
 #[test]
@@ -4375,10 +4380,10 @@ fn settings_vim_actions_navigate_groups_only_when_enabled(cx: &mut gpui::TestApp
 fn global_vim_keymap_spans_terminal_tabs_and_settings(cx: &mut gpui::TestAppContext) {
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    let mut settings = load_or_create_settings(&paths).unwrap().settings;
-    settings.general.onboarding_completed = true;
+    let mut settings = load_settings(&paths).unwrap().settings;
+    let confirmed = settings.clone();
     settings.vim.mode = VimModeSetting::Global;
-    save_settings(&paths, &settings).unwrap();
+    save_scoped_settings(&paths, &settings, &confirmed, false).unwrap();
     let app_bindings = load_app_keybindings(&paths, &bindable_registry());
     cx.update(|cx| {
         gpui_component::init(cx);
@@ -4705,10 +4710,10 @@ fn global_vim_keymap_spans_terminal_tabs_and_settings(cx: &mut gpui::TestAppCont
 fn modal_keybinding_recorder_owns_workspace_and_vim_keystrokes(cx: &mut gpui::TestAppContext) {
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    let mut settings = load_or_create_settings(&paths).unwrap().settings;
-    settings.general.onboarding_completed = true;
+    let mut settings = load_settings(&paths).unwrap().settings;
+    let confirmed = settings.clone();
     settings.vim.mode = VimModeSetting::Global;
-    save_settings(&paths, &settings).unwrap();
+    save_scoped_settings(&paths, &settings, &confirmed, false).unwrap();
     let app_bindings = load_app_keybindings(&paths, &bindable_registry());
     cx.update(|cx| {
         gpui_component::init(cx);
@@ -4760,9 +4765,6 @@ fn external_keybindings_edits_reload_without_restart(cx: &mut gpui::TestAppConte
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    let mut settings = load_or_create_settings(&paths).unwrap().settings;
-    settings.general.onboarding_completed = true;
-    save_settings(&paths, &settings).unwrap();
     let view_paths = paths.clone();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
@@ -4922,7 +4924,6 @@ fn external_keybindings_edits_reload_without_restart(cx: &mut gpui::TestAppConte
 fn new_tab_command_settings_edit_and_persist() {
     let (temp, mut root) = english_test_root();
 
-    assert!(!root.new_tab_command_picker_enabled());
     assert!(!root.add_new_tab_command("nvim").unwrap());
     assert!(!root.add_new_tab_command("   ").unwrap());
     assert!(root.add_new_tab_command("nvim .").unwrap());
@@ -4931,8 +4932,7 @@ fn new_tab_command_settings_edit_and_persist() {
 
     assert_eq!(root.new_tab_commands(), &["nvim", "codex", "nvim ."]);
     let loaded =
-        load_or_create_settings(&AppConfigPaths::from_config_dir(temp.path().join("config")))
-            .unwrap();
+        load_settings(&AppConfigPaths::from_config_dir(temp.path().join("config"))).unwrap();
     assert!(loaded.settings.general.new_tab_command_picker_enabled);
     assert_eq!(
         loaded.settings.general.new_tab_commands,
@@ -4969,9 +4969,6 @@ fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppCon
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    let mut settings = load_or_create_settings(&paths).unwrap().settings;
-    settings.general.onboarding_completed = true;
-    save_settings(&paths, &settings).unwrap();
     let view_paths = paths.clone();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
@@ -4987,6 +4984,7 @@ fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppCon
     });
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
+    select_settings_scope(cx, SettingsScope::Device);
     assert!(
         cx.debug_bounds("settings-restore-last-session-row")
             .is_some()
@@ -4997,33 +4995,28 @@ fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppCon
         .expect("restore-last-session setting should expose a switch");
     cx.simulate_click(restore_toggle.center(), gpui::Modifiers::none());
     cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("settings-performance-metrics-row")
+            .is_some()
+    );
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: restore_toggle.center(),
         delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-320.0))),
         ..Default::default()
     });
     cx.refresh().unwrap();
-
-    let picker_row = cx
-        .debug_bounds("settings-new-tab-command-picker-row")
-        .expect("general settings should render the new tab command picker row");
-    assert!(cx.debug_bounds("settings-new-tab-commands-row").is_some());
-    let toggle = cx
+    let picker = cx
         .debug_bounds("settings-new-tab-command-picker")
-        .expect("new tab command picker setting should expose a switch");
-    cx.simulate_click(toggle.center(), gpui::Modifiers::none());
+        .expect("Device settings should expose the new-tab picker switch");
+    cx.simulate_click(picker.center(), gpui::Modifiers::none());
     cx.run_until_parked();
-    cx.simulate_event(gpui::ScrollWheelEvent {
-        position: picker_row.center(),
-        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-160.0))),
-        ..Default::default()
-    });
-    cx.refresh().unwrap();
-    assert!(cx.debug_bounds("settings-add-new-tab-command").is_some());
-
+    assert!(
+        cx.debug_bounds("settings-new-tab-commands-row").is_none(),
+        "Host-owned command definitions must not appear in the Device scope"
+    );
     cx.read(|app| assert!(root.read(app).new_tab_command_picker_enabled()));
     assert!(
-        load_or_create_settings(&paths)
+        load_settings(&paths)
             .unwrap()
             .settings
             .general
@@ -5031,7 +5024,7 @@ fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppCon
     );
     cx.read(|app| assert!(root.read(app).restore_last_session_enabled()));
     assert!(
-        load_or_create_settings(&paths)
+        load_settings(&paths)
             .unwrap()
             .settings
             .general
@@ -5040,14 +5033,13 @@ fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
-fn agent_settings_toggle_persists_and_hides_session_tab(cx: &mut gpui::TestAppContext) {
+fn agent_settings_readonly_controls_display_values_without_mutation(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    let mut settings = load_or_create_settings(&paths).unwrap().settings;
-    settings.general.onboarding_completed = true;
+    let mut settings = AppSettings::default();
     settings.agent.primary = Some(BuiltinAgent::Codex);
-    save_settings(&paths, &settings).unwrap();
+    save_scoped_settings(&paths, &settings, &AppSettings::default(), true).unwrap();
     let project_path = temp.path().join("project");
     fs::create_dir_all(&project_path).unwrap();
     let view_paths = paths.clone();
@@ -5068,57 +5060,40 @@ fn agent_settings_toggle_persists_and_hides_session_tab(cx: &mut gpui::TestAppCo
     cx.run_until_parked();
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
+    select_settings_scope(cx, SettingsScope::Host);
+    let expected_session_agents = vec![BuiltinAgent::Codex];
+    let expected_additional_session_agents = settings.agent.additional_session_agents.clone();
     cx.read(|app| {
         assert_eq!(
             root.read(app).agent_session_agents(),
-            vec![BuiltinAgent::Codex]
+            expected_session_agents
         );
-        assert!(root.read(app).agent_sessions_enabled());
     });
 
-    assert!(cx.debug_bounds("settings-agent-primary-row").is_some());
-    let claude_toggle = cx
+    assert!(
+        cx.debug_bounds("settings-agent-primary-row").is_some(),
+        "Host scope should show the configured primary agent"
+    );
+    let claude_provider = cx
         .debug_bounds("settings-agent-session-provider-claude")
-        .expect("Agent settings should expose an additional Claude session switch");
-    cx.simulate_click(claude_toggle.center(), gpui::Modifiers::none());
+        .expect("read-only Host settings should display the effective provider value");
+    cx.simulate_click(claude_provider.center(), gpui::Modifiers::none());
     cx.run_until_parked();
+
     cx.read(|app| {
-        assert!(
-            root.read(app)
-                .agent_session_agent_enabled(BuiltinAgent::Claude)
+        assert_eq!(
+            root.read(app).agent_session_agents(),
+            expected_session_agents
         );
     });
     assert_eq!(
-        load_or_create_settings(&paths)
+        load_settings(&paths)
             .unwrap()
             .settings
             .agent
             .additional_session_agents,
-        vec![BuiltinAgent::Claude]
-    );
-    let toggle = cx
-        .debug_bounds("settings-agent-sessions")
-        .expect("Agent settings should expose the session-list switch");
-    cx.simulate_click(toggle.center(), gpui::Modifiers::none());
-    cx.run_until_parked();
-    root.update(cx, |root, cx| {
-        root.close_settings();
-        cx.notify();
-    });
-    cx.refresh().unwrap();
-    focus_surface_window(cx, "workbench-surface");
-
-    cx.read(|app| assert!(!root.read(app).agent_sessions_enabled()));
-    assert!(
-        !load_or_create_settings(&paths)
-            .unwrap()
-            .settings
-            .agent
-            .sessions_enabled
-    );
-    assert!(
-        cx.debug_bounds("project-panel-tab-agent-sessions")
-            .is_none()
+        expected_additional_session_agents,
+        "a read-only Host provider control must not mutate the persisted provider list"
     );
 }
 
@@ -5161,9 +5136,6 @@ fn update_settings_check_and_persist_auto_check(cx: &mut gpui::TestAppContext) {
 
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    let mut settings = load_or_create_settings(&paths).unwrap().settings;
-    settings.general.onboarding_completed = true;
-    save_settings(&paths, &settings).unwrap();
     let view_paths = paths.clone();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
@@ -5179,6 +5151,7 @@ fn update_settings_check_and_persist_auto_check(cx: &mut gpui::TestAppContext) {
     });
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
+    select_settings_scope(cx, SettingsScope::Device);
 
     let scroll_origin = cx
         .debug_bounds("settings-restore-last-session-row")
@@ -5199,7 +5172,7 @@ fn update_settings_check_and_persist_auto_check(cx: &mut gpui::TestAppContext) {
     cx.run_until_parked();
     cx.read(|app| assert!(!root.read(app).auto_check_updates_enabled()));
     assert!(
-        !load_or_create_settings(&paths)
+        !load_settings(&paths)
             .unwrap()
             .settings
             .general
@@ -5233,8 +5206,10 @@ fn enabled_new_tab_toolbar_click_runs_the_selected_configured_command(
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    let mut settings = load_or_create_settings(&paths).unwrap().settings;
-    settings.general.new_tab_command_picker_enabled = true;
+    let mut settings = load_settings(&paths).unwrap().settings;
+    let mut device_settings = settings.clone();
+    device_settings.general.new_tab_command_picker_enabled = true;
+    save_scoped_settings(&paths, &device_settings, &settings, false).unwrap();
     settings.general.new_tab_commands = vec![
         "lazygit".to_string(),
         "nvim .".to_string(),
@@ -5434,6 +5409,7 @@ fn keybindings_settings_explains_vim_leader_and_sequence_recording(cx: &mut gpui
     });
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
+    select_settings_scope(cx, SettingsScope::Device);
 
     assert!(
         cx.debug_bounds("settings-vim-profile-summary").is_some(),
@@ -5506,11 +5482,11 @@ fn status_bar_keeps_text_and_actions_inside_vertical_insets(cx: &mut gpui::TestA
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    let mut settings = load_or_create_settings(&paths).unwrap().settings;
-    settings.general.onboarding_completed = true;
+    let mut settings = load_settings(&paths).unwrap().settings;
+    let confirmed = settings.clone();
     settings.general.ui_font_size = 24.0;
     settings.general.ui_line_height = 2.0;
-    save_settings(&paths, &settings).unwrap();
+    save_scoped_settings(&paths, &settings, &confirmed, false).unwrap();
     let mut bars = ShellBarsSettings::default();
     bars.status.layout.left = vec![ShellBarModule::Surface];
     bars.status.layout.center = vec![ShellBarModule::Settings];
@@ -5576,6 +5552,7 @@ fn appearance_settings_group_renders_window_and_theme_controls(cx: &mut gpui::Te
     });
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
+    select_settings_scope(cx, SettingsScope::Device);
     assert!(
         cx.debug_bounds("settings-window-effect-row").is_some(),
         "Appearance settings should expose the window effect selector"
@@ -5631,16 +5608,8 @@ fn appearance_settings_group_renders_window_and_theme_controls(cx: &mut gpui::Te
     cx.run_until_parked();
     cx.refresh().unwrap();
     assert!(cx.debug_bounds("status-bar").is_none());
-    assert!(
-        !load_or_create_settings(&paths)
-            .unwrap()
-            .settings
-            .bars
-            .status
-            .enabled
-    );
-    let settings_source = std::fs::read_to_string(paths.settings_file()).unwrap();
-    assert!(!settings_source.contains("[bars"));
+    assert!(!load_settings(&paths).unwrap().settings.bars.status.enabled);
+    assert!(!paths.settings_file().exists());
     let bars_source = std::fs::read_to_string(paths.bars_file()).unwrap();
     assert!(bars_source.contains("enabled = false"));
 }
@@ -5650,9 +5619,6 @@ fn zed_theme_import_opens_review_dialog_before_writing(cx: &mut gpui::TestAppCon
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
-    let mut settings = load_or_create_settings(&paths).unwrap().settings;
-    settings.general.onboarding_completed = true;
-    save_settings(&paths, &settings).unwrap();
     let extension = DetectedZedExtension {
         path: temp.path().join("installed/test-pack"),
         id: "test-pack".to_string(),
@@ -5694,6 +5660,7 @@ fn zed_theme_import_opens_review_dialog_before_writing(cx: &mut gpui::TestAppCon
     });
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
+    select_settings_scope(cx, SettingsScope::Device);
 
     cx.read(|app| {
         let root = root.read(app);
@@ -5771,12 +5738,12 @@ fn editor_settings_group_renders_all_effective_controls(cx: &mut gpui::TestAppCo
     });
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
+    select_settings_scope(cx, SettingsScope::Device);
 
     for selector in [
         "settings-editor-font-family-row",
         "settings-editor-font-size-row",
         "settings-editor-line-height-row",
-        "settings-editor-tab-size-row",
         "settings-editor-soft-wrap-row",
         "settings-editor-line-numbers-row",
         "settings-editor-autosave-row",
@@ -5826,15 +5793,15 @@ fn terminal_settings_group_renders_protocol_and_interaction_controls(
     });
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
+    select_settings_scope(cx, SettingsScope::Device);
 
     for selector in [
-        "settings-terminal-scrollbar-row",
         "settings-terminal-cursor-shape-row",
+        "settings-terminal-scrollbar-row",
         "settings-terminal-cursor-blinking-row",
         "settings-terminal-hide-mouse-when-typing-row",
         "settings-terminal-copy-on-select-row",
         "settings-terminal-osc52-policy-row",
-        "settings-terminal-kitty-keyboard-row",
     ] {
         assert!(cx.debug_bounds(selector).is_some(), "missing {selector}");
     }
@@ -5860,6 +5827,7 @@ fn permissions_settings_group_renders_cross_platform_access_controls(
     });
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
+    select_settings_scope(cx, SettingsScope::Device);
 
     for selector in [
         "settings-login-startup-row",
@@ -5921,6 +5889,7 @@ fn enabling_login_startup_requires_confirmation_before_backend_registration(
     cx.run_until_parked();
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
+    select_settings_scope(cx, SettingsScope::Device);
 
     let toggle = cx
         .debug_bounds("settings-login-startup")
@@ -5980,37 +5949,6 @@ fn root_view_status_notifications_use_selected_language() {
     assert!(titles.iter().any(|title| title == "系统通知：已启用"));
     assert!(titles.iter().any(|title| title.starts_with("快捷键文件: ")));
     assert_eq!(root.visible_error_message(), None);
-}
-
-#[test]
-fn root_view_language_setting_updates_settings_labels() {
-    let temp = tempdir().unwrap();
-    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut root = WorkbenchView::with_config_paths_for_test(paths);
-    root.open_settings();
-
-    root.set_language(LanguageSetting::Chinese).unwrap();
-
-    assert_eq!(
-        root.visible_settings_group_titles(),
-        vec![
-            "通用",
-            "外观",
-            "语言",
-            "编辑器",
-            "终端",
-            "Agent",
-            "权限",
-            "默认布局",
-            "快捷键"
-        ]
-    );
-    assert_eq!(root.selected_settings_group_title(), Some("通用"));
-
-    root.set_settings_search_query("Shell");
-
-    assert_eq!(root.visible_settings_group_titles(), vec!["终端"]);
-    assert_eq!(root.selected_settings_group_title(), Some("终端"));
 }
 
 #[test]
@@ -6160,7 +6098,7 @@ fn root_view_command_palette_can_request_open_project() {
 
 #[test]
 fn root_view_closes_requested_tab_by_id() {
-    let mut root = WorkbenchView::dev_fixture_for_test();
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
 
     root.close_project_tab("agent").unwrap();
 
@@ -6175,7 +6113,7 @@ fn root_view_custom_terminal_shell_setting_persists() {
 
     assert!(root.add_custom_terminal_shell("/opt/tools/fish").unwrap());
 
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_settings(&paths).unwrap();
     assert_eq!(loaded.settings.terminal.shell, "/opt/tools/fish");
     assert_eq!(
         loaded.settings.terminal.custom_shells,
@@ -6192,14 +6130,14 @@ fn root_view_ui_font_settings_persist_and_family_can_reset() {
     root.set_ui_font_family("  Menlo  ").unwrap();
     root.set_ui_font_size(20.0).unwrap();
     root.set_ui_line_height(1.75).unwrap();
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_settings(&paths).unwrap();
     assert_eq!(loaded.settings.general.ui_font_family, "Menlo");
     assert_eq!(loaded.settings.general.ui_font_size, 20.0);
     assert_eq!(loaded.settings.general.ui_line_height, 1.75);
 
     root.set_ui_font_family("").unwrap();
     assert_eq!(
-        load_or_create_settings(&paths)
+        load_settings(&paths)
             .unwrap()
             .settings
             .general
@@ -6229,7 +6167,7 @@ fn window_background_settings_persist_from_live_window(cx: &mut gpui::TestAppCon
             .unwrap();
     });
 
-    let loaded = load_or_create_settings(&paths).unwrap();
+    let loaded = load_settings(&paths).unwrap();
     assert_eq!(
         loaded.settings.window.effect,
         WindowBackgroundEffect::Transparent
@@ -6270,7 +6208,7 @@ fn root_view_icon_theme_setting_persists_and_can_reset() {
 
     root.set_icon_theme_name(Some("Fixture dark")).unwrap();
     assert_eq!(
-        load_or_create_settings(&paths)
+        load_settings(&paths)
             .unwrap()
             .settings
             .theme
@@ -6281,11 +6219,7 @@ fn root_view_icon_theme_setting_persists_and_can_reset() {
 
     root.set_icon_theme_name(None).unwrap();
     assert_eq!(
-        load_or_create_settings(&paths)
-            .unwrap()
-            .settings
-            .theme
-            .icon_theme,
+        load_settings(&paths).unwrap().settings.theme.icon_theme,
         None
     );
 }
@@ -6364,7 +6298,7 @@ fn root_view_terminal_environment_persists_and_updates_existing_panes() {
         Some(&"production".to_string())
     );
     assert_eq!(
-        load_or_create_settings(&paths)
+        load_settings(&paths)
             .unwrap()
             .settings
             .terminal
@@ -6391,13 +6325,14 @@ fn failed_settings_save_keeps_the_confirmed_runtime_and_can_be_retried() {
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
     root.set_terminal_font_size(15.0).unwrap();
-    let saved = fs::read(paths.settings_file()).unwrap();
-    fs::remove_file(paths.settings_file()).unwrap();
-    fs::create_dir(paths.settings_file()).unwrap();
+    let device_settings_file = paths.config_dir().join("device/settings.toml");
+    let saved = fs::read(&device_settings_file).unwrap();
+    fs::remove_file(&device_settings_file).unwrap();
+    fs::create_dir(&device_settings_file).unwrap();
     assert!(root.set_terminal_font_size(19.0).is_err());
     assert_eq!(root.theme_runtime().terminal_settings.font_size, 15.0);
-    fs::remove_dir(paths.settings_file()).unwrap();
-    fs::write(paths.settings_file(), saved).unwrap();
+    fs::remove_dir(&device_settings_file).unwrap();
+    fs::write(&device_settings_file, saved).unwrap();
     root.set_terminal_font_size(19.0).unwrap();
     assert_eq!(
         WorkbenchView::with_config_paths_for_test(paths)
@@ -6583,7 +6518,7 @@ fn root_view_workspace_keybindings_are_blocked_by_foreground_owner() {
 
 #[test]
 fn root_view_layout_editor_blocks_project_file_save_binding() {
-    let mut root = WorkbenchView::dev_fixture_for_test();
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
     root.open_layout_toml_editor().unwrap();
 
     assert_eq!(root.foreground_input_owner_kind(), InputOwnerKind::Dialog);
@@ -6597,6 +6532,7 @@ fn root_view_layout_editor_blocks_project_file_save_binding() {
 fn key_dispatch_blocks_workspace_commands_for_foreground_owner() {
     let command = workspace_command_for_keystroke(
         InputOwnerKind::Settings,
+        CommandContext::local_controller(true, ActiveSurface::Terminal),
         &Keystroke::parse("cmd-t").unwrap(),
         |_| Some(CommandId::TabNew),
         |_| false,
@@ -6609,6 +6545,7 @@ fn key_dispatch_blocks_workspace_commands_for_foreground_owner() {
 fn key_dispatch_leaves_terminal_bytes_for_terminal_input() {
     let command = workspace_command_for_keystroke(
         InputOwnerKind::Workspace,
+        CommandContext::local_controller(true, ActiveSurface::Terminal),
         &Keystroke::parse("ctrl-c").unwrap(),
         |_| Some(CommandId::TabNew),
         |_| true,
@@ -6621,6 +6558,7 @@ fn key_dispatch_leaves_terminal_bytes_for_terminal_input() {
 fn key_dispatch_allows_workspace_command_when_terminal_does_not_need_key() {
     let command = workspace_command_for_keystroke(
         InputOwnerKind::Workspace,
+        CommandContext::local_controller(true, ActiveSurface::Terminal),
         &Keystroke::parse("cmd-t").unwrap(),
         |_| Some(CommandId::TabNew),
         |_| false,
@@ -6631,7 +6569,7 @@ fn key_dispatch_allows_workspace_command_when_terminal_does_not_need_key() {
 
 #[test]
 fn root_view_dialog_owner_blocks_terminal_input() {
-    let mut root = WorkbenchView::dev_fixture_for_test();
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
 
     root.handle_project_tab_click("dev", 2).unwrap();
 
@@ -6700,7 +6638,7 @@ fn root_view_exposes_keybinding_warning_lines() {
     let mut settings = AppSettings::default();
     settings.general.language = LanguageSetting::Chinese;
     settings.general.onboarding_completed = true;
-    save_settings(&paths, &settings).unwrap();
+    save_scoped_settings(&paths, &settings, &AppSettings::default(), false).unwrap();
     fs::write(
         paths.keybindings_file(),
         r#"
@@ -7068,7 +7006,7 @@ fn project_agent_expansion_is_persisted() {
 
     root.toggle_project_agent_expansion(&project_id).unwrap();
 
-    let settings = load_or_create_settings(&paths).unwrap();
+    let settings = load_settings(&paths).unwrap();
     assert_eq!(
         settings.settings.project_panel.collapsed_agent_projects,
         vec![project_id.as_str().to_string()]
@@ -7216,7 +7154,7 @@ fn split_pointer_drag_delta_maps_to_continuous_resize() {
 
 #[test]
 fn root_view_pointer_drag_resize_changes_split_ratio_visibly() {
-    let mut root = WorkbenchView::dev_fixture_for_test();
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
     let before = root_split_child_basis(root.workspace()).unwrap();
 
     let resized_ratio = root
@@ -7557,7 +7495,7 @@ fn root_view_routes_terminal_special_keys_to_focused_terminal() {
 
 #[test]
 fn root_view_keeps_platform_shortcuts_available_when_terminal_is_focused() {
-    let mut root = WorkbenchView::dev_fixture_for_test();
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
     let project_id = root.workspace().selected_project_id().unwrap().clone();
     let initial_tab_count = root
         .workspace()
@@ -7592,7 +7530,7 @@ fn create_project_action_creates_and_opens_new_directory(cx: &mut gpui::TestAppC
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut settings = AppSettings::default();
     settings.general.onboarding_completed = true;
-    save_settings(&paths, &settings).unwrap();
+    save_scoped_settings(&paths, &settings, &AppSettings::default(), false).unwrap();
 
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
@@ -7632,10 +7570,14 @@ fn create_project_action_creates_and_opens_new_directory(cx: &mut gpui::TestAppC
 #[gpui::test]
 fn focused_terminal_platform_open_shortcut_prompts_immediately(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let workspace = workspace_with_sample_project();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::dev_fixture_for_test());
+        let root =
+            cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
         register_workbench_keybinding_interceptor(cx, &root);
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         gpui_component::Root::new(root, window, cx)
@@ -8136,7 +8078,7 @@ fn root_view_pane_focus_command_queues_target_terminal_focus() {
 
 #[test]
 fn root_view_split_command_queues_new_terminal_focus() {
-    let mut root = WorkbenchView::dev_fixture_for_test();
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
 
     root.run_command(CommandId::PaneSplitVertical).unwrap();
 
@@ -8693,15 +8635,10 @@ fn english_test_root_with_workspace(workspace: Workspace) -> (tempfile::TempDir,
 
 fn english_test_config_paths(temp: &tempfile::TempDir) -> AppConfigPaths {
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    fs::create_dir_all(paths.config_dir()).unwrap();
-    fs::write(
-        paths.settings_file(),
-        r#"
-[general]
-language = "en"
-"#,
-    )
-    .unwrap();
+    let mut settings = AppSettings::default();
+    settings.general.language = LanguageSetting::English;
+    settings.general.onboarding_completed = true;
+    save_scoped_settings(&paths, &settings, &AppSettings::default(), false).unwrap();
     paths
 }
 
@@ -8762,12 +8699,13 @@ fn project_file_fixture<'a>(
     let canonical_file = fs::canonicalize(project_dir.join("notes.txt")).unwrap();
     let paths = english_test_config_paths(&temp);
     fs::write(
-        paths.settings_file(),
+        paths.config_dir().join("device/settings.toml"),
         format!(
             r#"
 [general]
 language = "en"
 
+onboarding_completed = true
 [editor]
 autosave = "{autosave}"
 autosave_delay_ms = {delay_ms}
@@ -8927,7 +8865,7 @@ fn git_commands_are_registered_in_action_and_keybinding_panels() {
 
 #[test]
 fn git_commands_open_branch_selector_and_diff_panel() {
-    let mut root = WorkbenchView::dev_fixture_for_test();
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
 
     root.run_command(CommandId::GitBranchSwitch).unwrap();
     assert_eq!(

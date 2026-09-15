@@ -1,14 +1,22 @@
 use gpui::Keystroke;
 
 use crate::{
-    commands::{ActiveSurface, CommandContext, CommandId},
+    commands::{CommandContext, CommandId},
     ui::interaction::input_owner::InputOwnerKind,
 };
 
-pub fn workspace_runtime_command_allowed(owner: InputOwnerKind, command: CommandId) -> bool {
+#[cfg(test)]
+use crate::commands::ActiveSurface;
+
+pub fn workspace_runtime_command_allowed(
+    owner: InputOwnerKind,
+    command: CommandId,
+    context: CommandContext,
+) -> bool {
     match owner {
-        InputOwnerKind::Workspace => true,
-        InputOwnerKind::Editor => editor_runtime_command_allowed(command),
+        InputOwnerKind::Workspace | InputOwnerKind::Editor => {
+            command.availability_for_context(context).enabled
+        }
         InputOwnerKind::Palette
         | InputOwnerKind::Settings
         | InputOwnerKind::Dialog
@@ -20,12 +28,13 @@ pub fn workspace_runtime_command_allowed(owner: InputOwnerKind, command: Command
 
 pub fn workspace_command_for_keystroke(
     owner: InputOwnerKind,
+    context: CommandContext,
     keystroke: &Keystroke,
     command_for_keystroke: impl FnOnce(&Keystroke) -> Option<CommandId>,
     terminal_should_receive: impl FnOnce(&Keystroke) -> bool,
 ) -> Option<CommandId> {
     let command = command_for_keystroke(keystroke)?;
-    if !workspace_runtime_command_allowed(owner, command) {
+    if !workspace_runtime_command_allowed(owner, command, context) {
         return None;
     }
 
@@ -51,15 +60,6 @@ fn uses_workspace_shortcut_modifier_for_platform(keystroke: &Keystroke, macos: b
     }
 }
 
-fn editor_runtime_command_allowed(command: CommandId) -> bool {
-    command
-        .availability_for_context(CommandContext {
-            has_selected_project: true,
-            active_surface: ActiveSurface::File,
-        })
-        .enabled
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,6 +75,7 @@ mod tests {
 
         let command = workspace_command_for_keystroke(
             InputOwnerKind::Workspace,
+            CommandContext::local_controller(true, ActiveSurface::Terminal),
             &keystroke,
             |_| Some(CommandId::CommandPaletteOpen),
             |_| true,
@@ -90,5 +91,36 @@ mod tests {
         assert!(uses_workspace_shortcut_modifier_for_platform(
             &keystroke, false
         ));
+    }
+    #[test]
+    fn observer_shortcuts_reject_shared_mutations_but_keep_navigation() {
+        let context = CommandContext {
+            has_selected_project: true,
+            active_surface: ActiveSurface::Terminal,
+            shared_editing_enabled: false,
+            is_remote: true,
+        };
+        let keystroke = Keystroke::parse("cmd-shift-t").unwrap();
+
+        assert_eq!(
+            workspace_command_for_keystroke(
+                InputOwnerKind::Workspace,
+                context,
+                &keystroke,
+                |_| Some(CommandId::TabNew),
+                |_| false,
+            ),
+            None
+        );
+        assert_eq!(
+            workspace_command_for_keystroke(
+                InputOwnerKind::Workspace,
+                context,
+                &keystroke,
+                |_| Some(CommandId::TabNext),
+                |_| false,
+            ),
+            Some(CommandId::TabNext)
+        );
     }
 }

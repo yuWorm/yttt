@@ -17,6 +17,7 @@ use yttt_protocol::{
     BuildIdentity, ConnectionChannel, HostBlocker, HostLifecycleStatus, LIFECYCLE_PROTOCOL_VERSION,
     LifecycleMessage, LifecycleRequest, LifecycleRequestEnvelope, LifecycleResponse,
     LifecycleResponseEnvelope, ProtocolRange, RESOURCE_PROTOCOL_VERSION,
+    workspace::WorkspaceProjectConfig,
 };
 use yttt_transport_local::{
     AuthToken, ClientIdentity, LocalEndpoint, LocalListener, LocalStream, client_handshake,
@@ -484,6 +485,7 @@ impl ServerPaths {
             runtime_root: self.runtime_root.clone(),
             state_root: self.state_root.clone(),
             config_root: self.state_root.join("config"),
+            project_config: WorkspaceProjectConfig::Project,
             auth_token_file: self.token_file.clone(),
             ssh_host_keys_file: self.state_root.join("ssh-host-keys.toml"),
             credential_namespace: format!("dev.yttt.remote.{}", self.profile.as_str()),

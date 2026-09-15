@@ -68,7 +68,14 @@ impl WorkbenchView {
 
     pub fn open_default_layout_editor(&mut self) -> Result<(), WorkbenchError> {
         let path = self.default_layout_state.path().to_path_buf();
-        let value = read_layout_editor_source(&path, &self.ui_text)?;
+        let value = match optional_layout_editor_source(
+            crate::config::storage::read_to_string(&path),
+            &path,
+            &self.ui_text,
+        )? {
+            Some(value) => value,
+            None => serialize_layout_editor_source(self.default_layout_state.template(), &path)?,
+        };
 
         self.overlays.layout_toml_editor = Some(LayoutEditorSession::new(
             LayoutEditorTarget::Default,
@@ -90,6 +97,9 @@ impl WorkbenchView {
     }
 
     pub fn open_project_layout_editor(&mut self) -> Result<(), WorkbenchError> {
+        if !self.require_shared_mutation_control() {
+            return Ok(());
+        }
         let project_id = self
             .workspace
             .selected_project_id()
@@ -108,8 +118,11 @@ impl WorkbenchView {
         let project_file = self.config_paths.project_layout_file(&project_path);
         let personal_file = self.config_paths.local_layout_file(&project_path);
 
-        let (path, format, value, diagnostic) = if personal_file.exists() {
-            let value = read_layout_editor_source(&personal_file, &self.ui_text)?;
+        let (path, format, value, diagnostic) = if let Some(value) = optional_layout_editor_source(
+            crate::config::storage::read_to_string(&personal_file),
+            &personal_file,
+            &self.ui_text,
+        )? {
             match parse_personal_layout(&personal_file, &value) {
                 Ok(PersonalLayout::Patch(_)) => (
                     personal_file,
@@ -137,8 +150,15 @@ impl WorkbenchView {
                     )
                 }
             }
-        } else if project_file.exists() {
-            let value = read_layout_editor_source(&project_file, &self.ui_text)?;
+        } else if let Some(value) = optional_layout_editor_source(
+            crate::config::storage::read_project_config(
+                &project_path,
+                yttt_protocol::workspace::WorkspaceProjectConfigFile::Layout,
+                &project_file,
+            ),
+            &project_file,
+            &self.ui_text,
+        )? {
             (
                 project_file,
                 ProjectLayoutEditorFormat::ProjectConfig,
@@ -146,10 +166,15 @@ impl WorkbenchView {
                 None,
             )
         } else {
-            let path = save_local_layout(&self.config_paths, &project_path, &effective_layout)?;
-            let value = read_layout_editor_source(&path, &self.ui_text)?;
+            let value = crate::config::layout_loader::serialize_personal_replace(&effective_layout)
+                .map_err(|error| {
+                    WorkbenchError::LayoutTomlEditor(format!(
+                        "Failed to prepare layout TOML ({}): {error}",
+                        personal_file.display(),
+                    ))
+                })?;
             (
-                path,
+                personal_file,
                 ProjectLayoutEditorFormat::PersonalReplace,
                 value,
                 None,
@@ -205,6 +230,9 @@ impl WorkbenchView {
     }
 
     pub fn save_layout_toml_editor(&mut self) -> Result<(), WorkbenchError> {
+        if !self.require_shared_mutation_control() {
+            return Ok(());
+        }
         let Some(session) = self.overlays.layout_toml_editor.clone() else {
             return Ok(());
         };
@@ -335,11 +363,29 @@ impl WorkbenchView {
     }
 }
 
-fn read_layout_editor_source(path: &Path, ui_text: &UiText) -> Result<String, WorkbenchError> {
-    fs::read_to_string(path).map_err(|source| {
-        WorkbenchError::LayoutTomlEditor(format!(
+fn optional_layout_editor_source(
+    source: std::io::Result<String>,
+    path: &Path,
+    ui_text: &UiText,
+) -> Result<Option<String>, WorkbenchError> {
+    match source {
+        Ok(source) => Ok(Some(source)),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(WorkbenchError::LayoutTomlEditor(format!(
             "{} ({}): {source}",
             ui_text.get(UiTextKey::LayoutEditorReadFailed),
+            path.display()
+        ))),
+    }
+}
+
+fn serialize_layout_editor_source(
+    layout: &impl serde::Serialize,
+    path: &Path,
+) -> Result<String, WorkbenchError> {
+    toml::to_string_pretty(layout).map_err(|source| {
+        WorkbenchError::LayoutTomlEditor(format!(
+            "failed to serialize layout TOML for {}: {source}",
             path.display()
         ))
     })

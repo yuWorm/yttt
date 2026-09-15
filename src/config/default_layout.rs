@@ -266,8 +266,8 @@ fn shell_pane() -> PaneConfig {
 }
 
 impl DefaultLayoutState {
-    pub fn load_or_create(paths: &AppConfigPaths) -> Self {
-        Self::load_or_create_with_file_system(paths, &StdLayoutFileSystem)
+    pub fn load(paths: &AppConfigPaths) -> Self {
+        Self::load_with_file_system(paths, &StdLayoutFileSystem)
     }
 
     pub fn template(&self) -> &DefaultLayoutTemplate {
@@ -298,43 +298,14 @@ impl DefaultLayoutState {
         self.reset_with_file_system(&StdLayoutFileSystem)
     }
 
-    fn load_or_create_with_file_system(
-        paths: &AppConfigPaths,
-        file_system: &dyn LayoutFileSystem,
-    ) -> Self {
+    fn load_with_file_system(paths: &AppConfigPaths, file_system: &dyn LayoutFileSystem) -> Self {
         let path = paths.default_layout_file();
-        let builtin = DefaultLayoutTemplate::builtin();
-
-        if !file_system.exists(&path) {
-            return match write_template_atomic(file_system, &path, &builtin) {
-                Ok(()) => Self {
-                    template: builtin,
-                    source: DefaultLayoutSource::ConfigFile(path.clone()),
-                    warnings: Vec::new(),
-                    path,
-                },
-                Err(warning) => Self {
-                    template: builtin,
-                    source: DefaultLayoutSource::BuiltIn,
-                    warnings: vec![warning],
-                    path,
-                },
-            };
-        }
-
-        match read_template(file_system, &path) {
-            Ok(template) => Self {
-                template,
-                source: DefaultLayoutSource::ConfigFile(path.clone()),
-                warnings: Vec::new(),
-                path,
-            },
-            Err(warning) => Self {
-                template: builtin,
-                source: DefaultLayoutSource::BuiltIn,
-                warnings: vec![warning],
-                path,
-            },
+        let (template, source, warnings) = load_template_or_builtin(file_system, &path);
+        Self {
+            template,
+            source,
+            warnings,
+            path,
         }
     }
 
@@ -342,25 +313,17 @@ impl DefaultLayoutState {
         &mut self,
         file_system: &dyn LayoutFileSystem,
     ) -> Result<(), LayoutLoadWarning> {
-        let result = if file_system.exists(&self.path) {
-            read_template(file_system, &self.path)
-        } else {
-            let builtin = DefaultLayoutTemplate::builtin();
-            write_template_atomic(file_system, &self.path, &builtin).map(|()| builtin)
-        };
+        let (template, source, warnings) = load_template_or_builtin(file_system, &self.path);
 
-        match result {
-            Ok(template) => {
-                self.template = template;
-                self.source = DefaultLayoutSource::ConfigFile(self.path.clone());
-                self.warnings.clear();
-                Ok(())
-            }
-            Err(warning) => {
-                self.warnings = vec![warning.clone()];
-                Err(warning)
-            }
+        if let Some(warning) = warnings.first().cloned() {
+            self.warnings = warnings;
+            return Err(warning);
         }
+
+        self.template = template;
+        self.source = source;
+        self.warnings.clear();
+        Ok(())
     }
 
     fn save_with_file_system(
@@ -389,29 +352,61 @@ impl DefaultLayoutState {
     }
 }
 
-fn read_template(
+fn load_template_or_builtin(
     file_system: &dyn LayoutFileSystem,
     path: &Path,
-) -> Result<DefaultLayoutTemplate, LayoutLoadWarning> {
-    let source =
-        file_system
-            .read_to_string(path)
-            .map_err(|error| LayoutLoadWarning::GlobalDefaultRead {
+) -> (
+    DefaultLayoutTemplate,
+    DefaultLayoutSource,
+    Vec<LayoutLoadWarning>,
+) {
+    let builtin = DefaultLayoutTemplate::builtin();
+    let source = match file_system.read_to_string(path) {
+        Ok(source) => source,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return (builtin, DefaultLayoutSource::BuiltIn, Vec::new());
+        }
+        Err(error) => {
+            return (
+                builtin,
+                DefaultLayoutSource::BuiltIn,
+                vec![LayoutLoadWarning::GlobalDefaultRead {
+                    path: path.to_path_buf(),
+                    message: error.to_string(),
+                }],
+            );
+        }
+    };
+
+    let template = match toml::from_str::<DefaultLayoutTemplate>(&source) {
+        Ok(template) => template,
+        Err(error) => {
+            return (
+                builtin,
+                DefaultLayoutSource::BuiltIn,
+                vec![LayoutLoadWarning::GlobalDefaultParse {
+                    path: path.to_path_buf(),
+                    message: error.to_string(),
+                }],
+            );
+        }
+    };
+    if let Err(error) = template.validate() {
+        return (
+            builtin,
+            DefaultLayoutSource::BuiltIn,
+            vec![LayoutLoadWarning::GlobalDefaultValidation {
                 path: path.to_path_buf(),
                 message: error.to_string(),
-            })?;
-    let template: DefaultLayoutTemplate =
-        toml::from_str(&source).map_err(|error| LayoutLoadWarning::GlobalDefaultParse {
-            path: path.to_path_buf(),
-            message: error.to_string(),
-        })?;
-    template
-        .validate()
-        .map_err(|error| LayoutLoadWarning::GlobalDefaultValidation {
-            path: path.to_path_buf(),
-            message: error.to_string(),
-        })?;
-    Ok(template)
+            }],
+        );
+    }
+
+    (
+        template,
+        DefaultLayoutSource::ConfigFile(path.to_path_buf()),
+        Vec::new(),
+    )
 }
 
 fn write_template_atomic(
@@ -443,7 +438,6 @@ fn write_template_atomic(
 }
 
 trait LayoutFileSystem {
-    fn exists(&self, path: &Path) -> bool;
     fn create_dir_all(&self, path: &Path) -> io::Result<()>;
     fn read_to_string(&self, path: &Path) -> io::Result<String>;
     fn write_atomic(&self, path: &Path, source: &str) -> io::Result<()>;
@@ -452,10 +446,6 @@ trait LayoutFileSystem {
 struct StdLayoutFileSystem;
 
 impl LayoutFileSystem for StdLayoutFileSystem {
-    fn exists(&self, path: &Path) -> bool {
-        crate::config::storage::exists(&path)
-    }
-
     fn create_dir_all(&self, path: &Path) -> io::Result<()> {
         crate::config::storage::create_dir_all(path)
     }
@@ -483,7 +473,6 @@ mod tests {
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Operation {
-        CreateDirectory,
         Read,
         Write,
     }
@@ -515,12 +504,8 @@ mod tests {
     }
 
     impl LayoutFileSystem for FakeFileSystem {
-        fn exists(&self, path: &Path) -> bool {
-            self.files.borrow().contains_key(path)
-        }
-
         fn create_dir_all(&self, _path: &Path) -> io::Result<()> {
-            self.take_failure(Operation::CreateDirectory)
+            Ok(())
         }
 
         fn read_to_string(&self, path: &Path) -> io::Result<String> {
@@ -539,27 +524,40 @@ mod tests {
     }
 
     #[test]
-    fn default_layout_state_create_failure_uses_builtin() {
+    fn default_layout_state_missing_file_uses_builtin_without_writing() {
         let paths = AppConfigPaths::from_config_dir("/config");
         let fs = FakeFileSystem::default();
-        fs.fail(Operation::CreateDirectory, "create denied");
 
-        let state = DefaultLayoutState::load_or_create_with_file_system(&paths, &fs);
+        let state = DefaultLayoutState::load_with_file_system(&paths, &fs);
 
         assert_eq!(state.template(), &DefaultLayoutTemplate::builtin());
         assert_eq!(state.source(), &DefaultLayoutSource::BuiltIn);
+        assert!(state.warnings().is_empty());
+        assert!(fs.source(&paths.default_layout_file()).is_none());
+    }
+
+    #[test]
+    fn default_layout_state_read_failure_is_not_treated_as_missing() {
+        let paths = AppConfigPaths::from_config_dir("/config");
+        let fs = FakeFileSystem::default();
+        fs.fail(Operation::Read, "read denied");
+
+        let state = DefaultLayoutState::load_with_file_system(&paths, &fs);
+
+        assert_eq!(state.template(), &DefaultLayoutTemplate::builtin());
         assert!(matches!(
             state.warnings(),
-            [LayoutLoadWarning::GlobalDefaultCreate { .. }]
+            [LayoutLoadWarning::GlobalDefaultRead { .. }]
         ));
+        assert!(fs.source(&paths.default_layout_file()).is_none());
     }
 
     #[test]
     fn default_layout_state_write_failure_preserves_file_and_cache() {
         let paths = AppConfigPaths::from_config_dir("/config");
         let fs = FakeFileSystem::default();
-        let mut state = DefaultLayoutState::load_or_create_with_file_system(&paths, &fs);
-        let original_source = fs.source(&paths.default_layout_file()).unwrap();
+        let mut state = DefaultLayoutState::load_with_file_system(&paths, &fs);
+        let original_source = fs.source(&paths.default_layout_file());
         let original_state = state.clone();
         let mut updated = DefaultLayoutTemplate::builtin();
         updated.tabs[0].title = "Updated".to_string();
@@ -568,10 +566,7 @@ mod tests {
         let error = state.save_with_file_system(updated, &fs).unwrap_err();
 
         assert_eq!(state, original_state);
-        assert_eq!(
-            fs.source(&paths.default_layout_file()).unwrap(),
-            original_source
-        );
+        assert_eq!(fs.source(&paths.default_layout_file()), original_source);
         assert!(matches!(
             error,
             LayoutLoadWarning::GlobalDefaultWrite { .. }
@@ -582,7 +577,7 @@ mod tests {
     fn default_layout_state_reset_write_failure_preserves_file_and_cache() {
         let paths = AppConfigPaths::from_config_dir("/config");
         let fs = FakeFileSystem::default();
-        let mut state = DefaultLayoutState::load_or_create_with_file_system(&paths, &fs);
+        let mut state = DefaultLayoutState::load_with_file_system(&paths, &fs);
         let mut changed = DefaultLayoutTemplate::builtin();
         changed.tabs[0].title = "Changed".to_string();
         state.save_with_file_system(changed, &fs).unwrap();

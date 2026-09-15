@@ -35,6 +35,7 @@ use yttt_protocol::{
         TerminalLeaseMode, TerminalMutationContext, TerminalProcessState, TerminalSpawnSpec,
         TerminalViewportAnchor, TerminateTerminalRequest, TerminationMode,
     },
+    workspace::WorkspaceProjectConfig,
 };
 use yttt_transport_local::{
     AuthToken, ClientIdentity, LocalConnector, LocalEndpoint, LocalListener, client_handshake,
@@ -81,6 +82,7 @@ impl RunningHost {
             runtime_root,
             state_root: temp.path().join("state"),
             config_root: temp.path().join("state/config"),
+            project_config: WorkspaceProjectConfig::Project,
             auth_token_file,
             ssh_host_keys_file: temp.path().join("ssh-host-keys.toml"),
             credential_namespace: "dev.yttt.ssh.integration-test".to_string(),
@@ -2616,6 +2618,29 @@ async fn host_owns_authenticated_agent_state_and_resyncs_snapshots() {
         panic!("unexpected Agent snapshot acknowledgement response");
     };
     assert!(current.is_empty());
+    // Disconnect completion is asynchronous at the Host. A replaying observer must explicitly
+    // acquire control before reattaching interactively or terminating the surviving Agent.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let status = observer.control_status().unwrap();
+            if status
+                .owner
+                .as_ref()
+                .is_none_or(|owner| owner.as_str() == "agent-observer")
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("disconnected Agent control owner release timeout");
+    observer
+        .request(Request::ProfileControl(
+            yttt_protocol::session::ProfileControlRequest::RequestControl,
+        ))
+        .await
+        .unwrap();
     let attached = observer
         .request(Request::AttachTerminal(AttachTerminal {
             session_id: session_id.clone(),

@@ -1,6 +1,9 @@
+use sha2::{Digest as _, Sha256};
 use std::{
     collections::{HashMap, HashSet},
-    path::{Component, PathBuf},
+    fs,
+    io::{self, Write as _},
+    path::{Component, Path, PathBuf},
     sync::Arc,
     time::{Duration, UNIX_EPOCH},
 };
@@ -35,6 +38,8 @@ const REMOTE_WORKSPACE_SCHEMA_VERSION: u16 = 1;
 const MAX_REMOTE_WORKSPACE_SNAPSHOT_BYTES: usize = 1024 * 1024;
 const WORKSPACE_PERSISTENCE_INTERVAL: Duration = Duration::from_millis(500);
 
+const RECOVERABLE_WORKSPACE_DRAFT_SCHEMA_VERSION: u16 = 1;
+
 type DraftUpload = (DraftRef, Arc<Vec<u8>>);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum WorkspacePersistenceMode {
@@ -55,6 +60,12 @@ struct PendingWorkspaceCommit {
     drafts: Arc<Vec<DraftUpload>>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct PendingSettingsRecovery {
+    candidate: serde_json::Value,
+    confirmed: serde_json::Value,
+}
+
 pub(super) struct WorkspacePersistenceState {
     view: Option<crate::session_coordinator::WorkspaceViewLease>,
     frozen_transfer: Option<String>,
@@ -64,6 +75,7 @@ pub(super) struct WorkspacePersistenceState {
     revision: Option<u64>,
     host_epoch: Option<u64>,
     initial_project: Option<PathBuf>,
+    pub(super) startup_projects: Vec<PathBuf>,
     available_terminal_sessions: HashSet<String>,
     last_committed_snapshot: Option<serde_json::Value>,
     pending_commit: Option<PendingWorkspaceCommit>,
@@ -76,6 +88,9 @@ pub(super) struct WorkspacePersistenceState {
     close_prompt_open: bool,
     last_error: Option<String>,
     resource_loss_message: Option<String>,
+    recoverable_draft_path: Option<PathBuf>,
+    pending_settings_recovery: Option<PendingSettingsRecovery>,
+    recovered_settings_recovery: Option<PendingSettingsRecovery>,
 }
 
 impl Default for WorkspacePersistenceState {
@@ -89,6 +104,7 @@ impl Default for WorkspacePersistenceState {
             revision: None,
             host_epoch: None,
             initial_project: None,
+            startup_projects: Vec::new(),
             available_terminal_sessions: HashSet::new(),
             last_committed_snapshot: None,
             pending_commit: None,
@@ -99,6 +115,9 @@ impl Default for WorkspacePersistenceState {
             pending_editor_snapshot: None,
             last_error: None,
             resource_loss_message: None,
+            recoverable_draft_path: None,
+            pending_settings_recovery: None,
+            recovered_settings_recovery: None,
             close_flush_requested: false,
             close_prompt_open: false,
         }
@@ -211,6 +230,30 @@ struct RemoteDocumentSnapshot {
     draft: Option<DraftContentRevision>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct RecoverableWorkspaceScope {
+    profile_id: String,
+    environment_id: String,
+    workspace_id: WorkspaceId,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RecoverableWorkspaceDraft {
+    schema_version: u16,
+    scope: RecoverableWorkspaceScope,
+    host_epoch: Option<u64>,
+    snapshot: serde_json::Value,
+    drafts: Vec<RecoverableDraftContent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_settings: Option<PendingSettingsRecovery>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RecoverableDraftContent {
+    reference: DraftRef,
+    content: Vec<u8>,
+}
+
 struct PreparedRemoteRestore {
     snapshot: RemoteWorkspaceSnapshot,
     server_snapshot: serde_json::Value,
@@ -230,6 +273,75 @@ impl WorkbenchView {
                 | WorkspacePersistenceMode::Loading
                 | WorkspacePersistenceMode::Restoring
         )
+    }
+    pub(crate) fn retain_pending_settings_recovery(
+        &mut self,
+        candidate: serde_json::Value,
+        confirmed: serde_json::Value,
+    ) {
+        self.workspace_persistence.pending_settings_recovery = Some(PendingSettingsRecovery {
+            candidate,
+            confirmed,
+        });
+    }
+
+    pub(crate) fn clear_pending_settings_recovery(
+        &mut self,
+        candidate: serde_json::Value,
+        confirmed: serde_json::Value,
+        cx: &mut Context<Self>,
+    ) {
+        let recovery = PendingSettingsRecovery {
+            candidate,
+            confirmed,
+        };
+        if self
+            .workspace_persistence
+            .pending_settings_recovery
+            .as_ref()
+            == Some(&recovery)
+        {
+            self.workspace_persistence.pending_settings_recovery = None;
+        }
+        if self
+            .workspace_persistence
+            .recovered_settings_recovery
+            .as_ref()
+            == Some(&recovery)
+        {
+            self.workspace_persistence.recovered_settings_recovery = None;
+        }
+        let Some(path) = self.workspace_persistence.recoverable_draft_path.clone() else {
+            return;
+        };
+        let task = cx.background_spawn(async move {
+            let mut draft = load_recoverable_workspace_draft(&path)?;
+            if draft.pending_settings.as_ref() == Some(&recovery) {
+                draft.pending_settings = None;
+                save_recoverable_workspace_draft(&path, &draft)?;
+            }
+            Ok::<_, String>(())
+        });
+        cx.spawn(async move |this, cx| {
+            if let Err(error) = task.await {
+                let _ = this.update(cx, |root, cx| {
+                    root.set_workspace_persistence_error(format!(
+                        "Device-private settings recovery could not be cleared: {error}"
+                    ));
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    pub(crate) fn take_recoverable_settings_recovery(
+        &mut self,
+    ) -> Option<(serde_json::Value, serde_json::Value)> {
+        self.workspace_persistence
+            .recovered_settings_recovery
+            .take()
+            .map(|recovery| (recovery.candidate, recovery.confirmed))
     }
 
     pub(super) fn profile_control_banner(&self, cx: &mut Context<Self>) -> Div {
@@ -254,6 +366,9 @@ impl WorkbenchView {
         };
         let state = if self.workspace_persistence.mode == WorkspacePersistenceMode::ControlLost {
             " · 未同步，编辑已保留"
+        } else if self.workspace_persistence.recoverable_draft_path.is_some() {
+            self.ui_text
+                .get(UiTextKey::RemoteDeviceDraftRecoveryAvailable)
         } else if status.transfer.is_some() {
             " · 正在交接"
         } else if self.workspace_is_loading() {
@@ -293,6 +408,21 @@ impl WorkbenchView {
                 .on_click(
                     cx.listener(|root, _, window, cx| root.request_profile_control(window, cx)),
                 ),
+            );
+        }
+        if self.workspace_persistence.recoverable_draft_path.is_some() {
+            banner = banner.child(
+                yttt_button(
+                    "recover-device-drafts",
+                    self.ui_text.get(UiTextKey::RemoteRecoverDeviceDrafts),
+                    YtttButtonVariant::Secondary,
+                    appearance.ui,
+                    appearance.style,
+                    cx,
+                )
+                .on_click(cx.listener(|root, _, window, cx| {
+                    root.restore_recoverable_workspace_drafts(window, cx)
+                })),
             );
         }
         banner
@@ -371,6 +501,7 @@ impl WorkbenchView {
             .expect("claimed view")
             .id()
             .clone();
+        self.discover_recoverable_workspace_draft(&runtime, &workspace_id);
 
         if self.workspace_persistence.mode == WorkspacePersistenceMode::Inactive {
             self.workspace_persistence.initial_project = self
@@ -409,7 +540,7 @@ impl WorkbenchView {
     fn tick_workspace_persistence(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(runtime) = self.terminal.host_runtime.clone() else {
             self.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
-            self.workspace_persistence.host_epoch = None;
+            self.workspace_persistence.pending_commit = None;
             return;
         };
         let Some(workspace_id) = self
@@ -425,32 +556,67 @@ impl WorkbenchView {
             return;
         };
         let Some(host_epoch) = remote_host_epoch(&runtime) else {
-            self.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
-            self.workspace_persistence.host_epoch = None;
+            if self.workspace_persistence.mode == WorkspacePersistenceMode::Active
+                && self.has_unpublished_workspace_snapshot(cx)
+            {
+                self.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
+                self.preserve_unpublished_workspace_drafts(
+                    &runtime,
+                    &workspace_id,
+                    "The Host disconnected before local edits were published",
+                    cx,
+                );
+            } else if self.workspace_persistence.mode != WorkspacePersistenceMode::ControlLost {
+                self.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
+            }
+            self.workspace_persistence.pending_commit = None;
             return;
         };
         if !runtime.is_controller() {
-            if self.workspace_persistence.mode == WorkspacePersistenceMode::Active {
-                let unpublished =
-                    self.build_remote_workspace_snapshot(cx)
-                        .ok()
-                        .is_none_or(|snapshot| {
-                            self.workspace_persistence.last_committed_snapshot.as_ref()
-                                != Some(&snapshot.0)
-                        });
-                self.workspace_persistence.mode = if unpublished {
-                    WorkspacePersistenceMode::ControlLost
-                } else {
-                    WorkspacePersistenceMode::Observer
-                };
+            let preserves_local_drafts = self.workspace_persistence.mode
+                == WorkspacePersistenceMode::Active
+                || (self.workspace_persistence.mode == WorkspacePersistenceMode::Observer
+                    && self.workspace_persistence.recoverable_draft_path.is_some());
+            if preserves_local_drafts {
+                let unpublished = self.has_unpublished_workspace_snapshot(cx);
                 self.workspace_persistence.pending_commit = None;
+                if unpublished {
+                    self.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
+                    self.preserve_unpublished_workspace_drafts(
+                        &runtime,
+                        &workspace_id,
+                        if self.workspace_persistence.recoverable_draft_path.is_some() {
+                            "Recovered Device-private drafts remain local while this Client observes"
+                        } else {
+                            "Host control was forced to another Client"
+                        },
+                        cx,
+                    );
+                } else if self.workspace_persistence.mode == WorkspacePersistenceMode::Active {
+                    self.workspace_persistence.mode = WorkspacePersistenceMode::Observer;
+                }
             }
-            if self.workspace_persistence.mode == WorkspacePersistenceMode::Observer {
+            if matches!(
+                self.workspace_persistence.mode,
+                WorkspacePersistenceMode::Observer | WorkspacePersistenceMode::AwaitingControl
+            ) {
                 self.request_workspace_control_and_open(runtime, workspace_id, window, cx);
             }
             return;
         }
         if self.workspace_persistence.mode == WorkspacePersistenceMode::ControlLost {
+            if let Some(transfer) = runtime.preparing_transfer()
+                && let Some(view) = &self.workspace_persistence.view
+            {
+                view.published(
+                    Some(transfer),
+                    None,
+                    self.workspace_persistence
+                        .last_error
+                        .clone()
+                        .or_else(|| Some("workspace publication lost control".to_string())),
+                );
+            }
             return;
         }
         if self.workspace_persistence.mode == WorkspacePersistenceMode::Observer {
@@ -467,6 +633,17 @@ impl WorkbenchView {
         if self.workspace_persistence.mode == WorkspacePersistenceMode::Active
             && self.workspace_persistence.host_epoch != Some(host_epoch)
         {
+            self.workspace_persistence.pending_commit = None;
+            if self.has_unpublished_workspace_snapshot(cx) {
+                self.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
+                self.preserve_unpublished_workspace_drafts(
+                    &runtime,
+                    &workspace_id,
+                    "Remote Host epoch changed before local edits were published",
+                    cx,
+                );
+                return;
+            }
             self.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
             self.workspace_persistence.host_epoch = None;
         }
@@ -475,6 +652,19 @@ impl WorkbenchView {
             return;
         }
         if self.workspace_persistence.mode == WorkspacePersistenceMode::Active {
+            if self.shared_mutation_allowed() {
+                let mut paths = std::mem::take(&mut self.workspace_persistence.startup_projects);
+                if paths.is_empty() && self.workspace.opened_projects().is_empty() {
+                    paths.extend(self.workspace_persistence.initial_project.take());
+                }
+                for path in paths {
+                    if let Err(error) = self.open_project_path(path) {
+                        self.set_workspace_persistence_error(format!(
+                            "Could not open the requested initial project: {error}"
+                        ));
+                    }
+                }
+            }
             self.commit_remote_workspace_if_changed(runtime, workspace_id, window, cx);
             let publication = self.build_remote_workspace_snapshot(cx);
             let error = publication
@@ -484,6 +674,10 @@ impl WorkbenchView {
                 .or_else(|| self.workspace_persistence.last_error.clone())
                 .or_else(|| self.settings.settings_save_error.clone());
             let clean = !self.settings_save_pending()
+                && self
+                    .workspace_persistence
+                    .pending_settings_recovery
+                    .is_none()
                 && publication.is_ok_and(|snapshot| {
                     self.workspace_persistence.last_committed_snapshot.as_ref() == Some(&snapshot.0)
                 })
@@ -517,26 +711,25 @@ impl WorkbenchView {
         let known_epoch = self.workspace_persistence.host_epoch;
         let preserve_local = self.workspace_persistence.mode != WorkspacePersistenceMode::Observer
             && known_revision.is_some()
-            && self
-                .build_remote_workspace_snapshot(cx)
-                .ok()
-                .is_none_or(|snapshot| {
-                    self.workspace_persistence.last_committed_snapshot.as_ref() != Some(&snapshot.0)
-                });
+            && self.has_unpublished_workspace_snapshot(cx);
         self.workspace_persistence.control_request_in_flight = true;
-        self.workspace_persistence.mode = WorkspacePersistenceMode::Loading;
+        // Polling an observer snapshot must not replace an already usable view with a loader.
+        if known_revision.is_none() {
+            self.workspace_persistence.mode = WorkspacePersistenceMode::Loading;
+        }
         let request_workspace_id = workspace_id.clone();
         let local_import = !runtime.is_remote();
+        let runtime_for_open = runtime.clone();
         let open_task = cx.background_spawn(async move {
-            acquire_control_and_open(&runtime, request_workspace_id.clone()).and_then(
+            acquire_control_and_open(&runtime_for_open, request_workspace_id.clone()).and_then(
                 |(server_snapshot, revision)| {
                     if known_revision == Some(revision)
-                        && known_epoch == remote_host_epoch(&runtime)
+                        && known_epoch == remote_host_epoch(&runtime_for_open)
                     {
                         Ok(None)
                     } else {
                         prepare_remote_restore(
-                            &runtime,
+                            &runtime_for_open,
                             &request_workspace_id,
                             server_snapshot,
                             revision,
@@ -551,31 +744,59 @@ impl WorkbenchView {
             let _ = this.update_in(cx, |root, window, cx| {
                 root.workspace_persistence.control_request_in_flight = false;
                 match result {
+                    Ok(None)
+                        if !mutation_belongs_to_current_host(
+                            known_epoch,
+                            root.terminal
+                                .host_runtime
+                                .as_deref()
+                                .and_then(remote_host_epoch),
+                        ) =>
+                    {
+                        root.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
+                        root.workspace_persistence.pending_commit = None;
+                    }
                     Ok(None) => {
                         root.workspace_persistence.mode = root.restored_workspace_mode();
                     }
-                    Ok(Some(prepared)) if local_import && prepared.revision == 0 && root.workspace_persistence.revision.is_none() => {
+                    Ok(Some(prepared))
+                        if !mutation_belongs_to_current_host(
+                            Some(prepared.host_epoch),
+                            root.terminal
+                                .host_runtime
+                                .as_deref()
+                                .and_then(remote_host_epoch),
+                        ) =>
+                    {
+                        root.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
+                        root.workspace_persistence.pending_commit = None;
+                    }
+                    Ok(Some(prepared))
+                        if preserve_local && known_epoch != Some(prepared.host_epoch) =>
+                    {
+                        root.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
+                        root.workspace_persistence.pending_commit = None;
+                        root.preserve_unpublished_workspace_drafts(
+                            &runtime,
+                            &workspace_id,
+                            "Remote Host epoch changed while this Client was disconnected",
+                            cx,
+                        );
+                    }
+                    Ok(Some(prepared))
+                        if local_import
+                            && prepared.revision == 0
+                            && root.workspace_persistence.revision.is_none() =>
+                    {
                         root.workspace_persistence.revision = Some(0);
                         root.workspace_persistence.host_epoch = Some(prepared.host_epoch);
                         root.workspace_persistence.mode = root.restored_workspace_mode();
                         root.clear_workspace_persistence_error();
                     }
-                    Ok(Some(prepared)) if root.workspace_persistence.revision.is_none() || !preserve_local => {
+                    Ok(Some(prepared))
+                        if root.workspace_persistence.revision.is_none() || !preserve_local =>
+                    {
                         root.install_remote_workspace_restore(prepared, window, cx);
-                    }
-                    Ok(Some(prepared)) if root.workspace_persistence.pending_commit.is_some() => {
-                        root.workspace_persistence.revision = Some(prepared.revision);
-                        root.workspace_persistence.host_epoch = Some(prepared.host_epoch);
-                        root.workspace_persistence.available_terminal_sessions =
-                            prepared.available_terminal_sessions.clone();
-                        root.project.services = prepared.services;
-                        root.workspace_persistence.mode = root.restored_workspace_mode();
-                        root.clear_workspace_persistence_error();
-                        root.reconcile_remote_host_resources(
-                            &prepared.available_terminal_sessions,
-                            window,
-                            cx,
-                        );
                     }
                     Ok(Some(prepared))
                         if root.workspace_persistence.revision == Some(prepared.revision) =>
@@ -594,18 +815,35 @@ impl WorkbenchView {
                     }
                     Ok(Some(prepared)) => {
                         root.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
-                        root.set_workspace_persistence_error(format!(
-                            "Remote workspace changed from revision {} to {} while this Client was disconnected; control was not resumed",
-                            root.workspace_persistence.revision.unwrap_or_default(),
-                            prepared.revision
-                        ));
+                        root.preserve_unpublished_workspace_drafts(
+                            &runtime,
+                            &workspace_id,
+                            &format!(
+                                "Remote workspace changed from revision {} to {} while this Client was disconnected",
+                                root.workspace_persistence.revision.unwrap_or_default(),
+                                prepared.revision
+                            ),
+                            cx,
+                        );
+                    }
+                    Err(error) if is_workspace_control_conflict(&error) => {
+                        root.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
+                        if preserve_local {
+                            root.preserve_unpublished_workspace_drafts(
+                                &runtime,
+                                &workspace_id,
+                                &format!("Remote Host rejected workspace publication: {error}"),
+                                cx,
+                            );
+                        } else {
+                            root.set_workspace_persistence_error(format!(
+                                "Remote workspace control is unavailable: {error}"
+                            ));
+                        }
                     }
                     Err(error) => {
-                        root.workspace_persistence.mode = if is_workspace_control_conflict(&error) {
-                            WorkspacePersistenceMode::ControlLost
-                        } else {
-                            WorkspacePersistenceMode::AwaitingControl
-                        };
+                        root.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
+                        root.workspace_persistence.pending_commit = None;
                         root.set_workspace_persistence_error(format!(
                             "Remote workspace control is unavailable: {error}"
                         ));
@@ -727,14 +965,38 @@ impl WorkbenchView {
             self.finish_remote_document_restore(cx);
             return;
         };
+        let Some(project_path) = self
+            .workspace
+            .project(&document.project_id)
+            .and_then(|project| project.location.local_path())
+            .cloned()
+        else {
+            self.cancel_project_file_open(&request);
+            self.set_workspace_persistence_error(format!(
+                "Restored project has no Host configuration path for {}",
+                document.relative_path.display()
+            ));
+            self.finish_remote_document_restore(cx);
+            return;
+        };
+        let config_paths = self.config_paths.clone();
         let relative_path = request.relative_path.clone();
-        let load_task = cx.background_spawn(async move { services.read_file(&relative_path) });
+        let load_task = cx.background_spawn(async move {
+            super::project_files::load_project_document_with_overrides(
+                &services,
+                &config_paths,
+                &project_path,
+                &relative_path,
+            )
+        });
         cx.spawn_in(window, async move |this, cx| {
             let result = load_task.await;
             let _ = this.update_in(cx, |root, window, cx| {
                 match result {
-                    Ok(loaded) => {
-                        root.apply_project_file_open_success(&request, loaded, window, cx);
+                    Ok((loaded, overrides)) => {
+                        root.apply_project_file_open_success(
+                            &request, loaded, overrides, window, cx,
+                        );
                         root.apply_remote_document_state(
                             &request.document_id,
                             &document,
@@ -743,7 +1005,15 @@ impl WorkbenchView {
                         );
                     }
                     Err(error) => {
-                        root.apply_project_file_open_error(&request, error.to_string());
+                        let error = match error {
+                            super::project_files::ProjectDocumentLoadError::File(error) => {
+                                error.to_string()
+                            }
+                            super::project_files::ProjectDocumentLoadError::ProjectSettings(
+                                error,
+                            ) => error.to_string(),
+                        };
+                        root.apply_project_file_open_error(&request, error.clone());
                         if document.draft.is_some() {
                             root.restore_missing_remote_draft(&document, window, cx);
                         } else {
@@ -911,18 +1181,271 @@ impl WorkbenchView {
             self.set_workspace_persistence_error(format!(
                 "Remote editor layout could not be finalized: {error}"
             ));
+
             return;
         }
         self.workspace_persistence.mode = self.restored_workspace_mode();
-        if let Some(path) = self.workspace_persistence.initial_project.take()
-            && self.workspace.opened_projects().is_empty()
-            && let Err(error) = self.open_project_path(path)
-        {
+        cx.notify();
+    }
+    fn restore_recoverable_workspace_drafts(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = self.workspace_persistence.recoverable_draft_path.clone() else {
+            return;
+        };
+        let Some(runtime) = self.terminal.host_runtime.clone() else {
+            self.set_workspace_persistence_error(
+                "Cannot recover Device-private drafts while the Host is unavailable".to_string(),
+            );
+            return;
+        };
+        let Some(workspace_id) = self
+            .workspace_persistence
+            .view
+            .as_ref()
+            .map(|view| view.id().clone())
+        else {
+            self.set_workspace_persistence_error(
+                "Cannot recover Device-private drafts because the workspace identity is unavailable"
+                    .to_string(),
+            );
+            return;
+        };
+        let expected_scope = match recoverable_workspace_scope(&runtime, &workspace_id) {
+            Ok(scope) => scope,
+            Err(error) => {
+                self.set_workspace_persistence_error(format!(
+                    "Cannot recover Device-private drafts: {error}"
+                ));
+                return;
+            }
+        };
+        let draft = match load_recoverable_workspace_draft(&path) {
+            Ok(draft) if draft.scope == expected_scope => draft,
+            Ok(_) => {
+                self.set_workspace_persistence_error(
+                    "Device-private draft recovery belongs to a different Host workspace"
+                        .to_string(),
+                );
+                return;
+            }
+            Err(error) => {
+                self.set_workspace_persistence_error(format!(
+                    "Cannot recover Device-private drafts: {error}"
+                ));
+                return;
+            }
+        };
+        let settings_recovery = draft.pending_settings.clone();
+        let snapshot = match RemoteWorkspaceSnapshot::from_value(draft.snapshot) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.set_workspace_persistence_error(format!(
+                    "Cannot recover Device-private drafts: {error}"
+                ));
+                return;
+            }
+        };
+        let mut contents = HashMap::new();
+        for body in draft.drafts {
+            let Ok(content) = String::from_utf8(body.content) else {
+                self.set_workspace_persistence_error(
+                    "Cannot recover Device-private drafts with invalid text".to_string(),
+                );
+                return;
+            };
+            contents.insert(
+                body.reference.document_id.clone(),
+                (body.reference, content),
+            );
+        }
+        let mut recovered = 0;
+        let mut unavailable_projects: usize = 0;
+        for mut document in snapshot.documents {
+            let Some(reference) = document.draft_ref.as_ref() else {
+                continue;
+            };
+            let Some((body_reference, content)) = contents.remove(&reference.document_id) else {
+                self.set_workspace_persistence_error(
+                    "Cannot recover Device-private drafts because a document body is missing"
+                        .to_string(),
+                );
+                return;
+            };
+            if body_reference != *reference {
+                self.set_workspace_persistence_error(
+                    "Cannot recover Device-private drafts because a document body does not match its manifest"
+                        .to_string(),
+                );
+                return;
+            }
+            if self.workspace.project(&document.project_id).is_none() {
+                unavailable_projects = unavailable_projects.saturating_add(1);
+                continue;
+            }
+            document.draft = Some(DraftContentRevision {
+                revision: reference.revision,
+                base: reference.base.clone(),
+                content,
+            });
+            self.workspace_persistence.pending_document_restores = self
+                .workspace_persistence
+                .pending_document_restores
+                .saturating_add(1);
+            self.spawn_remote_document_restore(document, window, cx);
+            recovered += 1;
+        }
+        if recovered == 0 {
+            self.set_workspace_persistence_error(
+                "No Device-private drafts match projects currently open from this Host workspace"
+                    .to_string(),
+            );
+        } else {
             self.set_workspace_persistence_error(format!(
-                "Could not open the initial remote project: {error}"
+                "Recovering {recovered} Device-private draft{} without replacing the Host workspace{}",
+                if recovered == 1 { "" } else { "s" },
+                if unavailable_projects == 0 {
+                    String::new()
+                } else {
+                    format!("; {unavailable_projects} project{} remain recoverable", if unavailable_projects == 1 { "" } else { "s" })
+                }
             ));
         }
+        if settings_recovery.is_some() {
+            self.workspace_persistence.recovered_settings_recovery = settings_recovery;
+            self.restore_recovered_settings_draft();
+        }
         cx.notify();
+    }
+
+    fn discover_recoverable_workspace_draft(
+        &mut self,
+        runtime: &crate::host_runtime::DesktopHostRuntime,
+        workspace_id: &WorkspaceId,
+    ) {
+        let scope = match recoverable_workspace_scope(runtime, workspace_id) {
+            Ok(scope) => scope,
+            Err(error) => {
+                self.set_workspace_persistence_error(format!(
+                    "Local draft recovery is unavailable: {error}"
+                ));
+                return;
+            }
+        };
+        let path = match recoverable_workspace_draft_path(&self.config_paths, runtime, workspace_id)
+        {
+            Ok(Some(path)) => path,
+            Ok(None) => return,
+            Err(error) => {
+                self.set_workspace_persistence_error(format!(
+                    "Local draft recovery is unavailable: {error}"
+                ));
+                return;
+            }
+        };
+        if !path.exists() {
+            return;
+        }
+        match load_recoverable_workspace_draft(&path) {
+            Ok(draft) if draft.scope == scope => {
+                self.workspace_persistence.recovered_settings_recovery =
+                    draft.pending_settings.clone();
+                self.workspace_persistence.recoverable_draft_path = Some(path);
+            }
+            Ok(_) => {
+                self.set_workspace_persistence_error(
+                    "Local draft recovery scope does not match this Host workspace".to_string(),
+                );
+            }
+            Err(error) => {
+                self.set_workspace_persistence_error(format!(
+                    "Local draft recovery could not be read: {error}"
+                ));
+            }
+        }
+    }
+
+    fn has_unpublished_workspace_snapshot(&self, cx: &Context<Self>) -> bool {
+        self.workspace_persistence
+            .pending_settings_recovery
+            .is_some()
+            || self
+                .build_remote_workspace_snapshot(cx)
+                .map_or(true, |snapshot| {
+                    self.workspace_persistence.last_committed_snapshot.as_ref() != Some(&snapshot.0)
+                })
+    }
+
+    fn preserve_unpublished_workspace_drafts(
+        &mut self,
+        runtime: &crate::host_runtime::DesktopHostRuntime,
+        workspace_id: &WorkspaceId,
+        reason: &str,
+        cx: &Context<Self>,
+    ) {
+        let (snapshot, drafts) = match self.build_workspace_snapshot(cx, None) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.set_workspace_persistence_error(format!(
+                    "{reason}; unpublished edits remain open, but their local recovery snapshot could not be prepared: {error}"
+                ));
+                return;
+            }
+        };
+        let path = match recoverable_workspace_draft_path(&self.config_paths, runtime, workspace_id)
+        {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                self.set_workspace_persistence_error(format!(
+                    "{reason}; unpublished edits remain open, but Device-private recovery storage is unavailable"
+                ));
+                return;
+            }
+            Err(error) => {
+                self.set_workspace_persistence_error(format!(
+                    "{reason}; unpublished edits remain open, but Device-private recovery storage could not be located: {error}"
+                ));
+                return;
+            }
+        };
+        let scope = match recoverable_workspace_scope(runtime, workspace_id) {
+            Ok(scope) => scope,
+            Err(error) => {
+                self.set_workspace_persistence_error(format!(
+                    "{reason}; unpublished edits remain open, but Device-private recovery storage could not be scoped: {error}"
+                ));
+                return;
+            }
+        };
+        let draft = RecoverableWorkspaceDraft {
+            schema_version: RECOVERABLE_WORKSPACE_DRAFT_SCHEMA_VERSION,
+            scope,
+            host_epoch: remote_host_epoch(runtime).or(self.workspace_persistence.host_epoch),
+            snapshot,
+            drafts: drafts
+                .into_iter()
+                .map(|(reference, content)| RecoverableDraftContent {
+                    reference,
+                    content: content.as_ref().clone(),
+                })
+                .collect(),
+            pending_settings: self.workspace_persistence.pending_settings_recovery.clone(),
+        };
+        match save_recoverable_workspace_draft(&path, &draft) {
+            Ok(()) => {
+                self.workspace_persistence.recoverable_draft_path = Some(path);
+                self.set_workspace_persistence_error(format!(
+                    "{reason}; unpublished edits were saved to Device-private recovery storage and will not replace the Host workspace automatically"
+                ));
+            }
+            Err(error) => {
+                self.set_workspace_persistence_error(format!(
+                    "{reason}; unpublished edits remain open, but Device-private recovery storage failed: {error}"
+                ));
+            }
+        }
     }
 
     fn reset_remote_agent_snapshots(&mut self) {
@@ -994,10 +1517,28 @@ impl WorkbenchView {
         if self.workspace_persistence.close_prompt_open {
             return;
         }
+        if self
+            .workspace_persistence
+            .pending_settings_recovery
+            .is_some()
+            && let Some(runtime) = self.terminal.host_runtime.clone()
+            && let Some(workspace_id) = self
+                .workspace_persistence
+                .view
+                .as_ref()
+                .map(|view| view.id().clone())
+        {
+            self.preserve_unpublished_workspace_drafts(
+                &runtime,
+                &workspace_id,
+                "Settings have not been confirmed by the Host",
+                cx,
+            );
+        }
         self.workspace_persistence.close_prompt_open = true;
         let answer = window.prompt(
             gpui::PromptLevel::Warning,
-            "Remote changes have not been saved",
+            "Changes have not been saved",
             self.workspace_persistence.last_error.as_deref(),
             &["Keep window open", "Close without saving"],
             cx,
@@ -1019,6 +1560,14 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.settings_save_pending() || self.has_failed_settings_save() {
+            self.set_workspace_persistence_error(
+                "Settings are still pending or failed to save; keep this window open to retry or copy the draft"
+                    .to_string(),
+            );
+            self.confirm_close_without_remote_save(window, cx);
+            return false;
+        }
         if self.workspace_persistence.mode == WorkspacePersistenceMode::Inactive {
             return true;
         }
@@ -1086,6 +1635,8 @@ impl WorkbenchView {
         }
         if self.workspace_persistence.mode != WorkspacePersistenceMode::Active
             || self.workspace_persistence.last_error.is_some()
+            || self.settings_save_pending()
+            || self.has_failed_settings_save()
         {
             self.confirm_close_without_remote_save(window, cx);
             return;
@@ -1135,6 +1686,16 @@ impl WorkbenchView {
             self.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
             return;
         };
+        let Some(request_host_epoch) = remote_host_epoch(&runtime) else {
+            self.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
+            self.workspace_persistence.pending_commit = None;
+            return;
+        };
+        if self.workspace_persistence.host_epoch != Some(request_host_epoch) {
+            self.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
+            self.workspace_persistence.pending_commit = None;
+            return;
+        }
         let pending = if let Some(pending) = self.workspace_persistence.pending_commit.as_ref() {
             PendingWorkspaceCommit {
                 expected_revision: pending.expected_revision,
@@ -1209,15 +1770,16 @@ impl WorkbenchView {
         let operation_id = pending.operation_id.clone();
         let drafts = pending.drafts.clone();
         let confirmed_drafts = self.workspace_persistence.confirmed_drafts.clone();
+        let runtime_for_commit = runtime.clone();
         let commit_task = cx.background_spawn(async move {
-            runtime.workspace_request(WorkspaceRequest::Register {
+            runtime_for_commit.workspace_request(WorkspaceRequest::Register {
                 workspace_id: request_workspace_id.clone(),
                 name: request_workspace_id.as_str().to_string(),
             })?;
             let mut references = Vec::with_capacity(drafts.len());
             for (reference, content) in drafts.iter() {
                 if !confirmed_drafts.contains(&reference.content_sha256) {
-                    runtime.workspace_request(WorkspaceRequest::PutDraft {
+                    runtime_for_commit.workspace_request(WorkspaceRequest::PutDraft {
                         workspace_id: request_workspace_id.clone(),
                         reference: reference.clone(),
                         content: content.as_ref().clone(),
@@ -1225,7 +1787,7 @@ impl WorkbenchView {
                 }
                 references.push(reference.clone());
             }
-            runtime.workspace_request(WorkspaceRequest::Commit {
+            runtime_for_commit.workspace_request(WorkspaceRequest::Commit {
                 workspace_id: request_workspace_id,
                 expected_revision,
                 operation_id,
@@ -1237,42 +1799,99 @@ impl WorkbenchView {
             let result = commit_task.await;
             let _ = this.update_in(cx, |root, window, cx| {
                 root.workspace_persistence.commit_in_flight = false;
-                match result {
-                    Ok(WorkspaceResponse::Committed {
-                        workspace_id: committed_workspace_id,
-                        revision,
-                        snapshot,
-                    }) if committed_workspace_id == workspace_id => {
-                        root.workspace_persistence.revision = Some(revision);
-                        root.workspace_persistence.confirmed_drafts = pending.drafts.iter().map(|(reference, _)| reference.content_sha256).collect();
-                        root.workspace_persistence.last_committed_snapshot =
-                            Some(snapshot.into_value());
-                        root.workspace_persistence.pending_commit = None;
-                        root.clear_workspace_persistence_error();
-                    }
-                    Ok(response) => {
+                let response_is_current = mutation_belongs_to_current_host(
+                    Some(request_host_epoch),
+                    root.terminal
+                        .host_runtime
+                        .as_deref()
+                        .and_then(remote_host_epoch),
+                ) && root.workspace_persistence.mode == WorkspacePersistenceMode::Active
+                    && root
+                        .terminal
+                        .host_runtime
+                        .as_ref()
+                        .is_some_and(|runtime| runtime.is_controller());
+                if !response_is_current {
+                    root.workspace_persistence.pending_commit = None;
+                    let forced_loss = root.workspace_persistence.mode
+                        == WorkspacePersistenceMode::Active
+                        && root
+                            .terminal
+                            .host_runtime
+                            .as_ref()
+                            .is_some_and(|runtime| !runtime.is_controller());
+                    if forced_loss {
                         root.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
-                        root.set_workspace_persistence_error(format!(
-                            "Remote Host returned an unexpected workspace commit response: {response:?}"
-                        ));
-                    }
-                    Err(error) if is_workspace_control_conflict(&error) => {
+                        root.preserve_unpublished_workspace_drafts(
+                            &runtime,
+                            &workspace_id,
+                            "Host control was forced to another Client while publishing",
+                            cx,
+                        );
+                    } else if root.workspace_persistence.mode != WorkspacePersistenceMode::ControlLost {
                         root.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
-                        root.set_workspace_persistence_error(format!(
-                            "Remote workspace commit was rejected; control was lost: {error}"
-                        ));
+                        root.preserve_unpublished_workspace_drafts(
+                            &runtime,
+                            &workspace_id,
+                            "Ignored a stale workspace publication response; local edits were not replayed",
+                            cx,
+                        );
                     }
-                    Err(error) if is_remote_connection_error(&error) => {
-                        root.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
-                        root.workspace_persistence.host_epoch = None;
-                        root.set_workspace_persistence_error(format!(
-                            "Remote workspace commit is pending until reconnection: {error}"
-                        ));
-                    }
-                    Err(error) => {
-                        root.set_workspace_persistence_error(format!(
-                            "Remote workspace commit failed; prior snapshot remains intact: {error}"
-                        ));
+                } else {
+                    match result {
+                        Ok(WorkspaceResponse::Committed {
+                            workspace_id: committed_workspace_id,
+                            revision,
+                            snapshot,
+                        }) if committed_workspace_id == workspace_id => {
+                            root.workspace_persistence.revision = Some(revision);
+                            root.workspace_persistence.confirmed_drafts = pending
+                                .drafts
+                                .iter()
+                                .map(|(reference, _)| reference.content_sha256)
+                                .collect();
+                            root.workspace_persistence.last_committed_snapshot =
+                                Some(snapshot.into_value());
+                            root.workspace_persistence.pending_commit = None;
+                            root.clear_workspace_persistence_error();
+                        }
+                        Ok(response) => {
+                            root.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
+                            root.preserve_unpublished_workspace_drafts(
+                                &runtime,
+                                &workspace_id,
+                                &format!(
+                                    "Remote Host returned an unexpected workspace commit response: {response:?}"
+                                ),
+                                cx,
+                            );
+                        }
+                        Err(error) if is_workspace_control_conflict(&error) => {
+                            root.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
+                            root.preserve_unpublished_workspace_drafts(
+                                &runtime,
+                                &workspace_id,
+                                &format!(
+                                    "Remote workspace commit was rejected; control was lost: {error}"
+                                ),
+                                cx,
+                            );
+                        }
+                        Err(error) if is_remote_connection_error(&error) => {
+                            root.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
+                            root.workspace_persistence.pending_commit = None;
+                            root.preserve_unpublished_workspace_drafts(
+                                &runtime,
+                                &workspace_id,
+                                &format!("The Host disconnected while publishing: {error}"),
+                                cx,
+                            );
+                        }
+                        Err(error) => {
+                            root.set_workspace_persistence_error(format!(
+                                "Remote workspace commit failed; prior snapshot remains intact: {error}"
+                            ));
+                        }
                     }
                 }
                 cx.notify();
@@ -1285,6 +1904,17 @@ impl WorkbenchView {
     fn build_remote_workspace_snapshot(
         &self,
         cx: &Context<Self>,
+    ) -> Result<(serde_json::Value, Vec<DraftUpload>), String> {
+        self.build_workspace_snapshot(
+            cx,
+            Some((MAX_DRAFT_CONTENT_BYTES, MAX_WORKSPACE_DRAFT_BYTES)),
+        )
+    }
+
+    fn build_workspace_snapshot(
+        &self,
+        cx: &Context<Self>,
+        limits: Option<(usize, usize)>,
     ) -> Result<(serde_json::Value, Vec<DraftUpload>), String> {
         let mut documents = Vec::new();
         let mut bodies = Vec::new();
@@ -1348,7 +1978,9 @@ impl WorkbenchView {
                                 },
                                 content: document.current_text(cx),
                             };
-                            if draft.content.len() > MAX_DRAFT_CONTENT_BYTES {
+                            if limits.is_some_and(|(document_limit, _)| {
+                                draft.content.len() > document_limit
+                            }) {
                                 return Err(
                                     "Document draft exceeds the 6 MiB recovery limit".to_string()
                                 );
@@ -1367,7 +1999,8 @@ impl WorkbenchView {
                         let (_, (reference, content)) =
                             cache.get(document_id).expect("captured draft generation");
                         total_bytes = total_bytes.saturating_add(content.len());
-                        if total_bytes > MAX_WORKSPACE_DRAFT_BYTES {
+                        if limits.is_some_and(|(_, workspace_limit)| total_bytes > workspace_limit)
+                        {
                             return Err(
                                 "Workspace drafts exceed the 64 MiB recovery limit".to_string()
                             );
@@ -1475,6 +2108,135 @@ fn remove_load_message(load_error: Option<String>, message: &str) -> Option<Stri
         return Some(retained);
     }
     Some(error)
+}
+
+fn recoverable_workspace_scope(
+    runtime: &crate::host_runtime::DesktopHostRuntime,
+    workspace_id: &WorkspaceId,
+) -> Result<RecoverableWorkspaceScope, String> {
+    let device_paths = crate::config::scope::device_preferences_config_paths()
+        .ok_or_else(|| "the Device profile is not bound".to_string())?;
+    let profile = device_paths
+        .profile()
+        .ok_or_else(|| "the Device profile is not bound".to_string())?;
+    let storage = runtime.environment_storage();
+    let environment = storage.environment();
+    if environment.environment_id.is_empty() {
+        return Err("the Host returned an empty environment identity".to_string());
+    }
+    Ok(RecoverableWorkspaceScope {
+        profile_id: profile.id().as_str().to_string(),
+        environment_id: environment.environment_id.clone(),
+        workspace_id: workspace_id.clone(),
+    })
+}
+
+fn recoverable_workspace_draft_path(
+    paths: &crate::config::paths::AppConfigPaths,
+    runtime: &crate::host_runtime::DesktopHostRuntime,
+    workspace_id: &WorkspaceId,
+) -> Result<Option<PathBuf>, String> {
+    let Some(root) = paths.device_state_dir() else {
+        return Ok(None);
+    };
+    let scope = recoverable_workspace_scope(runtime, workspace_id)?;
+    Ok(Some(recoverable_workspace_draft_file(&root, &scope)))
+}
+
+fn recoverable_workspace_draft_file(root: &Path, scope: &RecoverableWorkspaceScope) -> PathBuf {
+    let key = serde_json::to_vec(scope).expect("recovery scope is serializable");
+    let digest = format!("{:x}", Sha256::digest(key));
+    root.join("draft-recovery").join(format!("{digest}.json"))
+}
+
+fn save_recoverable_workspace_draft(
+    path: &Path,
+    draft: &RecoverableWorkspaceDraft,
+) -> Result<(), String> {
+    let source = serde_json::to_vec(draft)
+        .map_err(|error| format!("could not encode local recovery drafts: {error}"))?;
+    write_device_private_file(path, &source)
+        .map_err(|error| format!("could not write {}: {error}", path.display()))
+}
+
+fn load_recoverable_workspace_draft(path: &Path) -> Result<RecoverableWorkspaceDraft, String> {
+    let source =
+        fs::read(path).map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    let draft: RecoverableWorkspaceDraft = serde_json::from_slice(&source)
+        .map_err(|error| format!("could not decode {}: {error}", path.display()))?;
+    if draft.schema_version != RECOVERABLE_WORKSPACE_DRAFT_SCHEMA_VERSION {
+        return Err(format!(
+            "{} uses unsupported schema {}",
+            path.display(),
+            draft.schema_version
+        ));
+    }
+    let snapshot = RemoteWorkspaceSnapshot::from_value(draft.snapshot.clone())?;
+    let mut expected = HashMap::new();
+    for document in &snapshot.documents {
+        if let Some(reference) = &document.draft_ref
+            && expected
+                .insert(reference.document_id.clone(), reference)
+                .is_some()
+        {
+            return Err(format!(
+                "{} contains duplicate recovered draft identities",
+                path.display()
+            ));
+        }
+    }
+    for item in &draft.drafts {
+        let actual: [u8; 32] = Sha256::digest(&item.content).into();
+        let matches_manifest = expected
+            .remove(&item.reference.document_id)
+            .is_some_and(|reference| reference == &item.reference);
+        if item.reference.bytes != item.content.len() as u64
+            || item.reference.content_sha256 != actual
+            || std::str::from_utf8(&item.content).is_err()
+            || !matches_manifest
+        {
+            return Err(format!(
+                "{} contains an invalid recovered draft body",
+                path.display()
+            ));
+        }
+    }
+    if !expected.is_empty() {
+        return Err(format!(
+            "{} is missing recovered draft bodies",
+            path.display()
+        ));
+    }
+    Ok(draft)
+}
+
+fn write_device_private_file(path: &Path, source: &[u8]) -> io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Device-private recovery path has no parent directory",
+        )
+    })?;
+    fs::create_dir_all(parent)?;
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".yttt-draft-recovery-")
+        .suffix(".tmp")
+        .tempfile_in(parent)?;
+    temporary.write_all(source)?;
+    temporary.as_file_mut().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+
+    #[cfg(unix)]
+    fs::File::open(parent)?.sync_all()?;
+
+    Ok(())
+}
+
+fn mutation_belongs_to_current_host(
+    expected_epoch: Option<u64>,
+    current_epoch: Option<u64>,
+) -> bool {
+    expected_epoch.is_some() && expected_epoch == current_epoch
 }
 
 fn acquire_control_and_open(
@@ -1689,4 +2451,109 @@ fn is_remote_connection_error(error: &str) -> bool {
         || error.contains("disconnected")
         || error.contains("connection")
         || error.contains("supervisor stopped")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[gpui::test]
+    fn settings_only_draft_prevents_a_clean_workspace_handoff(cx: &mut gpui::TestAppContext) {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+        let root = cx.new(|_| WorkbenchView::with_config_paths(paths));
+        root.update(cx, |root, cx| {
+            root.workspace_persistence.last_committed_snapshot =
+                Some(root.build_remote_workspace_snapshot(cx).unwrap().0);
+            assert!(!root.has_unpublished_workspace_snapshot(cx));
+            let candidate = serde_json::json!({"editor": {"tab_size": 8}});
+            let confirmed = serde_json::json!({"editor": {"tab_size": 4}});
+            root.retain_pending_settings_recovery(candidate.clone(), confirmed.clone());
+            assert!(root.has_unpublished_workspace_snapshot(cx));
+            root.clear_pending_settings_recovery(candidate, confirmed, cx);
+            assert!(!root.has_unpublished_workspace_snapshot(cx));
+        });
+    }
+
+    fn scope(
+        profile_id: &str,
+        environment_id: &str,
+        workspace_id: &str,
+    ) -> RecoverableWorkspaceScope {
+        RecoverableWorkspaceScope {
+            profile_id: profile_id.to_string(),
+            environment_id: environment_id.to_string(),
+            workspace_id: WorkspaceId::new(workspace_id).unwrap(),
+        }
+    }
+
+    #[test]
+    fn forced_loss_drafts_are_private_to_host_profile_and_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        let recovery_scope = scope("desktop", "host-a", "workspace-a");
+        let path = recoverable_workspace_draft_file(root.path(), &recovery_scope);
+
+        assert_ne!(
+            path,
+            recoverable_workspace_draft_file(
+                root.path(),
+                &scope("desktop", "host-b", "workspace-a")
+            )
+        );
+        assert_ne!(
+            path,
+            recoverable_workspace_draft_file(
+                root.path(),
+                &scope("other-device", "host-a", "workspace-a")
+            )
+        );
+        assert_ne!(
+            path,
+            recoverable_workspace_draft_file(
+                root.path(),
+                &scope("desktop", "host-a", "workspace-b")
+            )
+        );
+
+        let draft = RecoverableWorkspaceDraft {
+            schema_version: RECOVERABLE_WORKSPACE_DRAFT_SCHEMA_VERSION,
+            scope: recovery_scope.clone(),
+            host_epoch: Some(9),
+            snapshot: serde_json::to_value(RemoteWorkspaceSnapshot::empty()).unwrap(),
+            drafts: Vec::new(),
+            pending_settings: Some(PendingSettingsRecovery {
+                candidate: serde_json::json!({"terminal": {"scrollback": 20_000}}),
+                confirmed: serde_json::json!({"terminal": {"scrollback": 1_000}}),
+            }),
+        };
+        save_recoverable_workspace_draft(&path, &draft).unwrap();
+
+        let restored = load_recoverable_workspace_draft(&path).unwrap();
+        assert_eq!(restored.scope, recovery_scope);
+        assert_eq!(restored.host_epoch, Some(9));
+        assert_eq!(
+            restored
+                .pending_settings
+                .as_ref()
+                .map(|settings| &settings.candidate),
+            Some(&serde_json::json!({"terminal": {"scrollback": 20_000}}))
+        );
+    }
+
+    #[test]
+    fn reconnect_rejects_stale_epoch_publication_responses() {
+        assert!(mutation_belongs_to_current_host(Some(7), Some(7)));
+        assert!(!mutation_belongs_to_current_host(Some(7), Some(8)));
+        assert!(!mutation_belongs_to_current_host(Some(7), None));
+        assert!(!mutation_belongs_to_current_host(None, Some(7)));
+    }
+
+    #[test]
+    fn host_rejection_is_classified_as_a_control_conflict() {
+        assert!(is_workspace_control_conflict("workspace control conflict"));
+        assert!(is_workspace_control_conflict("permission denied"));
+        assert!(!is_workspace_control_conflict(
+            "temporary transport timeout"
+        ));
+    }
 }

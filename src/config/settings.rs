@@ -5,12 +5,13 @@ use std::{
 
 use super::atomic_write;
 use crate::config::{
-    bars::{
-        BarsLoadError, BarsLoadWarning, BarsSaveError, ShellBarsSettings, load_or_create_bars,
-        save_bars,
-    },
+    bars::{BarsLoadWarning, ShellBarsSettings},
     default_layout::BuiltinAgent,
     paths::AppConfigPaths,
+    scope::{
+        DevicePreferencesLoadError, SettingsScope, merge_device_preferences_with_warnings,
+        setting_scope,
+    },
 };
 use crate::ui::theme::DEFAULT_THEME_NAME;
 
@@ -377,40 +378,13 @@ pub enum SettingsLoadWarning {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SettingsLoadError {
-    #[error("failed to create settings config directory {path}: {source}")]
-    CreateConfigDirectory {
-        path: PathBuf,
-        source: std::io::Error,
-    },
     #[error("failed to read settings file at {path}: {source}")]
     Read {
         path: PathBuf,
         source: std::io::Error,
     },
-    #[error("failed to serialize default settings at {path}: {source}")]
-    SerializeDefaults {
-        path: PathBuf,
-        source: toml::ser::Error,
-    },
-    #[error("failed to write default settings at {path}: {source}")]
-    WriteDefaults {
-        path: PathBuf,
-        source: std::io::Error,
-    },
-    #[error("failed to persist migrated settings at {path}: {source}")]
-    PersistMigration {
-        path: PathBuf,
-        #[source]
-        source: SettingsSaveError,
-    },
-    #[error("{0}")]
-    LoadBars(#[from] BarsLoadError),
-    #[error("failed to persist migrated bars at {path}: {source}")]
-    PersistBarsMigration {
-        path: PathBuf,
-        #[source]
-        source: BarsSaveError,
-    },
+    #[error("failed to merge Device preferences: {0}")]
+    DevicePreferences(#[from] DevicePreferencesLoadError),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -432,40 +406,20 @@ pub enum SettingsSaveError {
     },
 }
 
-pub fn load_or_create_settings(
-    paths: &AppConfigPaths,
-) -> Result<LoadedSettings, SettingsLoadError> {
-    let path = ensure_settings_file(paths)?;
-    let source = crate::config::storage::read_to_string(&path).map_err(|source| {
-        SettingsLoadError::Read {
-            path: path.clone(),
-            source,
-        }
-    })?;
-
-    let mut warnings = Vec::new();
-    let (mut settings, migrated, legacy_bars) =
-        parse_settings_source(&source, &path, &mut warnings);
-    if !crate::config::storage::exists(&paths.bars_file())
-        && let Some(mut legacy_bars) = legacy_bars
-    {
+pub fn load_settings(paths: &AppConfigPaths) -> Result<LoadedSettings, SettingsLoadError> {
+    let (mut settings, mut warnings, legacy_bars) = load_host_settings(paths)?;
+    if let Some(mut legacy_bars) = legacy_bars {
         warnings.extend(legacy_bars.validate().into_iter().map(|issue| {
             SettingsLoadWarning::InvalidBarsValue {
                 field: issue.field,
                 value: issue.value,
             }
         }));
-        save_bars(paths, &legacy_bars).map_err(|source| {
-            SettingsLoadError::PersistBarsMigration {
-                path: paths.bars_file(),
-                source,
-            }
-        })?;
+        settings.bars = legacy_bars;
     }
-    let loaded_bars = load_or_create_bars(paths)?;
+
     warnings.extend(
-        loaded_bars
-            .warnings
+        merge_device_preferences_with_warnings(paths, &mut settings)?
             .into_iter()
             .map(|warning| match warning {
                 BarsLoadWarning::InvalidToml { path, message } => {
@@ -476,19 +430,36 @@ pub fn load_or_create_settings(
                 }
             }),
     );
-    settings.bars = loaded_bars.settings;
     let settings = validate_settings(settings, &mut warnings);
-    if migrated {
-        save_settings(paths, &settings).map_err(|source| SettingsLoadError::PersistMigration {
-            path: path.clone(),
-            source,
-        })?;
-    }
 
     Ok(LoadedSettings { settings, warnings })
 }
 
-fn parse_settings_source(
+fn load_host_settings(
+    paths: &AppConfigPaths,
+) -> Result<
+    (
+        AppSettings,
+        Vec<SettingsLoadWarning>,
+        Option<ShellBarsSettings>,
+    ),
+    SettingsLoadError,
+> {
+    let path = paths.settings_file();
+    let source = match crate::config::storage::read_to_string(&path) {
+        Ok(source) => source,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((AppSettings::default(), Vec::new(), None));
+        }
+        Err(source) => return Err(SettingsLoadError::Read { path, source }),
+    };
+
+    let mut warnings = Vec::new();
+    let (settings, _migrated, legacy_bars) = parse_settings_source(&source, &path, &mut warnings);
+    Ok((settings, warnings, legacy_bars))
+}
+
+pub(super) fn parse_settings_source(
     source: &str,
     path: &Path,
     warnings: &mut Vec<SettingsLoadWarning>,
@@ -711,17 +682,52 @@ pub fn save_settings(
         })?;
     }
 
-    let source =
-        toml::to_string_pretty(settings).map_err(|source| SettingsSaveError::Serialize {
-            path: path.clone(),
-            source,
-        })?;
+    let source = host_settings_source(settings).map_err(|source| SettingsSaveError::Serialize {
+        path: path.clone(),
+        source,
+    })?;
     atomic_write(&path, source.as_bytes()).map_err(|source| SettingsSaveError::Write {
         path: path.clone(),
         source,
     })?;
 
     Ok(path)
+}
+
+fn host_settings_source(settings: &AppSettings) -> Result<String, toml::ser::Error> {
+    let source = toml::to_string(settings)?;
+    let value = toml::from_str::<toml::Value>(&source)
+        .expect("TOML emitted by toml::to_string must parse as a TOML value");
+    toml::to_string_pretty(&filter_host_settings(value, ""))
+}
+
+fn filter_host_settings(value: toml::Value, prefix: &str) -> toml::Value {
+    let toml::Value::Table(table) = value else {
+        return value;
+    };
+
+    let filtered = table
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let path = if prefix.is_empty() {
+                key.clone()
+            } else {
+                format!("{prefix}.{key}")
+            };
+            match value {
+                toml::Value::Table(table) => {
+                    let value = filter_host_settings(toml::Value::Table(table), &path);
+                    match &value {
+                        toml::Value::Table(entries) if entries.is_empty() => None,
+                        _ => Some((key, value)),
+                    }
+                }
+                value if setting_scope(&path) == SettingsScope::Host => Some((key, value)),
+                _ => None,
+            }
+        })
+        .collect();
+    toml::Value::Table(filtered)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -874,36 +880,7 @@ pub fn resolve_default_shell(shell: &str, candidates: &[String]) -> String {
         .unwrap_or_else(|| "sh".to_string())
 }
 
-fn ensure_settings_file(paths: &AppConfigPaths) -> Result<PathBuf, SettingsLoadError> {
-    let path = paths.settings_file();
-    if crate::config::storage::exists(&path) {
-        return Ok(path);
-    }
-
-    if let Some(parent) = path.parent() {
-        crate::config::storage::create_dir_all(parent).map_err(|source| {
-            SettingsLoadError::CreateConfigDirectory {
-                path: parent.to_path_buf(),
-                source,
-            }
-        })?;
-    }
-
-    let source = toml::to_string_pretty(&AppSettings::default()).map_err(|source| {
-        SettingsLoadError::SerializeDefaults {
-            path: path.clone(),
-            source,
-        }
-    })?;
-    atomic_write(&path, source.as_bytes()).map_err(|source| SettingsLoadError::WriteDefaults {
-        path: path.clone(),
-        source,
-    })?;
-
-    Ok(path)
-}
-
-fn validate_settings(
+pub(super) fn validate_settings(
     mut settings: AppSettings,
     warnings: &mut Vec<SettingsLoadWarning>,
 ) -> AppSettings {
@@ -1087,5 +1064,76 @@ pub fn is_valid_environment_variable_name(name: &str) -> bool {
 fn push_unique(values: &mut Vec<String>, value: &str) {
     if values.iter().all(|existing| existing != value) {
         values.push(value.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_host_settings_uses_defaults_without_creating_config_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+
+        let (settings, warnings, legacy_bars) = load_host_settings(&paths).unwrap();
+
+        assert_eq!(settings, AppSettings::default());
+        assert!(warnings.is_empty());
+        assert!(legacy_bars.is_none());
+        assert!(!paths.config_dir().exists());
+    }
+
+    #[test]
+    fn host_settings_source_excludes_device_preferences() {
+        let mut settings = AppSettings::default();
+        settings.general.new_tab_commands = vec!["htop".to_string()];
+        settings.agent.primary = Some(BuiltinAgent::Pi);
+        settings
+            .terminal
+            .environment
+            .insert("TERM".to_string(), "xterm-256color".to_string());
+        settings.editor.tab_size = 2;
+        settings.theme.name = "Device Theme".to_string();
+
+        let source = host_settings_source(&settings).unwrap();
+        let value = toml::from_str::<toml::Value>(&source).unwrap();
+
+        assert_eq!(
+            value
+                .get("general")
+                .and_then(|general| general.get("new_tab_commands"))
+                .and_then(toml::Value::as_array),
+            Some(&vec![toml::Value::String("htop".to_string())])
+        );
+        assert_eq!(
+            value
+                .get("agent")
+                .and_then(|agent| agent.get("primary"))
+                .and_then(toml::Value::as_str),
+            Some("pi")
+        );
+        assert_eq!(
+            value
+                .get("terminal")
+                .and_then(|terminal| terminal.get("environment"))
+                .and_then(|environment| environment.get("TERM"))
+                .and_then(toml::Value::as_str),
+            Some("xterm-256color")
+        );
+        assert_eq!(
+            value
+                .get("editor")
+                .and_then(|editor| editor.get("tab_size"))
+                .and_then(toml::Value::as_integer),
+            Some(2)
+        );
+        assert!(value.get("theme").is_none());
+        assert!(
+            value
+                .get("general")
+                .and_then(|general| general.get("ui_font_size"))
+                .is_none()
+        );
     }
 }

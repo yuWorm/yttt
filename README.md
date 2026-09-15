@@ -10,7 +10,7 @@ editing built into the same workbench:
 - Work in unified terminal and file tabs.
 - Browse project files from a lazy tree on the right.
 - Edit and save UTF-8 text files without leaving the terminal workflow.
-- Keep terminals, files, configuration, drafts, and Agent tasks on their owning Host.
+- Keep terminals, files, shared configuration, published drafts, and Agent tasks on their owning Host.
 - Split panes inside a tab.
 - Save personal layouts in the active environment.
 - Export shareable project layouts explicitly.
@@ -58,13 +58,13 @@ remain visible while only the body hides. Open in-file search with the **Find** 
 
 ## Keybindings and Vim Quick Start
 
-Open **Settings → Keybindings** to search commands, record one or more shortcut sequences,
-change the Vim leader key, and save. Changes take effect immediately. Under **Settings → Editor**,
-set **Vim mode** to **Global** for one modal keymap across editors, terminals, project trees,
+Open **Settings → This Device → Keybindings** to search commands, record one or more shortcut
+sequences, change the Vim leader key, and save. Changes take effect immediately. Under
+**Settings → This Device → General**, set **Vim mode** to **Global** for one modal keymap across editors, terminals, project trees,
 settings, panes, tabs, and palettes; choose **Editor only** to keep Vim behavior inside project
 editors, or **Disabled** to turn it off.
 
-For a minimal manual configuration, edit `<app-config>/keybindings.toml`:
+For a minimal manual configuration, edit `<local-profile-config>/device/keybindings.toml`:
 
 ```toml
 schema_version = 6
@@ -220,10 +220,16 @@ Project layout:
 native location on first launch when the native location does not already exist. `./.yttt` is
 used only when no platform user directory is available.
 
+Settings explicitly target **This Device**, **Host**, or **Selected Project**. Appearance,
+keybindings, Vim, notifications, and other UI preferences live in `<local-profile-config>/device`,
+even when viewing a remote Host as an observer. Host execution defaults remain in the owning
+profile's `settings.toml`; Project overrides support editor tab size and language selection only.
+Rows show their effective source and when changes apply. See [Configuration Targets](docs/usage.md#configuration-targets).
+
 Shareable Window Bar and Status Bar layout:
 
 ```text
-<app-config>/bars.toml
+<local-profile-config>/device/bars.toml
 ```
 
 Global default layout:

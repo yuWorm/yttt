@@ -9,7 +9,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::OnboardingLanguageHeading => "Choose your language",
         UiTextKey::OnboardingLanguageSubtitle => {
-            "The detected default is saved now. You can change it here or later in Settings."
+            "Preview your language here; it is saved when you finish onboarding. You can change it later in Settings."
         }
         UiTextKey::OnboardingFontHeading => "Choose a terminal font",
         UiTextKey::OnboardingFontSubtitle => {
@@ -368,6 +368,42 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsNoSearchResultsDescription => {
             "Try another setting name, description, or category."
         }
+        UiTextKey::SettingsTarget => "Settings target",
+        UiTextKey::SettingsTargetDevice => "This device",
+        UiTextKey::SettingsTargetHost => "Host",
+        UiTextKey::SettingsTargetProject => "Selected project",
+        UiTextKey::SettingsHostIdentity => "Host: ",
+        UiTextKey::SettingsScopeDevice => "Saved on this device",
+        UiTextKey::SettingsScopeHost => "Saved on the Host",
+        UiTextKey::SettingsScopeProject => "Saved for this project",
+        UiTextKey::SettingsApplyImmediate => "Applies immediately",
+        UiTextKey::SettingsApplyNewSession => "Applies to new sessions",
+        UiTextKey::SettingsApplyReopenFile => "Applies when files reopen",
+        UiTextKey::SettingsEffectiveSource => "Effective source",
+        UiTextKey::SettingsSourceHost => "Host default",
+        UiTextKey::SettingsSourceProject => "Project override",
+        UiTextKey::SettingsReadOnlyObserver => {
+            "Host and project settings are read-only while another client controls this profile."
+        }
+        UiTextKey::SettingsReadOnlyPreparingTransfer => {
+            "Host and project settings are read-only while profile control is transferring."
+        }
+        UiTextKey::SettingsReadOnlyDisconnected => {
+            "Host and project settings are read-only until the Host connection is available."
+        }
+        UiTextKey::SettingsProjectTargetUnavailable => {
+            "Open and select a project to edit project overrides."
+        }
+        UiTextKey::SettingsProjectLoading => "Loading project settings...",
+        UiTextKey::SettingsProjectLoadFailed => "Failed to load project settings",
+        UiTextKey::SettingsRemotePermissionsLocal => "Permissions are managed locally",
+        UiTextKey::SettingsRemotePermissionsLocalDescription => {
+            "This page manages desktop permissions on this device, not the remote Host."
+        }
+        UiTextKey::SettingsCopyDraft => "Copy draft",
+        UiTextKey::RemoteDeviceDraftRecoveryAvailable => " · Device draft recovery available",
+        UiTextKey::RemoteRecoverDeviceDrafts => "Recover device drafts",
+        UiTextKey::SettingsUseHostDefault => "Use Host default",
         UiTextKey::SettingsSectionApplicationInteraction => "Application & interaction",
         UiTextKey::SettingsSectionStartupNotifications => "Startup & notifications",
         UiTextKey::SettingsSectionPerformance => "Performance",
@@ -592,6 +628,11 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsAgentPrimaryDescription => {
             "The agent selected during onboarding and used for session discovery."
         }
+        UiTextKey::AgentInitializationPreparing => "Preparing Agent hooks on the Host…",
+        UiTextKey::AgentInitializationControllerRequired => {
+            "This Agent has not started. The controlling Client must initialize it."
+        }
+        UiTextKey::AgentInitializationRetry => "Retry Agent initialization",
         UiTextKey::SettingsAgentSessions => "Session list",
         UiTextKey::SettingsAgentSessionsDescription => {
             "Show the Agent Sessions tab. The primary agent is included by default."

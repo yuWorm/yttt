@@ -26,6 +26,17 @@ impl WorkbenchView {
 
     pub fn new_tab_from_toolbar(&mut self) -> Result<(), WorkbenchError> {
         if self.app_settings.general.new_tab_command_picker_enabled {
+            let availability = CommandId::TabNew.availability_for_context(self.command_context());
+            if !availability.enabled {
+                self.load_error = Some(
+                    self.localized_command_disabled_reason(
+                        availability
+                            .disabled_reason
+                            .unwrap_or("Command is unavailable"),
+                    ),
+                );
+                return Ok(());
+            }
             self.open_palette(PaletteKind::NewTabCommand);
             Ok(())
         } else {
@@ -117,6 +128,9 @@ impl WorkbenchView {
                 }
             }
             PaletteKind::NewTabCommand => {
+                if !self.require_shared_mutation_control() {
+                    return Ok(());
+                }
                 let tab_id = self.workspace.create_shell_tab_with_command(item.id)?;
                 self.select_work_item(WorkItemId::Terminal(tab_id))?;
             }
@@ -150,6 +164,9 @@ impl WorkbenchView {
                         .find(|project| project.id.as_str() == item.id)
                         .map(|project| project.location.clone())
                 {
+                    if !self.require_shared_mutation_control() {
+                        return Ok(());
+                    }
                     match location {
                         ProjectLocation::Local { path } => {
                             self.open_project_path(path)?;
@@ -184,6 +201,9 @@ impl WorkbenchView {
                 self.focus_visible_terminal_pane(&item.id)?;
             }
             PaletteKind::GitBranch => {
+                if !self.require_shared_mutation_control() {
+                    return Ok(());
+                }
                 self.queue_git_branch_switch(&item.id);
                 return Ok(());
             }

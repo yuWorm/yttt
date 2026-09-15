@@ -9,7 +9,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::OnboardingLanguageHeading => "选择语言",
         UiTextKey::OnboardingLanguageSubtitle => {
-            "已保存自动识别的默认语言，你可以在此修改，也可以稍后在设置中修改。"
+            "在此预览语言，完成引导后保存。之后也可以在设置中修改。"
         }
         UiTextKey::OnboardingFontHeading => "选择终端字体",
         UiTextKey::OnboardingFontSubtitle => {
@@ -322,6 +322,38 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsGroupKeybindingsDescription => "键盘快捷键和冲突诊断",
         UiTextKey::SettingsNoSearchResults => "没有找到设置",
         UiTextKey::SettingsNoSearchResultsDescription => "请尝试其他设置名称、说明或分类。",
+        UiTextKey::SettingsTarget => "设置目标",
+        UiTextKey::SettingsTargetDevice => "此设备",
+        UiTextKey::SettingsTargetHost => "Host",
+        UiTextKey::SettingsTargetProject => "所选项目",
+        UiTextKey::SettingsHostIdentity => "Host：",
+        UiTextKey::SettingsScopeDevice => "保存到此设备",
+        UiTextKey::SettingsScopeHost => "保存到 Host",
+        UiTextKey::SettingsScopeProject => "保存到此项目",
+        UiTextKey::SettingsApplyImmediate => "立即生效",
+        UiTextKey::SettingsApplyNewSession => "在新会话中生效",
+        UiTextKey::SettingsApplyReopenFile => "重新打开文件时生效",
+        UiTextKey::SettingsEffectiveSource => "有效来源",
+        UiTextKey::SettingsSourceHost => "Host 默认值",
+        UiTextKey::SettingsSourceProject => "项目覆盖",
+        UiTextKey::SettingsReadOnlyObserver => {
+            "其他客户端正在控制此 profile，Host 和项目设置为只读。"
+        }
+        UiTextKey::SettingsReadOnlyPreparingTransfer => {
+            "profile 控制权正在交接，Host 和项目设置为只读。"
+        }
+        UiTextKey::SettingsReadOnlyDisconnected => "Host 连接可用前，Host 和项目设置为只读。",
+        UiTextKey::SettingsProjectTargetUnavailable => "请打开并选中一个项目以编辑项目覆盖。",
+        UiTextKey::SettingsProjectLoading => "正在加载项目设置…",
+        UiTextKey::SettingsProjectLoadFailed => "项目设置加载失败",
+        UiTextKey::SettingsRemotePermissionsLocal => "权限在本地管理",
+        UiTextKey::SettingsRemotePermissionsLocalDescription => {
+            "此页面管理本设备的桌面权限，不管理远程 Host。"
+        }
+        UiTextKey::SettingsCopyDraft => "复制草稿",
+        UiTextKey::RemoteDeviceDraftRecoveryAvailable => " · 本机恢复草稿可用",
+        UiTextKey::RemoteRecoverDeviceDrafts => "恢复本机草稿",
+        UiTextKey::SettingsUseHostDefault => "使用 Host 默认值",
         UiTextKey::SettingsSectionApplicationInteraction => "应用与交互",
         UiTextKey::SettingsSectionStartupNotifications => "启动与通知",
         UiTextKey::SettingsSectionPerformance => "性能",
@@ -528,6 +560,11 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsKeybindingPrefixConflict => "前缀冲突",
         UiTextKey::SettingsAgentPrimary => "主 Agent",
         UiTextKey::SettingsAgentPrimaryDescription => "引导时选择、用于扫描会话的 Agent。",
+        UiTextKey::AgentInitializationPreparing => "正在 Host 上准备 Agent 钩子…",
+        UiTextKey::AgentInitializationControllerRequired => {
+            "此 Agent 尚未启动。控制客户端必须先初始化它。"
+        }
+        UiTextKey::AgentInitializationRetry => "重试 Agent 初始化",
         UiTextKey::SettingsAgentSessions => "会话列表",
         UiTextKey::SettingsAgentSessionsDescription => {
             "显示 Agent 会话标签页；默认仅包含主 Agent。"

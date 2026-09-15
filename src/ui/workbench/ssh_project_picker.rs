@@ -556,6 +556,10 @@ impl WorkbenchView {
                     return;
                 }
                 workbench.ssh.project_picker.loading = false;
+                if !workbench.require_shared_mutation_control() {
+                    cx.notify();
+                    return;
+                }
                 match result {
                     Ok(_) => match workbench.open_ssh_project_location(connection_id, root, true) {
                         Ok(()) => {
@@ -936,6 +940,10 @@ impl WorkbenchView {
 
     pub(super) fn open_current_ssh_project_directory(&mut self, cx: &mut Context<Self>) {
         if self.ssh.project_picker.loading || self.ssh.project_picker.error.is_some() {
+            return;
+        }
+        if !self.require_shared_mutation_control() {
+            cx.notify();
             return;
         }
         if self

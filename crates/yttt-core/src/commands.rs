@@ -19,6 +19,22 @@ pub enum ActiveSurface {
 pub struct CommandContext {
     pub has_selected_project: bool,
     pub active_surface: ActiveSurface,
+    pub shared_editing_enabled: bool,
+    pub is_remote: bool,
+}
+
+impl CommandContext {
+    pub const fn local_controller(
+        has_selected_project: bool,
+        active_surface: ActiveSurface,
+    ) -> Self {
+        Self {
+            has_selected_project,
+            active_surface,
+            shared_editing_enabled: true,
+            is_remote: false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -318,17 +334,27 @@ impl CommandId {
     }
 
     pub fn availability(self, has_selected_project: bool) -> CommandAvailability {
-        self.availability_for_context(CommandContext {
+        self.availability_for_context(CommandContext::local_controller(
             has_selected_project,
-            active_surface: if has_selected_project {
+            if has_selected_project {
                 ActiveSurface::Terminal
             } else {
                 ActiveSurface::None
             },
-        })
+        ))
     }
 
     pub fn availability_for_context(self, context: CommandContext) -> CommandAvailability {
+        if self == Self::ConnectExistingHost && context.is_remote {
+            return disabled("Connect to an existing Host from a local desktop session");
+        }
+        if self == Self::LayoutOpenFile && context.is_remote {
+            return disabled("Reveal Host files from a local desktop session");
+        }
+        if self.requires_shared_editing(context) && !context.shared_editing_enabled {
+            return disabled("Shared editing control is required");
+        }
+
         match self {
             Self::ApplicationQuit
             | Self::CommandPaletteOpen
@@ -420,6 +446,57 @@ impl CommandId {
                     disabled("Switch to a terminal tab first")
                 }
             }
+        }
+    }
+
+    const fn requires_shared_editing(self, context: CommandContext) -> bool {
+        match self {
+            Self::ProjectCreate
+            | Self::ProjectOpen
+            | Self::ProjectOpenSsh
+            | Self::ProjectClose
+            | Self::GitBranchSwitch
+            | Self::FileSave
+            | Self::TabNew
+            | Self::TabRename
+            | Self::PaneSplitHorizontal
+            | Self::PaneSplitVertical
+            | Self::PaneClose
+            | Self::PaneResizeLeft
+            | Self::PaneResizeRight
+            | Self::PaneResizeUp
+            | Self::PaneResizeDown
+            | Self::PaneRename
+            | Self::LayoutDefaultReset
+            | Self::LayoutProjectEdit
+            | Self::LayoutSaveCurrent
+            | Self::LayoutExportProjectConfig
+            | Self::LayoutResetLocalOverride => true,
+            Self::TabClose => matches!(context.active_surface, ActiveSurface::Terminal),
+            Self::ApplicationQuit
+            | Self::ConnectExistingHost
+            | Self::ProjectOpenRecent
+            | Self::ProjectPalette
+            | Self::ProjectOpenedPalette
+            | Self::ProjectPanelToggle
+            | Self::ProjectPanelRefresh
+            | Self::GitDiffOpen
+            | Self::FileFind
+            | Self::TabNext
+            | Self::TabPrev
+            | Self::TabPalette
+            | Self::PaneFocusLeft
+            | Self::PaneFocusRight
+            | Self::PaneFocusUp
+            | Self::PaneFocusDown
+            | Self::PanePalette
+            | Self::LayoutDefaultEdit
+            | Self::LayoutDefaultReload
+            | Self::LayoutOpenFile
+            | Self::CommandPaletteOpen
+            | Self::SettingsOpen
+            | Self::SettingsKeybindings
+            | Self::SettingsNotifications => false,
         }
     }
 }
@@ -610,5 +687,109 @@ pub fn dispatch_workspace_command(
             .map(|_| CommandOutcome::PaneResized)
             .map_err(CommandDispatchError::from),
         _ => Err(CommandDispatchError::Unsupported(command_id)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn observer(surface: ActiveSurface) -> CommandContext {
+        CommandContext {
+            has_selected_project: true,
+            active_surface: surface,
+            shared_editing_enabled: false,
+            is_remote: true,
+        }
+    }
+
+    #[test]
+    fn observer_cannot_dispatch_shared_mutations() {
+        for command in [
+            CommandId::FileSave,
+            CommandId::TabNew,
+            CommandId::TabRename,
+            CommandId::PaneSplitHorizontal,
+            CommandId::PaneClose,
+            CommandId::PaneResizeLeft,
+            CommandId::PaneRename,
+            CommandId::LayoutSaveCurrent,
+            CommandId::LayoutExportProjectConfig,
+        ] {
+            assert!(
+                !command
+                    .availability_for_context(observer(ActiveSurface::Terminal))
+                    .enabled,
+                "{command:?} must require shared editing control",
+            );
+        }
+        assert!(
+            !CommandId::FileSave
+                .availability_for_context(observer(ActiveSurface::File))
+                .enabled
+        );
+    }
+
+    #[test]
+    fn observer_keeps_local_navigation_and_view_commands() {
+        for command in [
+            CommandId::CommandPaletteOpen,
+            CommandId::ProjectPanelToggle,
+            CommandId::ProjectPanelRefresh,
+            CommandId::GitDiffOpen,
+            CommandId::FileFind,
+            CommandId::TabNext,
+            CommandId::TabPrev,
+            CommandId::TabPalette,
+            CommandId::PaneFocusLeft,
+            CommandId::PanePalette,
+            CommandId::SettingsOpen,
+            CommandId::SettingsKeybindings,
+        ] {
+            assert!(
+                command
+                    .availability_for_context(observer(ActiveSurface::Terminal))
+                    .enabled,
+                "{command:?} must remain available to observers",
+            );
+        }
+        assert!(
+            CommandId::TabClose
+                .availability_for_context(observer(ActiveSurface::File))
+                .enabled
+        );
+    }
+
+    #[test]
+    fn remote_sessions_cannot_reconnect_to_an_existing_host() {
+        let context = CommandContext {
+            has_selected_project: false,
+            active_surface: ActiveSurface::None,
+            shared_editing_enabled: true,
+            is_remote: true,
+        };
+
+        assert!(
+            !CommandId::ConnectExistingHost
+                .availability_for_context(context)
+                .enabled
+        );
+        let selected_remote = CommandContext {
+            has_selected_project: true,
+            ..context
+        };
+        assert!(
+            !CommandId::LayoutOpenFile
+                .availability_for_context(selected_remote)
+                .enabled
+        );
+        assert!(
+            CommandId::LayoutOpenFile
+                .availability_for_context(CommandContext {
+                    is_remote: false,
+                    ..selected_remote
+                })
+                .enabled
+        );
     }
 }

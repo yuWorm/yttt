@@ -134,10 +134,10 @@ fn command_palette_disables_workspace_commands_without_project() {
 #[test]
 fn command_palette_uses_active_file_surface_availability() {
     let registry = default_registry();
-    let context = CommandPaletteContext::from_command_context(CommandContext {
-        has_selected_project: true,
-        active_surface: ActiveSurface::File,
-    });
+    let context = CommandPaletteContext::from_command_context(CommandContext::local_controller(
+        true,
+        ActiveSurface::File,
+    ));
 
     let items = command_palette_items(&registry, context);
 

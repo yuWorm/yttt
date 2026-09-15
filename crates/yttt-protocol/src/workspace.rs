@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -178,19 +180,54 @@ impl DraftRef {
         }
     }
 }
-/// A content-addressed revision of a profile configuration document.
+/// A content-addressed revision for one bounded configuration document.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceConfigRevision {
     pub content_sha256: [u8; 32],
 }
 
-/// A profile configuration document stored below that profile's configuration root.
+/// A configuration document stored below its bounded configuration root.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceConfig {
     pub relative_path: ProjectRelativePath,
     pub revision: WorkspaceConfigRevision,
     #[serde(with = "serde_bytes")]
     pub bytes: Vec<u8>,
+}
+
+/// The bounded set of project configuration documents a remote client may access.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceProjectConfigFile {
+    Settings,
+    Layout,
+}
+
+impl WorkspaceProjectConfigFile {
+    pub const fn file_name(self) -> &'static str {
+        match self {
+            Self::Settings => "settings.toml",
+            Self::Layout => "layout.toml",
+        }
+    }
+}
+
+/// Encodes a project path as a stable, path-safe overlay directory name.
+pub fn encode_project_path(path: &Path) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+
+    let value = path.to_string_lossy();
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push('%');
+            encoded.push(HEX[(byte >> 4) as usize] as char);
+            encoded.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+    }
+    encoded
 }
 
 /// A directory entry returned while choosing a Host project root.
@@ -236,11 +273,21 @@ pub struct AgentSessionSummary {
     pub updated_at_ms: u64,
 }
 
+/// Project-configuration routing selected by the Host profile.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WorkspaceProjectConfig {
+    Project,
+    ReadOnlyProject,
+    Overlay { root: HostPath },
+}
+
 /// The Host environment needed by a remote client before selecting projects.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceEnvironment {
     pub environment_id: String,
     pub config_root: HostPath,
+    pub project_config: WorkspaceProjectConfig,
     pub home: HostPath,
     pub platform: String,
     pub shell: Option<String>,
@@ -297,6 +344,26 @@ pub enum WorkspaceRequest {
         #[serde(with = "serde_bytes")]
         bytes: Vec<u8>,
     },
+    /// Reads one bounded project configuration document without requiring workspace control.
+    ReadProjectConfig {
+        project_root: HostPath,
+        file: WorkspaceProjectConfigFile,
+    },
+    /// Atomically writes one bounded project configuration document when its revision matches.
+    WriteProjectConfig {
+        project_root: HostPath,
+        file: WorkspaceProjectConfigFile,
+        expected_revision: Option<WorkspaceConfigRevision>,
+        #[serde(with = "serde_bytes")]
+        bytes: Vec<u8>,
+    },
+    /// Deletes one bounded project configuration document when its revision matches.
+    DeleteProjectConfig {
+        project_root: HostPath,
+        file: WorkspaceProjectConfigFile,
+        expected_revision: WorkspaceConfigRevision,
+    },
+
     /// Opens the current snapshot, revision, and transient control owner for one workspace.
     Open {
         workspace_id: WorkspaceId,
@@ -332,6 +399,7 @@ impl WorkspaceRequest {
                 | Self::AgentSessions { .. }
                 | Self::Browse { .. }
                 | Self::ReadConfig { .. }
+                | Self::ReadProjectConfig { .. }
                 | Self::ListConfig { .. }
                 | Self::Open { .. }
                 | Self::GetDraft { .. }

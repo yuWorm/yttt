@@ -158,21 +158,16 @@ fn template_validation_rejects_duplicate_pane_ids() {
 }
 
 #[test]
-fn default_layout_state_creates_builtin_file_when_missing() {
+fn default_layout_state_loads_builtin_without_creating_missing_file() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
 
-    let state = DefaultLayoutState::load_or_create(&paths);
+    let state = DefaultLayoutState::load(&paths);
 
     assert_eq!(state.template(), &DefaultLayoutTemplate::builtin());
-    assert_eq!(
-        state.source(),
-        &DefaultLayoutSource::ConfigFile(paths.default_layout_file())
-    );
+    assert_eq!(state.source(), &DefaultLayoutSource::BuiltIn);
     assert!(state.warnings().is_empty());
-    let saved: DefaultLayoutTemplate =
-        toml::from_str(&fs::read_to_string(paths.default_layout_file()).unwrap()).unwrap();
-    assert_eq!(saved, DefaultLayoutTemplate::builtin());
+    assert!(!paths.default_layout_file().exists());
 }
 
 #[test]
@@ -188,7 +183,7 @@ fn default_layout_state_loads_valid_config_file() {
     )
     .unwrap();
 
-    let state = DefaultLayoutState::load_or_create(&paths);
+    let state = DefaultLayoutState::load(&paths);
 
     assert_eq!(state.template(), &template);
     assert_eq!(
@@ -203,9 +198,10 @@ fn default_layout_state_invalid_startup_file_falls_back_to_builtin() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     fs::create_dir_all(paths.config_dir()).unwrap();
-    fs::write(paths.default_layout_file(), "[project").unwrap();
+    let invalid_source = "[project";
+    fs::write(paths.default_layout_file(), invalid_source).unwrap();
 
-    let state = DefaultLayoutState::load_or_create(&paths);
+    let state = DefaultLayoutState::load(&paths);
 
     assert_eq!(state.template(), &DefaultLayoutTemplate::builtin());
     assert_eq!(state.source(), &DefaultLayoutSource::BuiltIn);
@@ -214,6 +210,10 @@ fn default_layout_state_invalid_startup_file_falls_back_to_builtin() {
         [LayoutLoadWarning::GlobalDefaultParse { path, message }]
             if path == &paths.default_layout_file() && !message.is_empty()
     ));
+    assert_eq!(
+        fs::read_to_string(paths.default_layout_file()).unwrap(),
+        invalid_source
+    );
 }
 
 #[test]
@@ -228,8 +228,9 @@ fn default_layout_state_invalid_reload_preserves_last_known_good() {
         toml::to_string_pretty(&configured).unwrap(),
     )
     .unwrap();
-    let mut state = DefaultLayoutState::load_or_create(&paths);
-    fs::write(paths.default_layout_file(), "[project").unwrap();
+    let mut state = DefaultLayoutState::load(&paths);
+    let invalid_source = "[project";
+    fs::write(paths.default_layout_file(), invalid_source).unwrap();
 
     let error = state.reload().unwrap_err();
 
@@ -243,13 +244,18 @@ fn default_layout_state_invalid_reload_preserves_last_known_good() {
         &DefaultLayoutSource::ConfigFile(paths.default_layout_file())
     );
     assert_eq!(state.warnings(), std::slice::from_ref(&error));
+    assert_eq!(
+        fs::read_to_string(paths.default_layout_file()).unwrap(),
+        invalid_source
+    );
 }
 
 #[test]
 fn default_layout_state_reload_accepts_valid_external_change() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut state = DefaultLayoutState::load_or_create(&paths);
+    let mut state = DefaultLayoutState::load(&paths);
+    fs::create_dir_all(paths.config_dir()).unwrap();
     let mut external = DefaultLayoutTemplate::builtin();
     external.tabs[0].title = "External".to_string();
     fs::write(
@@ -268,7 +274,7 @@ fn default_layout_state_reload_accepts_valid_external_change() {
 fn default_layout_state_save_updates_file_and_cache() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut state = DefaultLayoutState::load_or_create(&paths);
+    let mut state = DefaultLayoutState::load(&paths);
     let mut updated = DefaultLayoutTemplate::builtin();
     updated.tabs[0].title = "Saved".to_string();
 
@@ -288,7 +294,7 @@ fn default_layout_state_save_updates_file_and_cache() {
 fn default_layout_state_reset_writes_and_uses_builtin() {
     let temp = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut state = DefaultLayoutState::load_or_create(&paths);
+    let mut state = DefaultLayoutState::load(&paths);
     let mut changed = DefaultLayoutTemplate::builtin();
     changed.tabs[0].title = "Changed".to_string();
     state.save(changed).unwrap();

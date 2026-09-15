@@ -1146,6 +1146,12 @@ impl WorkbenchView {
         require_connected: bool,
         mode: ProjectOpenMode,
     ) -> Result<(), WorkbenchError> {
+        if mode == ProjectOpenMode::Fresh && !self.shared_mutation_allowed() {
+            return Err(WorkbenchError::RemoteProject(
+                "Shared editing control is required.".to_string(),
+            ));
+        }
+
         let connection = self
             .ssh
             .connections

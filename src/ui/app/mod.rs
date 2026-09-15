@@ -19,7 +19,7 @@ use crate::{
     config::{
         paths::AppConfigPaths,
         profile::AppProfile,
-        settings::{AppSettings, WindowBackgroundEffect, load_or_create_settings},
+        settings::{AppSettings, WindowBackgroundEffect, load_settings},
         theme::{ThemeStore, load_theme_store},
     },
     desktop_shell::{DesktopShellCommand, DesktopShellRuntime},
@@ -56,6 +56,10 @@ pub fn run(
     desktop_shell: Arc<DesktopShellRuntime>,
     initial_command: DesktopShellCommand,
 ) {
+    if let Err(error) = crate::config::scope::bind_device_profile(&profile) {
+        eprintln!("failed to initialize device preferences: {error}");
+        return;
+    }
     let config_paths = profile.config_paths();
     let startup_mode = startup_mode_from_fixture(std::env::var("YTTT_DEV_FIXTURE").ok().as_deref());
     let terminal_performance_mode =
@@ -166,6 +170,10 @@ pub fn run_remote(launch: crate::remote_launch::RemoteLaunch) {
     };
 
     let profile = launch.local_profile.clone();
+    if let Err(error) = crate::config::scope::bind_device_profile(&profile) {
+        eprintln!("failed to initialize device preferences: {error}");
+        return;
+    }
     let assets = assets::app_assets(&profile.config_paths());
     gpui_platform::application()
         .with_quit_mode(QuitMode::LastWindowClosed)
@@ -849,12 +857,18 @@ pub fn register_workbench_close_guard(window: &Window, cx: &App, view: &Entity<W
 }
 
 fn load_app_runtime(config_paths: &AppConfigPaths) -> (AppSettings, ThemeRuntime) {
-    let settings = load_or_create_settings(config_paths)
+    let settings = load_settings(config_paths)
         .map(|loaded| loaded.settings)
-        .unwrap_or_else(|_| AppSettings::default());
+        .unwrap_or_else(|error| {
+            eprintln!("Settings could not be loaded: {error}");
+            AppSettings::default()
+        });
     let theme_store = load_theme_store(config_paths)
         .map(|loaded| loaded.store)
-        .unwrap_or_else(|_| ThemeStore::builtin());
+        .unwrap_or_else(|error| {
+            eprintln!("Themes could not be loaded: {error}");
+            ThemeStore::builtin()
+        });
     let theme_runtime = ThemeRuntime::resolve(&settings, &theme_store);
 
     (settings, theme_runtime)

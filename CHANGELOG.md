@@ -4,6 +4,14 @@
 
 ### Added
 
+- Added explicit Device, Host and Project settings targets with effective-source and apply-timing
+  labels. Device appearance, keybindings and preferences remain local and editable by observers;
+  Host and Project writes require connected control.
+- Added allowlisted Project editor overrides with reset-to-Host behavior and consistent
+  Normal/Overlay/ReadOnly profile routing for local and remote Clients.
+- Preserved failed settings candidates and unpublished editor drafts across control loss,
+  disconnects and Host epoch changes, with Device-private recovery and explicit retry/copy/discard.
+
 - Fixed directory symlinks being omitted from remote directory pickers and blocked in project
   trees. Local and SSH trees now follow in-project directory aliases with cycle and root-boundary
   checks; directory actions treat links as folders while deletion still removes only the link.
@@ -60,6 +68,16 @@
   approval status, and secret-free startup arguments.
 
 ### Changed
+
+- Made configuration/default-layout reads and Agent-manager construction read-only. Legacy Device
+  migration, explicit saves/imports, onboarding completion and controlled Host hook provisioning are
+  separate write boundaries.
+- Unified shared-mutation authority across commands, buttons and shortcuts without blocking
+  observer Device preferences or attachment to existing terminal sessions.
+- Fixed remote connection handoff closing the last window before creating its workspaces, and
+  fixed auxiliary settings actions when the main workbench is occluded.
+- Advanced the resource protocol to version 8 for Host project-configuration routing and bounded
+  Project configuration IO; older Hosts require an explicit compatible upgrade.
 
 - Integrated the remote connection window with the launching window's live theme, typography,
   window effect, and UI style from its first frame. Replaced oversized warning cards with compact
@@ -121,6 +139,14 @@
 
 ### Fixed
 
+- Prevented concurrent Clients from overwriting newer Device `settings.toml` preferences:
+  saves now lock, reload and compare the confirmed baseline before atomically writing.
+  Conflicting or unreadable files remain untouched, and failed candidates remain available.
+- Kept onboarding language detection and selection as a preview until completion, so the first
+  Device save does not report a false conflict or prematurely persist the preview language.
+- Fixed observer Project configuration reads incorrectly requiring mutable project registration.
+  Reads now use a bounded Host namespace, writes/deletes retain CAS protection, and load failures
+  are shown explicitly instead of being presented as confirmed Host defaults.
 - Fixed remote directory names collapsing to ellipses and asynchronous directory results leaving
   the path input stale; remote `~` expansion now uses the connected user's home.
 - Fixed cold-start default layout creation, saving and reset with Host-backed configuration:

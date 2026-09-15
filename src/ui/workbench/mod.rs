@@ -73,7 +73,7 @@ use state::{
     overlays::OverlayControllerState,
     palette::PaletteControllerState,
     project::{ProjectControllerState, ProjectPanelPage, ProjectTreeClipboard},
-    settings::{SettingsControllerState, ZedThemeImportDialogState},
+    settings::{ProjectSettingsSaveDraft, SettingsControllerState, ZedThemeImportDialogState},
     ssh::{
         ConnectionState, ConnectionStatus, HostKeyChallenge, SshConnectionForm,
         SshConnectionFormInputs, SshConnectionFormMode, SshConnectionListAction,
@@ -87,7 +87,6 @@ use state::{
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    fs,
     ops::Range,
     path::{Path, PathBuf},
     rc::Rc,
@@ -156,8 +155,7 @@ use crate::{
             MAX_WINDOW_OPACITY, MIN_UI_FONT_SIZE, MIN_UI_LINE_HEIGHT, MIN_WINDOW_OPACITY,
             SettingsLoadWarning, SettingsSaveError, VimModeSetting, WindowBackgroundEffect,
             detect_shell_candidates, detect_system_language_setting,
-            is_valid_environment_variable_name, load_or_create_settings, resolve_default_shell,
-            save_settings,
+            is_valid_environment_variable_name, load_settings, resolve_default_shell,
         },
         theme::{ThemeLoadWarning, ThemeStore, load_theme_store},
     },
@@ -337,8 +335,15 @@ pub struct WorkbenchView {
     project: ProjectControllerState,
     ssh: SshControllerState,
     agent_manager: AgentManager,
+    agent_initialization_task: Option<Task<()>>,
+    agent_initialization_attempt: Option<yttt_protocol::session::ControlContext>,
+    agent_initialization_error: Option<String>,
     agent_sessions: AgentSessionsControllerState,
     settings: SettingsControllerState,
+    settings_sync_task: Option<Task<()>>,
+    failed_settings_save: Option<(AppSettings, AppSettings, bool)>,
+    pending_onboarding_completion: Option<bool>,
+    onboarding_completion_in_flight: bool,
     auxiliary_windows: AuxiliaryWindows,
     update: UpdateControllerState,
     performance: performance::PerformanceMonitorState,
@@ -389,6 +394,7 @@ struct ActiveProjectFileWatcher {
 
 struct ActiveKeybindingsWatcher {
     path: PathBuf,
+    directory: PathBuf,
     _task: Task<()>,
 }
 
@@ -553,9 +559,7 @@ impl WorkbenchView {
 
     pub fn from_startup(config_paths: AppConfigPaths, force_onboarding: bool) -> Self {
         let mut root = Self::with_config_paths_and_force_onboarding(config_paths, force_onboarding);
-        for project_path in startup_project_paths() {
-            let _ = root.open_project_path(project_path);
-        }
+        root.workspace_persistence.startup_projects = startup_project_paths();
         root
     }
 
@@ -566,9 +570,7 @@ impl WorkbenchView {
     ) -> Self {
         let mut root =
             Self::with_workspace_and_config_paths(Workspace::new(), config_paths, force_onboarding);
-        for project_path in project_paths {
-            let _ = root.open_project_path(project_path);
-        }
+        root.workspace_persistence.startup_projects = project_paths.into_iter().collect();
         root
     }
 
@@ -830,25 +832,23 @@ impl WorkbenchView {
         config_paths: AppConfigPaths,
         force_onboarding: bool,
     ) -> Self {
-        let default_layout_state = DefaultLayoutState::load_or_create(&config_paths);
+        let default_layout_state = DefaultLayoutState::load(&config_paths);
         let command_registry = bindable_registry();
         let recent_projects_config = load_recent_projects(&config_paths).unwrap_or_default();
         let (ssh, ssh_load_error) = SshControllerState::new(&config_paths);
         let agent_manager = AgentManager::new(&config_paths);
-        let agent_setup_error = agent_manager.setup_error().map(str::to_string);
+        let agent_setup_error = agent_manager.state_load_error().map(str::to_string);
         let recent_projects = recent_projects_for_palette(&recent_projects_config);
-        let (mut app_settings, settings_warning_lines) = load_app_settings_messages(&config_paths);
-        let language_detection_error = (!app_settings.general.onboarding_completed
+        let (app_settings, settings_warning_lines) = load_app_settings_messages(&config_paths);
+        let ui_language = if !app_settings.general.onboarding_completed
             && workspace.opened_projects().is_empty()
-            && app_settings.general.language == LanguageSetting::System)
-            .then(|| {
-                app_settings.general.language = detect_system_language_setting();
-                save_settings(&config_paths, &app_settings)
-                    .err()
-                    .map(|error| error.to_string())
-            })
-            .flatten();
-        let ui_text = ui_text_for_language(app_settings.general.language);
+            && app_settings.general.language == LanguageSetting::System
+        {
+            detect_system_language_setting()
+        } else {
+            app_settings.general.language
+        };
+        let ui_text = ui_text_for_language(ui_language);
         let keybindings_editor =
             load_keybindings_editor_state(&config_paths, &command_registry, &ui_text);
         let (keybinding_load_error, keybinding_warning_lines) =
@@ -876,7 +876,6 @@ impl WorkbenchView {
                 }),
         );
         let load_error = combine_load_messages(load_error, icon_theme_error);
-        let load_error = combine_load_messages(load_error, language_detection_error);
         let load_error = combine_load_messages(
             load_error,
             layout_load_warning_message(default_layout_state.warnings()),
@@ -886,10 +885,9 @@ impl WorkbenchView {
         let system_notifications_enabled = app_settings.notifications.system;
         let vim = VimControllerState::new(app_settings.vim.mode);
         let onboarding = ((force_onboarding || !app_settings.general.onboarding_completed)
-            && workspace.opened_projects().is_empty())
-        .then(|| {
-            OnboardingState::new(detect_installed_zed_themes(), app_settings.general.language)
-        });
+            && workspace.opened_projects().is_empty()
+            && !crate::config::storage::is_remote())
+        .then(|| OnboardingState::new(detect_installed_zed_themes(), ui_language));
         #[cfg(test)]
         let mut project_services = HashMap::new();
         #[cfg(not(test))]
@@ -935,6 +933,9 @@ impl WorkbenchView {
             },
             ssh,
             agent_manager,
+            agent_initialization_task: None,
+            agent_initialization_attempt: None,
+            agent_initialization_error: None,
             agent_sessions: AgentSessionsControllerState::default(),
             active_project_file_watcher: None,
             active_keybindings_watcher: None,
@@ -947,6 +948,10 @@ impl WorkbenchView {
                 keybinding_load_error,
                 app_settings.clone(),
             ),
+            settings_sync_task: None,
+            failed_settings_save: None,
+            pending_onboarding_completion: None,
+            onboarding_completion_in_flight: false,
             auxiliary_windows: AuxiliaryWindows::default(),
             update: UpdateControllerState::default(),
             performance: performance::PerformanceMonitorState::default(),
@@ -1023,7 +1028,10 @@ impl WorkbenchView {
             LanguageSetting::System => LanguageSetting::English,
             language => language,
         };
-        self.set_language(language)?;
+        self.ui_text = ui_text_for_language(language);
+        self.settings.keybinding_rows_cache = None;
+        self.reset_palette_input();
+        self.reset_settings_search_input();
         if let Some(state) = &mut self.onboarding {
             state.selected_language = language;
         }
@@ -1092,33 +1100,118 @@ impl WorkbenchView {
             );
         }
 
+        if !self.shared_mutation_allowed() {
+            return Err(
+                "Host control is required to initialize the default layout and Agent.".into(),
+            );
+        }
+        if self.settings_save_pending() || self.onboarding_completion_in_flight {
+            return Err("Wait for the current settings save before completing onboarding.".into());
+        }
+        if self.terminal.host_runtime.is_some() {
+            self.pending_onboarding_completion = Some(import_zed_themes);
+            return Ok(());
+        }
+        let (layout, settings) = Self::save_onboarding_configuration(
+            state,
+            import_zed_themes,
+            self.config_paths.clone(),
+            self.default_layout_state.clone(),
+            self.settings.confirmed_settings.clone(),
+            None,
+        )?;
+        self.default_layout_state = layout;
+        self.settings.confirmed_settings = settings.clone();
+
+        self.app_settings = settings;
+        self.onboarding = None;
+        Ok(())
+    }
+
+    fn save_onboarding_configuration(
+        state: OnboardingState,
+        import_zed_themes: bool,
+        paths: AppConfigPaths,
+        mut layout: DefaultLayoutState,
+        confirmed: AppSettings,
+        runtime: Option<Arc<crate::host_runtime::DesktopHostRuntime>>,
+    ) -> Result<(DefaultLayoutState, AppSettings), String> {
+        let can_write = || {
+            runtime.as_ref().map_or(paths.is_test_fixture(), |runtime| {
+                runtime.shared_editing_enabled()
+            })
+        };
+        if !can_write() {
+            return Err("Host control was lost before onboarding could be saved.".into());
+        }
         if import_zed_themes && !state.zed_import_completed {
+            let device_paths = crate::config::scope::device_preferences_config_paths()
+                .or_else(|| paths.is_test_fixture().then(|| paths.clone()))
+                .ok_or_else(|| "Device preferences are not bound.".to_string())?;
             import_detected_zed_themes_with_policy(
                 &state.zed_detection,
-                &self.config_paths,
+                &device_paths,
                 ZedThemeImportConflictPolicy::SkipExisting,
             )
             .map_err(|error| error.to_string())?;
-            if let Some(current_state) = &mut self.onboarding {
-                current_state.zed_import_completed = true;
-            }
         }
-
-        self.default_layout_state
+        layout
             .save(DefaultLayoutTemplate::for_onboarding(
                 state.selected_layout,
                 state.selected_agent,
             ))
             .map_err(|error| error.to_string())?;
-
-        let mut settings = self.app_settings.clone();
+        let mut host_settings = confirmed.clone();
+        host_settings.agent.primary = Some(state.selected_agent);
+        crate::config::scope::save_scoped_settings(&paths, &host_settings, &confirmed, can_write())
+            .map_err(|error| error.to_string())?;
+        let mut settings = host_settings.clone();
         settings.general.onboarding_completed = true;
-        settings.agent.primary = Some(state.selected_agent);
-        save_settings(&self.config_paths, &settings).map_err(|error| error.to_string())?;
+        settings.general.language = state.selected_language;
+        crate::config::scope::save_scoped_settings(&paths, &settings, &host_settings, false)
+            .map_err(|error| error.to_string())?;
+        Ok((layout, settings))
+    }
 
-        self.app_settings = settings;
-        self.onboarding = None;
-        Ok(())
+    fn flush_pending_onboarding_completion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(import_zed_themes) = self.pending_onboarding_completion.take() else {
+            return;
+        };
+        let Some(state) = self.onboarding.clone() else {
+            return;
+        };
+        self.onboarding_completion_in_flight = true;
+        let paths = self.config_paths.clone();
+        let layout = self.default_layout_state.clone();
+        let settings = self.settings.confirmed_settings.clone();
+        let runtime = self.terminal.host_runtime.clone();
+        let task = cx.background_spawn(async move {
+            Self::save_onboarding_configuration(
+                state,
+                import_zed_themes,
+                paths,
+                layout,
+                settings,
+                runtime,
+            )
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |root, _window, cx| {
+                root.onboarding_completion_in_flight = false;
+                match result {
+                    Ok((layout, settings)) => {
+                        root.default_layout_state = layout;
+                        root.settings.confirmed_settings = settings.clone();
+                        root.app_settings = settings;
+                        root.onboarding = None;
+                    }
+                    Err(error) => root.load_error = Some(error),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub fn select_project(&mut self, project_id: &ProjectId) -> Result<(), WorkbenchError> {
@@ -1349,7 +1442,7 @@ impl WorkbenchView {
             };
             self.app_settings.project_panel.width = width;
         }
-        save_settings(&self.config_paths, &self.app_settings)?;
+        self.persist_app_settings(false)?;
         Ok(())
     }
 
@@ -1396,6 +1489,11 @@ impl WorkbenchView {
     }
 
     pub fn confirm_tab_rename_dialog(&mut self, title: &str) -> Result<(), WorkbenchError> {
+        if !self.require_shared_mutation_control() {
+            return Err(WorkbenchError::SettingsUnavailable(
+                "Shared editing control is required".into(),
+            ));
+        }
         let Some(rename) = self.overlays.pending_tab_rename.clone() else {
             return Ok(());
         };
@@ -1823,6 +1921,9 @@ impl WorkbenchView {
         delta_x: f32,
         delta_y: f32,
     ) -> Result<Option<f32>, WorkbenchError> {
+        if !self.require_shared_mutation_control() {
+            return Ok(None);
+        }
         let Some(resize) = pointer_resize_for_drag_delta(direction, delta_x, delta_y) else {
             return Ok(None);
         };
@@ -1936,11 +2037,28 @@ impl WorkbenchView {
     }
 
     pub fn show_settings_file_path_status(&mut self) {
+        let path = match self.settings.settings_scope {
+            crate::config::scope::SettingsScope::Device => {
+                crate::config::scope::device_settings_file().or_else(|| {
+                    self.config_paths
+                        .is_test_fixture()
+                        .then(|| self.config_paths.config_dir().join("device/settings.toml"))
+                })
+            }
+            crate::config::scope::SettingsScope::Host => Some(self.config_paths.settings_file()),
+            crate::config::scope::SettingsScope::Project => {
+                self.cached_settings_project_path().map(Path::to_path_buf)
+            }
+        };
+        let Some(path) = path else {
+            self.load_error = Some("The selected configuration target is unavailable.".into());
+            return;
+        };
         self.queue_status_notification(
             format!(
                 "{}: {}",
                 self.ui_text.get(UiTextKey::StatusSettingsFile),
-                self.config_paths.settings_file().display()
+                path.display()
             ),
             self.ui_text.get(UiTextKey::SettingsGroupAppearance),
         );
@@ -1948,11 +2066,19 @@ impl WorkbenchView {
     }
 
     pub fn show_bars_file_path_status(&mut self) {
+        let Some(path) = crate::config::scope::device_bars_file().or_else(|| {
+            self.config_paths
+                .is_test_fixture()
+                .then(|| self.config_paths.bars_file())
+        }) else {
+            self.load_error = Some("Device preferences are not bound.".into());
+            return;
+        };
         self.queue_status_notification(
             format!(
                 "{}: {}",
                 self.ui_text.get(UiTextKey::StatusBarsFile),
-                self.config_paths.bars_file().display()
+                path.display()
             ),
             self.ui_text.get(UiTextKey::SettingsGroupAppearance),
         );
@@ -1960,11 +2086,19 @@ impl WorkbenchView {
     }
 
     pub fn show_themes_directory_status(&mut self) {
+        let Some(path) = crate::config::scope::device_themes_dir().or_else(|| {
+            self.config_paths
+                .is_test_fixture()
+                .then(|| self.config_paths.themes_dir())
+        }) else {
+            self.load_error = Some("Device preferences are not bound.".into());
+            return;
+        };
         self.queue_status_notification(
             format!(
                 "{}: {}",
                 self.ui_text.get(UiTextKey::StatusThemesDirectory),
-                self.config_paths.themes_dir().display()
+                path.display()
             ),
             self.ui_text.get(UiTextKey::SettingsGroupAppearance),
         );
@@ -2030,6 +2164,7 @@ impl WorkbenchView {
     pub fn runtime_command_for_dispatch(&self, keystroke: &Keystroke) -> Option<CommandId> {
         workspace_command_for_keystroke(
             self.foreground_input_owner_kind(),
+            self.command_context(),
             keystroke,
             |keystroke| self.runtime_command_for_keystroke(keystroke),
             |keystroke| self.terminal_should_receive_keystroke(keystroke),
@@ -2777,6 +2912,11 @@ impl WorkbenchView {
         &mut self,
         project_id: &ProjectId,
     ) -> Result<(), WorkbenchError> {
+        if !self.require_shared_mutation_control() {
+            return Err(WorkbenchError::SettingsUnavailable(
+                "Shared editing control is required".into(),
+            ));
+        }
         self.terminate_host_project(project_id.as_str())?;
         let closed = self.workspace.confirm_close_project(project_id)?;
         self.cleanup_closed_project(&closed.project_id);
@@ -2800,6 +2940,11 @@ impl WorkbenchView {
         project_path: impl AsRef<Path>,
         mode: ProjectOpenMode,
     ) -> Result<(), WorkbenchError> {
+        if matches!(mode, ProjectOpenMode::Fresh) && !self.require_shared_mutation_control() {
+            return Err(WorkbenchError::SettingsUnavailable(
+                "Shared editing control is required to open a project".into(),
+            ));
+        }
         match open_project_config(
             &self.config_paths,
             project_path.as_ref(),
@@ -3126,6 +3271,11 @@ impl WorkbenchView {
                 }
             }
             WorkItemId::Terminal(tab_id) => {
+                if !self.require_shared_mutation_control() {
+                    return Err(WorkbenchError::SettingsUnavailable(
+                        "Shared editing control is required".into(),
+                    ));
+                }
                 self.workspace.select_tab(&tab_id)?;
                 let project_id = self.workspace.selected_project_id().cloned();
                 if let Some(project_id) = &project_id {
@@ -3565,7 +3715,61 @@ impl WorkbenchView {
                 Some(WorkItemId::File(_)) => ActiveSurface::File,
                 None => ActiveSurface::None,
             },
+            shared_editing_enabled: self.shared_mutation_allowed(),
+            is_remote: self
+                .terminal
+                .host_runtime
+                .as_ref()
+                .is_some_and(|runtime| runtime.is_remote()),
         }
+    }
+
+    fn ensure_agent_initialization(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(runtime) = self.terminal.host_runtime.clone() else {
+            return;
+        };
+        if !runtime.shared_editing_enabled() {
+            self.agent_initialization_attempt = None;
+            return;
+        }
+        if self.agent_manager.is_initialized() || self.agent_initialization_task.is_some() {
+            return;
+        }
+        let Some(context) = runtime.control_status().map(|status| status.context) else {
+            return;
+        };
+        if self.agent_initialization_attempt == Some(context) {
+            return;
+        }
+        self.agent_initialization_attempt = Some(context);
+        self.agent_initialization_error = None;
+        let paths = self.config_paths.clone();
+        let task = cx.background_spawn(async move { AgentManager::provision(paths, runtime) });
+        self.agent_initialization_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |root, _window, cx| {
+                root.agent_initialization_task = None;
+                let still_controls = root.terminal.host_runtime.as_ref().is_some_and(|runtime| {
+                    runtime.shared_editing_enabled()
+                        && runtime
+                            .control_status()
+                            .is_some_and(|status| status.context == context)
+                });
+                if !still_controls {
+                    root.agent_initialization_attempt = None;
+                    cx.notify();
+                    return;
+                }
+                if let Err(error) =
+                    result.and_then(|ready| root.agent_manager.ensure_initialized(ready))
+                {
+                    let message = format!("Agent initialization failed: {error}");
+                    root.agent_initialization_error = Some(message.clone());
+                    root.load_error = Some(message);
+                }
+                cx.notify();
+            });
+        }));
     }
 
     fn localized_command_disabled_reason(&self, reason: &str) -> String {
@@ -3574,6 +3778,10 @@ impl WorkbenchView {
             "Focus a project file first" => UiTextKey::CommandDisabledFocusProjectFileFirst,
             "Open a terminal or file first" => UiTextKey::CommandDisabledOpenWorkItemFirst,
             "Switch to a terminal tab first" => UiTextKey::CommandDisabledSwitchTerminalFirst,
+            "Shared editing control is required" => UiTextKey::SettingsReadOnlyObserver,
+            "Connect to an existing Host from a local desktop session" => {
+                UiTextKey::RemoteManageLocally
+            }
             _ => UiTextKey::CommandUnavailable,
         };
         self.ui_text.get(key).to_string()

@@ -303,7 +303,7 @@ pub(super) fn load_keybindings_editor_state(
 
 pub(super) fn load_app_settings_messages(paths: &AppConfigPaths) -> (AppSettings, Vec<String>) {
     let mut warnings = Vec::new();
-    let settings = match load_or_create_settings(paths) {
+    let settings = match load_settings(paths) {
         Ok(loaded) => {
             warnings.extend(loaded.warnings.iter().map(format_settings_warning_line));
             loaded.settings

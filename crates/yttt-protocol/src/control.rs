@@ -230,6 +230,7 @@ impl Request {
                 | WorkspaceRequest::List
                 | WorkspaceRequest::Browse { .. }
                 | WorkspaceRequest::ReadConfig { .. }
+                | WorkspaceRequest::ReadProjectConfig { .. }
                 | WorkspaceRequest::ListConfig { .. }
                 | WorkspaceRequest::AgentSessions { .. }
                 | WorkspaceRequest::Open { .. }

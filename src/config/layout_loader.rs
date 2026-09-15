@@ -473,16 +473,15 @@ pub fn load_recent_projects(
     paths: &AppConfigPaths,
 ) -> Result<RecentProjectsConfig, ProjectOpenError> {
     let path = paths.recent_projects_file();
-    if !crate::config::storage::exists(&path) {
-        return Ok(RecentProjectsConfig::default());
-    }
-
-    let source = crate::config::storage::read_to_string(&path).map_err(|source| {
-        ProjectOpenError::ReadRecentProjects {
-            path: path.clone(),
-            source,
+    let source = match crate::config::storage::read_to_string(&path) {
+        Ok(source) => source,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            return Ok(RecentProjectsConfig::default());
         }
-    })?;
+        Err(source) => {
+            return Err(ProjectOpenError::ReadRecentProjects { path, source });
+        }
+    };
     toml::from_str(&source).map_err(|source| ProjectOpenError::ParseRecentProjects { path, source })
 }
 
@@ -528,26 +527,20 @@ fn reset_local_override_with_file_system(
     file_system: &dyn LocalLayoutFileSystem,
 ) -> Result<(), ProjectOpenError> {
     let path = paths.local_layout_file(project_path);
-    if !file_system.exists(&path) {
-        return Ok(());
+    match file_system.remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(ProjectOpenError::RemovePersonalLayout { path, source }),
     }
-    file_system
-        .remove_file(&path)
-        .map_err(|source| ProjectOpenError::RemovePersonalLayout { path, source })
 }
 
 trait LocalLayoutFileSystem {
-    fn exists(&self, path: &Path) -> bool;
     fn remove_file(&self, path: &Path) -> io::Result<()>;
 }
 
 struct StdLocalLayoutFileSystem;
 
 impl LocalLayoutFileSystem for StdLocalLayoutFileSystem {
-    fn exists(&self, path: &Path) -> bool {
-        crate::config::storage::exists(&path)
-    }
-
     fn remove_file(&self, path: &Path) -> io::Result<()> {
         crate::config::storage::remove_file(path)
     }
@@ -755,35 +748,38 @@ fn load_project_layout(
     default_state: &mut DefaultLayoutState,
 ) -> Result<LoadedProjectLayout, ProjectOpenError> {
     let project_layout_file = paths.project_layout_file(project_path);
-    let (base, base_source, mut warnings) = if crate::config::storage::exists(&project_layout_file)
-    {
-        (
-            read_project_layout(&project_layout_file, project_path)?,
-            LayoutSource::ProjectConfig(project_layout_file),
-            Vec::new(),
-        )
-    } else {
-        let _ = default_state.reload();
-        (
-            default_state
-                .template()
-                .materialize(project_name(project_path)),
-            LayoutSource::GlobalDefault(paths.default_layout_file()),
-            default_state.warnings().to_vec(),
-        )
-    };
+    let (base, base_source, mut warnings) =
+        match read_project_layout(&project_layout_file, project_path) {
+            Ok(layout) => (
+                layout,
+                LayoutSource::ProjectConfig(project_layout_file),
+                Vec::new(),
+            ),
+            Err(ProjectOpenError::ReadProjectLayout { source, .. })
+                if source.kind() == io::ErrorKind::NotFound =>
+            {
+                let _ = default_state.reload();
+                (
+                    default_state
+                        .template()
+                        .materialize(project_name(project_path)),
+                    LayoutSource::GlobalDefault(paths.default_layout_file()),
+                    default_state.warnings().to_vec(),
+                )
+            }
+            Err(error) => return Err(error),
+        };
 
     let local_layout_file = paths.local_layout_file(project_path);
-    if !crate::config::storage::exists(&local_layout_file) {
-        return Ok(LoadedProjectLayout {
-            layout: base,
-            source: base_source,
-            warnings,
-        });
-    }
-
     let source = match crate::config::storage::read_to_string(&local_layout_file) {
         Ok(source) => source,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(LoadedProjectLayout {
+                layout: base,
+                source: base_source,
+                warnings,
+            });
+        }
         Err(error) => {
             warnings.push(LayoutLoadWarning::PersonalOverrideRead {
                 path: local_layout_file,
@@ -921,11 +917,14 @@ fn read_project_layout(
     path: &Path,
     project_path: &Path,
 ) -> Result<ProjectLayout, ProjectOpenError> {
-    let source = crate::config::storage::read_to_string(path).map_err(|source| {
-        ProjectOpenError::ReadProjectLayout {
-            path: path.to_path_buf(),
-            source,
-        }
+    let source = crate::config::storage::read_project_config(
+        project_path,
+        yttt_protocol::workspace::WorkspaceProjectConfigFile::Layout,
+        path,
+    )
+    .map_err(|source| ProjectOpenError::ReadProjectLayout {
+        path: path.to_path_buf(),
+        source,
     })?;
     parse_project_layout(path, project_path, &source)
 }
@@ -1090,10 +1089,6 @@ mod tests {
     }
 
     impl LocalLayoutFileSystem for FakeLocalLayoutFileSystem {
-        fn exists(&self, path: &Path) -> bool {
-            self.files.borrow().contains(path)
-        }
-
         fn remove_file(&self, path: &Path) -> io::Result<()> {
             if let Some(message) = self.remove_error.borrow_mut().take() {
                 return Err(io::Error::new(io::ErrorKind::PermissionDenied, message));
@@ -1101,6 +1096,18 @@ mod tests {
             self.files.borrow_mut().remove(path);
             Ok(())
         }
+    }
+
+    #[test]
+    fn missing_recent_projects_uses_defaults_without_creating_config_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+
+        assert_eq!(
+            load_recent_projects(&paths).unwrap(),
+            RecentProjectsConfig::default()
+        );
+        assert!(!paths.config_dir().exists());
     }
 
     #[test]
@@ -1188,7 +1195,7 @@ mod tests {
         let error =
             reset_local_override_with_file_system(&paths, project, &file_system).unwrap_err();
 
-        assert!(file_system.exists(&path));
+        assert!(file_system.files.borrow().contains(&path));
         assert!(matches!(
             error,
             ProjectOpenError::RemovePersonalLayout {

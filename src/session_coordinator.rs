@@ -18,6 +18,29 @@ struct Publication {
     error: Option<String>,
 }
 
+fn transfer_readiness(
+    views: &HashMap<WorkspaceId, Publication>,
+    transfer_id: &str,
+) -> Option<Result<Vec<WorkspaceRevision>, String>> {
+    let mut revisions = Vec::with_capacity(views.len());
+    for (id, publication) in views {
+        if publication.transfer_id.as_deref() != Some(transfer_id) {
+            return None;
+        }
+        if let Some(error) = &publication.error {
+            return Some(Err(error.clone()));
+        }
+        let Some(revision) = publication.revision else {
+            return None;
+        };
+        revisions.push(WorkspaceRevision {
+            workspace_id: id.clone(),
+            revision,
+        });
+    }
+    Some(Ok(revisions))
+}
+
 struct State {
     available: VecDeque<WorkspaceId>,
     views: HashMap<WorkspaceId, Publication>,
@@ -106,33 +129,11 @@ impl SessionCoordinator {
                     if state.submitted_transfer.as_deref() == Some(&transfer.id) {
                         continue;
                     }
-                    let mut revisions = Vec::with_capacity(state.views.len());
-                    let mut failure = None;
-                    let mut pending = false;
-                    for (id, publication) in &state.views {
-                        if publication.transfer_id.as_deref() != Some(&transfer.id) {
-                            pending = true;
-                            break;
-                        }
-                        if let Some(error) = &publication.error {
-                            failure = Some(error.clone());
-                            break;
-                        }
-                        if let Some(revision) = publication.revision {
-                            revisions.push(WorkspaceRevision {
-                                workspace_id: id.clone(),
-                                revision,
-                            });
-                        } else {
-                            pending = true;
-                            break;
-                        }
-                    }
-                    if pending {
+                    let Some(readiness) = transfer_readiness(&state.views, &transfer.id) else {
                         continue;
-                    }
+                    };
                     state.submitted_transfer = Some(transfer.id.clone());
-                    failure.map_or(Ok(revisions), Err)
+                    readiness
                 };
                 let result = async {
                     let revisions = readiness?;
@@ -275,5 +276,43 @@ mod tests {
         let restored = coordinator.claim(None, true).unwrap();
         assert_eq!(restored.id(), &saved);
         assert_ne!(restored.id(), other.id());
+    }
+
+    #[test]
+    fn normal_transfer_waits_for_every_workspace_publication() {
+        let workspace = WorkspaceId::new("workspace").unwrap();
+        let mut views = HashMap::from([(workspace.clone(), Publication::default())]);
+
+        assert!(transfer_readiness(&views, "transfer").is_none());
+
+        views.get_mut(&workspace).unwrap().transfer_id = Some("transfer".to_string());
+        assert!(transfer_readiness(&views, "transfer").is_none());
+
+        views.get_mut(&workspace).unwrap().revision = Some(12);
+        assert_eq!(
+            transfer_readiness(&views, "transfer").unwrap().unwrap(),
+            vec![WorkspaceRevision {
+                workspace_id: workspace,
+                revision: 12,
+            }]
+        );
+    }
+
+    #[test]
+    fn failed_publication_prevents_transfer_readiness() {
+        let workspace = WorkspaceId::new("workspace").unwrap();
+        let views = HashMap::from([(
+            workspace,
+            Publication {
+                transfer_id: Some("transfer".to_string()),
+                revision: None,
+                error: Some("draft upload failed".to_string()),
+            },
+        )]);
+
+        assert_eq!(
+            transfer_readiness(&views, "transfer"),
+            Some(Err("draft upload failed".to_string()))
+        );
     }
 }

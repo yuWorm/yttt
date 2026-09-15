@@ -142,6 +142,12 @@ impl AgentRuntime {
             .resume_command(session)
     }
 
+    pub fn matches_command(&self, command: &str) -> bool {
+        self.providers
+            .iter()
+            .any(|provider| provider.matches_command(command))
+    }
+
     pub fn prepare_launch(
         &mut self,
         command: &str,
@@ -411,6 +417,16 @@ mod tests {
             assert_eq!(event.name, "working");
             Ok(vec![yttt_agent_core::AgentEventKind::Working])
         }
+    }
+
+    #[test]
+    fn matches_registered_provider_commands_without_preparing_a_launch() {
+        let mut runtime = AgentRuntime::default();
+        runtime.register_provider(Arc::new(TestProvider));
+
+        assert!(runtime.matches_command("test-agent"));
+        assert!(!runtime.matches_command("shell"));
+        assert!(runtime.records.is_empty());
     }
 
     #[test]

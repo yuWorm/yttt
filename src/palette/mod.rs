@@ -161,25 +161,29 @@ impl ActivePalette {
 pub struct CommandPaletteContext {
     pub has_selected_project: bool,
     pub active_surface: ActiveSurface,
+    pub shared_editing_enabled: bool,
+    pub is_remote: bool,
 }
 
 impl CommandPaletteContext {
     pub fn from_workspace(workspace: &Workspace) -> Self {
         let has_selected_project = workspace.selected_project_id().is_some();
-        Self::from_command_context(CommandContext {
+        Self::from_command_context(CommandContext::local_controller(
             has_selected_project,
-            active_surface: if has_selected_project {
+            if has_selected_project {
                 ActiveSurface::Terminal
             } else {
                 ActiveSurface::None
             },
-        })
+        ))
     }
 
     pub fn from_command_context(context: CommandContext) -> Self {
         Self {
             has_selected_project: context.has_selected_project,
             active_surface: context.active_surface,
+            shared_editing_enabled: context.shared_editing_enabled,
+            is_remote: context.is_remote,
         }
     }
 
@@ -187,6 +191,8 @@ impl CommandPaletteContext {
         CommandContext {
             has_selected_project: self.has_selected_project,
             active_surface: self.active_surface,
+            shared_editing_enabled: self.shared_editing_enabled,
+            is_remote: self.is_remote,
         }
     }
 }

@@ -3,6 +3,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use yttt_protocol::{
+    ProjectPathError,
+    workspace::{WorkspaceProjectConfig, encode_project_path},
+};
+
 use super::profile::{AgentSessionAccess, AppProfile, EnvironmentKind, ProjectConfigPolicy};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19,6 +24,21 @@ impl ProjectConfigStore {
         }
     }
 
+    fn from_workspace_project_config(
+        project_config: WorkspaceProjectConfig,
+    ) -> Result<Self, ProjectPathError> {
+        let (policy, overlay_root) = match project_config {
+            WorkspaceProjectConfig::Project => (ProjectConfigPolicy::Normal, PathBuf::new()),
+            WorkspaceProjectConfig::ReadOnlyProject => {
+                (ProjectConfigPolicy::ReadOnly, PathBuf::new())
+            }
+            WorkspaceProjectConfig::Overlay { root } => {
+                (ProjectConfigPolicy::Overlay, root.to_path()?)
+            }
+        };
+        Ok(Self::new(policy, overlay_root))
+    }
+
     pub fn policy(&self) -> ProjectConfigPolicy {
         self.policy
     }
@@ -32,7 +52,7 @@ impl ProjectConfigStore {
                 let project_path =
                     canonicalize_path(project_path).unwrap_or_else(|_| project_path.to_path_buf());
                 self.overlay_root
-                    .join(encode_path(&project_path))
+                    .join(encode_project_path(&project_path))
                     .join("layout.toml")
             }
         }
@@ -51,6 +71,7 @@ pub struct AppConfigPaths {
     project_config: ProjectConfigStore,
     agent_sessions: AgentSessionAccess,
     profile: Option<AppProfile>,
+    test_fixture: bool,
 }
 
 impl AppConfigPaths {
@@ -66,6 +87,40 @@ impl AppConfigPaths {
             environment: EnvironmentKind::Test,
             agent_sessions: AgentSessionAccess::disabled(),
             profile: None,
+            test_fixture: true,
+        }
+    }
+
+    /// Construct Host paths for a connected environment without granting local test access.
+    pub(crate) fn from_host_config_dir(
+        config_dir: impl Into<PathBuf>,
+        project_config: WorkspaceProjectConfig,
+    ) -> Result<Self, ProjectPathError> {
+        let config_dir = config_dir.into();
+        Ok(Self {
+            project_config: ProjectConfigStore::from_workspace_project_config(project_config)?,
+            config_dir,
+            environment: EnvironmentKind::Production,
+            agent_sessions: AgentSessionAccess::disabled(),
+            profile: None,
+            test_fixture: false,
+        })
+    }
+
+    pub(crate) fn from_device_preferences(profile: &AppProfile, config_dir: PathBuf) -> Self {
+        if profile.environment() == EnvironmentKind::Test {
+            super::storage::allow_test_root(&config_dir);
+        }
+        Self {
+            config_dir,
+            environment: profile.environment(),
+            project_config: ProjectConfigStore::new(
+                profile.project_config_policy(),
+                profile.paths().state.join("project-config-overlay"),
+            ),
+            agent_sessions: profile.agent_sessions().clone(),
+            profile: Some(profile.clone()),
+            test_fixture: false,
         }
     }
 
@@ -87,6 +142,7 @@ impl AppConfigPaths {
             ),
             agent_sessions: profile.agent_sessions().clone(),
             profile: Some(profile.clone()),
+            test_fixture: false,
         }
     }
 
@@ -96,6 +152,16 @@ impl AppConfigPaths {
 
     pub fn config_dir(&self) -> &Path {
         &self.config_dir
+    }
+
+    /// The Device-private configuration root, when the local profile has been bound.
+    pub fn device_preferences_root(&self) -> Option<PathBuf> {
+        super::scope::device_preferences_root()
+    }
+
+    /// Device-private durable state. Callers must use local filesystem operations for this path.
+    pub fn device_state_dir(&self) -> Option<PathBuf> {
+        super::scope::device_state_dir()
     }
 
     pub fn environment(&self) -> EnvironmentKind {
@@ -108,6 +174,10 @@ impl AppConfigPaths {
 
     pub fn agent_session_access(&self) -> &AgentSessionAccess {
         &self.agent_sessions
+    }
+
+    pub(crate) fn is_test_fixture(&self) -> bool {
+        self.test_fixture
     }
 
     pub fn project_layout_file(&self, project_path: &Path) -> PathBuf {
@@ -136,7 +206,7 @@ impl AppConfigPaths {
             canonicalize_path(project_path).unwrap_or_else(|_| project_path.to_path_buf());
         self.config_dir
             .join("projects")
-            .join(encode_path(&project_path))
+            .join(encode_project_path(&project_path))
     }
 
     pub fn local_layout_file(&self, project_path: &Path) -> PathBuf {
@@ -313,24 +383,92 @@ fn migrate_legacy_config_dir(native: PathBuf, legacy: PathBuf) -> PathBuf {
     }
 }
 
-fn encode_path(path: &Path) -> String {
-    let value = path.to_string_lossy();
-    let mut encoded = String::new();
-
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') {
-            encoded.push(byte as char);
-        } else {
-            encoded.push_str(&format!("%{byte:02x}"));
-        }
-    }
-
-    encoded
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_host_project_config_matches_profile(
+        profile: AppProfile,
+        project_config: WorkspaceProjectConfig,
+        project: &Path,
+    ) {
+        use crate::config::project_settings::{PROJECT_SETTINGS_FILE_NAME, project_settings_file};
+
+        let local_paths = profile.config_paths();
+        let remote_paths =
+            AppConfigPaths::from_host_config_dir(profile.paths().config.clone(), project_config)
+                .unwrap();
+
+        assert_eq!(
+            project_settings_file(&remote_paths, project),
+            project_settings_file(&local_paths, project)
+        );
+        assert_eq!(
+            remote_paths
+                .project_layout_write_file(project)
+                .map(|path| path.with_file_name(PROJECT_SETTINGS_FILE_NAME)),
+            local_paths
+                .project_layout_write_file(project)
+                .map(|path| path.with_file_name(PROJECT_SETTINGS_FILE_NAME))
+        );
+    }
+
+    #[test]
+    fn host_project_configuration_metadata_preserves_source_project_routing() {
+        use crate::{
+            config::profile::{HostConnectPolicy, ProfilePersistence},
+            model::ids::ProfileId,
+        };
+
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+
+        let normal = AppProfile::scoped(
+            ProfileId::new("normal"),
+            EnvironmentKind::Test,
+            ProfilePersistence::Ephemeral,
+            root.path().join("normal"),
+            ProjectConfigPolicy::Normal,
+            HostConnectPolicy::ProfileDiscovery,
+        );
+        assert_host_project_config_matches_profile(
+            normal,
+            WorkspaceProjectConfig::Project,
+            &project,
+        );
+
+        let overlay = AppProfile::scoped(
+            ProfileId::new("overlay"),
+            EnvironmentKind::Test,
+            ProfilePersistence::Ephemeral,
+            root.path().join("overlay"),
+            ProjectConfigPolicy::Overlay,
+            HostConnectPolicy::ProfileDiscovery,
+        );
+        let overlay_root = overlay.paths().state.join("project-config-overlay");
+        assert_host_project_config_matches_profile(
+            overlay,
+            WorkspaceProjectConfig::Overlay {
+                root: yttt_protocol::HostPath::from_path(&overlay_root).unwrap(),
+            },
+            &project,
+        );
+
+        let read_only = AppProfile::scoped(
+            ProfileId::new("read-only"),
+            EnvironmentKind::Test,
+            ProfilePersistence::Ephemeral,
+            root.path().join("read-only"),
+            ProjectConfigPolicy::ReadOnly,
+            HostConnectPolicy::ProfileDiscovery,
+        );
+        assert_host_project_config_matches_profile(
+            read_only,
+            WorkspaceProjectConfig::ReadOnlyProject,
+            &project,
+        );
+    }
 
     #[test]
     fn xdg_config_home_overrides_platform_defaults() {

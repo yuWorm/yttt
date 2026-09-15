@@ -1,5 +1,5 @@
 use std::{
-    fs, io,
+    io,
     path::{Path, PathBuf},
 };
 
@@ -158,19 +158,19 @@ struct StdLayoutEditorFileSystem;
 
 impl LayoutEditorFileSystem for StdLayoutEditorFileSystem {
     fn create_dir_all(&self, path: &Path) -> io::Result<()> {
-        fs::create_dir_all(path)
+        crate::config::storage::create_dir_all(path)
     }
 
     fn write(&self, path: &Path, source: &str) -> io::Result<()> {
-        fs::write(path, source)
+        crate::config::storage::write(path, source)
     }
 
     fn sync(&self, path: &Path) -> io::Result<()> {
-        fs::OpenOptions::new().read(true).open(path)?.sync_all()
+        crate::config::storage::sync(path)
     }
 
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
-        fs::rename(from, to)
+        crate::config::storage::rename(from, to)
     }
 }
 

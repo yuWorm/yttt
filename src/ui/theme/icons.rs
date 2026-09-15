@@ -553,19 +553,27 @@ pub fn available_icon_theme_names(config_paths: &AppConfigPaths) -> Result<Vec<S
 fn load_icon_theme_candidates(
     config_paths: &AppConfigPaths,
 ) -> Result<(PathBuf, Vec<IconThemeCandidate>)> {
-    let packages_dir = config_paths.icon_themes_dir();
-    fs::create_dir_all(&packages_dir).with_context(|| {
-        format!(
-            "failed to create icon theme directory {}",
-            packages_dir.display()
-        )
-    })?;
-    let assets_root = fs::canonicalize(&packages_dir).with_context(|| {
-        format!(
-            "failed to resolve icon theme directory {}",
-            packages_dir.display()
-        )
-    })?;
+    let packages_dir = crate::config::scope::device_icon_themes_dir()
+        .or_else(|| {
+            config_paths
+                .is_test_fixture()
+                .then(|| config_paths.icon_themes_dir())
+        })
+        .ok_or_else(|| anyhow!("Device profile must be bound before loading icon themes"))?;
+    let assets_root = match fs::canonicalize(&packages_dir) {
+        Ok(root) => root,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((packages_dir, Vec::new()));
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to resolve icon theme directory {}",
+                    packages_dir.display()
+                )
+            });
+        }
+    };
 
     let mut packages = fs::read_dir(&assets_root)
         .with_context(|| {
@@ -574,7 +582,8 @@ fn load_icon_theme_candidates(
                 assets_root.display()
             )
         })?
-        .filter_map(|entry| entry.ok())
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
         .filter(|entry| fs::is_dir(entry.path()))
         .collect::<Vec<_>>();
     packages.sort_by_key(|entry| entry.path());
@@ -604,7 +613,8 @@ fn load_icon_theme_candidates(
                     theme_dir.display()
                 )
             })?
-            .filter_map(|entry| entry.ok())
+            .collect::<std::io::Result<Vec<_>>>()?
+            .into_iter()
             .filter(|entry| {
                 entry
                     .path()

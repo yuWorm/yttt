@@ -1462,8 +1462,35 @@ impl WorkbenchView {
             return;
         }
         for context in self.pending_eager_terminal_pane_contexts() {
+            if self.agent_launch_waits_for_initialization(&context) {
+                continue;
+            }
             self.ensure_terminal_pane(context, window, cx);
         }
+    }
+
+    fn agent_launch_waits_for_initialization(&self, context: &TerminalPaneContext) -> bool {
+        if !self.terminal.start_processes
+            || self.agent_manager.is_initialized()
+            || !self
+                .agent_manager
+                .requires_initialization(&context.pane.command)
+        {
+            return false;
+        }
+        let key = terminal_pane_key(&context.project_id, &context.tab_id, &context.pane.id);
+        if self.terminal.terminal_panes.contains_key(&key) {
+            return false;
+        }
+        // Attaching to a running Host process is read-only and never requires provisioning.
+        !self.terminal.host_runtime.as_ref().is_some_and(|runtime| {
+            runtime.resource_catalog().is_some_and(|catalog| {
+                catalog
+                    .terminals
+                    .iter()
+                    .any(|terminal| terminal.session_id.as_str() == key)
+            })
+        })
     }
 
     fn ensure_terminal_pane(
@@ -1586,7 +1613,11 @@ impl WorkbenchView {
                 .child(
                     gpui_component::button::Button::new("restart-lost-remote-pane")
                         .label("Start a new process")
+                        .disabled(!self.shared_mutation_allowed())
                         .on_click(cx.listener(move |this, _, _, cx| {
+                            if !this.require_shared_mutation_control() {
+                                return;
+                            }
                             if let Err(error) =
                                 this.workspace
                                     .mark_pane_running(&project_id, &tab_id, &pane_id)
@@ -1611,6 +1642,43 @@ impl WorkbenchView {
             ssh: None,
             agent_launch: None,
         };
+        if self.agent_launch_waits_for_initialization(&context) {
+            let can_initialize = self.shared_mutation_allowed();
+            let message = self.agent_initialization_error.clone().unwrap_or_else(|| {
+                if can_initialize {
+                    self.ui_text
+                        .get(UiTextKey::AgentInitializationPreparing)
+                        .to_string()
+                } else {
+                    self.ui_text
+                        .get(UiTextKey::AgentInitializationControllerRequired)
+                        .to_string()
+                }
+            });
+            return div()
+                .flex()
+                .flex_1()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap_3()
+                .child(message)
+                .when(self.agent_initialization_error.is_some(), |view| {
+                    view.child(
+                        Button::new("retry-agent-initialization")
+                            .label(self.ui_text.get(UiTextKey::AgentInitializationRetry))
+                            .disabled(!can_initialize || self.agent_initialization_task.is_some())
+                            .on_click(cx.listener(|this, _, _window, cx| {
+                                if !this.require_shared_mutation_control() {
+                                    return;
+                                }
+                                this.agent_initialization_attempt = None;
+                                this.agent_initialization_error = None;
+                                cx.notify();
+                            })),
+                    )
+                });
+        }
         let pane_view = self.ensure_terminal_pane(context, window, cx);
 
         let pane_id = input.pane.id.clone();
@@ -1756,9 +1824,6 @@ impl WorkbenchView {
             &address.pane_id,
             snapshot,
         );
-        if let Some(error) = self.agent_manager.take_error() {
-            self.load_error = combine_load_messages(self.load_error.take(), Some(error));
-        }
         result
     }
     pub(super) fn record_agent_event_snapshot(
@@ -1896,9 +1961,6 @@ impl WorkbenchView {
                 {
                     self.load_error =
                         combine_load_messages(self.load_error.take(), Some(error.to_string()));
-                }
-                if let Some(error) = self.agent_manager.take_error() {
-                    self.load_error = combine_load_messages(self.load_error.take(), Some(error));
                 }
                 cx.notify();
             }

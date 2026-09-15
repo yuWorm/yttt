@@ -58,6 +58,65 @@ impl ProjectFileRefreshBatch {
     }
 }
 
+pub(super) enum ProjectDocumentLoadError {
+    File(ProjectFileIoError),
+    ProjectSettings(crate::config::project_settings::ProjectSettingsError),
+}
+
+pub(super) fn load_project_document_with_overrides(
+    services: &ProjectServices,
+    config_paths: &AppConfigPaths,
+    project_path: &Path,
+    relative_path: &Path,
+) -> Result<
+    (
+        LoadedProjectFile,
+        crate::config::project_settings::ProjectEditorOverrides,
+    ),
+    ProjectDocumentLoadError,
+> {
+    let loaded = services
+        .read_file(relative_path)
+        .map_err(ProjectDocumentLoadError::File)?;
+    let overrides =
+        crate::config::project_settings::load_project_overrides(config_paths, project_path)
+            .map_err(ProjectDocumentLoadError::ProjectSettings)?;
+    Ok((loaded, overrides))
+}
+
+pub(super) struct ProjectEditorSettingsIo {
+    pub(super) project_id: ProjectId,
+    pub(super) config_paths: AppConfigPaths,
+    pub(super) project_path: PathBuf,
+    pub(super) host_editor_settings: crate::config::settings::EditorSettings,
+    pub(super) can_write_host: bool,
+}
+
+impl WorkbenchView {
+    pub(super) fn selected_project_editor_settings_io(
+        &self,
+    ) -> Result<ProjectEditorSettingsIo, String> {
+        let project_id = self
+            .workspace
+            .selected_project_id()
+            .cloned()
+            .ok_or_else(|| "No project is selected.".to_string())?;
+        let project_path = self
+            .workspace
+            .project(&project_id)
+            .and_then(|project| project.location.local_path())
+            .cloned()
+            .ok_or_else(|| "The selected project has no Host configuration path.".to_string())?;
+        Ok(ProjectEditorSettingsIo {
+            project_id,
+            config_paths: self.config_paths.clone(),
+            project_path,
+            host_editor_settings: self.app_settings.editor.clone(),
+            can_write_host: self.shared_mutation_allowed(),
+        })
+    }
+}
+
 impl WorkbenchView {
     pub fn refresh_project_tree_state(
         &mut self,
@@ -401,6 +460,7 @@ impl WorkbenchView {
             .tree(project_id)
             .cloned()
         {
+            let shared_mutation_allowed = self.shared_mutation_allowed();
             let interaction_text = self.project_tree_interaction_text();
             let show_hidden = self.app_settings.project_panel.show_hidden;
             if let Some(snapshot) = self.project_tree_render_snapshot(project_id) {
@@ -408,6 +468,7 @@ impl WorkbenchView {
                     tree.sync_with_icon_theme(snapshot, self.icon_theme.clone(), tree_cx);
                     tree.set_interaction_text(interaction_text, tree_cx);
                     tree.set_show_hidden(show_hidden, tree_cx);
+                    tree.set_shared_mutation_allowed(shared_mutation_allowed, tree_cx);
                 });
             }
             return Some(tree);
@@ -429,10 +490,12 @@ impl WorkbenchView {
         let icon_theme = self.icon_theme.clone();
         let interaction_text = self.project_tree_interaction_text();
         let show_hidden = self.app_settings.project_panel.show_hidden;
+        let shared_mutation_allowed = self.shared_mutation_allowed();
         let tree = cx.new(|tree_cx| {
             let mut tree = ProjectTreeView::new_with_icon_theme(snapshot, icon_theme, tree_cx);
             tree.set_interaction_text(interaction_text, tree_cx);
             tree.set_show_hidden(show_hidden, tree_cx);
+            tree.set_shared_mutation_allowed(shared_mutation_allowed, tree_cx);
             tree.set_show_focus_indicator(false, tree_cx);
             tree
         });
@@ -505,28 +568,36 @@ impl WorkbenchView {
                 self.spawn_project_file_open(project_id.clone(), path.clone(), window, cx);
             }
             ProjectTreeViewEvent::CreateEntry { parent, input } => {
-                self.spawn_project_entry_create(
-                    project_id.clone(),
-                    parent.clone(),
-                    input.clone(),
-                    window,
-                    cx,
-                );
+                if self.require_shared_mutation_control() {
+                    self.spawn_project_entry_create(
+                        project_id.clone(),
+                        parent.clone(),
+                        input.clone(),
+                        window,
+                        cx,
+                    );
+                }
             }
             ProjectTreeViewEvent::CreateProjectLayout => {
-                self.spawn_project_layout_scaffold(project_id.clone(), window, cx);
+                if self.require_shared_mutation_control() {
+                    self.spawn_project_layout_scaffold(project_id.clone(), window, cx);
+                }
             }
             ProjectTreeViewEvent::RenameEntry { path, new_name } => {
-                self.spawn_project_entry_rename(
-                    project_id.clone(),
-                    path.clone(),
-                    new_name.clone(),
-                    window,
-                    cx,
-                );
+                if self.require_shared_mutation_control() {
+                    self.spawn_project_entry_rename(
+                        project_id.clone(),
+                        path.clone(),
+                        new_name.clone(),
+                        window,
+                        cx,
+                    );
+                }
             }
             ProjectTreeViewEvent::RequestDelete(path) => {
-                self.confirm_project_entry_delete(project_id.clone(), path.clone(), window, cx);
+                if self.require_shared_mutation_control() {
+                    self.confirm_project_entry_delete(project_id.clone(), path.clone(), window, cx);
+                }
             }
             ProjectTreeViewEvent::CopyEntry(path) => {
                 self.project.project_tree_clipboard = Some(ProjectTreeClipboard {
@@ -536,21 +607,25 @@ impl WorkbenchView {
                 });
             }
             ProjectTreeViewEvent::CutEntry(path) => {
-                self.project.project_tree_clipboard = Some(ProjectTreeClipboard {
-                    source_project_id: project_id.clone(),
-                    relative_path: path.clone(),
-                    mode: ProjectEntryPasteMode::Cut,
-                });
+                if self.require_shared_mutation_control() {
+                    self.project.project_tree_clipboard = Some(ProjectTreeClipboard {
+                        source_project_id: project_id.clone(),
+                        relative_path: path.clone(),
+                        mode: ProjectEntryPasteMode::Cut,
+                    });
+                }
             }
             ProjectTreeViewEvent::PasteEntry {
                 destination_directory,
             } => {
-                self.spawn_project_entry_paste(
-                    project_id.clone(),
-                    destination_directory.clone(),
-                    window,
-                    cx,
-                );
+                if self.require_shared_mutation_control() {
+                    self.spawn_project_entry_paste(
+                        project_id.clone(),
+                        destination_directory.clone(),
+                        window,
+                        cx,
+                    );
+                }
             }
             ProjectTreeViewEvent::SetShowHidden(show_hidden) => {
                 if let Err(error) = self.set_project_panel_show_hidden(*show_hidden) {
@@ -683,6 +758,9 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.require_shared_mutation_control() {
+            return;
+        }
         let Some(services) = self.project.services.get(&project_id).cloned() else {
             return;
         };
@@ -735,6 +813,9 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.require_shared_mutation_control() {
+            return;
+        }
         let Some((project_path, layout)) =
             self.workspace.project(&project_id).and_then(|project| {
                 project
@@ -783,6 +864,9 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.require_shared_mutation_control() {
+            return;
+        }
         let Some(services) = self.project.services.get(&project_id).cloned() else {
             return;
         };
@@ -841,6 +925,9 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.require_shared_mutation_control() {
+            return;
+        }
         let title = self
             .ui_text
             .get(UiTextKey::ProjectFilesDeleteConfirmTitle)
@@ -921,6 +1008,9 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.require_shared_mutation_control() {
+            return;
+        }
         let Some(services) = self.project.services.get(&project_id).cloned() else {
             return;
         };
@@ -967,6 +1057,9 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.require_shared_mutation_control() {
+            return;
+        }
         let Some(clipboard) = self.project.project_tree_clipboard.clone() else {
             return;
         };
@@ -1339,18 +1432,41 @@ impl WorkbenchView {
             self.cancel_project_file_open(&request);
             return;
         };
+        let Some(project_path) = self
+            .workspace
+            .project(&project_id)
+            .and_then(|project| project.location.local_path())
+            .cloned()
+        else {
+            self.cancel_project_file_open(&request);
+            self.load_error = Some("The project has no Host configuration path.".to_string());
+            return;
+        };
+        let config_paths = self.config_paths.clone();
         let read_relative_path = request.relative_path.clone();
-        let io_task = cx.background_spawn(async move { services.read_file(&read_relative_path) });
+        let io_task = cx.background_spawn(async move {
+            load_project_document_with_overrides(
+                &services,
+                &config_paths,
+                &project_path,
+                &read_relative_path,
+            )
+        });
         cx.spawn_in(window, async move |this, cx| {
             let result = io_task.await;
             let _ = this.update_in(cx, |root, window, cx| {
                 match result {
-                    Ok(loaded) => {
-                        root.apply_project_file_open_success(&request, loaded, window, cx);
+                    Ok((loaded, overrides)) => {
+                        root.apply_project_file_open_success(
+                            &request, loaded, overrides, window, cx,
+                        );
                     }
-                    Err(error) => {
+                    Err(ProjectDocumentLoadError::File(error)) => {
                         let message = root.localized_project_file_error(&error);
                         root.apply_project_file_open_error(&request, message);
+                    }
+                    Err(ProjectDocumentLoadError::ProjectSettings(error)) => {
+                        root.apply_project_file_open_error(&request, error.to_string());
                     }
                 }
                 cx.notify();
@@ -1363,6 +1479,7 @@ impl WorkbenchView {
         &mut self,
         request: &ProjectFileLoadRequest,
         loaded: LoadedProjectFile,
+        overrides: crate::config::project_settings::ProjectEditorOverrides,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -1387,10 +1504,11 @@ impl WorkbenchView {
             .document(&document_id)
             .is_none()
         {
-            let language_mode = if self.app_settings.editor.auto_detect_language {
+            let editor_settings = &self.app_settings.editor;
+            let language_mode = if overrides.auto_detect_language(editor_settings) {
                 CodeEditorLanguageMode::Auto
             } else {
-                CodeEditorLanguageMode::from(self.app_settings.editor.default_language.clone())
+                CodeEditorLanguageMode::from(overrides.default_language(editor_settings))
             };
             let breadcrumb_header = loaded.relative_path.to_string_lossy().into_owned();
             let title = loaded
@@ -1399,7 +1517,8 @@ impl WorkbenchView {
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| loaded.relative_path.to_string_lossy().into_owned());
             let config = CodeEditorConfig::new(title, language_mode)
-                .with_editor_settings(&self.app_settings.editor);
+                .with_editor_settings(editor_settings)
+                .with_tab_size(overrides.tab_size(editor_settings));
             let model = ProjectEditorModel::new(
                 document_id.clone(),
                 CodeEditorState::new(&loaded.canonical_path, config, loaded.text),

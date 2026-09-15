@@ -352,6 +352,7 @@ pub struct ProjectTreeView {
     interaction_text: ProjectTreeInteractionText,
     show_hidden: bool,
     show_focus_indicator: bool,
+    shared_mutation_allowed: bool,
     edit_target: Option<ProjectTreeEditTarget>,
     edit_input: Option<Entity<InputState>>,
     edit_subscription: Option<Subscription>,
@@ -383,6 +384,7 @@ impl ProjectTreeView {
             interaction_text: ProjectTreeInteractionText::default(),
             show_hidden: false,
             show_focus_indicator: true,
+            shared_mutation_allowed: true,
             edit_target: None,
             edit_input: None,
             edit_subscription: None,
@@ -443,6 +445,21 @@ impl ProjectTreeView {
         cx.notify();
     }
 
+    pub fn set_shared_mutation_allowed(
+        &mut self,
+        shared_mutation_allowed: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.shared_mutation_allowed == shared_mutation_allowed {
+            return;
+        }
+        self.shared_mutation_allowed = shared_mutation_allowed;
+        if !shared_mutation_allowed {
+            self.cancel_edit(cx);
+        }
+        cx.notify();
+    }
+
     fn toggle_show_hidden(&mut self, cx: &mut Context<Self>) {
         cx.emit(ProjectTreeViewEvent::SetShowHidden(!self.show_hidden));
     }
@@ -494,7 +511,9 @@ impl ProjectTreeView {
     }
 
     fn request_project_layout_scaffold(&mut self, cx: &mut Context<Self>) {
-        cx.emit(ProjectTreeViewEvent::CreateProjectLayout);
+        if self.shared_mutation_allowed {
+            cx.emit(ProjectTreeViewEvent::CreateProjectLayout);
+        }
     }
 
     pub fn begin_create_selected(
@@ -503,6 +522,9 @@ impl ProjectTreeView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.shared_mutation_allowed {
+            return;
+        }
         let row = self.selected_row(cx);
         self.begin_create(row, force_directory, window, cx);
     }
@@ -712,6 +734,9 @@ impl ProjectTreeView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.shared_mutation_allowed {
+            return;
+        }
         let (parent, placement) = match row {
             Some(ProjectTreeRenderRow {
                 relative_path: Some(path),
@@ -754,6 +779,9 @@ impl ProjectTreeView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.shared_mutation_allowed {
+            return;
+        }
         let Some(path) = row.relative_path else {
             return;
         };
@@ -798,6 +826,10 @@ impl ProjectTreeView {
     }
 
     fn submit_edit(&mut self, input: &Entity<InputState>, cx: &mut Context<Self>) {
+        if !self.shared_mutation_allowed {
+            self.cancel_edit(cx);
+            return;
+        }
         let Some(target) = self.edit_target.clone() else {
             return;
         };
@@ -986,6 +1018,9 @@ impl ProjectTreeView {
     }
 
     fn on_delete(&mut self, _: &ProjectTreeDelete, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.shared_mutation_allowed {
+            return;
+        }
         self.emit_selected_path_event(ProjectTreeViewEvent::RequestDelete, cx);
     }
 
@@ -994,10 +1029,16 @@ impl ProjectTreeView {
     }
 
     fn on_cut(&mut self, _: &ProjectTreeCut, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.shared_mutation_allowed {
+            return;
+        }
         self.emit_selected_path_event(ProjectTreeViewEvent::CutEntry, cx);
     }
 
     fn on_paste(&mut self, _: &ProjectTreePaste, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.shared_mutation_allowed {
+            return;
+        }
         let destination_directory = self
             .selected_row(cx)
             .as_ref()
@@ -1040,6 +1081,7 @@ impl Render for ProjectTreeView {
         let tree_has_keyboard_focus = self.is_focused(window, cx);
         let show_hidden = self.show_hidden;
         let show_focus_indicator = self.show_focus_indicator;
+        let shared_mutation_allowed = self.shared_mutation_allowed;
         let tree = tree(&self.tree, move |ix, entry, selected, _window, cx| {
             let id = entry.item().id.as_str().to_string();
             if id == EDIT_ROW_ID {
@@ -1167,6 +1209,9 @@ impl Render for ProjectTreeView {
             .item(PopupMenuItem::separator())
             .item(
                 PopupMenuItem::new(text.cut.clone()).on_click(move |_, _, cx| {
+                    if !shared_mutation_allowed {
+                        return;
+                    }
                     let _ = cut_view.update(cx, |_, view_cx| {
                         view_cx.emit(ProjectTreeViewEvent::CutEntry(cut_path.clone()));
                     });
@@ -1181,6 +1226,9 @@ impl Render for ProjectTreeView {
             )
             .item(
                 PopupMenuItem::new(text.paste.clone()).on_click(move |_, _, cx| {
+                    if !shared_mutation_allowed {
+                        return;
+                    }
                     let destination_directory = destination_directory.clone();
                     let _ = paste_view.update(cx, |_, view_cx| {
                         view_cx.emit(ProjectTreeViewEvent::PasteEntry {
@@ -1200,6 +1248,9 @@ impl Render for ProjectTreeView {
             )
             .item(
                 PopupMenuItem::new(text.delete.clone()).on_click(move |_, _, cx| {
+                    if !shared_mutation_allowed {
+                        return;
+                    }
                     let _ = delete_view.update(cx, |_, view_cx| {
                         view_cx.emit(ProjectTreeViewEvent::RequestDelete(delete_path.clone()));
                     });

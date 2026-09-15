@@ -301,15 +301,20 @@ fn upsert_codex_trust_block(source: &str, key: &str, hash: &str) -> String {
             })
             .map(|(index, _)| index)
             .unwrap_or(lines.len());
-        let enabled = lines[start + 1..end]
+        let block = &lines[start + 1..end];
+        let enabled = block
             .iter()
             .find(|line| line.trim_start().starts_with("enabled ="))
             .cloned();
+        let separated = block.last().is_some_and(|line| line.is_empty());
         let mut replacement = vec![header.clone()];
         if let Some(enabled) = enabled {
             replacement.push(enabled);
         }
         replacement.push(format!("trusted_hash = \"{hash}\""));
+        if separated {
+            replacement.push(String::new());
+        }
         lines.splice(start..end, replacement);
     } else {
         if lines.last().is_some_and(|line| !line.is_empty()) {
@@ -392,7 +397,9 @@ fn write_executable(path: &Path, source: &[u8]) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        if fs::metadata(path)?.permissions().mode() & 0o777 != 0o700 {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        }
     }
     Ok(())
 }
@@ -401,7 +408,9 @@ fn restrict_directory(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        if fs::metadata(path)?.permissions().mode() & 0o777 != 0o700 {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        }
     }
     let _ = path;
     Ok(())
@@ -453,7 +462,7 @@ mod tests {
     #[cfg(unix)]
     use std::{
         io::Write as _,
-        os::unix::fs::PermissionsExt as _,
+        os::unix::fs::{MetadataExt as _, PermissionsExt as _},
         process::{Command, Stdio},
     };
 
@@ -536,7 +545,41 @@ mod tests {
         .unwrap();
 
         install_managed_hooks_at(&config_dir, &home).unwrap();
+        #[cfg(unix)]
+        let managed_paths = [
+            config_dir
+                .join("agent-hooks")
+                .join(managed_hook_file_name()),
+            home.join(".claude/settings.json"),
+            home.join(".codex/hooks.json"),
+            home.join(".codex/config.toml"),
+            home.join(".grok/hooks").join(GROK_HOOK_FILE_NAME),
+            home.join(".config/opencode/plugins/yttt-agent-status.js"),
+            home.join(".omp/agent/extensions/yttt-agent-status.ts"),
+            home.join(".pi/agent/extensions/yttt-agent-status.ts"),
+        ];
+        #[cfg(unix)]
+        let managed_inodes = managed_paths
+            .iter()
+            .map(|path| fs::metadata(path).unwrap().ino())
+            .collect::<Vec<_>>();
+        #[cfg(unix)]
+        let codex_trust = fs::read_to_string(home.join(".codex/config.toml")).unwrap();
         install_managed_hooks_at(&config_dir, &home).unwrap();
+        #[cfg(unix)]
+        assert_eq!(
+            fs::read_to_string(home.join(".codex/config.toml")).unwrap(),
+            codex_trust
+        );
+        #[cfg(unix)]
+        for (path, inode) in managed_paths.iter().zip(managed_inodes) {
+            assert_eq!(
+                fs::metadata(path).unwrap().ino(),
+                inode,
+                "{}",
+                path.display()
+            );
+        }
 
         let claude = fs::read_to_string(home.join(".claude/settings.json")).unwrap();
         assert!(claude.contains("\"theme\": \"dark\""));

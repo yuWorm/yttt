@@ -15,8 +15,9 @@ use yttt_protocol::{
     workspace::{
         DraftRef, MAX_WORKSPACE_MANIFEST_BYTES, WorkspaceConfig, WorkspaceConfigRevision,
         WorkspaceDirectory, WorkspaceDirectoryEntry, WorkspaceDirectoryEntryKind, WorkspaceDraft,
-        WorkspaceEnvironment, WorkspaceId, WorkspaceOperationId, WorkspaceRequest,
-        WorkspaceResponse, WorkspaceSnapshot, WorkspaceSummary,
+        WorkspaceEnvironment, WorkspaceId, WorkspaceOperationId, WorkspaceProjectConfig,
+        WorkspaceProjectConfigFile, WorkspaceRequest, WorkspaceResponse, WorkspaceSnapshot,
+        WorkspaceSummary, encode_project_path,
     },
 };
 
@@ -34,6 +35,7 @@ const MAX_BROWSE_ENTRIES: usize = 4096;
 pub struct WorkspaceService {
     state_root: PathBuf,
     config_root: PathBuf,
+    project_config: WorkspaceProjectConfig,
     workspace_root: PathBuf,
     environment_id: String,
     drafts: crate::drafts::DraftObjects,
@@ -132,7 +134,11 @@ impl WorkspaceService {
     ///
     /// Workspace files live in state_root; config_root is the existing environment config,
     /// supplied explicitly by the desktop or standalone Server bootstrap.
-    pub fn new(state_root: impl AsRef<Path>, config_root: impl AsRef<Path>) -> io::Result<Self> {
+    pub fn new(
+        state_root: impl AsRef<Path>,
+        config_root: impl AsRef<Path>,
+        project_config: WorkspaceProjectConfig,
+    ) -> io::Result<Self> {
         let state_root = state_root.as_ref().to_path_buf();
         let config_root = config_root.as_ref().to_path_buf();
         let workspace_root = state_root.join("workspaces");
@@ -205,6 +211,7 @@ impl WorkspaceService {
         Ok(Self {
             state_root,
             config_root,
+            project_config,
             workspace_root,
             environment_id,
             drafts,
@@ -305,16 +312,24 @@ impl WorkspaceService {
         match request {
             WorkspaceRequest::AgentSessions { .. } => unreachable!("handled before the state lock"),
             WorkspaceRequest::InstallAgentHooks => {
-                let home = environment(&self.environment_id, &self.config_root)?
-                    .home
-                    .to_path()
-                    .map_err(|error| failure(FailureCode::Internal, error.to_string(), false))?;
+                let home = environment(
+                    &self.environment_id,
+                    &self.config_root,
+                    &self.project_config,
+                )?
+                .home
+                .to_path()
+                .map_err(|error| failure(FailureCode::Internal, error.to_string(), false))?;
                 yttt_agent_providers::installer::install_managed_hooks_at(&self.config_root, &home)
                     .map_err(|error| failure(FailureCode::Internal, error.to_string(), false))?;
                 Ok(WorkspaceResponse::AgentHooksInstalled)
             }
-            WorkspaceRequest::Environment => environment(&self.environment_id, &self.config_root)
-                .map(WorkspaceResponse::Environment),
+            WorkspaceRequest::Environment => environment(
+                &self.environment_id,
+                &self.config_root,
+                &self.project_config,
+            )
+            .map(WorkspaceResponse::Environment),
             WorkspaceRequest::Browse {
                 path,
                 include_hidden,
@@ -327,6 +342,20 @@ impl WorkspaceService {
                 expected_revision,
                 bytes,
             } => self.write_config(relative_path, expected_revision, bytes),
+            WorkspaceRequest::ReadProjectConfig { project_root, file } => self
+                .read_project_config(project_root, file)
+                .map(WorkspaceResponse::Config),
+            WorkspaceRequest::WriteProjectConfig {
+                project_root,
+                file,
+                expected_revision,
+                bytes,
+            } => self.write_project_config(project_root, file, expected_revision, bytes),
+            WorkspaceRequest::DeleteProjectConfig {
+                project_root,
+                file,
+                expected_revision,
+            } => self.delete_project_config(project_root, file, expected_revision),
             WorkspaceRequest::ListConfig { relative_directory } => {
                 let path = self.config_directory(&relative_directory, false)?;
                 let mut entries = Vec::new();
@@ -405,26 +434,7 @@ impl WorkspaceService {
             WorkspaceRequest::DeleteConfig {
                 relative_path,
                 expected_revision,
-            } => {
-                let config = self.read_config(&relative_path)?;
-                if config.as_ref().map(|value| &value.revision) != Some(&expected_revision) {
-                    return Err(failure(
-                        FailureCode::Conflict,
-                        "configuration changed before deletion",
-                        false,
-                    ));
-                }
-                let path = self.existing_config_path(&relative_path)?.ok_or_else(|| {
-                    failure(FailureCode::Conflict, "configuration was removed", false)
-                })?;
-                fs::remove_file(&path)
-                    .map_err(|error| filesystem_failure("delete configuration", error))?;
-                #[cfg(unix)]
-                File::open(path.parent().unwrap())
-                    .and_then(|directory| directory.sync_all())
-                    .map_err(|error| filesystem_failure("persist configuration deletion", error))?;
-                Ok(WorkspaceResponse::ConfigDeleted)
-            }
+            } => self.delete_config(&relative_path, expected_revision),
             WorkspaceRequest::Open { workspace_id } => Ok(self.open(&state, workspace_id)),
             WorkspaceRequest::List => {
                 let mut entries = state
@@ -666,7 +676,121 @@ impl WorkspaceService {
         relative_path: &ProjectRelativePath,
     ) -> Result<Option<WorkspaceConfig>, ProtocolFailure> {
         validate_config_path(relative_path)?;
-        let Some(path) = self.existing_config_path(relative_path)? else {
+        Self::read_config_at(&self.config_root, relative_path)
+    }
+
+    fn read_project_config(
+        &self,
+        project_root: HostPath,
+        file: WorkspaceProjectConfigFile,
+    ) -> Result<Option<WorkspaceConfig>, ProtocolFailure> {
+        let (config_root, relative_path) = self.project_config_root(project_root, file)?;
+        Self::read_config_at(&config_root, &relative_path)
+    }
+
+    fn write_config(
+        &self,
+        relative_path: ProjectRelativePath,
+        expected_revision: Option<WorkspaceConfigRevision>,
+        bytes: Vec<u8>,
+    ) -> Result<WorkspaceResponse, ProtocolFailure> {
+        validate_config_path(&relative_path)?;
+        Self::write_config_at(&self.config_root, relative_path, expected_revision, bytes)
+    }
+
+    fn write_project_config(
+        &self,
+        project_root: HostPath,
+        file: WorkspaceProjectConfigFile,
+        expected_revision: Option<WorkspaceConfigRevision>,
+        bytes: Vec<u8>,
+    ) -> Result<WorkspaceResponse, ProtocolFailure> {
+        self.ensure_project_config_mutable()?;
+        let (config_root, relative_path) = self.project_config_root(project_root, file)?;
+        Self::write_config_at(&config_root, relative_path, expected_revision, bytes)
+    }
+
+    fn delete_config(
+        &self,
+        relative_path: &ProjectRelativePath,
+        expected_revision: WorkspaceConfigRevision,
+    ) -> Result<WorkspaceResponse, ProtocolFailure> {
+        validate_config_path(relative_path)?;
+        Self::delete_config_at(&self.config_root, relative_path, expected_revision)
+    }
+
+    fn delete_project_config(
+        &self,
+        project_root: HostPath,
+        file: WorkspaceProjectConfigFile,
+        expected_revision: WorkspaceConfigRevision,
+    ) -> Result<WorkspaceResponse, ProtocolFailure> {
+        self.ensure_project_config_mutable()?;
+        let (config_root, relative_path) = self.project_config_root(project_root, file)?;
+        Self::delete_config_at(&config_root, &relative_path, expected_revision)
+    }
+
+    fn ensure_project_config_mutable(&self) -> Result<(), ProtocolFailure> {
+        if matches!(
+            &self.project_config,
+            WorkspaceProjectConfig::ReadOnlyProject
+        ) {
+            return Err(failure(
+                FailureCode::PermissionDenied,
+                "project configuration is read-only",
+                false,
+            ));
+        }
+        Ok(())
+    }
+
+    fn project_config_root(
+        &self,
+        project_root: HostPath,
+        file: WorkspaceProjectConfigFile,
+    ) -> Result<(PathBuf, ProjectRelativePath), ProtocolFailure> {
+        let project_root = project_root.to_path().map_err(|error| {
+            failure(
+                FailureCode::InvalidRequest,
+                format!("invalid project root: {error}"),
+                false,
+            )
+        })?;
+        let project_root = fs::canonicalize(&project_root)
+            .map_err(|error| filesystem_failure("resolve project root", error))?;
+        if !project_root.is_dir() {
+            return Err(failure(
+                FailureCode::InvalidRequest,
+                "project root is not a directory",
+                false,
+            ));
+        }
+        let config_root = match &self.project_config {
+            WorkspaceProjectConfig::Project | WorkspaceProjectConfig::ReadOnlyProject => {
+                project_root.join(".yttt")
+            }
+            WorkspaceProjectConfig::Overlay { root } => {
+                let overlay_root = root.to_path().map_err(|error| {
+                    failure(
+                        FailureCode::Internal,
+                        format!("invalid project configuration overlay root: {error}"),
+                        false,
+                    )
+                })?;
+                existing_directory_not_symlink(&overlay_root)?;
+                overlay_root.join(encode_project_path(&project_root))
+            }
+        };
+        let relative_path = ProjectRelativePath::from_utf8(file.file_name())
+            .expect("project configuration file names are valid relative paths");
+        Ok((config_root, relative_path))
+    }
+
+    fn read_config_at(
+        config_root: &Path,
+        relative_path: &ProjectRelativePath,
+    ) -> Result<Option<WorkspaceConfig>, ProtocolFailure> {
+        let Some(path) = Self::existing_config_path(config_root, relative_path)? else {
             return Ok(None);
         };
         let bytes = read_bounded_file(&path, MAX_CONFIG_BYTES).map_err(|error| {
@@ -683,13 +807,12 @@ impl WorkspaceService {
         }))
     }
 
-    fn write_config(
-        &self,
+    fn write_config_at(
+        config_root: &Path,
         relative_path: ProjectRelativePath,
         expected_revision: Option<WorkspaceConfigRevision>,
         bytes: Vec<u8>,
     ) -> Result<WorkspaceResponse, ProtocolFailure> {
-        validate_config_path(&relative_path)?;
         if bytes.len() > MAX_CONFIG_BYTES {
             return Err(failure(
                 FailureCode::ResourceLimit,
@@ -697,7 +820,7 @@ impl WorkspaceService {
                 false,
             ));
         }
-        let current = self.read_config(&relative_path)?;
+        let current = Self::read_config_at(config_root, &relative_path)?;
         if current.as_ref().map(|config| &config.revision) != expected_revision.as_ref() {
             return Err(failure(
                 FailureCode::Conflict,
@@ -706,7 +829,7 @@ impl WorkspaceService {
             ));
         }
 
-        let path = self.create_config_path(&relative_path)?;
+        let path = Self::create_config_path(config_root, &relative_path)?;
         let temporary_file = random_temporary_file();
         atomic_write(&path, &bytes, temporary_file).map_err(|error| {
             failure(
@@ -721,11 +844,32 @@ impl WorkspaceService {
         })
     }
 
+    fn delete_config_at(
+        config_root: &Path,
+        relative_path: &ProjectRelativePath,
+        expected_revision: WorkspaceConfigRevision,
+    ) -> Result<WorkspaceResponse, ProtocolFailure> {
+        let config = Self::read_config_at(config_root, relative_path)?;
+        if config.as_ref().map(|value| &value.revision) != Some(&expected_revision) {
+            return Err(failure(
+                FailureCode::Conflict,
+                "configuration changed before deletion",
+                false,
+            ));
+        }
+        let path = Self::existing_config_path(config_root, relative_path)?
+            .ok_or_else(|| failure(FailureCode::Conflict, "configuration was removed", false))?;
+        fs::remove_file(&path)
+            .map_err(|error| filesystem_failure("delete configuration", error))?;
+        sync_config_parent(&path)?;
+        Ok(WorkspaceResponse::ConfigDeleted)
+    }
+
     fn existing_config_path(
-        &self,
+        config_root: &Path,
         relative_path: &ProjectRelativePath,
     ) -> Result<Option<PathBuf>, ProtocolFailure> {
-        let mut current = self.config_root.clone();
+        let mut current = config_root.to_path_buf();
         if !existing_directory_not_symlink(&current)? {
             return Ok(None);
         }
@@ -765,10 +909,10 @@ impl WorkspaceService {
     }
 
     fn create_config_path(
-        &self,
+        config_root: &Path,
         relative_path: &ProjectRelativePath,
     ) -> Result<PathBuf, ProtocolFailure> {
-        let mut current = self.config_root.clone();
+        let mut current = config_root.to_path_buf();
         ensure_directory_not_symlink(&current).map_err(config_directory_failure)?;
         let (name, parents) = relative_path.segments.split_last().ok_or_else(|| {
             failure(
@@ -858,6 +1002,7 @@ fn scan_agent_history(
 fn environment(
     environment_id: &str,
     config_root: &Path,
+    project_config: &WorkspaceProjectConfig,
 ) -> Result<WorkspaceEnvironment, ProtocolFailure> {
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
         .map(PathBuf::from)
@@ -894,6 +1039,7 @@ fn environment(
         environment_id: environment_id.to_string(),
         config_root: HostPath::from_path(config_root)
             .map_err(|error| failure(FailureCode::Internal, error.to_string(), false))?,
+        project_config: project_config.clone(),
         shell_candidates,
         home,
         platform: std::env::consts::OS.to_string(),
@@ -1241,6 +1387,12 @@ fn ensure_directory_not_symlink(path: &Path) -> io::Result<()> {
             "path exists but is not a directory",
         )),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                ensure_directory_not_symlink(parent)?;
+            }
             fs::create_dir(path)?;
             ensure_directory_not_symlink(path)
         }
@@ -1369,8 +1521,9 @@ mod tests {
     use yttt_protocol::{
         FailureCode, HostPath, ProjectRelativePath,
         workspace::{
-            WorkspaceDirectoryEntryKind, WorkspaceId, WorkspaceOperationId, WorkspaceRequest,
-            WorkspaceSnapshot,
+            WorkspaceConfigRevision, WorkspaceDirectoryEntryKind, WorkspaceId,
+            WorkspaceOperationId, WorkspaceProjectConfig, WorkspaceProjectConfigFile,
+            WorkspaceRequest, WorkspaceResponse, WorkspaceSnapshot, encode_project_path,
         },
     };
 
@@ -1386,6 +1539,9 @@ mod tests {
 
     fn snapshot(name: &str) -> WorkspaceSnapshot {
         WorkspaceSnapshot::new(json!({ "layout": name })).unwrap()
+    }
+    fn service(root: &std::path::Path) -> WorkspaceService {
+        WorkspaceService::new(root, root.join("config"), WorkspaceProjectConfig::Project).unwrap()
     }
 
     fn acquire(service: &WorkspaceService, client: &ClientInstanceId) {
@@ -1431,7 +1587,7 @@ mod tests {
     #[test]
     fn only_the_controller_can_commit_and_takeover_revokes_the_prior_controller() {
         let root = tempdir().unwrap();
-        let service = WorkspaceService::new(root.path(), root.path().join("config")).unwrap();
+        let service = service(root.path());
         let first = client("first");
         let second = client("second");
         acquire(&service, &first);
@@ -1469,7 +1625,7 @@ mod tests {
     #[test]
     fn another_workspace_cannot_bypass_profile_control_or_takeover() {
         let root = tempdir().unwrap();
-        let service = WorkspaceService::new(root.path(), root.path().join("config")).unwrap();
+        let service = service(root.path());
         let first = client("first");
         let second = client("second");
         acquire(&service, &first);
@@ -1510,7 +1666,7 @@ mod tests {
     #[test]
     fn disconnect_releases_control_for_the_next_client_without_erasing_workspace_state() {
         let root = tempdir().unwrap();
-        let service = WorkspaceService::new(root.path(), root.path().join("config")).unwrap();
+        let service = service(root.path());
         let first = client("first");
         let second = client("second");
         acquire(&service, &first);
@@ -1542,6 +1698,219 @@ mod tests {
             panic!("opened workspace")
         };
         assert_eq!(saved, snapshot("saved"));
+    }
+
+    #[test]
+    fn environment_reports_explicit_project_configuration_routing() {
+        let root = tempdir().unwrap();
+        let project_config = WorkspaceProjectConfig::Overlay {
+            root: HostPath::from_path(&root.path().join("project-config-overlay")).unwrap(),
+        };
+        let service = WorkspaceService::new(
+            root.path(),
+            root.path().join("config"),
+            project_config.clone(),
+        )
+        .unwrap();
+
+        let WorkspaceResponse::Environment(environment) = service
+            .handle(&client("reader"), WorkspaceRequest::Environment)
+            .unwrap()
+        else {
+            panic!("workspace environment")
+        };
+
+        assert_eq!(environment.project_config, project_config);
+    }
+
+    #[test]
+    fn observers_read_normal_project_configuration_without_control_or_creation() {
+        let root = tempdir().unwrap();
+        let project = root.path().join("project");
+        fs::create_dir_all(project.join(".yttt")).unwrap();
+        fs::write(project.join(".yttt/settings.toml"), b"settings").unwrap();
+        fs::write(project.join(".yttt/layout.toml"), b"layout").unwrap();
+        let service = service(root.path());
+        let reader = client("reader");
+
+        for (file, bytes) in [
+            (WorkspaceProjectConfigFile::Settings, b"settings".as_slice()),
+            (WorkspaceProjectConfigFile::Layout, b"layout".as_slice()),
+        ] {
+            let WorkspaceResponse::Config(Some(config)) = service
+                .handle(
+                    &reader,
+                    WorkspaceRequest::ReadProjectConfig {
+                        project_root: HostPath::from_path(&project).unwrap(),
+                        file,
+                    },
+                )
+                .unwrap()
+            else {
+                panic!("project configuration");
+            };
+            assert_eq!(config.bytes, bytes);
+        }
+
+        let absent_project = root.path().join("absent-project");
+        fs::create_dir(&absent_project).unwrap();
+        assert!(matches!(
+            service
+                .handle(
+                    &reader,
+                    WorkspaceRequest::ReadProjectConfig {
+                        project_root: HostPath::from_path(&absent_project).unwrap(),
+                        file: WorkspaceProjectConfigFile::Settings,
+                    },
+                )
+                .unwrap(),
+            WorkspaceResponse::Config(None)
+        ));
+        assert!(!absent_project.join(".yttt").exists());
+    }
+
+    #[test]
+    fn observers_read_project_configuration_from_the_overlay_root() {
+        let root = tempdir().unwrap();
+        let project = root.path().join("project");
+        fs::create_dir(&project).unwrap();
+        let overlay = root.path().join("overlay");
+        let overlay_file = overlay
+            .join(encode_project_path(&project.canonicalize().unwrap()))
+            .join("layout.toml");
+        fs::create_dir_all(overlay_file.parent().unwrap()).unwrap();
+        fs::write(&overlay_file, b"overlay-layout").unwrap();
+        let service = WorkspaceService::new(
+            root.path(),
+            root.path().join("config"),
+            WorkspaceProjectConfig::Overlay {
+                root: HostPath::from_path(&overlay).unwrap(),
+            },
+        )
+        .unwrap();
+
+        let WorkspaceResponse::Config(Some(config)) = service
+            .handle(
+                &client("reader"),
+                WorkspaceRequest::ReadProjectConfig {
+                    project_root: HostPath::from_path(&project).unwrap(),
+                    file: WorkspaceProjectConfigFile::Layout,
+                },
+            )
+            .unwrap()
+        else {
+            panic!("project configuration");
+        };
+
+        assert_eq!(config.bytes, b"overlay-layout");
+    }
+
+    #[test]
+    fn read_only_project_configuration_rejects_controller_mutations() {
+        let root = tempdir().unwrap();
+        let project = root.path().join("project");
+        fs::create_dir(&project).unwrap();
+        let service = WorkspaceService::new(
+            root.path(),
+            root.path().join("config"),
+            WorkspaceProjectConfig::ReadOnlyProject,
+        )
+        .unwrap();
+        let owner = client("owner");
+        acquire(&service, &owner);
+        let project_root = HostPath::from_path(&project).unwrap();
+
+        assert_eq!(
+            service
+                .handle(
+                    &owner,
+                    WorkspaceRequest::WriteProjectConfig {
+                        project_root: project_root.clone(),
+                        file: WorkspaceProjectConfigFile::Settings,
+                        expected_revision: None,
+                        bytes: b"settings".to_vec(),
+                    },
+                )
+                .unwrap_err()
+                .code,
+            FailureCode::PermissionDenied
+        );
+        assert_eq!(
+            service
+                .handle(
+                    &owner,
+                    WorkspaceRequest::DeleteProjectConfig {
+                        project_root,
+                        file: WorkspaceProjectConfigFile::Settings,
+                        expected_revision: WorkspaceConfigRevision {
+                            content_sha256: [0; 32],
+                        },
+                    },
+                )
+                .unwrap_err()
+                .code,
+            FailureCode::PermissionDenied
+        );
+        assert!(!project.join(".yttt").exists());
+    }
+
+    #[test]
+    fn project_configuration_write_uses_compare_and_swap() {
+        let root = tempdir().unwrap();
+        let project = root.path().join("project");
+        fs::create_dir(&project).unwrap();
+        let service = service(root.path());
+        let owner = client("owner");
+        acquire(&service, &owner);
+        let project_root = HostPath::from_path(&project).unwrap();
+
+        let WorkspaceResponse::ConfigWritten { revision, .. } = service
+            .handle(
+                &owner,
+                WorkspaceRequest::WriteProjectConfig {
+                    project_root: project_root.clone(),
+                    file: WorkspaceProjectConfigFile::Settings,
+                    expected_revision: None,
+                    bytes: b"original".to_vec(),
+                },
+            )
+            .unwrap()
+        else {
+            panic!("project configuration write");
+        };
+        assert_eq!(
+            service
+                .handle(
+                    &owner,
+                    WorkspaceRequest::WriteProjectConfig {
+                        project_root: project_root.clone(),
+                        file: WorkspaceProjectConfigFile::Settings,
+                        expected_revision: None,
+                        bytes: b"stale".to_vec(),
+                    },
+                )
+                .unwrap_err()
+                .code,
+            FailureCode::Conflict
+        );
+        let WorkspaceResponse::ConfigWritten { .. } = service
+            .handle(
+                &owner,
+                WorkspaceRequest::WriteProjectConfig {
+                    project_root,
+                    file: WorkspaceProjectConfigFile::Settings,
+                    expected_revision: Some(revision),
+                    bytes: b"updated".to_vec(),
+                },
+            )
+            .unwrap()
+        else {
+            panic!("project configuration compare-and-swap");
+        };
+        assert_eq!(
+            fs::read(project.join(".yttt/settings.toml")).unwrap(),
+            b"updated"
+        );
     }
 
     #[cfg(unix)]
@@ -1604,7 +1973,7 @@ mod tests {
         let root = tempdir().unwrap();
         let outside = root.path().join("outside-settings");
         fs::write(&outside, b"outside").unwrap();
-        let service = WorkspaceService::new(root.path(), root.path().join("config")).unwrap();
+        let service = service(root.path());
         symlink(&outside, root.path().join("config").join("settings")).unwrap();
 
         let failure = service
@@ -1618,12 +1987,58 @@ mod tests {
         assert_eq!(failure.code, FailureCode::PermissionDenied);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn project_configuration_rejects_symbolic_link_escape() {
+        let root = tempdir().unwrap();
+        let project = root.path().join("project");
+        let outside = root.path().join("private-settings");
+        fs::create_dir_all(project.join(".yttt")).unwrap();
+        fs::write(&outside, b"private").unwrap();
+        symlink(&outside, project.join(".yttt/settings.toml")).unwrap();
+        let service = service(root.path());
+        let project_root = HostPath::from_path(&project).unwrap();
+
+        assert_eq!(
+            service
+                .handle(
+                    &client("reader"),
+                    WorkspaceRequest::ReadProjectConfig {
+                        project_root: project_root.clone(),
+                        file: WorkspaceProjectConfigFile::Settings,
+                    },
+                )
+                .unwrap_err()
+                .code,
+            FailureCode::PermissionDenied
+        );
+
+        let owner = client("owner");
+        acquire(&service, &owner);
+        assert_eq!(
+            service
+                .handle(
+                    &owner,
+                    WorkspaceRequest::WriteProjectConfig {
+                        project_root,
+                        file: WorkspaceProjectConfigFile::Settings,
+                        expected_revision: None,
+                        bytes: b"attempted-write".to_vec(),
+                    },
+                )
+                .unwrap_err()
+                .code,
+            FailureCode::PermissionDenied
+        );
+        assert_eq!(fs::read(outside).unwrap(), b"private");
+    }
+
     #[test]
     fn persisted_commit_reopens_without_a_stale_runtime_controller() {
         let root = tempdir().unwrap();
         let owner = client("owner");
         {
-            let service = WorkspaceService::new(root.path(), root.path().join("config")).unwrap();
+            let service = service(root.path());
             acquire(&service, &owner);
             service
                 .handle(
@@ -1639,7 +2054,7 @@ mod tests {
                 .unwrap();
         }
 
-        let reloaded = WorkspaceService::new(root.path(), root.path().join("config")).unwrap();
+        let reloaded = service(root.path());
         let opened = reloaded
             .handle(
                 &client("reader"),
@@ -1662,7 +2077,7 @@ mod tests {
     #[test]
     fn failed_atomic_replace_keeps_the_old_revision_and_can_be_retried() {
         let root = tempdir().unwrap();
-        let service = WorkspaceService::new(root.path(), root.path().join("config")).unwrap();
+        let service = service(root.path());
         let owner = client("owner");
         acquire(&service, &owner);
         let state_path = root.path().join("workspaces").join("default.json");
@@ -1705,10 +2120,14 @@ mod tests {
 #[cfg(test)]
 mod publication_tests {
     use super::*;
-    use yttt_protocol::workspace::{DraftBase, DraftContentRevision, MAX_DRAFT_CONTENT_BYTES};
+    use yttt_protocol::workspace::{
+        DraftBase, DraftContentRevision, MAX_DRAFT_CONTENT_BYTES, WorkspaceProjectConfig,
+    };
 
     fn setup(root: &Path) -> (WorkspaceService, ClientInstanceId) {
-        let service = WorkspaceService::new(root, root.join("config")).unwrap();
+        let service =
+            WorkspaceService::new(root, root.join("config"), WorkspaceProjectConfig::Project)
+                .unwrap();
         let client = ClientInstanceId::new("publisher");
         let transfer = service
             .control

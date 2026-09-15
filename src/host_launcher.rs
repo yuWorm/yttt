@@ -10,10 +10,10 @@ use std::{
 use sha2::{Digest as _, Sha256};
 use yttt_core::model::ids::{ClientInstanceId, ProfileId};
 use yttt_protocol::{
-    BuildIdentity, ClientRequest, ConnectionChannel, ControlMessage, HostBlocker, HostResponse,
-    LIFECYCLE_PROTOCOL_VERSION, LifecycleMessage, LifecycleRequest, LifecycleRequestEnvelope,
-    LifecycleResponse, LifecycleResponseEnvelope, ProtocolRange, RESOURCE_PROTOCOL_VERSION,
-    Request, Response,
+    BuildIdentity, ClientRequest, ConnectionChannel, ControlMessage, HostBlocker, HostPath,
+    HostResponse, LIFECYCLE_PROTOCOL_VERSION, LifecycleMessage, LifecycleRequest,
+    LifecycleRequestEnvelope, LifecycleResponse, LifecycleResponseEnvelope, ProtocolRange,
+    RESOURCE_PROTOCOL_VERSION, Request, Response, workspace::WorkspaceProjectConfig,
 };
 use yttt_transport_local::{
     AuthToken, AuthenticatedHost, ClientIdentity, LocalConnector, LocalEndpoint, LocalListener,
@@ -21,11 +21,23 @@ use yttt_transport_local::{
     send_lifecycle,
 };
 
-use crate::config::profile::AppProfile;
+use crate::config::profile::{AppProfile, ProjectConfigPolicy};
 
 const HOST_READY_TIMEOUT: Duration = Duration::from_secs(8);
 const HOST_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const RESOURCE_COMPATIBILITY: &str = "yttt-resource-v1";
+
+fn workspace_project_config(
+    profile: &AppProfile,
+) -> Result<WorkspaceProjectConfig, HostLaunchError> {
+    match profile.project_config_policy() {
+        ProjectConfigPolicy::Normal => Ok(WorkspaceProjectConfig::Project),
+        ProjectConfigPolicy::ReadOnly => Ok(WorkspaceProjectConfig::ReadOnlyProject),
+        ProjectConfigPolicy::Overlay => Ok(WorkspaceProjectConfig::Overlay {
+            root: HostPath::from_path(&profile.paths().state.join("project-config-overlay"))?,
+        }),
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProcessRole {
@@ -73,6 +85,8 @@ pub enum HostLaunchError {
     RequestFailed(String),
     #[error("Host I/O failed: {0}")]
     Io(#[from] io::Error),
+    #[error("Host project configuration path is invalid: {0}")]
+    ProjectConfigPath(#[from] yttt_protocol::ProjectPathError),
     #[error("Host transport failed: {0}")]
     Transport(#[from] yttt_transport_local::TransportError),
     #[error("Host handshake failed: {0}")]
@@ -297,6 +311,12 @@ impl HostLauncher {
             ExistingHostAction::Spawn => {}
         }
 
+        let project_config = workspace_project_config(&self.profile)?;
+        let project_config_kind = match &project_config {
+            WorkspaceProjectConfig::Project => "project",
+            WorkspaceProjectConfig::ReadOnlyProject => "read_only_project",
+            WorkspaceProjectConfig::Overlay { .. } => "overlay",
+        };
         fs::create_dir_all(&self.profile.paths().logs)?;
         let log_file = open_host_log(&self.profile.paths().logs.join("host.log"))?;
         let error_log = log_file.try_clone()?;
@@ -311,6 +331,14 @@ impl HostLauncher {
             .arg(&self.profile.paths().state)
             .arg("--config-root")
             .arg(&self.profile.paths().config)
+            .arg("--project-config")
+            .arg(project_config_kind);
+        if let WorkspaceProjectConfig::Overlay { root } = project_config {
+            command
+                .arg("--project-config-overlay-root")
+                .arg(root.to_path()?);
+        }
+        command
             .arg("--auth-token-file")
             .arg(&token_file)
             .arg("--ssh-host-keys-file")
@@ -837,6 +865,7 @@ pub async fn run_host_process(
         runtime_root: parsed.runtime_root,
         state_root: parsed.state_root,
         config_root: parsed.config_root,
+        project_config: parsed.project_config,
         auth_token_file: parsed.auth_token_file,
         ssh_host_keys_file: parsed.ssh_host_keys_file,
         credential_namespace: parsed.credential_namespace,
@@ -854,6 +883,7 @@ struct ParsedHostArgs {
     runtime_root: PathBuf,
     state_root: PathBuf,
     config_root: PathBuf,
+    project_config: WorkspaceProjectConfig,
     auth_token_file: PathBuf,
     ssh_host_keys_file: PathBuf,
     credential_namespace: String,
@@ -896,6 +926,17 @@ impl ParsedHostArgs {
             build_fingerprint: string_value("--build-fingerprint")?,
             resource_compatibility: string_value("--resource-compatibility")?,
         };
+        let project_config = match string_value("--project-config")?.as_str() {
+            "project" => WorkspaceProjectConfig::Project,
+            "read_only_project" => WorkspaceProjectConfig::ReadOnlyProject,
+            "overlay" => WorkspaceProjectConfig::Overlay {
+                root: HostPath::from_path(&PathBuf::from(value("--project-config-overlay-root")?))
+                    .map_err(|_| {
+                        HostLaunchError::InvalidArgument("--project-config-overlay-root")
+                    })?,
+            },
+            _ => return Err(HostLaunchError::InvalidArgument("--project-config")),
+        };
         let lifetime = match optional_string_value("--host-lifetime")?.as_deref() {
             None | Some("independent") => yttt_host::HostLifetime::Independent,
             Some("desktop_owned") => yttt_host::HostLifetime::DesktopOwned,
@@ -906,6 +947,7 @@ impl ParsedHostArgs {
             runtime_root: PathBuf::from(value("--runtime-root")?),
             state_root: PathBuf::from(value("--state-root")?),
             config_root: PathBuf::from(value("--config-root")?),
+            project_config,
             ssh_host_keys_file: PathBuf::from(value("--ssh-host-keys-file")?),
             auth_token_file: PathBuf::from(value("--auth-token-file")?),
             credential_namespace,
@@ -1048,6 +1090,40 @@ mod tests {
             profile_lock_held: Some(false),
             last_connect_error: Some("Host transport failed: entity not found".to_string()),
         }
+    }
+
+    #[test]
+    fn desktop_profile_project_configuration_is_explicit_in_host_metadata() {
+        use crate::config::profile::{EnvironmentKind, HostConnectPolicy, ProfilePersistence};
+
+        let root = tempfile::tempdir().unwrap();
+        let profile = |id, policy| {
+            AppProfile::scoped(
+                ProfileId::new(id),
+                EnvironmentKind::Test,
+                ProfilePersistence::Ephemeral,
+                root.path().join(id),
+                policy,
+                HostConnectPolicy::ProfileDiscovery,
+            )
+        };
+
+        assert_eq!(
+            workspace_project_config(&profile("project", ProjectConfigPolicy::Normal)).unwrap(),
+            WorkspaceProjectConfig::Project
+        );
+        assert_eq!(
+            workspace_project_config(&profile("read-only", ProjectConfigPolicy::ReadOnly)).unwrap(),
+            WorkspaceProjectConfig::ReadOnlyProject
+        );
+        let overlay = profile("overlay", ProjectConfigPolicy::Overlay);
+        assert_eq!(
+            workspace_project_config(&overlay).unwrap(),
+            WorkspaceProjectConfig::Overlay {
+                root: HostPath::from_path(&overlay.paths().state.join("project-config-overlay"))
+                    .unwrap(),
+            }
+        );
     }
 
     #[test]

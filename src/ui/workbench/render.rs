@@ -3,6 +3,11 @@ use super::*;
 impl Render for WorkbenchView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.flush_pending_settings_save(window, cx);
+        self.flush_pending_project_settings_save(window, cx);
+        self.flush_pending_onboarding_completion(window, cx);
+        self.ensure_settings_sync(window, cx);
+        self.ensure_agent_initialization(window, cx);
+        self.ensure_settings_project_target_loaded(window, cx);
         let appearance = self.appearance.runtime();
         self.app_settings.theme.ui_style = appearance.style_id;
         window.set_rem_size(px(appearance.typography.font_size));

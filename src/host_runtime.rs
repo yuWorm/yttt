@@ -110,6 +110,16 @@ enum DesktopHostLifecycle {
     },
 }
 
+fn shared_editing_available(
+    connection_state: &ConnectionState,
+    is_controller: bool,
+    transfer_in_progress: bool,
+) -> bool {
+    matches!(connection_state, ConnectionState::Ready { .. })
+        && is_controller
+        && !transfer_in_progress
+}
+
 impl DesktopHostRuntime {
     pub fn start(profile: AppProfile) -> Result<Arc<Self>, DesktopHostRuntimeError> {
         let launcher = HostLauncher::for_current_desktop(profile.clone())?;
@@ -322,7 +332,11 @@ impl DesktopHostRuntime {
     }
 
     pub fn shared_editing_enabled(&self) -> bool {
-        self.client.is_controller() && self.preparing_transfer().is_none()
+        shared_editing_available(
+            &self.state(),
+            self.client.is_controller(),
+            self.preparing_transfer().is_some(),
+        )
     }
 
     pub fn preparing_transfer(&self) -> Option<String> {
@@ -969,6 +983,31 @@ mod tests {
             ssh_connections: Vec::new(),
             projects: Vec::new(),
         }
+    }
+
+    #[test]
+    fn shared_editing_requires_live_connection_control_and_no_transfer() {
+        let ready = ConnectionState::Ready {
+            host_epoch: 1,
+            connection_sequence: 1,
+        };
+
+        assert!(shared_editing_available(&ready, true, false));
+        assert!(!shared_editing_available(
+            &ConnectionState::Disconnected,
+            true,
+            false
+        ));
+        assert!(!shared_editing_available(
+            &ConnectionState::Reconnecting {
+                attempt: 1,
+                message: "reconnecting".to_string(),
+            },
+            true,
+            false
+        ));
+        assert!(!shared_editing_available(&ready, false, false));
+        assert!(!shared_editing_available(&ready, true, true));
     }
 
     #[test]

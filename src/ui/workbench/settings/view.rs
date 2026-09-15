@@ -1,3 +1,5 @@
+use crate::config::scope::{SettingApply, SettingsScope, setting_apply};
+
 use super::super::*;
 
 pub(in super::super) fn settings_window_content(
@@ -28,7 +30,10 @@ fn settings_sidebar(
 ) -> Div {
     let theme = root.theme_runtime().ui;
     let ui_style = style.ui_style;
-    let visible_groups = root.settings.settings_page.visible_groups(&root.ui_text);
+    let visible_groups = root
+        .settings
+        .settings_page
+        .visible_groups_for_settings_scope(&root.ui_text, root.selected_settings_scope());
     let no_results = visible_groups.is_empty();
     let groups = visible_groups.into_iter().fold(
         div().flex().flex_col().gap(ui_style.spacing.xxs),
@@ -124,11 +129,11 @@ fn settings_content(
 ) -> Div {
     let theme = root.theme_runtime().ui;
     let group = root.settings.settings_page.selected_group;
-    let no_results = root
+    let visible_groups = root
         .settings
         .settings_page
-        .visible_groups(&root.ui_text)
-        .is_empty();
+        .visible_groups_for_settings_scope(&root.ui_text, root.selected_settings_scope());
+    let no_results = visible_groups.is_empty();
     let (title, description) = if no_results {
         (
             root.ui_text.get(UiTextKey::SettingsNoSearchResults),
@@ -138,6 +143,7 @@ fn settings_content(
     } else {
         (group.title(&root.ui_text), group.description(&root.ui_text))
     };
+    let scope_selector = settings_scope_selector(root, style, window, cx);
     let rows = if no_results {
         div()
             .debug_selector(|| "settings-no-results".to_string())
@@ -211,9 +217,248 @@ fn settings_content(
                                 .text_color(theme.text_subtle)
                                 .child(description),
                         ),
-                ),
+                )
+                .child(scope_selector),
         )
         .child(div().flex_1().min_h_0().child(rows))
+}
+fn settings_scope_selector(
+    root: &mut WorkbenchView,
+    style: YtttSettingsLayout,
+    _window: &mut Window,
+    cx: &mut Context<WorkbenchView>,
+) -> Div {
+    let theme = root.theme_runtime().ui;
+    let text = root.ui_text;
+    let scope = root.selected_settings_scope();
+    let selected_index = match scope {
+        SettingsScope::Device => 0,
+        SettingsScope::Host => 1,
+        SettingsScope::Project => 2,
+    };
+    let project_name = root.selected_settings_project_name();
+    let host_name = root
+        .terminal
+        .host_runtime
+        .as_ref()
+        .and_then(|runtime| runtime.remote_label())
+        .unwrap_or(text.get(UiTextKey::SettingsTargetDevice));
+    let profile_name = root
+        .terminal
+        .host_runtime
+        .as_ref()
+        .and_then(|runtime| runtime.remote_environment())
+        .map(|environment| environment.environment_id.as_str())
+        .or_else(|| {
+            root.config_paths
+                .profile()
+                .map(|profile| profile.id().as_str())
+        });
+    let identity = match scope {
+        SettingsScope::Device => text.get(UiTextKey::SettingsScopeDevice).to_string(),
+        SettingsScope::Host => match profile_name {
+            Some(profile) => format!(
+                "{}{host_name} · {profile}",
+                text.get(UiTextKey::SettingsHostIdentity)
+            ),
+            None => format!("{}{host_name}", text.get(UiTextKey::SettingsHostIdentity)),
+        },
+        SettingsScope::Project => project_name
+            .as_ref()
+            .map(|name| format!("{}: {name}", text.get(UiTextKey::SettingsTargetProject)))
+            .unwrap_or_else(|| {
+                text.get(UiTextKey::SettingsProjectTargetUnavailable)
+                    .to_string()
+            }),
+    };
+    let read_only_reason = root.settings_scope_read_only_reason();
+
+    div()
+        .debug_selector(|| "settings-scope-selector".to_string())
+        .flex()
+        .flex_col()
+        .items_end()
+        .gap(style.ui_style.spacing.xs)
+        .child(
+            TabBar::new("settings-scope-tabs")
+                .segmented()
+                .xsmall()
+                .selected_index(selected_index)
+                .on_click(cx.listener(|root, selected_index: &usize, window, cx| {
+                    let scope = match *selected_index {
+                        0 => SettingsScope::Device,
+                        1 => SettingsScope::Host,
+                        2 => SettingsScope::Project,
+                        _ => return,
+                    };
+                    root.select_settings_scope(scope, window, cx);
+                    cx.notify();
+                }))
+                .child(
+                    Tab::new()
+                        .debug_selector(|| "settings-scope-device".to_string())
+                        .label(text.get(UiTextKey::SettingsTargetDevice)),
+                )
+                .child(
+                    Tab::new()
+                        .debug_selector(|| "settings-scope-host".to_string())
+                        .label(text.get(UiTextKey::SettingsTargetHost)),
+                )
+                .child(
+                    Tab::new()
+                        .debug_selector(|| "settings-scope-project".to_string())
+                        .label(text.get(UiTextKey::SettingsTargetProject)),
+                ),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.text_subtle)
+                .child(identity),
+        )
+        .when_some(read_only_reason, |selector, reason| {
+            selector.child(
+                div()
+                    .max_w(px(360.0))
+                    .text_right()
+                    .text_xs()
+                    .text_color(theme.warning)
+                    .child(text.get(reason)),
+            )
+        })
+        .when(
+            scope == SettingsScope::Project && project_name.is_none(),
+            |selector| {
+                selector.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.warning)
+                        .child(text.get(UiTextKey::SettingsProjectTargetUnavailable)),
+                )
+            },
+        )
+        .when(root.has_failed_settings_save(), |selector| {
+            selector.child(settings_failed_save_banner(root, style, cx))
+        })
+}
+
+fn settings_failed_save_banner(
+    root: &mut WorkbenchView,
+    style: YtttSettingsLayout,
+    cx: &mut Context<WorkbenchView>,
+) -> Div {
+    let theme = root.theme_runtime().ui;
+    let text = root.ui_text;
+    let retry_allowed = root.settings_scope_retry_allowed();
+    let message = root
+        .settings
+        .settings_save_error
+        .clone()
+        .unwrap_or_else(|| "A settings save failed.".to_string());
+
+    div()
+        .debug_selector(|| "settings-save-failure".to_string())
+        .flex()
+        .flex_col()
+        .items_end()
+        .gap(style.ui_style.spacing.xs)
+        .max_w(px(360.0))
+        .p(style.ui_style.spacing.sm)
+        .rounded(style.ui_style.radius.compact)
+        .bg(theme.warning.alpha(0.12))
+        .child(
+            div()
+                .text_right()
+                .text_xs()
+                .text_color(theme.warning)
+                .child(message),
+        )
+        .child(
+            div()
+                .flex()
+                .gap(style.ui_style.spacing.xs)
+                .child(
+                    settings_button(
+                        "settings-retry-failed-save",
+                        text.get(UiTextKey::Retry),
+                        true,
+                        theme,
+                        cx,
+                        cx.listener(|this, _, _window, cx| {
+                            if let Err(error) = this.retry_failed_settings_save() {
+                                this.settings.settings_save_error = Some(error.to_string());
+                            }
+                            cx.notify();
+                        }),
+                    )
+                    .disabled(!retry_allowed)
+                    .tab_stop(retry_allowed),
+                )
+                .child(settings_button(
+                    "settings-copy-failed-draft",
+                    text.get(UiTextKey::SettingsCopyDraft),
+                    false,
+                    theme,
+                    cx,
+                    cx.listener(|this, _, _window, cx| {
+                        this.copy_failed_settings_draft(cx);
+                        cx.notify();
+                    }),
+                ))
+                .child(settings_button(
+                    "settings-discard-failed-save",
+                    text.get(UiTextKey::Discard),
+                    false,
+                    theme,
+                    cx,
+                    cx.listener(|this, _, _window, cx| {
+                        this.discard_failed_settings_save(cx);
+                        cx.notify();
+                    }),
+                )),
+        )
+}
+
+fn settings_project_target_status(root: &WorkbenchView, style: YtttSettingsLayout) -> Div {
+    let theme = root.theme_runtime().ui;
+    let text = root.ui_text;
+    let (status, message, color) = if root.selected_settings_project_name().is_none() {
+        (
+            UiTextKey::SettingsProjectTargetUnavailable,
+            None,
+            theme.warning,
+        )
+    } else if let Some(error) = root.project_settings_load_error() {
+        (
+            UiTextKey::SettingsProjectLoadFailed,
+            Some(error),
+            theme.warning,
+        )
+    } else {
+        (UiTextKey::SettingsProjectLoading, None, theme.accent)
+    };
+
+    div()
+        .debug_selector(|| "settings-project-load-status".to_string())
+        .flex()
+        .flex_col()
+        .gap(style.ui_style.spacing.xs)
+        .rounded(style.ui_style.radius.compact)
+        .border(style.ui_style.border.hairline)
+        .border_color(color.alpha(0.5))
+        .bg(color.alpha(0.1))
+        .p(style.ui_style.spacing.md)
+        .text_xs()
+        .text_color(color)
+        .child(text.get(status))
+        .when_some(message, |status, message| {
+            status.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.text_muted)
+                    .child(message.to_string()),
+            )
+        })
 }
 
 fn settings_rows(
@@ -223,6 +468,19 @@ fn settings_rows(
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
+    if root.selected_settings_scope() == SettingsScope::Project {
+        if !root.project_settings_snapshot_is_confirmed() {
+            return settings_project_target_status(root, style);
+        }
+        return match group {
+            SettingsGroupId::Languages | SettingsGroupId::Editor => {
+                settings_project_override_rows(root, group, style, window, cx)
+            }
+            SettingsGroupId::ProjectLayout => settings_project_layout_rows(root, style, cx),
+            _ => div().flex().flex_col(),
+        };
+    }
+
     match group {
         SettingsGroupId::General => settings_general_rows(root, style, window, cx),
         SettingsGroupId::Appearance => settings_appearance_rows(root, style, window, cx),
@@ -231,9 +489,275 @@ fn settings_rows(
         SettingsGroupId::Terminal => settings_terminal_rows(root, style, window, cx),
         SettingsGroupId::Agent => settings_agent_rows(root, style, cx),
         SettingsGroupId::Permissions => settings_permission_rows(root, style, cx),
+        SettingsGroupId::ProjectLayout => div().flex().flex_col(),
         SettingsGroupId::DefaultLayout => settings_default_layout_rows(root, style, cx),
         SettingsGroupId::Keybindings => settings_keybinding_rows(root, style, window, cx),
     }
+}
+
+fn project_override_description(
+    root: &WorkbenchView,
+    key: crate::config::project_settings::ProjectEditorSettingKey,
+    description: &str,
+) -> String {
+    let source = match root
+        .cached_project_editor_setting(key)
+        .map(|setting| setting.source)
+    {
+        Some(crate::config::project_settings::ProjectSettingSource::Project) => {
+            root.ui_text.get(UiTextKey::SettingsSourceProject)
+        }
+        _ => root.ui_text.get(UiTextKey::SettingsSourceHost),
+    };
+    format!(
+        "{description} · {}: {source}",
+        root.ui_text.get(UiTextKey::SettingsEffectiveSource)
+    )
+}
+
+fn project_override_reset_button(
+    id: &'static str,
+    key: crate::config::project_settings::ProjectEditorSettingKey,
+    text: UiText,
+    theme: WorkbenchTheme,
+    cx: &mut Context<WorkbenchView>,
+) -> Button {
+    settings_button(
+        id,
+        text.get(UiTextKey::SettingsUseHostDefault),
+        false,
+        theme,
+        cx,
+        cx.listener(move |this, _, window, cx| {
+            if let Err(error) = this.save_project_editor_setting(key, None, window, cx) {
+                this.load_error = Some(error);
+            }
+            cx.notify();
+        }),
+    )
+}
+
+fn settings_project_override_rows(
+    root: &mut WorkbenchView,
+    group: SettingsGroupId,
+    mut style: YtttSettingsLayout,
+    window: &mut Window,
+    cx: &mut Context<WorkbenchView>,
+) -> Div {
+    use crate::config::project_settings::{ProjectEditorSettingKey, ProjectEditorSettingValue};
+    // Project controls include an explicit reset action; keep their full width below the source.
+    style.stack_rows = true;
+
+    let theme = root.theme_runtime().ui;
+    let text = root.ui_text;
+    match group {
+        SettingsGroupId::Languages => {
+            let auto_detect = root
+                .cached_project_editor_setting(ProjectEditorSettingKey::AutoDetectLanguage)
+                .and_then(|setting| match &setting.value {
+                    ProjectEditorSettingValue::AutoDetectLanguage(value) => Some(*value),
+                    _ => None,
+                })
+                .unwrap_or_else(|| root.editor_auto_detect_language());
+            let default_language_input = root.settings_project_default_language_input(window, cx);
+            let auto_detect_description = project_override_description(
+                root,
+                ProjectEditorSettingKey::AutoDetectLanguage,
+                text.get(UiTextKey::SettingsLanguageDetectionDescription),
+            );
+            let default_language_description = project_override_description(
+                root,
+                ProjectEditorSettingKey::DefaultLanguage,
+                text.get(UiTextKey::SettingsDefaultCodeLanguageDescription),
+            );
+            div()
+                .flex()
+                .flex_col()
+                .child(settings_section_header(
+                    style,
+                    theme,
+                    text.get(UiTextKey::SettingsSectionDetectionDefaults),
+                    true,
+                ))
+                .child(scoped_settings_row(
+                    root,
+                    "editor.auto_detect_language",
+                    style,
+                    theme,
+                    text.get(UiTextKey::SettingsLanguageDetection),
+                    auto_detect_description,
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap(style.ui_style.spacing.sm)
+                        .child(settings_switch(
+                            "settings-project-auto-detect-language",
+                            auto_detect,
+                            theme,
+                            style.ui_style,
+                            cx.listener(|this, checked: &bool, window, cx| {
+                                if let Err(error) = this.save_project_editor_setting(
+                                    ProjectEditorSettingKey::AutoDetectLanguage,
+                                    Some(ProjectEditorSettingValue::AutoDetectLanguage(*checked)),
+                                    window,
+                                    cx,
+                                ) {
+                                    this.load_error = Some(error);
+                                }
+                                cx.notify();
+                            }),
+                        ))
+                        .child(project_override_reset_button(
+                            "settings-project-auto-detect-reset",
+                            ProjectEditorSettingKey::AutoDetectLanguage,
+                            text,
+                            theme,
+                            cx,
+                        ))
+                        .into_any_element(),
+                ))
+                .child(scoped_settings_row(
+                    root,
+                    "editor.default_language",
+                    style,
+                    theme,
+                    text.get(UiTextKey::SettingsDefaultCodeLanguage),
+                    default_language_description,
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap(style.ui_style.spacing.sm)
+                        .child(
+                            div()
+                                .w(style.compact_control_width)
+                                .h(style.control_height)
+                                .child(
+                                    yttt_input(
+                                        &default_language_input,
+                                        YtttInputKind::Settings,
+                                        theme,
+                                        style.ui_style,
+                                    )
+                                    .small(),
+                                ),
+                        )
+                        .child(project_override_reset_button(
+                            "settings-project-default-language-reset",
+                            ProjectEditorSettingKey::DefaultLanguage,
+                            text,
+                            theme,
+                            cx,
+                        ))
+                        .into_any_element(),
+                ))
+        }
+        SettingsGroupId::Editor => {
+            let tab_size_input = root.settings_project_tab_size_input(window, cx);
+            let tab_size_description = project_override_description(
+                root,
+                ProjectEditorSettingKey::TabSize,
+                text.get(UiTextKey::SettingsEditorTabSizeDescription),
+            );
+            div()
+                .flex()
+                .flex_col()
+                .child(settings_section_header(
+                    style,
+                    theme,
+                    text.get(UiTextKey::SettingsSectionEditingBehavior),
+                    true,
+                ))
+                .child(scoped_settings_row(
+                    root,
+                    "editor.tab_size",
+                    style,
+                    theme,
+                    text.get(UiTextKey::SettingsEditorTabSize),
+                    tab_size_description,
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap(style.ui_style.spacing.sm)
+                        .child(settings_number_control(tab_size_input, theme, style))
+                        .child(project_override_reset_button(
+                            "settings-project-tab-size-reset",
+                            ProjectEditorSettingKey::TabSize,
+                            text,
+                            theme,
+                            cx,
+                        ))
+                        .into_any_element(),
+                ))
+        }
+        _ => div().flex().flex_col(),
+    }
+}
+
+fn settings_project_layout_rows(
+    root: &WorkbenchView,
+    style: YtttSettingsLayout,
+    cx: &mut Context<WorkbenchView>,
+) -> Div {
+    let theme = root.theme_runtime().ui;
+    let text = root.ui_text;
+    let editable = root.settings_scope_is_editable();
+    div()
+        .flex()
+        .flex_col()
+        .child(scoped_settings_row(
+            root,
+            "project_layout.edit",
+            style,
+            theme,
+            text.get(UiTextKey::SettingsEditLayoutToml),
+            text.get(UiTextKey::SettingsEditLayoutTomlDescription),
+            settings_command_button(
+                "settings-project-layout-edit",
+                text.get(UiTextKey::SettingsEdit),
+                editable,
+                theme,
+                CommandId::LayoutProjectEdit,
+                cx,
+            )
+            .into_any_element(),
+        ))
+        .child(scoped_settings_row(
+            root,
+            "project_layout.save",
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSaveCurrentLayout),
+            text.get(UiTextKey::SettingsSaveCurrentLayoutDescription),
+            settings_command_button(
+                "settings-project-layout-save",
+                text.get(UiTextKey::SettingsSave),
+                editable,
+                theme,
+                CommandId::LayoutSaveCurrent,
+                cx,
+            )
+            .into_any_element(),
+        ))
+        .child(scoped_settings_row(
+            root,
+            "project_layout.export",
+            style,
+            theme,
+            text.get(UiTextKey::SettingsExportProjectLayout),
+            text.get(UiTextKey::SettingsExportProjectLayoutDescription),
+            settings_command_button(
+                "settings-project-layout-export",
+                text.get(UiTextKey::SettingsExport),
+                editable,
+                theme,
+                CommandId::LayoutExportProjectConfig,
+                cx,
+            )
+            .into_any_element(),
+        ))
 }
 
 fn settings_general_rows(
@@ -244,90 +768,126 @@ fn settings_general_rows(
 ) -> Div {
     let theme = root.theme_runtime().ui;
     let text = root.ui_text;
+    if root.selected_settings_scope() == SettingsScope::Host {
+        let command_input = root.settings_new_tab_command_input(window, cx);
+        let command_input_for_add = command_input.clone();
+        let command_add_control = div()
+            .flex()
+            .items_center()
+            .gap(style.ui_style.spacing.md)
+            .w_full()
+            .max_w(px(720.0))
+            .child(
+                div().flex_1().min_w_0().h(style.control_height).child(
+                    yttt_input(
+                        &command_input,
+                        YtttInputKind::Settings,
+                        theme,
+                        style.ui_style,
+                    )
+                    .small(),
+                ),
+            )
+            .child(
+                settings_button(
+                    "settings-add-new-tab-command",
+                    text.get(UiTextKey::SettingsAddCommand),
+                    false,
+                    theme,
+                    cx,
+                    cx.listener(move |this, _, _window, cx| {
+                        let command = command_input_for_add.read(cx).value().to_string();
+                        if let Err(error) = this.add_new_tab_command(&command) {
+                            this.load_error = Some(error.to_string());
+                        }
+                        cx.notify();
+                    }),
+                )
+                .debug_selector(|| "settings-add-new-tab-command".to_string()),
+            );
+        let command_list = root
+            .new_tab_commands()
+            .to_vec()
+            .into_iter()
+            .enumerate()
+            .fold(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(style.ui_style.spacing.md)
+                    .w_full()
+                    .max_w(px(720.0))
+                    .child(command_add_control),
+                |list, (index, command)| {
+                    list.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(style.ui_style.spacing.md)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .text_xs()
+                                    .text_color(theme.text)
+                                    .child(command),
+                            )
+                            .child(settings_button(
+                                format!("settings-delete-new-tab-command-{index}"),
+                                text.get(UiTextKey::SettingsDelete),
+                                false,
+                                theme,
+                                cx,
+                                cx.listener(move |this, _, _window, cx| {
+                                    if let Err(error) = this.remove_new_tab_command(index) {
+                                        this.load_error = Some(error.to_string());
+                                    }
+                                    cx.notify();
+                                }),
+                            )),
+                    )
+                },
+            );
+        return div()
+            .flex()
+            .flex_col()
+            .child(
+                scoped_settings_block(
+                    root,
+                    "general.new_tab_commands",
+                    style,
+                    theme,
+                    text.get(UiTextKey::SettingsNewTabCommands),
+                    text.get(UiTextKey::SettingsNewTabCommandsDescription),
+                    command_list.into_any_element(),
+                )
+                .debug_selector(|| "settings-new-tab-commands-row".to_string()),
+            )
+            .child(setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsEditSettingsToml),
+                text.get(UiTextKey::SettingsEditSettingsTomlDescription),
+                settings_button(
+                    "settings-open-host-file",
+                    text.get(UiTextKey::SettingsShowPath),
+                    false,
+                    theme,
+                    cx,
+                    cx.listener(|this, _, window, cx| {
+                        this.show_settings_file_path_status();
+                        this.flush_pending_status_notifications(window, cx);
+                        cx.notify();
+                    }),
+                )
+                .into_any_element(),
+            ));
+    }
     let language_select = root.settings_language_select(window, cx);
     let vim_mode_select = root.settings_vim_mode_select(window, cx);
-    let command_input = root.settings_new_tab_command_input(window, cx);
-    let command_input_for_add = command_input.clone();
-    let command_add_control = div()
-        .flex()
-        .items_center()
-        .gap(style.ui_style.spacing.md)
-        .w_full()
-        .max_w(px(720.0))
-        .child(
-            div().flex_1().min_w_0().h(style.control_height).child(
-                yttt_input(
-                    &command_input,
-                    YtttInputKind::Settings,
-                    theme,
-                    style.ui_style,
-                )
-                .small(),
-            ),
-        )
-        .child(
-            settings_button(
-                "settings-add-new-tab-command",
-                text.get(UiTextKey::SettingsAddCommand),
-                false,
-                theme,
-                cx,
-                cx.listener(move |this, _, _window, cx| {
-                    let command = command_input_for_add.read(cx).value().to_string();
-                    if let Err(error) = this.add_new_tab_command(&command) {
-                        this.load_error = Some(error.to_string());
-                    }
-                    cx.notify();
-                }),
-            )
-            .debug_selector(|| "settings-add-new-tab-command".to_string()),
-        );
-    let command_list = root
-        .new_tab_commands()
-        .to_vec()
-        .into_iter()
-        .enumerate()
-        .fold(
-            div()
-                .flex()
-                .flex_col()
-                .gap(style.ui_style.spacing.md)
-                .w_full()
-                .max_w(px(720.0))
-                .child(command_add_control),
-            |list, (index, command)| {
-                list.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(style.ui_style.spacing.md)
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .whitespace_nowrap()
-                                .text_xs()
-                                .text_color(theme.text)
-                                .child(command),
-                        )
-                        .child(settings_button(
-                            format!("settings-delete-new-tab-command-{index}"),
-                            text.get(UiTextKey::SettingsDelete),
-                            false,
-                            theme,
-                            cx,
-                            cx.listener(move |this, _, _window, cx| {
-                                if let Err(error) = this.remove_new_tab_command(index) {
-                                    this.load_error = Some(error.to_string());
-                                }
-                                cx.notify();
-                            }),
-                        )),
-                )
-            },
-        );
     let update_status = root.update_status().clone();
     let update_checking = matches!(update_status, UpdateStatus::Checking);
     let update_status_label = match &update_status {
@@ -558,16 +1118,6 @@ fn settings_general_rows(
             )
             .debug_selector(|| "settings-new-tab-command-picker-row".to_string()),
         )
-        .child(
-            setting_block(
-                style,
-                theme,
-                text.get(UiTextKey::SettingsNewTabCommands),
-                text.get(UiTextKey::SettingsNewTabCommandsDescription),
-                command_list.into_any_element(),
-            )
-            .debug_selector(|| "settings-new-tab-commands-row".to_string()),
-        )
         .child(settings_section_header(
             style,
             theme,
@@ -579,7 +1129,18 @@ fn settings_general_rows(
                 style,
                 theme,
                 text.get(UiTextKey::RemoteServices),
-                text.get(UiTextKey::RemoteServicesDescription),
+                text.get(
+                    if root
+                        .terminal
+                        .host_runtime
+                        .as_ref()
+                        .is_some_and(|runtime| runtime.is_remote())
+                    {
+                        UiTextKey::RemoteManageLocally
+                    } else {
+                        UiTextKey::RemoteServicesDescription
+                    },
+                ),
                 settings_button(
                     "settings-open-remote-services",
                     text.get(UiTextKey::SettingsOpen),
@@ -590,6 +1151,12 @@ fn settings_general_rows(
                         this.open_ssh_connection_manager();
                         cx.notify();
                     }),
+                )
+                .disabled(
+                    root.terminal
+                        .host_runtime
+                        .as_ref()
+                        .is_some_and(|runtime| runtime.is_remote()),
                 )
                 .into_any_element(),
             )
@@ -981,8 +1548,21 @@ fn settings_language_rows(
 ) -> Div {
     let theme = root.theme_runtime().ui;
     let text = root.ui_text;
+    if root.selected_settings_scope() == SettingsScope::Device {
+        return setting_row(
+            style,
+            theme,
+            text.get(UiTextKey::SettingsSupportedLanguages),
+            text.get(UiTextKey::SettingsSupportedLanguagesDescription),
+            settings_value(
+                root.available_editor_language_names().len().to_string(),
+                theme,
+                style.ui_style,
+            )
+            .into_any_element(),
+        );
+    }
     let default_language_select = root.settings_editor_language_select(window, cx);
-    let supported_language_count = root.available_editor_language_names().len();
     let lsp_command = if root.editor_lsp_command().is_empty() {
         text.get(UiTextKey::SettingsUnbound).to_string()
     } else {
@@ -998,7 +1578,9 @@ fn settings_language_rows(
             text.get(UiTextKey::SettingsSectionDetectionDefaults),
             true,
         ))
-        .child(setting_row(
+        .child(scoped_settings_row(
+            root,
+            "editor.auto_detect_language",
             style,
             theme,
             text.get(UiTextKey::SettingsLanguageDetection),
@@ -1015,7 +1597,9 @@ fn settings_language_rows(
             )
             .into_any_element(),
         ))
-        .child(setting_row(
+        .child(scoped_settings_row(
+            root,
+            "editor.default_language",
             style,
             theme,
             text.get(UiTextKey::SettingsDefaultCodeLanguage),
@@ -1029,21 +1613,15 @@ fn settings_language_rows(
             )
             .into_any_element(),
         ))
-        .child(setting_row(
-            style,
-            theme,
-            text.get(UiTextKey::SettingsSupportedLanguages),
-            text.get(UiTextKey::SettingsSupportedLanguagesDescription),
-            settings_value(supported_language_count.to_string(), theme, style.ui_style)
-                .into_any_element(),
-        ))
         .child(settings_section_header(
             style,
             theme,
             text.get(UiTextKey::SettingsSectionLanguageServices),
             false,
         ))
-        .child(setting_row(
+        .child(scoped_settings_row(
+            root,
+            "editor.lsp.enabled",
             style,
             theme,
             text.get(UiTextKey::SettingsLanguageServer),
@@ -1060,7 +1638,9 @@ fn settings_language_rows(
             )
             .into_any_element(),
         ))
-        .child(setting_row(
+        .child(scoped_settings_row(
+            root,
+            "editor.lsp.command",
             style,
             theme,
             text.get(UiTextKey::SettingsLanguageServerCommand),
@@ -1077,13 +1657,26 @@ fn settings_editor_rows(
 ) -> Div {
     let theme = root.theme_runtime().ui;
     let text = root.ui_text;
+    if root.selected_settings_scope() == SettingsScope::Host {
+        let tab_size_input =
+            root.settings_number_input(SettingsNumberField::EditorTabSize, window, cx);
+        return scoped_settings_row(
+            root,
+            "editor.tab_size",
+            style,
+            theme,
+            text.get(UiTextKey::SettingsEditorTabSize),
+            text.get(UiTextKey::SettingsEditorTabSizeDescription),
+            settings_number_control(tab_size_input, theme, style).into_any_element(),
+        )
+        .debug_selector(|| "settings-editor-tab-size-row".to_string());
+    }
     let font_select = root.settings_editor_font_family_select(window, cx);
     let autosave_select = root.settings_editor_autosave_select(window, cx);
     let font_size_input =
         root.settings_number_input(SettingsNumberField::EditorFontSize, window, cx);
     let line_height_input =
         root.settings_number_input(SettingsNumberField::EditorLineHeight, window, cx);
-    let tab_size_input = root.settings_number_input(SettingsNumberField::EditorTabSize, window, cx);
     let autosave_delay_input =
         root.settings_number_input(SettingsNumberField::EditorAutosaveDelay, window, cx);
     let project_panel_width_input =
@@ -1143,16 +1736,6 @@ fn settings_editor_rows(
             text.get(UiTextKey::SettingsSectionEditingBehavior),
             false,
         ))
-        .child(
-            setting_row(
-                style,
-                theme,
-                text.get(UiTextKey::SettingsEditorTabSize),
-                text.get(UiTextKey::SettingsEditorTabSizeDescription),
-                settings_number_control(tab_size_input, theme, style).into_any_element(),
-            )
-            .debug_selector(|| "settings-editor-tab-size-row".to_string()),
-        )
         .child(
             setting_row(
                 style,
@@ -1311,190 +1894,235 @@ fn settings_terminal_rows(
 ) -> Div {
     let theme = root.theme_runtime().ui;
     let text = root.ui_text;
-    let shell_select = root.settings_shell_select(window, cx);
-    let custom_shell_input = root.settings_custom_shell_input(window, cx);
+    if root.selected_settings_scope() == SettingsScope::Host {
+        let shell_select = root.settings_shell_select(window, cx);
+        let custom_shell_input = root.settings_custom_shell_input(window, cx);
+        let scrollback_input =
+            root.settings_number_input(SettingsNumberField::Scrollback, window, cx);
+        let custom_shell_input_for_add = custom_shell_input.clone();
+        let custom_shell_control = div()
+            .flex()
+            .items_center()
+            .gap(style.ui_style.spacing.md)
+            .w_full()
+            .max_w(px(640.0))
+            .child(
+                div().flex_1().min_w_0().h(style.control_height).child(
+                    yttt_input(
+                        &custom_shell_input,
+                        YtttInputKind::Settings,
+                        theme,
+                        style.ui_style,
+                    )
+                    .small(),
+                ),
+            )
+            .child(settings_button(
+                "settings-add-custom-shell",
+                text.get(UiTextKey::SettingsAddShell),
+                false,
+                theme,
+                cx,
+                cx.listener(move |this, _, _window, cx| {
+                    let shell = custom_shell_input_for_add.read(cx).value().to_string();
+                    if let Err(error) = this.add_custom_terminal_shell(&shell) {
+                        this.load_error = Some(error.to_string());
+                    }
+                    cx.notify();
+                }),
+            ));
+        let environment_name_input = root.settings_environment_name_input(window, cx);
+        let environment_value_input = root.settings_environment_value_input(window, cx);
+        let environment_name_input_for_set = environment_name_input.clone();
+        let environment_value_input_for_set = environment_value_input.clone();
+        let environment_set_control = div()
+            .flex()
+            .items_center()
+            .gap(style.ui_style.spacing.md)
+            .w_full()
+            .max_w(px(720.0))
+            .child(
+                div().flex_1().min_w_0().h(style.control_height).child(
+                    yttt_input(
+                        &environment_name_input,
+                        YtttInputKind::Settings,
+                        theme,
+                        style.ui_style,
+                    )
+                    .small(),
+                ),
+            )
+            .child(
+                div().flex_1().min_w_0().h(style.control_height).child(
+                    yttt_input(
+                        &environment_value_input,
+                        YtttInputKind::Settings,
+                        theme,
+                        style.ui_style,
+                    )
+                    .small(),
+                ),
+            )
+            .child(settings_button(
+                "settings-set-environment-variable",
+                text.get(UiTextKey::SettingsSetEnvironmentVariable),
+                false,
+                theme,
+                cx,
+                cx.listener(move |this, _, _window, cx| {
+                    let name = environment_name_input_for_set.read(cx).value().to_string();
+                    let value = environment_value_input_for_set.read(cx).value().to_string();
+                    if let Err(error) = this.set_terminal_environment_variable(&name, &value) {
+                        this.load_error = Some(error.to_string());
+                    }
+                    cx.notify();
+                }),
+            ));
+        let environment_variables = root
+            .terminal_environment()
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        let environment_list = environment_variables.into_iter().enumerate().fold(
+            div()
+                .flex()
+                .flex_col()
+                .gap(style.ui_style.spacing.md)
+                .w_full()
+                .max_w(px(720.0))
+                .child(environment_set_control),
+            |list, (index, (name, value))| {
+                let name_for_remove = name.clone();
+                list.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(style.ui_style.spacing.md)
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .text_xs()
+                                .text_color(theme.text)
+                                .child(format!("{name}={value}")),
+                        )
+                        .child(settings_button(
+                            format!("settings-delete-environment-variable-{index}"),
+                            text.get(UiTextKey::SettingsDelete),
+                            false,
+                            theme,
+                            cx,
+                            cx.listener(move |this, _, _window, cx| {
+                                if let Err(error) =
+                                    this.remove_terminal_environment_variable(&name_for_remove)
+                                {
+                                    this.load_error = Some(error.to_string());
+                                }
+                                cx.notify();
+                            }),
+                        )),
+                )
+            },
+        );
+        return div()
+            .flex()
+            .flex_col()
+            .child(settings_section_header(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsSectionShell),
+                true,
+            ))
+            .child(scoped_settings_row(
+                root,
+                "terminal.shell",
+                style,
+                theme,
+                text.get(UiTextKey::SettingsDefaultShell),
+                text.get(UiTextKey::SettingsDefaultShellDescription),
+                settings_select_control(
+                    shell_select,
+                    theme,
+                    style.ui_style,
+                    false,
+                    text.get(UiTextKey::SettingsSelectShell),
+                )
+                .into_any_element(),
+            ))
+            .child(scoped_settings_block(
+                root,
+                "terminal.custom_shells",
+                style,
+                theme,
+                text.get(UiTextKey::SettingsCustomShell),
+                text.get(UiTextKey::SettingsCustomShellDescription),
+                custom_shell_control.into_any_element(),
+            ))
+            .child(settings_section_header(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsSectionEnvironment),
+                false,
+            ))
+            .child(
+                scoped_settings_block(
+                    root,
+                    "terminal.environment",
+                    style,
+                    theme,
+                    text.get(UiTextKey::SettingsEnvironmentVariables),
+                    text.get(UiTextKey::SettingsEnvironmentVariablesDescription),
+                    environment_list.into_any_element(),
+                )
+                .debug_selector(|| "settings-terminal-environment-row".to_string()),
+            )
+            .child(scoped_settings_row(
+                root,
+                "terminal.scrollback",
+                style,
+                theme,
+                text.get(UiTextKey::SettingsScrollback),
+                text.get(UiTextKey::SettingsScrollbackDescription),
+                settings_number_control(scrollback_input, theme, style).into_any_element(),
+            ))
+            .child(
+                scoped_settings_row(
+                    root,
+                    "terminal.kitty_keyboard",
+                    style,
+                    theme,
+                    text.get(UiTextKey::SettingsTerminalKittyKeyboard),
+                    text.get(UiTextKey::SettingsTerminalKittyKeyboardDescription),
+                    settings_switch(
+                        "settings-terminal-kitty-keyboard",
+                        root.terminal_kitty_keyboard(),
+                        theme,
+                        style.ui_style,
+                        cx.listener(|this, checked: &bool, _window, cx| {
+                            if let Err(error) = this.set_terminal_kitty_keyboard(*checked) {
+                                this.load_error = Some(error.to_string());
+                            }
+                            this.sync_terminal_pane_configs(cx);
+                            cx.notify();
+                        }),
+                    )
+                    .into_any_element(),
+                )
+                .debug_selector(|| "settings-terminal-kitty-keyboard-row".to_string()),
+            );
+    }
     let font_select = root.settings_font_family_select(window, cx);
     let font_size_input = root.settings_number_input(SettingsNumberField::FontSize, window, cx);
     let line_height_input = root.settings_number_input(SettingsNumberField::LineHeight, window, cx);
     let padding_input = root.settings_number_input(SettingsNumberField::Padding, window, cx);
-    let scrollback_input = root.settings_number_input(SettingsNumberField::Scrollback, window, cx);
     let cursor_shape_select = root.settings_terminal_cursor_shape_select(window, cx);
     let osc52_policy_select = root.settings_terminal_osc52_policy_select(window, cx);
-    let custom_shell_input_for_add = custom_shell_input.clone();
-    let custom_shell_control = div()
-        .flex()
-        .items_center()
-        .gap(style.ui_style.spacing.md)
-        .w_full()
-        .max_w(px(640.0))
-        .child(
-            div().flex_1().min_w_0().h(style.control_height).child(
-                yttt_input(
-                    &custom_shell_input,
-                    YtttInputKind::Settings,
-                    theme,
-                    style.ui_style,
-                )
-                .small(),
-            ),
-        )
-        .child(settings_button(
-            "settings-add-custom-shell",
-            text.get(UiTextKey::SettingsAddShell),
-            false,
-            theme,
-            cx,
-            cx.listener(move |this, _, _window, cx| {
-                let shell = custom_shell_input_for_add.read(cx).value().to_string();
-                if let Err(error) = this.add_custom_terminal_shell(&shell) {
-                    this.load_error = Some(error.to_string());
-                }
-                cx.notify();
-            }),
-        ));
-    let environment_name_input = root.settings_environment_name_input(window, cx);
-    let environment_value_input = root.settings_environment_value_input(window, cx);
-    let environment_name_input_for_set = environment_name_input.clone();
-    let environment_value_input_for_set = environment_value_input.clone();
-    let environment_set_control = div()
-        .flex()
-        .items_center()
-        .gap(style.ui_style.spacing.md)
-        .w_full()
-        .max_w(px(720.0))
-        .child(
-            div().flex_1().min_w_0().h(style.control_height).child(
-                yttt_input(
-                    &environment_name_input,
-                    YtttInputKind::Settings,
-                    theme,
-                    style.ui_style,
-                )
-                .small(),
-            ),
-        )
-        .child(
-            div().flex_1().min_w_0().h(style.control_height).child(
-                yttt_input(
-                    &environment_value_input,
-                    YtttInputKind::Settings,
-                    theme,
-                    style.ui_style,
-                )
-                .small(),
-            ),
-        )
-        .child(settings_button(
-            "settings-set-environment-variable",
-            text.get(UiTextKey::SettingsSetEnvironmentVariable),
-            false,
-            theme,
-            cx,
-            cx.listener(move |this, _, _window, cx| {
-                let name = environment_name_input_for_set.read(cx).value().to_string();
-                let value = environment_value_input_for_set.read(cx).value().to_string();
-                if let Err(error) = this.set_terminal_environment_variable(&name, &value) {
-                    this.load_error = Some(error.to_string());
-                }
-                cx.notify();
-            }),
-        ));
-    let environment_variables = root
-        .terminal_environment()
-        .iter()
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect::<Vec<_>>();
-    let environment_list = environment_variables.into_iter().enumerate().fold(
-        div()
-            .flex()
-            .flex_col()
-            .gap(style.ui_style.spacing.md)
-            .w_full()
-            .max_w(px(720.0))
-            .child(environment_set_control),
-        |list, (index, (name, value))| {
-            let name_for_remove = name.clone();
-            list.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(style.ui_style.spacing.md)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .text_xs()
-                            .text_color(theme.text)
-                            .child(format!("{name}={value}")),
-                    )
-                    .child(settings_button(
-                        format!("settings-delete-environment-variable-{index}"),
-                        text.get(UiTextKey::SettingsDelete),
-                        false,
-                        theme,
-                        cx,
-                        cx.listener(move |this, _, _window, cx| {
-                            if let Err(error) =
-                                this.remove_terminal_environment_variable(&name_for_remove)
-                            {
-                                this.load_error = Some(error.to_string());
-                            }
-                            cx.notify();
-                        }),
-                    )),
-            )
-        },
-    );
-
     div()
         .flex()
         .flex_col()
-        .child(settings_section_header(
-            style,
-            theme,
-            text.get(UiTextKey::SettingsSectionShell),
-            true,
-        ))
-        .child(setting_row(
-            style,
-            theme,
-            text.get(UiTextKey::SettingsDefaultShell),
-            text.get(UiTextKey::SettingsDefaultShellDescription),
-            settings_select_control(
-                shell_select,
-                theme,
-                style.ui_style,
-                false,
-                text.get(UiTextKey::SettingsSelectShell),
-            )
-            .into_any_element(),
-        ))
-        .child(setting_block(
-            style,
-            theme,
-            text.get(UiTextKey::SettingsCustomShell),
-            text.get(UiTextKey::SettingsCustomShellDescription),
-            custom_shell_control.into_any_element(),
-        ))
-        .child(settings_section_header(
-            style,
-            theme,
-            text.get(UiTextKey::SettingsSectionEnvironment),
-            false,
-        ))
-        .child(
-            setting_block(
-                style,
-                theme,
-                text.get(UiTextKey::SettingsEnvironmentVariables),
-                text.get(UiTextKey::SettingsEnvironmentVariablesDescription),
-                environment_list.into_any_element(),
-            )
-            .debug_selector(|| "settings-terminal-environment-row".to_string()),
-        )
         .child(settings_section_header(
             style,
             theme,
@@ -1541,13 +2169,6 @@ fn settings_terminal_rows(
             theme,
             text.get(UiTextKey::SettingsSectionScrolling),
             false,
-        ))
-        .child(setting_row(
-            style,
-            theme,
-            text.get(UiTextKey::SettingsScrollback),
-            text.get(UiTextKey::SettingsScrollbackDescription),
-            settings_number_control(scrollback_input, theme, style).into_any_element(),
         ))
         .child(
             setting_row(
@@ -1687,29 +2308,6 @@ fn settings_terminal_rows(
             )
             .debug_selector(|| "settings-terminal-osc52-policy-row".to_string()),
         )
-        .child(
-            setting_row(
-                style,
-                theme,
-                text.get(UiTextKey::SettingsTerminalKittyKeyboard),
-                text.get(UiTextKey::SettingsTerminalKittyKeyboardDescription),
-                settings_switch(
-                    "settings-terminal-kitty-keyboard",
-                    root.terminal_kitty_keyboard(),
-                    theme,
-                    style.ui_style,
-                    cx.listener(|this, checked: &bool, _window, cx| {
-                        if let Err(error) = this.set_terminal_kitty_keyboard(*checked) {
-                            this.load_error = Some(error.to_string());
-                        }
-                        this.sync_terminal_pane_configs(cx);
-                        cx.notify();
-                    }),
-                )
-                .into_any_element(),
-            )
-            .debug_selector(|| "settings-terminal-kitty-keyboard-row".to_string()),
-        )
 }
 
 fn settings_agent_rows(
@@ -1731,18 +2329,28 @@ fn settings_agent_rows(
                 theme,
                 agent.display_name(),
                 text.get(UiTextKey::SettingsAgentSessionProviderDescription),
-                settings_switch(
-                    format!("settings-agent-session-provider-{provider_id}"),
-                    root.agent_session_agent_enabled(agent),
-                    theme,
-                    style.ui_style,
-                    cx.listener(move |this, checked: &bool, _window, cx| {
-                        if let Err(error) = this.set_agent_session_agent_enabled(agent, *checked) {
-                            this.load_error = Some(error.to_string());
-                        }
-                        cx.notify();
-                    }),
-                )
+                if root.settings_scope_is_editable() {
+                    settings_switch(
+                        format!("settings-agent-session-provider-{provider_id}"),
+                        root.agent_session_agent_enabled(agent),
+                        theme,
+                        style.ui_style,
+                        cx.listener(move |this, checked: &bool, _window, cx| {
+                            if let Err(error) =
+                                this.set_agent_session_agent_enabled(agent, *checked)
+                            {
+                                this.load_error = Some(error.to_string());
+                            }
+                            cx.notify();
+                        }),
+                    )
+                } else {
+                    settings_value(
+                        (root.agent_session_agent_enabled(agent)).to_string(),
+                        theme,
+                        style.ui_style,
+                    )
+                }
                 .debug_selector(move || format!("settings-agent-session-provider-{provider_id}"))
                 .into_any_element(),
             )
@@ -1760,7 +2368,9 @@ fn settings_agent_rows(
             true,
         ))
         .child(
-            setting_row(
+            scoped_settings_row(
+                root,
+                "agent.primary",
                 style,
                 theme,
                 text.get(UiTextKey::SettingsAgentPrimary),
@@ -1772,7 +2382,9 @@ fn settings_agent_rows(
             .debug_selector(|| "settings-agent-primary-row".to_string()),
         )
         .child(
-            setting_row(
+            scoped_settings_row(
+                root,
+                "agent.sessions_enabled",
                 style,
                 theme,
                 text.get(UiTextKey::SettingsAgentSessions),
@@ -1815,6 +2427,11 @@ fn settings_permission_rows(
     root.ensure_login_startup_refresh(cx);
     let theme = root.theme_runtime().ui;
     let text = root.ui_text;
+    let remote_permissions_local = root
+        .terminal
+        .host_runtime
+        .as_ref()
+        .is_some_and(|runtime| runtime.is_remote());
     let refreshing = root.permission_refreshing();
     let action_in_progress = root.permission_action_in_progress();
     let login_startup_state = root.login_startup_state();
@@ -1908,6 +2525,20 @@ fn settings_permission_rows(
     div()
         .flex()
         .flex_col()
+        .when(remote_permissions_local, |rows| {
+            rows.child(setting_row(
+                style,
+                theme,
+                text.get(UiTextKey::SettingsRemotePermissionsLocal),
+                text.get(UiTextKey::SettingsRemotePermissionsLocalDescription),
+                settings_value(
+                    text.get(UiTextKey::SettingsScopeDevice),
+                    theme,
+                    style.ui_style,
+                )
+                .into_any_element(),
+            ))
+        })
         .child(settings_section_header(
             style,
             theme,
@@ -2621,6 +3252,91 @@ fn settings_keybinding_assignments(
                     .child(metadata),
             )
         })
+}
+
+fn scoped_settings_row(
+    root: &WorkbenchView,
+    key: &'static str,
+    style: YtttSettingsLayout,
+    theme: WorkbenchTheme,
+    title: impl Into<String>,
+    description: impl Into<String>,
+    control: AnyElement,
+) -> Div {
+    let scope_label = match root.selected_settings_scope() {
+        SettingsScope::Device => root.ui_text.get(UiTextKey::SettingsScopeDevice),
+        SettingsScope::Host => root.ui_text.get(UiTextKey::SettingsScopeHost),
+        SettingsScope::Project => root.ui_text.get(UiTextKey::SettingsScopeProject),
+    };
+    let apply_label = match setting_apply(key) {
+        SettingApply::Immediate => root.ui_text.get(UiTextKey::SettingsApplyImmediate),
+        SettingApply::NewSession => root.ui_text.get(UiTextKey::SettingsApplyNewSession),
+        SettingApply::ReopenFile => root.ui_text.get(UiTextKey::SettingsApplyReopenFile),
+    };
+    let description = format!("{} · {scope_label} · {apply_label}", description.into());
+    let control = if root.settings_scope_is_editable() {
+        control
+    } else {
+        settings_value(read_only_setting_value(root, key), theme, style.ui_style).into_any_element()
+    };
+    setting_row(style, theme, title, description, control)
+}
+
+fn scoped_settings_block(
+    root: &WorkbenchView,
+    key: &'static str,
+    mut style: YtttSettingsLayout,
+    theme: WorkbenchTheme,
+    title: impl Into<String>,
+    description: impl Into<String>,
+    control: AnyElement,
+) -> Div {
+    style.stack_rows = true;
+    scoped_settings_row(root, key, style, theme, title, description, control)
+}
+
+fn read_only_setting_value(root: &WorkbenchView, key: &str) -> String {
+    use crate::config::project_settings::{
+        ProjectEditorSettingKey as Key, ProjectEditorSettingValue as Value,
+    };
+    if root.selected_settings_scope() == SettingsScope::Project {
+        let project_key = match key {
+            "editor.tab_size" => Some(Key::TabSize),
+            "editor.auto_detect_language" => Some(Key::AutoDetectLanguage),
+            "editor.default_language" => Some(Key::DefaultLanguage),
+            _ => None,
+        };
+        if let Some(setting) = project_key.and_then(|key| root.cached_project_editor_setting(key)) {
+            return match &setting.value {
+                Value::TabSize(value) => value.to_string(),
+                Value::AutoDetectLanguage(value) => value.to_string(),
+                Value::DefaultLanguage(value) => value.clone(),
+            };
+        }
+    }
+    let settings = &root.app_settings;
+    match key {
+        "general.new_tab_commands" => settings.general.new_tab_commands.join("\n"),
+        "terminal.shell" => settings.terminal.shell.clone(),
+        "terminal.custom_shells" => settings.terminal.custom_shells.join("\n"),
+        "terminal.environment" => settings
+            .terminal
+            .environment
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        "terminal.scrollback" => settings.terminal.scrollback.to_string(),
+        "terminal.kitty_keyboard" => settings.terminal.kitty_keyboard.to_string(),
+        "editor.tab_size" => settings.editor.tab_size.to_string(),
+        "editor.auto_detect_language" => settings.editor.auto_detect_language.to_string(),
+        "editor.default_language" => settings.editor.default_language.clone(),
+        "editor.lsp.enabled" => settings.editor.lsp.enabled.to_string(),
+        "editor.lsp.command" => settings.editor.lsp.command.clone(),
+        "agent.primary" => root.primary_agent().display_name().to_string(),
+        "agent.sessions_enabled" => settings.agent.sessions_enabled.to_string(),
+        _ => root.ui_text.get(UiTextKey::SettingsUnbound).to_string(),
+    }
 }
 
 fn setting_row(

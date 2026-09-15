@@ -69,6 +69,14 @@ async fn start_previous_build_host(
         profile.paths().state.clone().into_os_string(),
         OsString::from("--config-root"),
         profile.paths().config.clone().into_os_string(),
+        OsString::from("--project-config"),
+        OsString::from("overlay"),
+        OsString::from("--project-config-overlay-root"),
+        profile
+            .paths()
+            .state
+            .join("project-config-overlay")
+            .into_os_string(),
         OsString::from("--auth-token-file"),
         token_file.into_os_string(),
         OsString::from("--ssh-host-keys-file"),
@@ -304,6 +312,10 @@ async fn host_role_starts_headless_enforces_single_instance_and_stops_cleanly() 
         .arg(&profile.paths().state)
         .arg("--config-root")
         .arg(&profile.paths().config)
+        .arg("--project-config")
+        .arg("overlay")
+        .arg("--project-config-overlay-root")
+        .arg(profile.paths().state.join("project-config-overlay"))
         .arg("--auth-token-file")
         .arg(profile.paths().runtime.join("host-auth-token"))
         .arg("--ssh-host-keys-file")

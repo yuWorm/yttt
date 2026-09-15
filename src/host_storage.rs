@@ -15,7 +15,9 @@ use yttt_protocol::{
     project::{
         ProjectFileFingerprint, ProjectRequest, ProjectResponse, ProjectSaveMode, ProjectSaveResult,
     },
-    workspace::{WorkspaceConfigRevision, WorkspaceRequest, WorkspaceResponse},
+    workspace::{
+        WorkspaceConfigRevision, WorkspaceProjectConfigFile, WorkspaceRequest, WorkspaceResponse,
+    },
 };
 
 pub struct HostStorage {
@@ -29,6 +31,7 @@ pub struct HostStorage {
 #[derive(Default)]
 struct StorageState {
     config_revisions: HashMap<PathBuf, Option<WorkspaceConfigRevision>>,
+    project_config_targets: HashMap<PathBuf, (HostPath, WorkspaceProjectConfigFile)>,
     file_revisions: HashMap<PathBuf, ProjectFileFingerprint>,
     projects: Vec<(PathBuf, ProjectId, u64)>,
 }
@@ -164,12 +167,17 @@ impl HostStorage {
         Ok(())
     }
     fn read_locked(&self, state: &mut StorageState, path: &Path) -> io::Result<Vec<u8>> {
-        if path.starts_with(&self.config_root) {
-            let WorkspaceResponse::Config(config) =
-                self.workspace(WorkspaceRequest::ReadConfig {
+        if path.starts_with(&self.config_root) || state.project_config_targets.contains_key(path) {
+            let request = match state.project_config_targets.get(path) {
+                Some((project_root, file)) => WorkspaceRequest::ReadProjectConfig {
+                    project_root: project_root.clone(),
+                    file: file.clone(),
+                },
+                None => WorkspaceRequest::ReadConfig {
                     relative_path: self.config_relative(path)?,
-                })?
-            else {
+                },
+            };
+            let WorkspaceResponse::Config(config) = self.workspace(request)? else {
                 return Err(unexpected());
             };
             state.config_revisions.insert(
@@ -216,9 +224,28 @@ impl ConfigStorage for HostStorage {
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
         self.with_state(|state| self.read_locked(state, path))
     }
+    fn read_project_config(
+        &self,
+        project_root: &Path,
+        file: WorkspaceProjectConfigFile,
+        path: &Path,
+    ) -> io::Result<Vec<u8>> {
+        self.with_state(|state| {
+            state.project_config_targets.insert(
+                path.to_path_buf(),
+                (
+                    HostPath::from_path(project_root).map_err(io::Error::other)?,
+                    file,
+                ),
+            );
+            self.read_locked(state, path)
+        })
+    }
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
         self.with_state(|mut state| {
-            if path.starts_with(&self.config_root) {
+            if path.starts_with(&self.config_root)
+                || state.project_config_targets.contains_key(path)
+            {
                 if !state.config_revisions.contains_key(path) {
                     match self.read_locked(&mut state, path) {
                         Ok(_) => {}
@@ -226,12 +253,21 @@ impl ConfigStorage for HostStorage {
                         Err(error) => return Err(error),
                     }
                 }
-                let WorkspaceResponse::ConfigWritten { revision, .. } =
-                    self.workspace(WorkspaceRequest::WriteConfig {
-                        relative_path: self.config_relative(path)?,
-                        expected_revision: state.config_revisions.get(path).cloned().flatten(),
+                let expected_revision = state.config_revisions.get(path).cloned().flatten();
+                let request = match state.project_config_targets.get(path) {
+                    Some((project_root, file)) => WorkspaceRequest::WriteProjectConfig {
+                        project_root: project_root.clone(),
+                        file: file.clone(),
+                        expected_revision,
                         bytes: bytes.to_vec(),
-                    })?
+                    },
+                    None => WorkspaceRequest::WriteConfig {
+                        relative_path: self.config_relative(path)?,
+                        expected_revision,
+                        bytes: bytes.to_vec(),
+                    },
+                };
+                let WorkspaceResponse::ConfigWritten { revision, .. } = self.workspace(request)?
                 else {
                     return Err(unexpected());
                 };
@@ -309,7 +345,9 @@ impl ConfigStorage for HostStorage {
     }
     fn remove_file(&self, path: &Path) -> io::Result<()> {
         self.with_state(|mut state| {
-            if path.starts_with(&self.config_root) {
+            if path.starts_with(&self.config_root)
+                || state.project_config_targets.contains_key(path)
+            {
                 if !state.config_revisions.contains_key(path) {
                     self.read_locked(&mut state, path)?;
                 }
@@ -321,10 +359,18 @@ impl ConfigStorage for HostStorage {
                     .ok_or_else(|| {
                         io::Error::new(io::ErrorKind::NotFound, "remote config missing")
                     })?;
-                self.workspace(WorkspaceRequest::DeleteConfig {
-                    relative_path: self.config_relative(path)?,
-                    expected_revision: revision,
-                })?;
+                let request = match state.project_config_targets.get(path) {
+                    Some((project_root, file)) => WorkspaceRequest::DeleteProjectConfig {
+                        project_root: project_root.clone(),
+                        file: file.clone(),
+                        expected_revision: revision,
+                    },
+                    None => WorkspaceRequest::DeleteConfig {
+                        relative_path: self.config_relative(path)?,
+                        expected_revision: revision,
+                    },
+                };
+                self.workspace(request)?;
                 state.config_revisions.insert(path.to_owned(), None);
             } else {
                 let (project_id, relative_path) = self.location(&mut state, path)?;

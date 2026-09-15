@@ -2,6 +2,8 @@ mod persistence;
 mod view;
 pub(super) use view::{settings_button, settings_window_content};
 
+use crate::config::scope::SettingsScope;
+
 use super::*;
 
 const KEYBINDINGS_WATCH_DEBOUNCE: Duration = Duration::from_millis(150);
@@ -31,90 +33,121 @@ impl WorkbenchView {
             .map(str::to_string)
             .or(Some(current));
     }
+    fn device_preferences_config_paths(
+        &self,
+    ) -> Result<crate::config::paths::AppConfigPaths, WorkbenchError> {
+        crate::config::scope::device_preferences_config_paths()
+            .or_else(|| {
+                self.config_paths
+                    .is_test_fixture()
+                    .then(|| self.config_paths.clone())
+            })
+            .ok_or_else(|| {
+                WorkbenchError::SettingsUnavailable(
+                    "Device preferences are not bound for this Client profile.".to_string(),
+                )
+            })
+    }
     pub(super) fn ensure_keybindings_watcher(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let path = self.config_paths.keybindings_file();
+        let keybinding_paths = match self.device_preferences_config_paths() {
+            Ok(paths) => paths,
+            Err(error) => {
+                self.set_keybinding_load_error(error.to_string());
+                return;
+            }
+        };
+        let path = keybinding_paths.keybindings_file();
+        let Some(mut directory) = path.parent().map(Path::to_path_buf) else {
+            return;
+        };
         if self
             .active_keybindings_watcher
             .as_ref()
-            .is_some_and(|watcher| watcher.path == path)
+            .is_some_and(|watcher| watcher.path == path && watcher.directory == directory)
+        {
+            return;
+        }
+        loop {
+            match directory.try_exists() {
+                Ok(true) => break,
+                Ok(false) if directory.pop() => {}
+                Ok(false) => return,
+                Err(error) => {
+                    self.set_keybinding_load_error(format!(
+                        "Failed to inspect keybindings directory {}: {error}",
+                        directory.display()
+                    ));
+                    return;
+                }
+            }
+        }
+        if self
+            .active_keybindings_watcher
+            .as_ref()
+            .is_some_and(|watcher| watcher.path == path && watcher.directory == directory)
         {
             return;
         }
         self.active_keybindings_watcher = None;
-
-        let Some(parent) = path.parent().map(Path::to_path_buf) else {
-            return;
-        };
         let pending_reload = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let callback_reload = pending_reload.clone();
-        let callback_path = path.clone();
-        let watcher = if crate::config::storage::is_remote() {
-            None
-        } else {
-            let mut watcher =
-                match notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
-                    let Ok(event) = result else {
-                        return;
-                    };
-                    if event.paths.iter().any(|event_path| {
-                        event_path == &callback_path
-                            || event_path.file_name() == callback_path.file_name()
-                    }) {
-                        callback_reload.store(true, std::sync::atomic::Ordering::Release);
-                    }
-                }) {
-                    Ok(watcher) => watcher,
-                    Err(error) => {
-                        self.set_keybinding_load_error(format!(
-                            "Failed to watch keybindings at {}: {error}",
-                            path.display()
-                        ));
-                        return;
-                    }
-                };
-            use notify::Watcher as _;
-            if let Err(error) = watcher.watch(&parent, notify::RecursiveMode::NonRecursive) {
+        let callback_path = match std::fs::canonicalize(&directory) {
+            Ok(directory_root) => directory_root.join(
+                path.strip_prefix(&directory)
+                    .expect("watched directory is an ancestor of the keybindings path"),
+            ),
+            Err(error) => {
                 self.set_keybinding_load_error(format!(
-                    "Failed to watch keybindings at {}: {error}",
-                    path.display()
+                    "Failed to resolve keybindings directory {}: {error}",
+                    directory.display()
                 ));
                 return;
             }
-            Some(watcher)
         };
+        let mut watcher =
+            match notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+                let Ok(event) = result else {
+                    return;
+                };
+                if event.paths.iter().any(|event_path| {
+                    callback_path.starts_with(event_path)
+                        || (matches!(
+                            event.kind,
+                            notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
+                        ) && event_path.parent() == callback_path.parent())
+                }) {
+                    callback_reload.store(true, std::sync::atomic::Ordering::Release);
+                }
+            }) {
+                Ok(watcher) => watcher,
+                Err(error) => {
+                    self.set_keybinding_load_error(format!(
+                        "Failed to watch keybindings at {}: {error}",
+                        path.display()
+                    ));
+                    return;
+                }
+            };
+        use notify::Watcher as _;
+        if let Err(error) = watcher.watch(&directory, notify::RecursiveMode::NonRecursive) {
+            self.set_keybinding_load_error(format!(
+                "Failed to watch keybindings at {}: {error}",
+                path.display()
+            ));
+            return;
+        }
 
         let watched_path = path.clone();
         let task = cx.spawn_in(window, async move |this, cx| {
             let _watcher = watcher;
-            let mut remote_source = None;
             loop {
                 cx.background_executor()
-                    .timer(if crate::config::storage::is_remote() {
-                        Duration::from_secs(1)
-                    } else {
-                        KEYBINDINGS_WATCH_DEBOUNCE
-                    })
+                    .timer(KEYBINDINGS_WATCH_DEBOUNCE)
                     .await;
-                if crate::config::storage::is_remote() {
-                    let path = watched_path.clone();
-                    let source = cx
-                        .background_executor()
-                        .spawn(async move {
-                            crate::config::storage::read(path).map_err(|error| error.to_string())
-                        })
-                        .await;
-                    if remote_source
-                        .as_ref()
-                        .is_some_and(|previous| previous != &source)
-                    {
-                        pending_reload.store(true, std::sync::atomic::Ordering::Release);
-                    }
-                    remote_source = Some(source);
-                }
                 if !pending_reload.swap(false, std::sync::atomic::Ordering::AcqRel) {
                     continue;
                 }
@@ -126,7 +159,7 @@ impl WorkbenchView {
                     {
                         return;
                     }
-                    match load_keybindings(&root.config_paths, &root.command_registry) {
+                    match load_keybindings(&keybinding_paths, &root.command_registry) {
                         Ok(loaded) if loaded.warnings.is_empty() => {
                             root.settings.keybindings_editor = KeybindingsEditorState::new(
                                 loaded.config.clone(),
@@ -166,7 +199,11 @@ impl WorkbenchView {
                 });
             }
         });
-        self.active_keybindings_watcher = Some(ActiveKeybindingsWatcher { path, _task: task });
+        self.active_keybindings_watcher = Some(ActiveKeybindingsWatcher {
+            path,
+            directory,
+            _task: task,
+        });
     }
 
     pub(super) fn flush_pending_keybindings_reload(&mut self, cx: &mut Context<Self>) {
@@ -248,6 +285,397 @@ impl WorkbenchView {
 
     pub fn settings_is_open(&self) -> bool {
         self.settings.settings_page.is_open
+    }
+    pub(super) fn selected_settings_scope(&self) -> SettingsScope {
+        self.settings.settings_scope
+    }
+
+    pub(super) fn select_settings_scope(
+        &mut self,
+        scope: SettingsScope,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings.settings_scope == scope {
+            if scope == SettingsScope::Project {
+                self.refresh_settings_project_target(window, cx);
+            }
+            return;
+        }
+
+        self.settings.settings_scope = scope;
+        self.clear_settings_project_target();
+        if scope == SettingsScope::Project {
+            self.refresh_settings_project_target(window, cx);
+        }
+        if crate::ui::settings::settings_rows_for_scope(
+            self.settings.settings_page.selected_group,
+            &self.ui_text,
+            scope,
+        )
+        .is_empty()
+        {
+            if let Some(group) = SettingsGroupId::ALL.iter().copied().find(|group| {
+                !crate::ui::settings::settings_rows_for_scope(*group, &self.ui_text, scope)
+                    .is_empty()
+            }) {
+                self.settings.settings_page.selected_group = group;
+            }
+        }
+    }
+
+    fn clear_settings_project_target(&mut self) {
+        self.settings.project_editor_settings_generation = self
+            .settings
+            .project_editor_settings_generation
+            .wrapping_add(1);
+        self.settings.project_editor_settings_project_id = None;
+        self.settings.project_editor_settings.clear();
+        self.settings.project_settings_path = None;
+        self.settings.project_settings_load_error = None;
+        self.settings.settings_project_tab_size_input = None;
+        self.settings.settings_project_tab_size_input_subscription = None;
+        self.settings.settings_project_default_language_input = None;
+        self.settings
+            .settings_project_default_language_input_subscription = None;
+    }
+
+    pub(super) fn ensure_settings_project_target_loaded(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings.settings_scope != SettingsScope::Project {
+            return;
+        }
+        let selected_project_id = self.workspace.selected_project_id().cloned();
+        if self.settings.project_editor_settings_project_id.as_ref() == selected_project_id.as_ref()
+        {
+            return;
+        }
+        self.refresh_settings_project_target(window, cx);
+    }
+
+    pub(super) fn refresh_settings_project_target(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings.settings_scope != SettingsScope::Project {
+            return;
+        }
+
+        self.clear_settings_project_target();
+        let Some(selected_project_id) = self.workspace.selected_project_id().cloned() else {
+            return;
+        };
+        self.settings.project_editor_settings_project_id = Some(selected_project_id);
+        let generation = self.settings.project_editor_settings_generation;
+
+        let io = match self.selected_project_editor_settings_io() {
+            Ok(io) => io,
+            Err(error) => {
+                self.settings.project_settings_load_error = Some(error);
+                return;
+            }
+        };
+        let project_id = io.project_id.clone();
+        let task = cx.background_spawn(async move {
+            crate::config::project_settings::load_project_editor_settings_snapshot(
+                &io.config_paths,
+                &io.project_path,
+                &io.host_editor_settings,
+            )
+            .map_err(|error| error.to_string())
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |root, _window, cx| {
+                if root.settings.settings_scope != SettingsScope::Project
+                    || root.workspace.selected_project_id() != Some(&project_id)
+                    || root.settings.project_editor_settings_generation != generation
+                {
+                    return;
+                }
+                match result {
+                    Ok(snapshot) => {
+                        root.settings.project_settings_path = Some(snapshot.settings_file);
+                        root.settings.project_editor_settings =
+                            snapshot.effective.into_iter().collect();
+                        root.settings.settings_project_tab_size_input = None;
+                        root.settings.settings_project_tab_size_input_subscription = None;
+                        root.settings.settings_project_default_language_input = None;
+                        root.settings
+                            .settings_project_default_language_input_subscription = None;
+                        root.settings.project_settings_load_error = None;
+                    }
+                    Err(error) => {
+                        root.settings.project_editor_settings.clear();
+                        root.settings.project_settings_path = None;
+                        root.settings.project_settings_load_error = Some(error);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn cached_settings_project_path(&self) -> Option<&std::path::Path> {
+        self.settings.project_settings_path.as_deref()
+    }
+
+    pub(super) fn project_settings_snapshot_is_confirmed(&self) -> bool {
+        self.settings.project_settings_path.is_some()
+            && self.settings.project_settings_load_error.is_none()
+            && self.settings.project_editor_settings_project_id.as_ref()
+                == self.workspace.selected_project_id()
+    }
+
+    pub(super) fn project_settings_load_error(&self) -> Option<&str> {
+        self.settings.project_settings_load_error.as_deref()
+    }
+
+    pub(super) fn cached_project_editor_setting(
+        &self,
+        key: crate::config::project_settings::ProjectEditorSettingKey,
+    ) -> Option<&crate::config::project_settings::EffectiveProjectEditorSetting> {
+        self.settings
+            .project_editor_settings
+            .iter()
+            .find(|setting| setting.key == key)
+    }
+
+    pub(super) fn save_project_editor_setting(
+        &mut self,
+        key: crate::config::project_settings::ProjectEditorSettingKey,
+        value: Option<crate::config::project_settings::ProjectEditorSettingValue>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if self.settings.settings_scope != SettingsScope::Project {
+            return Err("Project overrides require the Project settings target.".to_string());
+        }
+        if self.settings_save_pending() {
+            return Err("A settings save is still pending; wait for its result.".to_string());
+        }
+        if self.has_failed_settings_save() {
+            return Err(
+                "A previous settings draft is retained. Retry or discard it before saving another change."
+                    .to_string(),
+            );
+        }
+        if !self.settings_scope_is_editable() {
+            return Err(self
+                .ui_text
+                .get(
+                    self.settings_scope_read_only_reason()
+                        .unwrap_or(UiTextKey::SettingsReadOnlyDisconnected),
+                )
+                .to_string());
+        }
+
+        let io = self.selected_project_editor_settings_io()?;
+        if !io.can_write_host {
+            return Err(self
+                .ui_text
+                .get(UiTextKey::SettingsReadOnlyObserver)
+                .to_string());
+        }
+        let confirmed = self
+            .cached_project_editor_setting(key)
+            .cloned()
+            .ok_or_else(|| "Project settings are still loading.".to_string())?;
+        self.settings.pending_project_settings_save = Some(ProjectSettingsSaveDraft {
+            project_id: io.project_id.as_str().to_string(),
+            project_path: io.project_path,
+            target_generation: self.settings.project_editor_settings_generation,
+            key,
+            candidate: value,
+            confirmed,
+        });
+        Ok(())
+    }
+
+    fn project_settings_draft_matches_current_target(
+        &self,
+        draft: &ProjectSettingsSaveDraft,
+    ) -> bool {
+        self.workspace
+            .selected_project_id()
+            .filter(|project_id| project_id.as_str() == draft.project_id.as_str())
+            .and_then(|project_id| self.workspace.project(project_id))
+            .and_then(|project| project.location.local_path())
+            == Some(&draft.project_path)
+    }
+
+    pub(super) fn settings_scope_retry_allowed(&self) -> bool {
+        if !self.has_failed_settings_save() {
+            return false;
+        }
+        if let Some(draft) = self.settings.failed_project_settings_save.as_ref() {
+            return self.settings.settings_scope == SettingsScope::Project
+                && self.settings_scope_is_editable()
+                && self.project_settings_draft_matches_current_target(draft);
+        }
+        self.settings_scope_is_editable()
+    }
+    pub(super) fn settings_project_tab_size_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(input) = &self.settings.settings_project_tab_size_input {
+            return input.clone();
+        }
+        let value = self
+            .cached_project_editor_setting(
+                crate::config::project_settings::ProjectEditorSettingKey::TabSize,
+            )
+            .and_then(|setting| match &setting.value {
+                crate::config::project_settings::ProjectEditorSettingValue::TabSize(value) => {
+                    Some(*value)
+                }
+                _ => None,
+            })
+            .unwrap_or(self.app_settings.editor.tab_size)
+            .to_string();
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(value));
+        let subscription = cx.subscribe_in(
+            &input,
+            window,
+            Self::on_settings_project_tab_size_input_event,
+        );
+        self.settings.settings_project_tab_size_input = Some(input.clone());
+        self.settings.settings_project_tab_size_input_subscription = Some(subscription);
+        input
+    }
+
+    pub(super) fn settings_project_default_language_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(input) = &self.settings.settings_project_default_language_input {
+            return input.clone();
+        }
+        let value = self
+            .cached_project_editor_setting(
+                crate::config::project_settings::ProjectEditorSettingKey::DefaultLanguage,
+            )
+            .and_then(|setting| match &setting.value {
+                crate::config::project_settings::ProjectEditorSettingValue::DefaultLanguage(
+                    value,
+                ) => Some(value.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| self.app_settings.editor.default_language.clone());
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(value));
+        let subscription = cx.subscribe_in(
+            &input,
+            window,
+            Self::on_settings_project_default_language_input_event,
+        );
+        self.settings.settings_project_default_language_input = Some(input.clone());
+        self.settings
+            .settings_project_default_language_input_subscription = Some(subscription);
+        input
+    }
+
+    pub(super) fn on_settings_project_tab_size_input_event(
+        &mut self,
+        input: &Entity<InputState>,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+            return;
+        }
+        let value = input.read(cx).value().trim().parse::<usize>();
+        let result = value
+            .ok()
+            .filter(|value| (1..=16).contains(value))
+            .ok_or_else(|| "Tab size must be between 1 and 16.".to_string())
+            .and_then(|value| {
+                self.save_project_editor_setting(
+                    crate::config::project_settings::ProjectEditorSettingKey::TabSize,
+                    Some(
+                        crate::config::project_settings::ProjectEditorSettingValue::TabSize(value),
+                    ),
+                    window,
+                    cx,
+                )
+            });
+        if let Err(error) = result {
+            self.load_error = Some(error);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn on_settings_project_default_language_input_event(
+        &mut self,
+        input: &Entity<InputState>,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+            return;
+        }
+        let value = input.read(cx).value().trim().to_string();
+        if value.is_empty() {
+            self.load_error = Some("Default language cannot be empty.".to_string());
+        } else if let Err(error) = self.save_project_editor_setting(
+            crate::config::project_settings::ProjectEditorSettingKey::DefaultLanguage,
+            Some(
+                crate::config::project_settings::ProjectEditorSettingValue::DefaultLanguage(value),
+            ),
+            window,
+            cx,
+        ) {
+            self.load_error = Some(error);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn selected_settings_project_name(&self) -> Option<String> {
+        self.workspace
+            .selected_project_id()
+            .and_then(|project_id| self.workspace.project(project_id))
+            .map(|project| project.layout.project.name.clone())
+    }
+
+    pub(super) fn settings_scope_read_only_reason(&self) -> Option<UiTextKey> {
+        if self.settings.settings_scope == SettingsScope::Device {
+            return None;
+        }
+
+        let Some(runtime) = self.terminal.host_runtime.as_ref() else {
+            return Some(UiTextKey::SettingsReadOnlyDisconnected);
+        };
+        if runtime.preparing_transfer().is_some() {
+            return Some(UiTextKey::SettingsReadOnlyPreparingTransfer);
+        }
+        if !matches!(
+            runtime.state(),
+            yttt_client_core::ConnectionState::Ready { .. }
+        ) {
+            return Some(UiTextKey::SettingsReadOnlyDisconnected);
+        }
+        if runtime.shared_editing_enabled() {
+            return None;
+        }
+        Some(UiTextKey::SettingsReadOnlyObserver)
+    }
+
+    pub(super) fn settings_scope_is_editable(&self) -> bool {
+        match self.settings.settings_scope {
+            SettingsScope::Device => true,
+            SettingsScope::Host | SettingsScope::Project => {
+                self.settings_scope_read_only_reason().is_none()
+            }
+        }
     }
 
     pub fn open_settings(&mut self) {
@@ -423,7 +851,8 @@ impl WorkbenchView {
         }
         self.ui_text = ui_text_for_language(language);
         self.settings.keybinding_rows_cache = None;
-        if let Ok(loaded) = load_keybindings(&self.config_paths, &self.command_registry) {
+        let keybinding_paths = self.device_preferences_config_paths()?;
+        if let Ok(loaded) = load_keybindings(&keybinding_paths, &self.command_registry) {
             self.settings.keybinding_warning_lines =
                 format_keybinding_warning_lines(&loaded.warnings, &self.ui_text);
         }
@@ -673,7 +1102,13 @@ impl WorkbenchView {
     }
 
     pub fn open_zed_theme_import_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let paths = self.config_paths.clone();
+        let paths = match self.device_preferences_config_paths() {
+            Ok(paths) => paths,
+            Err(error) => {
+                self.load_error = Some(error.to_string());
+                return;
+            }
+        };
         let task = cx.background_spawn(async move {
             let detection = detect_installed_zed_themes();
             let mut existing_paths = std::collections::HashSet::new();
@@ -746,20 +1181,17 @@ impl WorkbenchView {
         if self.settings_save_pending() {
             return;
         }
-        if self
-            .terminal
-            .host_runtime
-            .as_ref()
-            .is_some_and(|runtime| !runtime.shared_editing_enabled())
-        {
-            self.load_error = Some("Profile control is required to import shared themes.".into());
-            return;
-        }
         let Some(dialog) = self.settings.zed_theme_import_dialog.clone() else {
             return;
         };
+        let paths = match self.device_preferences_config_paths() {
+            Ok(paths) => paths,
+            Err(error) => {
+                self.load_error = Some(error.to_string());
+                return;
+            }
+        };
         self.settings.settings_save_in_flight = true;
-        let paths = self.config_paths.clone();
         let settings = self.app_settings.clone();
         let task = cx.background_spawn(async move {
             let imported = import_detected_zed_themes_with_policy(
@@ -1495,7 +1927,15 @@ impl WorkbenchView {
     }
 
     pub(super) fn refresh_theme_runtime_from_settings(&mut self) {
-        match load_theme_store(&self.config_paths) {
+        let paths = match self.device_preferences_config_paths() {
+            Ok(paths) => paths,
+            Err(error) => {
+                self.icon_theme = IconTheme::default();
+                self.load_error = Some(error.to_string());
+                return;
+            }
+        };
+        match load_theme_store(&paths) {
             Ok(loaded) => {
                 let runtime = ThemeRuntime::resolve(&self.app_settings, &loaded.store);
                 self.appearance.replace(runtime);
@@ -1504,10 +1944,7 @@ impl WorkbenchView {
                 self.load_error = Some(error.to_string());
             }
         }
-        match load_icon_theme(
-            &self.config_paths,
-            self.app_settings.theme.icon_theme.as_deref(),
-        ) {
+        match load_icon_theme(&paths, self.app_settings.theme.icon_theme.as_deref()) {
             Ok(icon_theme) => self.icon_theme = icon_theme,
             Err(error) => {
                 self.icon_theme = IconTheme::default();
@@ -1632,7 +2069,8 @@ impl WorkbenchView {
     }
 
     pub(super) fn save_keybindings_editor(&mut self) -> Result<(), WorkbenchError> {
-        self.settings.keybindings_editor.save(&self.config_paths)?;
+        let keybinding_paths = self.device_preferences_config_paths()?;
+        self.settings.keybindings_editor.save(&keybinding_paths)?;
         self.settings.keybinding_rows_cache = None;
         self.keybindings_reload_requested = true;
         self.settings.keybinding_warning_lines.clear();
@@ -1647,13 +2085,18 @@ impl WorkbenchView {
     }
 
     pub(super) fn available_theme_names(&self) -> Vec<String> {
-        load_theme_store(&self.config_paths)
+        self.device_preferences_config_paths()
+            .ok()
+            .and_then(|paths| load_theme_store(&paths).ok())
             .map(|loaded| loaded.store.theme_names())
-            .unwrap_or_else(|_| ThemeStore::builtin().theme_names())
+            .unwrap_or_else(|| ThemeStore::builtin().theme_names())
     }
 
     pub(super) fn available_icon_theme_names(&self) -> Vec<String> {
-        load_icon_theme_names(&self.config_paths).unwrap_or_default()
+        self.device_preferences_config_paths()
+            .ok()
+            .and_then(|paths| load_icon_theme_names(&paths).ok())
+            .unwrap_or_default()
     }
 
     pub(super) fn available_editor_language_names(&self) -> Vec<String> {

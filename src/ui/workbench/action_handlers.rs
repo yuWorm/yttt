@@ -1,6 +1,21 @@
 use super::*;
 
 impl WorkbenchView {
+    pub(super) fn shared_mutation_allowed(&self) -> bool {
+        self.terminal.host_runtime.as_ref().map_or(
+            cfg!(test) || self.local_project_services_for_test,
+            |runtime| runtime.shared_editing_enabled(),
+        )
+    }
+
+    pub(super) fn require_shared_mutation_control(&mut self) -> bool {
+        if self.shared_mutation_allowed() {
+            return true;
+        }
+        self.load_error = Some("Shared editing control is required".to_string());
+        false
+    }
+
     pub(super) fn on_application_quit(
         &mut self,
         _: &ApplicationQuit,
@@ -196,8 +211,11 @@ impl WorkbenchView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.request_create_project();
-        self.handle_pending_create_project_request(cx);
+        let pending_was_set = self.pending_create_project_request;
+        let _ = self.run_command(CommandId::ProjectCreate);
+        if !pending_was_set && self.pending_create_project_request {
+            self.handle_pending_create_project_request(cx);
+        }
         cx.notify();
     }
 
@@ -207,8 +225,11 @@ impl WorkbenchView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.request_open_project();
-        self.handle_pending_open_project_request(cx);
+        let pending_was_set = self.pending_open_project_request;
+        let _ = self.run_command(CommandId::ProjectOpen);
+        if !pending_was_set && self.pending_open_project_request {
+            self.handle_pending_open_project_request(cx);
+        }
         cx.notify();
     }
 
@@ -218,10 +239,10 @@ impl WorkbenchView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if crate::config::storage::is_remote() {
-            self.open_remote_host_directory_picker(cx);
-        } else {
-            self.open_ssh_project_picker();
+        let pending_was_set = self.pending_open_project_request;
+        let _ = self.run_command(CommandId::ProjectOpenSsh);
+        if !pending_was_set && self.pending_open_project_request {
+            self.handle_pending_open_project_request(cx);
         }
         cx.notify();
     }
@@ -232,8 +253,11 @@ impl WorkbenchView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.pending_existing_host_request = true;
-        self.handle_pending_open_project_request(cx);
+        let pending_was_set = self.pending_existing_host_request;
+        let _ = self.run_command(CommandId::ConnectExistingHost);
+        if !pending_was_set && self.pending_existing_host_request {
+            self.handle_pending_open_project_request(cx);
+        }
         cx.notify();
     }
 
@@ -259,6 +283,12 @@ impl WorkbenchView {
 
         cx.spawn(async move |this, cx| match picked_path.await {
             Ok(Ok(Some(project_path))) => {
+                let can_create = this
+                    .update(cx, |this, _| this.shared_mutation_allowed())
+                    .unwrap_or(false);
+                if !can_create {
+                    return;
+                }
                 let path_to_create = project_path.clone();
                 let create_task = cx
                     .background_executor()
@@ -267,7 +297,9 @@ impl WorkbenchView {
                 let _ = this.update(cx, |this, cx| {
                     match result {
                         Ok(()) => {
-                            let _ = this.open_project_path(project_path);
+                            if this.require_shared_mutation_control() {
+                                let _ = this.open_project_path(project_path);
+                            }
                         }
                         Err(error) => {
                             this.load_error = Some(format!(
@@ -324,7 +356,9 @@ impl WorkbenchView {
             Ok(Ok(Some(paths))) => {
                 if let Some(project_path) = paths.into_iter().next() {
                     let _ = this.update(cx, |this, cx| {
-                        let _ = this.open_project_path(project_path);
+                        if this.require_shared_mutation_control() {
+                            let _ = this.open_project_path(project_path);
+                        }
                         cx.notify();
                     });
                 }
@@ -572,6 +606,10 @@ impl WorkbenchView {
     }
 
     fn dispatch_tab_close_scope(&mut self, scope: WorkbenchTabCloseScope, cx: &mut Context<Self>) {
+        if !self.require_shared_mutation_control() {
+            cx.notify();
+            return;
+        }
         if let Some(anchor) = self.active_work_item()
             && let Err(error) = self.close_work_item_tabs(&anchor, scope, cx)
         {
@@ -799,8 +837,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.save_active_document(window, cx);
-        cx.notify();
+        self.dispatch_command_action(CommandId::FileSave, window, cx);
     }
 
     pub(super) fn on_git_branch_switch(
@@ -890,7 +927,7 @@ impl WorkbenchView {
         }
         let input_owner = self.foreground_input_owner_kind();
         if input_owner == InputOwnerKind::Editor
-            && !workspace_runtime_command_allowed(input_owner, command_id)
+            && !workspace_runtime_command_allowed(input_owner, command_id, self.command_context())
         {
             cx.propagate();
             return;

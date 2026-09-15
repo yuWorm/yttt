@@ -640,7 +640,7 @@ fn config_global_default_uses_template_without_creating_personal_file() {
     let project_dir = temp.path().join("global-default-project");
     fs::create_dir(&project_dir).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut default_state = DefaultLayoutState::load_or_create(&paths);
+    let mut default_state = DefaultLayoutState::load(&paths);
     let mut template = DefaultLayoutTemplate::builtin();
     template.tabs[0].title = "Global Shell".to_string();
     default_state.save(template).unwrap();
@@ -667,12 +667,13 @@ fn config_global_default_project_config_does_not_read_broken_global_file() {
     let project_dir = temp.path().join("project-wins");
     fs::create_dir_all(project_dir.join(".yttt")).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut default_state = DefaultLayoutState::load_or_create(&paths);
+    let mut default_state = DefaultLayoutState::load(&paths);
     fs::write(
         project_dir.join(".yttt/layout.toml"),
         toml::to_string_pretty(&sample_layout()).unwrap(),
     )
     .unwrap();
+    fs::create_dir_all(paths.config_dir()).unwrap();
     fs::write(paths.default_layout_file(), "[project").unwrap();
 
     let opened = open_project_config(&paths, &project_dir, &mut default_state).unwrap();
@@ -693,7 +694,7 @@ fn config_project_layout_without_name_uses_project_directory_name() {
     let project_dir = temp.path().join("unnamed-project");
     fs::create_dir_all(project_dir.join(".yttt")).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut default_state = DefaultLayoutState::load_or_create(&paths);
+    let mut default_state = DefaultLayoutState::load(&paths);
     fs::write(
         project_dir.join(".yttt/layout.toml"),
         toml::to_string_pretty(&DefaultLayoutTemplate::builtin()).unwrap(),
@@ -720,7 +721,7 @@ fn config_project_layout_resolves_project_dir_in_tab_cwd() {
     fs::create_dir_all(project_dir.join(".yttt")).unwrap();
     fs::create_dir_all(project_dir.join("services/api")).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut default_state = DefaultLayoutState::load_or_create(&paths);
+    let mut default_state = DefaultLayoutState::load(&paths);
     let mut layout = sample_layout();
     layout.tabs[0].cwd = Some(PathBuf::from("<ProjectDir>/services/api"));
     fs::write(
@@ -744,7 +745,7 @@ fn personal_layout_precedence_applies_patch_to_global_default() {
     let project_dir = temp.path().join("global-patch");
     fs::create_dir(&project_dir).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut default_state = DefaultLayoutState::load_or_create(&paths);
+    let mut default_state = DefaultLayoutState::load(&paths);
     let canonical_project = project_dir.canonicalize().unwrap();
     let local = paths.local_layout_file(&canonical_project);
     fs::create_dir_all(local.parent().unwrap()).unwrap();
@@ -776,7 +777,7 @@ fn personal_layout_precedence_applies_patch_to_project_config() {
     let project_dir = temp.path().join("project-patch");
     fs::create_dir_all(project_dir.join(".yttt")).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut default_state = DefaultLayoutState::load_or_create(&paths);
+    let mut default_state = DefaultLayoutState::load(&paths);
     fs::write(
         project_dir.join(".yttt/layout.toml"),
         toml::to_string_pretty(&sample_layout()).unwrap(),
@@ -818,7 +819,7 @@ fn personal_layout_precedence_replace_wins_over_global_and_project_bases() {
         });
         fs::create_dir_all(&project_dir).unwrap();
         let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-        let mut default_state = DefaultLayoutState::load_or_create(&paths);
+        let mut default_state = DefaultLayoutState::load(&paths);
         if with_project_config {
             fs::create_dir_all(project_dir.join(".yttt")).unwrap();
             fs::write(
@@ -848,7 +849,7 @@ fn personal_layout_legacy_replace_loads_over_project_base() {
     let project_dir = temp.path().join("invalid-personal");
     fs::create_dir_all(project_dir.join(".yttt")).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut default_state = DefaultLayoutState::load_or_create(&paths);
+    let mut default_state = DefaultLayoutState::load(&paths);
     fs::write(
         project_dir.join(".yttt/layout.toml"),
         toml::to_string_pretty(&sample_layout()).unwrap(),
@@ -859,11 +860,13 @@ fn personal_layout_legacy_replace_loads_over_project_base() {
     fs::create_dir_all(local.parent().unwrap()).unwrap();
     let mut legacy_layout = sample_layout();
     legacy_layout.project.name = "legacy personal".to_string();
-    fs::write(&local, toml::to_string_pretty(&legacy_layout).unwrap()).unwrap();
+    let legacy_source = toml::to_string_pretty(&legacy_layout).unwrap();
+    fs::write(&local, &legacy_source).unwrap();
 
     let opened = open_project_config(&paths, &project_dir, &mut default_state).unwrap();
 
     assert_eq!(opened.layout, legacy_layout);
+    assert_eq!(fs::read_to_string(&local).unwrap(), legacy_source);
     assert_eq!(opened.layout_source, LayoutSource::PersonalReplace(local));
     assert!(opened.warnings.is_empty());
 }
@@ -874,7 +877,7 @@ fn personal_layout_warning_reports_stale_tab_and_pane_with_path() {
     let project_dir = temp.path().join("stale-personal");
     fs::create_dir_all(project_dir.join(".yttt")).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut default_state = DefaultLayoutState::load_or_create(&paths);
+    let mut default_state = DefaultLayoutState::load(&paths);
     fs::write(
         project_dir.join(".yttt/layout.toml"),
         toml::to_string_pretty(&sample_layout()).unwrap(),
@@ -931,7 +934,7 @@ fn reset_local_override_is_idempotent_and_restores_inheritance_on_reopen() {
     let project_dir = temp.path().join("reset-local");
     fs::create_dir(&project_dir).unwrap();
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut default_state = DefaultLayoutState::load_or_create(&paths);
+    let mut default_state = DefaultLayoutState::load(&paths);
     let canonical_project = project_dir.canonicalize().unwrap();
     save_local_layout(&paths, &canonical_project, &sample_layout()).unwrap();
 
@@ -1042,7 +1045,8 @@ fn config_invalid_app_local_override_is_ignored_when_project_config_exists() {
     .unwrap();
     let local_layout_file = paths.local_layout_file(&project_dir.canonicalize().unwrap());
     fs::create_dir_all(local_layout_file.parent().unwrap()).unwrap();
-    fs::write(&local_layout_file, "[not valid toml").unwrap();
+    let invalid_source = "[not valid toml";
+    fs::write(&local_layout_file, invalid_source).unwrap();
 
     let opened = open_project_for_test(&paths, &project_dir);
 
@@ -1058,6 +1062,10 @@ fn config_invalid_app_local_override_is_ignored_when_project_config_exists() {
         [LayoutLoadWarning::PersonalOverrideParse { path, .. }]
             if path == &local_layout_file
     ));
+    assert_eq!(
+        fs::read_to_string(&local_layout_file).unwrap(),
+        invalid_source
+    );
 }
 
 #[test]
@@ -1086,15 +1094,16 @@ fn config_legacy_unversioned_personal_replace_loads_without_warning() {
     fs::create_dir_all(local_layout_file.parent().unwrap()).unwrap();
     let mut legacy_layout = sample_layout();
     legacy_layout.project.name = "legacy personal".to_string();
-    fs::write(
-        &local_layout_file,
-        toml::to_string_pretty(&legacy_layout).unwrap(),
-    )
-    .unwrap();
+    let legacy_source = toml::to_string_pretty(&legacy_layout).unwrap();
+    fs::write(&local_layout_file, &legacy_source).unwrap();
 
     let opened = open_project_for_test(&paths, &project_dir);
 
     assert_eq!(opened.layout.project.name, "legacy personal");
+    assert_eq!(
+        fs::read_to_string(&local_layout_file).unwrap(),
+        legacy_source
+    );
     assert_eq!(
         opened.layout_source,
         LayoutSource::PersonalReplace(local_layout_file)
@@ -1212,7 +1221,7 @@ fn open_project_for_test(
     paths: &AppConfigPaths,
     project_dir: &std::path::Path,
 ) -> yttt::config::layout_loader::ProjectOpenConfig {
-    let mut default_state = DefaultLayoutState::load_or_create(paths);
+    let mut default_state = DefaultLayoutState::load(paths);
     open_project_config(paths, project_dir, &mut default_state).unwrap()
 }
 

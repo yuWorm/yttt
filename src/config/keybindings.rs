@@ -154,6 +154,8 @@ pub enum KeybindingLoadWarning {
 
 #[derive(Debug, thiserror::Error)]
 pub enum KeybindingsLoadError {
+    #[error("Device preferences are not bound; cannot load keybindings")]
+    DevicePreferencesUnbound,
     #[error("failed to create keybindings config directory {path}: {source}")]
     CreateConfigDirectory {
         path: PathBuf,
@@ -183,6 +185,8 @@ pub enum KeybindingsLoadError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum KeybindingsSaveError {
+    #[error("Device preferences are not bound; cannot save keybindings")]
+    DevicePreferencesUnbound,
     #[error("failed to create keybindings config directory {path}: {source}")]
     CreateConfigDirectory {
         path: PathBuf,
@@ -204,13 +208,19 @@ pub fn load_keybindings(
     paths: &AppConfigPaths,
     registry: &CommandRegistry,
 ) -> Result<LoadedKeybindings, KeybindingsLoadError> {
-    let path = ensure_keybindings_file(paths)?;
-    let source = crate::config::storage::read_to_string(&path).map_err(|source| {
-        KeybindingsLoadError::Read {
-            path: path.clone(),
-            source,
+    let paths =
+        device_keybinding_paths(paths).ok_or(KeybindingsLoadError::DevicePreferencesUnbound)?;
+    let path = paths.keybindings_file();
+    let source = match crate::config::storage::read_to_string(&path) {
+        Ok(source) => source,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(LoadedKeybindings {
+                config: KeybindingsConfig::default(),
+                warnings: Vec::new(),
+            });
         }
-    })?;
+        Err(source) => return Err(KeybindingsLoadError::Read { path, source }),
+    };
     let config: KeybindingsConfig =
         toml::from_str(&source).map_err(|source| KeybindingsLoadError::Parse {
             path: path.clone(),
@@ -228,6 +238,8 @@ pub fn save_keybindings(
     paths: &AppConfigPaths,
     config: &KeybindingsConfig,
 ) -> Result<PathBuf, KeybindingsSaveError> {
+    let paths =
+        device_keybinding_paths(paths).ok_or(KeybindingsSaveError::DevicePreferencesUnbound)?;
     let path = paths.keybindings_file();
     if let Some(parent) = path.parent() {
         crate::config::storage::create_dir_all(parent).map_err(|source| {
@@ -252,6 +264,8 @@ pub fn save_keybindings(
 }
 
 pub fn ensure_keybindings_file(paths: &AppConfigPaths) -> Result<PathBuf, KeybindingsLoadError> {
+    let paths =
+        device_keybinding_paths(paths).ok_or(KeybindingsLoadError::DevicePreferencesUnbound)?;
     let path = paths.keybindings_file();
     if crate::config::storage::exists(&path) {
         return Ok(path);
@@ -271,14 +285,20 @@ pub fn ensure_keybindings_file(paths: &AppConfigPaths) -> Result<PathBuf, Keybin
     Ok(path)
 }
 
+fn device_keybinding_paths(paths: &AppConfigPaths) -> Option<AppConfigPaths> {
+    paths
+        .is_test_fixture()
+        .then(|| paths.clone())
+        .or_else(crate::config::scope::device_preferences_config_paths)
+}
+
 fn migrate_keybindings_config(
-    path: &Path,
+    _path: &Path,
     mut config: KeybindingsConfig,
 ) -> Result<KeybindingsConfig, KeybindingsLoadError> {
     if config.schema_version >= KEYBINDINGS_SCHEMA_VERSION {
         return Ok(config);
     }
-
     let uses_legacy_defaults = match config.schema_version {
         0 => config.bindings == legacy_v0_default_bindings(),
         1 => config.bindings == legacy_v1_default_bindings(),
@@ -301,7 +321,6 @@ fn migrate_keybindings_config(
         migrate_legacy_vim_contexts(&mut config.bindings);
         config.schema_version = KEYBINDINGS_SCHEMA_VERSION;
     }
-    write_keybindings_config(path, &config)?;
     Ok(config)
 }
 

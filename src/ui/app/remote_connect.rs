@@ -249,8 +249,10 @@ impl RemoteConnectView {
                 let Some(on_ready) = self.on_ready.take() else {
                     return;
                 };
-                window.remove_window();
+                // Keep a window alive until its replacements exist: remote Clients quit when
+                // the last window closes.
                 on_ready(environment, cx);
+                window.remove_window();
             }
             Err(error) => {
                 self.reject_prompts();

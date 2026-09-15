@@ -3,7 +3,7 @@ use std::{cell::RefCell, fs, path::PathBuf, rc::Rc};
 use gpui::AppContext as _;
 use tempfile::tempdir;
 use yttt::{
-    config::{paths::AppConfigPaths, settings::load_or_create_settings},
+    config::{paths::AppConfigPaths, scope::SettingsScope, settings::load_settings},
     model::{
         ids::ProjectId,
         project::{ProjectDescriptor, ProjectLocation},
@@ -20,6 +20,41 @@ fn local_project(path: PathBuf) -> ProjectDescriptor {
     )
 }
 
+fn settings_window_context(cx: &mut gpui::VisualTestContext) -> gpui::VisualTestContext {
+    cx.cx.refresh().unwrap();
+    cx.run_until_parked();
+    let mut matching = cx.windows().into_iter().filter_map(|window| {
+        let mut candidate = gpui::VisualTestContext::from_window(window, &cx.cx);
+        candidate.refresh().unwrap();
+        candidate.debug_bounds("settings-window").map(|_| candidate)
+    });
+    let mut target = matching
+        .next()
+        .unwrap_or_else(|| panic!("missing native settings surface"));
+    assert!(
+        matching.next().is_none(),
+        "duplicate native settings surface"
+    );
+    drop(matching);
+    target.update(|window, _| window.activate_window());
+    target.run_until_parked();
+    target
+}
+
+fn select_settings_scope(cx: &mut gpui::VisualTestContext, scope: SettingsScope) {
+    let selector = match scope {
+        SettingsScope::Device => "settings-scope-device",
+        SettingsScope::Host => "settings-scope-host",
+        SettingsScope::Project => "settings-scope-project",
+    };
+    let scope_tab = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("settings should expose the {scope:?} scope selector"));
+    cx.simulate_click(scope_tab.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+}
+
 #[gpui::test]
 fn performance_metrics_render_sample_and_toggle_from_settings(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
@@ -29,7 +64,7 @@ fn performance_metrics_render_sample_and_toggle_from_settings(cx: &mut gpui::Tes
     let workspace = workspace_with_sample_project();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
-    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+    let (_component_root, mut main_cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| {
             WorkbenchView::with_workspace_for_test_and_config_paths(workspace, view_paths)
         });
@@ -37,11 +72,7 @@ fn performance_metrics_render_sample_and_toggle_from_settings(cx: &mut gpui::Tes
         gpui_component::Root::new(root, window, cx)
     });
     let root = root_slot.borrow_mut().take().unwrap();
-    root.update(cx, |root, cx| {
-        root.open_settings();
-        cx.notify();
-    });
-    cx.run_until_parked();
+    main_cx.run_until_parked();
 
     for selector in [
         "window-bar-projects-count",
@@ -52,12 +83,12 @@ fn performance_metrics_render_sample_and_toggle_from_settings(cx: &mut gpui::Tes
         "window-bar-app-memory",
     ] {
         assert!(
-            cx.debug_bounds(selector).is_some(),
+            main_cx.debug_bounds(selector).is_some(),
             "{selector} should be visible"
         );
     }
-    assert!(cx.debug_bounds("window-bar-system-cpu").is_none());
-    cx.read(|app| {
+    assert!(main_cx.debug_bounds("window-bar-system-cpu").is_none());
+    main_cx.read(|app| {
         let metrics = root
             .read(app)
             .visible_performance_info()
@@ -75,24 +106,33 @@ fn performance_metrics_render_sample_and_toggle_from_settings(cx: &mut gpui::Tes
         assert_eq!(application.memory.value, "—");
     });
 
-    let settings_scroll_origin = cx
+    root.update(main_cx, |root, cx| {
+        root.open_settings();
+        cx.notify();
+    });
+    main_cx.run_until_parked();
+    let mut settings_cx = settings_window_context(&mut main_cx);
+    select_settings_scope(&mut settings_cx, SettingsScope::Device);
+
+    let settings_scroll_origin = settings_cx
         .debug_bounds("settings-restore-last-session-row")
         .expect("general settings rows should be visible")
         .center();
-    cx.simulate_event(gpui::ScrollWheelEvent {
+    settings_cx.simulate_event(gpui::ScrollWheelEvent {
         position: settings_scroll_origin,
         delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-240.0))),
         ..Default::default()
     });
-    cx.run_until_parked();
-    cx.refresh().unwrap();
+    settings_cx.run_until_parked();
+    settings_cx.refresh().unwrap();
 
-    let system_toggle = cx
+    let system_toggle = settings_cx
         .debug_bounds("settings-system-performance-metrics")
         .expect("general settings should expose the system performance switch");
-    cx.simulate_click(system_toggle.center(), gpui::Modifiers::none());
-    cx.run_until_parked();
-    cx.read(|app| {
+    settings_cx.simulate_click(system_toggle.center(), gpui::Modifiers::none());
+    settings_cx.run_until_parked();
+    main_cx.refresh().unwrap();
+    main_cx.read(|app| {
         let root = root.read(app);
         assert!(root.system_performance_metrics_enabled());
         let metrics = root
@@ -106,22 +146,23 @@ fn performance_metrics_render_sample_and_toggle_from_settings(cx: &mut gpui::Tes
         assert!(system.cpu.tooltip.starts_with("System CPU: "));
         assert!(system.memory.tooltip.starts_with("System memory: "));
     });
-    assert!(cx.debug_bounds("window-bar-system-cpu").is_some());
-    assert!(cx.debug_bounds("window-bar-system-memory").is_some());
+    assert!(main_cx.debug_bounds("window-bar-system-cpu").is_some());
+    assert!(main_cx.debug_bounds("window-bar-system-memory").is_some());
     assert!(
-        load_or_create_settings(&paths)
+        load_settings(&paths)
             .unwrap()
             .settings
             .general
             .system_performance_metrics_enabled
     );
 
-    let application_toggle = cx
+    let application_toggle = settings_cx
         .debug_bounds("settings-performance-metrics")
         .expect("application performance switch should remain available");
-    cx.simulate_click(application_toggle.center(), gpui::Modifiers::none());
-    cx.run_until_parked();
-    cx.read(|app| {
+    settings_cx.simulate_click(application_toggle.center(), gpui::Modifiers::none());
+    settings_cx.run_until_parked();
+    main_cx.refresh().unwrap();
+    main_cx.read(|app| {
         let root = root.read(app);
         assert!(!root.performance_metrics_enabled());
         let metrics = root
@@ -130,34 +171,36 @@ fn performance_metrics_render_sample_and_toggle_from_settings(cx: &mut gpui::Tes
         assert!(metrics.application.is_none());
         assert!(metrics.system.is_some());
     });
-    assert!(cx.debug_bounds("window-bar-app-cpu").is_none());
-    assert!(cx.debug_bounds("window-bar-system-cpu").is_some());
+    assert!(main_cx.debug_bounds("window-bar-app-cpu").is_none());
+    assert!(main_cx.debug_bounds("window-bar-system-cpu").is_some());
 
-    let system_toggle = cx
+    let system_toggle = settings_cx
         .debug_bounds("settings-system-performance-metrics")
         .expect("system performance switch should remain available");
-    cx.simulate_click(system_toggle.center(), gpui::Modifiers::none());
-    cx.run_until_parked();
-    cx.read(|app| {
+    settings_cx.simulate_click(system_toggle.center(), gpui::Modifiers::none());
+    settings_cx.run_until_parked();
+    main_cx.refresh().unwrap();
+    main_cx.read(|app| {
         let root = root.read(app);
         assert!(!root.system_performance_metrics_enabled());
         assert!(root.visible_performance_info().is_none());
     });
-    assert!(cx.debug_bounds("window-bar-app-cpu").is_none());
+    assert!(main_cx.debug_bounds("window-bar-app-cpu").is_none());
     assert!(
-        !load_or_create_settings(&paths)
+        !load_settings(&paths)
             .unwrap()
             .settings
             .general
             .system_performance_metrics_enabled
     );
 
-    let application_toggle = cx
+    let application_toggle = settings_cx
         .debug_bounds("settings-performance-metrics")
         .expect("application performance switch should remain available");
-    cx.simulate_click(application_toggle.center(), gpui::Modifiers::none());
-    cx.run_until_parked();
-    cx.read(|app| {
+    settings_cx.simulate_click(application_toggle.center(), gpui::Modifiers::none());
+    settings_cx.run_until_parked();
+    main_cx.refresh().unwrap();
+    main_cx.read(|app| {
         let root = root.read(app);
         assert!(root.performance_metrics_enabled());
         let metrics = root
@@ -168,20 +211,23 @@ fn performance_metrics_render_sample_and_toggle_from_settings(cx: &mut gpui::Tes
             .expect("application metrics should have a sample");
         assert!(metrics.system.is_none());
         assert_ne!(application.cpu.value, "—");
-        assert_ne!(application.memory.value, "—");
         assert!(application.memory.value.ends_with(" MiB"));
     });
-    assert!(cx.debug_bounds("window-bar-app-cpu").is_some());
+    assert!(main_cx.debug_bounds("window-bar-app-cpu").is_some());
 }
 
 fn english_test_config_paths(temp: &tempfile::TempDir) -> AppConfigPaths {
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    fs::create_dir_all(paths.config_dir()).unwrap();
+    let device_settings_file = paths.config_dir().join("device/settings.toml");
+    fs::create_dir_all(device_settings_file.parent().unwrap()).unwrap();
     fs::write(
-        paths.settings_file(),
+        device_settings_file,
         r#"
 [general]
 language = "en"
+onboarding_completed = true
+performance_metrics_enabled = true
+system_performance_metrics_enabled = false
 "#,
     )
     .unwrap();

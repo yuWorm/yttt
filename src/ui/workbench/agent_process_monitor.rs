@@ -30,11 +30,7 @@ impl WorkbenchView {
                 while let Some(update) = client.recv().await {
                     if this
                         .update_in(cx, |view, window, cx| {
-                            let mut changed = view.apply_host_agent_snapshot(update, window, cx);
-                            if let Some(error) = view.agent_manager.take_error() {
-                                view.load_error = Some(error);
-                                changed = true;
-                            }
+                            let changed = view.apply_host_agent_snapshot(update, window, cx);
                             if changed {
                                 cx.notify();
                             }
@@ -52,10 +48,6 @@ impl WorkbenchView {
         let mut changed = false;
         for update in pending.into_values() {
             changed |= self.apply_host_agent_snapshot(update, window, cx);
-        }
-        if let Some(error) = self.agent_manager.take_error() {
-            self.load_error = Some(error);
-            changed = true;
         }
         if changed {
             cx.notify();

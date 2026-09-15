@@ -1,13 +1,19 @@
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::HashMap, path::PathBuf, rc::Rc};
 
 use gpui::{Entity, Subscription};
 use gpui_component::{VirtualListScrollHandle, input::InputState};
 
-use crate::ui::settings::{
-    SettingsPageState,
-    keybindings::{KeybindingProfile, KeybindingRow, KeybindingsEditorState},
+use crate::{config::project_settings::EffectiveProjectEditorSetting, model::ids::ProjectId};
+use crate::{
+    config::scope::SettingsScope,
+    ui::{
+        settings::{
+            SettingsPageState,
+            keybindings::{KeybindingProfile, KeybindingRow, KeybindingsEditorState},
+        },
+        theme::zed::{ZedThemeDetection, ZedThemeImportConflictPolicy},
+    },
 };
-use crate::ui::theme::zed::{ZedThemeDetection, ZedThemeImportConflictPolicy};
 use crate::{
     login_startup::LoginStartupState,
     ui::app::platform::{self, PermissionKind, PermissionStatus},
@@ -22,6 +28,17 @@ pub(in super::super) struct ZedThemeImportDialogState {
     pub(in super::super) detection: ZedThemeDetection,
     pub(in super::super) conflict_policy: ZedThemeImportConflictPolicy,
     pub(in super::super) existing_paths: std::collections::HashSet<std::path::PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in super::super) struct ProjectSettingsSaveDraft {
+    pub(in super::super) project_id: String,
+    pub(in super::super) project_path: PathBuf,
+    pub(in super::super) target_generation: u64,
+    pub(in super::super) key: crate::config::project_settings::ProjectEditorSettingKey,
+    pub(in super::super) candidate:
+        Option<crate::config::project_settings::ProjectEditorSettingValue>,
+    pub(in super::super) confirmed: EffectiveProjectEditorSetting,
 }
 
 pub(in super::super) struct SettingsControllerState {
@@ -77,6 +94,16 @@ pub(in super::super) struct SettingsControllerState {
     pub(in super::super) settings_number_input_subscriptions:
         HashMap<SettingsNumberField, Vec<Subscription>>,
     pub(in super::super) settings_bar_inputs: HashMap<SettingsBarField, Entity<InputState>>,
+    pub(in super::super) settings_scope: SettingsScope,
+    pub(in super::super) project_editor_settings_project_id: Option<ProjectId>,
+    pub(in super::super) project_editor_settings_generation: u64,
+    pub(in super::super) project_editor_settings: Vec<EffectiveProjectEditorSetting>,
+    pub(in super::super) project_settings_path: Option<std::path::PathBuf>,
+    pub(in super::super) project_settings_load_error: Option<String>,
+    pub(in super::super) settings_project_tab_size_input: Option<Entity<InputState>>,
+    pub(in super::super) settings_project_tab_size_input_subscription: Option<Subscription>,
+    pub(in super::super) settings_project_default_language_input: Option<Entity<InputState>>,
+    pub(in super::super) settings_project_default_language_input_subscription: Option<Subscription>,
     pub(in super::super) settings_page: SettingsPageState,
     pub(in super::super) zed_theme_import_dialog: Option<ZedThemeImportDialogState>,
     pub(in super::super) permission_statuses: [PermissionStatus; PermissionKind::COUNT],
@@ -94,6 +121,9 @@ pub(in super::super) struct SettingsControllerState {
     pub(in super::super) confirmed_settings: crate::config::settings::AppSettings,
     pub(in super::super) pending_settings_save:
         Option<(crate::config::settings::AppSettings, bool)>,
+    pub(in super::super) pending_project_settings_save: Option<ProjectSettingsSaveDraft>,
+    pub(in super::super) project_settings_save_in_flight: bool,
+    pub(in super::super) failed_project_settings_save: Option<ProjectSettingsSaveDraft>,
     pub(in super::super) settings_save_in_flight: bool,
     pub(in super::super) settings_save_error: Option<String>,
 }
@@ -109,6 +139,9 @@ impl SettingsControllerState {
             confirmed_settings,
             pending_settings_save: None,
             settings_save_in_flight: false,
+            pending_project_settings_save: None,
+            project_settings_save_in_flight: false,
+            failed_project_settings_save: None,
             settings_save_error: None,
             keybinding_warning_lines,
             keybindings_editor,
@@ -158,6 +191,16 @@ impl SettingsControllerState {
             settings_number_input_subscriptions: HashMap::new(),
             settings_bar_inputs: HashMap::new(),
             settings_page: SettingsPageState::default(),
+            settings_scope: SettingsScope::Device,
+            project_editor_settings_project_id: None,
+            project_editor_settings_generation: 0,
+            project_editor_settings: Vec::new(),
+            project_settings_path: None,
+            project_settings_load_error: None,
+            settings_project_tab_size_input: None,
+            settings_project_tab_size_input_subscription: None,
+            settings_project_default_language_input: None,
+            settings_project_default_language_input_subscription: None,
             permission_statuses: std::array::from_fn(|index| {
                 platform::initial_permission_status(PermissionKind::ALL[index])
             }),

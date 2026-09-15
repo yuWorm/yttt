@@ -220,6 +220,10 @@ impl WorkbenchView {
     }
 
     pub fn save_pending_dirty_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.require_shared_mutation_control() {
+            cx.notify();
+            return;
+        }
         let Some(pending) = &mut self.documents.pending_dirty_close else {
             return;
         };
@@ -426,6 +430,9 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.shared_mutation_allowed() {
+            return;
+        }
         let Some(document) = self
             .project
             .project_editor_runtime
@@ -472,6 +479,9 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.shared_mutation_allowed() {
+            return;
+        }
         let Some((services, relative_path)) = self.project_file_services(&request.document_id)
         else {
             let message = self

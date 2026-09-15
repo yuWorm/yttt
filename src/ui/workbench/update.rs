@@ -20,7 +20,7 @@ impl WorkbenchView {
 
     pub fn set_auto_check_updates_enabled(&mut self, enabled: bool) -> Result<(), WorkbenchError> {
         self.app_settings.general.auto_check_updates = enabled;
-        save_settings(&self.config_paths, &self.app_settings)?;
+        let _ = self.persist_app_settings(false)?;
         Ok(())
     }
 

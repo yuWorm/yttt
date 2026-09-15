@@ -18,8 +18,8 @@ project palette, not shown by default.
 
 ## First Launch
 
-The first launch opens onboarding before the empty workspace. First choose one of two default
-layout types:
+The first launch opens onboarding before the empty workspace. Choose the interface language and
+terminal font, then one of two default layout types:
 
 - **Split view:** one tab with the coding agent on the left and an interactive shell on the right.
 - **Separate tabs:** one agent tab and one shell tab.
@@ -29,9 +29,11 @@ the `groky` fork is recognized as the same provider), OpenCode (`opencode`), Pi 
 Pi (`omp`). The command palette remains available from both onboarding steps through its configured
 shortcut and the visible Command Palette action.
 
-Completing onboarding sets `general.onboarding_completed = true`; subsequent launches go directly
-to the workspace. Projects opened afterward inherit the generated global default unless they
-provide a project or personal layout override.
+Language selection previews the interface without writing configuration. Completing onboarding
+requires Host control, saves the selected Host layout and Agent, then writes the Device language
+and `general.onboarding_completed = true`. Configuration reads alone never create defaults or
+install hooks. Projects opened afterward inherit the Host default unless they provide a project
+or personal layout override.
 
 Normal application launches remain local. The bottom status bar identifies the current
 environment; connecting a remote service never replaces the current local window.
@@ -197,11 +199,14 @@ Use this path to access computer A's already-running yttt from B without deployi
 6. Choose observation or profile-wide control. All saved work windows restore under stable
    workspace IDs, while B's original local windows remain attached to B.
 
-**Ownership and handoff.** Settings, keybindings, themes, layouts, files and recoverable drafts
-belong to A's Host and original config root. Device administration, login-startup consent and
-credentials are not shared configuration. One authenticated Client session controls the entire
-profile across all its windows. During normal handoff the old Client freezes shared editing and
-terminal input, publishes all windows, then relinquishes control. A save failure cancels handoff.
+**Ownership and handoff.** Host execution settings, layouts, files and published editor drafts
+belong to A's Host. Appearance, themes, keybindings and other Device preferences remain on B.
+Device administration, login-startup consent and credentials are not shared configuration.
+Controller/observer authority is independent of local/remote connection type: an observer can
+change Device preferences but cannot write Host or Project settings. One authenticated Client
+session controls the entire profile across all its windows. During normal handoff the old Client
+freezes shared editing and terminal input, publishes all windows, then relinquishes control.
+A workspace or settings save failure cancels handoff.
 The five-second deadline never automatically grants control: **Force takeover** explicitly chooses
 the last durable state. The former controller remains an observer; reconnecting does not replay
 old mutations or automatically regain input authority.
@@ -210,6 +215,13 @@ old mutations or automatically regain input authority.
 64 MiB per workspace and 1 MiB per manifest. An oversized or failed publication remains an error;
 unpublished edits are not advertised as saved. Host restart restores confirmed windows and drafts
 but shows lost terminal processes as exited instead of rerunning them.
+
+Forced control loss, disconnection, or a stale Host epoch preserves unpublished edits in
+Device-private recovery storage, keyed by Device profile, Host environment and workspace.
+**Recover local drafts** restores matching editor drafts explicitly; it does not replace the
+Host workspace wholesale. Failed Host/Project settings retain their candidate and confirmed
+baseline for **Retry**, **Copy**, or **Discard**. Retrying requires current control and rejects a
+changed baseline instead of replaying stale settings.
 
 **Local management.** A can reclaim control, disconnect all TCP sessions, change the address, reset
 credentials or disable access. Closing the management window or a work window does not close the
@@ -280,11 +292,11 @@ or invoke device administration.
 An incompatible idle Host can be replaced; an incompatible busy Host refuses upgrade with its
 resource blockers instead of killing work.
 
-The remote Host owns configuration, default and personal layouts, project `.yttt` files, Git,
-recursive project watching, terminal PTYs, Agent hooks and Agent history. **Open Project** inside
-a remote Client browses the Host filesystem, including directory creation; it never opens a
-local native folder dialog. Settings, theme and keybinding changes affect only that environment.
-Manage SSH endpoints from the local Client.
+The remote Host owns execution configuration, default and personal layouts, project `.yttt` files,
+Git, recursive project watching, terminal PTYs, Agent hooks and Agent history. **Open Project**
+inside a remote Client browses the Host filesystem, including directory creation; it never opens a
+local native folder dialog. Device theme and keybinding changes stay on this computer.
+Manage SSH endpoints and Host-private administration from the local Client.
 
 Remote workspace snapshots include project/tab/group/pane layout, active selection, tree state,
 editor state and unsaved drafts. A save is acknowledged only after durable Host persistence.
@@ -390,9 +402,43 @@ that native desktop applications do not need to request separately. Linux has no
 center, so the page identifies access managed by the desktop environment, requested by an XDG
 Desktop Portal when used, or available without separate approval.
 
+## Configuration Targets
+
+The settings window has explicit **This Device**, **Host**, and **Selected Project** targets.
+It shows the destination, effective source, read-only reason, and application timing for each row.
+
+| Target | Contents | Storage and authority |
+| --- | --- | --- |
+| This Device | Appearance, themes/icons, fonts, keybindings, Vim, notifications, performance display, editor presentation/autosave, UI preferences | `<local-profile-config>/device`; editable by controllers and observers, including while disconnected |
+| Host | Shells/environment, scrollback, keyboard protocol, new-tab commands, Agent defaults, editor language/tab defaults and LSP, default layouts | Owning Host profile; requires a connected controller, with no transfer in progress |
+| Selected Project | `editor.tab_size`, `editor.auto_detect_language`, `editor.default_language`; project layouts have their own existing format | `<project>/.yttt/settings.toml`, or the Host profile's isolated overlay; requires control and a writable project-config policy |
+
+Resetting a Project setting removes its override and reveals the Host default. Editor tab size
+and language settings apply to newly opened/reopened files; shell and Agent launch settings apply
+to new sessions. Existing file contents and running processes are not replaced.
+
+`<app config>` below means the owning Host's original profile config directory.
+`<device config>` means `<local-profile-config>/device`, never a directory on the connected Host.
+On first binding, local legacy Device fields, themes, icons, keybindings and bars are copied into
+the Device root. Existing standalone bars take precedence over embedded legacy bars. Migration
+does not rewrite Host files, and a completion marker prevents deleted Device overrides from being
+reimported on every launch.
+
+Missing configuration uses in-memory defaults. Opening settings or a layout editor does not
+create files; explicit saves, imports, onboarding completion, and controlled Agent initialization
+are the write boundaries. Malformed files and I/O failures remain visible.
+
+Concurrent Clients serialize Device `settings.toml` saves with a local file lock and reject drafts
+whose confirmed Device values no longer match disk. Unreadable files are not overwritten.
+A rejected candidate remains available for **Copy**, **Retry**, or **Discard**; retrying never
+forces an overwrite. After a conflict, copy any changes you want to keep, discard the old draft,
+reload the current settings, and apply those changes again.
+
 ## Settings TOML
 
-The settings file is `<app config>/settings.toml`. These are the complete defaults:
+Host fields live in `<app config>/settings.toml`; Device fields live in
+`<device config>/settings.toml`. The following illustrates the merged defaults, not a single
+file to copy into both destinations:
 
 ```toml
 [general]
@@ -449,7 +495,7 @@ project_sidebar_width = 216.0
 
 ## Bars TOML
 
-Window Bar and Status Bar configuration lives in the standalone `<app config>/bars.toml` file.
+Window Bar and Status Bar configuration lives in the standalone `<device config>/bars.toml` file.
 This file is independent of `settings.toml`, so a complete bar layout can be copied, versioned, or
 shared without carrying unrelated application preferences. These are the complete defaults:
 
@@ -466,9 +512,9 @@ center = ["vim-keys"]
 right = ["editor-language", "editor-position", "editor-dirty", "editor-diagnostics", "git-branch", "git-changes", "agent-state", "ssh", "update"]
 ```
 
-On first launch after upgrading, a legacy `[bars]` section in `settings.toml` is moved to
-`bars.toml`. If `bars.toml` already exists, it remains authoritative and the legacy section is
-removed without overwriting the standalone file.
+During the one-time local Device migration, a legacy `[bars]` section supplies defaults only when
+there is no standalone `bars.toml`. The standalone layout is preserved without rewriting the
+legacy Host settings file.
 
 Editor font family, font size, line height, soft wrap, and line numbers update all open files
 without replacing their text or saved baseline. `vim.mode` accepts `"global"`, `"editor"`, or
@@ -553,8 +599,8 @@ command. Already-running processes keep their original environment until restart
 
 ## Theme TOML
 
-Place user themes in `<app config>/themes/*.toml` and select one with `[theme].name` in
-`settings.toml`.
+Place user themes in `<device config>/themes/*.toml` and select one with `[theme].name` in
+`<device config>/settings.toml`.
 
 ```toml
 name = "custom-dark"
@@ -591,7 +637,7 @@ package theme names. Choosing a theme saves `[theme].icon_theme` and immediately
 project-tree, file-tab, and editor-header icons. Packages use Zed-compatible JSON and SVG paths:
 
 ```text
-<app config>/themes/icons/<package>/
+<device config>/themes/icons/<package>/
 ├── icon_themes/
 │   └── <theme>.json
 └── icons/
@@ -757,10 +803,10 @@ falling back to an older schema.
 The editable keybindings file is:
 
 ```text
-<app config>/keybindings.toml
+<device config>/keybindings.toml
 ```
 
-Open or create it from the app with:
+Open its editor with the following command; the first explicit save creates a missing file:
 
 ```text
 settings.keybindings
@@ -865,12 +911,17 @@ during launcher handoff while still detecting a hard-killed Agent whose parent s
 Remote workspace panes use the remote Host's process tree, so the same discovery and hard-exit
 cleanup apply without inspecting processes on the desktop machine.
 
-All six built-in Agents have managed provider adapters. For configured command panes, yttt:
+All six built-in Agents have managed provider adapters. Hook provisioning is an explicit,
+idempotent initialization step after the Client has connected with Host control; constructing an
+Agent manager or attaching an observer never installs hooks. For configured command panes, yttt:
 
-1. creates a stable Agent instance for the Project/Tab/Pane scope;
-2. installs the provider hook or extension without replacing unrelated user configuration;
+1. waits for successful Host-side provider initialization without replacing unrelated user configuration;
+2. creates a stable Agent instance for the Project/Tab/Pane scope;
 3. injects a per-launch instance ID, generation, and random authentication token; and
 4. receives bounded events through the local hook server or authenticated terminal-title frames.
+
+Initialization failure exposes a retry action. Ordinary shells and attachment to existing
+Host terminal/Agent sessions do not wait for new Agent provisioning.
 Grok's native hooks use `snake_case` event names. When Grok's Claude-compatibility loader also
 re-exports yttt's Claude hook, the adapter discards that duplicate before HTTP delivery so the Host
 receives one native Grok lifecycle stream.

@@ -260,6 +260,9 @@ impl Render for AuxiliaryWindow {
         let kind = self.kind;
         let content = owner.update(cx, |root, cx| {
             root.flush_pending_settings_save(window, cx);
+            root.flush_pending_project_settings_save(window, cx);
+            root.sync_auxiliary_windows(cx);
+            root.ensure_settings_project_target_loaded(window, cx);
             root.flush_pending_status_notifications(window, cx);
             let appearance = root.theme_runtime();
             window.set_rem_size(px(appearance.typography.font_size));

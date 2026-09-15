@@ -420,6 +420,10 @@ pub(super) fn zed_theme_import_dialog(
 ) -> Div {
     let ui_style = current_ui_style(cx);
     let dialog = yttt_dialog_style(theme, ui_style);
+    let device_paths = crate::config::scope::device_preferences_config_paths()
+        .or_else(|| config_paths.is_test_fixture().then(|| config_paths.clone()))
+        .expect("Device profile must be bound before importing themes");
+    let config_paths = &device_paths;
     let ui_output_dir = config_paths.themes_dir();
     let icon_output_dir = config_paths.icon_themes_dir();
     let existing_count = detected_zed_theme_existing_count(

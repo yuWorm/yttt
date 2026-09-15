@@ -661,6 +661,7 @@ impl TerminalPaneView {
             self.set_spawn_failure("Host runtime is unavailable".to_string(), cx);
             return false;
         };
+
         let host_epoch = match host_runtime.state() {
             ConnectionState::Ready { host_epoch, .. } => host_epoch,
             _ => {
@@ -1339,6 +1340,7 @@ impl TerminalPaneView {
 
     pub(crate) fn terminate_host_session(&mut self) {
         if let (Some(runtime), Some(session_id)) = (&self.host_runtime, self.host_session_id.take())
+            && runtime.shared_editing_enabled()
         {
             let _ = runtime.request(Request::TerminateTerminal {
                 session_id,

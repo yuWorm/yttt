@@ -196,6 +196,10 @@ impl WorkbenchView {
         axis: WorkAreaSplitAxis,
         position: Point<Pixels>,
     ) {
+        if !self.shared_mutation_allowed() {
+            self.active_work_area_resize_drag = None;
+            return;
+        }
         let Some(active_drag) = self.active_work_area_resize_drag else {
             self.begin_work_area_resize_drag(split_id, axis, position);
             return;
@@ -233,6 +237,10 @@ impl WorkbenchView {
         direction: SplitDirection,
         position: Point<Pixels>,
     ) {
+        if !self.shared_mutation_allowed() {
+            self.active_split_resize_drag = None;
+            return;
+        }
         let Some(active_drag) = self.active_split_resize_drag else {
             self.begin_split_resize_drag(direction, position);
             return;

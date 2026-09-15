@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     io,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, LazyLock, Mutex},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -112,9 +112,11 @@ impl AgentPaneLaunch {
         let program = self.program_override().unwrap_or(program);
         let mut command = format!(
             "umask 077 && yttt_agent_dir=\"$HOME/.config/yttt/agent-providers/{OMP_PROVIDER_ID}\" && \\
-             mkdir -p \"$yttt_agent_dir\" && yttt_agent_path=\"$yttt_agent_dir/{OMP_EXTENSION_FILE_NAME}\" && \\
+             if [ ! -d \"$yttt_agent_dir\" ]; then mkdir -p \"$yttt_agent_dir\"; fi && \\
+             yttt_agent_path=\"$yttt_agent_dir/{OMP_EXTENSION_FILE_NAME}\" && \\
+             if [ ! -f \"$yttt_agent_path\" ] || ! printf '%s' '{encoded}' | base64 -d | cmp -s - \"$yttt_agent_path\"; then \\
              yttt_agent_tmp=\"$yttt_agent_path.$$\" && printf '%s' '{encoded}' | base64 -d > \"$yttt_agent_tmp\" && \\
-             mv -f \"$yttt_agent_tmp\" \"$yttt_agent_path\" && exec {}",
+             mv -f \"$yttt_agent_tmp\" \"$yttt_agent_path\" || exit $?; fi && exec {}",
             shell_quote(program)
         );
         if self.program_override().is_none() {
@@ -144,43 +146,76 @@ pub enum AgentPaneExitOutcome {
     },
 }
 
+#[derive(Clone, Debug)]
+pub struct AgentRuntimeProvisioning {
+    key: AgentProvisioningKey,
+    omp_extension_path: PathBuf,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AgentInitializationError {
+    #[error("shared Host control is required before provisioning agents")]
+    ControlRequired,
+    #[error("agent runtime provisioning failed: {0}")]
+    Installation(String),
+    #[error("agent provisioning does not match this workbench configuration")]
+    MismatchedConfiguration,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct AgentProvisioningKey {
+    environment_id: Option<String>,
+    profile_id: Option<String>,
+    config_dir: PathBuf,
+}
+
+impl AgentProvisioningKey {
+    fn for_paths(config_paths: &AppConfigPaths) -> Self {
+        let environment_id = crate::config::storage::environment_storage()
+            .map(|storage| storage.environment().environment_id.clone());
+        let profile_id = config_paths
+            .profile()
+            .map(|profile| profile.id().as_str().to_string());
+        Self {
+            environment_id,
+            profile_id,
+            config_dir: config_paths.config_dir().to_path_buf(),
+        }
+    }
+}
+
+static PROVISIONED_AGENT_RUNTIMES: LazyLock<Mutex<HashSet<AgentProvisioningKey>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
 pub struct AgentManager {
     runtime: AgentRuntime,
     launches_by_address: HashMap<AgentPaneAddress, AgentPaneLaunch>,
     addresses_by_instance: HashMap<AgentInstanceId, AgentPaneAddress>,
     snapshot_client: Option<AgentSnapshotClient>,
     host_snapshot_sequences: HashMap<AgentPaneAddress, (u64, u64, u64)>,
-    omp_extension_path: Option<PathBuf>,
-    state_path: PathBuf,
+    provisioning_key: AgentProvisioningKey,
+    omp_extension_path: PathBuf,
+    agent_runtime_initialized: bool,
     retained_snapshots: HashMap<AgentPaneAddress, AgentSnapshot>,
     restorable_projects: HashSet<String>,
     fresh_program_overrides: HashMap<AgentPaneAddress, &'static str>,
     omp_extension_base64: Arc<str>,
-    last_error: Option<String>,
-    setup_error: Option<String>,
+    state_load_error: Option<String>,
 }
 
 impl AgentManager {
     pub fn new(config_paths: &AppConfigPaths) -> Self {
         let mut runtime = AgentRuntime::default();
-        let providers = builtin_providers();
-        for provider in providers {
+        for provider in builtin_providers() {
             runtime.register_provider(provider);
         }
-        let adapter_error = install_managed_hooks(config_paths)
-            .err()
-            .map(|error| format!("agent hook adapters: {error}"));
-        let (omp_extension_path, extension_error) = match install_omp_extension(config_paths) {
-            Ok(path) => (Some(path), None),
-            Err(error) => (None, Some(error.to_string())),
-        };
         let state_path = config_paths.agent_state_path();
-        let (retained_snapshots, state_error) = match load_agent_state(&state_path) {
+        let (retained_snapshots, state_load_error) = match load_agent_state(&state_path) {
             Ok(state) => (state, None),
             Err(error) => (HashMap::new(), Some(error.to_string())),
         };
-        let setup_error =
-            combine_errors(combine_errors(extension_error, state_error), adapter_error);
+        let omp_extension_path = omp_extension_path(config_paths);
+        let provisioning_key = AgentProvisioningKey::for_paths(config_paths);
         let omp_extension_base64 = Arc::<str>::from(STANDARD.encode(OMP_EXTENSION_SOURCE));
         Self {
             runtime,
@@ -189,18 +224,93 @@ impl AgentManager {
             snapshot_client: None,
             host_snapshot_sequences: HashMap::new(),
             omp_extension_path,
-            state_path,
+            provisioning_key,
+            agent_runtime_initialized: false,
             retained_snapshots,
             restorable_projects: HashSet::new(),
             fresh_program_overrides: HashMap::new(),
             omp_extension_base64,
-            last_error: None,
-            setup_error,
+            state_load_error,
         }
     }
 
-    pub fn setup_error(&self) -> Option<&str> {
-        self.setup_error.as_deref()
+    /// Performs Host-authorized provisioning and is intended for a background executor.
+    pub fn provision(
+        config_paths: AppConfigPaths,
+        runtime: Arc<crate::host_runtime::DesktopHostRuntime>,
+    ) -> Result<AgentRuntimeProvisioning, AgentInitializationError> {
+        Self::provision_with_authority(&config_paths, || runtime.shared_editing_enabled())
+    }
+
+    fn provision_with_authority(
+        config_paths: &AppConfigPaths,
+        mut shared_editing_enabled: impl FnMut() -> bool,
+    ) -> Result<AgentRuntimeProvisioning, AgentInitializationError> {
+        if !shared_editing_enabled() {
+            return Err(AgentInitializationError::ControlRequired);
+        }
+
+        let key = AgentProvisioningKey::for_paths(config_paths);
+        let mut provisioned = PROVISIONED_AGENT_RUNTIMES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if provisioned.contains(&key) {
+            return Ok(AgentRuntimeProvisioning {
+                key,
+                omp_extension_path: omp_extension_path(config_paths),
+            });
+        }
+
+        let mut errors = Vec::new();
+        if let Err(error) = install_managed_hooks(config_paths) {
+            errors.push(format!("agent hook adapters: {error}"));
+        }
+        if !shared_editing_enabled() {
+            return Err(AgentInitializationError::ControlRequired);
+        }
+        if let Err(error) = install_omp_extension(config_paths) {
+            errors.push(format!("OMP extension: {error}"));
+        }
+        if !shared_editing_enabled() {
+            return Err(AgentInitializationError::ControlRequired);
+        }
+        if !errors.is_empty() {
+            return Err(AgentInitializationError::Installation(errors.join("; ")));
+        }
+
+        provisioned.insert(key.clone());
+        Ok(AgentRuntimeProvisioning {
+            key,
+            omp_extension_path: omp_extension_path(config_paths),
+        })
+    }
+
+    /// Applies successful background provisioning to this workbench without I/O.
+    pub fn ensure_initialized(
+        &mut self,
+        provisioning: AgentRuntimeProvisioning,
+    ) -> Result<(), AgentInitializationError> {
+        if provisioning.key != self.provisioning_key
+            || provisioning.omp_extension_path != self.omp_extension_path
+        {
+            return Err(AgentInitializationError::MismatchedConfiguration);
+        }
+        self.agent_runtime_initialized = true;
+        Ok(())
+    }
+
+    pub fn is_initialized(&self) -> bool {
+        self.agent_runtime_initialized
+    }
+    /// Whether a fresh command needs Host agent provisioning before it can launch.
+    ///
+    /// Existing Host terminal attachments must bypass this check: observation never provisions.
+    pub fn requires_initialization(&self, command: &str) -> bool {
+        self.runtime.matches_command(command)
+    }
+
+    pub fn state_load_error(&self) -> Option<&str> {
+        self.state_load_error.as_deref()
     }
 
     pub fn resume_command(
@@ -252,7 +362,6 @@ impl AgentManager {
         self.restorable_projects.clear();
         self.fresh_program_overrides.clear();
         self.retained_snapshots = snapshots.into_iter().collect();
-        self.last_error = None;
     }
 
     pub fn forget_tabs(&mut self, project_id: &str, tab_ids: &[String]) {
@@ -285,21 +394,12 @@ impl AgentManager {
             self.runtime.remove(&instance_id);
         }
 
-        let retained_count = self.retained_snapshots.len();
         self.retained_snapshots
             .retain(|address, _| !matches(address));
         self.host_snapshot_sequences
             .retain(|address, _| !matches(address));
-        if self.retained_snapshots.len() != retained_count
-            && let Err(error) = write_agent_state(&self.state_path, &self.retained_snapshots)
-        {
-            self.last_error = Some(error.to_string());
-        }
     }
 
-    pub fn take_error(&mut self) -> Option<String> {
-        self.last_error.take()
-    }
     pub fn set_snapshot_client(&mut self, client: Option<AgentSnapshotClient>) {
         self.snapshot_client = client;
         self.host_snapshot_sequences.clear();
@@ -340,16 +440,13 @@ impl AgentManager {
                 self.fresh_program_overrides
                     .insert(address.clone(), program);
             }
-            if let Err(error) = write_agent_state(&self.state_path, &self.retained_snapshots) {
-                self.last_error = Some(error.to_string());
-            }
             return Some(AgentPaneExitOutcome::ResumeFailed { address });
         }
         if !snapshot_failed && let Some(launch) = self.launches_by_address.get_mut(&address) {
             launch.resuming_session = false;
         }
 
-        self.persist_snapshot(address.clone(), update.snapshot.clone());
+        self.retain_snapshot(address.clone(), update.snapshot.clone());
         Some(AgentPaneExitOutcome::Snapshot {
             address,
             snapshot: update.snapshot,
@@ -388,22 +485,16 @@ impl AgentManager {
         ) else {
             if restored.is_some() {
                 self.retained_snapshots.remove(&address);
-                if let Err(error) = write_agent_state(&self.state_path, &self.retained_snapshots) {
-                    self.last_error = Some(error.to_string());
-                }
             }
             return None;
         };
         let restored_for_view = restored.as_ref().map(disconnected_snapshot);
+        let mut additional_args = prepared.resume_arguments().to_vec();
         let resuming_session = !prepared.resume_arguments().is_empty();
         let is_omp = prepared.provider_id.as_str() == OMP_PROVIDER_ID;
-        let mut additional_args = prepared.resume_arguments().to_vec();
-        if is_omp
-            && !remote
-            && let Some(path) = &self.omp_extension_path
-        {
+        if is_omp && !remote {
             additional_args.push("--extension".to_string());
-            additional_args.push(path.to_string_lossy().into_owned());
+            additional_args.push(self.omp_extension_path.to_string_lossy().into_owned());
         }
         let launch = AgentPaneLaunch {
             forced_program_override,
@@ -432,13 +523,10 @@ impl AgentManager {
             return None;
         }
         self.retained_snapshots.remove(&address);
-        if let Err(error) = write_agent_state(&self.state_path, &self.retained_snapshots) {
-            self.last_error = Some(error.to_string());
-        }
         Some(address)
     }
 
-    fn persist_snapshot(&mut self, address: AgentPaneAddress, snapshot: AgentSnapshot) {
+    fn retain_snapshot(&mut self, address: AgentPaneAddress, snapshot: AgentSnapshot) {
         self.retained_snapshots.insert(address, snapshot);
         if self.retained_snapshots.len() > AGENT_STATE_MAX_ENTRIES {
             let mut oldest = self
@@ -452,9 +540,6 @@ impl AgentManager {
                 self.retained_snapshots.remove(&address);
             }
         }
-        if let Err(error) = write_agent_state(&self.state_path, &self.retained_snapshots) {
-            self.last_error = Some(error.to_string());
-        }
     }
 }
 
@@ -466,14 +551,6 @@ fn disconnected_snapshot(snapshot: &AgentSnapshot) -> AgentSnapshot {
     let mut snapshot = snapshot.clone();
     snapshot.mark_disconnected();
     snapshot
-}
-
-fn combine_errors(first: Option<String>, second: Option<String>) -> Option<String> {
-    match (first, second) {
-        (Some(first), Some(second)) => Some(format!("{first}; {second}")),
-        (Some(error), None) | (None, Some(error)) => Some(error),
-        (None, None) => None,
-    }
 }
 
 fn load_agent_state(path: &Path) -> io::Result<HashMap<AgentPaneAddress, AgentSnapshot>> {
@@ -516,56 +593,30 @@ fn valid_address(address: &AgentPaneAddress) -> bool {
         .all(|part| !part.trim().is_empty() && part.len() <= 512)
 }
 
-fn write_agent_state(
-    path: &Path,
-    snapshots: &HashMap<AgentPaneAddress, AgentSnapshot>,
-) -> io::Result<()> {
-    let mut entries = snapshots
-        .iter()
-        .map(|(address, snapshot)| PersistedAgentEntry {
-            address: address.clone(),
-            snapshot: snapshot.clone(),
-        })
-        .collect::<Vec<_>>();
-    entries.sort_by(|left, right| {
-        (
-            &left.address.project_id,
-            &left.address.tab_id,
-            &left.address.pane_id,
-        )
-            .cmp(&(
-                &right.address.project_id,
-                &right.address.tab_id,
-                &right.address.pane_id,
-            ))
-    });
-    let source = serde_json::to_vec(&PersistedAgentState {
-        version: AGENT_STATE_VERSION,
-        entries,
-    })
-    .map_err(io::Error::other)?;
-    if source.len() > AGENT_STATE_MAX_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "agent state exceeds the 1 MiB limit",
-        ));
-    }
-    atomic_write(path, &source)
+fn omp_extension_path(config_paths: &AppConfigPaths) -> PathBuf {
+    config_paths
+        .agent_provider_dir(OMP_PROVIDER_ID)
+        .join(OMP_EXTENSION_FILE_NAME)
 }
 
-fn install_omp_extension(config_paths: &AppConfigPaths) -> std::io::Result<PathBuf> {
-    let directory = config_paths.agent_provider_dir(OMP_PROVIDER_ID);
-    fs::create_dir_all(&directory)?;
-    let path = directory.join(OMP_EXTENSION_FILE_NAME);
+fn install_omp_extension(config_paths: &AppConfigPaths) -> std::io::Result<()> {
+    let path = omp_extension_path(config_paths);
+    let directory = path
+        .parent()
+        .expect("OMP extension path has an agent provider directory");
+    fs::create_dir_all(directory)?;
     let source = OMP_EXTENSION_SOURCE.as_bytes();
     if fs::read(&path).ok().as_deref() != Some(source) {
         atomic_write(&path, source)?;
     }
-    Ok(path)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::{os::unix::fs::MetadataExt as _, process::Command};
+
     use tempfile::TempDir;
     use yttt_agent_core::{AgentReducer, AgentViewState, ProviderId};
     use yttt_core::model::ids::TerminalSessionId;
@@ -574,21 +625,103 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prepares_omp_with_managed_extension_and_stable_identity() {
+    fn constructor_does_not_provision_agent_files() {
+        let temp = TempDir::new().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path());
+
+        let manager = AgentManager::new(&paths);
+
+        assert!(!manager.is_initialized());
+        assert!(manager.state_load_error().is_none());
+        assert!(!paths.agent_provider_dir(OMP_PROVIDER_ID).exists());
+    }
+
+    #[test]
+    fn provisioning_requires_control_without_creating_extension_files() {
+        let temp = TempDir::new().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path());
+
+        assert!(matches!(
+            AgentManager::provision_with_authority(&paths, || false),
+            Err(AgentInitializationError::ControlRequired)
+        ));
+        assert!(!paths.agent_provider_dir(OMP_PROVIDER_ID).exists());
+    }
+
+    #[test]
+    fn prepares_omp_after_explicit_idempotent_provisioning() {
         let temp = TempDir::new().unwrap();
         let paths = AppConfigPaths::from_config_dir(temp.path());
         let mut manager = AgentManager::new(&paths);
-        assert!(manager.setup_error().is_none());
+
+        let provisioning = AgentManager::provision_with_authority(&paths, || true).unwrap();
+        manager.ensure_initialized(provisioning).unwrap();
+        assert!(manager.is_initialized());
+
+        let mut second_manager = AgentManager::new(&paths);
+        let repeat = AgentManager::provision_with_authority(&paths, || true).unwrap();
+        second_manager.ensure_initialized(repeat).unwrap();
+        assert!(second_manager.is_initialized());
+
         let address = AgentPaneAddress::new("project", "agent", "omp");
         let (first, _) = manager.prepare_pane(address.clone(), "omp", false).unwrap();
         assert_eq!(first.additional_args()[0], "--extension");
-        assert!(PathBuf::from(&first.additional_args()[1]).is_file());
+        assert_eq!(
+            PathBuf::from(&first.additional_args()[1]),
+            omp_extension_path(&paths)
+        );
+        assert_eq!(
+            fs::read(omp_extension_path(&paths)).unwrap(),
+            OMP_EXTENSION_SOURCE.as_bytes()
+        );
         let (second, _) = manager.prepare_pane(address, "omp", false).unwrap();
         assert_eq!(first.instance_id(), second.instance_id());
     }
 
     #[test]
-    fn applies_only_monotonic_host_snapshots_and_persists_them() {
+    fn requires_initialization_only_for_matching_fresh_agent_commands() {
+        let temp = TempDir::new().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path());
+        let manager = AgentManager::new(&paths);
+
+        assert!(manager.requires_initialization("omp"));
+        assert!(!manager.requires_initialization("zsh"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remote_omp_command_reuses_matching_extension_content() {
+        let temp = TempDir::new().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+        let mut manager = AgentManager::new(&paths);
+        let address = AgentPaneAddress::new("project", "agent", "omp");
+        let (launch, _) = manager.prepare_pane(address, "omp", true).unwrap();
+        let command = launch.remote_command("true", &[]).unwrap();
+
+        let first = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(&command)
+            .env("HOME", temp.path())
+            .status()
+            .unwrap();
+        assert!(first.success());
+        let extension = temp
+            .path()
+            .join(".config/yttt/agent-providers/omp")
+            .join(OMP_EXTENSION_FILE_NAME);
+        let inode = std::fs::metadata(&extension).unwrap().ino();
+
+        let second = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(&command)
+            .env("HOME", temp.path())
+            .status()
+            .unwrap();
+        assert!(second.success());
+        assert_eq!(std::fs::metadata(extension).unwrap().ino(), inode);
+    }
+    #[test]
+    fn applies_monotonic_host_snapshots_without_writing_client_mirrors() {
         let temp = TempDir::new().unwrap();
         let paths = AppConfigPaths::from_config_dir(temp.path());
         let mut manager = AgentManager::new(&paths);
@@ -627,7 +760,12 @@ mod tests {
                 .is_none()
         );
 
-        let restored = load_agent_state(&paths.agent_state_path()).unwrap();
-        assert_eq!(restored.get(&address), Some(&snapshot));
+        assert!(
+            manager
+                .retained_snapshots()
+                .iter()
+                .any(|(retained_address, _)| retained_address == &address)
+        );
+        assert!(!paths.agent_state_path().exists());
     }
 }

@@ -79,11 +79,6 @@ pub struct YtttAssets {
 impl AssetSource for YtttAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         if let Some(relative_path) = path.strip_prefix(EXTERNAL_ICON_ASSET_PREFIX) {
-            if let Some(storage) = crate::config::storage::environment_storage() {
-                let relative = yttt_protocol::ProjectRelativePath::from_utf8(relative_path)?;
-                let path = relative.join_under(&storage.config_root().join("themes/icons"));
-                return Ok(Some(Cow::Owned(storage.read(&path)?)));
-            }
             let root = self
                 .icon_themes_root
                 .canonicalize()
@@ -132,7 +127,13 @@ impl AssetSource for YtttAssets {
 
 pub fn app_assets(config_paths: &AppConfigPaths) -> YtttAssets {
     YtttAssets {
-        icon_themes_root: config_paths.icon_themes_dir(),
+        icon_themes_root: crate::config::scope::device_icon_themes_dir()
+            .or_else(|| {
+                config_paths
+                    .is_test_fixture()
+                    .then(|| config_paths.icon_themes_dir())
+            })
+            .expect("Device profile must be bound before loading application assets"),
     }
 }
 

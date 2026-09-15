@@ -1118,8 +1118,11 @@ impl Render for ProjectEditorDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let read_only = cx
             .try_global::<crate::host_runtime::HostRuntimeGlobal>()
-            .and_then(crate::host_runtime::HostRuntimeGlobal::runtime)
-            .is_some_and(|runtime| !runtime.shared_editing_enabled());
+            .is_some_and(|status| {
+                status
+                    .runtime()
+                    .is_none_or(|runtime| !runtime.shared_editing_enabled())
+            });
         if read_only {
             let generation = self.model.generation();
             if self

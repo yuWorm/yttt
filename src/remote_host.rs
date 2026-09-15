@@ -482,7 +482,9 @@ fn initialize_environment(
         true,
     ));
     crate::config::storage::bind_environment(storage.clone()).map_err(|error| error.to_string())?;
-    let config_paths = AppConfigPaths::from_config_dir(config_root);
+    let config_paths =
+        AppConfigPaths::from_host_config_dir(config_root, environment.project_config.clone())
+            .map_err(|error| error.to_string())?;
     let home = environment
         .home
         .to_path()
