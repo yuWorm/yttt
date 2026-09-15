@@ -464,6 +464,18 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::ConnectionAddressInvalid => "Enter host:port or [IPv6]:port, not a URL.",
         UiTextKey::ConnectionRemember => "Remember credentials",
         UiTextKey::ConnectionRemembered => "Remember: OS keychain",
+        UiTextKey::RemoteConnections => "Remote connections",
+        UiTextKey::RemoteAdd => "Add connection",
+        UiTextKey::RemoteAddSsh => "SSH connection",
+        UiTextKey::RemoteAddHost => "Network Host",
+        UiTextKey::RemoteEdit => "Edit",
+        UiTextKey::RemoteSaveConnect => "Save and connect",
+        UiTextKey::RemoteEmpty => {
+            "No remote connections yet. Add an SSH connection or paste a Host connection code."
+        }
+        UiTextKey::RemoteConnecting => "Connecting…",
+        UiTextKey::RemoteConnectionName => "Connection name",
+        UiTextKey::RemoteCredentialsRequired => "Credentials required",
         UiTextKey::SettingsPermissionNotifications => "System notifications",
         UiTextKey::SettingsPermissionNotificationsDescription => {
             "Allow agent completion and attention alerts when yttt is not focused."

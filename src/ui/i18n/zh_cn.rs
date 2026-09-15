@@ -410,6 +410,16 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::ConnectionAddressInvalid => "请输入主机:端口或 [IPv6]:端口，不要填写 URL。",
         UiTextKey::ConnectionRemember => "记住凭据",
         UiTextKey::ConnectionRemembered => "已选择保存到系统钥匙串",
+        UiTextKey::RemoteConnections => "远程连接",
+        UiTextKey::RemoteAdd => "添加连接",
+        UiTextKey::RemoteAddSsh => "SSH 连接",
+        UiTextKey::RemoteAddHost => "网络 Host",
+        UiTextKey::RemoteEdit => "编辑",
+        UiTextKey::RemoteSaveConnect => "保存并连接",
+        UiTextKey::RemoteEmpty => "暂无远程连接。添加 SSH 连接，或粘贴 Host 连接码即可开始。",
+        UiTextKey::RemoteConnecting => "正在连接…",
+        UiTextKey::RemoteConnectionName => "连接名称",
+        UiTextKey::RemoteCredentialsRequired => "补充连接凭据",
         UiTextKey::SettingsPermissionNotifications => "系统通知",
         UiTextKey::SettingsPermissionNotificationsDescription => {
             "允许 yttt 在后台发送 Agent 任务完成或等待处理的提醒。"

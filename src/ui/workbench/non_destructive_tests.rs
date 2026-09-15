@@ -21,17 +21,17 @@ struct RemoteManagerTestSurface(Entity<WorkbenchView>);
 
 impl Render for RemoteManagerTestSurface {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .w(px(800.0))
-            .h(px(400.0))
-            .child(self.0.update(cx, |root, cx| {
-                ssh_connections::remote_services_window_content(root, window, cx)
-            }))
+        div().w(px(800.0)).h(px(400.0)).child(
+            self.0
+                .update(cx, |root, cx| remote_connections::render(root, window, cx)),
+        )
     }
 }
 
 #[gpui::test]
-fn remote_manager_scrolls_form_and_switches_connection_pages_inline(cx: &mut TestAppContext) {
+fn remote_manager_connects_from_list_and_scrolls_modal_without_losing_list(
+    cx: &mut TestAppContext,
+) {
     use crate::config::profile::{
         AppProfile, EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
     };
@@ -46,15 +46,35 @@ fn remote_manager_scrolls_form_and_switches_connection_pages_inline(cx: &mut Tes
         HostConnectPolicy::ProfileDiscovery,
     );
     let paths = AppConfigPaths::from_profile(&profile);
+    let slot = Rc::new(RefCell::new(None));
+    let window_slot = slot.clone();
     let (_view, cx) = cx.add_window_view(|window, cx| {
         let root = cx.new(|_| {
             let mut root = WorkbenchView::with_config_paths(paths);
+            let mut saved = crate::config::ssh::SshConnectionConfig::new(
+                "Password target",
+                "saved.example",
+                22,
+                "alice",
+            );
+            saved.id = crate::model::ids::ConnectionId::new("saved-target");
+            saved.auth = crate::config::ssh::SshAuthPreference::Password;
+            root.ssh.connections.connections.push(saved);
             root.open_ssh_connection_manager();
             root
         });
+        *window_slot.borrow_mut() = Some(root.clone());
         let surface = cx.new(|_| RemoteManagerTestSurface(root));
         ComponentRoot::new(surface, window, cx)
     });
+    cx.run_until_parked();
+    let root = slot.borrow_mut().take().unwrap();
+    assert!(cx.debug_bounds("remote-connections-list").is_some());
+    assert!(cx.debug_bounds("ssh-form-viewport").is_none());
+    root.update_in(cx, |root, window, cx| {
+        root.open_ssh_connection_editor(None, window, cx)
+    });
+    cx.refresh().unwrap();
     cx.run_until_parked();
     let viewport = cx.debug_bounds("ssh-form-viewport").unwrap();
     let field = cx.debug_bounds("ssh-command-field").unwrap();
@@ -70,16 +90,31 @@ fn remote_manager_scrolls_form_and_switches_connection_pages_inline(cx: &mut Tes
     cx.run_until_parked();
     assert!(cx.debug_bounds("ssh-command-field").unwrap().top() < field.top() - px(50.0));
     assert_eq!(cx.debug_bounds("ssh-form-footer").unwrap(), footer);
-    let existing = cx.debug_bounds("remote-services-existing-host").unwrap();
-    cx.simulate_click(existing.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes("escape");
+    cx.refresh().unwrap();
     cx.run_until_parked();
-    assert!(cx.debug_bounds("existing-host-manager").is_some());
-    assert!(cx.debug_bounds("ssh-form-viewport").is_none());
-    let ssh = cx.debug_bounds("remote-services-connections").unwrap();
-    cx.simulate_click(ssh.center(), gpui::Modifiers::none());
+    assert!(cx.debug_bounds("remote-connection-editor").is_none());
+    let row = cx.debug_bounds("remote-record-ssh-saved-target").unwrap();
+    cx.simulate_click(row.center(), gpui::Modifiers::none());
+    cx.refresh().unwrap();
     cx.run_until_parked();
-    assert!(cx.debug_bounds("ssh-form-viewport").is_some());
-    assert!(cx.debug_bounds("existing-host-manager").is_none());
+    root.read_with(cx, |root, _| {
+        assert!(
+            root.ssh.credentials_only,
+            "clicking saved password target must request only credentials"
+        );
+        assert_eq!(
+            root.ssh.connections.connections.len(),
+            1,
+            "connecting must not save a discarded new form"
+        );
+        assert_eq!(root.ssh.connections.connections[0].host, "saved.example");
+    });
+    cx.simulate_keystrokes("escape");
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("remote-connections-list").is_some());
+    assert!(cx.debug_bounds("remote-connection-editor").is_none());
 }
 
 #[derive(Clone)]

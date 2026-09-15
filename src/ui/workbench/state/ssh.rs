@@ -108,6 +108,9 @@ pub(in super::super) struct SshControllerState {
     pub(in super::super) connections: SshConnectionsConfig,
     pub(in super::super) statuses: HashMap<ConnectionId, ConnectionStatus>,
     pub(in super::super) manager_open: bool,
+    pub(in super::super) editor_open: bool,
+    pub(in super::super) connecting: Option<ConnectionId>,
+    pub(in super::super) credentials_only: bool,
     pub(in super::super) remote_access: Option<yttt_protocol::remote_access::RemoteAccessStatus>,
     pub(in super::super) remote_access_busy: bool,
     pub(in super::super) remote_access_loaded: bool,
@@ -118,9 +121,6 @@ pub(in super::super) struct SshControllerState {
     pub(in super::super) pending_host_keys: VecDeque<HostKeyChallenge>,
     pub(in super::super) event_task: Option<Task<()>>,
     pub(in super::super) error: Option<String>,
-    pub(in super::super) manager_connection_list:
-        Option<Entity<ListState<SshConnectionListDelegate>>>,
-    pub(in super::super) manager_connection_list_subscription: Option<Subscription>,
 }
 
 impl SshControllerState {
@@ -139,6 +139,9 @@ impl SshControllerState {
                 connections,
                 statuses: HashMap::new(),
                 manager_open: false,
+                editor_open: false,
+                connecting: None,
+                credentials_only: false,
                 remote_access: None,
                 remote_access_busy: false,
                 remote_access_loaded: false,
@@ -149,8 +152,6 @@ impl SshControllerState {
                 pending_host_keys: VecDeque::new(),
                 event_task: None,
                 error: load_error.clone(),
-                manager_connection_list: None,
-                manager_connection_list_subscription: None,
             },
             load_error,
         )
@@ -242,9 +243,6 @@ pub(in super::super) enum SshConnectionListAction {
 pub(in super::super) enum SshConnectionListTone {
     #[default]
     Neutral,
-    Success,
-    Warning,
-    Danger,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -398,9 +396,6 @@ impl ListDelegate for SshConnectionListDelegate {
         let entry = self.entry(index)?.clone();
         let status_color = match entry.tone {
             SshConnectionListTone::Neutral => cx.theme().muted_foreground,
-            SshConnectionListTone::Success => cx.theme().success,
-            SshConnectionListTone::Warning => cx.theme().warning,
-            SshConnectionListTone::Danger => cx.theme().danger,
         };
         let icon = match &entry.action {
             SshConnectionListAction::New => IconName::Plus,

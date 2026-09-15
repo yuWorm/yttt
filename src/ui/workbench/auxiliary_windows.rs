@@ -19,8 +19,7 @@ struct WindowSlot {
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum RemoteServicesPage {
     #[default]
-    Ssh,
-    ExistingHost,
+    Connections,
     ThisComputer,
 }
 
@@ -31,6 +30,11 @@ pub(super) struct AuxiliaryWindows {
     layout_editor: WindowSlot,
     pub(super) remote_page: RemoteServicesPage,
     pub(super) existing_host: Option<Entity<crate::ui::app::existing_host::ExistingHostForm>>,
+    pub(super) existing_host_subscription: Option<Subscription>,
+    pub(super) remote_list_scroll: ScrollHandle,
+    pub(super) remote_editor_focus: Option<FocusHandle>,
+    pub(super) remote_manager_focus: Option<FocusHandle>,
+    pub(super) pending_new_host_editor: bool,
     pub(super) ssh_form_scroll: ScrollHandle,
     pub(super) remote_access_scroll: ScrollHandle,
     pub(super) active: Option<AuxiliaryWindowKind>,
@@ -279,9 +283,7 @@ impl Render for AuxiliaryWindow {
                     .settings_search_input(window, cx)
                     .map(|input| settings_window_content(root, &input, window, cx))
                     .unwrap_or_else(div),
-                AuxiliaryWindowKind::RemoteServices => {
-                    remote_services_window_content(root, window, cx)
-                }
+                AuxiliaryWindowKind::RemoteServices => remote_connections::render(root, window, cx),
                 AuxiliaryWindowKind::LayoutEditor => root
                     .layout_toml_input(window, cx)
                     .map(|input| render::layout_toml_editor_window_content(root, &input, cx))
@@ -389,6 +391,10 @@ impl Render for AuxiliaryWindow {
                             && root.zed_theme_import_dialog_is_open()
                         {
                             root.cancel_zed_theme_import_dialog();
+                        } else if kind == AuxiliaryWindowKind::RemoteServices
+                            && root.remote_connection_editor_open(cx)
+                        {
+                            root.dismiss_remote_connection_editor(window, cx);
                         } else {
                             root.close_auxiliary_window(kind);
                         }

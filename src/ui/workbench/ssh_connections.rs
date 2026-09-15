@@ -1,9 +1,11 @@
-use std::{collections::VecDeque, path::PathBuf, sync::Arc};
-
-use gpui_component::{
-    list::{List, ListEvent, ListState},
-    radio::RadioGroup,
+use std::{
+    collections::VecDeque,
+    path::{Path, PathBuf},
+    sync::Arc,
 };
+
+use base64::Engine as _;
+use gpui_component::radio::RadioGroup;
 use yttt_client_core::ClientEvent;
 use yttt_core::model::{
     ids::{ConnectionId, CredentialId},
@@ -292,30 +294,84 @@ impl WorkbenchView {
             return;
         }
         self.ssh.manager_open = true;
+        self.ssh.editor_open = false;
+        self.ssh.credentials_only = false;
+        self.ssh.form = None;
+        self.auxiliary_windows.remote_page =
+            super::auxiliary_windows::RemoteServicesPage::Connections;
         self.auxiliary_windows
             .request(AuxiliaryWindowKind::RemoteServices);
         self.ssh.error = None;
-        if self.ssh.form.is_none() {
-            if let Some(connection) = self.ssh.connections.connections.first().cloned() {
-                self.ssh.form = Some(SshConnectionForm::new(connection));
-            } else {
-                self.new_ssh_connection_form();
-            }
-        }
         self.sync_input_owner_state();
     }
 
     pub fn close_ssh_connection_manager(&mut self) {
         self.ssh.manager_open = false;
-        self.ssh.form = None;
-        self.ssh.manager_connection_list = None;
-        self.ssh.manager_connection_list_subscription = None;
+        self.close_ssh_connection_editor();
         self.ssh.remote_access_address = None;
         self.auxiliary_windows.existing_host = None;
+        self.auxiliary_windows.existing_host_subscription = None;
+        self.auxiliary_windows.pending_new_host_editor = false;
         if self.auxiliary_windows.active == Some(AuxiliaryWindowKind::RemoteServices) {
             self.auxiliary_windows.active = None;
         }
         self.sync_input_owner_state();
+    }
+
+    pub(super) fn open_ssh_connection_editor(
+        &mut self,
+        connection_id: Option<ConnectionId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if crate::config::storage::is_remote() {
+            self.load_error =
+                Some("Manage SSH targets and credentials in the local yttt window.".into());
+            return;
+        }
+        let connection = match connection_id {
+            Some(connection_id) => self
+                .ssh
+                .connections
+                .connections
+                .iter()
+                .find(|connection| connection.id == connection_id)
+                .cloned(),
+            None => {
+                let user = std::env::var("USER")
+                    .or_else(|_| std::env::var("USERNAME"))
+                    .unwrap_or_default();
+                let mut connection = SshConnectionConfig::new("", "", 22, user);
+                connection.default_remote_root =
+                    Some(RemotePathBuf::new("/").expect("root is a valid remote path"));
+                Some(connection)
+            }
+        };
+        let Some(connection) = connection else {
+            self.ssh.error = Some("SSH connection is no longer configured.".to_string());
+            cx.notify();
+            return;
+        };
+        self.ssh.manager_open = true;
+        self.ssh.editor_open = true;
+        self.ssh.credentials_only = false;
+        self.ssh.form = Some(SshConnectionForm::new(connection));
+        self.ssh.error = None;
+        if let Some(inputs) = self.ssh_connection_form_inputs(window, cx) {
+            inputs
+                .command
+                .update(cx, |input, cx| input.focus(window, cx));
+        }
+        self.sync_input_owner_state();
+        cx.notify();
+    }
+
+    pub(super) fn close_ssh_connection_editor(&mut self) {
+        self.ssh.editor_open = false;
+        self.ssh.credentials_only = false;
+        self.ssh.connecting = None;
+        self.ssh.form = None;
+        self.ssh.error = None;
     }
 
     pub fn new_ssh_connection_form(&mut self) {
@@ -639,13 +695,95 @@ impl WorkbenchView {
         Some(connection.id)
     }
 
-    pub fn save_ssh_connection(&mut self, cx: &mut Context<Self>) {
+    fn save_ssh_connection_editor(&mut self, cx: &mut Context<Self>) {
         if self
             .save_ssh_connection_from_form(false, true, cx)
             .is_some()
         {
             self.queue_status_notification(self.ui_text.get(UiTextKey::SshConnectionSaved), "");
+            self.close_ssh_connection_editor();
         }
+        cx.notify();
+    }
+
+    fn save_and_connect_ssh_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((password, key_passphrase)) = self.ssh.form.as_ref().and_then(|form| {
+            form.inputs.as_ref().map(|inputs| {
+                (
+                    secret_input_value(&inputs.password, cx),
+                    secret_input_value(&inputs.key_passphrase, cx),
+                )
+            })
+        }) else {
+            return;
+        };
+        let Some(connection_id) = self.save_ssh_connection_from_form(false, true, cx) else {
+            cx.notify();
+            return;
+        };
+        let save_password_as = self.ssh.form.as_ref().and_then(|form| {
+            (form.auth == SshConnectionFormMode::Password && form.remember_password)
+                .then(|| form.credential_id.clone())
+        });
+        self.launch_saved_ssh_connection(
+            connection_id,
+            (!password.is_empty()).then_some(password),
+            (!key_passphrase.is_empty()).then_some(key_passphrase),
+            save_password_as,
+            window,
+            cx,
+        );
+    }
+
+    fn submit_ssh_connection_credentials(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((connection_id, password, secret, save_password_as)) = self
+            .ssh
+            .form
+            .as_ref()
+            .filter(|_| self.ssh.credentials_only)
+            .and_then(|form| {
+                form.inputs.as_ref().map(|inputs| {
+                    let password = form.auth == SshConnectionFormMode::Password;
+                    (
+                        form.connection_id.clone(),
+                        password,
+                        if password {
+                            secret_input_value(&inputs.password, cx)
+                        } else {
+                            secret_input_value(&inputs.key_passphrase, cx)
+                        },
+                        (password && form.remember_password).then(|| form.credential_id.clone()),
+                    )
+                })
+            })
+        else {
+            return;
+        };
+        if secret.is_empty() {
+            self.ssh.error = Some(if password {
+                self.ui_text.get(UiTextKey::SshPasswordRequired).to_string()
+            } else {
+                format!(
+                    "{} is required.",
+                    self.ui_text.get(UiTextKey::SshKeyPassphrase)
+                )
+            });
+            cx.notify();
+            return;
+        }
+        let (password, passphrase) = if password {
+            (Some(secret), None)
+        } else {
+            (None, Some(secret))
+        };
+        self.launch_saved_ssh_connection(
+            connection_id,
+            password,
+            passphrase,
+            save_password_as,
+            window,
+            cx,
+        );
     }
 
     pub fn connect_ssh_connection(
@@ -654,14 +792,145 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(saved_id) = self.save_ssh_connection_from_form(false, false, cx) else {
+        self.launch_saved_ssh_connection(connection_id, None, None, None, window, cx);
+    }
+
+    fn open_ssh_credentials_prompt(
+        &mut self,
+        connection_id: ConnectionId,
+        error: Option<String>,
+        remember_password: Option<bool>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_ssh_connection_editor(Some(connection_id), window, cx);
+        self.ssh.credentials_only = true;
+        if let Some(remember_password) = remember_password
+            && let Some(form) = self.ssh.form.as_mut()
+        {
+            form.remember_password = remember_password;
+        }
+        self.ssh.error = error;
+        if let Some(inputs) = self.ssh_connection_form_inputs(window, cx) {
+            let input = self
+                .ssh
+                .form
+                .as_ref()
+                .is_some_and(|form| form.auth == SshConnectionFormMode::Password)
+                .then_some(&inputs.password)
+                .unwrap_or(&inputs.key_passphrase);
+            input.update(cx, |input, cx| input.focus(window, cx));
+        }
+        cx.notify();
+    }
+
+    fn check_stored_ssh_password(
+        &mut self,
+        connection_id: ConnectionId,
+        credential_id: CredentialId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(local_profile) = self.config_paths.profile().cloned() else {
+            self.ssh.error = Some("Manage remote servers from the local yttt window.".to_string());
+            cx.notify();
             return;
         };
-        let connection_id = if saved_id == connection_id {
-            connection_id
-        } else {
-            saved_id
-        };
+        self.ssh.connecting = Some(connection_id.clone());
+        self.ssh.error = None;
+        cx.notify();
+        let credential_namespace = local_profile.credential_namespace().to_string();
+        let task = cx.background_spawn(async move {
+            yttt_ssh::CredentialStore::new(credential_namespace)
+                .load(&credential_id)
+                .map(|secret| secret.is_some())
+                .map_err(|error| error.to_string())
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let available = task.await;
+            let _ = this.update_in(cx, |root, window, cx| {
+                if root.ssh.connecting.as_ref() != Some(&connection_id) {
+                    return;
+                }
+                root.ssh.connecting = None;
+                match available {
+                    Ok(true) => root.launch_saved_ssh_connection_after_credential_check(
+                        connection_id,
+                        None,
+                        None,
+                        None,
+                        window,
+                        cx,
+                    ),
+                    Ok(false) => {
+                        root.open_ssh_credentials_prompt(connection_id, None, None, window, cx)
+                    }
+                    Err(error) => root.open_ssh_credentials_prompt(
+                        connection_id,
+                        Some(error),
+                        Some(false),
+                        window,
+                        cx,
+                    ),
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn launch_saved_ssh_connection(
+        &mut self,
+        connection_id: ConnectionId,
+        password: Option<String>,
+        passphrase: Option<String>,
+        save_password_as: Option<CredentialId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.launch_saved_ssh_connection_impl(
+            connection_id,
+            password,
+            passphrase,
+            save_password_as,
+            false,
+            window,
+            cx,
+        );
+    }
+
+    fn launch_saved_ssh_connection_after_credential_check(
+        &mut self,
+        connection_id: ConnectionId,
+        password: Option<String>,
+        passphrase: Option<String>,
+        save_password_as: Option<CredentialId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.launch_saved_ssh_connection_impl(
+            connection_id,
+            password,
+            passphrase,
+            save_password_as,
+            true,
+            window,
+            cx,
+        );
+    }
+
+    fn launch_saved_ssh_connection_impl(
+        &mut self,
+        connection_id: ConnectionId,
+        password: Option<String>,
+        passphrase: Option<String>,
+        save_password_as: Option<CredentialId>,
+        credential_checked: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.ssh.connecting.is_some() {
+            return;
+        }
         let Some(connection) = self
             .ssh
             .connections
@@ -670,44 +939,53 @@ impl WorkbenchView {
             .find(|connection| connection.id == connection_id)
             .cloned()
         else {
+            self.ssh.error = Some("SSH connection is no longer configured.".to_string());
+            cx.notify();
             return;
         };
-        let (password, key_passphrase) = self
-            .ssh
-            .form
-            .as_ref()
-            .filter(|form| form.connection_id == connection_id)
-            .and_then(|form| form.inputs.as_ref())
-            .map(|inputs| {
-                (
-                    secret_input_value(&inputs.password, cx),
-                    secret_input_value(&inputs.key_passphrase, cx),
-                )
-            })
-            .unwrap_or_default();
-        let Some(local_profile) = self.config_paths.profile().cloned() else {
-            self.ssh.error = Some("Manage remote servers from the local yttt window.".to_string());
-            return;
-        };
-        if connection.auth == SshAuthPreference::Password
-            && password.is_empty()
-            && connection.credential.is_none()
+        if connection.auth == SshAuthPreference::Password && password.is_none() {
+            if let Some(credential) = connection.credential.as_ref() {
+                if !credential_checked {
+                    self.check_stored_ssh_password(
+                        connection_id,
+                        credential.id.clone(),
+                        window,
+                        cx,
+                    );
+                    return;
+                }
+            } else {
+                self.open_ssh_credentials_prompt(connection_id, None, None, window, cx);
+                return;
+            }
+        }
+        if matches!(
+            connection.auth,
+            SshAuthPreference::Auto | SshAuthPreference::PublicKey
+        ) && passphrase.is_none()
+            && connection
+                .identity_file
+                .as_deref()
+                .is_some_and(ssh_identity_requires_passphrase)
         {
-            self.ssh.error = Some("Enter a password before connecting.".to_string());
+            self.open_ssh_credentials_prompt(connection_id, None, None, window, cx);
             return;
         }
+        let Some(local_profile) = self.config_paths.profile().cloned() else {
+            self.ssh.error = Some("Manage remote servers from the local yttt window.".to_string());
+            cx.notify();
+            return;
+        };
+        self.ssh.connecting = Some(connection_id.clone());
+        self.ssh.error = None;
+        cx.notify();
         let launch = crate::remote_launch::RemoteLaunch {
             local_profile,
             target: crate::remote_launch::RemoteTarget::SshServer {
                 connection,
-                password: (!password.is_empty()).then_some(password),
-                passphrase: (!key_passphrase.is_empty()).then_some(key_passphrase),
-                save_password_as: self
-                    .ssh
-                    .form
-                    .as_ref()
-                    .filter(|form| form.remember_password)
-                    .map(|form| form.credential_id.clone()),
+                password,
+                passphrase,
+                save_password_as,
             },
         };
         let task =
@@ -715,6 +993,10 @@ impl WorkbenchView {
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |root, _window, cx| {
+                if root.ssh.connecting.as_ref() != Some(&connection_id) {
+                    return;
+                }
+                root.ssh.connecting = None;
                 match result {
                     Ok(()) => root.close_ssh_connection_manager(),
                     Err(error) => {
@@ -803,14 +1085,17 @@ impl WorkbenchView {
             return;
         }
         self.ssh.connections = updated;
-        self.ssh.form = None;
-        if let Some(connection) = self.ssh.connections.connections.first().cloned() {
-            self.ssh.form = Some(SshConnectionForm::new(connection));
-        } else {
-            self.new_ssh_connection_form();
+        if self
+            .ssh
+            .form
+            .as_ref()
+            .is_some_and(|form| form.connection_id == connection_id)
+        {
+            self.close_ssh_connection_editor();
         }
         self.ssh.error = None;
         self.ssh.statuses.remove(&connection_id);
+        cx.notify();
         let disconnect_id = connection_id.clone();
         let runtime = self.terminal.host_runtime.clone();
         cx.spawn(async move |this, cx| {
@@ -968,93 +1253,6 @@ impl WorkbenchView {
         self.ssh.pending_host_keys = retained;
     }
 
-    pub(super) fn ssh_manager_connection_list(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<ListState<SshConnectionListDelegate>> {
-        let ui_style = current_ui_style(cx);
-        let entries = self
-            .ssh
-            .connections
-            .connections
-            .iter()
-            .map(|connection| {
-                let (status, tone) = ssh_connection_status(
-                    self.ssh
-                        .statuses
-                        .get(&connection.id)
-                        .map(|status| status.state),
-                    &self.ui_text,
-                );
-                SshConnectionListEntry {
-                    action: SshConnectionListAction::Edit(connection.id.clone()),
-                    title: connection.name.clone().into(),
-                    subtitle: format!(
-                        "{}@{}:{}",
-                        connection.user, connection.host, connection.port
-                    )
-                    .into(),
-                    status: status.into(),
-                    tone,
-                }
-            })
-            .collect();
-        let sections = vec![SshConnectionListSection {
-            title: self.ui_text.get(UiTextKey::SshConnections).into(),
-            entries,
-        }];
-        let selected_action = self
-            .ssh
-            .form
-            .as_ref()
-            .map(|form| SshConnectionListAction::Edit(form.connection_id.clone()));
-
-        if let Some(list) = self.ssh.manager_connection_list.clone() {
-            list.update(cx, |list, cx| {
-                list.delegate_mut().replace_sections(sections, ui_style);
-                let selected_index = selected_action
-                    .as_ref()
-                    .and_then(|action| list.delegate().index_of(action));
-                if list.selected_index() != selected_index {
-                    list.set_selected_index(selected_index, window, cx);
-                }
-            });
-            return list;
-        }
-
-        let empty_message = self.ui_text.get(UiTextKey::SshNoConnections);
-        let list = cx.new(|cx| {
-            ListState::new(
-                SshConnectionListDelegate::new(sections, empty_message, ui_style),
-                window,
-                cx,
-            )
-        });
-        let subscription = cx.subscribe(
-            &list,
-            |this, list: Entity<ListState<SshConnectionListDelegate>>, event, cx| {
-                let ListEvent::Confirm(index) = event else {
-                    return;
-                };
-                let action = list.read(cx).delegate().action(*index).cloned();
-                if let Some(SshConnectionListAction::Edit(connection_id)) = action {
-                    this.edit_ssh_connection(&connection_id);
-                    cx.notify();
-                }
-            },
-        );
-        if let Some(selected_action) = selected_action {
-            list.update(cx, |list, cx| {
-                let selected_index = list.delegate().index_of(&selected_action);
-                list.set_selected_index(selected_index, window, cx);
-            });
-        }
-        self.ssh.manager_connection_list = Some(list.clone());
-        self.ssh.manager_connection_list_subscription = Some(subscription);
-        list
-    }
-
     pub(super) fn send_ssh_host_key_answer(
         &mut self,
         challenge: HostKeyChallenge,
@@ -1109,6 +1307,40 @@ fn input_value(input: &Entity<InputState>, cx: &Context<WorkbenchView>) -> Strin
 fn secret_input_value(input: &Entity<InputState>, cx: &Context<WorkbenchView>) -> String {
     input.read(cx).value().to_string()
 }
+
+fn ssh_identity_requires_passphrase(path: &Path) -> bool {
+    let Ok(pem) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let pem = zeroize::Zeroizing::new(pem);
+    if pem.contains("-----BEGIN ENCRYPTED PRIVATE KEY-----")
+        || pem.contains("Proc-Type: 4,ENCRYPTED")
+    {
+        return true;
+    }
+    let encoded = zeroize::Zeroizing::new(
+        pem.lines()
+            .filter(|line| !line.starts_with("-----"))
+            .collect::<String>(),
+    );
+    let Ok(payload) = base64::engine::general_purpose::STANDARD.decode(encoded.as_bytes()) else {
+        return false;
+    };
+    let payload = zeroize::Zeroizing::new(payload);
+    let Some(payload) = payload.strip_prefix(b"openssh-key-v1\0") else {
+        return false;
+    };
+    let Some((cipher, _)) = ssh_wire_string(payload) else {
+        return false;
+    };
+    cipher != b"none"
+}
+
+fn ssh_wire_string(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
+    let length = u32::from_be_bytes(bytes.get(..4)?.try_into().ok()?) as usize;
+    Some((bytes.get(4..4 + length)?, bytes.get(4 + length..)?))
+}
+
 pub(super) fn ssh_connection_state_text(state: ConnectionState, text: &UiText) -> &'static str {
     match state {
         ConnectionState::Disconnected => text.get(UiTextKey::SshDisconnected),
@@ -1121,94 +1353,17 @@ pub(super) fn ssh_connection_state_text(state: ConnectionState, text: &UiText) -
     }
 }
 
-pub(super) fn ssh_connection_status(
-    state: Option<ConnectionState>,
-    text: &UiText,
-) -> (&'static str, SshConnectionListTone) {
-    match state.unwrap_or(ConnectionState::Disconnected) {
-        ConnectionState::Connected => (
-            text.get(UiTextKey::SshConnected),
-            SshConnectionListTone::Success,
-        ),
-        ConnectionState::Failed => (
-            text.get(UiTextKey::SshFailed),
-            SshConnectionListTone::Danger,
-        ),
-        ConnectionState::Connecting
-        | ConnectionState::VerifyingHostKey
-        | ConnectionState::Authenticating
-        | ConnectionState::Reconnecting => (
-            ssh_connection_state_text(state.unwrap_or(ConnectionState::Disconnected), text),
-            SshConnectionListTone::Warning,
-        ),
-        ConnectionState::Disconnected => (
-            text.get(UiTextKey::SshDisconnected),
-            SshConnectionListTone::Neutral,
-        ),
-    }
-}
-
-pub(super) fn remote_services_window_content(
+pub(super) fn ssh_connection_editor(
     root: &mut WorkbenchView,
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
-    use super::auxiliary_windows::RemoteServicesPage;
-    if root.auxiliary_windows.remote_page == RemoteServicesPage::ExistingHost {
-        if root.auxiliary_windows.existing_host.is_none() {
-            if let Some(profile) = root.config_paths.profile().cloned() {
-                root.auxiliary_windows.existing_host = Some(crate::ui::app::existing_host::create(
-                    profile,
-                    root.ui_text,
-                    window,
-                    cx,
-                ));
-            }
-        }
-        return div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .overflow_hidden()
-            .bg(root.theme_runtime().ui.editor_background)
-            .child(remote_services_navigation(root, cx))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .children(root.auxiliary_windows.existing_host.clone()),
-            );
-    }
-    if root.auxiliary_windows.remote_page == RemoteServicesPage::ThisComputer {
-        return div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .bg(root.theme_runtime().ui.editor_background)
-            .child(remote_services_navigation(root, cx))
-            .child(
-                div()
-                    .id("remote-access-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .vertical_scrollbar(&root.auxiliary_windows.remote_access_scroll)
-                    .p(gpui::rems(2.0))
-                    .child(root.remote_access_settings(window, cx)),
-            );
-    }
     let theme = root.theme_runtime().ui;
     let ui_style = current_ui_style(cx);
     let dialog = yttt_dialog_style(theme, ui_style);
     let Some(inputs) = root.ssh_connection_form_inputs(window, cx) else {
         return div();
     };
-    let connection_list = root.ssh_manager_connection_list(window, cx);
-    let selected_id = root
-        .ssh
-        .form
-        .as_ref()
-        .map(|form| form.connection_id.clone());
     let auth = root
         .ssh
         .form
@@ -1220,9 +1375,133 @@ pub(super) fn remote_services_window_content(
         .form
         .as_ref()
         .is_some_and(|form| form.remember_password);
-    let selected_id_for_connect = selected_id.clone();
-    let selected_id_for_disconnect = selected_id.clone();
-    let selected_id_for_delete = selected_id;
+    let connecting = root.ssh.connecting.is_some();
+
+    if root.ssh.credentials_only {
+        let password_prompt = auth == SshConnectionFormMode::Password;
+        let mut fields = div()
+            .flex()
+            .flex_col()
+            .gap(ui_style.spacing.md)
+            .child(
+                div().text_sm().text_color(theme.text_muted).child(
+                    root.ssh
+                        .form
+                        .as_ref()
+                        .map(|form| {
+                            format!(
+                                "{}@{}:{}",
+                                form.initial.user, form.initial.host, form.initial.port
+                            )
+                        })
+                        .unwrap_or_default(),
+                ),
+            )
+            .child(if password_prompt {
+                ssh_form_field(
+                    root.ui_text.get(UiTextKey::SshPassword),
+                    &inputs.password,
+                    theme,
+                    ui_style,
+                )
+            } else {
+                ssh_form_field(
+                    root.ui_text.get(UiTextKey::SshKeyPassphrase),
+                    &inputs.key_passphrase,
+                    theme,
+                    ui_style,
+                )
+            });
+        if password_prompt {
+            fields = fields.child(yttt_labeled_switch(
+                "ssh-remember-password",
+                root.ui_text.get(UiTextKey::SshRememberPassword),
+                remember_password,
+                theme,
+                ui_style,
+                cx.listener(|this, checked: &bool, _window, cx| {
+                    if let Some(form) = this.ssh.form.as_mut() {
+                        form.remember_password = *checked;
+                    }
+                    cx.notify();
+                }),
+            ));
+        }
+        if let Some(error) = root.ssh.error.clone() {
+            fields = fields.child(
+                yttt_alert(
+                    "ssh-connection-error",
+                    error,
+                    YtttNotificationTone::Error,
+                    theme,
+                    ui_style,
+                )
+                .title(root.ui_text.get(UiTextKey::SshFailed)),
+            );
+        }
+        return div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .min_h_0()
+            .overflow_hidden()
+            .child(
+                div()
+                    .id("remote-service-form-scroll")
+                    .debug_selector(|| "ssh-form-viewport".into())
+                    .min_h_0()
+                    .flex_1()
+                    .overflow_y_scroll()
+                    .vertical_scrollbar(&root.auxiliary_windows.ssh_form_scroll)
+                    .p(gpui::rems(1.5))
+                    .child(fields.w_full().max_w(gpui::rems(44.0))),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "ssh-form-footer".into())
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_end()
+                    .min_h(gpui::rems(3.0))
+                    .px(gpui::rems(1.0))
+                    .py(gpui::rems(0.5))
+                    .border_t_1()
+                    .border_color(dialog.border)
+                    .gap(ui_style.spacing.sm)
+                    .child(
+                        yttt_dialog_button(
+                            cx,
+                            "cancel-ssh-connection-credentials",
+                            root.ui_text.get(UiTextKey::Cancel),
+                            YtttButtonVariant::Ghost,
+                            theme,
+                            cx.listener(|this, _, _window, cx| {
+                                this.close_ssh_connection_editor();
+                                cx.notify();
+                            }),
+                        )
+                        .disabled(connecting),
+                    )
+                    .child(
+                        yttt_dialog_button(
+                            cx,
+                            "connect-ssh-connection-credentials",
+                            root.ui_text.get(if connecting {
+                                UiTextKey::RemoteConnecting
+                            } else {
+                                UiTextKey::SshConnect
+                            }),
+                            YtttButtonVariant::Primary,
+                            theme,
+                            cx.listener(|this, _, window, cx| {
+                                this.submit_ssh_connection_credentials(window, cx);
+                            }),
+                        )
+                        .disabled(connecting),
+                    ),
+            );
+    }
 
     let auth_index = match auth {
         SshConnectionFormMode::Auto => 0,
@@ -1401,115 +1680,22 @@ pub(super) fn remote_services_window_content(
         );
     }
 
-    let selected_saved = selected_id_for_delete.as_ref().is_some_and(|id| {
-        root.ssh
-            .connections
-            .connections
-            .iter()
-            .any(|connection| &connection.id == id)
-    });
-    let selected_connected = selected_id_for_disconnect.as_ref().is_some_and(|id| {
-        root.ssh.statuses.get(id).is_some_and(|status| {
-            !matches!(
-                status.state,
-                ConnectionState::Disconnected | ConnectionState::Failed
-            )
-        })
-    });
     div()
-        .debug_selector(|| "remote-services-manager".to_string())
         .flex()
         .flex_col()
         .size_full()
+        .min_h_0()
         .overflow_hidden()
-        .bg(theme.editor_background)
-        .child(remote_services_navigation(root, cx))
         .child(
             div()
-                .flex()
-                .flex_none()
-                .items_center()
-                .justify_between()
-                .gap(ui_style.spacing.lg)
-                .px(gpui::rems(1.0))
-                .py(gpui::rems(0.75))
-                .border_b_1()
-                .border_color(dialog.border)
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .min_w_0()
-                        .gap(ui_style.spacing.xs)
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(root.ui_text.get(UiTextKey::SshConnections)),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.text_muted)
-                                .child(root.ui_text.get(UiTextKey::SshConnectionsDescription)),
-                        ),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_1()
+                .id("remote-service-form-scroll")
+                .debug_selector(|| "ssh-form-viewport".into())
                 .min_h_0()
-                .child(
-                    div()
-                        .w(gpui::rems(14.0))
-                        .flex_none()
-                        .min_h_0()
-                        .flex()
-                        .flex_col()
-                        .bg(theme.sidebar_background)
-                        .border_r_1()
-                        .border_color(dialog.border)
-                        .child(
-                            div()
-                                .min_h_0()
-                                .flex_1()
-                                .py(ui_style.spacing.sm)
-                                .child(List::new(&connection_list).size_full()),
-                        )
-                        .child(
-                            div()
-                                .p(gpui::rems(0.75))
-                                .border_t_1()
-                                .border_color(dialog.border)
-                                .child(
-                                    yttt_dialog_button(
-                                        cx,
-                                        "new-ssh-connection",
-                                        root.ui_text.get(UiTextKey::SshNewConnection),
-                                        YtttButtonVariant::Ghost,
-                                        theme,
-                                        cx.listener(|this, _, _window, cx| {
-                                            this.new_ssh_connection_form();
-                                            cx.notify();
-                                        }),
-                                    )
-                                    .w_full(),
-                                ),
-                        ),
-                )
-                .child(
-                    div()
-                        .id("remote-service-form-scroll")
-                        .debug_selector(|| "ssh-form-viewport".into())
-                        .min_w_0()
-                        .min_h_0()
-                        .flex_1()
-                        .overflow_y_scroll()
-                        .vertical_scrollbar(&root.auxiliary_windows.ssh_form_scroll)
-                        .p(gpui::rems(1.5))
-                        .child(form_fields.w_full().max_w(gpui::rems(44.0))),
-                ),
+                .flex_1()
+                .overflow_y_scroll()
+                .vertical_scrollbar(&root.auxiliary_windows.ssh_form_scroll)
+                .p(gpui::rems(1.5))
+                .child(form_fields.w_full().max_w(gpui::rems(44.0))),
         )
         .child(
             div()
@@ -1517,133 +1703,57 @@ pub(super) fn remote_services_window_content(
                 .flex()
                 .flex_none()
                 .items_center()
-                .justify_between()
+                .justify_end()
                 .min_h(gpui::rems(3.0))
                 .px(gpui::rems(1.0))
                 .py(gpui::rems(0.5))
                 .border_t_1()
                 .border_color(dialog.border)
-                .gap(ui_style.spacing.md)
+                .gap(ui_style.spacing.sm)
                 .child(
                     yttt_dialog_button(
                         cx,
-                        "delete-ssh-connection",
-                        root.ui_text.get(UiTextKey::SshDeleteConnection),
-                        YtttButtonVariant::Danger,
+                        "cancel-ssh-connection",
+                        root.ui_text.get(UiTextKey::Cancel),
+                        YtttButtonVariant::Ghost,
                         theme,
-                        cx.listener(move |this, _, window, cx| {
-                            if let Some(connection_id) = selected_id_for_delete.clone() {
-                                this.delete_ssh_connection(connection_id, window, cx);
-                            }
+                        cx.listener(|this, _, _window, cx| {
+                            this.close_ssh_connection_editor();
+                            cx.notify();
                         }),
                     )
-                    .disabled(!selected_saved),
+                    .disabled(connecting),
                 )
                 .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(ui_style.spacing.sm)
-                        .child(yttt_dialog_button(
-                            cx,
-                            "save-ssh-connection",
-                            root.ui_text.get(UiTextKey::SettingsSave),
-                            YtttButtonVariant::Secondary,
-                            theme,
-                            cx.listener(|this, _, _window, cx| {
-                                this.save_ssh_connection(cx);
-                                cx.notify();
-                            }),
-                        ))
-                        .child(
-                            yttt_dialog_button(
-                                cx,
-                                "disconnect-ssh-connection",
-                                root.ui_text.get(UiTextKey::SshDisconnect),
-                                YtttButtonVariant::Ghost,
-                                theme,
-                                cx.listener(move |this, _, window, cx| {
-                                    if let Some(connection_id) = selected_id_for_disconnect.clone()
-                                    {
-                                        this.disconnect_ssh_connection(connection_id, window, cx);
-                                    }
-                                }),
-                            )
-                            .disabled(!selected_connected),
-                        )
-                        .child(yttt_dialog_button(
-                            cx,
-                            "connect-ssh-connection",
-                            root.ui_text.get(UiTextKey::SshConnect),
-                            YtttButtonVariant::Primary,
-                            theme,
-                            cx.listener(move |this, _, window, cx| {
-                                if let Some(connection_id) = selected_id_for_connect.clone() {
-                                    this.connect_ssh_connection(connection_id, window, cx);
-                                }
-                            }),
-                        )),
+                    yttt_dialog_button(
+                        cx,
+                        "save-ssh-connection",
+                        root.ui_text.get(UiTextKey::SettingsSave),
+                        YtttButtonVariant::Secondary,
+                        theme,
+                        cx.listener(|this, _, _window, cx| {
+                            this.save_ssh_connection_editor(cx);
+                        }),
+                    )
+                    .disabled(connecting),
+                )
+                .child(
+                    yttt_dialog_button(
+                        cx,
+                        "save-connect-ssh-connection",
+                        root.ui_text.get(if connecting {
+                            UiTextKey::RemoteConnecting
+                        } else {
+                            UiTextKey::RemoteSaveConnect
+                        }),
+                        YtttButtonVariant::Primary,
+                        theme,
+                        cx.listener(|this, _, window, cx| {
+                            this.save_and_connect_ssh_connection(window, cx);
+                        }),
+                    )
+                    .disabled(connecting),
                 ),
-        )
-}
-
-fn remote_services_navigation(root: &WorkbenchView, cx: &mut Context<WorkbenchView>) -> Div {
-    use super::auxiliary_windows::RemoteServicesPage;
-    let theme = root.theme_runtime().ui;
-    let style = current_ui_style(cx);
-    div()
-        .flex()
-        .flex_none()
-        .items_center()
-        .px(gpui::rems(1.0))
-        .gap(style.spacing.lg)
-        .border_b(style.border.hairline)
-        .border_color(theme.border_variant)
-        .children(
-            [
-                (
-                    RemoteServicesPage::Ssh,
-                    "remote-services-connections",
-                    UiTextKey::SshConnections,
-                ),
-                (
-                    RemoteServicesPage::ExistingHost,
-                    "remote-services-existing-host",
-                    UiTextKey::ConnectExistingHost,
-                ),
-                (
-                    RemoteServicesPage::ThisComputer,
-                    "remote-services-this-computer",
-                    UiTextKey::RemoteAccessTitle,
-                ),
-            ]
-            .into_iter()
-            .map(|(page, id, key)| {
-                let selected = root.auxiliary_windows.remote_page == page;
-                div()
-                    .id(id)
-                    .debug_selector(move || id.to_string())
-                    .py(gpui::rems(0.625))
-                    .border_b(px(2.0))
-                    .border_color(if selected {
-                        theme.text_muted
-                    } else {
-                        theme.text_muted.alpha(0.0)
-                    })
-                    .text_sm()
-                    .text_color(if selected {
-                        theme.text
-                    } else {
-                        theme.text_muted
-                    })
-                    .cursor_pointer()
-                    .hover(|this| this.text_color(theme.text))
-                    .child(root.ui_text.get(key))
-                    .on_click(cx.listener(move |root, _, _, cx| {
-                        root.auxiliary_windows.remote_page = page;
-                        cx.notify();
-                    }))
-            }),
         )
 }
 

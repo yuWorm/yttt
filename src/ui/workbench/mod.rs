@@ -44,6 +44,7 @@ mod performance;
 mod persistence;
 mod project_files;
 mod remote_access;
+mod remote_connections;
 mod render;
 mod resize;
 mod settings;
@@ -63,7 +64,7 @@ use onboarding::*;
 use persistence::WorkspacePersistenceState;
 use render::{push_component_notification, split_child};
 use settings::{settings_button, settings_window_content};
-use ssh_connections::{remote_services_window_content, ssh_host_key_overlay};
+use ssh_connections::ssh_host_key_overlay;
 use ssh_project_picker::ssh_project_picker_overlay;
 pub use state::update::UpdateStatus;
 use state::{
@@ -2633,7 +2634,8 @@ impl WorkbenchView {
             if self.config_paths.profile().is_some() {
                 self.open_ssh_connection_manager();
                 self.auxiliary_windows.remote_page =
-                    auxiliary_windows::RemoteServicesPage::ExistingHost;
+                    auxiliary_windows::RemoteServicesPage::Connections;
+                self.auxiliary_windows.pending_new_host_editor = true;
             } else {
                 self.load_error = Some("Open connections from your local yttt window.".into());
             }

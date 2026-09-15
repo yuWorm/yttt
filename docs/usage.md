@@ -35,10 +35,14 @@ provide a project or personal layout override.
 
 Normal application launches remain local. The bottom status bar identifies the current
 environment; connecting a remote service never replaces the current local window.
-Use **Remote services** on the homepage to open one management window with three peer tabs:
-**SSH connections**, **Connect to existing yttt**, and **Remote access to this computer**.
-Switching tabs stays in this window; the SSH and TLS forms scroll independently of their fixed
-bottom actions. The workbench stays usable behind it; connecting opens an independent Client window.
+Use **Remote services** on the homepage to open one management window with two tabs:
+**Remote connections** and **Remote access to this computer**. The first tab lists saved SSH
+and network Host connections together. Click a row to connect; use its **⋯** menu to edit or
+delete it. **Add connection** opens a type-specific SSH or network Host modal in the same window.
+Forms scroll independently of their fixed bottom actions; **Escape** or **Cancel** discards
+unsaved input and returns to the list. **Save** only updates the record; **Save and connect**
+explicitly does both. Missing credentials open a small credential-only prompt instead of the
+full editor. The workbench stays usable behind the manager; connecting opens an independent Client window.
 
 Both local and remote windows restore their Host's confirmed workspace state before starting
 terminal/Agent views. A workspace with opened projects goes directly to its project page; a
@@ -169,13 +173,17 @@ Use this path to access computer A's already-running yttt from B without deployi
 3. Forward A's listening TCP port using a general-purpose TCP tunnel. Keep the loopback bind when
    the forwarder's endpoint runs on A. Binding another interface requires explicit confirmation
    and appropriate firewall protection.
-4. On B, open **Remote services → Connect to existing yttt**, or use the command-palette action
-   to select that same tab. Paste A's code into **Connection code**: the address and authentication
-   information are filled automatically. The decoded payload is limited to 8 KiB.
+4. On B, open **Remote services → Remote connections → Add connection → Network Host**.
+   The **Connect to existing yttt** command-palette action opens the same modal.
+   Give the connection a name and paste A's code into **Connection code**: the address and
+   authentication information are filled automatically. The decoded payload is limited to 8 KiB.
    Replace the address with one reachable on B when needed (for example a forwarded
    `127.0.0.1:54321`, or A's LAN address instead of its loopback/wildcard listening address).
-   The code stays masked. Optional remembered credentials use the OS keychain; a keychain error
-   does not fall back to plaintext storage. Previously saved credentials remain usable.
+   The code stays masked. **Save** adds a record without connecting; **Save and connect** also
+   opens the Client. Saved names and routes can be edited without re-entering credentials.
+   Optional remembered credentials use the OS keychain; a keychain error does not fall back to
+   plaintext storage. Previously saved credentials remain usable. Clicking a saved record with
+   missing or unavailable credentials prompts only for a code matching that Host's environment.
 5. The separate Client verifies TLS 1.3, the imported certificate and environment before using
    the work credential. The address is a route, not Host identity: a forwarded `localhost`
    address is valid. No SSH login, binary deployment, or Server startup happens on this path.
@@ -209,6 +217,11 @@ for independent background Hosts. TCP forwarding was exercised with a generic lo
 this is not certification of any particular third-party tunnel product.
 
 ### SSH projects
+
+Manage SSH records in **Remote services → Remote connections**. Choose **Add connection → SSH
+connection** to create one, or use a row's **⋯ → Edit** action. Clicking the saved row connects
+without saving any editor input. Password authentication prompts when no stored password is
+available; encrypted configured private keys prompt for a temporary passphrase.
 
 Run **Open SSH Project** from the command palette, the empty-workbench action, or the project
 sidebar menu. This opens a dedicated picker instead of the SSH settings page:

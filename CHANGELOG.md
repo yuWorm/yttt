@@ -56,8 +56,11 @@
 
 ### Changed
 
-- Consolidated SSH, existing TLS Host connections, and local remote-access settings into peer
-  tabs in one management window, with scrolling forms and fixed bottom actions.
+- Replaced the separate SSH and TLS Host tabs with one saved **Remote connections** list beside
+  **Remote access to this computer**. Rows connect directly; type-specific add/edit modals use
+  separate Save and Save-and-connect actions, with small prompts for missing credentials.
+- Preserved existing SSH/Host records and keychain storage; network Host names and routes can
+  now be saved or edited independently of credentials.
 - Changed connection-info copying to a Base64 code containing the endpoint, certificate and
   access key; pasting it fills the connection address and credentials automatically.
 - Reworked remote directory selection into a compact, connection-labelled picker with the Host home
