@@ -272,6 +272,22 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
             "Personal layout editor requires mode = \"replace\""
         }
         UiTextKey::LayoutEditorSaveFailed => "Failed to save layout TOML",
+        UiTextKey::BarsEditorTitle => "Edit bars TOML",
+        UiTextKey::BarsEditorPlaceholder => "Edit Window Bar and Status Bar TOML...",
+        UiTextKey::BarsEditorParseFailed => "Failed to parse bars TOML",
+        UiTextKey::BarsEditorValidationFailed => "Invalid bars TOML",
+        UiTextKey::BarsEditorSaveFailed => "Failed to save bars TOML",
+        UiTextKey::BarsEditorComponents => "Components",
+        UiTextKey::BarsEditorSearchComponents => "Search components...",
+        UiTextKey::BarsEditorInsertInto => "Insert into",
+        UiTextKey::BarsEditorPreview => "Preview",
+        UiTextKey::BarsEditorPreviewUnavailable => "Fix the TOML to preview this layout.",
+        UiTextKey::BarsEditorWindow => "Window",
+        UiTextKey::BarsEditorStatus => "Status",
+        UiTextKey::BarsEditorPreviewPerformanceDisabled => "Performance metrics are disabled.",
+        UiTextKey::BarsEditorPreviewPerformanceCached => {
+            "New performance modules preview cached samples only until saved."
+        }
         UiTextKey::CommandPaletteOpenTitle => "Open Command Palette",
         UiTextKey::CommandPaletteOpenDescription => "Search and run commands",
         UiTextKey::CommandSettingsOpenTitle => "Open Settings",
@@ -728,29 +744,16 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsTerminalTheme => "Terminal theme",
         UiTextKey::SettingsTerminalThemeDescription => "Optional terminal colors override.",
         UiTextKey::SettingsSearchTheme => "Search theme...",
-        UiTextKey::SettingsWindowBarModules => "Window Bar modules",
-        UiTextKey::SettingsWindowBarModulesDescription => {
-            "Additional modules for the left, center, and right regions. Project identity and Git status stay fixed."
-        }
-        UiTextKey::SettingsStatusBarEnabled => "Show Status Bar",
-        UiTextKey::SettingsStatusBarEnabledDescription => {
-            "Show the compact shared status surface below the workspace."
-        }
-        UiTextKey::SettingsStatusBarModules => "Status Bar modules",
-        UiTextKey::SettingsStatusBarModulesDescription => {
-            "Modules can move independently between the three regions."
-        }
         UiTextKey::SettingsBarLeft => "Left",
         UiTextKey::SettingsBarCenter => "Center",
         UiTextKey::SettingsBarRight => "Right",
-        UiTextKey::SettingsApplyBarLayout => "Apply layout",
         UiTextKey::SettingsEditSettingsToml => "Edit settings TOML",
         UiTextKey::SettingsEditSettingsTomlDescription => {
             "Open the app settings file for advanced edits."
         }
-        UiTextKey::SettingsEditBarsToml => "Edit bars TOML",
+        UiTextKey::SettingsEditBarsToml => "Bars",
         UiTextKey::SettingsEditBarsTomlDescription => {
-            "Open the standalone Window Bar and Status Bar configuration for editing or sharing."
+            "Edit the Window Bar and Status Bar template in a dedicated editor."
         }
         UiTextKey::SettingsShowPath => "Show Path",
         UiTextKey::SettingsThemesDirectory => "Themes directory",

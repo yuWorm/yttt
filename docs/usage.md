@@ -501,15 +501,15 @@ shared without carrying unrelated application preferences. These are the complet
 
 ```toml
 [window]
-left = []
-center = []
-right = ["projects-count", "terminals-count", "tabs-count", "editors-count", "app-cpu", "app-memory", "system-cpu", "system-memory", "command-palette", "settings"]
+left = '[project-name] [|] [project-path] [|] [git-branch] [|] [git-changes]'
+center = ''
+right = '[projects-count] [terminals-count] [tabs-count] [editors-count] [app-cpu] [app-memory] [system-cpu] [system-memory] [command-palette] [settings]'
 
 [status]
 enabled = true
-left = ["vim-mode", "surface", "vim-detail", "active-item"]
-center = ["vim-keys"]
-right = ["editor-language", "editor-position", "editor-dirty", "editor-diagnostics", "git-branch", "git-changes", "agent-state", "ssh", "update"]
+left = '[vim-mode] [surface] [vim-detail] [active-item]'
+center = '[vim-keys]'
+right = '[editor-language] [editor-position] [editor-dirty] [editor-diagnostics] [git-branch] [git-changes] [agent-state] [ssh] [update]'
 ```
 
 During the one-time local Device migration, a legacy `[bars]` section supplies defaults only when
@@ -526,14 +526,48 @@ delayed saves. `default_open` affects new project sessions. Editing `width` upda
 project and the default for future projects, while other open projects retain their own widths.
 Valid width ranges are 200–520 px for the right tree and 160–420 px for the left sidebar.
 
-Window Bar and Status Bar module order can be edited under **Settings → Appearance → Window &
-status bars** or directly in `bars.toml`. Both bars use independent `left`, `center`, and `right`
-arrays. The same Settings page shows the standalone file path.
+Open **Settings → Appearance → Window & status bars → Edit bars TOML** to edit both bars
+in the dedicated text editor. Its searchable component directory inserts into the selected
+left/center/right region; the preview uses current application data without changing the live bars
+or executing actions. Save (Cmd-S on macOS, Ctrl-S elsewhere) validates and persists Device
+preferences; Cancel or closing the editor discards unsaved changes. Opening or previewing does
+not create a file. Device bar preferences remain editable without shared Host control.
 
-The Window Bar always keeps the project name, complete project path, Git branch, and Git change
-summary together on the left. These identity modules cannot be hidden, moved, duplicated, or
-restyled by the Window Bar arrays; entries for `project-name`, `project-path`, `git-branch`, and
-`git-changes` in `[window]` are ignored. The same module IDs remain configurable in the Status Bar.
+Both bars use independent `left`, `center`, and `right` template strings. Project identity and Git
+information are ordinary configurable modules; an explicit empty string hides that region.
+Native window controls and the essential local/remote Profile control surface are not template
+items. `status.enabled = false` hides configured status content but retains the Profile control
+surface while connected to a Host.
+
+Legacy module arrays are read without rewriting the file. Legacy window layouts inherit the former
+fixed identity prefix; saving writes template strings only. Repeated modules are allowed.
+
+```toml
+[status]
+right = '[app-memory] [Space*5] [text:ssssss] [icon:settings] [|] [update]'
+```
+
+- `[module-id]` renders a dynamic module with its existing icon, tooltip and action.
+- `[Space]` or `[Space*N]` inserts N font-relative space widths (1–256). Explicit spaces replace
+  the default gap at that position rather than adding another gap on either side.
+- `[text:literal text]` preserves text and internal whitespace. Use `\[`, `\]`, and `\\`
+  for literal brackets and backslashes; TOML single-quoted strings avoid double escaping.
+- `[icon:name]` is a static icon, not an action. `[icon:settings]` is decorative;
+  `[settings]` opens Settings.
+- `[|]` is a vertical separator. Leading, trailing and redundant separators disappear when
+  adjacent dynamic modules have no data. A region containing only spaces/separators collapses.
+- Whitespace outside tokens is for readability only. Unknown modules/icons, invalid escapes,
+  unclosed tokens and invalid space counts are errors.
+
+Available static icon names: `settings`, `info`, `cpu`, `memory-stick`, `search`, `palette`,
+`folder`, `folder-open`, `file`, `square-terminal`, `github`, `network`, `globe`, `user`, `bot`,
+`bell`, `calendar`, `chart-pie`, `hard-drive`, `battery`, `triangle-alert`, `circle-check`,
+`circle-x`, `play`, and `pause`. Icons are bundled assets; arbitrary paths and URLs are not accepted.
+
+Application CPU/memory describe the local GUI process, not remote Host or terminal subprocesses.
+System metrics describe this device. Existing performance switches still apply; previews use
+available cached samples and explain when a metric is disabled or requires saving to begin sampling.
+
 Available module IDs are:
 
 - Workspace: `project-name`, `project-path`, `active-item`, `surface`

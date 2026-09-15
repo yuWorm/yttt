@@ -19,9 +19,7 @@ use crate::{
     ui::app::platform::{self, PermissionKind, PermissionStatus},
 };
 
-use super::super::{
-    SettingsBarField, SettingsFontFamilySelectState, SettingsNumberField, SettingsStringSelectState,
-};
+use super::super::{SettingsFontFamilySelectState, SettingsNumberField, SettingsStringSelectState};
 
 #[derive(Clone)]
 pub(in super::super) struct ZedThemeImportDialogState {
@@ -93,7 +91,6 @@ pub(in super::super) struct SettingsControllerState {
     pub(in super::super) settings_number_inputs: HashMap<SettingsNumberField, Entity<InputState>>,
     pub(in super::super) settings_number_input_subscriptions:
         HashMap<SettingsNumberField, Vec<Subscription>>,
-    pub(in super::super) settings_bar_inputs: HashMap<SettingsBarField, Entity<InputState>>,
     pub(in super::super) settings_scope: SettingsScope,
     pub(in super::super) project_editor_settings_project_id: Option<ProjectId>,
     pub(in super::super) project_editor_settings_generation: u64,
@@ -189,7 +186,6 @@ impl SettingsControllerState {
             settings_editor_autosave_select_subscription: None,
             settings_number_inputs: HashMap::new(),
             settings_number_input_subscriptions: HashMap::new(),
-            settings_bar_inputs: HashMap::new(),
             settings_page: SettingsPageState::default(),
             settings_scope: SettingsScope::Device,
             project_editor_settings_project_id: None,

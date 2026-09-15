@@ -117,23 +117,13 @@ enum SettingsNumberField {
     ProjectSidebarWidth,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum SettingsBarField {
-    WindowLeft,
-    WindowCenter,
-    WindowRight,
-    StatusLeft,
-    StatusCenter,
-    StatusRight,
-}
-
 use crate::{
     commands::{
         ActiveSurface, CommandContext, CommandDispatchError, CommandId, CommandOutcome,
         CommandRegistry, dispatch_workspace_command,
     },
     config::{
-        bars::{BarsSaveError, ShellBarModule, save_bars},
+        bars::{BarsSaveError, save_bars},
         default_layout::{
             BuiltinAgent, DefaultLayoutKind, DefaultLayoutState, DefaultLayoutTemplate,
             LayoutLoadWarning,
@@ -2065,26 +2055,6 @@ impl WorkbenchView {
         self.load_error = None;
     }
 
-    pub fn show_bars_file_path_status(&mut self) {
-        let Some(path) = crate::config::scope::device_bars_file().or_else(|| {
-            self.config_paths
-                .is_test_fixture()
-                .then(|| self.config_paths.bars_file())
-        }) else {
-            self.load_error = Some("Device preferences are not bound.".into());
-            return;
-        };
-        self.queue_status_notification(
-            format!(
-                "{}: {}",
-                self.ui_text.get(UiTextKey::StatusBarsFile),
-                path.display()
-            ),
-            self.ui_text.get(UiTextKey::SettingsGroupAppearance),
-        );
-        self.load_error = None;
-    }
-
     pub fn show_themes_directory_status(&mut self) {
         let Some(path) = crate::config::scope::device_themes_dir().or_else(|| {
             self.config_paths
@@ -3513,7 +3483,6 @@ impl WorkbenchView {
         self.settings.settings_editor_autosave_select_subscription = None;
         self.settings.settings_number_inputs.clear();
         self.settings.settings_number_input_subscriptions.clear();
-        self.settings.settings_bar_inputs.clear();
     }
 
     fn reset_layout_toml_input(&mut self) {

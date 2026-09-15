@@ -21,9 +21,9 @@ pub fn bar_sections_content(sections: BarSections, host: BarHost, ui_style: UiSt
         BarHost::Window => ("window-bar-left", "window-bar-center", "window-bar-right"),
         BarHost::Status => ("status-bar-left", "status-bar-center", "status-bar-right"),
     };
-    let left = bar_group(left_id, sections.left, ui_style);
-    let center = bar_group(center_id, sections.center, ui_style);
-    let right = bar_group(right_id, sections.right, ui_style).justify_end();
+    let left = bar_group(left_id, sections.left);
+    let center = bar_group(center_id, sections.center);
+    let right = bar_group(right_id, sections.right).justify_end();
 
     let content = div()
         .flex()
@@ -48,13 +48,12 @@ pub fn bar_sections_content(sections: BarSections, host: BarHost, ui_style: UiSt
     }
 }
 
-fn bar_group(id: &'static str, modules: Vec<AnyElement>, ui_style: UiStyle) -> Div {
+fn bar_group(id: &'static str, modules: Vec<AnyElement>) -> Div {
     div()
         .debug_selector(move || id.to_string())
         .flex()
         .items_center()
         .min_w_0()
         .overflow_hidden()
-        .gap(ui_style.shell.bar_module_gap)
         .children(modules)
 }

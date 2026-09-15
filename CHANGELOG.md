@@ -4,6 +4,11 @@
 
 ### Added
 
+- Added bracket templates for Window and Status bars, including font-relative spaces, literal text,
+  bundled icons and adaptive separators. Existing module arrays migrate on save; project identity
+  can now be moved, repeated or hidden without affecting native window controls.
+- Added a Bars target to the popup TOML editor with searchable component insertion, draft-only
+  live previews, validation and Device-scoped saving; unsaved and failed drafts remain recoverable.
 - Added explicit Device, Host and Project settings targets with effective-source and apply-timing
   labels. Device appearance, keybindings and preferences remain local and editable by observers;
   Host and Project writes require connected control.

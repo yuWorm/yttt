@@ -13,6 +13,7 @@ use tempfile::tempdir;
 use yttt::{
     commands::{ActiveSurface, CommandContext, CommandId},
     config::{
+        bars::load_bars,
         default_layout::{BuiltinAgent, DefaultLayoutKind, DefaultLayoutTemplate},
         keybindings::{
             KEYBINDINGS_SCHEMA_VERSION, Keybinding, KeybindingsConfig, default_keybindings,
@@ -4049,6 +4050,53 @@ fn root_view_layout_default_editor_saves_valid_toml() {
 }
 
 #[test]
+fn root_view_bars_editor_keeps_invalid_draft_and_writes_only_on_save() {
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let bars_file = paths.bars_file();
+    let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
+
+    root.open_bars_toml_editor().unwrap();
+    let source = root.layout_toml_editor_value().unwrap().to_string();
+    assert!(!bars_file.exists());
+
+    let invalid_template = r#"[window]
+left = "[not-a-module]"
+center = ""
+right = ""
+
+[status]
+enabled = true
+left = ""
+center = ""
+right = ""
+"#;
+    root.set_layout_toml_editor_value(invalid_template);
+    root.save_layout_toml_editor().unwrap();
+
+    assert!(root.layout_toml_editor_is_open());
+    assert_eq!(root.layout_toml_editor_value(), Some(invalid_template));
+    assert!(root.visible_layout_toml_editor_error().is_some());
+    assert_eq!(
+        root.visible_layout_toml_editor_diagnostics()[0].source,
+        "window.left"
+    );
+    assert!(!bars_file.exists());
+
+    root.cancel_layout_toml_editor();
+    root.open_bars_toml_editor().unwrap();
+    let reopened = root.layout_toml_editor_value().unwrap();
+    assert_eq!(reopened, source);
+    let saved = reopened.replace("enabled = true", "enabled = false");
+    assert_ne!(saved, reopened);
+    root.set_layout_toml_editor_value(saved);
+    root.save_layout_toml_editor().unwrap();
+
+    assert!(!root.layout_toml_editor_is_open());
+    assert!(!load_bars(&paths).unwrap().settings.status.enabled);
+}
+
+#[test]
 fn root_view_layout_default_editor_keeps_invalid_toml_open() {
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
@@ -5520,7 +5568,7 @@ fn status_bar_keeps_text_and_actions_inside_vertical_insets(cx: &mut gpui::TestA
 }
 
 #[gpui::test]
-fn appearance_settings_group_renders_window_and_theme_controls(cx: &mut gpui::TestAppContext) {
+fn appearance_settings_group_opens_bars_template_editor(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
@@ -5573,45 +5621,67 @@ fn appearance_settings_group_renders_window_and_theme_controls(cx: &mut gpui::Te
         cx.debug_bounds("settings-ui-line-height-row").is_some(),
         "Appearance settings should expose the UI line-height control"
     );
-    assert!(
-        cx.debug_bounds("settings-window-bar-modules-row").is_some(),
-        "Appearance settings should expose Window Bar module regions"
-    );
-    assert!(
-        cx.debug_bounds("settings-status-bar-enabled-row").is_some(),
-        "Appearance settings should expose the Status Bar visibility switch"
-    );
-    assert!(
-        cx.debug_bounds("settings-status-bar-modules-row").is_some(),
-        "Appearance settings should expose Status Bar module regions"
-    );
-    assert!(cx.debug_bounds("settings-window-bar-left").is_some());
-    assert!(cx.debug_bounds("settings-window-bar-center").is_some());
-    assert!(cx.debug_bounds("settings-window-bar-right").is_some());
-    assert!(cx.debug_bounds("settings-status-bar-left").is_some());
-    assert!(cx.debug_bounds("settings-status-bar-center").is_some());
-    assert!(cx.debug_bounds("settings-status-bar-right").is_some());
-    assert!(cx.debug_bounds("settings-open-bars-file").is_some());
-
-    assert!(
-        cx.debug_bounds("settings-import-zed-themes").is_some(),
-        "Appearance settings should expose the Zed theme import action"
-    );
-    assert!(
-        cx.debug_bounds("settings-status-bar-enabled").is_some(),
-        "Status Bar switch should be interactive"
-    );
-    root.update(cx, |root, cx| {
-        root.set_status_bar_enabled(false, cx).unwrap();
-        cx.notify();
+    let scroll_origin = cx
+        .debug_bounds("settings-window-effect-row")
+        .unwrap()
+        .center();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: scroll_origin,
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-1200.0))),
+        ..Default::default()
     });
-    cx.run_until_parked();
     cx.refresh().unwrap();
-    assert!(cx.debug_bounds("status-bar").is_none());
-    assert!(!load_settings(&paths).unwrap().settings.bars.status.enabled);
-    assert!(!paths.settings_file().exists());
-    let bars_source = std::fs::read_to_string(paths.bars_file()).unwrap();
-    assert!(bars_source.contains("enabled = false"));
+    let bars_editor = cx
+        .debug_bounds("settings-open-bars-editor")
+        .expect("Appearance settings should expose the Bars template editor");
+    cx.simulate_click(bars_editor.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    focus_surface_window(cx, "layout-editor-window");
+    let (bars_path, source) = cx.read(|app| {
+        let root = root.read(app);
+        (
+            root.layout_toml_editor_path().unwrap().to_path_buf(),
+            root.layout_toml_editor_value().unwrap().to_string(),
+        )
+    });
+    assert!(!bars_path.exists(), "opening must not create bars.toml");
+    assert!(cx.debug_bounds("bars-editor-components").is_some());
+    assert!(cx.debug_bounds("bars-editor-component-search").is_some());
+    let insert_project_name = cx
+        .debug_bounds("bars-editor-insert-project-name")
+        .expect("component directory should insert selectable modules");
+    cx.simulate_click(insert_project_name.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    let draft_after_insert = cx.read(|app| {
+        root.read(app)
+            .layout_toml_editor_value()
+            .unwrap()
+            .to_string()
+    });
+    let mut expected: yttt::config::bars::ShellBarsSettings = toml::from_str(&source).unwrap();
+    expected
+        .window
+        .layout
+        .left
+        .push(yttt::config::bars::ShellBarModule::ProjectName);
+    let draft: yttt::config::bars::ShellBarsSettings = toml::from_str(&draft_after_insert).unwrap();
+    assert_eq!(
+        draft, expected,
+        "insertion must change only the selected region"
+    );
+    assert!(!bars_path.exists(), "insertion must not persist the draft");
+    assert!(cx.debug_bounds("bars-editor-preview").is_some());
+
+    let cancel = cx
+        .debug_bounds("layout-toml-editor-cancel")
+        .expect("Bars editor should offer a discard action");
+    cx.simulate_click(cancel.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.read(|app| {
+        assert!(!root.read(app).layout_toml_editor_is_open());
+        assert!(root.read(app).settings_is_open());
+    });
+    assert!(!bars_path.exists(), "cancel must not create bars.toml");
 }
 
 #[gpui::test]

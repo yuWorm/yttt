@@ -242,6 +242,22 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::LayoutEditorRequiresPatchMode => "个人布局编辑器要求 mode = \"patch\"",
         UiTextKey::LayoutEditorRequiresReplaceMode => "个人布局编辑器要求 mode = \"replace\"",
         UiTextKey::LayoutEditorSaveFailed => "保存布局 TOML 失败",
+        UiTextKey::BarsEditorTitle => "编辑栏位 TOML",
+        UiTextKey::BarsEditorPlaceholder => "编辑窗口栏与状态栏 TOML…",
+        UiTextKey::BarsEditorParseFailed => "解析栏位 TOML 失败",
+        UiTextKey::BarsEditorValidationFailed => "栏位 TOML 无效",
+        UiTextKey::BarsEditorSaveFailed => "保存栏位 TOML 失败",
+        UiTextKey::BarsEditorComponents => "组件",
+        UiTextKey::BarsEditorSearchComponents => "搜索组件…",
+        UiTextKey::BarsEditorInsertInto => "插入到",
+        UiTextKey::BarsEditorPreview => "预览",
+        UiTextKey::BarsEditorPreviewUnavailable => "修正 TOML 后可预览此布局。",
+        UiTextKey::BarsEditorWindow => "窗口栏",
+        UiTextKey::BarsEditorStatus => "状态栏",
+        UiTextKey::BarsEditorPreviewPerformanceDisabled => "性能指标已关闭。",
+        UiTextKey::BarsEditorPreviewPerformanceCached => {
+            "新增性能组件仅预览已缓存的采样，保存后才会采集。"
+        }
         UiTextKey::CommandPaletteOpenTitle => "打开命令面板",
         UiTextKey::CommandPaletteOpenDescription => "搜索并运行命令",
         UiTextKey::CommandSettingsOpenTitle => "打开设置",
@@ -646,26 +662,13 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsTerminalTheme => "终端主题",
         UiTextKey::SettingsTerminalThemeDescription => "可选的终端颜色覆盖。",
         UiTextKey::SettingsSearchTheme => "搜索主题...",
-        UiTextKey::SettingsWindowBarModules => "窗口栏模块",
-        UiTextKey::SettingsWindowBarModulesDescription => {
-            "配置左、中、右区域的附加模块；项目标识和 Git 状态固定显示。"
-        }
-        UiTextKey::SettingsStatusBarEnabled => "显示状态栏",
-        UiTextKey::SettingsStatusBarEnabledDescription => "在工作区底部显示紧凑的通用状态栏。",
-        UiTextKey::SettingsStatusBarModules => "状态栏模块",
-        UiTextKey::SettingsStatusBarModulesDescription => {
-            "模块可以在左、中、右三个区域之间自由移动。"
-        }
         UiTextKey::SettingsBarLeft => "左侧",
         UiTextKey::SettingsBarCenter => "中间",
         UiTextKey::SettingsBarRight => "右侧",
-        UiTextKey::SettingsApplyBarLayout => "应用布局",
         UiTextKey::SettingsEditSettingsToml => "编辑设置 TOML",
         UiTextKey::SettingsEditSettingsTomlDescription => "打开应用设置文件进行高级编辑。",
-        UiTextKey::SettingsEditBarsToml => "编辑栏位 TOML",
-        UiTextKey::SettingsEditBarsTomlDescription => {
-            "打开独立的窗口栏与状态栏配置，便于编辑或分发。"
-        }
+        UiTextKey::SettingsEditBarsToml => "栏位",
+        UiTextKey::SettingsEditBarsTomlDescription => "在专用编辑器中编辑窗口栏与状态栏模板。",
         UiTextKey::SettingsShowPath => "显示路径",
         UiTextKey::SettingsThemesDirectory => "主题目录",
         UiTextKey::SettingsThemesDirectoryDescription => "打开用户主题 TOML 文件所在目录。",

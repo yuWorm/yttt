@@ -120,44 +120,6 @@ fn app_window_options_apply_configured_background_effect() {
 }
 
 #[test]
-fn shell_bar_defaults_keep_fixed_identity_out_of_configurable_window_modules() {
-    use yttt::config::bars::{ShellBarModule, ShellBarsSettings};
-
-    let bars = ShellBarsSettings::default();
-    let configured_window_modules = bars
-        .window
-        .layout
-        .left
-        .iter()
-        .chain(&bars.window.layout.center)
-        .chain(&bars.window.layout.right)
-        .collect::<Vec<_>>();
-
-    assert!(bars.window.layout.left.is_empty());
-    assert!(bars.window.layout.center.is_empty());
-    for fixed in [
-        ShellBarModule::ProjectName,
-        ShellBarModule::ProjectPath,
-        ShellBarModule::GitBranch,
-        ShellBarModule::GitChanges,
-    ] {
-        assert!(!configured_window_modules.contains(&&fixed));
-    }
-    assert_eq!(
-        &bars.window.layout.right[bars.window.layout.right.len() - 2..],
-        &[ShellBarModule::CommandPalette, ShellBarModule::Settings]
-    );
-    assert!(bars.status.enabled);
-    assert!(bars.status.layout.left.contains(&ShellBarModule::VimMode));
-    assert!(
-        bars.status
-            .layout
-            .right
-            .contains(&ShellBarModule::EditorPosition)
-    );
-}
-
-#[test]
 fn titlebar_preserves_complete_windows_paths_without_verbatim_prefixes() {
     assert_eq!(
         display_path_for_titlebar(r"\\?\D:\work\yttt"),

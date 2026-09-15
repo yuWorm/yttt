@@ -749,9 +749,9 @@ fn agent_exit_notification_does_not_reenter_workbench_entity(cx: &mut TestAppCon
 }
 
 #[gpui::test]
-fn window_bar_keeps_project_identity_and_git_fixed_outside_configured_modules(
-    cx: &mut TestAppContext,
-) {
+fn window_bar_identity_can_be_hidden_and_moved_by_configuration(cx: &mut TestAppContext) {
+    use crate::config::bars::ShellBarModule;
+
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
@@ -762,7 +762,7 @@ fn window_bar_keeps_project_identity_and_git_fixed_outside_configured_modules(
         .open_project(local_project(project_path), dev_fixture_layout())
         .unwrap();
 
-    let (_root, cx) = cx.add_window_view(|_, _| {
+    let (root, cx) = cx.add_window_view(|_, _| {
         let mut root =
             WorkbenchView::with_workspace_for_test_and_config_paths(workspace, config_paths);
         root.app_settings.bars.window.layout = Default::default();
@@ -774,11 +774,21 @@ fn window_bar_keeps_project_identity_and_git_fixed_outside_configured_modules(
     });
     cx.run_until_parked();
 
+    assert!(cx.debug_bounds("window-bar-project-name").is_none());
+    assert!(cx.debug_bounds("window-bar-project-path").is_none());
+    assert!(cx.debug_bounds("window-bar-git-branch").is_none());
+    assert!(cx.debug_bounds("window-bar-git-changes").is_none());
+
+    root.update(cx, |root, cx| {
+        root.app_settings.bars.window.layout.center = vec![ShellBarModule::ProjectName];
+        root.app_settings.bars.window.layout.right = vec![ShellBarModule::GitBranch];
+        cx.notify();
+    });
+    cx.refresh().unwrap();
     assert!(cx.debug_bounds("window-bar-project-name").is_some());
-    assert!(cx.debug_bounds("window-bar-project-path").is_some());
-    assert!(cx.debug_bounds("window-bar-identity-separator").is_some());
     assert!(cx.debug_bounds("window-bar-git-branch").is_some());
-    assert!(cx.debug_bounds("window-bar-git-changes").is_some());
+    assert!(cx.debug_bounds("window-bar-project-path").is_none());
+    assert!(cx.debug_bounds("window-bar-git-changes").is_none());
 }
 
 #[gpui::test]

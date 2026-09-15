@@ -1,3 +1,9 @@
+use super::{
+    layout_editor::{BarEditorRegion, LayoutEditorTarget},
+    layout_editor_controller::validate_bars_editor_source,
+    shell::bar::{BarHost, bar_sections_content},
+};
+
 use super::*;
 
 impl Render for WorkbenchView {
@@ -218,7 +224,7 @@ impl Render for WorkbenchView {
                 None => false,
             };
 
-        let (window_bar_sections, status_bar_sections) = self.shell_bar_sections(cx);
+        let (window_bar_sections, status_bar_sections) = self.shell_bar_sections(window, cx);
         let mut root = div()
             .debug_selector(|| "workbench-surface".to_string())
             .flex()
@@ -512,8 +518,60 @@ pub(super) fn split_child(child: Div, basis: f32) -> Div {
         .child(child)
 }
 
+const BAR_COMPONENT_IDS: [&str; 32] = [
+    "project-name",
+    "project-path",
+    "active-item",
+    "surface",
+    "vim-mode",
+    "vim-detail",
+    "vim-keys",
+    "editor-language",
+    "editor-position",
+    "editor-dirty",
+    "editor-diagnostics",
+    "terminal-title",
+    "terminal-state",
+    "git-branch",
+    "git-changes",
+    "agent-state",
+    "ssh",
+    "update",
+    "projects-count",
+    "terminals-count",
+    "tabs-count",
+    "editors-count",
+    "app-cpu",
+    "app-memory",
+    "system-cpu",
+    "system-memory",
+    "command-palette",
+    "settings",
+    "Space*5",
+    "text:Text",
+    "icon:settings",
+    "|",
+];
+
 pub(super) fn layout_toml_editor_window_content(
-    root: &WorkbenchView,
+    root: &mut WorkbenchView,
+    input: &Entity<InputState>,
+    window: &mut Window,
+    cx: &mut Context<WorkbenchView>,
+) -> Div {
+    if root
+        .overlays
+        .layout_toml_editor
+        .as_ref()
+        .is_some_and(|session| matches!(session.target(), LayoutEditorTarget::Bars))
+    {
+        return bars_toml_editor_window_content(root, input, window, cx);
+    }
+    standard_layout_toml_editor_window_content(root, input, cx)
+}
+
+fn standard_layout_toml_editor_window_content(
+    root: &mut WorkbenchView,
     input: &Entity<InputState>,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
@@ -561,45 +619,360 @@ pub(super) fn layout_toml_editor_window_content(
                     .child(error.to_string()),
             )
         })
+        .child(layout_toml_editor_footer(root, theme, style, cx))
+}
+
+fn bars_toml_editor_window_content(
+    root: &mut WorkbenchView,
+    input: &Entity<InputState>,
+    window: &mut Window,
+    cx: &mut Context<WorkbenchView>,
+) -> Div {
+    let appearance = root.theme_runtime();
+    let theme = appearance.ui;
+    let style = appearance.style;
+    let text = root.ui_text;
+    let Some((source, path, editor_appearance, error, query, selected_region)) = root
+        .overlays
+        .layout_toml_editor
+        .as_ref()
+        .filter(|session| matches!(session.target(), LayoutEditorTarget::Bars))
+        .map(|session| {
+            (
+                session.editor().value().to_string(),
+                session.editor().path().display().to_string(),
+                session.appearance().clone(),
+                session.editor().error().map(str::to_string),
+                session.bar_component_query().to_string(),
+                session.bar_insert_region(),
+            )
+        })
+    else {
+        return div();
+    };
+    let component_search = root.bar_component_search_input(window, cx);
+    let normalized_query = query.trim().to_ascii_lowercase();
+    let visible_components = BAR_COMPONENT_IDS.into_iter().filter(|component| {
+        normalized_query.is_empty()
+            || component
+                .as_bytes()
+                .windows(normalized_query.len())
+                .any(|part| part.eq_ignore_ascii_case(normalized_query.as_bytes()))
+    });
+    let preview = match validate_bars_editor_source(&source, &text) {
+        Ok(bars) => {
+            let performance_hint =
+                bars_preview_performance_hint(root, &bars).map(|key| text.get(key));
+            let window_preview =
+                bars_preview_surface(root, BarHost::Window, &bars.window.layout, window, cx);
+            let status_preview = bars.status.enabled.then(|| {
+                bars_preview_surface(root, BarHost::Status, &bars.status.layout, window, cx)
+            });
+            div()
+                .debug_selector(|| "bars-editor-preview".to_string())
+                .flex()
+                .flex_col()
+                .gap(style.spacing.sm)
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.text_muted)
+                        .child(text.get(UiTextKey::BarsEditorPreview)),
+                )
+                .child(window_preview)
+                .when_some(status_preview, |preview, status_preview| {
+                    preview.child(status_preview)
+                })
+                .when_some(performance_hint, |preview, hint| {
+                    preview.child(div().text_xs().text_color(theme.text_muted).child(hint))
+                })
+        }
+        Err(_) => div()
+            .debug_selector(|| "bars-editor-preview-unavailable".to_string())
+            .text_xs()
+            .text_color(theme.text_muted)
+            .child(text.get(UiTextKey::BarsEditorPreviewUnavailable)),
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .size_full()
+        .bg(appearance.editor.background)
         .child(
             div()
                 .flex_none()
-                .flex()
-                .items_center()
-                .justify_between()
-                .px(gpui::rems(0.75))
+                .px(gpui::rems(1.0))
                 .py(gpui::rems(0.375))
-                .border_t(style.border.hairline)
+                .border_b(style.border.hairline)
                 .border_color(theme.border_variant)
-                .bg(theme.statusbar_background)
-                .child(div().text_xs().text_color(theme.text_muted).child("TOML"))
+                .text_xs()
+                .text_color(theme.text_muted)
+                .truncate()
+                .child(path),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_1()
+                .min_h_0()
+                .child(
+                    div()
+                        .debug_selector(|| "bars-editor-components".to_string())
+                        .flex()
+                        .flex_col()
+                        .w(px(224.0))
+                        .flex_none()
+                        .min_h_0()
+                        .border_r(style.border.hairline)
+                        .border_color(theme.border_variant)
+                        .child(
+                            div()
+                                .px(gpui::rems(0.75))
+                                .pt(gpui::rems(0.75))
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(text.get(UiTextKey::BarsEditorComponents)),
+                        )
+                        .when_some(component_search, |panel, search| {
+                            panel.child(
+                                div()
+                                    .debug_selector(|| "bars-editor-component-search".to_string())
+                                    .px(gpui::rems(0.75))
+                                    .py(gpui::rems(0.5))
+                                    .child(
+                                        yttt_input(&search, YtttInputKind::Search, theme, style)
+                                            .small(),
+                                    ),
+                            )
+                        })
+                        .child(
+                            div()
+                                .id("bars-component-list")
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_y_scroll()
+                                .px(gpui::rems(0.5))
+                                .pb(gpui::rems(0.75))
+                                .gap(style.spacing.xs)
+                                .children(visible_components.map(|component| {
+                                    settings_button(
+                                        format!("bars-editor-insert-{component}"),
+                                        component,
+                                        false,
+                                        theme,
+                                        cx,
+                                        cx.listener(move |this, _, _window, cx| {
+                                            this.insert_bar_component(component);
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .debug_selector(move || {
+                                        format!("bars-editor-insert-{component}")
+                                    })
+                                    .w_full()
+                                })),
+                        ),
+                )
                 .child(
                     div()
                         .flex()
-                        .items_center()
-                        .gap(style.spacing.sm)
-                        .child(settings_button(
-                            "layout-toml-editor-cancel",
-                            root.ui_text.get(UiTextKey::Cancel),
-                            false,
-                            theme,
-                            cx,
-                            cx.listener(|this, _, _window, cx| {
-                                this.cancel_layout_toml_editor();
-                                cx.notify();
-                            }),
-                        ))
-                        .child(settings_button(
-                            "layout-toml-editor-save",
-                            root.ui_text.get(UiTextKey::SettingsSave),
-                            true,
-                            theme,
-                            cx,
-                            cx.listener(|this, _, _window, cx| {
-                                let _ = this.save_layout_toml_editor();
-                                cx.notify();
-                            }),
-                        )),
+                        .flex_col()
+                        .flex_1()
+                        .min_w_0()
+                        .min_h_0()
+                        .child(
+                            div()
+                                .debug_selector(|| "layout-editor-content".into())
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_hidden()
+                                .child(
+                                    styled_code_editor_input(input, &editor_appearance).h_full(),
+                                ),
+                        )
+                        .when_some(error, |editor, error| {
+                            editor.child(
+                                div()
+                                    .px(gpui::rems(1.0))
+                                    .py(gpui::rems(0.5))
+                                    .border_t(style.border.hairline)
+                                    .border_color(theme.border_variant)
+                                    .text_sm()
+                                    .text_color(theme.danger)
+                                    .child(error),
+                            )
+                        })
+                        .child(
+                            div()
+                                .debug_selector(|| "bars-editor-insert-region".to_string())
+                                .flex_none()
+                                .flex()
+                                .flex_wrap()
+                                .items_center()
+                                .gap(style.spacing.xs)
+                                .px(gpui::rems(0.75))
+                                .py(gpui::rems(0.5))
+                                .border_t(style.border.hairline)
+                                .border_color(theme.border_variant)
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.text_muted)
+                                        .child(text.get(UiTextKey::BarsEditorInsertInto)),
+                                )
+                                .children(BarEditorRegion::ALL.into_iter().map(|region| {
+                                    settings_button(
+                                        format!("bars-editor-region-{}", region.path()),
+                                        bar_editor_region_label(region, text),
+                                        region == selected_region,
+                                        theme,
+                                        cx,
+                                        cx.listener(move |this, _, _window, cx| {
+                                            this.set_bar_insert_region(region);
+                                            cx.notify();
+                                        }),
+                                    )
+                                })),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .p(gpui::rems(0.75))
+                                .border_t(style.border.hairline)
+                                .border_color(theme.border_variant)
+                                .bg(theme.statusbar_background)
+                                .child(preview),
+                        ),
+                ),
+        )
+        .child(layout_toml_editor_footer(root, theme, style, cx))
+}
+
+fn bars_preview_performance_hint(
+    root: &WorkbenchView,
+    bars: &crate::config::bars::ShellBarsSettings,
+) -> Option<UiTextKey> {
+    use crate::config::bars::ShellBarModule;
+
+    let performance_modules = [
+        ShellBarModule::AppCpu,
+        ShellBarModule::AppMemory,
+        ShellBarModule::SystemCpu,
+        ShellBarModule::SystemMemory,
+    ];
+    let requests_performance = performance_modules
+        .iter()
+        .any(|module| bars.contains(module));
+    let requests_application_performance = [ShellBarModule::AppCpu, ShellBarModule::AppMemory]
+        .iter()
+        .any(|module| bars.contains(module));
+    if requests_application_performance && !root.app_settings.general.performance_metrics_enabled {
+        return Some(UiTextKey::BarsEditorPreviewPerformanceDisabled);
+    }
+    (requests_performance
+        && performance_modules
+            .iter()
+            .any(|module| bars.contains(module) && !root.app_settings.bars.contains(module)))
+    .then_some(UiTextKey::BarsEditorPreviewPerformanceCached)
+}
+
+fn bars_preview_surface(
+    root: &WorkbenchView,
+    host: BarHost,
+    layout: &crate::config::bars::BarLayoutSettings,
+    window: &mut Window,
+    cx: &mut Context<WorkbenchView>,
+) -> Div {
+    let appearance = root.theme_runtime();
+    let selector = match host {
+        BarHost::Window => "bars-editor-window-preview",
+        BarHost::Status => "bars-editor-status-preview",
+    };
+    div()
+        .debug_selector(move || selector.to_string())
+        .flex()
+        .items_center()
+        .min_h(appearance.style.controls.button_height)
+        .px(gpui::rems(0.5))
+        .rounded(appearance.style.radius.compact)
+        .border(appearance.style.border.hairline)
+        .border_color(appearance.ui.border_variant)
+        .bg(appearance.ui.app_background)
+        .child(bar_sections_content(
+            root.shell_bar_preview_sections(host, layout, window, cx),
+            host,
+            appearance.style,
+        ))
+}
+
+fn bar_editor_region_label(region: BarEditorRegion, text: UiText) -> String {
+    let (host, position) = match region {
+        BarEditorRegion::WindowLeft => (UiTextKey::BarsEditorWindow, UiTextKey::SettingsBarLeft),
+        BarEditorRegion::WindowCenter => {
+            (UiTextKey::BarsEditorWindow, UiTextKey::SettingsBarCenter)
+        }
+        BarEditorRegion::WindowRight => (UiTextKey::BarsEditorWindow, UiTextKey::SettingsBarRight),
+        BarEditorRegion::StatusLeft => (UiTextKey::BarsEditorStatus, UiTextKey::SettingsBarLeft),
+        BarEditorRegion::StatusCenter => {
+            (UiTextKey::BarsEditorStatus, UiTextKey::SettingsBarCenter)
+        }
+        BarEditorRegion::StatusRight => (UiTextKey::BarsEditorStatus, UiTextKey::SettingsBarRight),
+    };
+    format!("{} {}", text.get(host), text.get(position))
+}
+
+fn layout_toml_editor_footer(
+    root: &mut WorkbenchView,
+    theme: WorkbenchTheme,
+    style: UiStyle,
+    cx: &mut Context<WorkbenchView>,
+) -> Div {
+    div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_between()
+        .px(gpui::rems(0.75))
+        .py(gpui::rems(0.375))
+        .border_t(style.border.hairline)
+        .border_color(theme.border_variant)
+        .bg(theme.statusbar_background)
+        .child(div().text_xs().text_color(theme.text_muted).child("TOML"))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(style.spacing.sm)
+                .child(
+                    settings_button(
+                        "layout-toml-editor-cancel",
+                        root.ui_text.get(UiTextKey::Cancel),
+                        false,
+                        theme,
+                        cx,
+                        cx.listener(|this, _, _window, cx| {
+                            this.cancel_layout_toml_editor();
+                            cx.notify();
+                        }),
+                    )
+                    .debug_selector(|| "layout-toml-editor-cancel".to_string()),
+                )
+                .child(
+                    settings_button(
+                        "layout-toml-editor-save",
+                        root.ui_text.get(UiTextKey::SettingsSave),
+                        true,
+                        theme,
+                        cx,
+                        cx.listener(|this, _, _window, cx| {
+                            let _ = this.save_layout_toml_editor_with_runtime_refresh(cx);
+                            cx.notify();
+                        }),
+                    )
+                    .debug_selector(|| "layout-toml-editor-save".to_string()),
                 ),
         )
 }

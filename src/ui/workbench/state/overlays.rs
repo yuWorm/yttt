@@ -24,6 +24,8 @@ pub(in super::super) struct OverlayControllerState {
     pub(in super::super) layout_toml_input: Option<Entity<InputState>>,
     pub(in super::super) layout_toml_input_subscription: Option<Subscription>,
     pub(in super::super) layout_toml_input_needs_focus: bool,
+    pub(in super::super) bar_component_search_input: Option<Entity<InputState>>,
+    pub(in super::super) bar_component_search_input_subscription: Option<Subscription>,
     pub(in super::super) git_diff_panel: Option<GitDiffPanel>,
     pub(in super::super) git_diff_generation: u64,
     pub(in super::super) pending_git_diff_load: Option<(ProjectId, ProjectLocation, u64)>,

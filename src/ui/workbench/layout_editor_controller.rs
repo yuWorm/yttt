@@ -1,3 +1,6 @@
+use super::layout_editor::BarEditorRegion;
+use crate::config::bars::ShellBarsSettings;
+
 use super::*;
 
 impl WorkbenchView {
@@ -64,6 +67,42 @@ impl WorkbenchView {
 
     pub fn open_layout_toml_editor(&mut self) -> Result<(), WorkbenchError> {
         self.open_default_layout_editor()
+    }
+
+    pub fn open_bars_toml_editor(&mut self) -> Result<(), WorkbenchError> {
+        let path = crate::config::scope::device_bars_file()
+            .or_else(|| {
+                self.config_paths
+                    .is_test_fixture()
+                    .then(|| self.config_paths.bars_file())
+            })
+            .ok_or_else(|| {
+                WorkbenchError::SettingsUnavailable("Device preferences are not bound.".to_string())
+            })?;
+        let value = toml::to_string_pretty(&self.app_settings.bars).map_err(|source| {
+            WorkbenchError::LayoutTomlEditor(format!(
+                "failed to serialize bars TOML for {}: {source}",
+                path.display()
+            ))
+        })?;
+
+        self.overlays.layout_toml_editor = Some(LayoutEditorSession::new(
+            LayoutEditorTarget::Bars,
+            CodeEditorState::new(
+                path,
+                CodeEditorConfig::new(
+                    self.ui_text.get(UiTextKey::BarsEditorTitle),
+                    CodeEditorLanguageMode::Explicit(EditorLanguageId::Toml),
+                )
+                .placeholder_text(self.ui_text.get(UiTextKey::BarsEditorPlaceholder))
+                .with_rows(24)
+                .with_editor_settings(&self.app_settings.editor),
+                value,
+            ),
+            EditorAppearance::from(&self.app_settings.editor),
+        ));
+        self.finish_opening_layout_editor();
+        Ok(())
     }
 
     pub fn open_default_layout_editor(&mut self) -> Result<(), WorkbenchError> {
@@ -215,6 +254,7 @@ impl WorkbenchView {
 
     pub(super) fn finish_opening_layout_editor(&mut self) {
         self.reset_layout_toml_input();
+        self.reset_bar_component_search_input();
         self.overlays.layout_toml_input_needs_focus = true;
         self.load_error = None;
         self.auxiliary_windows
@@ -230,15 +270,41 @@ impl WorkbenchView {
     }
 
     pub fn save_layout_toml_editor(&mut self) -> Result<(), WorkbenchError> {
-        if !self.require_shared_mutation_control() {
-            return Ok(());
-        }
         let Some(session) = self.overlays.layout_toml_editor.clone() else {
             return Ok(());
         };
+        if !matches!(session.target(), LayoutEditorTarget::Bars)
+            && !self.require_shared_mutation_control()
+        {
+            return Ok(());
+        }
         let editor = session.editor();
 
         match session.target() {
+            LayoutEditorTarget::Bars => {
+                let bars = match validate_bars_editor_source(editor.value(), &self.ui_text) {
+                    Ok(bars) => bars,
+                    Err((source, message)) => {
+                        self.set_layout_toml_editor_error(source, message);
+                        return Ok(());
+                    }
+                };
+                self.app_settings.bars = bars;
+                match self.persist_app_settings(true) {
+                    Ok(true) => {}
+                    Ok(false) => return Ok(()),
+                    Err(error) => {
+                        let message = localized_layout_editor_error(
+                            &self.ui_text,
+                            UiTextKey::BarsEditorSaveFailed,
+                            error,
+                        );
+                        self.set_layout_toml_editor_error("bars", message.clone());
+                        self.load_error = Some(message);
+                        return Ok(());
+                    }
+                }
+            }
             LayoutEditorTarget::Default => {
                 let template = match toml::from_str::<DefaultLayoutTemplate>(editor.value()) {
                     Ok(template) => template,
@@ -294,15 +360,33 @@ impl WorkbenchView {
 
         self.overlays.layout_toml_editor = None;
         self.reset_layout_toml_input();
+        self.reset_bar_component_search_input();
         self.load_error = None;
         self.restore_layout_editor_owner();
         self.sync_input_owner_state();
         Ok(())
     }
 
+    pub fn save_layout_toml_editor_with_runtime_refresh(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Result<(), WorkbenchError> {
+        let saving_bars = self
+            .overlays
+            .layout_toml_editor
+            .as_ref()
+            .is_some_and(|session| matches!(session.target(), LayoutEditorTarget::Bars));
+        self.save_layout_toml_editor()?;
+        if saving_bars && !self.layout_toml_editor_is_open() {
+            self.sync_performance_monitoring(cx);
+        }
+        Ok(())
+    }
+
     pub fn cancel_layout_toml_editor(&mut self) {
         self.overlays.layout_toml_editor = None;
         self.reset_layout_toml_input();
+        self.reset_bar_component_search_input();
         self.restore_layout_editor_owner();
         self.sync_input_owner_state();
     }
@@ -342,6 +426,98 @@ impl WorkbenchView {
         Some(input)
     }
 
+    pub(super) fn bar_component_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<InputState>> {
+        let query = self
+            .overlays
+            .layout_toml_editor
+            .as_ref()
+            .filter(|session| matches!(session.target(), LayoutEditorTarget::Bars))
+            .map(|session| session.bar_component_query().to_string())?;
+        let input = if let Some(input) = &self.overlays.bar_component_search_input {
+            input.clone()
+        } else {
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(self.ui_text.get(UiTextKey::BarsEditorSearchComponents))
+                    .default_value(query)
+            });
+            let subscription =
+                cx.subscribe_in(&input, window, Self::on_bar_component_search_input_event);
+            self.overlays.bar_component_search_input = Some(input.clone());
+            self.overlays.bar_component_search_input_subscription = Some(subscription);
+            input
+        };
+        Some(input)
+    }
+
+    pub(super) fn set_bar_insert_region(&mut self, region: BarEditorRegion) {
+        if let Some(session) = &mut self.overlays.layout_toml_editor
+            && matches!(session.target(), LayoutEditorTarget::Bars)
+        {
+            session.set_bar_insert_region(region);
+        }
+    }
+
+    pub(super) fn insert_bar_component(&mut self, component: &str) {
+        let Some((source, region)) =
+            self.overlays
+                .layout_toml_editor
+                .as_ref()
+                .and_then(|session| {
+                    matches!(session.target(), LayoutEditorTarget::Bars).then(|| {
+                        (
+                            session.editor().value().to_string(),
+                            session.bar_insert_region(),
+                        )
+                    })
+                })
+        else {
+            return;
+        };
+        let mut bars = match validate_bars_editor_source(&source, &self.ui_text) {
+            Ok(bars) => bars,
+            Err((source, message)) => {
+                self.set_layout_toml_editor_error(source, message);
+                return;
+            }
+        };
+        let Ok(mut nodes) = crate::config::bars::parse_bar_template(&format!("[{component}]"))
+        else {
+            return;
+        };
+        let Some(module) = nodes.pop() else {
+            return;
+        };
+        match region {
+            BarEditorRegion::WindowLeft => bars.window.layout.left.push(module),
+            BarEditorRegion::WindowCenter => bars.window.layout.center.push(module),
+            BarEditorRegion::WindowRight => bars.window.layout.right.push(module),
+            BarEditorRegion::StatusLeft => bars.status.layout.left.push(module),
+            BarEditorRegion::StatusCenter => bars.status.layout.center.push(module),
+            BarEditorRegion::StatusRight => bars.status.layout.right.push(module),
+        }
+        match toml::to_string_pretty(&bars) {
+            Ok(source) => self.set_layout_toml_editor_value(source),
+            Err(error) => self.set_layout_toml_editor_error(
+                region.path(),
+                localized_layout_editor_error(
+                    &self.ui_text,
+                    UiTextKey::BarsEditorSaveFailed,
+                    error,
+                ),
+            ),
+        }
+    }
+
+    fn reset_bar_component_search_input(&mut self) {
+        self.overlays.bar_component_search_input = None;
+        self.overlays.bar_component_search_input_subscription = None;
+    }
+
     pub(super) fn on_layout_toml_input_event(
         &mut self,
         input: &Entity<InputState>,
@@ -351,14 +527,47 @@ impl WorkbenchView {
     ) {
         match event {
             InputEvent::Change => {
+                let value = input.read(cx).value().to_string();
+                let is_bars_editor = self
+                    .overlays
+                    .layout_toml_editor
+                    .as_ref()
+                    .is_some_and(|session| matches!(session.target(), LayoutEditorTarget::Bars));
                 if let Some(session) = &mut self.overlays.layout_toml_editor {
-                    session
-                        .editor_mut()
-                        .set_value(input.read(cx).value().to_string());
-                    cx.notify();
+                    session.editor_mut().set_value(value.clone());
                 }
+                if is_bars_editor {
+                    match validate_bars_editor_source(&value, &self.ui_text) {
+                        Ok(_) => {
+                            if let Some(session) = &mut self.overlays.layout_toml_editor {
+                                session.editor_mut().clear_error();
+                                session.editor_mut().clear_diagnostics();
+                            }
+                        }
+                        Err((source, message)) => {
+                            self.set_layout_toml_editor_error(source, message);
+                        }
+                    }
+                }
+                cx.notify();
             }
             InputEvent::PressEnter { .. } | InputEvent::Focus | InputEvent::Blur => {}
+        }
+    }
+
+    fn on_bar_component_search_input_event(
+        &mut self,
+        input: &Entity<InputState>,
+        event: &InputEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(event, InputEvent::Change)
+            && let Some(session) = &mut self.overlays.layout_toml_editor
+            && matches!(session.target(), LayoutEditorTarget::Bars)
+        {
+            session.set_bar_component_query(input.read(cx).value().to_string());
+            cx.notify();
         }
     }
 }
@@ -397,6 +606,109 @@ fn localized_layout_editor_error(
     detail: impl std::fmt::Display,
 ) -> String {
     format!("{}: {detail}", ui_text.get(key))
+}
+
+pub(super) fn validate_bars_editor_source(
+    source: &str,
+    ui_text: &UiText,
+) -> Result<ShellBarsSettings, (&'static str, String)> {
+    let mut bars = toml::from_str::<ShellBarsSettings>(source).map_err(|error| {
+        // Flattened Serde tables can attach a template error to the section header.
+        // Recover the actual region from parsed TOML, including multiline/quoted values.
+        if let Ok(document) = toml::from_str::<toml::Value>(source) {
+            for (host, region, field) in [
+                ("window", "left", "window.left"),
+                ("window", "center", "window.center"),
+                ("window", "right", "window.right"),
+                ("status", "left", "status.left"),
+                ("status", "center", "status.center"),
+                ("status", "right", "status.right"),
+            ] {
+                if let Some(template) = document
+                    .get(host)
+                    .and_then(|table| table.get(region))
+                    .and_then(toml::Value::as_str)
+                    && let Err(message) = crate::config::bars::parse_bar_template(template)
+                {
+                    return (
+                        field,
+                        format!(
+                            "{}: {field}: {message}",
+                            ui_text.get(UiTextKey::BarsEditorValidationFailed)
+                        ),
+                    );
+                }
+            }
+        }
+        (
+            "toml",
+            localized_bars_editor_parse_error(source, &error, ui_text),
+        )
+    })?;
+    if let Some(issue) = bars.validate().into_iter().next() {
+        return Err((
+            issue.field,
+            format!(
+                "{}: {} ({})",
+                ui_text.get(UiTextKey::BarsEditorValidationFailed),
+                issue.field,
+                issue.value
+            ),
+        ));
+    }
+    Ok(bars)
+}
+
+fn localized_bars_editor_parse_error(
+    source: &str,
+    error: &toml::de::Error,
+    ui_text: &UiText,
+) -> String {
+    let Some(span) = error.span() else {
+        return localized_layout_editor_error(ui_text, UiTextKey::BarsEditorParseFailed, error);
+    };
+    let offset = span.start.min(source.len());
+    let before = source.get(..offset).unwrap_or(source);
+    let line = before.bytes().filter(|byte| *byte == b'\n').count() + 1;
+    let column = before
+        .rsplit_once('\n')
+        .map_or(before.chars().count() + 1, |(_, line)| {
+            line.chars().count() + 1
+        });
+    let region = bars_editor_region_at_line(source, line)
+        .map(|region| format!("{region}, "))
+        .unwrap_or_default();
+    format!(
+        "{}: {region}line {line}, column {column}: {error}",
+        ui_text.get(UiTextKey::BarsEditorParseFailed)
+    )
+}
+
+fn bars_editor_region_at_line(source: &str, line: usize) -> Option<&'static str> {
+    let field = source.lines().nth(line.checked_sub(1)?).and_then(|line| {
+        ["left", "center", "right", "enabled"]
+            .into_iter()
+            .find(|field| line.trim_start().starts_with(*field))
+    })?;
+    let section = source
+        .lines()
+        .take(line)
+        .filter_map(|line| match line.trim() {
+            "[window]" => Some("window"),
+            "[status]" => Some("status"),
+            _ => None,
+        })
+        .last()?;
+    match (section, field) {
+        ("window", "left") => Some("window.left"),
+        ("window", "center") => Some("window.center"),
+        ("window", "right") => Some("window.right"),
+        ("status", "left") => Some("status.left"),
+        ("status", "center") => Some("status.center"),
+        ("status", "right") => Some("status.right"),
+        ("status", "enabled") => Some("status.enabled"),
+        _ => None,
+    }
 }
 
 fn validate_project_editor_source(

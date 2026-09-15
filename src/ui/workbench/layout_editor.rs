@@ -16,8 +16,41 @@ pub enum ProjectLayoutEditorFormat {
     InvalidPersonal,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BarEditorRegion {
+    WindowLeft,
+    WindowCenter,
+    WindowRight,
+    StatusLeft,
+    StatusCenter,
+    StatusRight,
+}
+
+impl BarEditorRegion {
+    pub const ALL: [Self; 6] = [
+        Self::WindowLeft,
+        Self::WindowCenter,
+        Self::WindowRight,
+        Self::StatusLeft,
+        Self::StatusCenter,
+        Self::StatusRight,
+    ];
+
+    pub fn path(self) -> &'static str {
+        match self {
+            Self::WindowLeft => "window.left",
+            Self::WindowCenter => "window.center",
+            Self::WindowRight => "window.right",
+            Self::StatusLeft => "status.left",
+            Self::StatusCenter => "status.center",
+            Self::StatusRight => "status.right",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LayoutEditorTarget {
+    Bars,
     Default,
     Project {
         project_id: ProjectId,
@@ -29,6 +62,7 @@ pub enum LayoutEditorTarget {
 impl LayoutEditorTarget {
     pub fn kind(&self) -> &'static str {
         match self {
+            Self::Bars => "bars",
             Self::Default => "default",
             Self::Project { format, .. } => match format {
                 ProjectLayoutEditorFormat::ProjectConfig => "project_config",
@@ -41,6 +75,7 @@ impl LayoutEditorTarget {
 
     pub fn input_scope_id(&self) -> &'static str {
         match self {
+            Self::Bars => "editor.bars",
             Self::Default => "editor.default_layout",
             Self::Project { .. } => "editor.project_layout",
         }
@@ -52,6 +87,8 @@ pub struct LayoutEditorSession {
     target: LayoutEditorTarget,
     editor: CodeEditorState,
     appearance: EditorAppearance,
+    bar_component_query: String,
+    bar_insert_region: BarEditorRegion,
 }
 
 impl LayoutEditorSession {
@@ -64,6 +101,8 @@ impl LayoutEditorSession {
             target,
             editor,
             appearance,
+            bar_component_query: String::new(),
+            bar_insert_region: BarEditorRegion::WindowLeft,
         }
     }
 
@@ -85,6 +124,22 @@ impl LayoutEditorSession {
 
     pub fn set_appearance(&mut self, appearance: EditorAppearance) {
         self.appearance = appearance;
+    }
+
+    pub fn bar_component_query(&self) -> &str {
+        &self.bar_component_query
+    }
+
+    pub fn set_bar_component_query(&mut self, query: impl Into<String>) {
+        self.bar_component_query = query.into();
+    }
+
+    pub fn bar_insert_region(&self) -> BarEditorRegion {
+        self.bar_insert_region
+    }
+
+    pub fn set_bar_insert_region(&mut self, region: BarEditorRegion) {
+        self.bar_insert_region = region;
     }
 }
 

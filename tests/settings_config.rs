@@ -2,7 +2,10 @@ use std::path::{Path, PathBuf};
 
 use tempfile::tempdir;
 use yttt::config::{
-    bars::{BarModuleSettings, BarsLoadWarning, ShellBarModule, ShellBarsSettings, load_bars},
+    bars::{
+        BarModuleSettings, BarsLoadWarning, ShellBarModule, ShellBarsSettings, bar_icon_path,
+        format_bar_template, load_bars, parse_bar_template, save_bars,
+    },
     default_layout::BuiltinAgent,
     paths::AppConfigPaths,
     scope::save_scoped_settings,
@@ -655,13 +658,102 @@ fn shell_bar_layout_and_module_options_round_trip_in_standalone_file() {
 }
 
 #[test]
-fn invalid_fixed_and_unknown_window_modules_are_removed_and_aliases_are_canonicalized() {
+fn bar_template_round_trips_unicode_escapes_icons_and_duplicates() {
+    let template =
+        r" [Settings] [Space] [Space*5] [text: 你好: \[x\] \\ ] [icon:CPU] [|] [settings] ";
+
+    let modules = parse_bar_template(template).unwrap();
+
+    assert_eq!(
+        modules,
+        vec![
+            ShellBarModule::Settings,
+            ShellBarModule::Space(1),
+            ShellBarModule::Space(5),
+            ShellBarModule::Text(" 你好: [x] \\ ".to_string()),
+            ShellBarModule::Icon("cpu".to_string()),
+            ShellBarModule::Separator,
+            ShellBarModule::Settings,
+        ]
+    );
+    assert_eq!(
+        format_bar_template(&modules),
+        r"[settings] [Space] [Space*5] [text: 你好: \[x\] \\ ] [icon:cpu] [|] [settings]"
+    );
+    assert_eq!(
+        bar_icon_path("MeMoRy-StIcK"),
+        Some("icons/memory-stick.svg")
+    );
+}
+
+#[test]
+fn bar_template_rejects_invalid_tokens() {
+    for template in [
+        "[space*0]",
+        "[space*257]",
+        "[icon:not-bundled]",
+        "[not-a-module]",
+        r"[text:\q]",
+    ] {
+        assert!(parse_bar_template(template).is_err(), "{template}");
+    }
+    assert_eq!(parse_bar_template(" \n\t ").unwrap(), Vec::new());
+}
+
+#[test]
+fn legacy_array_bars_preserve_window_identity_and_save_templates() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(
+        paths.bars_file(),
+        r#"
+[window]
+left = ["project-name", "active-item", "active-item"]
+center = ["project-path"]
+right = ["settings"]
+"#,
+    )
+    .unwrap();
+
+    let loaded = load_bars(&paths).unwrap();
+
+    assert_eq!(
+        format_bar_template(&loaded.settings.window.layout.left),
+        "[project-name] [|] [project-path] [|] [git-branch] [|] [git-changes] [active-item] [active-item]"
+    );
+    assert!(loaded.settings.window.layout.center.is_empty());
+    assert!(loaded.warnings.is_empty());
+    save_bars(&paths, &loaded.settings).unwrap();
+
+    let saved: toml::Value =
+        toml::from_str(&std::fs::read_to_string(paths.bars_file()).unwrap()).unwrap();
+    assert!(saved["window"]["left"].is_str());
+    assert!(saved["window"]["center"].is_str());
+    assert!(saved["window"]["right"].is_str());
+}
+
+#[test]
+fn empty_window_template_left_is_intentionally_empty() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    std::fs::create_dir_all(paths.config_dir()).unwrap();
+    std::fs::write(paths.bars_file(), "[window]\nleft = \"\"\n").unwrap();
+
+    let loaded = load_bars(&paths).unwrap();
+
+    assert!(loaded.settings.window.layout.left.is_empty());
+    assert!(loaded.warnings.is_empty());
+}
+
+#[test]
+fn invalid_legacy_modules_are_removed_without_filtering_duplicates_or_identity_settings() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
     std::fs::create_dir_all(paths.config_dir()).unwrap();
     let source = r#"
 [window]
-left = ["project-name", "missing-module", "project-name"]
+left = ["project-name", "missing-module", "active-item", "active-item"]
 center = ["project-name", "active_item"]
 right = ["settings"]
 
@@ -676,7 +768,10 @@ max_width = 120.0
 
     let loaded = load_bars(&paths).unwrap();
 
-    assert!(loaded.settings.window.layout.left.is_empty());
+    assert_eq!(
+        format_bar_template(&loaded.settings.window.layout.left),
+        "[project-name] [|] [project-path] [|] [git-branch] [|] [git-changes] [active-item] [active-item]"
+    );
     assert_eq!(
         loaded.settings.window.layout.center,
         vec![ShellBarModule::ActiveItem]
@@ -685,13 +780,12 @@ max_width = 120.0
         loaded.settings.window.layout.right,
         vec![ShellBarModule::Settings]
     );
-    assert!(
-        !loaded
-            .settings
-            .window
-            .layout
-            .modules
-            .contains_key("project-path")
+    assert_eq!(
+        loaded.settings.window.layout.modules["project-path"],
+        BarModuleSettings {
+            max_width: None,
+            hide_when_empty: false,
+        }
     );
     assert!(
         !loaded
@@ -741,8 +835,8 @@ hide_when_empty = false
 
     assert!(!loaded.settings.bars.status.enabled);
     assert_eq!(
-        loaded.settings.bars.window.layout.left,
-        vec![ShellBarModule::ActiveItem]
+        format_bar_template(&loaded.settings.bars.window.layout.left),
+        "[project-name] [|] [project-path] [|] [git-branch] [|] [git-changes] [active-item]"
     );
     assert!(loaded.warnings.is_empty());
     assert_eq!(
@@ -757,7 +851,7 @@ fn standalone_bars_take_precedence_without_rewriting_legacy_settings() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
     let legacy = "[bars.status]\nenabled = false\nleft = [\"surface\"]\n";
-    let standalone = "[status]\nenabled = true\nleft = [\"active-item\"]\n";
+    let standalone = "[status]\nenabled = true\nleft = \"[active-item]\"\n";
     std::fs::write(paths.settings_file(), legacy).unwrap();
     std::fs::write(paths.bars_file(), standalone).unwrap();
 

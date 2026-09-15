@@ -1,3 +1,4 @@
+use super::super::layout_editor_controller::validate_bars_editor_source;
 use super::super::*;
 use crate::config::scope::SettingsScope;
 
@@ -264,6 +265,17 @@ impl WorkbenchView {
         let paths = self.config_paths.clone();
         let confirmed = self.settings.confirmed_settings.clone();
         let retained = (settings.clone(), confirmed.clone(), bars_only);
+        let bars_editor_source = self
+            .overlays
+            .layout_toml_editor
+            .as_ref()
+            .filter(|session| {
+                bars_only
+                    && matches!(session.target(), LayoutEditorTarget::Bars)
+                    && validate_bars_editor_source(session.editor().value(), &self.ui_text)
+                        .is_ok_and(|bars| bars == settings.bars)
+            })
+            .map(|session| session.editor().value().to_string());
         let host_changed = crate::config::scope::host_settings_changed(&settings, &confirmed);
         if host_changed {
             self.retain_pending_settings_recovery(
@@ -296,6 +308,15 @@ impl WorkbenchView {
             let result = task.await;
             let _ = this.update_in(cx, |root, window, cx| {
                 root.settings.settings_save_in_flight = false;
+                let same_bars_draft = bars_editor_source.as_deref().is_some_and(|source| {
+                    root.overlays
+                        .layout_toml_editor
+                        .as_ref()
+                        .is_some_and(|session| {
+                            matches!(session.target(), LayoutEditorTarget::Bars)
+                                && session.editor().value() == source
+                        })
+                });
                 match result {
                     Ok((settings, theme, icons)) => {
                         root.settings.settings_save_error = None;
@@ -310,8 +331,14 @@ impl WorkbenchView {
                             );
                         }
                         root.apply_confirmed_settings(settings, theme, icons, window, cx);
+                        if same_bars_draft {
+                            root.cancel_layout_toml_editor();
+                        }
                     }
                     Err(error) => {
+                        if same_bars_draft {
+                            root.set_layout_toml_editor_error("bars", error.clone());
+                        }
                         root.load_error = Some(format!("Settings were not saved: {error}"));
                         root.settings.settings_save_error = Some(error);
                         root.failed_settings_save = Some(retained);

@@ -1,4 +1,7 @@
-use gpui::{AnyElement, Context, IntoElement as _, div, prelude::*, px};
+use gpui::{
+    AnyElement, Context, Font, FontFeatures, FontStyle, FontWeight, IntoElement as _, TextRun,
+    Window, black, div, prelude::*, px,
+};
 use gpui_component::{Icon, IconName, StyledExt};
 use yttt_agent_core::AgentViewState;
 use yttt_protocol::ssh::SshConnectionState as ConnectionState;
@@ -6,24 +9,17 @@ use yttt_protocol::ssh::SshConnectionState as ConnectionState;
 use super::{WorkbenchView, performance::PerformanceInfo, state::update::UpdateStatus};
 use crate::{
     commands::CommandId,
-    config::bars::{BarLayoutSettings, BarModuleSettings, ShellBarModule},
+    config::bars::{BarLayoutSettings, BarModuleSettings, ShellBarModule, bar_icon_path},
     model::project::ProjectLocation,
     ui::{
         editor::{EditorDiagnosticSeverity, WorkItemId},
         primitives::icon_button::{YtttIconButtonKind, yttt_icon_button},
         terminal::status::{agent_status_label, project_agent_status},
-        theme::{WorkbenchTheme, current_ui_style, current_workbench_theme},
+        theme::{UiStyle, WorkbenchTheme, current_ui_style, current_workbench_theme},
         vim::{VimStatus, WorkbenchVimMode},
         workbench::shell::bar::{BarHost, BarSections},
     },
 };
-
-const FIXED_WINDOW_IDENTITY_MODULES: &[ShellBarModule] = &[
-    ShellBarModule::ProjectName,
-    ShellBarModule::ProjectPath,
-    ShellBarModule::GitBranch,
-    ShellBarModule::GitChanges,
-];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum BarTone {
@@ -39,6 +35,7 @@ enum BarTone {
 struct BarModuleView {
     text: Option<String>,
     icon: Option<IconName>,
+    icon_path: Option<&'static str>,
     tooltip: Option<String>,
     tone: BarTone,
     action: Option<CommandId>,
@@ -52,6 +49,7 @@ impl BarModuleView {
         Self {
             text: Some(text.into()),
             icon: None,
+            icon_path: None,
             tooltip: None,
             tone: BarTone::Muted,
             action: None,
@@ -110,34 +108,64 @@ struct ShellBarData {
     performance: Option<PerformanceInfo>,
 }
 
+enum BarSectionEntry {
+    Content(AnyElement),
+    Space(AnyElement),
+    Separator(AnyElement),
+}
+
 impl WorkbenchView {
     pub(super) fn shell_bar_sections(
         &self,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> (BarSections, Option<BarSections>) {
-        let data = self.shell_bar_data(cx);
-        let mut window = self.render_bar_sections(
+        let data = self.shell_bar_data(cx, None);
+        let window_sections = self.render_bar_sections(
             BarHost::Window,
             &self.app_settings.bars.window.layout,
             &data,
+            None,
+            true,
+            window,
             cx,
         );
-        let mut identity = self.render_fixed_window_identity(&data, cx);
-        identity.append(&mut window.left);
-        window.left = identity;
-        let status = Some({
-            let mut sections = self.render_bar_sections(
+
+        let status_enabled = self.app_settings.bars.status.enabled;
+        let profile_control_required = self.terminal.host_runtime.is_some();
+        let empty_layout = BarLayoutSettings::default();
+        let status_layout = if status_enabled {
+            &self.app_settings.bars.status.layout
+        } else {
+            &empty_layout
+        };
+        let status = if status_enabled || profile_control_required {
+            let profile = profile_control_required
+                .then(|| self.profile_control_banner(cx).into_any_element());
+            Some(self.render_bar_sections(
                 BarHost::Status,
-                &self.app_settings.bars.status.layout,
+                status_layout,
                 &data,
+                profile,
+                true,
+                window,
                 cx,
-            );
-            sections
-                .left
-                .insert(0, self.profile_control_banner(cx).into_any_element());
-            sections
-        });
-        (window, status)
+            ))
+        } else {
+            None
+        };
+        (window_sections, status)
+    }
+
+    pub(super) fn shell_bar_preview_sections(
+        &self,
+        host: BarHost,
+        layout: &BarLayoutSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> BarSections {
+        let data = self.shell_bar_data(cx, Some(layout));
+        self.render_bar_sections(host, layout, &data, None, false, window, cx)
     }
 
     fn render_bar_sections(
@@ -145,52 +173,46 @@ impl WorkbenchView {
         host: BarHost,
         layout: &BarLayoutSettings,
         data: &ShellBarData,
+        left_prefix: Option<AnyElement>,
+        interactive: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> BarSections {
         BarSections {
-            left: self.render_bar_section(host, "left", &layout.left, layout, data, cx),
-            center: self.render_bar_section(host, "center", &layout.center, layout, data, cx),
-            right: self.render_bar_section(host, "right", &layout.right, layout, data, cx),
-        }
-    }
-
-    fn render_fixed_window_identity(
-        &self,
-        data: &ShellBarData,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        let theme = current_workbench_theme(cx);
-        let mut elements = Vec::with_capacity(FIXED_WINDOW_IDENTITY_MODULES.len() * 2 - 1);
-        for (index, module) in FIXED_WINDOW_IDENTITY_MODULES.iter().enumerate() {
-            let settings = BarModuleSettings {
-                max_width: (module == &ShellBarModule::ProjectPath).then_some(480.0),
-                hide_when_empty: true,
-            };
-            let Some(view) = bar_module_view(module, data, settings) else {
-                continue;
-            };
-            if !elements.is_empty() {
-                elements.push(
-                    div()
-                        .debug_selector(|| "window-bar-identity-separator".to_string())
-                        .flex_none()
-                        .text_xs()
-                        .text_color(theme.text_subtle)
-                        .child("—")
-                        .into_any_element(),
-                );
-            }
-            elements.push(render_bar_module(
-                BarHost::Window,
-                "identity",
-                index,
-                module,
-                settings,
-                view,
+            left: self.render_bar_section(
+                host,
+                "left",
+                &layout.left,
+                layout,
+                data,
+                left_prefix,
+                interactive,
+                window,
                 cx,
-            ));
+            ),
+            center: self.render_bar_section(
+                host,
+                "center",
+                &layout.center,
+                layout,
+                data,
+                None,
+                interactive,
+                window,
+                cx,
+            ),
+            right: self.render_bar_section(
+                host,
+                "right",
+                &layout.right,
+                layout,
+                data,
+                None,
+                interactive,
+                window,
+                cx,
+            ),
         }
-        elements
     }
 
     fn render_bar_section(
@@ -200,23 +222,97 @@ impl WorkbenchView {
         modules: &[ShellBarModule],
         layout: &BarLayoutSettings,
         data: &ShellBarData,
+        prefix: Option<AnyElement>,
+        interactive: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        modules
+        let appearance = self.theme_runtime();
+        let space_advance = modules
             .iter()
-            .enumerate()
-            .filter(|(_, module)| host != BarHost::Window || !module.is_fixed_window_identity())
-            .filter_map(|(index, module)| {
-                let settings = layout.module_settings(module);
-                let view = bar_module_view(module, data, settings)?;
-                Some(render_bar_module(
-                    host, section, index, module, settings, view, cx,
-                ))
-            })
-            .collect()
+            .any(|module| matches!(module, ShellBarModule::Space(count) if *count > 0))
+            .then(|| bar_space_advance(window, &appearance.typography.font_family));
+        let mut entries = Vec::with_capacity(modules.len() + usize::from(prefix.is_some()));
+        if let Some(prefix) = prefix {
+            entries.push(BarSectionEntry::Content(prefix));
+        }
+
+        for (index, module) in modules.iter().enumerate() {
+            let settings = layout.module_settings(module);
+            match module {
+                ShellBarModule::Space(count) if *count > 0 => {
+                    entries.push(BarSectionEntry::Space(render_bar_space(
+                        host,
+                        section,
+                        index,
+                        space_advance.expect("space advance is calculated for visible spaces")
+                            * f32::from(*count),
+                    )));
+                }
+                ShellBarModule::Text(text) if !text.is_empty() => {
+                    entries.push(BarSectionEntry::Content(render_bar_module(
+                        host,
+                        section,
+                        index,
+                        module,
+                        settings,
+                        BarModuleView::text(text.clone()),
+                        interactive,
+                        cx,
+                    )));
+                }
+                ShellBarModule::Icon(name) => {
+                    let Some(path) = bar_icon_path(name) else {
+                        continue;
+                    };
+                    let mut view = BarModuleView::text("");
+                    view.icon_path = Some(path);
+                    entries.push(BarSectionEntry::Content(render_bar_module(
+                        host,
+                        section,
+                        index,
+                        module,
+                        settings,
+                        view,
+                        interactive,
+                        cx,
+                    )));
+                }
+                ShellBarModule::Separator => {
+                    entries.push(BarSectionEntry::Separator(render_bar_separator(
+                        host,
+                        section,
+                        index,
+                        appearance.ui,
+                    )));
+                }
+                ShellBarModule::Space(_) | ShellBarModule::Text(_) => {}
+                _ => {
+                    let Some(view) = bar_module_view(module, data, settings) else {
+                        continue;
+                    };
+                    entries.push(BarSectionEntry::Content(render_bar_module(
+                        host,
+                        section,
+                        index,
+                        module,
+                        settings,
+                        view,
+                        interactive,
+                        cx,
+                    )));
+                }
+            }
+        }
+
+        normalized_bar_section(entries, appearance.style)
     }
 
-    fn shell_bar_data(&self, cx: &gpui::App) -> ShellBarData {
+    fn shell_bar_data(
+        &self,
+        cx: &gpui::App,
+        preview_layout: Option<&BarLayoutSettings>,
+    ) -> ShellBarData {
         let selected_project = self
             .workspace
             .selected_project_id()
@@ -329,7 +425,10 @@ impl WorkbenchView {
             ShellBarModule::SystemMemory,
         ]
         .iter()
-        .any(|module| self.app_settings.bars.contains(module))
+        .any(|module| {
+            self.app_settings.bars.contains(module)
+                || preview_layout.is_some_and(|layout| layout.contains(module))
+        })
         .then(|| self.visible_performance_info())
         .flatten();
 
@@ -349,6 +448,134 @@ impl WorkbenchView {
             performance,
         }
     }
+}
+
+impl BarSectionEntry {
+    fn is_content(&self) -> bool {
+        matches!(self, Self::Content(_))
+    }
+
+    fn is_space(&self) -> bool {
+        matches!(self, Self::Space(_))
+    }
+
+    fn into_element(self) -> AnyElement {
+        match self {
+            Self::Content(element) | Self::Space(element) | Self::Separator(element) => element,
+        }
+    }
+}
+
+fn normalized_bar_section(entries: Vec<BarSectionEntry>, ui_style: UiStyle) -> Vec<AnyElement> {
+    if !entries.iter().any(BarSectionEntry::is_content) {
+        return Vec::new();
+    }
+
+    let mut content_after = vec![false; entries.len()];
+    let mut has_content_after = false;
+    for (index, entry) in entries.iter().enumerate().rev() {
+        content_after[index] = has_content_after;
+        has_content_after |= entry.is_content();
+    }
+
+    let mut retained = Vec::with_capacity(entries.len());
+    let mut has_content_before = false;
+    let mut separator_pending = false;
+    for (index, entry) in entries.into_iter().enumerate() {
+        match entry {
+            BarSectionEntry::Content(element) => {
+                has_content_before = true;
+                separator_pending = false;
+                retained.push(BarSectionEntry::Content(element));
+            }
+            BarSectionEntry::Space(element) => retained.push(BarSectionEntry::Space(element)),
+            BarSectionEntry::Separator(element)
+                if has_content_before && content_after[index] && !separator_pending =>
+            {
+                separator_pending = true;
+                retained.push(BarSectionEntry::Separator(element));
+            }
+            BarSectionEntry::Separator(_) => {}
+        }
+    }
+
+    let mut elements = Vec::with_capacity(retained.len().saturating_mul(2));
+    let mut previous_was_space = true;
+    for entry in retained {
+        let is_space = entry.is_space();
+        if !elements.is_empty() && !previous_was_space && !is_space {
+            elements.push(
+                div()
+                    .flex_none()
+                    .w(ui_style.shell.bar_module_gap)
+                    .into_any_element(),
+            );
+        }
+        elements.push(entry.into_element());
+        previous_was_space = is_space;
+    }
+    elements
+}
+
+fn bar_space_advance(window: &mut Window, font_family: &str) -> f32 {
+    let font = Font {
+        family: font_family.to_string().into(),
+        features: FontFeatures::disable_ligatures(),
+        fallbacks: None,
+        weight: FontWeight::NORMAL,
+        style: FontStyle::Normal,
+    };
+    let run = TextRun {
+        len: " ".len(),
+        font,
+        color: black(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let font_size = window.rem_size() * 0.875;
+    window
+        .text_system()
+        .shape_line(" ".into(), font_size, &[run], None)
+        .width
+        .as_f32()
+}
+
+fn render_bar_space(host: BarHost, section: &'static str, index: usize, width: f32) -> AnyElement {
+    let host_name = match host {
+        BarHost::Window => "window",
+        BarHost::Status => "status",
+    };
+    let selector = format!("{host_name}-bar-space");
+    let id = format!("{selector}-{section}-{index}");
+    div()
+        .id(id)
+        .debug_selector(move || selector.clone())
+        .flex_none()
+        .w(px(width))
+        .into_any_element()
+}
+
+fn render_bar_separator(
+    host: BarHost,
+    section: &'static str,
+    index: usize,
+    theme: WorkbenchTheme,
+) -> AnyElement {
+    let host_name = match host {
+        BarHost::Window => "window",
+        BarHost::Status => "status",
+    };
+    let selector = format!("{host_name}-bar-separator");
+    let id = format!("{selector}-{section}-{index}");
+    div()
+        .id(id)
+        .debug_selector(move || selector.clone())
+        .flex_none()
+        .w(px(1.0))
+        .h(gpui::rems(0.75))
+        .bg(theme.text_subtle)
+        .into_any_element()
 }
 
 fn bar_module_view(
@@ -584,7 +811,11 @@ fn bar_module_view(
             view.action = Some(CommandId::SettingsOpen);
             view
         }
-        ShellBarModule::Unknown(_) => return None,
+        ShellBarModule::Space(_)
+        | ShellBarModule::Text(_)
+        | ShellBarModule::Icon(_)
+        | ShellBarModule::Separator
+        | ShellBarModule::Unknown(_) => return None,
     };
 
     if view.empty && settings.hide_when_empty {
@@ -603,6 +834,7 @@ fn render_bar_module(
     module: &ShellBarModule,
     settings: BarModuleSettings,
     view: BarModuleView,
+    interactive: bool,
     cx: &mut Context<WorkbenchView>,
 ) -> AnyElement {
     let host_name = match host {
@@ -613,11 +845,18 @@ fn render_bar_module(
     let id = format!("{selector}-{section}-{index}");
     let theme = current_workbench_theme(cx);
     let ui_style = current_ui_style(cx);
-    let fixed_identity_meta = section == "identity" && module != &ShellBarModule::ProjectName;
-    let fixed_identity_branch = section == "identity" && module == &ShellBarModule::GitBranch;
-    let fixed_identity_changes = section == "identity" && module == &ShellBarModule::GitChanges;
+    let window_identity_meta = host == BarHost::Window
+        && matches!(
+            module,
+            ShellBarModule::ProjectPath | ShellBarModule::GitBranch | ShellBarModule::GitChanges
+        );
+    let window_identity_branch =
+        host == BarHost::Window && matches!(module, ShellBarModule::GitBranch);
+    let window_identity_changes =
+        host == BarHost::Window && matches!(module, ShellBarModule::GitChanges);
 
-    if view.text.as_deref().is_none_or(str::is_empty)
+    if interactive
+        && view.text.as_deref().is_none_or(str::is_empty)
         && let (Some(icon), Some(command)) = (view.icon.clone(), view.action)
     {
         let tooltip = view.tooltip.unwrap_or_default();
@@ -657,11 +896,12 @@ fn render_bar_module(
         .or_else(|| default_module_max_width(host, module));
     let text = view.text.unwrap_or_default();
     let action = view.action;
-    let icon = if fixed_identity_branch {
+    let icon = if window_identity_branch {
         None
     } else {
         view.icon
     };
+    let icon_path = view.icon_path;
     let mut element = div()
         .id(id)
         .debug_selector(move || debug_selector.clone())
@@ -682,10 +922,10 @@ fn render_bar_module(
         .when(view.highlighted, |element| {
             element.px(ui_style.spacing.xs).bg(color.alpha(0.18))
         })
-        .when(fixed_identity_meta, |element| {
+        .when(window_identity_meta, |element| {
             element.text_xs().text_color(theme.text_muted)
         })
-        .when(fixed_identity_changes, |element| {
+        .when(window_identity_changes, |element| {
             element
                 .rounded(ui_style.radius.compact)
                 .border(ui_style.border.hairline)
@@ -697,17 +937,24 @@ fn render_bar_module(
         .when_some(icon, |element, icon| {
             element.child(Icon::new(icon).size_3().text_color(color))
         })
-        .child(div().min_w_0().truncate().child(text));
+        .when_some(icon_path, |element, path| {
+            element.child(Icon::default().path(path).size_3().text_color(color))
+        })
+        .when(!text.is_empty(), |element| {
+            element.child(div().min_w_0().truncate().child(text))
+        });
     if let Some(command) = action {
-        element = element
-            .cursor_pointer()
-            .px(ui_style.spacing.xs)
-            .when(host == BarHost::Window, |element| element.occlude())
-            .hover(move |element| element.bg(ui_style.hover_background(theme)))
-            .on_click(cx.listener(move |this, _, _window, cx| {
-                let _ = this.run_command(command);
-                cx.notify();
-            }));
+        element = element.px(ui_style.spacing.xs);
+        if interactive {
+            element = element
+                .cursor_pointer()
+                .when(host == BarHost::Window, |element| element.occlude())
+                .hover(move |element| element.bg(ui_style.hover_background(theme)))
+                .on_click(cx.listener(move |this, _, _window, cx| {
+                    let _ = this.run_command(command);
+                    cx.notify();
+                }));
+        }
     }
     if let Some(tooltip) = tooltip {
         element = element.tooltip(move |window, cx| {
@@ -735,7 +982,7 @@ fn performance_view(
 fn default_module_max_width(host: BarHost, module: &ShellBarModule) -> Option<f32> {
     match module {
         ShellBarModule::ProjectPath => Some(if host == BarHost::Window {
-            320.0
+            480.0
         } else {
             240.0
         }),

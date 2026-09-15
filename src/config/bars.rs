@@ -1,8 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashSet},
-    mem,
-    path::PathBuf,
-};
+use std::{collections::BTreeMap, mem, path::PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -85,17 +81,8 @@ impl ShellBarsSettings {
     }
 
     pub fn validate(&mut self) -> Vec<BarSettingsIssue> {
-        for section in [
-            &mut self.window.layout.left,
-            &mut self.window.layout.center,
-            &mut self.window.layout.right,
-        ] {
-            section.retain(|module| !module.is_fixed_window_identity());
-        }
-        self.window
-            .layout
-            .modules
-            .retain(|name, _| !ShellBarModule::from_name(name.clone()).is_fixed_window_identity());
+        self.window.layout.migrate_legacy_window_identity();
+        self.status.layout.clear_legacy_region_markers();
         let mut issues = Vec::new();
         validate_layout(&mut self.window.layout, "window", &mut issues);
         validate_layout(&mut self.status.layout, "status", &mut issues);
@@ -183,7 +170,7 @@ impl Default for WindowBarSettings {
     fn default() -> Self {
         Self {
             layout: BarLayoutSettings {
-                left: Vec::new(),
+                left: window_identity_template(),
                 center: Vec::new(),
                 right: vec![
                     ShellBarModule::ProjectsCount,
@@ -198,6 +185,9 @@ impl Default for WindowBarSettings {
                     ShellBarModule::Settings,
                 ],
                 modules: BTreeMap::new(),
+                legacy_left: false,
+                legacy_center: false,
+                legacy_right: false,
             },
         }
     }
@@ -235,18 +225,60 @@ impl Default for StatusBarSettings {
                     ShellBarModule::Update,
                 ],
                 modules: BTreeMap::new(),
+                legacy_left: false,
+                legacy_center: false,
+                legacy_right: false,
             },
         }
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(default)]
 pub struct BarLayoutSettings {
+    #[serde(serialize_with = "serialize_bar_template")]
     pub left: Vec<ShellBarModule>,
+    #[serde(serialize_with = "serialize_bar_template")]
     pub center: Vec<ShellBarModule>,
+    #[serde(serialize_with = "serialize_bar_template")]
     pub right: Vec<ShellBarModule>,
     pub modules: BTreeMap<String, BarModuleSettings>,
+    #[serde(skip)]
+    legacy_left: bool,
+    #[serde(skip)]
+    legacy_center: bool,
+    #[serde(skip)]
+    legacy_right: bool,
+}
+
+impl<'de> Deserialize<'de> for BarLayoutSettings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Default, Deserialize)]
+        #[serde(default)]
+        struct RawBarLayoutSettings {
+            left: Option<ParsedBarTemplate>,
+            center: Option<ParsedBarTemplate>,
+            right: Option<ParsedBarTemplate>,
+            modules: BTreeMap<String, BarModuleSettings>,
+        }
+
+        let raw = RawBarLayoutSettings::deserialize(deserializer)?;
+        let left = raw.left.unwrap_or_else(ParsedBarTemplate::legacy_empty);
+        let center = raw.center.unwrap_or_else(ParsedBarTemplate::legacy_empty);
+        let right = raw.right.unwrap_or_else(ParsedBarTemplate::legacy_empty);
+        Ok(Self {
+            left: left.modules,
+            center: center.modules,
+            right: right.modules,
+            modules: raw.modules,
+            legacy_left: left.legacy_array,
+            legacy_center: center.legacy_array,
+            legacy_right: right.legacy_array,
+        })
+    }
 }
 
 impl BarLayoutSettings {
@@ -263,6 +295,30 @@ impl BarLayoutSettings {
             .get(module.as_str())
             .copied()
             .unwrap_or_default()
+    }
+
+    fn migrate_legacy_window_identity(&mut self) {
+        if self.legacy_left {
+            self.left.retain(|module| !is_window_identity(module));
+            let mut migrated = window_identity_template();
+            migrated.append(&mut self.left);
+            self.left = migrated;
+        }
+        if self.legacy_center {
+            self.center.retain(|module| !is_window_identity(module));
+        }
+        if self.legacy_right {
+            self.right.retain(|module| !is_window_identity(module));
+        }
+        self.legacy_left = false;
+        self.legacy_center = false;
+        self.legacy_right = false;
+    }
+
+    fn clear_legacy_region_markers(&mut self) {
+        self.legacy_left = false;
+        self.legacy_center = false;
+        self.legacy_right = false;
     }
 }
 
@@ -312,6 +368,10 @@ pub enum ShellBarModule {
     SystemMemory,
     CommandPalette,
     Settings,
+    Space(u16),
+    Text(String),
+    Icon(String),
+    Separator,
     Unknown(String),
 }
 
@@ -382,19 +442,16 @@ impl ShellBarModule {
             Self::SystemMemory => "system-memory",
             Self::CommandPalette => "command-palette",
             Self::Settings => "settings",
+            Self::Space(_) => "space",
+            Self::Text(_) => "text",
+            Self::Icon(_) => "icon",
+            Self::Separator => "separator",
             Self::Unknown(name) => name,
         }
     }
 
     pub fn is_known(&self) -> bool {
         !matches!(self, Self::Unknown(_))
-    }
-
-    pub fn is_fixed_window_identity(&self) -> bool {
-        matches!(
-            self,
-            Self::ProjectName | Self::ProjectPath | Self::GitBranch | Self::GitChanges
-        )
     }
 }
 
@@ -416,6 +473,302 @@ impl<'de> Deserialize<'de> for ShellBarModule {
     }
 }
 
+const MAX_BAR_TEMPLATE_BYTES: usize = 16 * 1024;
+const MAX_BAR_TEMPLATE_MODULES: usize = 256;
+const MAX_BAR_TEMPLATE_TEXT_BYTES: usize = 4 * 1024;
+const MAX_BAR_SPACE_COUNT: u16 = 256;
+
+const BAR_ICON_NAMES: &[(&str, &str)] = &[
+    ("settings", "icons/settings.svg"),
+    ("info", "icons/info.svg"),
+    ("cpu", "icons/cpu.svg"),
+    ("memory-stick", "icons/memory-stick.svg"),
+    ("search", "icons/search.svg"),
+    ("palette", "icons/palette.svg"),
+    ("folder", "icons/folder.svg"),
+    ("folder-open", "icons/folder-open.svg"),
+    ("file", "icons/file.svg"),
+    ("square-terminal", "icons/square-terminal.svg"),
+    ("github", "icons/github.svg"),
+    ("network", "icons/network.svg"),
+    ("globe", "icons/globe.svg"),
+    ("user", "icons/user.svg"),
+    ("bot", "icons/bot.svg"),
+    ("bell", "icons/bell.svg"),
+    ("calendar", "icons/calendar.svg"),
+    ("chart-pie", "icons/chart-pie.svg"),
+    ("hard-drive", "icons/hard-drive.svg"),
+    ("battery", "icons/battery.svg"),
+    ("triangle-alert", "icons/triangle-alert.svg"),
+    ("circle-check", "icons/circle-check.svg"),
+    ("circle-x", "icons/circle-x.svg"),
+    ("play", "icons/play.svg"),
+    ("pause", "icons/pause.svg"),
+];
+
+/// Returns the bundled asset path for an allowlisted bar icon.
+pub fn bar_icon_path(icon: &str) -> Option<&'static str> {
+    let icon = icon.trim();
+    BAR_ICON_NAMES
+        .iter()
+        .find(|(name, _)| icon.eq_ignore_ascii_case(name))
+        .map(|(_, path)| *path)
+}
+
+fn canonical_bar_icon_name(icon: &str) -> Option<&'static str> {
+    let icon = icon.trim();
+    BAR_ICON_NAMES
+        .iter()
+        .find(|(name, _)| icon.eq_ignore_ascii_case(name))
+        .map(|(name, _)| *name)
+}
+
+/// Parses a bracket-delimited bar template into modules.
+pub fn parse_bar_template(template: &str) -> Result<Vec<ShellBarModule>, String> {
+    if template.len() > MAX_BAR_TEMPLATE_BYTES {
+        return Err(template_error(
+            MAX_BAR_TEMPLATE_BYTES,
+            "template exceeds the 16 KiB limit",
+        ));
+    }
+
+    let mut modules = Vec::new();
+    let mut characters = template.char_indices();
+    while let Some((position, character)) = characters.next() {
+        if character.is_whitespace() {
+            continue;
+        }
+        if character != '[' {
+            return Err(template_error(position, "expected '[' or whitespace"));
+        }
+
+        let mut token = String::new();
+        let mut closed = false;
+        while let Some((token_position, character)) = characters.next() {
+            match character {
+                ']' => {
+                    closed = true;
+                    break;
+                }
+                '[' => {
+                    return Err(template_error(
+                        token_position,
+                        "unescaped '[' inside a token",
+                    ));
+                }
+                '\\' => match characters.next() {
+                    Some((_, '[')) => token.push('['),
+                    Some((_, ']')) => token.push(']'),
+                    Some((_, '\\')) => token.push('\\'),
+                    Some((escape_position, _)) => {
+                        return Err(template_error(
+                            escape_position,
+                            "only '\\[', '\\]' and '\\\\' escapes are allowed",
+                        ));
+                    }
+                    None => {
+                        return Err(template_error(token_position, "unfinished escape"));
+                    }
+                },
+                _ => token.push(character),
+            }
+        }
+        if !closed {
+            return Err(template_error(position, "unclosed '['"));
+        }
+        if modules.len() == MAX_BAR_TEMPLATE_MODULES {
+            return Err(template_error(
+                position,
+                "template exceeds the 256-module limit",
+            ));
+        }
+        modules.push(parse_bar_template_token(&token, position)?);
+    }
+    Ok(modules)
+}
+
+/// Formats modules as a canonical bracket-delimited bar template.
+pub fn format_bar_template(modules: &[ShellBarModule]) -> String {
+    let mut template = String::new();
+    for (index, module) in modules.iter().enumerate() {
+        if index > 0 {
+            template.push(' ');
+        }
+        match module {
+            ShellBarModule::Space(1) => template.push_str("[Space]"),
+            ShellBarModule::Space(count) => {
+                template.push_str("[Space*");
+                template.push_str(&count.to_string());
+                template.push(']');
+            }
+            ShellBarModule::Text(text) => {
+                template.push_str("[text:");
+                escape_bar_template_text(text, &mut template);
+                template.push(']');
+            }
+            ShellBarModule::Icon(icon) => {
+                template.push_str("[icon:");
+                template.push_str(icon);
+                template.push(']');
+            }
+            ShellBarModule::Separator => template.push_str("[|]"),
+            module => {
+                template.push('[');
+                template.push_str(module.as_str());
+                template.push(']');
+            }
+        }
+    }
+    template
+}
+
+fn serialize_bar_template<S>(modules: &[ShellBarModule], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(&format_bar_template(modules))
+}
+
+#[derive(Debug)]
+struct ParsedBarTemplate {
+    modules: Vec<ShellBarModule>,
+    legacy_array: bool,
+}
+
+impl ParsedBarTemplate {
+    fn legacy_empty() -> Self {
+        Self {
+            modules: Vec::new(),
+            legacy_array: true,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ParsedBarTemplate {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Representation {
+            Template(String),
+            Legacy(Vec<ShellBarModule>),
+        }
+
+        match Representation::deserialize(deserializer)? {
+            Representation::Template(template) => parse_bar_template(&template)
+                .map(|modules| Self {
+                    modules,
+                    legacy_array: false,
+                })
+                .map_err(serde::de::Error::custom),
+            Representation::Legacy(modules) => Ok(Self {
+                modules,
+                legacy_array: true,
+            }),
+        }
+    }
+}
+
+fn parse_bar_template_token(token: &str, position: usize) -> Result<ShellBarModule, String> {
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        return Err(template_error(position, "empty token"));
+    }
+    if trimmed == "|" {
+        return Ok(ShellBarModule::Separator);
+    }
+
+    if let Some((keyword, value)) = token.split_once(':') {
+        let keyword = keyword.trim();
+        if keyword.eq_ignore_ascii_case("text") {
+            if value.len() > MAX_BAR_TEMPLATE_TEXT_BYTES {
+                return Err(template_error(position, "text exceeds the 4 KiB limit"));
+            }
+            return Ok(ShellBarModule::Text(value.to_string()));
+        }
+        if keyword.eq_ignore_ascii_case("icon") {
+            let icon = canonical_bar_icon_name(value).ok_or_else(|| {
+                template_error(position, format!("unknown icon {:?}", value.trim()))
+            })?;
+            return Ok(ShellBarModule::Icon(icon.to_string()));
+        }
+        return Err(template_error(
+            position,
+            format!("unknown token keyword {:?}", keyword),
+        ));
+    }
+
+    if trimmed.eq_ignore_ascii_case("text") || trimmed.eq_ignore_ascii_case("icon") {
+        return Err(template_error(position, "token requires ':'"));
+    }
+    if trimmed.eq_ignore_ascii_case("space") {
+        return Ok(ShellBarModule::Space(1));
+    }
+    if let Some((keyword, count)) = trimmed.split_once('*')
+        && keyword.trim().eq_ignore_ascii_case("space")
+    {
+        let count = count.trim().parse::<u16>().map_err(|_| {
+            template_error(position, "space count must be an integer between 1 and 256")
+        })?;
+        if !(1..=MAX_BAR_SPACE_COUNT).contains(&count) {
+            return Err(template_error(
+                position,
+                "space count must be between 1 and 256",
+            ));
+        }
+        return Ok(ShellBarModule::Space(count));
+    }
+
+    let module = ShellBarModule::from_name(trimmed);
+    if module.is_known() {
+        Ok(module)
+    } else {
+        Err(template_error(
+            position,
+            format!("unknown token {:?}", trimmed),
+        ))
+    }
+}
+
+fn escape_bar_template_text(text: &str, template: &mut String) {
+    for character in text.chars() {
+        match character {
+            '[' => template.push_str("\\["),
+            ']' => template.push_str("\\]"),
+            '\\' => template.push_str("\\\\"),
+            _ => template.push(character),
+        }
+    }
+}
+
+fn template_error(position: usize, message: impl AsRef<str>) -> String {
+    format!("bar template at byte {position}: {}", message.as_ref())
+}
+
+fn window_identity_template() -> Vec<ShellBarModule> {
+    vec![
+        ShellBarModule::ProjectName,
+        ShellBarModule::Separator,
+        ShellBarModule::ProjectPath,
+        ShellBarModule::Separator,
+        ShellBarModule::GitBranch,
+        ShellBarModule::Separator,
+        ShellBarModule::GitChanges,
+    ]
+}
+
+fn is_window_identity(module: &ShellBarModule) -> bool {
+    matches!(
+        module,
+        ShellBarModule::ProjectName
+            | ShellBarModule::ProjectPath
+            | ShellBarModule::GitBranch
+            | ShellBarModule::GitChanges
+    )
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BarSettingsIssue {
     pub field: &'static str,
@@ -427,10 +780,9 @@ fn validate_layout(
     host: &'static str,
     issues: &mut Vec<BarSettingsIssue>,
 ) {
-    let mut seen = HashSet::new();
-    validate_section(&mut layout.left, host, "left", &mut seen, issues);
-    validate_section(&mut layout.center, host, "center", &mut seen, issues);
-    validate_section(&mut layout.right, host, "right", &mut seen, issues);
+    validate_section(&mut layout.left, host, "left", issues);
+    validate_section(&mut layout.center, host, "center", issues);
+    validate_section(&mut layout.right, host, "right", issues);
 
     let module_field = if host == "window" {
         "window.modules"
@@ -461,16 +813,7 @@ fn validate_layout(
             });
             settings.max_width = None;
         }
-        let canonical_name = module.as_str().to_string();
-        if normalized
-            .insert(canonical_name.clone(), settings)
-            .is_some()
-        {
-            issues.push(BarSettingsIssue {
-                field: module_field,
-                value: canonical_name,
-            });
-        }
+        normalized.insert(module.as_str().to_string(), settings);
     }
     layout.modules = normalized;
 }
@@ -479,7 +822,6 @@ fn validate_section(
     modules: &mut Vec<ShellBarModule>,
     host: &'static str,
     section: &'static str,
-    seen: &mut HashSet<String>,
     issues: &mut Vec<BarSettingsIssue>,
 ) {
     let field = match (host, section) {
@@ -492,7 +834,7 @@ fn validate_section(
         _ => "bars",
     };
     modules.retain(|module| {
-        if !module.is_known() || !seen.insert(module.as_str().to_string()) {
+        if !module.is_known() {
             issues.push(BarSettingsIssue {
                 field,
                 value: module.as_str().to_string(),

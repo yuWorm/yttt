@@ -289,7 +289,9 @@ impl Render for AuxiliaryWindow {
                 AuxiliaryWindowKind::RemoteServices => remote_connections::render(root, window, cx),
                 AuxiliaryWindowKind::LayoutEditor => root
                     .layout_toml_input(window, cx)
-                    .map(|input| render::layout_toml_editor_window_content(root, &input, cx))
+                    .map(|input| {
+                        render::layout_toml_editor_window_content(root, &input, window, cx)
+                    })
                     .unwrap_or_else(div),
             };
             let mut content = div()
@@ -364,7 +366,7 @@ impl Render for AuxiliaryWindow {
                             event.keystroke.modifiers.control
                         }
                     {
-                        let _ = root.save_layout_toml_editor();
+                        let _ = root.save_layout_toml_editor_with_runtime_refresh(cx);
                         cx.stop_propagation();
                         cx.notify();
                         return;
