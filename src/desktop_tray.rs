@@ -1,13 +1,21 @@
 use yttt_protocol::{HostLifecycleState, HostLifecycleStatus};
 
 const ACTION_QUEUE_CAPACITY: usize = 32;
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
 const OPEN_ID: &str = "yttt.tray.open";
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
 const NEW_WINDOW_ID: &str = "yttt.tray.new-window";
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
 const OPEN_LOGS_ID: &str = "yttt.tray.open-logs";
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
 const START_HOST_ID: &str = "yttt.tray.start-host";
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
 const STOP_HOST_ID: &str = "yttt.tray.stop-host";
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
 const RESTART_HOST_ID: &str = "yttt.tray.restart-host";
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
 const QUIT_DESKTOP_ID: &str = "yttt.tray.quit-desktop";
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
 const QUIT_ALL_ID: &str = "yttt.tray.quit-all";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,6 +112,7 @@ pub fn create_desktop_tray() -> Result<Box<dyn DesktopTrayAdapter>, DesktopTrayE
     platform::create()
 }
 
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
 fn action_for_id(id: &str) -> Option<DesktopTrayAction> {
     match id {
         OPEN_ID => Some(DesktopTrayAction::Open),
