@@ -396,23 +396,17 @@ where
             on_move_tab(index),
         ));
     }
-    let tab_strip = div()
-        .relative()
-        .flex()
-        .flex_1()
-        .min_w_0()
-        .h_full()
-        .overflow_x_hidden()
-        .child(
-            div()
-                .id(tabbar_border_id)
-                .debug_selector(move || tabbar_border_selector.to_string())
-                .absolute()
-                .inset_0()
-                .border_b(style.border_width)
-                .border_color(theme.border_variant),
-        )
-        .child(tab_row.flex_1().min_w_0());
+    // Each inactive tab owns its bottom edge. Only the unused strip gets a
+    // filler border: a full-width underlay leaks through translucent active tabs.
+    let tab_strip = tab_row.flex_1().min_w_0().child(
+        div()
+            .id(tabbar_border_id)
+            .debug_selector(move || tabbar_border_selector.to_string())
+            .flex_1()
+            .h_full()
+            .border_b(style.border_width)
+            .border_color(theme.border_variant),
+    );
 
     div()
         .flex()

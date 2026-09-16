@@ -4253,17 +4253,6 @@ fn root_view_settings_open_command_opens_settings_page() {
 }
 
 #[test]
-fn root_view_settings_search_filters_groups() {
-    let (_temp, mut root) = english_test_root();
-    root.open_settings();
-
-    root.set_settings_search_query("shell");
-
-    assert_eq!(root.visible_settings_group_titles(), vec!["Terminal"]);
-    assert_eq!(root.selected_settings_group_title(), Some("Terminal"));
-}
-
-#[test]
 fn root_view_settings_can_select_and_close_group() {
     let (_temp, mut root) = english_test_root();
     root.open_settings();

@@ -418,10 +418,12 @@ categories remain discoverable together. Search covers all categories and matche
 keys, localized labels/descriptions and English names, including in the Chinese interface.
 For example, searching `terminal.shell` takes you directly to the default shell control.
 
-The header identifies the current **Environment** and **Project**. Local development/test
-environments have readable labels; hover the environment identity or expand **Configuration
-details** for the full profile ID and configuration paths. Settings describe their destination,
-application timing and any read-only restriction alongside the control:
+The information strip below the category heading identifies the current **Environment** and
+**Project**. Local development/test environments have readable labels. Expand **Configuration
+details** for the profile ID and aligned configuration paths. Long paths truncate within the
+available width; hover a path's copy button to read it in full, or click to copy the complete path.
+Settings actions use the same compact filled buttons in the Zed style. Each setting describes
+its destination, application timing and any read-only restriction alongside the control:
 
 | Destination | Contents | Storage and authority |
 | --- | --- | --- |

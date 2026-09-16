@@ -6,7 +6,10 @@ use gpui_component::{
     button::{Button, ButtonCustomVariant, ButtonVariants},
 };
 
-use crate::{style::UiStyle, theme::WorkbenchTheme};
+use crate::{
+    style::{UiStyle, UiStyleId},
+    theme::WorkbenchTheme,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum YtttButtonVariant {
@@ -101,7 +104,12 @@ pub fn yttt_button_base(
         .h(ui_style.controls.button_height)
         .px(ui_style.controls.button_padding_x)
         .rounded(style.radius)
-        .outline()
+        .when(
+            ui_style.id != UiStyleId::Zed
+                || variant == YtttButtonVariant::Secondary
+                || variant == YtttButtonVariant::Danger,
+            |button| button.outline(),
+        )
         .border_color(style.border)
         .custom(yttt_button_variant(variant, theme, ui_style, cx))
         .bg(style.background)

@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::primitives::button::{YtttButtonVariant, yttt_button};
 
 pub fn notification_tone_for_toast(tone: ToastTone) -> YtttNotificationTone {
     match tone {
@@ -73,18 +74,25 @@ fn workbench_notification(
 
     yttt_toast_notification(tone, theme, ui_style).content(move |_, _, cx| {
         let action = action.clone().map(|(label, on_action)| {
-            Button::new("notification-action")
-                .debug_selector(|| "notification-action".into())
-                .primary()
-                .outline()
-                .xsmall()
-                .icon(IconName::ArrowRight)
-                .label(label)
-                .on_click(cx.listener(move |notification, event, window, cx| {
-                    cx.stop_propagation();
-                    notification.dismiss(window, cx);
-                    on_action(event, window, cx);
-                }))
+            yttt_button(
+                "notification-action",
+                label,
+                YtttButtonVariant::Primary,
+                WorkbenchTheme {
+                    // Toasts are opaque even when the window material is translucent.
+                    element_background: theme.element_background.alpha(1.0),
+                    ..theme
+                },
+                ui_style,
+                cx,
+            )
+            .debug_selector(|| "notification-action".into())
+            .icon(IconName::ArrowRight)
+            .on_click(cx.listener(move |notification, event, window, cx| {
+                cx.stop_propagation();
+                notification.dismiss(window, cx);
+                on_action(event, window, cx);
+            }))
         });
 
         notification_content(
@@ -146,26 +154,39 @@ fn notification_content(
                         .text_color(style.title)
                         .child(title),
                 )
-                .when_some(status, |this, status| {
-                    this.child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(style.tone)
-                            .truncate()
-                            .child(status),
-                    )
-                })
                 .child(
                     div()
                         .debug_selector(|| "notification-body".into())
-                        .text_sm()
+                        .text_xs()
                         .line_height(gpui::rems(1.25))
                         .text_color(style.context)
                         .child(context),
                 )
-                .when_some(action, |this, action| {
-                    this.child(div().flex().justify_end().pt(style.gap).child(action))
+                .when(status.is_some() || action.is_some(), |this| {
+                    this.child(
+                        div()
+                            .flex()
+                            .w_full()
+                            .min_w_0()
+                            .items_center()
+                            .justify_between()
+                            .gap(style.gap)
+                            .pt_1()
+                            .when_some(status, |this, status| {
+                                this.child(
+                                    div()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .text_xs()
+                                        .text_color(style.tone)
+                                        .truncate()
+                                        .child(status),
+                                )
+                            })
+                            .when_some(action, |this, action| {
+                                this.child(div().flex_none().child(action))
+                            }),
+                    )
                 }),
         )
 }

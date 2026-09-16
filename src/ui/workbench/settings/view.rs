@@ -193,9 +193,8 @@ fn settings_content(
         .child(
             div()
                 .flex_none()
-                .flex()
-                .items_center()
-                .justify_between()
+                .flex_col()
+                .gap(style.ui_style.spacing.lg)
                 .border_b(style.ui_style.border.hairline)
                 .border_color(theme.border_variant)
                 .px(style.content_padding_x)
@@ -217,9 +216,9 @@ fn settings_content(
                                 .text_color(theme.text_subtle)
                                 .child(description),
                         ),
-                )
-                .child(context),
+                ),
         )
+        .child(context)
         .child(div().flex_1().min_h_0().child(rows))
 }
 fn settings_context(
@@ -269,71 +268,113 @@ fn settings_context(
     } else {
         identity
     };
-    let mut details = format!(
-        "{}\n{}: {}",
-        profile.unwrap_or(""),
-        text.get(UiTextKey::SettingsTargetHost),
-        root.config_paths.settings_file().display(),
-    );
-    if let Ok(paths) = root.device_preferences_config_paths() {
-        details.push_str(&format!(
-            "\n{}: {}",
-            text.get(UiTextKey::SettingsTargetDevice),
-            paths.settings_file().display()
-        ));
-    }
-    if let Some(path) = root.cached_settings_project_path() {
-        details.push_str(&format!(
-            "\n{}: {}",
-            text.get(UiTextKey::SettingsTargetProject),
-            path.display()
-        ));
-    }
-    let identity_details = details.clone();
+    let expanded = root.settings.settings_context_expanded;
     div()
         .debug_selector(|| "settings-context".to_string())
         .flex()
         .flex_col()
-        .items_end()
-        .max_w(px(360.0))
         .gap(style.ui_style.spacing.xs)
+        .flex_none()
+        .min_w_0()
+        .px(style.content_padding_x)
+        .py(style.ui_style.spacing.lg)
+        .border_b(style.ui_style.border.hairline)
+        .border_color(theme.border_variant)
         .text_xs()
         .text_color(theme.text_muted)
         .child(
             div()
-                .id("settings-environment-identity")
-                .tooltip(move |window, cx| {
-                    yttt_ui::primitives::tooltip::yttt_tooltip(
-                        identity_details.clone(),
-                        crate::ui::theme::current_workbench_theme(cx),
-                        crate::ui::theme::current_ui_style(cx),
+                .flex()
+                .items_center()
+                .gap(style.ui_style.spacing.lg)
+                .child(
+                    div()
+                        .id("settings-environment-identity")
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(match project {
+                            Some(project) => format!(
+                                "{}: {identity}  ·  {}: {project}",
+                                text.get(UiTextKey::SettingsTargetHost),
+                                text.get(UiTextKey::SettingsTargetProject),
+                            ),
+                            None => {
+                                format!("{}: {identity}", text.get(UiTextKey::SettingsTargetHost),)
+                            }
+                        }),
+                )
+                .child(
+                    settings_button(
+                        "settings-environment-details",
+                        text.get(UiTextKey::SettingsEnvironmentDetails),
+                        expanded,
+                        theme,
+                        cx,
+                        cx.listener(|this, _, _window, cx| {
+                            this.settings.settings_context_expanded =
+                                !this.settings.settings_context_expanded;
+                            cx.notify();
+                        }),
                     )
-                    .build(window, cx)
-                })
-                .child(format!(
-                    "{}: {identity}",
-                    text.get(UiTextKey::SettingsTargetHost)
-                )),
+                    .icon(if expanded {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    }),
+                ),
         )
-        .when_some(project, |context, project| {
-            context.child(format!(
-                "{}: {project}",
-                text.get(UiTextKey::SettingsTargetProject)
-            ))
-        })
-        .child(settings_button(
-            "settings-environment-details",
-            text.get(UiTextKey::SettingsEnvironmentDetails),
-            root.settings.settings_context_expanded,
-            theme,
-            cx,
-            cx.listener(|this, _, _window, cx| {
-                this.settings.settings_context_expanded = !this.settings.settings_context_expanded;
-                cx.notify();
-            }),
-        ))
-        .when(root.settings.settings_context_expanded, |context| {
-            context.child(div().text_xs().child(details))
+        .when(expanded, |context| {
+            context.child(
+                div()
+                    .id("settings-environment-paths")
+                    .debug_selector(|| "settings-environment-paths".into())
+                    .flex()
+                    .flex_col()
+                    .min_w_0()
+                    .max_h(rems(10.0))
+                    .overflow_y_scrollbar()
+                    .pt(style.ui_style.spacing.md)
+                    .gap(style.ui_style.spacing.sm)
+                    .when_some(profile, |this, profile| {
+                        this.child(
+                            div()
+                                .text_color(theme.text_subtle)
+                                .child(profile.to_string()),
+                        )
+                    })
+                    .child(settings_config_path(
+                        "host",
+                        text.get(UiTextKey::SettingsTargetHost),
+                        root.config_paths.settings_file().display().to_string(),
+                        theme,
+                        style.ui_style,
+                        cx,
+                    ))
+                    .when_some(
+                        root.device_preferences_config_paths().ok(),
+                        |this, paths| {
+                            this.child(settings_config_path(
+                                "device",
+                                text.get(UiTextKey::SettingsTargetDevice),
+                                paths.settings_file().display().to_string(),
+                                theme,
+                                style.ui_style,
+                                cx,
+                            ))
+                        },
+                    )
+                    .when_some(root.cached_settings_project_path(), |this, path| {
+                        this.child(settings_config_path(
+                            "project",
+                            text.get(UiTextKey::SettingsTargetProject),
+                            path.display().to_string(),
+                            theme,
+                            style.ui_style,
+                            cx,
+                        ))
+                    }),
+            )
         })
         .when_some(
             root.settings_scope_read_only_reason(SettingsScope::Host),
@@ -347,6 +388,43 @@ fn settings_context(
         .when(root.has_failed_settings_save(), |context| {
             context.child(settings_failed_save_banner(root, style, cx))
         })
+}
+
+fn settings_config_path(
+    id: &'static str,
+    label: &'static str,
+    path: String,
+    theme: WorkbenchTheme,
+    ui_style: UiStyle,
+    cx: &App,
+) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .min_w_0()
+        .gap(ui_style.spacing.md)
+        .child(
+            div()
+                .w(rems(5.0))
+                .flex_none()
+                .text_color(theme.text_subtle)
+                .child(label),
+        )
+        .child(div().flex_1().min_w_0().truncate().child(path.clone()))
+        .child(
+            yttt_button_base(
+                SharedString::from(format!("settings-copy-{id}-path")),
+                YtttButtonVariant::Ghost,
+                theme,
+                ui_style,
+                cx,
+            )
+            .icon(IconName::Copy)
+            .tooltip(path.clone())
+            .on_click(move |_, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(path.clone()))
+            }),
+        )
 }
 
 fn settings_failed_save_banner(
@@ -3117,7 +3195,7 @@ fn settings_keybinding_row(
             yttt_button(
                 format!("settings-keybinding-edit-{row_id}"),
                 text.get(UiTextKey::SettingsEdit),
-                YtttButtonVariant::Ghost,
+                YtttButtonVariant::Primary,
                 theme,
                 style.ui_style,
                 cx,
@@ -3492,12 +3570,12 @@ pub(in super::super) fn settings_button<H>(
 where
     H: Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
 {
-    let variant = if selected {
+    let ui_style = current_ui_style(cx);
+    let variant = if selected || ui_style.id == UiStyleId::Zed {
         YtttButtonVariant::Primary
     } else {
         YtttButtonVariant::Secondary
     };
-    let ui_style = current_ui_style(cx);
     yttt_button(
         SharedString::from(id.into()),
         SharedString::from(label.into()),

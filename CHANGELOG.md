@@ -4,6 +4,14 @@
 
 ### Added
 
+- Unified Zed-style settings actions as compact filled buttons, including path, import,
+  TOML and keybinding actions. Configuration details now expand below the category heading
+  into aligned, truncating path rows with full-path tooltips and copy controls.
+- Tightened Agent notifications into a title/context block and a shared status/action row;
+  their filled action buttons remain readable on opaque toasts in translucent windows.
+- Fixed active tab bottom borders leaking through transparent and blurred backgrounds.
+  Only inactive tabs and the unused tab-strip area now draw a bottom edge.
+
 - Unified automatic and manual Host workspace restoration, preserving dynamic terminal/file
   tabs, split layouts and active work items. Surviving processes reattach; cold restoration
   rebuilds clean shells and resumes saved Agent sessions, including started lazy tabs, without

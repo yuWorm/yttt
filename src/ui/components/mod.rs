@@ -12,16 +12,10 @@ pub use notification::{
 pub use palette_item::{workbench_keybinding_badge, workbench_palette_item};
 
 use gpui::{
-    AnyElement, App, ClickEvent, Div, ElementId, FontWeight, InteractiveElement as _,
-    ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _, Window, div,
-    prelude::*,
+    AnyElement, App, ClickEvent, Div, ElementId, InteractiveElement as _, ParentElement as _,
+    SharedString, Stateful, StatefulInteractiveElement as _, Window, div, prelude::*,
 };
-use gpui_component::{
-    Icon, IconName, Sizable as _,
-    button::{Button, ButtonVariants as _},
-    kbd::Kbd,
-    notification::Notification,
-};
+use gpui_component::{Icon, IconName, button::Button, kbd::Kbd, notification::Notification};
 
 use crate::ui::{
     notifications::{ToastItem, ToastTone},

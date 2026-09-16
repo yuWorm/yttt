@@ -64,7 +64,7 @@ pub fn yttt_notification_style(
         background: theme.surface.alpha(1.0),
         border: theme.border,
         title: theme.text,
-        context: theme.text_subtle,
+        context: theme.text_muted,
         action: theme.text_muted,
         action_background: ui_style.hover_background(theme),
         tone,
