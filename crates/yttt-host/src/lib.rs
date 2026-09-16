@@ -2690,7 +2690,9 @@ pub fn profile_lock_is_held(runtime_root: &Path) -> Result<bool, HostError> {
             lock.unlock()?;
             Ok(false)
         }
-        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(true),
+        Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
+            Ok(true)
+        }
         Err(error) => Err(error.into()),
     }
 }
