@@ -855,9 +855,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsUpToDate => "YTTT is up to date",
         UiTextKey::SettingsUpdateCheckFailed => "Unable to check for updates",
         UiTextKey::SettingsDownloadUpdate => "Download update",
-        UiTextKey::SettingsRestoreLastSession => "Restore projects on startup",
+        UiTextKey::SettingsRestoreLastSession => "Restore last session on startup",
         UiTextKey::SettingsRestoreLastSessionDescription => {
-            "Open every project that was still open when YTTT last exited."
+            "Restore saved projects, terminal and file tabs, and split layouts. Reconnect running processes, recreate shells, and resume saved Agent sessions without replaying other commands."
         }
         UiTextKey::PerformanceProjects => "Projects",
         UiTextKey::PerformanceTerminals => "Terminals",

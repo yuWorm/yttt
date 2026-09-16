@@ -160,7 +160,11 @@ fn confirmed_terminal_close_is_idempotent_after_host_acknowledgement() {
     };
     let spawn_fingerprint = spec.address_fingerprint();
     let request = desktop
-        .terminal_start_request(spec.clone(), &catalog)
+        .terminal_start_request(
+            spec.clone(),
+            &catalog,
+            yttt::host_runtime::TerminalStartIntent::Fresh,
+        )
         .unwrap();
     let Response::TerminalSpawned { session_epoch, .. } =
         desktop.request_blocking_typed(request).unwrap()

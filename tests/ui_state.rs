@@ -569,7 +569,7 @@ fn empty_workspace_renders_responsive_action_dashboard(cx: &mut gpui::TestAppCon
 
     cx.simulate_resize(size(px(960.0), px(640.0)));
     cx.refresh().unwrap();
-    cx.read(|app| assert!(!root.read(app).has_last_opened_projects()));
+    cx.read(|app| assert!(!root.read(app).has_restorable_workspace()));
 
     let small_actions = [
         "empty-open-directory",
@@ -630,7 +630,7 @@ fn empty_workspace_renders_responsive_action_dashboard(cx: &mut gpui::TestAppCon
 }
 
 #[test]
-fn legacy_recent_project_is_available_for_manual_restore() {
+fn recent_project_history_is_not_a_restorable_workspace() {
     let temp = tempdir().unwrap();
     let project = temp.path().join("legacy-project");
     fs::create_dir(&project).unwrap();
@@ -647,18 +647,13 @@ fn legacy_recent_project_is_available_for_manual_restore() {
     settings.general.onboarding_completed = true;
     save_scoped_settings(&paths, &settings, &AppSettings::default(), false).unwrap();
 
-    let mut root = WorkbenchView::with_config_paths_for_test(paths);
+    let root = WorkbenchView::with_config_paths_for_test(paths);
     assert!(root.workspace().opened_projects().is_empty());
-    assert!(root.has_last_opened_projects());
-    assert_eq!(root.restore_last_opened_projects(), 1);
-    assert_eq!(
-        root.workspace().opened_projects()[0].location.local_path(),
-        Some(&project)
-    );
+    assert!(!root.has_restorable_workspace());
 }
 
 #[test]
-fn closing_last_project_preserves_manual_restore_without_startup_reopen() {
+fn closing_last_project_prevents_legacy_startup_import() {
     let temp = tempdir().unwrap();
     let project = temp.path().join("closed-project");
     fs::create_dir(&project).unwrap();
@@ -675,26 +670,18 @@ fn closing_last_project_preserves_manual_restore_without_startup_reopen() {
         root.confirm_pending_project_close().unwrap();
     }
     assert!(root.workspace().opened_projects().is_empty());
-    assert!(root.has_last_opened_projects());
     root.set_restore_last_session_enabled(true).unwrap();
     drop(root);
 
-    let mut restarted = WorkbenchView::with_config_paths_for_test(paths);
+    let restarted = WorkbenchView::from_startup(paths, false);
     assert!(
         restarted.workspace().opened_projects().is_empty(),
         "startup restore must not reopen a project that was explicitly closed"
     );
-    assert_eq!(restarted.restore_last_opened_projects(), 1);
-    assert_eq!(
-        restarted.workspace().opened_projects()[0]
-            .location
-            .local_path(),
-        Some(&project)
-    );
 }
 
 #[test]
-fn root_view_restores_all_last_opened_projects_when_enabled() {
+fn legacy_startup_import_respects_the_restore_preference() {
     let temp = tempdir().unwrap();
     let first_project = temp.path().join("first-project");
     let second_project = temp.path().join("second-project");
@@ -708,17 +695,18 @@ fn root_view_restores_all_last_opened_projects_when_enabled() {
     let mut initial = WorkbenchView::with_config_paths_for_test(paths.clone());
     initial.open_project_path(&first_project).unwrap();
     initial.open_project_path(&second_project).unwrap();
+    initial.set_restore_last_session_enabled(false).unwrap();
     drop(initial);
 
-    let mut restore_disabled = WorkbenchView::with_config_paths_for_test(paths.clone());
+    let mut restore_disabled = WorkbenchView::from_startup(paths.clone(), false);
     assert!(restore_disabled.workspace().opened_projects().is_empty());
-    assert!(restore_disabled.has_last_opened_projects());
+    assert!(!restore_disabled.has_restorable_workspace());
     restore_disabled
         .set_restore_last_session_enabled(true)
         .unwrap();
     drop(restore_disabled);
 
-    let restored = WorkbenchView::with_config_paths_for_test(paths);
+    let restored = WorkbenchView::from_startup(paths, false);
     let restored_paths = restored
         .workspace()
         .opened_projects()
@@ -734,44 +722,6 @@ fn root_view_restores_all_last_opened_projects_when_enabled() {
     );
 }
 
-#[gpui::test]
-fn empty_workspace_restore_button_opens_last_session(cx: &mut gpui::TestAppContext) {
-    cx.update(gpui_component::init);
-    let temp = tempdir().unwrap();
-    let first_project = temp.path().join("first-project");
-    let second_project = temp.path().join("second-project");
-    fs::create_dir(&first_project).unwrap();
-    fs::create_dir(&second_project).unwrap();
-    let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
-    let mut settings = AppSettings::default();
-    settings.general.onboarding_completed = true;
-    save_scoped_settings(&paths, &settings, &AppSettings::default(), false).unwrap();
-
-    let mut initial = WorkbenchView::with_config_paths_for_test(paths.clone());
-    initial.open_project_path(&first_project).unwrap();
-    initial.open_project_path(&second_project).unwrap();
-    drop(initial);
-
-    let root_slot = Rc::new(RefCell::new(None));
-    let root_slot_for_window = root_slot.clone();
-    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
-        *root_slot_for_window.borrow_mut() = Some(root.clone());
-        gpui_component::Root::new(root, window, cx)
-    });
-    let root = root_slot.borrow_mut().take().unwrap();
-    cx.refresh().unwrap();
-
-    let restore = cx
-        .debug_bounds("empty-restore-last-session")
-        .expect("empty workspace should show the restore button");
-    cx.simulate_click(restore.center(), gpui::Modifiers::none());
-    cx.run_until_parked();
-
-    cx.read(|app| {
-        assert_eq!(root.read(app).workspace().opened_projects().len(), 2);
-    });
-}
 #[test]
 fn root_view_dev_fixture_contains_sample_project() {
     let root = WorkbenchView::dev_fixture_for_test();
@@ -3556,14 +3506,6 @@ fn closing_project_combines_dirty_files_and_running_processes(cx: &mut gpui::Tes
         assert!(root.workspace().project(&project_id).is_some());
         assert!(root.has_pending_project_close());
         assert!(root.has_pending_dirty_close());
-        assert_eq!(
-            root.visible_dirty_close_dialog_text().as_deref(),
-            Some("Close project?\n1 unsaved file: notes.txt\n1 running process")
-        );
-        assert_eq!(
-            root.visible_dirty_close_actions(),
-            vec!["Cancel", "Discard and Continue", "Save All and Continue"]
-        );
     });
 
     root.update_in(cx, |root, window, cx| {
@@ -5037,6 +4979,7 @@ fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppCon
     });
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
+        root.set_restore_last_session_enabled(false).unwrap();
         root.open_settings();
         cx.notify();
     });

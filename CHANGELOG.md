@@ -4,6 +4,12 @@
 
 ### Added
 
+- Unified automatic and manual Host workspace restoration, preserving dynamic terminal/file
+  tabs, split layouts and active work items. Surviving processes reattach; cold restoration
+  rebuilds clean shells and resumes saved Agent sessions, including started lazy tabs, without
+  replaying arbitrary commands or old prompts. Failed resume retains the original session.
+  The restore preference now gates local and remote startup and defaults on for new preferences.
+
 - Redesigned the application icon with an angular Y, terminal prompt, and separate
   underscore cursor. Platform icons now regenerate from an editable SVG source.
 
@@ -68,8 +74,8 @@
 - Added Host-owned remote configuration, project/Git operations, Agent integration, workspace
   snapshots and editor drafts, with durable revision-checked commits, idempotent retries, and
   explicit single-controller takeover.
-- Remote Client exit now preserves remote tasks; Host restart restores workspace state without
-  silently rerunning lost terminal processes.
+- Remote Client exit preserves remote tasks; Host restart preserves workspace state and rebuilds
+  shells or resumes Agent sessions without silently replaying arbitrary commands.
 - Added a unified, live-reloadable GPUI keymap covering commands, palettes, project tree, Git diff, terminal, editor Vim, and modal UI actions, with contextual sequences and per-action unbinding.
 - Added a single `Global` / `Editor only` / `Disabled` Vim setting backed by one window-level mode controller and a persistent mode/context status bar; Global mode spans editors, terminals, project trees, settings, panes, tabs, and command palettes.
 - Added configurable Vim leader expansion, multi-keystroke shortcut recording, alternative shortcut sequences, and an in-app quick-start guide for the unified keymap.

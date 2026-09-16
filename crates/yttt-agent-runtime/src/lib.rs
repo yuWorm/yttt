@@ -180,14 +180,13 @@ impl AgentRuntime {
             .filter(|snapshot| snapshot.provider_id == descriptor.id)
             .and_then(|snapshot| snapshot.session.as_ref())
             .and_then(|session| provider.resume_command(session));
-        if !command_matches && resume_command.is_none() {
+        if resume_command.is_none()
+            && (!command_matches || restored.is_some_and(|snapshot| snapshot.session.is_some()))
+        {
             return None;
         }
         let restored = resume_command.as_ref().and(restored);
-        let program_override = resume_command
-            .as_ref()
-            .filter(|_| !command_matches)
-            .map(|command| command.program);
+        let program_override = resume_command.as_ref().map(|command| command.program);
         let resume_arguments = resume_command
             .as_ref()
             .map(|command| command.arguments.clone())

@@ -76,7 +76,7 @@ pub(super) struct WorkspacePersistenceState {
     host_epoch: Option<u64>,
     initial_project: Option<PathBuf>,
     pub(super) startup_projects: Vec<PathBuf>,
-    available_terminal_sessions: HashSet<String>,
+    pub(super) available_terminal_sessions: HashSet<String>,
     last_committed_snapshot: Option<serde_json::Value>,
     pending_commit: Option<PendingWorkspaceCommit>,
     control_request_in_flight: bool,
@@ -261,11 +261,59 @@ struct PreparedRemoteRestore {
     host_epoch: u64,
     services: HashMap<ProjectId, ProjectServices>,
     available_terminal_sessions: HashSet<String>,
-    unavailable_terminal_ids: HashMap<ProjectId, HashSet<String>>,
     losses: Vec<RemoteResourceLoss>,
 }
 
 impl WorkbenchView {
+    pub fn has_restorable_workspace(&self) -> bool {
+        self.terminal
+            .host_runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.pending_workspace_count() > 0)
+    }
+
+    pub(crate) fn restore_last_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.workspace.opened_projects().is_empty() || self.workspace_is_loading() {
+            return;
+        }
+        let Some(runtime) = self.terminal.host_runtime.clone() else {
+            return;
+        };
+        if runtime.pending_workspace_count() == 0 {
+            return;
+        }
+        if self.workspace_persistence.commit_in_flight
+            || self.workspace_persistence.control_request_in_flight
+            || self.settings_save_pending()
+            || self.has_failed_settings_save()
+            || self.has_unpublished_workspace_snapshot(cx)
+        {
+            self.set_workspace_persistence_error(
+                "Wait for pending changes to be saved before restoring another workspace".into(),
+            );
+            return;
+        }
+        // Claim before releasing the empty view, so it cannot claim itself.
+        let view = match runtime.claim_workspace_view(true) {
+            Ok(view) => view,
+            Err(error) => {
+                self.set_workspace_persistence_error(error);
+                return;
+            }
+        };
+        let workspace_id = view.id().clone();
+        self.workspace_persistence = WorkspacePersistenceState {
+            view: Some(view),
+            mode: WorkspacePersistenceMode::AwaitingControl,
+            ..WorkspacePersistenceState::default()
+        };
+        self.onboarding = None;
+        self.discover_recoverable_workspace_draft(&runtime, &workspace_id);
+        self.start_workspace_persistence_tick(window, cx);
+        self.request_workspace_control_and_open(runtime, workspace_id, window, cx);
+        cx.notify();
+    }
+
     pub(super) fn workspace_is_loading(&self) -> bool {
         matches!(
             self.workspace_persistence.mode,
@@ -895,11 +943,7 @@ impl WorkbenchView {
             .project
             .project_editor_runtime
             .workspace_mut()
-            .restore_snapshot(
-                prepared.snapshot.editor.clone(),
-                &terminal_ids,
-                &prepared.unavailable_terminal_ids,
-            )
+            .restore_snapshot(prepared.snapshot.editor.clone(), &terminal_ids)
         {
             self.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
             self.set_workspace_persistence_error(format!(
@@ -1167,15 +1211,11 @@ impl WorkbenchView {
             return;
         };
         let terminal_ids = terminal_ids_by_project(&self.workspace);
-        let unavailable = unavailable_terminal_ids(
-            &self.workspace,
-            &self.workspace_persistence.available_terminal_sessions,
-        );
         if let Err(error) = self
             .project
             .project_editor_runtime
             .workspace_mut()
-            .restore_snapshot(editor_snapshot, &terminal_ids, &unavailable)
+            .restore_snapshot(editor_snapshot, &terminal_ids)
         {
             self.workspace_persistence.mode = WorkspacePersistenceMode::ControlLost;
             self.set_workspace_persistence_error(format!(
@@ -1488,12 +1528,6 @@ impl WorkbenchView {
             .workspace
             .reconcile_host_resources(available_terminal_sessions);
         self.reset_remote_agent_snapshots();
-        let terminal_ids = terminal_ids_by_project(&self.workspace);
-        let unavailable = unavailable_terminal_ids(&self.workspace, available_terminal_sessions);
-        self.project
-            .project_editor_runtime
-            .workspace_mut()
-            .set_unavailable_terminal_ids(&unavailable, &terminal_ids);
         self.report_lost_remote_resources(&losses);
     }
 
@@ -1502,7 +1536,7 @@ impl WorkbenchView {
             return;
         }
         self.set_workspace_resource_loss(format!(
-            "Remote Host no longer has {} restored terminal resource{}; they were not restarted",
+            "Host lost {} terminal process{}; restoring shells and Agent sessions without replaying other commands",
             losses.len(),
             if losses.len() == 1 { "" } else { "s" }
         ));
@@ -2293,8 +2327,6 @@ fn prepare_remote_restore(
         .map(|terminal| terminal.session_id.as_str().to_string())
         .collect::<HashSet<_>>();
     let losses = workspace.reconcile_host_resources(&available_terminal_sessions);
-    let unavailable_terminal_ids =
-        unavailable_terminal_ids(&workspace, &available_terminal_sessions);
     snapshot.workspace = workspace.persisted_state();
 
     let mut services = HashMap::new();
@@ -2321,7 +2353,6 @@ fn prepare_remote_restore(
         host_epoch,
         services,
         available_terminal_sessions,
-        unavailable_terminal_ids,
         losses,
     })
 }
@@ -2340,33 +2371,6 @@ fn terminal_ids_by_project(workspace: &Workspace) -> HashMap<ProjectId, Vec<Stri
                     .map(|tab| tab.id.clone())
                     .collect(),
             )
-        })
-        .collect()
-}
-
-fn unavailable_terminal_ids(
-    workspace: &Workspace,
-    available_terminal_sessions: &HashSet<String>,
-) -> HashMap<ProjectId, HashSet<String>> {
-    workspace
-        .opened_projects()
-        .iter()
-        .filter_map(|project| {
-            let unavailable = project
-                .tab_states
-                .iter()
-                .filter(|tab| {
-                    tab.pane_states.iter().any(|pane| {
-                        pane.process_state == yttt_core::model::workspace::PaneProcessState::Exited
-                            && !available_terminal_sessions.contains(&format!(
-                                "{}:{}:{}",
-                                project.id, tab.tab_id, pane.pane_id
-                            ))
-                    })
-                })
-                .map(|tab| tab.tab_id.clone())
-                .collect::<HashSet<_>>();
-            (!unavailable.is_empty()).then_some((project.id.clone(), unavailable))
         })
         .collect()
 }
@@ -2456,6 +2460,129 @@ fn is_remote_connection_error(error: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[gpui::test]
+    fn cold_workspace_restore_preserves_mixed_tabs_and_file_contents(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::ui::editor::{WorkAreaDropEdge, WorkAreaDropPlacement, WorkItemId};
+
+        cx.update(gpui_component::init);
+        let temp = tempfile::tempdir().unwrap();
+        let project_path = temp.path().join("project");
+        fs::create_dir(&project_path).unwrap();
+        let project_path = project_path.canonicalize().unwrap();
+        fs::write(project_path.join("note.txt"), "saved file contents\n").unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+        let mut workspace = Workspace::new();
+        let project_id = workspace
+            .open_project(
+                ProjectDescriptor::new(
+                    ProjectId::new("restore-project"),
+                    ProjectLocation::local(project_path.clone()),
+                ),
+                dev_fixture_layout(),
+            )
+            .unwrap();
+        workspace
+            .mark_pane_running(&project_id, "dev", "shell")
+            .unwrap();
+        workspace
+            .mark_pane_running(&project_id, "agent", "codex")
+            .unwrap();
+        let source = cx.new(|_| {
+            WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths.clone())
+        });
+        let (server_snapshot, expected_area, document_id) = source.update(cx, |root, cx| {
+            let session = root
+                .project
+                .project_editor_runtime
+                .workspace_mut()
+                .session_mut(&project_id)
+                .unwrap();
+            let terminals = vec!["dev".to_string(), "agent".to_string()];
+            session.reconcile_work_area(&terminals);
+            let document = session.open_file(project_path.join("note.txt"));
+            let group = session.active_group_id();
+            assert!(session.drop_work_item(
+                &WorkItemId::File(document.clone()),
+                group,
+                group,
+                WorkAreaDropPlacement::Edge(WorkAreaDropEdge::Right),
+                &terminals,
+            ));
+            let area = session.work_area().clone();
+            (
+                root.build_remote_workspace_snapshot(cx).unwrap().0,
+                area,
+                document,
+            )
+        });
+        let mut snapshot = RemoteWorkspaceSnapshot::from_value(server_snapshot.clone()).unwrap();
+        let mut restored = Workspace::restore_persisted_state(snapshot.workspace).unwrap();
+        let losses = restored.reconcile_host_resources(&HashSet::new());
+        snapshot.workspace = restored.persisted_state();
+        let services = HashMap::from([(
+            project_id.clone(),
+            ProjectServices::local_for_test(project_path),
+        )]);
+        let target_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let window_slot = target_slot.clone();
+        let (_component, cx) = cx.add_window_view(|window, cx| {
+            let target = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
+            *window_slot.borrow_mut() = Some(target.clone());
+            gpui_component::Root::new(target, window, cx)
+        });
+        let target = target_slot.borrow_mut().take().unwrap();
+        target.update_in(cx, |root, window, cx| {
+            root.install_remote_workspace_restore(
+                PreparedRemoteRestore {
+                    snapshot,
+                    server_snapshot,
+                    revision: 1,
+                    host_epoch: 2,
+                    services,
+                    available_terminal_sessions: HashSet::new(),
+                    losses,
+                },
+                window,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        target.read_with(cx, |root, cx| {
+            let session = root
+                .project
+                .project_editor_runtime
+                .workspace()
+                .session(&project_id)
+                .unwrap();
+            assert_eq!(session.work_area(), &expected_area);
+            assert_eq!(
+                session.active_work_item(),
+                Some(&WorkItemId::File(document_id.clone()))
+            );
+            let document = root
+                .project
+                .project_editor_runtime
+                .document(&document_id)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "document restore failed: {:?}, pending: {}",
+                        root.load_error, root.workspace_persistence.pending_document_restores
+                    )
+                });
+            assert_eq!(document.read(cx).current_text(cx), "saved file contents\n");
+            assert_eq!(
+                root.workspace
+                    .project(&project_id)
+                    .unwrap()
+                    .layout
+                    .tabs
+                    .len(),
+                2
+            );
+        });
+    }
 
     #[gpui::test]
     fn settings_only_draft_prevents_a_clean_workspace_handoff(cx: &mut gpui::TestAppContext) {

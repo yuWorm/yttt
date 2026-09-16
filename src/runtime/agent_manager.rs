@@ -66,7 +66,6 @@ impl AgentPaneAddress {
 #[derive(Clone, Debug)]
 pub struct AgentPaneLaunch {
     prepared: PreparedAgentLaunch,
-    forced_program_override: Option<&'static str>,
     additional_args: Vec<String>,
     remote_extension_base64: Option<Arc<str>>,
     resuming_session: bool,
@@ -90,12 +89,7 @@ impl AgentPaneLaunch {
     }
 
     pub fn program_override(&self) -> Option<&str> {
-        self.static_program_override()
-    }
-
-    fn static_program_override(&self) -> Option<&'static str> {
-        self.forced_program_override
-            .or_else(|| self.prepared.program_override())
+        self.prepared.program_override()
     }
 
     pub fn restored_title_for(&self, default_title: &str) -> Option<&str> {
@@ -143,6 +137,7 @@ pub enum AgentPaneExitOutcome {
     },
     ResumeFailed {
         address: AgentPaneAddress,
+        snapshot: AgentSnapshot,
     },
 }
 
@@ -198,7 +193,6 @@ pub struct AgentManager {
     agent_runtime_initialized: bool,
     retained_snapshots: HashMap<AgentPaneAddress, AgentSnapshot>,
     restorable_projects: HashSet<String>,
-    fresh_program_overrides: HashMap<AgentPaneAddress, &'static str>,
     omp_extension_base64: Arc<str>,
     state_load_error: Option<String>,
 }
@@ -228,7 +222,6 @@ impl AgentManager {
             agent_runtime_initialized: false,
             retained_snapshots,
             restorable_projects: HashSet::new(),
-            fresh_program_overrides: HashMap::new(),
             omp_extension_base64,
             state_load_error,
         }
@@ -359,8 +352,10 @@ impl AgentManager {
         self.launches_by_address.clear();
         self.addresses_by_instance.clear();
         self.host_snapshot_sequences.clear();
-        self.restorable_projects.clear();
-        self.fresh_program_overrides.clear();
+        self.restorable_projects = snapshots
+            .iter()
+            .map(|(address, _)| address.project_id.clone())
+            .collect();
         self.retained_snapshots = snapshots.into_iter().collect();
     }
 
@@ -376,8 +371,6 @@ impl AgentManager {
     }
 
     fn forget_matching(&mut self, mut matches: impl FnMut(&AgentPaneAddress) -> bool) {
-        self.fresh_program_overrides
-            .retain(|address, _| !matches(address));
         self.launches_by_address
             .retain(|address, _| !matches(address));
 
@@ -412,7 +405,7 @@ impl AgentManager {
     pub fn apply_host_snapshot(
         &mut self,
         address: AgentPaneAddress,
-        update: AgentSnapshotUpdate,
+        mut update: AgentSnapshotUpdate,
     ) -> Option<AgentPaneExitOutcome> {
         let cursor = (update.host_epoch, update.scope.generation, update.sequence);
         if self
@@ -423,26 +416,30 @@ impl AgentManager {
             return None;
         }
         self.host_snapshot_sequences.insert(address.clone(), cursor);
+        let session_confirmed = update.snapshot.session.is_some();
+        let resuming = self
+            .launches_by_address
+            .get(&address)
+            .is_some_and(AgentPaneLaunch::is_resuming_session);
+        if resuming && !session_confirmed {
+            update.snapshot.session = self
+                .retained_snapshots
+                .get(&address)
+                .and_then(|previous| previous.session.clone());
+        }
 
         let snapshot_failed =
             update.snapshot.view_state() == yttt_agent_core::AgentViewState::Failed;
-        let resume_failed = snapshot_failed
-            && self
-                .launches_by_address
-                .get(&address)
-                .is_some_and(AgentPaneLaunch::is_resuming_session);
+        let resume_failed = snapshot_failed && resuming;
         if resume_failed {
-            let launch = self.launches_by_address.remove(&address)?;
-            self.addresses_by_instance.remove(launch.instance_id());
-            self.runtime.remove(launch.instance_id());
-            self.retained_snapshots.remove(&address);
-            if let Some(program) = launch.static_program_override() {
-                self.fresh_program_overrides
-                    .insert(address.clone(), program);
-            }
-            return Some(AgentPaneExitOutcome::ResumeFailed { address });
+            let snapshot = update.snapshot;
+            self.retain_snapshot(address.clone(), snapshot.clone());
+            return Some(AgentPaneExitOutcome::ResumeFailed { address, snapshot });
         }
-        if !snapshot_failed && let Some(launch) = self.launches_by_address.get_mut(&address) {
+        if !snapshot_failed
+            && session_confirmed
+            && let Some(launch) = self.launches_by_address.get_mut(&address)
+        {
             launch.resuming_session = false;
         }
 
@@ -471,21 +468,16 @@ impl AgentManager {
                 .flatten();
             return Some((launch.clone(), restored));
         }
-        let forced_program_override = self.fresh_program_overrides.remove(&address);
-        let provider_command = forced_program_override.unwrap_or(command);
         let restored = self
             .restorable_projects
             .contains(&address.project_id)
             .then(|| self.retained_snapshots.get(&address).cloned())
             .flatten();
         let Some((prepared, _)) = self.runtime.prepare_launch_with_snapshot(
-            provider_command,
+            command,
             address.scope_key(),
             restored.as_ref(),
         ) else {
-            if restored.is_some() {
-                self.retained_snapshots.remove(&address);
-            }
             return None;
         };
         let restored_for_view = restored.as_ref().map(disconnected_snapshot);
@@ -497,7 +489,6 @@ impl AgentManager {
             additional_args.push(self.omp_extension_path.to_string_lossy().into_owned());
         }
         let launch = AgentPaneLaunch {
-            forced_program_override,
             prepared,
             additional_args,
             remote_extension_base64: (is_omp && remote).then(|| self.omp_extension_base64.clone()),
@@ -507,23 +498,6 @@ impl AgentManager {
             .insert(launch.instance_id().clone(), address.clone());
         self.launches_by_address.insert(address, launch.clone());
         Some((launch, restored_for_view))
-    }
-
-    pub fn process_start_failed(
-        &mut self,
-        instance_id: &AgentInstanceId,
-        _generation: u64,
-    ) -> Option<AgentPaneAddress> {
-        let address = self.addresses_by_instance.get(instance_id)?.clone();
-        if !self
-            .launches_by_address
-            .get(&address)
-            .is_some_and(|launch| launch.instance_id() == instance_id)
-        {
-            return None;
-        }
-        self.retained_snapshots.remove(&address);
-        Some(address)
     }
 
     fn retain_snapshot(&mut self, address: AgentPaneAddress, snapshot: AgentSnapshot) {
@@ -623,6 +597,39 @@ mod tests {
     use yttt_protocol::agent::{AgentHookScope, AgentSnapshotUpdate};
 
     use super::*;
+
+    #[test]
+    fn host_restore_resumes_saved_agent_and_keeps_unresumable_session() {
+        let temp = TempDir::new().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path());
+        let mut manager = AgentManager::new(&paths);
+        let address = AgentPaneAddress::new("project", "tab", "agent");
+        let reducer = AgentReducer::new(
+            AgentInstanceId::random(),
+            ProviderId::from_static("codex"),
+            1,
+        );
+        let mut snapshot = reducer.snapshot().clone();
+        snapshot.session = Some(yttt_agent_core::AgentSessionMetadata {
+            session_id: Some("saved-session".into()),
+            ..Default::default()
+        });
+        manager.reset_for_host_restore(vec![(address.clone(), snapshot.clone())]);
+        let (launch, _) = manager
+            .prepare_pane(address.clone(), "codex", false)
+            .unwrap();
+        assert_eq!(launch.program_override(), Some("codex"));
+        assert_eq!(launch.additional_args(), ["resume", "saved-session"]);
+
+        snapshot.session.as_mut().unwrap().session_id = None;
+        manager.reset_for_host_restore(vec![(address.clone(), snapshot)]);
+        assert!(
+            manager
+                .prepare_pane(address.clone(), "codex", false)
+                .is_none()
+        );
+        assert!(manager.has_retained_snapshot(&address));
+    }
 
     #[test]
     fn constructor_does_not_provision_agent_files() {

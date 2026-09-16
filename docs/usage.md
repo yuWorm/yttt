@@ -53,11 +53,19 @@ when the content scrolls. Normal takeover uses **Continue here**; only forced ta
 as destructive. Interface text is available in English and Chinese; underlying diagnostic errors
 remain in their original language under **Technical details**.
 
-Both local and remote windows restore their Host's confirmed workspace state before starting
-terminal/Agent views. A workspace with opened projects goes directly to its project page; a
-confirmed empty workspace goes to the initial project menu, even when recent-project history
-exists. Multiple saved workspaces restore separately. Explicitly opening a directory or a new
-empty window remains distinct from restoring a saved workspace.
+With **Restore last session** enabled (the default for new preferences), local and remote
+windows restore the Host's confirmed workspace before starting terminal/Agent views. This
+includes dynamic terminal tabs, file tabs, split layout and active work items—not just the
+project list. Multiple saved workspaces restore separately; a confirmed empty workspace stays
+empty even when recent-project history exists. Disable the setting to start at the initial
+project menu, where **Restore Last Session** explicitly loads a saved workspace through the
+same restoration path. Opening a directory or a new empty window remains a separate action.
+
+Surviving Host processes are reattached, not duplicated. After a cold Host restart, previously
+running shells are recreated without replaying their startup commands, and saved Agent sessions
+use the provider's resume command, including previously started lazy tabs. Failed or unavailable
+resume retains the original session and tab rather than silently starting a fresh conversation.
+Other command processes remain stopped until explicitly started; observers never spawn them.
 
 For onboarding development or demos, force the flow even after it has been completed:
 
@@ -213,8 +221,9 @@ old mutations or automatically regain input authority.
 
 **Recovery limits.** Draft bodies are separate from layout manifests: up to 6 MiB per document,
 64 MiB per workspace and 1 MiB per manifest. An oversized or failed publication remains an error;
-unpublished edits are not advertised as saved. Host restart restores confirmed windows and drafts
-but shows lost terminal processes as exited instead of rerunning them.
+unpublished edits are not advertised as saved. Host restart restores confirmed windows and drafts,
+then reconnects or rebuilds shells and Agent sessions as described above; arbitrary commands are
+not automatically replayed.
 
 Forced control loss, disconnection, or a stale Host epoch preserves unpublished edits in
 Device-private recovery storage, keyed by Device profile, Host environment and workspace.
@@ -306,8 +315,8 @@ an unconfirmed workspace save requires keeping the window open or explicitly dis
 A second Client can restore the same environment after explicitly taking control. The old Client
 then loses mutation authority, including terminal input, file/config writes and workspace commits.
 Disconnecting or exiting a remote Client leaves Host processes alive. A Host or machine restart
-restores persisted layout and drafts but cannot resurrect a PTY: missing processes are shown as
-exited and require **Start a new process**, never automatic rerun.
+cannot resurrect the old PTY: the controlling Client retains its tab and layout, recreates a clean
+shell or resumes a saved Agent session, and leaves other commands stopped for **Start a new process**.
 
 Legacy recent SSH entries remain available and launch the new remote Client using their saved
 endpoint/root. They are skipped during local workspace auto-restoration; no local settings or

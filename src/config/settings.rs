@@ -97,7 +97,7 @@ impl Default for GeneralSettings {
             ui_line_height: DEFAULT_UI_LINE_HEIGHT,
             onboarding_completed: false,
             auto_check_updates: true,
-            restore_last_session: false,
+            restore_last_session: true,
             new_tab_command_picker_enabled: false,
             new_tab_commands: vec![
                 "lazygit".to_string(),

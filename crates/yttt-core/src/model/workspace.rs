@@ -68,8 +68,8 @@ impl Workspace {
 
     /// Reconciles persisted pane activity with the authoritative Host catalog.
     ///
-    /// A missing formerly-running pane is marked exited rather than started again.
-    /// The caller can surface these losses and decide whether to offer manual restart.
+    /// Missing running panes retain their place and become pending recovery.
+    /// Explicitly exited panes and never-started panes are not restarted.
     pub fn reconcile_host_resources(
         &mut self,
         available_terminal_sessions: &HashSet<String>,
@@ -84,7 +84,7 @@ impl Workspace {
                         continue;
                     }
                     if pane.process_state == PaneProcessState::Running {
-                        pane.process_state = PaneProcessState::Exited;
+                        pane.process_state = PaneProcessState::Restoring;
                         if let Some(snapshot) = pane.agent_snapshot.as_mut() {
                             snapshot.mark_disconnected();
                         }
@@ -993,6 +993,7 @@ pub enum TabStartState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub enum PaneProcessState {
     Idle,
+    Restoring,
     Running,
     Exited,
 }

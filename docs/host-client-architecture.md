@@ -251,8 +251,9 @@ HostBootstrap 显式传入原 `config_root`，不根据 Server descriptor 猜路
 
 每个 workspace 有原子 CAS manifest（最大 1 MiB）和独立不可变草稿正文。正文每份最大 6 MiB，
 每 workspace 最大 64 MiB；先持久化正文，再提交引用它的 manifest，最后确认幂等操作结果。
-启动只回收未引用正文。旧 `default`/内联草稿迁移在新 manifest 确认前保留原文件，恢复不重跑
-已经丢失的 PTY 或 Agent 进程。
+启动只回收未引用正文。旧 `default`/内联草稿迁移在新 manifest 确认前保留原文件。
+自动恢复开关同时约束本机和远程启动；手动恢复使用同一 Host 快照入口，而非重新打开最近项目列表。
+PTY 丢失不删除 terminal/file tab、分组或布局。Client 只重建干净 shell 或恢复 Agent 会话，不重放任意命令。
 
 独立 `yttt-server` 的 descriptor 只导出 SSH `work.sock`/工作 token。status、stop-if-idle、
 ensure 的管理连接仍使用另一个本机 socket/token；关闭桌面 TLS 不关闭 SSH 工作会话。
@@ -461,13 +462,15 @@ Disconnected -> Connecting -> Ready
 - 临时 I/O 失败：保留 mirrors，指数退避 100 ms 到 1 s，持续尝试同一 endpoint。
 - 重连成功：更新 host epoch/connection sequence，立即请求 catalog。
 - Host 在断线期间仍存活：相同 terminal ID 通过 checkpoint/delta 继续。
-- Host 已死亡并由 launcher/外部 supervisor 重启：新 catalog 不含旧进程资源；Client 删除 stale mirror，并在 pane 启动时把旧 `Bound` / `ClosePending` / `Lost` placement 原子替换为 `OpenPending` 后创建新 session。
+- Host 已死亡并由 launcher/外部 supervisor 重启：新 catalog 不含旧进程资源；Client 删除 stale mirror，但保留 tab、pane 和编辑器布局，将缺失的运行中 pane 标记为 `Restoring`。控制 Client 自动重建 shell（不执行旧启动命令）并以 provider resume 恢复 Agent 会话；已启动的 lazy tab 也参与。其他命令保持停止，观察者不创建进程。
+- 恢复前再次检查 catalog：相同 project/session 的存活进程直接 attach，即使 resume 参数与原启动参数不同也不重复 spawn。仅允许 attach 的命令在此时丢失资源则报错，不能降级为重新执行。
+- Agent resume 失败或缺少可恢复元数据时保留原 session 与 tab，不自动替换成新会话。用户显式启动新进程才可放弃旧会话。
 - Host 确认 `AcknowledgeTerminalExit` 后，Client 将 durable placement 写为 `Closed`，不得留下指向已回收进程的 `Bound`。
 - handshake 的身份、profile、build 或认证失败属于 fatal `HostLost`，不能无限重试到错误 Host。
 - 用户请求不会跨连接自动重放。
 - 持久化 Agent snapshot 在 Host catalog reconciliation 前统一降级为 `Exited/Stale`；只有
-  当前 Host 的 live snapshot 能恢复 `Running/Working`。terminal `Exited`/`Lost` 事件必须
-  清除对应 pane 的 live Agent 状态，避免应用重启后展示幽灵 `Running`。
+  当前 Host 的 live snapshot 能恢复 `Running/Working`。terminal `Exited` 必须清除对应 pane
+  的 live Agent 状态；`Lost` 保留会话元数据并交由 catalog reconciliation 决定恢复，不能伪造持久退出或删除 tab。
 
 ## 11. SSH、文件、Git 与 Agent 扩展边界
 

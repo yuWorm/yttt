@@ -47,7 +47,7 @@ pub fn pane_agent_status(
     }
 
     match pane_state.process_state {
-        PaneProcessState::Running => Some(AgentViewState::Stale),
+        PaneProcessState::Running | PaneProcessState::Restoring => Some(AgentViewState::Stale),
         PaneProcessState::Idle | PaneProcessState::Exited => None,
     }
 }

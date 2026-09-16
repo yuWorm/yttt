@@ -107,17 +107,14 @@ impl WorkbenchView {
                 }
                 true
             }
-            Some(AgentPaneExitOutcome::ResumeFailed { address }) => {
-                if let Err(error) = self.workspace.clear_agent_snapshot(
-                    &ProjectId::new(&address.project_id),
-                    &address.tab_id,
-                    &address.pane_id,
-                ) {
+            Some(AgentPaneExitOutcome::ResumeFailed { address, snapshot }) => {
+                if let Err(error) = self.record_agent_runtime_snapshot(address, snapshot) {
                     self.load_error = Some(error.to_string());
+                } else {
+                    self.load_error = Some(
+                        "Agent session could not be resumed; the original session is retained. Retry or explicitly open a new session.".into(),
+                    );
                 }
-                let key = terminal_pane_key(&address.project_id, &address.tab_id, &address.pane_id);
-                self.terminal.terminal_panes.remove(&key);
-                self.terminal.terminal_pane_subscriptions.remove(&key);
                 true
             }
             None => false,

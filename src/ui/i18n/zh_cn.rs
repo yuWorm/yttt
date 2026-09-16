@@ -733,9 +733,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsUpToDate => "YTTT 已是最新版本",
         UiTextKey::SettingsUpdateCheckFailed => "无法检查更新",
         UiTextKey::SettingsDownloadUpdate => "下载更新",
-        UiTextKey::SettingsRestoreLastSession => "启动时恢复项目",
+        UiTextKey::SettingsRestoreLastSession => "启动时恢复上次会话",
         UiTextKey::SettingsRestoreLastSessionDescription => {
-            "启动 YTTT 时，重新打开上次退出时仍保持打开的所有项目。"
+            "恢复已保存的项目、终端与文件标签页和分屏布局。重连存活进程，重建 shell 并恢复 Agent 会话，不重放其他命令。"
         }
         UiTextKey::PerformanceProjects => "项目",
         UiTextKey::PerformanceTerminals => "终端",

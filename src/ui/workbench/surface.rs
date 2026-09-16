@@ -14,6 +14,12 @@ struct AgentSessionTooltipText {
 
 use super::*;
 
+fn pane_can_recover_process(pane: &PaneConfig, state: &crate::model::workspace::PaneState) -> bool {
+    pane.execution_mode == crate::model::layout::TerminalExecutionMode::Shell
+        || crate::ui::terminal::status::is_agent_pane(pane)
+        || state.agent_snapshot.is_some()
+}
+
 fn agent_session_field_matches(value: &str, normalized_query: &str) -> bool {
     value.contains(normalized_query) || value.to_lowercase().contains(normalized_query)
 }
@@ -1387,7 +1393,17 @@ impl WorkbenchView {
                 ProjectLocation::Ssh { root, .. } => PathBuf::from(root.as_str()),
             };
             for tab in &project.layout.tabs {
-                if !tab.startup.is_eager()
+                let started = project.tab_state(&tab.id).is_some_and(|state| {
+                    state.start_state == crate::model::workspace::TabStartState::Started
+                        || state.pane_states.iter().any(|pane| {
+                            matches!(
+                                pane.process_state,
+                                crate::model::workspace::PaneProcessState::Running
+                                    | crate::model::workspace::PaneProcessState::Restoring
+                            )
+                        })
+                });
+                if (!tab.startup.is_eager() && !started)
                     || !self.layout_has_uninitialized_terminal_pane(
                         project.id.as_str(),
                         &tab.id,
@@ -1399,7 +1415,7 @@ impl WorkbenchView {
                 let shell = shell.get_or_insert_with(|| self.resolved_terminal_shell());
                 collect_terminal_pane_contexts(
                     project.id.as_str(),
-                    &project_path,
+                    tab.cwd.as_ref().unwrap_or(&project_path),
                     &project.layout.project.name,
                     &tab.id,
                     &tab.title,
@@ -1414,21 +1430,23 @@ impl WorkbenchView {
         }
         contexts.retain(|context| {
             let key = terminal_pane_key(&context.project_id, &context.tab_id, &context.pane.id);
-            if self.terminal.host_runtime.as_ref().is_some()
-                && self
-                    .workspace
-                    .project(&ProjectId::new(&context.project_id))
-                    .and_then(|project| project.tab_state(&context.tab_id))
-                    .and_then(|tab| {
-                        tab.pane_states
-                            .iter()
-                            .find(|pane| pane.pane_id == context.pane.id)
-                    })
-                    .is_some_and(|pane| {
-                        pane.process_state == yttt_core::model::workspace::PaneProcessState::Exited
-                    })
-            {
-                return false;
+            if self.terminal.host_runtime.is_some() {
+                if self.terminal_pane_state(context).is_some_and(|state| {
+                    state.process_state == crate::model::workspace::PaneProcessState::Exited
+                        || (state.process_state
+                            == crate::model::workspace::PaneProcessState::Restoring
+                            && !pane_can_recover_process(&context.pane, state))
+                }) {
+                    return false;
+                }
+                if !self.shared_mutation_allowed()
+                    && !self
+                        .workspace_persistence
+                        .available_terminal_sessions
+                        .contains(&key)
+                {
+                    return false;
+                }
             }
             !self.terminal.terminal_panes.contains_key(&key)
         });
@@ -1469,12 +1487,27 @@ impl WorkbenchView {
         }
     }
 
+    fn terminal_pane_state(
+        &self,
+        context: &TerminalPaneContext,
+    ) -> Option<&crate::model::workspace::PaneState> {
+        self.workspace
+            .project(&ProjectId::new(&context.project_id))?
+            .tab_state(&context.tab_id)?
+            .pane_states
+            .iter()
+            .find(|pane| pane.pane_id == context.pane.id)
+    }
+
     fn agent_launch_waits_for_initialization(&self, context: &TerminalPaneContext) -> bool {
         if !self.terminal.start_processes
             || self.agent_manager.is_initialized()
-            || !self
+            || (!self
                 .agent_manager
                 .requires_initialization(&context.pane.command)
+                && !self
+                    .terminal_pane_state(context)
+                    .is_some_and(|state| state.agent_snapshot.is_some()))
         {
             return false;
         }
@@ -1498,10 +1531,33 @@ impl WorkbenchView {
         mut context: TerminalPaneContext,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<TerminalPaneView> {
+    ) -> Option<Entity<TerminalPaneView>> {
         let key = terminal_pane_key(&context.project_id, &context.tab_id, &context.pane.id);
         if let Some(pane_view) = self.terminal.terminal_panes.get(&key) {
-            return pane_view.clone();
+            return Some(pane_view.clone());
+        }
+        let recovering = self.terminal_pane_state(&context).is_some_and(|state| {
+            state.process_state == crate::model::workspace::PaneProcessState::Restoring
+        });
+        let restoring = recovering
+            || self
+                .workspace_persistence
+                .available_terminal_sessions
+                .contains(&key);
+        let attach_only = restoring
+            && self
+                .terminal_pane_state(&context)
+                .is_some_and(|state| !pane_can_recover_process(&context.pane, state));
+        if restoring
+            && !attach_only
+            && !crate::ui::terminal::status::is_agent_pane(&context.pane)
+            && !self
+                .terminal_pane_state(&context)
+                .is_some_and(|state| state.agent_snapshot.is_some())
+        {
+            // Restoring a shell must never replay its old startup command.
+            context.pane.command.clear();
+            context.pane.args.clear();
         }
         let project_id = ProjectId::new(&context.project_id);
         context.ssh =
@@ -1520,6 +1576,9 @@ impl WorkbenchView {
             &context.pane.command,
             context.ssh.is_some(),
         ) {
+            if launch.is_resuming_session() {
+                context.pane.exit_behavior = ProcessExitBehavior::ManualRestart;
+            }
             context.agent_launch = Some(launch);
             if let Some(snapshot) = restored
                 && let Err(error) =
@@ -1527,13 +1586,26 @@ impl WorkbenchView {
             {
                 self.load_error = Some(error.to_string());
             }
-        } else if !self.agent_manager.has_retained_snapshot(&agent_address)
-            && let Err(error) = self.workspace.clear_agent_snapshot(
-                &project_id,
-                &agent_address.tab_id,
-                &agent_address.pane_id,
-            )
-        {
+        } else if self.agent_manager.has_retained_snapshot(&agent_address) {
+            if !self
+                .workspace_persistence
+                .available_terminal_sessions
+                .contains(&key)
+            {
+                let _ = self.workspace.record_pane_exited(
+                    &project_id,
+                    &agent_address.tab_id,
+                    &agent_address.pane_id,
+                );
+                self.load_error = Some("The saved Agent session cannot be resumed by its provider; open a new session explicitly.".into());
+                cx.notify();
+                return None;
+            }
+        } else if let Err(error) = self.workspace.clear_agent_snapshot(
+            &project_id,
+            &agent_address.tab_id,
+            &agent_address.pane_id,
+        ) {
             self.load_error = Some(error.to_string());
         }
 
@@ -1557,7 +1629,11 @@ impl WorkbenchView {
         self.terminal.terminal_panes.insert(key, pane_view.clone());
         if start_processes {
             pane_view.update(cx, |pane, cx| {
-                pane.start_terminal(window, cx);
+                if restoring {
+                    pane.start_restored_terminal(window, cx, attach_only);
+                } else {
+                    pane.start_terminal(window, cx);
+                }
             });
         } else {
             if let Err(error) =
@@ -1568,7 +1644,7 @@ impl WorkbenchView {
             }
         }
         self.sync_agent_process_monitoring(window, cx);
-        pane_view
+        Some(pane_view)
     }
 
     pub(super) fn render_terminal_pane(
@@ -1588,7 +1664,11 @@ impl WorkbenchView {
                         .find(|pane| pane.pane_id == input.pane.id)
                 })
                 .is_some_and(|pane| {
-                    pane.process_state == yttt_core::model::workspace::PaneProcessState::Exited
+                    pane.process_state == crate::model::workspace::PaneProcessState::Exited
+                        || (pane.process_state
+                            == crate::model::workspace::PaneProcessState::Restoring
+                            && (!pane_can_recover_process(input.pane, pane)
+                                || !self.shared_mutation_allowed()))
                 })
             && !self
                 .terminal
@@ -1609,7 +1689,7 @@ impl WorkbenchView {
                 .items_center()
                 .justify_center()
                 .gap_3()
-                .child("Remote process ended or was lost after Host restart.")
+                .child("The previous process ended. Commands are not replayed automatically.")
                 .child(
                     gpui_component::button::Button::new("restart-lost-remote-pane")
                         .label("Start a new process")
@@ -1618,6 +1698,14 @@ impl WorkbenchView {
                             if !this.require_shared_mutation_control() {
                                 return;
                             }
+                            this.agent_manager.forget_pane(&AgentPaneAddress::new(
+                                project_id.as_str(),
+                                &tab_id,
+                                &pane_id,
+                            ));
+                            let _ =
+                                this.workspace
+                                    .clear_agent_snapshot(&project_id, &tab_id, &pane_id);
                             if let Err(error) =
                                 this.workspace
                                     .mark_pane_running(&project_id, &tab_id, &pane_id)
@@ -1679,7 +1767,11 @@ impl WorkbenchView {
                     )
                 });
         }
-        let pane_view = self.ensure_terminal_pane(context, window, cx);
+        let Some(pane_view) = self.ensure_terminal_pane(context, window, cx) else {
+            return div()
+                .flex_1()
+                .child("The saved Agent session could not be resumed.");
+        };
 
         let pane_id = input.pane.id.clone();
         let pending_focus_matches =
@@ -1949,37 +2041,12 @@ impl WorkbenchView {
             }
             TerminalPaneEvent::StartFailed(event) => {
                 self.load_error = Some(event.message.clone());
-                if let Some(instance_id) = &event.agent_instance_id
-                    && let Some(address) = self
-                        .agent_manager
-                        .process_start_failed(instance_id, event.generation)
-                    && let Err(error) = self.workspace.clear_agent_snapshot(
-                        &ProjectId::new(&address.project_id),
-                        &address.tab_id,
-                        &address.pane_id,
-                    )
-                {
-                    self.load_error =
-                        combine_load_messages(self.load_error.take(), Some(error.to_string()));
-                }
                 cx.notify();
             }
             TerminalPaneEvent::Lost(event) => {
-                let project_id = ProjectId::new(&event.project_id);
-                if let Err(error) =
-                    self.workspace
-                        .record_pane_exited(&project_id, &event.tab_id, &event.pane_id)
-                {
-                    self.load_error = Some(error.to_string());
-                }
-                let address =
-                    AgentPaneAddress::new(&event.project_id, &event.tab_id, &event.pane_id);
-                if let Some(snapshot) = self.agent_manager.disconnected_snapshot(&address)
-                    && let Err(error) = self.record_agent_runtime_snapshot(address, snapshot)
-                {
-                    self.load_error =
-                        combine_load_messages(self.load_error.take(), Some(error.to_string()));
-                }
+                // Connection loss is not a user edit or a confirmed process exit.
+                // Keep the saved running intent for reconciliation after reconnect.
+                self.load_error = Some(event.message.clone());
                 cx.notify();
             }
             TerminalPaneEvent::IoError { message, fatal, .. } => {

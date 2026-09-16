@@ -352,8 +352,7 @@ impl DesktopHostRuntime {
         &self,
         restore_existing: bool,
     ) -> Result<crate::session_coordinator::WorkspaceViewLease, String> {
-        self.coordinator
-            .claim(None, restore_existing || self.is_remote())
+        self.coordinator.claim(None, restore_existing)
     }
 
     pub fn sharing_ready(&self) -> bool {
@@ -618,6 +617,7 @@ impl DesktopHostRuntime {
         &self,
         spec: TerminalSpawnSpec,
         catalog: &ResourceCatalog,
+        intent: TerminalStartIntent,
     ) -> Result<Request, TerminalRecoveryError> {
         if !self.shared_editing_enabled() {
             let placement = catalog
@@ -633,7 +633,7 @@ impl DesktopHostRuntime {
                 yttt_protocol::terminal::TerminalLeaseMode::Observer,
             ));
         }
-        reconcile_terminal_start(&self.placement_store, spec, catalog)
+        reconcile_terminal_start(&self.placement_store, spec, catalog, intent)
     }
 
     pub fn bind_terminal(
@@ -791,6 +791,12 @@ pub struct RecoveredTerminal {
     pub placement: TerminalPlacement,
     pub durable: Option<DurableTerminalPlacement>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalStartIntent {
+    Fresh,
+    Restore,
+    Attach,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum TerminalRecoveryError {
@@ -816,6 +822,7 @@ fn reconcile_terminal_start(
     store: &TerminalPlacementStore,
     spec: TerminalSpawnSpec,
     catalog: &ResourceCatalog,
+    intent: TerminalStartIntent,
 ) -> Result<Request, TerminalRecoveryError> {
     let durable = store.placement(&spec.session_id);
     if let Some(placement) = catalog
@@ -824,7 +831,11 @@ fn reconcile_terminal_start(
         .find(|placement| placement.session_id == spec.session_id)
     {
         let actual = spec.address_fingerprint();
-        if placement.spawn_fingerprint != actual {
+        // A validated workspace restores an existing resource by stable identity,
+        // not by replaying its old execution spec (resume args may have changed).
+        if placement.project_id != spec.project_id
+            || (intent == TerminalStartIntent::Fresh && placement.spawn_fingerprint != actual)
+        {
             return Err(TerminalRecoveryError::AddressConflict {
                 session_id: placement.session_id.clone(),
                 expected: placement.spawn_fingerprint,
@@ -850,10 +861,16 @@ fn reconcile_terminal_start(
             yttt_protocol::terminal::TerminalLeaseMode::Interactive,
         ));
     }
+    if intent == TerminalStartIntent::Attach {
+        return Err(TerminalRecoveryError::MissingObservedSession(
+            spec.session_id,
+        ));
+    }
 
     if let Some(DurableTerminalPlacement::OpenPending {
         spawn_fingerprint, ..
     }) = &durable
+        && intent == TerminalStartIntent::Fresh
         && *spawn_fingerprint != spec.address_fingerprint()
     {
         return Err(TerminalRecoveryError::PendingAddressConflict(
@@ -1011,13 +1028,91 @@ mod tests {
     }
 
     #[test]
+    fn workspace_restore_attaches_existing_process_without_replaying_changed_execution() {
+        let temp = tempfile::tempdir().unwrap();
+        let store =
+            TerminalPlacementStore::load_local(temp.path().join("placements.json")).unwrap();
+        let original = spec();
+        let placement = TerminalPlacement {
+            session_id: original.session_id.clone(),
+            session_epoch: 3,
+            geometry_epoch: 1,
+            project_id: original.project_id.clone(),
+            geometry: original.geometry,
+            last_sequence: 11,
+            spawn_fingerprint: original.address_fingerprint(),
+            owner: None,
+            process_state: TerminalProcessState::Running,
+        };
+        let catalog = catalog(vec![placement]);
+        let mut resumed = original;
+        resumed.execution = TerminalExecutionSpec::Command {
+            shell: "/bin/sh".into(),
+            program: "codex".into(),
+            args: vec!["resume".into(), "saved-session".into()],
+            return_to_shell: false,
+        };
+        assert!(matches!(
+            reconcile_terminal_start(
+                &store,
+                resumed.clone(),
+                &catalog,
+                TerminalStartIntent::Restore
+            )
+            .unwrap(),
+            Request::AttachTerminal(AttachTerminal {
+                known_session_epoch: Some(3),
+                ..
+            })
+        ));
+        assert!(matches!(
+            reconcile_terminal_start(
+                &store,
+                resumed.clone(),
+                &catalog,
+                TerminalStartIntent::Fresh
+            ),
+            Err(TerminalRecoveryError::AddressConflict { .. })
+        ));
+        resumed.project_id = ProjectId::new("another-project");
+        assert!(matches!(
+            reconcile_terminal_start(&store, resumed, &catalog, TerminalStartIntent::Restore),
+            Err(TerminalRecoveryError::AddressConflict { .. })
+        ));
+    }
+
+    #[test]
+    fn attach_only_restore_never_spawns_a_missing_command() {
+        let temp = tempfile::tempdir().unwrap();
+        let store =
+            TerminalPlacementStore::load_local(temp.path().join("placements.json")).unwrap();
+        let spec = spec();
+        assert!(matches!(
+            reconcile_terminal_start(
+                &store,
+                spec.clone(),
+                &catalog(Vec::new()),
+                TerminalStartIntent::Attach
+            ),
+            Err(TerminalRecoveryError::MissingObservedSession(_))
+        ));
+        assert!(store.placement(&spec.session_id).is_none());
+    }
+
+    #[test]
     fn startup_reconciles_open_bound_and_missing_placements() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("terminal-placements.json");
         let store = TerminalPlacementStore::load_local(&path).unwrap();
         let spec = spec();
         assert!(matches!(
-            reconcile_terminal_start(&store, spec.clone(), &catalog(Vec::new())).unwrap(),
+            reconcile_terminal_start(
+                &store,
+                spec.clone(),
+                &catalog(Vec::new()),
+                TerminalStartIntent::Fresh
+            )
+            .unwrap(),
             Request::SpawnTerminal(_)
         ));
         assert!(matches!(
@@ -1046,7 +1141,13 @@ mod tests {
             process_state: TerminalProcessState::Running,
         };
         assert!(matches!(
-            reconcile_terminal_start(&store, spec.clone(), &catalog(vec![placement])).unwrap(),
+            reconcile_terminal_start(
+                &store,
+                spec.clone(),
+                &catalog(vec![placement]),
+                TerminalStartIntent::Fresh
+            )
+            .unwrap(),
             Request::AttachTerminal(AttachTerminal {
                 known_session_epoch: Some(3),
                 ..
@@ -1054,7 +1155,13 @@ mod tests {
         ));
 
         assert!(matches!(
-            reconcile_terminal_start(&store, spec.clone(), &catalog(Vec::new())).unwrap(),
+            reconcile_terminal_start(
+                &store,
+                spec.clone(),
+                &catalog(Vec::new()),
+                TerminalStartIntent::Fresh
+            )
+            .unwrap(),
             Request::SpawnTerminal(_)
         ));
         assert!(matches!(
@@ -1090,7 +1197,8 @@ mod tests {
             reconcile_terminal_start(
                 &address_store,
                 requested.clone(),
-                &catalog(vec![conflicting_placement])
+                &catalog(vec![conflicting_placement]),
+                TerminalStartIntent::Fresh,
             ),
             Err(TerminalRecoveryError::AddressConflict { .. })
         ));
@@ -1104,7 +1212,12 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(
-            reconcile_terminal_start(&pending_store, requested.clone(), &catalog(Vec::new())),
+            reconcile_terminal_start(
+                &pending_store,
+                requested.clone(),
+                &catalog(Vec::new()),
+                TerminalStartIntent::Fresh
+            ),
             Err(TerminalRecoveryError::PendingAddressConflict(_))
         ));
 
@@ -1132,7 +1245,12 @@ mod tests {
             process_state: TerminalProcessState::Running,
         };
         assert!(matches!(
-            reconcile_terminal_start(&close_store, requested, &catalog(vec![live_placement])),
+            reconcile_terminal_start(
+                &close_store,
+                requested,
+                &catalog(vec![live_placement]),
+                TerminalStartIntent::Fresh
+            ),
             Err(TerminalRecoveryError::ClosePending(_))
         ));
     }
@@ -1189,7 +1307,13 @@ mod tests {
         let store = TerminalPlacementStore::load_local(path).unwrap();
 
         assert!(matches!(
-            reconcile_terminal_start(&store, requested.clone(), &catalog(Vec::new())).unwrap(),
+            reconcile_terminal_start(
+                &store,
+                requested.clone(),
+                &catalog(Vec::new()),
+                TerminalStartIntent::Fresh
+            )
+            .unwrap(),
             Request::SpawnTerminal(_)
         ));
         assert!(matches!(

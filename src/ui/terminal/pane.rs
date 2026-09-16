@@ -12,6 +12,7 @@ use std::{
 use crate::{
     host_runtime::{
         DesktopHostRuntime, HostRuntimeGlobal, TerminalPaneHostEvent, TerminalRecoveryError,
+        TerminalStartIntent,
     },
     model::layout::{PaneConfig, PaneKind, ProcessExitBehavior, TerminalExecutionMode},
     runtime::{
@@ -658,7 +659,12 @@ impl TerminalPaneView {
         })
     }
 
-    fn start_host_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    fn start_host_terminal(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        intent: TerminalStartIntent,
+    ) -> bool {
         let Some(host_runtime) = cx
             .try_global::<HostRuntimeGlobal>()
             .and_then(HostRuntimeGlobal::runtime)
@@ -883,9 +889,19 @@ impl TerminalPaneView {
                     };
                     Arc::new(catalog)
                 };
-                let spawn_fingerprint = request_spec.address_fingerprint();
-                let request =
-                    request_runtime.terminal_start_request(request_spec, catalog.as_ref())?;
+                let spawn_fingerprint = catalog
+                    .terminals
+                    .iter()
+                    .find(|placement| placement.session_id == request_spec.session_id)
+                    .map_or_else(
+                        || request_spec.address_fingerprint(),
+                        |placement| placement.spawn_fingerprint,
+                    );
+                let request = request_runtime.terminal_start_request(
+                    request_spec,
+                    catalog.as_ref(),
+                    intent,
+                )?;
                 let response = request_runtime
                     .request(request)
                     .recv_async()
@@ -1191,7 +1207,25 @@ impl TerminalPaneView {
 
     pub(crate) fn start_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         self.window_handle = Some(window.window_handle());
-        self.start_host_terminal(window, cx)
+        self.start_host_terminal(window, cx, TerminalStartIntent::Fresh)
+    }
+
+    pub(crate) fn start_restored_terminal(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        attach_only: bool,
+    ) -> bool {
+        self.window_handle = Some(window.window_handle());
+        self.start_host_terminal(
+            window,
+            cx,
+            if attach_only {
+                TerminalStartIntent::Attach
+            } else {
+                TerminalStartIntent::Restore
+            },
+        )
     }
 
     fn set_spawn_failure(&mut self, message: String, cx: &mut Context<Self>) {

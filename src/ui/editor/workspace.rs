@@ -32,7 +32,6 @@ pub struct ProjectWorkItemSession {
     file_tree: ProjectFileTree,
     project_panel_visible: bool,
     project_panel_width: f32,
-    unavailable_terminal_ids: HashSet<String>,
 }
 
 /// A serialized editor-session tree. It contains no GPUI entities and is
@@ -83,7 +82,7 @@ impl ProjectEditorWorkspaceSnapshot {
             return Err("editor session root does not match its workspace project".to_string());
         }
         let mut state = ProjectEditorWorkspaceState::default();
-        state.restore_snapshot(self.clone(), terminal_ids, &HashMap::new())
+        state.restore_snapshot(self.clone(), terminal_ids)
     }
 }
 
@@ -107,7 +106,6 @@ impl ProjectWorkItemSession {
             file_tree: ProjectFileTree::new(root),
             project_panel_visible,
             project_panel_width,
-            unavailable_terminal_ids: HashSet::new(),
         }
     }
 
@@ -162,7 +160,6 @@ impl ProjectWorkItemSession {
     fn restore(
         snapshot: ProjectWorkItemSessionSnapshot,
         terminal_ids: &[String],
-        unavailable_terminal_ids: HashSet<String>,
     ) -> Result<Self, String> {
         if snapshot
             .file_ids
@@ -215,7 +212,6 @@ impl ProjectWorkItemSession {
             file_tree: ProjectFileTree::new(snapshot.root),
             project_panel_visible: snapshot.project_panel_visible,
             project_panel_width: snapshot.project_panel_width,
-            unavailable_terminal_ids,
         };
         session.reconcile_work_area(terminal_ids);
         Ok(session)
@@ -236,8 +232,7 @@ impl ProjectWorkItemSession {
     }
 
     pub fn ordered_items(&self, terminal_ids: &[String]) -> Vec<WorkItemId> {
-        let terminal_ids = self.available_terminal_ids(terminal_ids);
-        self.work_area.ordered_items(&terminal_ids, &self.file_ids)
+        self.work_area.ordered_items(terminal_ids, &self.file_ids)
     }
 
     pub fn move_work_item(
@@ -306,9 +301,8 @@ impl ProjectWorkItemSession {
     }
 
     pub fn reconcile_work_area(&mut self, terminal_ids: &[String]) {
-        let terminal_ids = self.available_terminal_ids(terminal_ids);
-        self.work_area.reconcile(&terminal_ids, &self.file_ids);
-        let available = self.ordered_items(&terminal_ids);
+        self.work_area.reconcile(terminal_ids, &self.file_ids);
+        let available = self.ordered_items(terminal_ids);
         self.activation_history
             .retain(|item| available.contains(item));
         self.record_active_item();
@@ -316,9 +310,7 @@ impl ProjectWorkItemSession {
 
     pub fn select_work_item(&mut self, item: WorkItemId, terminal_ids: &[String]) -> bool {
         let exists = match &item {
-            WorkItemId::Terminal(id) => {
-                terminal_ids.contains(id) && !self.unavailable_terminal_ids.contains(id)
-            }
+            WorkItemId::Terminal(id) => terminal_ids.contains(id),
             WorkItemId::File(id) => self.file_ids.contains(id),
         };
         if !exists {
@@ -408,14 +400,6 @@ impl ProjectWorkItemSession {
 
     pub fn set_project_panel_width(&mut self, width: f32) {
         self.project_panel_width = width;
-    }
-
-    fn available_terminal_ids(&self, terminal_ids: &[String]) -> Vec<String> {
-        terminal_ids
-            .iter()
-            .filter(|terminal_id| !self.unavailable_terminal_ids.contains(*terminal_id))
-            .cloned()
-            .collect()
     }
 
     fn select_relative(&mut self, terminal_ids: &[String], offset: isize) -> Option<WorkItemId> {
@@ -555,7 +539,6 @@ impl ProjectEditorWorkspaceState {
         &mut self,
         snapshot: ProjectEditorWorkspaceSnapshot,
         terminal_ids: &HashMap<ProjectId, Vec<String>>,
-        unavailable_terminal_ids: &HashMap<ProjectId, HashSet<String>>,
     ) -> Result<(), String> {
         let mut sessions = HashMap::with_capacity(snapshot.sessions.len());
         for session_snapshot in snapshot.sessions {
@@ -572,34 +555,11 @@ impl ProjectEditorWorkspaceState {
                     .get(&project_id)
                     .map(Vec::as_slice)
                     .unwrap_or_default(),
-                unavailable_terminal_ids
-                    .get(&project_id)
-                    .cloned()
-                    .unwrap_or_default(),
             )?;
             sessions.insert(project_id, session);
         }
         self.sessions = sessions;
         Ok(())
-    }
-
-    pub(crate) fn set_unavailable_terminal_ids(
-        &mut self,
-        unavailable_terminal_ids: &HashMap<ProjectId, HashSet<String>>,
-        terminal_ids: &HashMap<ProjectId, Vec<String>>,
-    ) {
-        for (project_id, session) in &mut self.sessions {
-            session.unavailable_terminal_ids = unavailable_terminal_ids
-                .get(project_id)
-                .cloned()
-                .unwrap_or_default();
-            session.reconcile_work_area(
-                terminal_ids
-                    .get(project_id)
-                    .map(Vec::as_slice)
-                    .unwrap_or_default(),
-            );
-        }
     }
 
     pub fn len(&self) -> usize {

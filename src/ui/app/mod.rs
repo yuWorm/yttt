@@ -138,7 +138,8 @@ pub fn run(
             workbenches: Rc::new(RefCell::new(Vec::new())),
         };
         install_desktop_tray(window_context.clone(), cx);
-        let restore_windows = matches!(&initial_command, DesktopShellCommand::Activate);
+        let restore_windows = matches!(&initial_command, DesktopShellCommand::Activate)
+            && window_context.app_settings.general.restore_last_session;
         if let Err(error) = handle_desktop_shell_command(initial_command, &window_context, cx) {
             eprintln!("failed to open initial yttt window: {error}");
         }
@@ -194,9 +195,14 @@ pub fn run_remote(launch: crate::remote_launch::RemoteLaunch) {
             if let Err(error) = remote_connect::open(
                 launch,
                 move |remote, cx| {
-                    let workspace_count = remote.runtime.pending_workspace_count().max(1);
+                    let pending_workspaces = remote.runtime.pending_workspace_count().max(1);
                     cx.set_global(HostRuntimeGlobal::ready(remote.runtime));
                     let (app_settings, theme_runtime) = load_app_runtime(&remote.config_paths);
+                    let workspace_count = if app_settings.general.restore_last_session {
+                        pending_workspaces
+                    } else {
+                        1
+                    };
                     let appearance = AppearanceState::new(theme_runtime);
                     Theme::global_mut(cx).apply_config(&Rc::new(
                         appearance.runtime().to_gpui_component_theme_config(),
@@ -346,7 +352,10 @@ fn open_workbench_window(
     let startup_mode = window_context.startup_mode;
     let login_startup = window_context.login_startup.clone();
     let workbenches = window_context.workbenches.clone();
-    let restore_existing = matches!(intent, WindowIntent::Restore);
+    let restore_existing = matches!(intent, WindowIntent::Restore)
+        && load_settings(&config_paths)
+            .map(|loaded| loaded.settings.general.restore_last_session)
+            .unwrap_or(false);
     let has_host_snapshot = cx
         .global::<HostRuntimeGlobal>()
         .runtime()
@@ -373,6 +382,13 @@ fn open_workbench_window(
                             force_onboarding,
                             Vec::new(),
                         ),
+                        WindowIntent::Restore if !restore_existing => {
+                            WorkbenchView::from_project_paths(
+                                config_paths.clone(),
+                                force_onboarding,
+                                Vec::new(),
+                            )
+                        }
                         WindowIntent::Restore if has_host_snapshot => {
                             WorkbenchView::from_project_paths(
                                 config_paths.clone(),

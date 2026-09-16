@@ -536,12 +536,7 @@ impl WorkbenchView {
         config_paths: AppConfigPaths,
         force_onboarding: bool,
     ) -> Self {
-        let mut root =
-            Self::with_workspace_and_config_paths(Workspace::new(), config_paths, force_onboarding);
-        if root.restore_last_session_enabled() {
-            root.restore_projects_open_at_last_exit();
-        }
-        root
+        Self::with_workspace_and_config_paths(Workspace::new(), config_paths, force_onboarding)
     }
     pub fn with_login_startup(mut self, manager: LoginStartupManager) -> Self {
         self.login_startup = Some(manager);
@@ -550,6 +545,10 @@ impl WorkbenchView {
 
     pub fn from_startup(config_paths: AppConfigPaths, force_onboarding: bool) -> Self {
         let mut root = Self::with_config_paths_and_force_onboarding(config_paths, force_onboarding);
+        // One-time import for profiles predating Host workspace snapshots.
+        if root.restore_last_session_enabled() {
+            root.import_legacy_projects();
+        }
         root.workspace_persistence.startup_projects = startup_project_paths();
         root
     }
@@ -715,46 +714,11 @@ impl WorkbenchView {
         }
         Ok(())
     }
-    pub fn has_last_opened_projects(&self) -> bool {
-        !self.recent_projects_config.last_opened_projects.is_empty()
-            || !self
-                .recent_projects_config
-                .last_restorable_projects
-                .is_empty()
-            || !self.recent_projects_config.projects.is_empty()
-    }
 
-    pub fn restore_last_opened_projects(&mut self) -> usize {
-        let projects = if !self.recent_projects_config.last_opened_projects.is_empty() {
-            self.recent_projects_config.last_opened_projects.clone()
-        } else if !self
-            .recent_projects_config
-            .last_restorable_projects
-            .is_empty()
-        {
-            self.recent_projects_config.last_restorable_projects.clone()
-        } else {
-            self.recent_projects_config
-                .projects
-                .first()
-                .map(|project| {
-                    vec![ProjectReferenceConfig::new(
-                        project.id.clone(),
-                        project.location.clone(),
-                    )]
-                })
-                .unwrap_or_default()
-        };
-        self.restore_projects(projects)
-    }
-
-    fn restore_projects_open_at_last_exit(&mut self) -> usize {
-        self.restore_projects(self.recent_projects_config.last_opened_projects.clone())
-    }
-
-    fn restore_projects(&mut self, projects: Vec<ProjectReferenceConfig>) -> usize {
+    fn import_legacy_projects(&mut self) -> usize {
         let mut restored = 0;
         let mut messages = self.load_error.take().into_iter().collect::<Vec<_>>();
+        let projects = self.recent_projects_config.last_opened_projects.clone();
         for project in projects {
             let result = match project.location {
                 ProjectLocation::Local { path } => {

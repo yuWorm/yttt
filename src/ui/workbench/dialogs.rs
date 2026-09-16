@@ -1281,8 +1281,8 @@ pub(super) fn empty_workspace(
                                 scale,
                                 cx,
                             )
-                            .on_click(cx.listener(|this, _, _window, cx| {
-                                this.restore_last_opened_projects();
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.restore_last_session(window, cx);
                                 cx.notify();
                             }))
                             .disabled(!can_restore_last_session)

@@ -1762,7 +1762,7 @@ fn opening_recent_project_does_not_restore_persisted_agent_session(cx: &mut Test
 }
 
 #[gpui::test]
-fn restoring_last_session_restores_persisted_agent_session(cx: &mut TestAppContext) {
+fn legacy_import_preserves_persisted_agent_session(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
@@ -1780,7 +1780,7 @@ fn restoring_last_session_restores_persisted_agent_session(cx: &mut TestAppConte
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
         root.recent_projects_config.last_opened_projects = vec![project];
-        assert_eq!(root.restore_last_opened_projects(), 1);
+        assert_eq!(root.import_legacy_projects(), 1);
         cx.notify();
     });
     cx.run_until_parked();
@@ -1815,9 +1815,7 @@ fn restoring_last_session_restores_persisted_agent_session(cx: &mut TestAppConte
 }
 
 #[gpui::test]
-fn failed_host_scoped_restored_shell_session_is_replaced_with_a_fresh_agent(
-    cx: &mut TestAppContext,
-) {
+fn failed_host_scoped_resume_keeps_the_original_agent_session(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let project_path = temp.path().join("project");
@@ -1835,7 +1833,7 @@ fn failed_host_scoped_restored_shell_session_is_replaced_with_a_fresh_agent(
     let root = root_slot.borrow_mut().take().unwrap();
     root.update(cx, |root, cx| {
         root.recent_projects_config.last_opened_projects = vec![project];
-        assert_eq!(root.restore_last_opened_projects(), 1);
+        assert_eq!(root.import_legacy_projects(), 1);
         cx.notify();
     });
     cx.run_until_parked();
@@ -1896,25 +1894,28 @@ fn failed_host_scoped_restored_shell_session_is_replaced_with_a_fresh_agent(
 
     cx.update(|_, app| {
         let root = root.read(app);
-        let fresh_pane = root.terminal.terminal_panes.get(&key).unwrap().read(app);
-        assert_ne!(
-            fresh_pane.agent_instance_id(),
-            Some(&failed_instance),
-            "the failed resume launch must not be reused"
+        let pane = root.terminal.terminal_panes.get(&key).unwrap().read(app);
+        assert_eq!(pane.agent_instance_id(), Some(&failed_instance));
+        let snapshot = root
+            .workspace
+            .project(&project_id)
+            .unwrap()
+            .tab_state("dev")
+            .unwrap()
+            .pane_states
+            .iter()
+            .find(|pane| pane.pane_id == "shell")
+            .unwrap()
+            .agent_snapshot
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            snapshot.session.as_ref().unwrap().title.as_deref(),
+            Some("Fix the flaky terminal test")
         );
-        assert!(
-            root.workspace
-                .project(&project_id)
-                .unwrap()
-                .tab_state("dev")
-                .unwrap()
-                .pane_states
-                .iter()
-                .find(|pane| pane.pane_id == "shell")
-                .unwrap()
-                .agent_snapshot
-                .is_none(),
-            "fresh launches wait for a Host-owned snapshot"
+        assert_eq!(
+            snapshot.view_state(),
+            yttt_agent_core::AgentViewState::Failed
         );
     });
 }

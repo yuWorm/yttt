@@ -100,7 +100,7 @@ impl Render for WorkbenchView {
                 cx,
                 &self.ui_text,
                 &appearance.ui,
-                self.has_last_opened_projects(),
+                self.has_restorable_workspace(),
             )
         } else {
             self.reconcile_selected_work_area();

@@ -668,7 +668,9 @@ fn pane_count(layout: &LayoutNode) -> usize {
 
 fn process_status_label(state: PaneProcessState, ui_text: &UiText) -> &'static str {
     match state {
-        PaneProcessState::Idle => ui_text.get(UiTextKey::PaletteStatusIdle),
+        PaneProcessState::Idle | PaneProcessState::Restoring => {
+            ui_text.get(UiTextKey::PaletteStatusIdle)
+        }
         PaneProcessState::Running => ui_text.get(UiTextKey::PaletteStatusRunning),
         PaneProcessState::Exited => ui_text.get(UiTextKey::PaletteStatusExited),
     }
