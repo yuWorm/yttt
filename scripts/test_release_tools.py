@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -128,6 +130,47 @@ Release introduction.
 
 
 class PrepareReleaseTests(unittest.TestCase):
+    def test_prepared_release_builds_with_locked_workspace_versions(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            repo = Path(temporary_directory)
+            (repo / "src").mkdir()
+            (repo / "src/lib.rs").write_text("", encoding="utf-8")
+            (repo / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["."]\n'
+                '[workspace.package]\nversion = "0.2.0"\n'
+                '[package]\nname = "yttt"\nversion.workspace = true\n',
+                encoding="utf-8",
+            )
+            (repo / "CHANGELOG.md").write_text(
+                "# Changelog\n\n## Unreleased\n\n- A release change.\n",
+                encoding="utf-8",
+            )
+            subprocess.run(
+                ["cargo", "generate-lockfile", "--offline"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).with_name("prepare_release.py")),
+                    "0.3.0",
+                    "--repo",
+                    str(repo),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            result = subprocess.run(
+                ["cargo", "check", "--locked", "--offline"],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_workspace_version_is_replaced_only_in_workspace_package(self) -> None:
         manifest = """[workspace]
 members = []

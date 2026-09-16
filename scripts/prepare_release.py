@@ -126,7 +126,7 @@ def repair_existing_release(changelog: str, version: str, release_date: str) -> 
 
 
 def run_cargo_metadata(repo_root: Path, *, locked: bool) -> dict[str, object]:
-    command = ["cargo", "metadata", "--format-version", "1", "--no-deps"]
+    command = ["cargo", "metadata", "--format-version", "1"]
     if locked:
         command.append("--locked")
     completed = subprocess.run(
