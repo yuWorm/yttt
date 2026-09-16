@@ -455,27 +455,38 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsGroupKeybindingsDescription => "键盘快捷键和冲突诊断",
         UiTextKey::SettingsNoSearchResults => "没有找到设置",
         UiTextKey::SettingsNoSearchResultsDescription => "请尝试其他设置名称、说明或分类。",
-        UiTextKey::SettingsTarget => "设置目标",
-        UiTextKey::SettingsTargetDevice => "此设备",
-        UiTextKey::SettingsTargetHost => "Host",
-        UiTextKey::SettingsTargetProject => "所选项目",
-        UiTextKey::SettingsHostIdentity => "Host：",
-        UiTextKey::SettingsScopeDevice => "保存到此设备",
-        UiTextKey::SettingsScopeHost => "保存到 Host",
-        UiTextKey::SettingsScopeProject => "保存到此项目",
+        UiTextKey::SettingsTargetDevice => "本机偏好",
+        UiTextKey::SettingsTargetHost => "运行环境",
+        UiTextKey::SettingsTargetProject => "项目",
+        UiTextKey::SettingsScopeDevice => "本机偏好",
+        UiTextKey::SettingsScopeHost => "运行环境 · 此环境共用",
+        UiTextKey::SettingsScopeProject => "仅此项目",
+        UiTextKey::SettingsLocalEnvironment => "本机",
+        UiTextKey::SettingsRemoteEnvironment => "远程",
+        UiTextKey::SettingsDevelopmentEnvironment => "开发配置",
+        UiTextKey::SettingsTestEnvironment => "测试配置",
+        UiTextKey::SettingsEnvironmentDetails => "配置详情",
+        UiTextKey::SettingsLastKnownValue => "最后已知值",
+        UiTextKey::SettingsCustomizeProject => "为此项目单独设置",
+        UiTextKey::SettingsCollapseOverride => "收起项目设置",
+        UiTextKey::SettingsSavePending => "正在保存设置…",
         UiTextKey::SettingsApplyImmediate => "立即生效",
         UiTextKey::SettingsApplyNewSession => "在新会话中生效",
         UiTextKey::SettingsApplyReopenFile => "重新打开文件时生效",
-        UiTextKey::SettingsEffectiveSource => "有效来源",
-        UiTextKey::SettingsSourceHost => "Host 默认值",
+        UiTextKey::SettingsSourceHost => "使用运行环境默认值",
         UiTextKey::SettingsSourceProject => "项目覆盖",
         UiTextKey::SettingsReadOnlyObserver => {
-            "其他客户端正在控制此 profile，Host 和项目设置为只读。"
+            "其他客户端正在控制此环境，运行环境和项目设置为只读；本机偏好仍可编辑。"
         }
         UiTextKey::SettingsReadOnlyPreparingTransfer => {
-            "profile 控制权正在交接，Host 和项目设置为只读。"
+            "控制权正在交接，运行环境和项目设置暂时只读；本机偏好仍可编辑。"
         }
-        UiTextKey::SettingsReadOnlyDisconnected => "Host 连接可用前，Host 和项目设置为只读。",
+        UiTextKey::SettingsReadOnlyDisconnected => {
+            "运行环境未连接，其配置暂时只读；本机偏好仍可编辑。"
+        }
+        UiTextKey::SettingsReadOnlyProjectConfig => {
+            "此环境的项目配置为只读。请使用允许写入项目配置的环境进行项目定制。"
+        }
         UiTextKey::SettingsProjectTargetUnavailable => "请打开并选中一个项目以编辑项目覆盖。",
         UiTextKey::SettingsProjectLoading => "正在加载项目设置…",
         UiTextKey::SettingsProjectLoadFailed => "项目设置加载失败",
@@ -486,7 +497,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsCopyDraft => "复制草稿",
         UiTextKey::RemoteDeviceDraftRecoveryAvailable => " · 本机恢复草稿可用",
         UiTextKey::RemoteRecoverDeviceDrafts => "恢复本机草稿",
-        UiTextKey::SettingsUseHostDefault => "使用 Host 默认值",
+        UiTextKey::SettingsUseHostDefault => "恢复使用环境默认值",
         UiTextKey::SettingsSectionApplicationInteraction => "应用与交互",
         UiTextKey::SettingsSectionStartupNotifications => "启动与通知",
         UiTextKey::SettingsSectionNewTabs => "新标签页",

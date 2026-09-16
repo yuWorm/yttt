@@ -2028,8 +2028,8 @@ impl WorkbenchView {
         }
     }
 
-    pub fn show_settings_file_path_status(&mut self) {
-        let path = match self.settings.settings_scope {
+    pub fn show_settings_file_path_status(&mut self, scope: crate::config::scope::SettingsScope) {
+        let path = match scope {
             crate::config::scope::SettingsScope::Device => {
                 crate::config::scope::device_settings_file().or_else(|| {
                     self.config_paths

@@ -41,7 +41,7 @@ use yttt::ui::settings::font_options::{
     terminal_font_family_option_for_setting, terminal_font_family_options_from_system,
     terminal_font_family_setting_from_option,
 };
-use yttt::ui::settings::{SettingsGroupId, settings_rows_for_group};
+use yttt::ui::settings::{SettingsGroupId, SettingsPageState, settings_rows_for_group};
 use yttt::ui::terminal::pane::TerminalPaneView;
 use yttt::ui::theme::icons::IconTheme;
 use yttt::ui::theme::{ThemeRuntime, UiStyle, UiStyleId, WorkbenchTheme};
@@ -907,7 +907,18 @@ fn settings_rows_are_grouped_by_user_facing_sections() {
     let layout_rows = settings_rows_for_group(SettingsGroupId::DefaultLayout, &text);
 
     assert!(general_rows.iter().any(|row| row.title == "Language"));
+    assert!(
+        general_rows
+            .iter()
+            .any(|row| row.key == "host.settings.toml")
+    );
     let appearance_rows = settings_rows_for_group(SettingsGroupId::Appearance, &text);
+    assert!(appearance_rows.iter().any(|row| row.key == "bars"));
+    assert!(
+        appearance_rows
+            .iter()
+            .any(|row| row.key == "device.settings.toml")
+    );
     assert!(appearance_rows.iter().any(|row| row.title == "UI font"));
     assert!(
         appearance_rows
@@ -950,6 +961,16 @@ fn settings_rows_are_grouped_by_user_facing_sections() {
     assert!(terminal_rows.iter().any(|row| row.title == "Cursor shape"));
     assert!(terminal_rows.iter().any(|row| row.title == "Scrollbar"));
     assert!(agent_rows.iter().any(|row| row.title == "Primary agent"));
+    assert!(
+        agent_rows
+            .iter()
+            .any(|row| row.key == "agent.sessions_enabled")
+    );
+    assert!(
+        agent_rows
+            .iter()
+            .any(|row| row.key == "agent.additional_session_agents")
+    );
     assert!(agent_rows.iter().any(|row| row.title == "Session list"));
     assert!(
         permission_rows
@@ -1038,6 +1059,78 @@ fn settings_rows_are_localized() {
     assert!(terminal_rows.iter().any(|row| row.title == "默认 Shell"));
     assert!(terminal_rows.iter().any(|row| row.title == "全局环境变量"));
     assert!(terminal_rows.iter().any(|row| row.title == "光标形状"));
+}
+
+#[test]
+fn settings_search_keeps_every_category_discoverable_without_a_query() {
+    let page = SettingsPageState::default();
+    let groups = page.visible_groups(&UiText::english());
+
+    assert_eq!(groups.len(), SettingsGroupId::ALL.len());
+    assert!(
+        groups
+            .iter()
+            .any(|group| group.id == SettingsGroupId::Agent)
+    );
+    assert!(
+        groups
+            .iter()
+            .any(|group| group.id == SettingsGroupId::Terminal)
+    );
+}
+
+#[test]
+fn settings_search_matches_shell_aliases_and_canonical_key_in_chinese() {
+    let text = UiText::new(Locale::Chinese);
+
+    for query in ["shell", "default shell", "terminal.shell"] {
+        let page = SettingsPageState {
+            search_query: query.into(),
+            ..Default::default()
+        };
+
+        assert!(
+            page.matching_rows(SettingsGroupId::Terminal, &text)
+                .iter()
+                .any(|row| row.key == "terminal.shell")
+        );
+        assert!(page.matches_row(SettingsGroupId::Terminal, "terminal.shell", &text));
+    }
+}
+
+#[test]
+fn settings_search_matches_english_language_text_and_canonical_keys_in_chinese() {
+    let text = UiText::new(Locale::Chinese);
+
+    for (query, key) in [
+        ("language server command", "editor.lsp.command"),
+        ("editor.lsp.enabled", "editor.lsp.enabled"),
+    ] {
+        let page = SettingsPageState {
+            search_query: query.into(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            page.visible_groups(&text)
+                .into_iter()
+                .map(|group| group.id)
+                .collect::<Vec<_>>(),
+            vec![SettingsGroupId::Languages]
+        );
+        assert!(page.matches_row(SettingsGroupId::Languages, key, &text));
+    }
+
+    let page = SettingsPageState {
+        search_query: "not a settings term".into(),
+        ..Default::default()
+    };
+    assert!(page.visible_groups(&text).is_empty());
+    assert!(
+        page.matching_rows(SettingsGroupId::Languages, &text)
+            .is_empty()
+    );
+    assert!(!page.matches_row(SettingsGroupId::Languages, "editor.lsp.enabled", &text));
 }
 
 #[test]

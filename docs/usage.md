@@ -404,16 +404,34 @@ Desktop Portal when used, or available without separate approval.
 
 ## Configuration Targets
 
-The settings window has explicit **This Device**, **Host**, and **Selected Project** targets.
-It shows the destination, effective source, read-only reason, and application timing for each row.
+Settings are organized by **feature**, not by storage target. Agent, Terminal, Editor and the other
+categories remain discoverable together. Search covers all categories and matches configuration
+keys, localized labels/descriptions and English names, including in the Chinese interface.
+For example, searching `terminal.shell` takes you directly to the default shell control.
 
-| Target | Contents | Storage and authority |
+The header identifies the current **Environment** and **Project**. Local development/test
+environments have readable labels; hover the environment identity or expand **Configuration
+details** for the full profile ID and configuration paths. Settings describe their destination,
+application timing and any read-only restriction alongside the control:
+
+| Destination | Contents | Storage and authority |
 | --- | --- | --- |
-| This Device | Appearance, themes/icons, fonts, keybindings, Vim, notifications, performance display, editor presentation/autosave, UI preferences | `<local-profile-config>/device`; editable by controllers and observers, including while disconnected |
-| Host | Shells/environment, scrollback, keyboard protocol, new-tab commands, Agent defaults, editor language/tab defaults and LSP, default layouts | Owning Host profile; requires a connected controller, with no transfer in progress |
-| Selected Project | `editor.tab_size`, `editor.auto_detect_language`, `editor.default_language`; project layouts have their own existing format | `<project>/.yttt/settings.toml`, or the Host profile's isolated overlay; requires control and a writable project-config policy |
+| Local preferences | Appearance, themes/icons, fonts, keybindings, Vim, notifications, editor presentation/autosave, UI preferences | `<local-profile-config>/device`; editable by controllers and observers, including while disconnected |
+| Environment | Shells/environment, scrollback, keyboard protocol, new-tab commands, Agent defaults, editor language/tab defaults and LSP, default layouts | Owning Host profile, shared by its connected clients; requires a connected controller, with no transfer in progress |
+| Project | `editor.tab_size`, `editor.auto_detect_language`, `editor.default_language`; project layouts have their own existing format | `<project>/.yttt/settings.toml`, or the Host profile's isolated overlay; requires control and a writable project-config policy |
 
-Resetting a Project setting removes its override and reveals the Host default. Editor tab size
+Under an overridable Editor or Languages setting, the named project's summary shows whether it
+uses the environment default or a project value. **Customize for this project** expands a separate
+project control; changing the environment control above it still changes the environment default.
+Expanding the project control or leaving its value unchanged does not create an override.
+Project controls are bound to the displayed project and snapshot generation, so stale input cannot
+write to a newly selected project. Shell and Agent settings do not gain project overrides.
+
+Unavailable environment settings remain visible with the reason they are read-only. Disconnected
+values are labeled as last known; local preferences remain editable. Retained drafts still use
+**Retry**, **Copy**, and **Discard**, with retry authority determined by the draft's actual destination.
+
+**Restore environment default** removes the project override and restores inheritance. Editor tab size
 and language settings apply to newly opened/reopened files; shell and Agent launch settings apply
 to new sessions. Existing file contents and running processes are not replaced.
 

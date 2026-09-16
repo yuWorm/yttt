@@ -3,9 +3,9 @@ use std::{collections::HashMap, path::PathBuf, rc::Rc};
 use gpui::{Entity, Subscription};
 use gpui_component::{VirtualListScrollHandle, input::InputState};
 
-use crate::{config::project_settings::EffectiveProjectEditorSetting, model::ids::ProjectId};
 use crate::{
-    config::scope::SettingsScope,
+    config::project_settings::{EffectiveProjectEditorSetting, ProjectEditorSettingKey},
+    model::ids::ProjectId,
     ui::{
         settings::{
             SettingsPageState,
@@ -91,7 +91,7 @@ pub(in super::super) struct SettingsControllerState {
     pub(in super::super) settings_number_inputs: HashMap<SettingsNumberField, Entity<InputState>>,
     pub(in super::super) settings_number_input_subscriptions:
         HashMap<SettingsNumberField, Vec<Subscription>>,
-    pub(in super::super) settings_scope: SettingsScope,
+    pub(in super::super) project_override_expanded: Option<ProjectEditorSettingKey>,
     pub(in super::super) project_editor_settings_project_id: Option<ProjectId>,
     pub(in super::super) project_editor_settings_generation: u64,
     pub(in super::super) project_editor_settings: Vec<EffectiveProjectEditorSetting>,
@@ -101,6 +101,7 @@ pub(in super::super) struct SettingsControllerState {
     pub(in super::super) settings_project_tab_size_input_subscription: Option<Subscription>,
     pub(in super::super) settings_project_default_language_input: Option<Entity<InputState>>,
     pub(in super::super) settings_project_default_language_input_subscription: Option<Subscription>,
+    pub(in super::super) settings_context_expanded: bool,
     pub(in super::super) settings_page: SettingsPageState,
     pub(in super::super) zed_theme_import_dialog: Option<ZedThemeImportDialogState>,
     pub(in super::super) permission_statuses: [PermissionStatus; PermissionKind::COUNT],
@@ -187,9 +188,9 @@ impl SettingsControllerState {
             settings_number_inputs: HashMap::new(),
             settings_number_input_subscriptions: HashMap::new(),
             settings_page: SettingsPageState::default(),
-            settings_scope: SettingsScope::Device,
             project_editor_settings_project_id: None,
             project_editor_settings_generation: 0,
+            project_override_expanded: None,
             project_editor_settings: Vec::new(),
             project_settings_path: None,
             project_settings_load_error: None,
@@ -197,6 +198,7 @@ impl SettingsControllerState {
             settings_project_tab_size_input_subscription: None,
             settings_project_default_language_input: None,
             settings_project_default_language_input_subscription: None,
+            settings_context_expanded: false,
             permission_statuses: std::array::from_fn(|index| {
                 platform::initial_permission_status(PermissionKind::ALL[index])
             }),

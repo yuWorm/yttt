@@ -286,49 +286,12 @@ impl WorkbenchView {
     pub fn settings_is_open(&self) -> bool {
         self.settings.settings_page.is_open
     }
-    pub(super) fn selected_settings_scope(&self) -> SettingsScope {
-        self.settings.settings_scope
-    }
-
-    pub(super) fn select_settings_scope(
-        &mut self,
-        scope: SettingsScope,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.settings.settings_scope == scope {
-            if scope == SettingsScope::Project {
-                self.refresh_settings_project_target(window, cx);
-            }
-            return;
-        }
-
-        self.settings.settings_scope = scope;
-        self.clear_settings_project_target();
-        if scope == SettingsScope::Project {
-            self.refresh_settings_project_target(window, cx);
-        }
-        if crate::ui::settings::settings_rows_for_scope(
-            self.settings.settings_page.selected_group,
-            &self.ui_text,
-            scope,
-        )
-        .is_empty()
-        {
-            if let Some(group) = SettingsGroupId::ALL.iter().copied().find(|group| {
-                !crate::ui::settings::settings_rows_for_scope(*group, &self.ui_text, scope)
-                    .is_empty()
-            }) {
-                self.settings.settings_page.selected_group = group;
-            }
-        }
-    }
-
     fn clear_settings_project_target(&mut self) {
         self.settings.project_editor_settings_generation = self
             .settings
             .project_editor_settings_generation
             .wrapping_add(1);
+        self.settings.project_override_expanded = None;
         self.settings.project_editor_settings_project_id = None;
         self.settings.project_editor_settings.clear();
         self.settings.project_settings_path = None;
@@ -345,7 +308,12 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings.settings_scope != SettingsScope::Project {
+        if !self.settings.settings_page.is_open
+            || !matches!(
+                self.settings.settings_page.selected_group,
+                SettingsGroupId::Editor | SettingsGroupId::Languages
+            )
+        {
             return;
         }
         let selected_project_id = self.workspace.selected_project_id().cloned();
@@ -361,10 +329,6 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings.settings_scope != SettingsScope::Project {
-            return;
-        }
-
         self.clear_settings_project_target();
         let Some(selected_project_id) = self.workspace.selected_project_id().cloned() else {
             return;
@@ -391,8 +355,7 @@ impl WorkbenchView {
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |root, _window, cx| {
-                if root.settings.settings_scope != SettingsScope::Project
-                    || root.workspace.selected_project_id() != Some(&project_id)
+                if root.workspace.selected_project_id() != Some(&project_id)
                     || root.settings.project_editor_settings_generation != generation
                 {
                     return;
@@ -425,11 +388,21 @@ impl WorkbenchView {
         self.settings.project_settings_path.as_deref()
     }
 
-    pub(super) fn project_settings_snapshot_is_confirmed(&self) -> bool {
-        self.settings.project_settings_path.is_some()
+    pub(super) fn settings_project_target(&self) -> Option<(ProjectId, u64)> {
+        (self.settings.project_settings_path.is_some()
             && self.settings.project_settings_load_error.is_none()
             && self.settings.project_editor_settings_project_id.as_ref()
-                == self.workspace.selected_project_id()
+                == self.workspace.selected_project_id())
+        .then(|| {
+            (
+                self.settings
+                    .project_editor_settings_project_id
+                    .as_ref()
+                    .expect("confirmed project settings have a project ID")
+                    .clone(),
+                self.settings.project_editor_settings_generation,
+            )
+        })
     }
 
     pub(super) fn project_settings_load_error(&self) -> Option<&str> {
@@ -448,13 +421,19 @@ impl WorkbenchView {
 
     pub(super) fn save_project_editor_setting(
         &mut self,
+        target: &(ProjectId, u64),
         key: crate::config::project_settings::ProjectEditorSettingKey,
         value: Option<crate::config::project_settings::ProjectEditorSettingValue>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        if self.settings.settings_scope != SettingsScope::Project {
-            return Err("Project overrides require the Project settings target.".to_string());
+        let current_target = self
+            .settings_project_target()
+            .ok_or_else(|| "Project settings are still loading.".to_string())?;
+        if &current_target != target {
+            return Err(
+                "The selected project changed before this setting could be saved.".to_string(),
+            );
         }
         if self.settings_save_pending() {
             return Err("A settings save is still pending; wait for its result.".to_string());
@@ -465,17 +444,22 @@ impl WorkbenchView {
                     .to_string(),
             );
         }
-        if !self.settings_scope_is_editable() {
+        if !self.settings_scope_is_editable(SettingsScope::Project) {
             return Err(self
                 .ui_text
                 .get(
-                    self.settings_scope_read_only_reason()
+                    self.settings_scope_read_only_reason(SettingsScope::Project)
                         .unwrap_or(UiTextKey::SettingsReadOnlyDisconnected),
                 )
                 .to_string());
         }
 
         let io = self.selected_project_editor_settings_io()?;
+        if io.project_id != target.0 {
+            return Err(
+                "The selected project changed before this setting could be saved.".to_string(),
+            );
+        }
         if !io.can_write_host {
             return Err(self
                 .ui_text
@@ -486,10 +470,16 @@ impl WorkbenchView {
             .cached_project_editor_setting(key)
             .cloned()
             .ok_or_else(|| "Project settings are still loading.".to_string())?;
+        if value
+            .as_ref()
+            .is_some_and(|candidate| candidate == &confirmed.value)
+        {
+            return Ok(());
+        }
         self.settings.pending_project_settings_save = Some(ProjectSettingsSaveDraft {
-            project_id: io.project_id.as_str().to_string(),
+            project_id: target.0.as_str().to_string(),
             project_path: io.project_path,
-            target_generation: self.settings.project_editor_settings_generation,
+            target_generation: target.1,
             key,
             candidate: value,
             confirmed,
@@ -509,16 +499,21 @@ impl WorkbenchView {
             == Some(&draft.project_path)
     }
 
-    pub(super) fn settings_scope_retry_allowed(&self) -> bool {
-        if !self.has_failed_settings_save() {
-            return false;
-        }
+    pub(super) fn settings_retry_allowed(&self) -> bool {
         if let Some(draft) = self.settings.failed_project_settings_save.as_ref() {
-            return self.settings.settings_scope == SettingsScope::Project
-                && self.settings_scope_is_editable()
+            return self.settings_scope_is_editable(SettingsScope::Project)
+                && self.shared_mutation_allowed()
                 && self.project_settings_draft_matches_current_target(draft);
         }
-        self.settings_scope_is_editable()
+        let Some((candidate, baseline, _)) = self.failed_settings_save.as_ref() else {
+            return false;
+        };
+        let scope = if crate::config::scope::host_settings_changed(candidate, baseline) {
+            SettingsScope::Host
+        } else {
+            SettingsScope::Device
+        };
+        self.settings_scope_is_editable(scope)
     }
     pub(super) fn settings_project_tab_size_input(
         &mut self,
@@ -540,12 +535,14 @@ impl WorkbenchView {
             })
             .unwrap_or(self.app_settings.editor.tab_size)
             .to_string();
+        let target = self
+            .settings_project_target()
+            .expect("project input requires confirmed project settings");
         let input = cx.new(|cx| InputState::new(window, cx).default_value(value));
-        let subscription = cx.subscribe_in(
-            &input,
-            window,
-            Self::on_settings_project_tab_size_input_event,
-        );
+        let subscription =
+            cx.subscribe_in(&input, window, move |this, input, event, window, cx| {
+                this.on_settings_project_tab_size_input_event(&target, input, event, window, cx);
+            });
         self.settings.settings_project_tab_size_input = Some(input.clone());
         self.settings.settings_project_tab_size_input_subscription = Some(subscription);
         input
@@ -570,12 +567,16 @@ impl WorkbenchView {
                 _ => None,
             })
             .unwrap_or_else(|| self.app_settings.editor.default_language.clone());
+        let target = self
+            .settings_project_target()
+            .expect("project input requires confirmed project settings");
         let input = cx.new(|cx| InputState::new(window, cx).default_value(value));
-        let subscription = cx.subscribe_in(
-            &input,
-            window,
-            Self::on_settings_project_default_language_input_event,
-        );
+        let subscription =
+            cx.subscribe_in(&input, window, move |this, input, event, window, cx| {
+                this.on_settings_project_default_language_input_event(
+                    &target, input, event, window, cx,
+                );
+            });
         self.settings.settings_project_default_language_input = Some(input.clone());
         self.settings
             .settings_project_default_language_input_subscription = Some(subscription);
@@ -584,6 +585,7 @@ impl WorkbenchView {
 
     pub(super) fn on_settings_project_tab_size_input_event(
         &mut self,
+        target: &(ProjectId, u64),
         input: &Entity<InputState>,
         event: &InputEvent,
         window: &mut Window,
@@ -599,6 +601,7 @@ impl WorkbenchView {
             .ok_or_else(|| "Tab size must be between 1 and 16.".to_string())
             .and_then(|value| {
                 self.save_project_editor_setting(
+                    target,
                     crate::config::project_settings::ProjectEditorSettingKey::TabSize,
                     Some(
                         crate::config::project_settings::ProjectEditorSettingValue::TabSize(value),
@@ -615,6 +618,7 @@ impl WorkbenchView {
 
     pub(super) fn on_settings_project_default_language_input_event(
         &mut self,
+        target: &(ProjectId, u64),
         input: &Entity<InputState>,
         event: &InputEvent,
         window: &mut Window,
@@ -627,6 +631,7 @@ impl WorkbenchView {
         if value.is_empty() {
             self.load_error = Some("Default language cannot be empty.".to_string());
         } else if let Err(error) = self.save_project_editor_setting(
+            target,
             crate::config::project_settings::ProjectEditorSettingKey::DefaultLanguage,
             Some(
                 crate::config::project_settings::ProjectEditorSettingValue::DefaultLanguage(value),
@@ -646,9 +651,18 @@ impl WorkbenchView {
             .map(|project| project.layout.project.name.clone())
     }
 
-    pub(super) fn settings_scope_read_only_reason(&self) -> Option<UiTextKey> {
-        if self.settings.settings_scope == SettingsScope::Device {
+    pub(super) fn settings_scope_read_only_reason(
+        &self,
+        scope: SettingsScope,
+    ) -> Option<UiTextKey> {
+        if scope == SettingsScope::Device {
             return None;
+        }
+        if scope == SettingsScope::Project
+            && self.config_paths.project_config_policy()
+                == crate::config::profile::ProjectConfigPolicy::ReadOnly
+        {
+            return Some(UiTextKey::SettingsReadOnlyProjectConfig);
         }
 
         let Some(runtime) = self.terminal.host_runtime.as_ref() else {
@@ -669,13 +683,9 @@ impl WorkbenchView {
         Some(UiTextKey::SettingsReadOnlyObserver)
     }
 
-    pub(super) fn settings_scope_is_editable(&self) -> bool {
-        match self.settings.settings_scope {
-            SettingsScope::Device => true,
-            SettingsScope::Host | SettingsScope::Project => {
-                self.settings_scope_read_only_reason().is_none()
-            }
-        }
+    pub(super) fn settings_scope_is_editable(&self, scope: SettingsScope) -> bool {
+        matches!(scope, SettingsScope::Device)
+            || self.settings_scope_read_only_reason(scope).is_none()
     }
 
     pub fn open_settings(&mut self) {

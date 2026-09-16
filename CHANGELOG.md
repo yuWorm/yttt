@@ -28,11 +28,14 @@
   can now be moved, repeated or hidden without affecting native window controls.
 - Added a Bars target to the popup TOML editor with searchable component insertion, draft-only
   live previews, validation and Device-scoped saving; unsaved and failed drafts remain recoverable.
-- Added explicit Device, Host and Project settings targets with effective-source and apply-timing
-  labels. Device appearance, keybindings and preferences remain local and editable by observers;
-  Host and Project writes require connected control.
-- Added allowlisted Project editor overrides with reset-to-Host behavior and consistent
-  Normal/Overlay/ReadOnly profile routing for local and remote Clients.
+- Unified settings navigation around feature categories instead of Device/Host/Project tabs.
+  Search finds localized/English setting names and configuration keys across destinations,
+  while controls retain explicit local/environment ownership, read-only reasons and apply timing.
+  Environment identity and profile details no longer require understanding Host terminology.
+- Added inline, allowlisted project editor overrides with explicit project identity and
+  restore-environment-default actions. Stale controls cannot write to a newly selected project,
+  and unchanged inputs do not create overrides. Normal/Overlay/ReadOnly routing is preserved;
+  local preferences remain editable by observers while shared writes require connected control.
 - Preserved failed settings candidates and unpublished editor drafts across control loss,
   disconnects and Host epoch changes, with Device-private recovery and explicit retry/copy/discard.
 

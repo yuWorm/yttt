@@ -23,7 +23,7 @@ use yttt::{
         profile::{
             AppProfile, EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
         },
-        scope::{SettingsScope, save_scoped_settings},
+        scope::save_scoped_settings,
         settings::{
             AppSettings, EditorAutosave, LanguageSetting, VimModeSetting, WindowBackgroundEffect,
             load_settings, save_settings,
@@ -202,7 +202,7 @@ fn settings_window_reuses_search_state_and_rebinds_after_native_close(
         cx.notify();
     });
     focus_surface_window(cx, "settings-window");
-    select_settings_scope(cx, SettingsScope::Device);
+
     let settings_window = cx.update(|window, _| window.window_handle());
     cx.simulate_input("qzxnonexistent");
     cx.refresh().unwrap();
@@ -365,20 +365,6 @@ fn focus_surface_window(cx: &mut gpui::VisualTestContext, selector: &'static str
     target.update(|window, _| window.activate_window());
     target.run_until_parked();
     *cx = target;
-}
-
-fn select_settings_scope(cx: &mut gpui::VisualTestContext, scope: SettingsScope) {
-    let selector = match scope {
-        SettingsScope::Device => "settings-scope-device",
-        SettingsScope::Host => "settings-scope-host",
-        SettingsScope::Project => "settings-scope-project",
-    };
-    let scope_tab = cx
-        .debug_bounds(selector)
-        .unwrap_or_else(|| panic!("settings should expose the {scope:?} scope selector"));
-    cx.simulate_click(scope_tab.center(), gpui::Modifiers::none());
-    cx.run_until_parked();
-    cx.refresh().unwrap();
 }
 
 #[test]
@@ -961,7 +947,7 @@ fn titlebar_action_buttons_open_command_picker_and_settings(cx: &mut gpui::TestA
     });
     assert!(cx.debug_bounds("settings-panel").is_none());
     focus_surface_window(cx, "settings-window");
-    select_settings_scope(cx, SettingsScope::Device);
+
     let panel = cx
         .debug_bounds("settings-panel")
         .expect("settings should render the adaptive panel");
@@ -4306,7 +4292,7 @@ fn root_view_status_reveals_settings_paths_without_error_banner() {
     let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
     let mut root = WorkbenchView::with_config_paths_for_test(paths.clone());
 
-    root.show_settings_file_path_status();
+    root.show_settings_file_path_status(yttt::config::scope::SettingsScope::Device);
     root.show_themes_directory_status();
 
     assert_eq!(root.visible_error_message(), None);
@@ -4333,26 +4319,6 @@ fn root_view_settings_search_filters_groups() {
 
     assert_eq!(root.visible_settings_group_titles(), vec!["Terminal"]);
     assert_eq!(root.selected_settings_group_title(), Some("Terminal"));
-}
-
-#[test]
-fn root_view_settings_search_matches_setting_titles_and_descriptions() {
-    let (_temp, mut root) = english_test_root();
-    root.open_settings();
-
-    root.set_settings_search_query("CPU and memory");
-    assert_eq!(root.visible_settings_group_titles(), vec!["General"]);
-    assert_eq!(root.selected_settings_group_title(), Some("General"));
-
-    root.set_settings_search_query("UI style");
-    assert_eq!(root.visible_settings_group_titles(), vec!["Appearance"]);
-    assert_eq!(root.selected_settings_group_title(), Some("Appearance"));
-
-    root.set_settings_search_query("synthetic input");
-    assert_eq!(root.visible_settings_group_titles(), vec!["Permissions"]);
-
-    root.set_settings_search_query("setting-that-does-not-exist");
-    assert!(root.visible_settings_group_titles().is_empty());
 }
 
 #[test]
@@ -5013,6 +4979,50 @@ fn new_tab_toolbar_defaults_to_creating_a_shell_tab() {
 }
 
 #[gpui::test]
+fn settings_search_finds_shell_and_keeps_terminal_preferences_together(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.open_settings();
+        cx.notify();
+    });
+    cx.refresh().unwrap();
+    focus_surface_window(cx, "settings-window");
+    cx.simulate_input("terminal.shell");
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    assert!(cx.debug_bounds("settings-row-terminal.shell").is_some());
+    assert!(cx.debug_bounds("settings-row-terminal.font_size").is_none());
+
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-a backspace"
+    } else {
+        "ctrl-a backspace"
+    });
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    assert!(cx.debug_bounds("settings-row-terminal.shell").is_some());
+    assert!(cx.debug_bounds("settings-row-terminal.font_size").is_some());
+
+    cx.simulate_input("agent.sessions_enabled");
+    cx.run_until_parked();
+    cx.refresh().unwrap();
+    assert!(cx.debug_bounds("settings-agent-sessions-row").is_some());
+    assert!(cx.debug_bounds("settings-row-terminal.shell").is_none());
+}
+
+#[gpui::test]
 fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
@@ -5032,7 +5042,7 @@ fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppCon
     });
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
-    select_settings_scope(cx, SettingsScope::Device);
+
     assert!(
         cx.debug_bounds("settings-restore-last-session-row")
             .is_some()
@@ -5043,10 +5053,6 @@ fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppCon
         .expect("restore-last-session setting should expose a switch");
     cx.simulate_click(restore_toggle.center(), gpui::Modifiers::none());
     cx.run_until_parked();
-    assert!(
-        cx.debug_bounds("settings-performance-metrics-row")
-            .is_some()
-    );
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: restore_toggle.center(),
         delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-320.0))),
@@ -5058,10 +5064,6 @@ fn general_settings_render_and_toggle_behavior_options(cx: &mut gpui::TestAppCon
         .expect("Device settings should expose the new-tab picker switch");
     cx.simulate_click(picker.center(), gpui::Modifiers::none());
     cx.run_until_parked();
-    assert!(
-        cx.debug_bounds("settings-new-tab-commands-row").is_none(),
-        "Host-owned command definitions must not appear in the Device scope"
-    );
     cx.read(|app| assert!(root.read(app).new_tab_command_picker_enabled()));
     assert!(
         load_settings(&paths)
@@ -5108,7 +5110,7 @@ fn agent_settings_readonly_controls_display_values_without_mutation(cx: &mut gpu
     cx.run_until_parked();
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
-    select_settings_scope(cx, SettingsScope::Host);
+
     let expected_session_agents = vec![BuiltinAgent::Codex];
     let expected_additional_session_agents = settings.agent.additional_session_agents.clone();
     cx.read(|app| {
@@ -5199,7 +5201,6 @@ fn update_settings_check_and_persist_auto_check(cx: &mut gpui::TestAppContext) {
     });
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
-    select_settings_scope(cx, SettingsScope::Device);
 
     let scroll_origin = cx
         .debug_bounds("settings-restore-last-session-row")
@@ -5457,7 +5458,6 @@ fn keybindings_settings_explains_vim_leader_and_sequence_recording(cx: &mut gpui
     });
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
-    select_settings_scope(cx, SettingsScope::Device);
 
     assert!(
         cx.debug_bounds("settings-vim-profile-summary").is_some(),
@@ -5600,7 +5600,7 @@ fn appearance_settings_group_opens_bars_template_editor(cx: &mut gpui::TestAppCo
     });
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
-    select_settings_scope(cx, SettingsScope::Device);
+
     assert!(
         cx.debug_bounds("settings-window-effect-row").is_some(),
         "Appearance settings should expose the window effect selector"
@@ -5976,7 +5976,6 @@ fn zed_theme_import_opens_review_dialog_before_writing(cx: &mut gpui::TestAppCon
     });
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
-    select_settings_scope(cx, SettingsScope::Device);
 
     cx.read(|app| {
         let root = root.read(app);
@@ -6054,7 +6053,6 @@ fn editor_settings_group_renders_all_effective_controls(cx: &mut gpui::TestAppCo
     });
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
-    select_settings_scope(cx, SettingsScope::Device);
 
     for selector in [
         "settings-editor-font-family-row",
@@ -6109,7 +6107,6 @@ fn terminal_settings_group_renders_protocol_and_interaction_controls(
     });
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
-    select_settings_scope(cx, SettingsScope::Device);
 
     for selector in [
         "settings-terminal-cursor-shape-row",
@@ -6143,7 +6140,6 @@ fn permissions_settings_group_renders_cross_platform_access_controls(
     });
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
-    select_settings_scope(cx, SettingsScope::Device);
 
     for selector in [
         "settings-login-startup-row",
@@ -6205,7 +6201,6 @@ fn enabling_login_startup_requires_confirmation_before_backend_registration(
     cx.run_until_parked();
     cx.refresh().unwrap();
     focus_surface_window(cx, "settings-window");
-    select_settings_scope(cx, SettingsScope::Device);
 
     let toggle = cx
         .debug_bounds("settings-login-startup")

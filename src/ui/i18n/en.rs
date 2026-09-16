@@ -553,28 +553,37 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsNoSearchResultsDescription => {
             "Try another setting name, description, or category."
         }
-        UiTextKey::SettingsTarget => "Settings target",
-        UiTextKey::SettingsTargetDevice => "This device",
-        UiTextKey::SettingsTargetHost => "Host",
-        UiTextKey::SettingsTargetProject => "Selected project",
-        UiTextKey::SettingsHostIdentity => "Host: ",
-        UiTextKey::SettingsScopeDevice => "Saved on this device",
-        UiTextKey::SettingsScopeHost => "Saved on the Host",
-        UiTextKey::SettingsScopeProject => "Saved for this project",
+        UiTextKey::SettingsTargetDevice => "Local preferences",
+        UiTextKey::SettingsTargetHost => "Environment",
+        UiTextKey::SettingsTargetProject => "Project",
+        UiTextKey::SettingsScopeDevice => "Local preferences",
+        UiTextKey::SettingsScopeHost => "Environment · Shared by its clients",
+        UiTextKey::SettingsScopeProject => "This project only",
+        UiTextKey::SettingsLocalEnvironment => "Local",
+        UiTextKey::SettingsRemoteEnvironment => "Remote",
+        UiTextKey::SettingsDevelopmentEnvironment => "Development",
+        UiTextKey::SettingsTestEnvironment => "Test",
+        UiTextKey::SettingsEnvironmentDetails => "Configuration details",
+        UiTextKey::SettingsLastKnownValue => "Last known value",
+        UiTextKey::SettingsCustomizeProject => "Customize for this project",
+        UiTextKey::SettingsCollapseOverride => "Collapse project settings",
+        UiTextKey::SettingsSavePending => "Saving settings...",
         UiTextKey::SettingsApplyImmediate => "Applies immediately",
         UiTextKey::SettingsApplyNewSession => "Applies to new sessions",
         UiTextKey::SettingsApplyReopenFile => "Applies when files reopen",
-        UiTextKey::SettingsEffectiveSource => "Effective source",
-        UiTextKey::SettingsSourceHost => "Host default",
+        UiTextKey::SettingsSourceHost => "Using environment default",
         UiTextKey::SettingsSourceProject => "Project override",
         UiTextKey::SettingsReadOnlyObserver => {
-            "Host and project settings are read-only while another client controls this profile."
+            "Another client controls this environment. Environment and project settings are read-only; local preferences remain editable."
         }
         UiTextKey::SettingsReadOnlyPreparingTransfer => {
-            "Host and project settings are read-only while profile control is transferring."
+            "Control is transferring. Environment and project settings are read-only; local preferences remain editable."
         }
         UiTextKey::SettingsReadOnlyDisconnected => {
-            "Host and project settings are read-only until the Host connection is available."
+            "Environment disconnected. Its settings are read-only; local preferences remain editable."
+        }
+        UiTextKey::SettingsReadOnlyProjectConfig => {
+            "Project configuration is read-only in this environment. Use an environment with writable project configuration to customize this project."
         }
         UiTextKey::SettingsProjectTargetUnavailable => {
             "Open and select a project to edit project overrides."
@@ -588,7 +597,7 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsCopyDraft => "Copy draft",
         UiTextKey::RemoteDeviceDraftRecoveryAvailable => " · Device draft recovery available",
         UiTextKey::RemoteRecoverDeviceDrafts => "Recover device drafts",
-        UiTextKey::SettingsUseHostDefault => "Use Host default",
+        UiTextKey::SettingsUseHostDefault => "Restore environment default",
         UiTextKey::SettingsSectionApplicationInteraction => "Application & interaction",
         UiTextKey::SettingsSectionStartupNotifications => "Startup & notifications",
         UiTextKey::SettingsSectionNewTabs => "New tabs",

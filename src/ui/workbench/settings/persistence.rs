@@ -49,6 +49,12 @@ fn project_settings_recovery_values(
     )
 }
 
+fn project_editor_defaults_changed(current: &AppSettings, next: &AppSettings) -> bool {
+    current.editor.tab_size != next.editor.tab_size
+        || current.editor.auto_detect_language != next.editor.auto_detect_language
+        || current.editor.default_language != next.editor.default_language
+}
+
 impl WorkbenchView {
     pub(in super::super) fn settings_save_pending(&self) -> bool {
         self.settings.pending_settings_save.is_some()
@@ -106,14 +112,14 @@ impl WorkbenchView {
             ));
         }
         if let Some(draft) = self.settings.failed_project_settings_save.as_ref() {
-            if self.settings.settings_scope != SettingsScope::Project
-                || !self.project_settings_draft_matches_current_target(draft)
-            {
+            if !self.project_settings_draft_matches_current_target(draft) {
                 return Err(WorkbenchError::SettingsUnavailable(
                     "Select the project that owns this draft before retrying it.".into(),
                 ));
             }
-            if !self.settings_scope_is_editable() || !self.shared_mutation_allowed() {
+            if !self.settings_scope_is_editable(SettingsScope::Project)
+                || !self.shared_mutation_allowed()
+            {
                 return Err(WorkbenchError::SettingsUnavailable(
                     "Host control is required to retry this project settings draft.".into(),
                 ));
@@ -247,6 +253,9 @@ impl WorkbenchView {
                 true,
             )
             .map_err(|error| WorkbenchError::SettingsUnavailable(error.to_string()))?;
+        }
+        if project_editor_defaults_changed(&self.settings.confirmed_settings, &candidate) {
+            self.clear_settings_project_target();
         }
         self.settings.confirmed_settings = candidate.clone();
         self.app_settings = candidate;
@@ -406,18 +415,12 @@ impl WorkbenchView {
                             recovery.1.clone(),
                             cx,
                         );
-                        let cache_matches_target = root.settings.settings_scope
-                            == SettingsScope::Project
-                            && root
-                                .settings
-                                .project_editor_settings_project_id
-                                .as_ref()
-                                .is_some_and(|project_id| {
-                                    project_id.as_str() == draft.project_id.as_str()
-                                })
-                            && root.settings.project_editor_settings_generation
-                                == draft.target_generation
-                            && root.project_settings_draft_matches_current_target(&draft);
+                        let cache_matches_target = root
+                            .settings_project_target()
+                            .is_some_and(|(project_id, generation)| {
+                                project_id.as_str() == draft.project_id.as_str()
+                                    && generation == draft.target_generation
+                            });
                         if cache_matches_target {
                             let saved_key = saved.key;
                             if let Some(cached) = root
@@ -442,9 +445,7 @@ impl WorkbenchView {
                                 }
                                 crate::config::project_settings::ProjectEditorSettingKey::AutoDetectLanguage => {}
                             }
-                        } else if root.settings.settings_scope == SettingsScope::Project
-                            && root.project_settings_draft_matches_current_target(&draft)
-                        {
+                        } else if root.project_settings_draft_matches_current_target(&draft) {
                             root.refresh_settings_project_target(window, cx);
                         }
                     }
@@ -469,12 +470,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings.confirmed_settings.editor.tab_size != settings.editor.tab_size
-            || self.settings.confirmed_settings.editor.auto_detect_language
-                != settings.editor.auto_detect_language
-            || self.settings.confirmed_settings.editor.default_language
-                != settings.editor.default_language
-        {
+        if project_editor_defaults_changed(&self.settings.confirmed_settings, &settings) {
             self.clear_settings_project_target();
         }
         self.settings.confirmed_settings = settings.clone();

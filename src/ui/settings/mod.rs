@@ -103,22 +103,20 @@ pub struct SettingsRowMeta {
     pub scope: SettingsScope,
     pub apply: SettingApply,
     pub project_override: bool,
-}
-
-impl SettingsRowMeta {
-    pub fn is_visible_for(self, scope: SettingsScope) -> bool {
-        self.scope == scope || (scope == SettingsScope::Project && self.project_override)
-    }
+    title_key: UiTextKey,
+    description_key: UiTextKey,
 }
 
 pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<SettingsRowMeta> {
-    let row = |key, title, description| SettingsRowMeta {
+    let row = |key, title_key, description_key| SettingsRowMeta {
         key,
-        title: text.get(title),
-        description: text.get(description),
+        title: text.get(title_key),
+        description: text.get(description_key),
         scope: setting_scope(key),
         apply: setting_apply(key),
         project_override: supports_project_override(key),
+        title_key,
+        description_key,
     };
 
     match group {
@@ -168,6 +166,16 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 UiTextKey::RemoteServices,
                 UiTextKey::RemoteServicesDescription,
             ),
+            SettingsRowMeta {
+                key: "host.settings.toml",
+                title: text.get(UiTextKey::SettingsEditSettingsToml),
+                description: text.get(UiTextKey::SettingsEditSettingsTomlDescription),
+                scope: SettingsScope::Host,
+                apply: SettingApply::Immediate,
+                project_override: false,
+                title_key: UiTextKey::SettingsEditSettingsToml,
+                description_key: UiTextKey::SettingsEditSettingsTomlDescription,
+            },
         ],
         SettingsGroupId::Appearance => vec![
             row(
@@ -216,7 +224,12 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 UiTextKey::SettingsTerminalThemeDescription,
             ),
             row(
-                "settings.toml",
+                "bars",
+                UiTextKey::SettingsEditBarsToml,
+                UiTextKey::SettingsEditBarsTomlDescription,
+            ),
+            row(
+                "device.settings.toml",
                 UiTextKey::SettingsEditSettingsToml,
                 UiTextKey::SettingsEditSettingsTomlDescription,
             ),
@@ -404,9 +417,14 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 UiTextKey::SettingsAgentPrimaryDescription,
             ),
             row(
-                "agent.sessions",
+                "agent.sessions_enabled",
                 UiTextKey::SettingsAgentSessions,
                 UiTextKey::SettingsAgentSessionsDescription,
+            ),
+            row(
+                "agent.additional_session_agents",
+                UiTextKey::SettingsAgentSessions,
+                UiTextKey::SettingsAgentSessionProviderDescription,
             ),
         ],
         SettingsGroupId::Permissions => vec![
@@ -451,6 +469,8 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 key: "project_layout.edit",
                 title: text.get(UiTextKey::SettingsEditLayoutToml),
                 description: text.get(UiTextKey::SettingsEditLayoutTomlDescription),
+                title_key: UiTextKey::SettingsEditLayoutToml,
+                description_key: UiTextKey::SettingsEditLayoutTomlDescription,
                 scope: SettingsScope::Project,
                 apply: SettingApply::Immediate,
                 project_override: false,
@@ -459,6 +479,8 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 key: "project_layout.save",
                 title: text.get(UiTextKey::SettingsSaveCurrentLayout),
                 description: text.get(UiTextKey::SettingsSaveCurrentLayoutDescription),
+                title_key: UiTextKey::SettingsSaveCurrentLayout,
+                description_key: UiTextKey::SettingsSaveCurrentLayoutDescription,
                 scope: SettingsScope::Project,
                 apply: SettingApply::Immediate,
                 project_override: false,
@@ -467,6 +489,8 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 key: "project_layout.export",
                 title: text.get(UiTextKey::SettingsExportProjectLayout),
                 description: text.get(UiTextKey::SettingsExportProjectLayoutDescription),
+                title_key: UiTextKey::SettingsExportProjectLayout,
+                description_key: UiTextKey::SettingsExportProjectLayoutDescription,
                 scope: SettingsScope::Project,
                 apply: SettingApply::Immediate,
                 project_override: false,
@@ -519,17 +543,6 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
     }
 }
 
-pub fn settings_rows_for_scope(
-    group: SettingsGroupId,
-    text: &UiText,
-    scope: SettingsScope,
-) -> Vec<SettingsRowMeta> {
-    settings_rows_for_group(group, text)
-        .into_iter()
-        .filter(|row| row.is_visible_for(scope))
-        .collect()
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SettingsGroupItem {
     pub id: SettingsGroupId,
@@ -557,39 +570,18 @@ impl Default for SettingsPageState {
 
 impl SettingsPageState {
     pub fn visible_groups(&self, text: &UiText) -> Vec<SettingsGroupItem> {
-        self.visible_groups_for_scope(text, None)
-    }
-
-    pub fn visible_groups_for_settings_scope(
-        &self,
-        text: &UiText,
-        scope: SettingsScope,
-    ) -> Vec<SettingsGroupItem> {
-        self.visible_groups_for_scope(text, Some(scope))
-    }
-
-    fn visible_groups_for_scope(
-        &self,
-        text: &UiText,
-        scope: Option<SettingsScope>,
-    ) -> Vec<SettingsGroupItem> {
         let query = self.search_query.trim().to_lowercase();
+        let english = UiText::english();
+
         SettingsGroupId::ALL
             .iter()
             .copied()
             .filter(|group| {
-                let rows = match scope {
-                    Some(scope) => settings_rows_for_scope(*group, text, scope),
-                    None => settings_rows_for_group(*group, text),
-                };
-                !rows.is_empty()
-                    && (query.is_empty()
-                        || group.title(text).to_lowercase().contains(&query)
-                        || group.description(text).to_lowercase().contains(&query)
-                        || rows.iter().any(|row| {
-                            row.title.to_lowercase().contains(&query)
-                                || row.description.to_lowercase().contains(&query)
-                        }))
+                query.is_empty()
+                    || group_matches_query(*group, text, &english, &query)
+                    || settings_rows_for_group(*group, text)
+                        .iter()
+                        .any(|row| row_matches_query(*row, &english, &query))
             })
             .map(|group| SettingsGroupItem {
                 id: group,
@@ -599,4 +591,63 @@ impl SettingsPageState {
             })
             .collect()
     }
+
+    pub fn matching_rows(&self, group: SettingsGroupId, text: &UiText) -> Vec<SettingsRowMeta> {
+        let query = self.search_query.trim();
+        if query.is_empty() {
+            return settings_rows_for_group(group, text);
+        }
+
+        let query = query.to_lowercase();
+        let english = UiText::english();
+        let group_matches = group_matches_query(group, text, &english, &query);
+
+        settings_rows_for_group(group, text)
+            .into_iter()
+            .filter(|row| group_matches || row_matches_query(*row, &english, &query))
+            .collect()
+    }
+
+    pub fn matches_row(&self, group: SettingsGroupId, key: &str, text: &UiText) -> bool {
+        let query = self.search_query.trim();
+        if query.is_empty() {
+            return true;
+        }
+
+        let query = query.to_lowercase();
+        let english = UiText::english();
+        if group_matches_query(group, text, &english, &query) {
+            return true;
+        }
+
+        settings_rows_for_group(group, text)
+            .into_iter()
+            .find(|row| row.key == key)
+            .is_some_and(|row| row_matches_query(row, &english, &query))
+    }
+}
+
+fn group_matches_query(
+    group: SettingsGroupId,
+    text: &UiText,
+    english: &UiText,
+    query: &str,
+) -> bool {
+    query_matches(group.as_str(), query)
+        || query_matches(group.title(text), query)
+        || query_matches(group.description(text), query)
+        || query_matches(group.title(english), query)
+        || query_matches(group.description(english), query)
+}
+
+fn row_matches_query(row: SettingsRowMeta, english: &UiText, query: &str) -> bool {
+    query_matches(row.key, query)
+        || query_matches(row.title, query)
+        || query_matches(row.description, query)
+        || query_matches(english.get(row.title_key), query)
+        || query_matches(english.get(row.description_key), query)
+}
+
+fn query_matches(candidate: &str, query: &str) -> bool {
+    candidate.to_lowercase().contains(query)
 }
