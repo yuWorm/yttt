@@ -3203,6 +3203,17 @@ impl TerminalView {
         (self.state.cols(), self.state.rows())
     }
 
+    /// Get the dimensions of the actual rendered terminal viewport.
+    ///
+    /// `None` means the terminal has not yet been laid out, so returning the
+    /// spawn configuration would be misleading.
+    pub fn viewport_dimensions(&self) -> Option<(usize, usize)> {
+        self.viewport
+            .lock()
+            .as_ref()
+            .map(|viewport| (viewport.cols, viewport.rows))
+    }
+
     fn apply_viewport_size(&mut self, mut viewport: TerminalViewport, cx: &mut Context<Self>) {
         viewport.cols = viewport.cols.clamp(1, u16::MAX as usize);
         viewport.rows = viewport.rows.clamp(1, u16::MAX as usize);

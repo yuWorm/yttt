@@ -499,7 +499,6 @@ impl WorkbenchView {
                 .cancel_all_autosave_tasks();
         }
         self.sync_terminal_environment();
-        self.sync_performance_monitoring(cx);
         self.sync_input_owner_state();
         self.sync_vim_controller(window, cx);
         self.settings.keybinding_rows_cache = None;

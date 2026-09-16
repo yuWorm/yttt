@@ -26,8 +26,8 @@ use crate::{
     },
 };
 use gpui::{
-    AnyWindowHandle, Context, Entity, EventEmitter, IntoElement, Render, SharedString, Task,
-    Window, div, prelude::*,
+    AnyWindowHandle, Context, Entity, EventEmitter, IntoElement, Render, SharedString,
+    Subscription, Task, Window, div, prelude::*,
 };
 use yttt_agent_core::AgentInstanceId;
 use yttt_client_core::{ClientEvent, ConnectionState, TerminalMirrorMetadata};
@@ -86,6 +86,9 @@ pub enum TerminalPaneEvent {
     TitleChanged {
         pane_id: String,
         title: String,
+    },
+    ViewportSizeChanged {
+        pane_id: String,
     },
     IoError {
         pane_id: String,
@@ -204,6 +207,8 @@ pub struct TerminalPaneView {
     agent_session_title: Option<String>,
     ssh: Option<SshTerminalContext>,
     terminal: Option<Entity<TerminalView>>,
+    terminal_viewport_subscription: Option<Subscription>,
+    terminal_viewport_size: Option<(usize, usize)>,
     terminal_config: TerminalConfig,
     theme: WorkbenchTheme,
     host_runtime: Option<Arc<DesktopHostRuntime>>,
@@ -432,6 +437,8 @@ impl TerminalPaneView {
             agent_session_title,
             ssh,
             terminal: None,
+            terminal_viewport_subscription: None,
+            terminal_viewport_size: None,
             terminal_config,
             theme,
             host_runtime: None,
@@ -454,10 +461,11 @@ impl TerminalPaneView {
     fn start_idle_terminal(&mut self, cx: &mut Context<Self>) {
         let terminal_input_allowed = self.terminal_input_gate.shared_flag();
         let config = self.terminal_config.clone();
-        self.terminal = Some(cx.new(|cx| {
+        let terminal = cx.new(|cx| {
             TerminalView::new_semantic(std::io::sink(), config, cx)
                 .with_key_handler(move |_event| !terminal_input_allowed.load(Ordering::SeqCst))
-        }));
+        });
+        self.track_terminal_viewport(terminal, cx);
         self.lifecycle = PaneLifecycle::Running;
         cx.notify();
     }
@@ -677,7 +685,7 @@ impl TerminalPaneView {
             .clone()
             .unwrap_or_else(|| self.default_title.clone());
         self.set_runtime_title(initial_title, cx);
-        self.terminal = None;
+        self.clear_terminal_viewport();
         self.host_events_task = None;
         self.lifecycle = PaneLifecycle::Starting;
         self.terminal_error = None;
@@ -839,7 +847,7 @@ impl TerminalPaneView {
             }
         });
 
-        self.terminal = Some(terminal);
+        self.track_terminal_viewport(terminal, cx);
         self.host_runtime = Some(host_runtime.clone());
         self.host_session_id = Some(session_id.clone());
         self.host_session_epoch = None;
@@ -1161,7 +1169,7 @@ impl TerminalPaneView {
             return;
         }
         self.exit_emitted = true;
-        self.terminal = None;
+        self.clear_terminal_viewport();
         self.host_session_epoch = Some(session_epoch);
         self.lifecycle = PaneLifecycle::Stopping {
             reason: ExitReason::Completed,
@@ -1191,7 +1199,7 @@ impl TerminalPaneView {
             message: message.clone(),
         };
         self.terminal_error = Some(message.clone());
-        self.terminal = None;
+        self.clear_terminal_viewport();
         self.host_events_task = None;
         self.host_session_id = None;
         self.host_session_epoch = None;
@@ -1214,7 +1222,7 @@ impl TerminalPaneView {
             message: message.clone(),
         };
         self.terminal_error = Some(message.clone());
-        self.terminal = None;
+        self.clear_terminal_viewport();
         self.host_events_task = None;
         self.host_session_id = None;
         self.host_session_epoch = None;
@@ -1238,7 +1246,7 @@ impl TerminalPaneView {
             return;
         }
         self.exit_emitted = true;
-        self.terminal = None;
+        self.clear_terminal_viewport();
         self.lifecycle = PaneLifecycle::Stopping {
             reason: exit_reason,
         };
@@ -1352,6 +1360,40 @@ impl TerminalPaneView {
 
     pub fn is_running(&self) -> bool {
         self.lifecycle == PaneLifecycle::Running
+    }
+
+    pub fn terminal_exit(&self) -> Option<(Option<i32>, ExitReason)> {
+        let PaneLifecycle::Exited { code, reason } = &self.lifecycle else {
+            return None;
+        };
+        Some((*code, reason.clone()))
+    }
+
+    pub fn terminal_viewport_size(&self) -> Option<(usize, usize)> {
+        self.terminal_viewport_size
+    }
+
+    fn track_terminal_viewport(&mut self, terminal: Entity<TerminalView>, cx: &mut Context<Self>) {
+        self.terminal_viewport_size = terminal.read(cx).viewport_dimensions();
+        let pane_id = self.pane_id.clone();
+        self.terminal_viewport_subscription =
+            Some(cx.observe(&terminal, move |pane, terminal, cx| {
+                let size = terminal.read(cx).viewport_dimensions();
+                if pane.terminal_viewport_size != size {
+                    pane.terminal_viewport_size = size;
+                    cx.emit(TerminalPaneEvent::ViewportSizeChanged {
+                        pane_id: pane_id.clone(),
+                    });
+                    cx.notify();
+                }
+            }));
+        self.terminal = Some(terminal);
+    }
+
+    fn clear_terminal_viewport(&mut self) {
+        self.terminal = None;
+        self.terminal_viewport_subscription = None;
+        self.terminal_viewport_size = None;
     }
     #[cfg(feature = "perf-metrics")]
     pub(crate) fn performance_terminal(&self) -> Option<Entity<TerminalView>> {

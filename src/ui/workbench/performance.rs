@@ -1,10 +1,13 @@
-use std::time::Duration;
+use std::{cell::Cell, rc::Rc, time::Duration};
 
-use gpui::{Context, Task};
+use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task, Window};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 use super::WorkbenchView;
-use crate::{config::bars::ShellBarModule, ui::i18n::UiTextKey};
+use crate::{
+    config::bars::{ShellBarModule, ShellBarsSettings},
+    ui::i18n::UiTextKey,
+};
 
 const PERFORMANCE_SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 const MEBIBYTE_BYTES: f64 = 1024.0 * 1024.0;
@@ -37,18 +40,6 @@ pub struct PerformanceInfo {
     pub system: Option<SystemPerformanceInfo>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct PerformanceCollectionMode {
-    application: bool,
-    system: bool,
-}
-
-impl PerformanceCollectionMode {
-    fn is_empty(self) -> bool {
-        !self.application && !self.system
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ApplicationPerformanceSample {
     cpu_percent: f32,
@@ -67,205 +58,174 @@ struct PerformanceSample {
     system: Option<SystemPerformanceSample>,
 }
 
+pub(super) struct PerformanceMonitor {
+    sample: Rc<Cell<Option<PerformanceSample>>>,
+    _task: Option<Task<()>>,
+}
+
+struct SharedPerformanceMonitor(Entity<PerformanceMonitor>);
+
+impl Global for SharedPerformanceMonitor {}
+
+impl PerformanceMonitor {
+    pub(super) fn shared(cx: &mut App) -> Entity<Self> {
+        if let Some(shared) = cx.try_global::<SharedPerformanceMonitor>() {
+            return shared.0.clone();
+        }
+        let monitor = cx.new(|cx| {
+            let sample = Rc::new(Cell::new(None));
+            let latest = sample.clone();
+            let task = sysinfo::IS_SUPPORTED_SYSTEM.then(|| {
+                cx.spawn(async move |this, cx| {
+                    let pid = sysinfo::get_current_pid().ok();
+                    let mut system = System::new();
+                    loop {
+                        let (refreshed, sample) = cx
+                            .background_executor()
+                            .spawn(async move {
+                                let sample = refresh_performance(&mut system, pid);
+                                (system, sample)
+                            })
+                            .await;
+                        system = refreshed;
+                        latest.set(Some(sample));
+                        if this.update(cx, |_, cx| cx.notify()).is_err() {
+                            break;
+                        }
+                        cx.background_executor()
+                            .timer(PERFORMANCE_SAMPLE_INTERVAL)
+                            .await;
+                    }
+                })
+            });
+            Self {
+                sample,
+                _task: task,
+            }
+        });
+        cx.set_global(SharedPerformanceMonitor(monitor.clone()));
+        monitor
+    }
+}
+
+pub(super) fn uses_performance_samples(bars: &ShellBarsSettings) -> bool {
+    [
+        ShellBarModule::AppCpu,
+        ShellBarModule::AppMemory,
+        ShellBarModule::SystemCpu,
+        ShellBarModule::SystemMemory,
+    ]
+    .iter()
+    .any(|module| bars.contains(module))
+}
+
 #[derive(Default)]
 pub(super) struct PerformanceMonitorState {
-    sample: Option<PerformanceSample>,
-    task: Option<Task<()>>,
-    mode: PerformanceCollectionMode,
+    sample: Option<Rc<Cell<Option<PerformanceSample>>>>,
+    subscription: Option<Subscription>,
+}
+
+impl PerformanceMonitorState {
+    pub(super) fn attach(&mut self, window: &Window, cx: &mut Context<WorkbenchView>) {
+        if self.subscription.is_some() {
+            return;
+        }
+        let monitor = PerformanceMonitor::shared(cx);
+        let handle = window.window_handle();
+        let subscription = cx.observe(&monitor, move |view, _, cx| {
+            if uses_performance_samples(&view.app_settings.bars) {
+                // Refresh only this window, not the owner's settings and editor windows.
+                cx.defer(move |cx| {
+                    let _ = handle.update(cx, |_, window, _| window.refresh());
+                });
+            }
+        });
+        self.sample = Some(monitor.read(cx).sample.clone());
+        self.subscription = Some(subscription);
+    }
 }
 
 impl WorkbenchView {
-    fn performance_collection_mode(&self) -> PerformanceCollectionMode {
-        let application_visible = self.app_settings.bars.contains(&ShellBarModule::AppCpu)
-            || self.app_settings.bars.contains(&ShellBarModule::AppMemory);
-        let system_visible = self.app_settings.bars.contains(&ShellBarModule::SystemCpu)
-            || self
-                .app_settings
-                .bars
-                .contains(&ShellBarModule::SystemMemory);
-        PerformanceCollectionMode {
-            application: self.app_settings.general.performance_metrics_enabled
-                && application_visible,
-            system: self.app_settings.general.system_performance_metrics_enabled && system_visible,
-        }
-    }
-
-    pub(crate) fn sync_performance_monitoring(&mut self, cx: &mut Context<Self>) {
-        let mode = self.performance_collection_mode();
-        if mode.is_empty() || !sysinfo::IS_SUPPORTED_SYSTEM {
-            self.performance.task.take();
-            self.performance.sample = None;
-            self.performance.mode = mode;
-            return;
-        }
-        if self.performance.task.is_some() && self.performance.mode == mode {
-            return;
-        }
-
-        self.performance.task.take();
-        self.performance.sample = None;
-        self.performance.mode = mode;
-        let pid = mode
-            .application
-            .then(sysinfo::get_current_pid)
-            .and_then(Result::ok);
-
-        self.performance.task = Some(cx.spawn(async move |this, cx| {
-            let initial_refresh = cx.background_executor().spawn(async move {
-                let mut system = System::new();
-                let sample = refresh_performance(&mut system, pid, mode);
-                (system, sample)
-            });
-            let (mut system, initial_sample) = initial_refresh.await;
-            let initial_applied = this.update(cx, |view, cx| {
-                if view.performance_collection_mode() != mode {
-                    return false;
-                }
-                view.performance.sample = Some(initial_sample);
-                cx.notify();
-                true
-            });
-            if !matches!(initial_applied, Ok(true)) {
-                return;
-            }
-
-            loop {
-                cx.background_executor()
-                    .timer(PERFORMANCE_SAMPLE_INTERVAL)
-                    .await;
-                let refresh = cx.background_executor().spawn(async move {
-                    let sample = refresh_performance(&mut system, pid, mode);
-                    (system, sample)
-                });
-                let (refreshed_system, sample) = refresh.await;
-                system = refreshed_system;
-                let applied = this.update(cx, |view, cx| {
-                    if view.performance_collection_mode() != mode {
-                        return false;
-                    }
-                    view.performance.sample = Some(sample);
-                    cx.notify();
-                    true
-                });
-                if !matches!(applied, Ok(true)) {
-                    break;
-                }
-            }
-        }));
-    }
-
     pub fn visible_performance_info(&self) -> Option<PerformanceInfo> {
-        let application = self
-            .app_settings
-            .general
-            .performance_metrics_enabled
-            .then(|| {
-                let projects = self.workspace.opened_projects();
-                let project_count = projects.len();
-                let terminal_count = self.terminal.terminal_panes.len();
-                let terminal_tab_count = projects
-                    .iter()
-                    .map(|project| project.layout.tabs.len())
-                    .sum::<usize>();
-                let editor_tab_count = projects
-                    .iter()
-                    .filter_map(|project| {
-                        self.project
-                            .project_editor_runtime
-                            .workspace()
-                            .session(&project.id)
-                    })
-                    .map(|session| session.file_ids().len())
-                    .sum::<usize>();
-                let editor_count = projects
-                    .iter()
-                    .map(|project| {
-                        self.project
-                            .project_editor_runtime
-                            .documents_for_project(&project.id)
-                            .count()
-                    })
-                    .sum::<usize>();
-                let cpu = self
-                    .performance
-                    .sample
-                    .and_then(|sample| sample.application)
-                    .map_or_else(
-                        || "—".to_string(),
-                        |sample| format!("{:.1}%", sample.cpu_percent),
-                    );
-                let memory = self
-                    .performance
-                    .sample
-                    .and_then(|sample| sample.application)
-                    .map_or_else(
-                        || "—".to_string(),
-                        |sample| format!("{:.1} MiB", sample.memory_bytes as f64 / MEBIBYTE_BYTES),
-                    );
+        let sample = self
+            .performance
+            .sample
+            .as_ref()
+            .and_then(|sample| sample.get());
+        let application = Some({
+            let projects = self.workspace.opened_projects();
+            let project_count = projects.len();
+            let terminal_count = self.terminal.terminal_panes.len();
+            let terminal_tab_count = projects
+                .iter()
+                .map(|project| project.layout.tabs.len())
+                .sum::<usize>();
+            let editor_tab_count = projects
+                .iter()
+                .filter_map(|project| {
+                    self.project
+                        .project_editor_runtime
+                        .workspace()
+                        .session(&project.id)
+                })
+                .map(|session| session.file_ids().len())
+                .sum::<usize>();
+            let editor_count = projects
+                .iter()
+                .map(|project| {
+                    self.project
+                        .project_editor_runtime
+                        .documents_for_project(&project.id)
+                        .count()
+                })
+                .sum::<usize>();
+            let cpu = sample.and_then(|sample| sample.application).map_or_else(
+                || "—".to_string(),
+                |sample| format!("{:.1}%", sample.cpu_percent),
+            );
+            let memory = sample.and_then(|sample| sample.application).map_or_else(
+                || "—".to_string(),
+                |sample| format!("{:.1} MiB", sample.memory_bytes as f64 / MEBIBYTE_BYTES),
+            );
 
-                ApplicationPerformanceInfo {
-                    projects: performance_metric(
-                        self.ui_text.get(UiTextKey::PerformanceProjects),
-                        project_count.to_string(),
-                    ),
-                    terminals: performance_metric(
-                        self.ui_text.get(UiTextKey::PerformanceTerminals),
-                        terminal_count.to_string(),
-                    ),
-                    tabs: performance_metric(
-                        self.ui_text.get(UiTextKey::PerformanceTabs),
-                        (terminal_tab_count + editor_tab_count).to_string(),
-                    ),
-                    editors: performance_metric(
-                        self.ui_text.get(UiTextKey::PerformanceEditors),
-                        editor_count.to_string(),
-                    ),
-                    cpu: performance_metric(self.ui_text.get(UiTextKey::PerformanceCpu), cpu),
-                    memory: performance_metric(
-                        self.ui_text.get(UiTextKey::PerformanceMemory),
-                        memory,
-                    ),
-                }
-            });
-        let system = self
-            .app_settings
-            .general
-            .system_performance_metrics_enabled
-            .then(|| {
-                let cpu = self
-                    .performance
-                    .sample
-                    .and_then(|sample| sample.system)
-                    .map_or_else(
-                        || "—".to_string(),
-                        |sample| format!("{:.1}%", sample.cpu_percent),
-                    );
-                let memory = self
-                    .performance
-                    .sample
-                    .and_then(|sample| sample.system)
-                    .map_or_else(
-                        || "—".to_string(),
-                        |sample| format!("{:.1}%", sample.memory_percent),
-                    );
+            ApplicationPerformanceInfo {
+                projects: performance_metric(
+                    self.ui_text.get(UiTextKey::PerformanceProjects),
+                    project_count.to_string(),
+                ),
+                terminals: performance_metric(
+                    self.ui_text.get(UiTextKey::PerformanceTerminals),
+                    terminal_count.to_string(),
+                ),
+                tabs: performance_metric(
+                    self.ui_text.get(UiTextKey::PerformanceTabs),
+                    (terminal_tab_count + editor_tab_count).to_string(),
+                ),
+                editors: performance_metric(
+                    self.ui_text.get(UiTextKey::PerformanceEditors),
+                    editor_count.to_string(),
+                ),
+                cpu: performance_metric(self.ui_text.get(UiTextKey::PerformanceCpu), cpu),
+                memory: performance_metric(self.ui_text.get(UiTextKey::PerformanceMemory), memory),
+            }
+        });
+        let system = sample.and_then(|sample| sample.system).map(|sample| {
+            let cpu = format!("{:.1}%", sample.cpu_percent);
+            let memory = format!("{:.1}%", sample.memory_percent);
 
-                SystemPerformanceInfo {
-                    cpu: performance_metric(self.ui_text.get(UiTextKey::PerformanceSystemCpu), cpu),
-                    memory: performance_metric(
-                        self.ui_text.get(UiTextKey::PerformanceSystemMemory),
-                        memory,
-                    ),
-                }
-            });
+            SystemPerformanceInfo {
+                cpu: performance_metric(self.ui_text.get(UiTextKey::PerformanceSystemCpu), cpu),
+                memory: performance_metric(
+                    self.ui_text.get(UiTextKey::PerformanceSystemMemory),
+                    memory,
+                ),
+            }
+        });
 
-        if application.is_none() && system.is_none() {
-            None
-        } else {
-            Some(PerformanceInfo {
-                application,
-                system,
-            })
-        }
+        Some(PerformanceInfo {
+            application,
+            system,
+        })
     }
 }
 
@@ -276,11 +236,7 @@ fn performance_metric(label: &'static str, value: String) -> PerformanceMetricIn
     }
 }
 
-fn refresh_performance(
-    system: &mut System,
-    pid: Option<Pid>,
-    mode: PerformanceCollectionMode,
-) -> PerformanceSample {
+fn refresh_performance(system: &mut System, pid: Option<Pid>) -> PerformanceSample {
     let application = pid.and_then(|pid| {
         let pids = [pid];
         system.refresh_processes_specifics(
@@ -295,7 +251,7 @@ fn refresh_performance(
             })
     });
 
-    let system_sample = mode.system.then(|| {
+    let system_sample = {
         system.refresh_cpu_usage();
         system.refresh_memory();
         let total_memory = system.total_memory();
@@ -308,10 +264,10 @@ fn refresh_performance(
             cpu_percent: system.global_cpu_usage(),
             memory_percent,
         }
-    });
+    };
 
     PerformanceSample {
         application,
-        system: system_sample,
+        system: Some(system_sample),
     }
 }

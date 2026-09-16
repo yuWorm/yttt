@@ -1,4 +1,4 @@
-use super::layout_editor::BarEditorRegion;
+use super::layout_editor::{BarEditorPreset, BarEditorRegion};
 use crate::config::bars::ShellBarsSettings;
 
 use super::*;
@@ -101,6 +101,7 @@ impl WorkbenchView {
             ),
             EditorAppearance::from(&self.app_settings.editor),
         ));
+        self.refresh_bars_editor_preview_cache();
         self.finish_opening_layout_editor();
         Ok(())
     }
@@ -265,8 +266,16 @@ impl WorkbenchView {
     pub fn set_layout_toml_editor_value(&mut self, value: impl Into<String>) {
         if let Some(session) = &mut self.overlays.layout_toml_editor {
             session.editor_mut().set_value(value);
-            self.reset_layout_toml_input();
+        } else {
+            return;
         }
+        if matches!(self.refresh_bars_editor_preview_cache(), Some(Ok(())))
+            && let Some(session) = &mut self.overlays.layout_toml_editor
+        {
+            session.editor_mut().clear_error();
+            session.editor_mut().clear_diagnostics();
+        }
+        self.reset_layout_toml_input();
     }
 
     pub fn save_layout_toml_editor(&mut self) -> Result<(), WorkbenchError> {
@@ -364,22 +373,6 @@ impl WorkbenchView {
         self.load_error = None;
         self.restore_layout_editor_owner();
         self.sync_input_owner_state();
-        Ok(())
-    }
-
-    pub fn save_layout_toml_editor_with_runtime_refresh(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) -> Result<(), WorkbenchError> {
-        let saving_bars = self
-            .overlays
-            .layout_toml_editor
-            .as_ref()
-            .is_some_and(|session| matches!(session.target(), LayoutEditorTarget::Bars));
-        self.save_layout_toml_editor()?;
-        if saving_bars && !self.layout_toml_editor_is_open() {
-            self.sync_performance_monitoring(cx);
-        }
         Ok(())
     }
 
@@ -513,6 +506,69 @@ impl WorkbenchView {
         }
     }
 
+    pub(super) fn apply_bar_editor_preset(&mut self, preset: BarEditorPreset) {
+        let Some(mut bars) = self
+            .overlays
+            .layout_toml_editor
+            .as_ref()
+            .filter(|session| matches!(session.target(), LayoutEditorTarget::Bars))
+            .map(|session| session.bars_preview().cloned().unwrap_or_default())
+        else {
+            return;
+        };
+        preset.apply(&mut bars);
+        self.replace_bars_editor_draft(bars);
+    }
+
+    pub(super) fn restore_bar_editor_defaults(&mut self) {
+        if !self
+            .overlays
+            .layout_toml_editor
+            .as_ref()
+            .is_some_and(|session| matches!(session.target(), LayoutEditorTarget::Bars))
+        {
+            return;
+        }
+        self.replace_bars_editor_draft(ShellBarsSettings::default());
+    }
+
+    fn replace_bars_editor_draft(&mut self, bars: ShellBarsSettings) {
+        match toml::to_string_pretty(&bars) {
+            Ok(source) => self.set_layout_toml_editor_value(source),
+            Err(error) => self.set_layout_toml_editor_error(
+                "bars",
+                localized_layout_editor_error(
+                    &self.ui_text,
+                    UiTextKey::BarsEditorSaveFailed,
+                    error,
+                ),
+            ),
+        }
+    }
+
+    fn refresh_bars_editor_preview_cache(&mut self) -> Option<Result<(), (&'static str, String)>> {
+        let validation = self
+            .overlays
+            .layout_toml_editor
+            .as_ref()
+            .filter(|session| matches!(session.target(), LayoutEditorTarget::Bars))
+            .map(|session| validate_bars_editor_source(session.editor().value(), &self.ui_text))?;
+        match validation {
+            Ok(bars) => {
+                if let Some(session) = &mut self.overlays.layout_toml_editor {
+                    session.set_bars_preview(Some(bars));
+                }
+                Some(Ok(()))
+            }
+            Err(error) => {
+                if let Some(session) = &mut self.overlays.layout_toml_editor {
+                    session.set_bars_preview(None);
+                }
+                Some(Err(error))
+            }
+        }
+    }
+
     fn reset_bar_component_search_input(&mut self) {
         self.overlays.bar_component_search_input = None;
         self.overlays.bar_component_search_input_subscription = None;
@@ -534,19 +590,20 @@ impl WorkbenchView {
                     .as_ref()
                     .is_some_and(|session| matches!(session.target(), LayoutEditorTarget::Bars));
                 if let Some(session) = &mut self.overlays.layout_toml_editor {
-                    session.editor_mut().set_value(value.clone());
+                    session.editor_mut().set_value(value);
                 }
                 if is_bars_editor {
-                    match validate_bars_editor_source(&value, &self.ui_text) {
-                        Ok(_) => {
+                    match self.refresh_bars_editor_preview_cache() {
+                        Some(Ok(())) => {
                             if let Some(session) = &mut self.overlays.layout_toml_editor {
                                 session.editor_mut().clear_error();
                                 session.editor_mut().clear_diagnostics();
                             }
                         }
-                        Err((source, message)) => {
+                        Some(Err((source, message))) => {
                             self.set_layout_toml_editor_error(source, message);
                         }
+                        None => {}
                     }
                 }
                 cx.notify();

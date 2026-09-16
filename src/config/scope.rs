@@ -35,8 +35,6 @@ const SETTING_KEYS: &[&str] = &[
     "general.ui_font_size",
     "general.ui_line_height",
     "general.onboarding_completed",
-    "general.performance_metrics_enabled",
-    "general.system_performance_metrics_enabled",
     "general.auto_check_updates",
     "general.restore_last_session",
     "general.new_tab_command_picker_enabled",
@@ -316,9 +314,6 @@ fn merge_device_settings(settings: &mut AppSettings, device: &AppSettings) {
     settings.general.ui_font_size = device.general.ui_font_size;
     settings.general.ui_line_height = device.general.ui_line_height;
     settings.general.onboarding_completed = device.general.onboarding_completed;
-    settings.general.performance_metrics_enabled = device.general.performance_metrics_enabled;
-    settings.general.system_performance_metrics_enabled =
-        device.general.system_performance_metrics_enabled;
     settings.general.auto_check_updates = device.general.auto_check_updates;
     settings.general.restore_last_session = device.general.restore_last_session;
     settings.general.new_tab_command_picker_enabled = device.general.new_tab_command_picker_enabled;
@@ -447,10 +442,6 @@ fn device_settings_changed(candidate: &AppSettings, confirmed: &AppSettings) -> 
         || candidate.general.ui_font_size != confirmed.general.ui_font_size
         || candidate.general.ui_line_height != confirmed.general.ui_line_height
         || candidate.general.onboarding_completed != confirmed.general.onboarding_completed
-        || candidate.general.performance_metrics_enabled
-            != confirmed.general.performance_metrics_enabled
-        || candidate.general.system_performance_metrics_enabled
-            != confirmed.general.system_performance_metrics_enabled
         || candidate.general.auto_check_updates != confirmed.general.auto_check_updates
         || candidate.general.restore_last_session != confirmed.general.restore_last_session
         || candidate.general.new_tab_command_picker_enabled

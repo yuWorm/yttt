@@ -120,6 +120,42 @@ opacity = 0.42
 }
 
 #[test]
+fn legacy_performance_metric_keys_load_and_are_omitted_from_device_saves() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    let device_settings_file = paths.config_dir().join("device/settings.toml");
+    std::fs::create_dir_all(device_settings_file.parent().unwrap()).unwrap();
+    std::fs::write(
+        &device_settings_file,
+        r#"
+[general]
+onboarding_completed = true
+performance_metrics_enabled = false
+system_performance_metrics_enabled = true
+"#,
+    )
+    .unwrap();
+
+    let confirmed = load_settings(&paths).unwrap();
+
+    assert!(confirmed.settings.general.onboarding_completed);
+    assert!(confirmed.warnings.is_empty());
+
+    let mut candidate = confirmed.settings.clone();
+    candidate.general.language = LanguageSetting::Chinese;
+    save_scoped_settings(&paths, &candidate, &confirmed.settings, false).unwrap();
+
+    let source: toml::Value =
+        toml::from_str(&std::fs::read_to_string(device_settings_file).unwrap()).unwrap();
+    let general = source
+        .get("general")
+        .and_then(toml::Value::as_table)
+        .expect("saved device settings include general settings");
+    assert!(!general.contains_key("performance_metrics_enabled"));
+    assert!(!general.contains_key("system_performance_metrics_enabled"));
+}
+
+#[test]
 fn terminal_settings_reject_invalid_numeric_values() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
@@ -273,8 +309,6 @@ fn device_settings_persist_language_and_terminal_scrollbar() {
     settings.general.ui_font_size = 20.0;
     settings.general.ui_line_height = 1.75;
     settings.general.onboarding_completed = true;
-    settings.general.performance_metrics_enabled = false;
-    settings.general.system_performance_metrics_enabled = true;
     settings.general.restore_last_session = true;
     settings.general.new_tab_command_picker_enabled = true;
     settings.notifications.system = true;
@@ -290,8 +324,6 @@ fn device_settings_persist_language_and_terminal_scrollbar() {
     assert_eq!(loaded.settings.general.ui_font_size, 20.0);
     assert_eq!(loaded.settings.general.ui_line_height, 1.75);
     assert!(loaded.settings.general.onboarding_completed);
-    assert!(!loaded.settings.general.performance_metrics_enabled);
-    assert!(loaded.settings.general.system_performance_metrics_enabled);
     assert!(loaded.settings.general.restore_last_session);
     assert!(loaded.settings.general.new_tab_command_picker_enabled);
     assert!(loaded.settings.notifications.system);
@@ -660,7 +692,7 @@ fn shell_bar_layout_and_module_options_round_trip_in_standalone_file() {
 #[test]
 fn bar_template_round_trips_unicode_escapes_icons_and_duplicates() {
     let template =
-        r" [Settings] [Space] [Space*5] [text: 你好: \[x\] \\ ] [icon:CPU] [|] [settings] ";
+        r" [Settings] [Space: 1] [sPaCe:5] [text: 你好: \[x\] \\ ] [icon:CPU] [|] [settings] ";
 
     let modules = parse_bar_template(template).unwrap();
 
@@ -678,7 +710,7 @@ fn bar_template_round_trips_unicode_escapes_icons_and_duplicates() {
     );
     assert_eq!(
         format_bar_template(&modules),
-        r"[settings] [Space] [Space*5] [text: 你好: \[x\] \\ ] [icon:cpu] [|] [settings]"
+        r"[settings] [Space: 1] [Space: 5] [text: 你好: \[x\] \\ ] [icon:cpu] [|] [settings]"
     );
     assert_eq!(
         bar_icon_path("MeMoRy-StIcK"),
@@ -689,8 +721,13 @@ fn bar_template_round_trips_unicode_escapes_icons_and_duplicates() {
 #[test]
 fn bar_template_rejects_invalid_tokens() {
     for template in [
-        "[space*0]",
-        "[space*257]",
+        "[Space]",
+        "[Space*5]",
+        "[Space:]",
+        "[Space: 0]",
+        "[Space: 257]",
+        "[Space: -1]",
+        "[Space: 1.5]",
         "[icon:not-bundled]",
         "[not-a-module]",
         r"[text:\q]",
@@ -698,6 +735,10 @@ fn bar_template_rejects_invalid_tokens() {
         assert!(parse_bar_template(template).is_err(), "{template}");
     }
     assert_eq!(parse_bar_template(" \n\t ").unwrap(), Vec::new());
+    assert_eq!(
+        parse_bar_template("[Space: 256]").unwrap(),
+        vec![ShellBarModule::Space(256)]
+    );
 }
 
 #[test]
@@ -734,16 +775,34 @@ right = ["settings"]
 }
 
 #[test]
-fn empty_window_template_left_is_intentionally_empty() {
+fn explicit_bar_templates_and_empty_regions_survive_loading_and_saving() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
     std::fs::create_dir_all(paths.config_dir()).unwrap();
-    std::fs::write(paths.bars_file(), "[window]\nleft = \"\"\n").unwrap();
+    let source = r#"
+[window]
+left = ""
+center = "[text:custom] [Space: 7] [project-path]"
+right = ""
+[status]
+enabled = false
+left = ""
+center = ""
+right = "[app-memory]"
+[window.modules.project-path]
+max_width = 144
+hide_when_empty = false
+"#;
+    std::fs::write(paths.bars_file(), source).unwrap();
 
     let loaded = load_bars(&paths).unwrap();
 
-    assert!(loaded.settings.window.layout.left.is_empty());
+    let expected: ShellBarsSettings = toml::from_str(source).unwrap();
+    assert_eq!(loaded.settings, expected);
     assert!(loaded.warnings.is_empty());
+    assert_eq!(std::fs::read_to_string(paths.bars_file()).unwrap(), source);
+    save_bars(&paths, &loaded.settings).unwrap();
+    assert_eq!(load_bars(&paths).unwrap().settings, expected);
 }
 
 #[test]

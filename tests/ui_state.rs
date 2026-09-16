@@ -5672,6 +5672,25 @@ fn appearance_settings_group_opens_bars_template_editor(cx: &mut gpui::TestAppCo
     assert!(!bars_path.exists(), "insertion must not persist the draft");
     assert!(cx.debug_bounds("bars-editor-preview").is_some());
 
+    let search = cx.debug_bounds("bars-editor-component-search").unwrap();
+    cx.simulate_click(search.center(), gpui::Modifiers::none());
+    cx.simulate_input("space");
+    cx.run_until_parked();
+    let spacer = cx.debug_bounds("bars-editor-insert-Space: 5").unwrap();
+    cx.simulate_click(spacer.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    expected
+        .window
+        .layout
+        .left
+        .push(yttt::config::bars::ShellBarModule::Space(5));
+    cx.read(|app| {
+        let draft: yttt::config::bars::ShellBarsSettings =
+            toml::from_str(root.read(app).layout_toml_editor_value().unwrap()).unwrap();
+        assert_eq!(draft, expected);
+    });
+    assert!(!bars_path.exists(), "spacing insertion must remain a draft");
+
     let cancel = cx
         .debug_bounds("layout-toml-editor-cancel")
         .expect("Bars editor should offer a discard action");
@@ -5682,6 +5701,233 @@ fn appearance_settings_group_opens_bars_template_editor(cx: &mut gpui::TestAppCo
         assert!(root.read(app).settings_is_open());
     });
     assert!(!bars_path.exists(), "cancel must not create bars.toml");
+}
+
+#[gpui::test]
+fn bars_agent_components_follow_active_pane_and_attention_transitions(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let mut bars = yttt::config::bars::ShellBarsSettings::default();
+    bars.window.layout.left = yttt::config::bars::parse_bar_template(
+        "[agent-waiting] [agent-model] [agent-children] [agent-state-duration]",
+    )
+    .unwrap();
+    yttt::config::bars::save_bars(&paths, &bars).unwrap();
+    let mut workspace = workspace_with_sample_project();
+    workspace.select_tab("agent").unwrap();
+    let project_id = workspace.selected_project_id().unwrap().clone();
+    let mut snapshot = agent_snapshot(AgentTurnState::Waiting);
+    snapshot.waiting_reason = Some(yttt_agent_core::WaitingReason::Approval);
+    snapshot.children = vec![ChildAgentSnapshot {
+        id: "worker".to_string(),
+        name: None,
+        task: None,
+        current_action: None,
+        turn_state: AgentTurnState::Working,
+        started_at: 1,
+        updated_at: 1,
+    }];
+    workspace
+        .record_agent_snapshot(&project_id, "agent", "codex", snapshot.clone())
+        .unwrap();
+    let root_slot = Rc::new(RefCell::new(None));
+    let capture = root_slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let root =
+            cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
+        *capture.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("window-bar-agent-waiting").is_some());
+    assert!(cx.debug_bounds("window-bar-agent-children").is_some());
+    assert!(cx.debug_bounds("window-bar-agent-state-duration").is_some());
+    assert!(cx.debug_bounds("window-bar-agent-model").is_none());
+
+    snapshot.turn_state = AgentTurnState::Working;
+    snapshot.waiting_reason = None;
+    snapshot.children[0].turn_state = AgentTurnState::Completed;
+    snapshot.session = Some(yttt_agent_core::AgentSessionMetadata {
+        model: Some("reported-model".to_string()),
+        ..Default::default()
+    });
+    root.update(cx, |root, cx| {
+        root.workspace_mut()
+            .record_agent_snapshot(&project_id, "agent", "codex", snapshot)
+            .unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("window-bar-agent-waiting").is_none());
+    assert!(cx.debug_bounds("window-bar-agent-children").is_none());
+    assert!(cx.debug_bounds("window-bar-agent-model").is_some());
+
+    root.update(cx, |root, cx| {
+        root.select_work_item(WorkItemId::Terminal("dev".to_string()))
+            .unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("window-bar-agent-model").is_none());
+    assert!(cx.debug_bounds("window-bar-agent-state-duration").is_none());
+}
+
+#[gpui::test]
+fn bars_editor_presets_remain_drafts_until_saved(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let bars_path = paths.bars_file();
+    let view_paths = paths.clone();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.open_bars_toml_editor().unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    focus_surface_window(cx, "layout-editor-window");
+    let original_source = cx.read(|app| {
+        root.read(app)
+            .layout_toml_editor_value()
+            .unwrap()
+            .to_string()
+    });
+
+    let mut recommended = yttt::config::bars::ShellBarsSettings::default();
+    recommended.window.layout.modules.insert(
+        "project-name".to_string(),
+        yttt::config::bars::BarModuleSettings {
+            max_width: Some(128.0),
+            hide_when_empty: false,
+        },
+    );
+    let mut customized = recommended.clone();
+    customized.window.layout.left = vec![yttt::config::bars::ShellBarModule::Text(
+        "custom".to_string(),
+    )];
+    customized.status.enabled = false;
+    root.update(cx, |root, cx| {
+        root.set_layout_toml_editor_value(toml::to_string_pretty(&customized).unwrap());
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let preset = cx
+        .debug_bounds("bars-editor-preset-recommended")
+        .expect("Bars editor should offer the Recommended draft preset");
+    cx.simulate_click(preset.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    let draft: yttt::config::bars::ShellBarsSettings =
+        cx.read(|app| toml::from_str(root.read(app).layout_toml_editor_value().unwrap()).unwrap());
+    assert_eq!(draft, recommended, "presets must preserve module overrides");
+
+    let minimal = cx
+        .debug_bounds("bars-editor-preset-minimal")
+        .expect("Bars editor should offer the Minimal draft preset");
+    cx.simulate_click(minimal.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        !bars_path.exists(),
+        "a preset must remain a draft before Save"
+    );
+
+    let cancel = cx
+        .debug_bounds("layout-toml-editor-cancel")
+        .expect("Bars editor should offer Cancel");
+    cx.simulate_click(cancel.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        !bars_path.exists(),
+        "Cancel must discard the preset instead of writing bars.toml"
+    );
+
+    root.update(cx, |root, cx| {
+        root.open_bars_toml_editor().unwrap();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    focus_surface_window(cx, "layout-editor-window");
+    let reopened_source = cx.read(|app| {
+        root.read(app)
+            .layout_toml_editor_value()
+            .unwrap()
+            .to_string()
+    });
+    assert_eq!(
+        reopened_source, original_source,
+        "Cancel must leave the confirmed bars layout unchanged"
+    );
+
+    let agent = cx
+        .debug_bounds("bars-editor-preset-agent")
+        .expect("Bars editor should offer the Agent draft preset");
+    cx.simulate_click(agent.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    let agent_draft: yttt::config::bars::ShellBarsSettings =
+        cx.read(|app| toml::from_str(root.read(app).layout_toml_editor_value().unwrap()).unwrap());
+
+    let save = cx
+        .debug_bounds("layout-toml-editor-save")
+        .expect("Bars editor should offer Save");
+    cx.simulate_click(save.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        yttt::config::bars::load_bars(&paths).unwrap().settings,
+        agent_draft,
+        "Save must persist the selected preset"
+    );
+}
+
+#[gpui::test]
+fn bars_editor_preview_cache_drops_invalid_drafts_and_recovers_with_defaults(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let temp = tempdir().unwrap();
+    let paths = english_test_config_paths(&temp);
+    let view_paths = paths.clone();
+    let root_slot = Rc::new(RefCell::new(None));
+    let root_slot_for_window = root_slot.clone();
+    let (_component_root, cx) = cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| WorkbenchView::with_config_paths_for_test(view_paths));
+        *root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let root = root_slot.borrow_mut().take().unwrap();
+    root.update(cx, |root, cx| {
+        root.open_bars_toml_editor().unwrap();
+        root.set_layout_toml_editor_value("[window\nleft = \"[missing]\"");
+        cx.notify();
+    });
+    cx.run_until_parked();
+    focus_surface_window(cx, "layout-editor-window");
+    assert!(
+        cx.debug_bounds("bars-editor-preview-unavailable").is_some(),
+        "an invalid draft must not retain its previous valid preview"
+    );
+
+    let restore = cx
+        .debug_bounds("bars-editor-restore-defaults")
+        .expect("invalid drafts should offer Restore Defaults");
+    cx.simulate_click(restore.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("bars-editor-preview").is_some(),
+        "Restore Defaults must refresh the valid preview cache"
+    );
+    let restored: yttt::config::bars::ShellBarsSettings =
+        cx.read(|app| toml::from_str(root.read(app).layout_toml_editor_value().unwrap()).unwrap());
+    assert_eq!(restored, yttt::config::bars::ShellBarsSettings::default());
 }
 
 #[gpui::test]

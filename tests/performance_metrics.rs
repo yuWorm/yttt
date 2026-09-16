@@ -1,9 +1,12 @@
-use std::{cell::RefCell, fs, path::PathBuf, rc::Rc};
+use std::{cell::RefCell, fs, path::PathBuf, rc::Rc, time::Duration};
 
 use gpui::AppContext as _;
 use tempfile::tempdir;
 use yttt::{
-    config::{paths::AppConfigPaths, scope::SettingsScope, settings::load_settings},
+    config::{
+        bars::{ShellBarModule, ShellBarsSettings, save_bars},
+        paths::AppConfigPaths,
+    },
     model::{
         ids::ProjectId,
         project::{ProjectDescriptor, ProjectLocation},
@@ -20,51 +23,53 @@ fn local_project(path: PathBuf) -> ProjectDescriptor {
     )
 }
 
-fn settings_window_context(cx: &mut gpui::VisualTestContext) -> gpui::VisualTestContext {
+fn focus_surface_window(cx: &mut gpui::VisualTestContext, selector: &'static str) {
     cx.cx.refresh().unwrap();
     cx.run_until_parked();
     let mut matching = cx.windows().into_iter().filter_map(|window| {
         let mut candidate = gpui::VisualTestContext::from_window(window, &cx.cx);
         candidate.refresh().unwrap();
-        candidate.debug_bounds("settings-window").map(|_| candidate)
+        candidate.debug_bounds(selector).map(|_| candidate)
     });
     let mut target = matching
         .next()
-        .unwrap_or_else(|| panic!("missing native settings surface"));
+        .unwrap_or_else(|| panic!("missing native surface: {selector}"));
     assert!(
         matching.next().is_none(),
-        "duplicate native settings surface"
+        "duplicate native surface: {selector}"
     );
     drop(matching);
     target.update(|window, _| window.activate_window());
     target.run_until_parked();
-    target
-}
-
-fn select_settings_scope(cx: &mut gpui::VisualTestContext, scope: SettingsScope) {
-    let selector = match scope {
-        SettingsScope::Device => "settings-scope-device",
-        SettingsScope::Host => "settings-scope-host",
-        SettingsScope::Project => "settings-scope-project",
-    };
-    let scope_tab = cx
-        .debug_bounds(selector)
-        .unwrap_or_else(|| panic!("settings should expose the {scope:?} scope selector"));
-    cx.simulate_click(scope_tab.center(), gpui::Modifiers::none());
-    cx.run_until_parked();
-    cx.refresh().unwrap();
+    *cx = target;
 }
 
 #[gpui::test]
-fn performance_metrics_render_sample_and_toggle_from_settings(cx: &mut gpui::TestAppContext) {
+fn performance_metrics_are_cached_independently_of_bar_configuration(
+    cx: &mut gpui::TestAppContext,
+) {
     cx.update(gpui_component::init);
     let temp = tempdir().unwrap();
     let paths = english_test_config_paths(&temp);
+    let mut bars_without_metrics = ShellBarsSettings::default();
+    bars_without_metrics.window.layout = Default::default();
+    bars_without_metrics.status.layout = Default::default();
+    save_bars(&paths, &bars_without_metrics).unwrap();
+
+    let mut metric_bars = bars_without_metrics.clone();
+    metric_bars.window.layout.left = vec![
+        ShellBarModule::AppCpu,
+        ShellBarModule::AppMemory,
+        ShellBarModule::SystemCpu,
+        ShellBarModule::SystemMemory,
+    ];
+    let metric_draft = toml::to_string_pretty(&metric_bars).unwrap();
+
     let view_paths = paths.clone();
     let workspace = workspace_with_sample_project();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
-    let (_component_root, mut main_cx) = cx.add_window_view(move |window, cx| {
+    let (first_component_root, main_cx) = cx.add_window_view(move |window, cx| {
         let root = cx.new(|_| {
             WorkbenchView::with_workspace_for_test_and_config_paths(workspace, view_paths)
         });
@@ -73,147 +78,168 @@ fn performance_metrics_render_sample_and_toggle_from_settings(cx: &mut gpui::Tes
     });
     let root = root_slot.borrow_mut().take().unwrap();
     main_cx.run_until_parked();
+    main_cx.refresh().unwrap();
 
+    let assert_cached_performance =
+        |view: &gpui::Entity<WorkbenchView>, view_cx: &gpui::VisualTestContext| {
+            view_cx.read(|app| {
+                let metrics = view
+                    .read(app)
+                    .visible_performance_info()
+                    .expect("the shared sampler should publish a cached metric sample");
+                let application = metrics
+                    .application
+                    .expect("application metrics should be available without bar modules");
+                let system = metrics
+                    .system
+                    .expect("system metrics should be available without bar modules");
+
+                assert_eq!(application.projects.value, "1");
+                assert_eq!(application.terminals.value, "2");
+                assert_eq!(application.tabs.value, "2");
+                assert_eq!(application.editors.value, "0");
+                assert_ne!(application.cpu.value, "—");
+                assert!(application.cpu.value.ends_with('%'));
+                assert_ne!(application.memory.value, "—");
+                assert!(application.memory.value.ends_with(" MiB"));
+                assert_ne!(system.cpu.value, "—");
+                assert!(system.cpu.value.ends_with('%'));
+                assert_ne!(system.memory.value, "—");
+                assert!(system.memory.value.ends_with('%'));
+            });
+        };
+
+    assert_cached_performance(&root, &main_cx);
+    let first_window = main_cx.update(|window, _| window.window_handle());
+    let second_root_slot = Rc::new(RefCell::new(None));
+    let second_root_slot_for_window = second_root_slot.clone();
+    let second_paths = paths.clone();
+    let second_workspace = workspace_with_sample_project();
+    let (_second_component_root, second_cx) = main_cx.cx.add_window_view(move |window, cx| {
+        let root = cx.new(|_| {
+            WorkbenchView::with_workspace_for_test_and_config_paths(second_workspace, second_paths)
+        });
+        *second_root_slot_for_window.borrow_mut() = Some(root.clone());
+        gpui_component::Root::new(root, window, cx)
+    });
+    let second_root = second_root_slot.borrow_mut().take().unwrap();
+    assert_cached_performance(&second_root, &second_cx);
+
+    first_window
+        .update(second_cx, |_, window, _| window.remove_window())
+        .unwrap();
+    second_cx.cx.refresh().unwrap();
+    assert!(
+        !second_cx.windows().contains(&first_window),
+        "the first workbench window should close"
+    );
+    drop(root);
+    drop(first_component_root);
+    second_cx
+        .background_executor
+        .advance_clock(Duration::from_secs(1));
+    second_cx.run_until_parked();
+    assert_cached_performance(&second_root, &second_cx);
+
+    let root = second_root;
+    let mut main_cx = second_cx;
     for selector in [
-        "window-bar-projects-count",
-        "window-bar-terminals-count",
-        "window-bar-tabs-count",
-        "window-bar-editors-count",
         "window-bar-app-cpu",
         "window-bar-app-memory",
+        "window-bar-system-cpu",
+        "window-bar-system-memory",
     ] {
         assert!(
-            main_cx.debug_bounds(selector).is_some(),
-            "{selector} should be visible"
+            main_cx.debug_bounds(selector).is_none(),
+            "{selector} should not render before its bar module is configured"
         );
     }
-    assert!(main_cx.debug_bounds("window-bar-system-cpu").is_none());
-    main_cx.read(|app| {
-        let metrics = root
-            .read(app)
-            .visible_performance_info()
-            .expect("enabled application metrics should be visible");
-        let application = metrics
-            .application
-            .expect("application metrics should be enabled by default");
-        assert!(metrics.system.is_none());
-        assert_eq!(application.projects.value, "1");
-        assert_eq!(application.projects.tooltip, "Projects: 1");
-        assert_eq!(application.terminals.value, "2");
-        assert_eq!(application.tabs.value, "2");
-        assert_eq!(application.editors.value, "0");
-        assert_eq!(application.cpu.value, "—");
-        assert_eq!(application.memory.value, "—");
-    });
 
+    let persisted_before_draft = fs::read_to_string(paths.bars_file()).unwrap();
     root.update(main_cx, |root, cx| {
-        root.open_settings();
+        root.open_bars_toml_editor().unwrap();
+        root.set_layout_toml_editor_value(metric_draft.clone());
         cx.notify();
     });
     main_cx.run_until_parked();
-    let mut settings_cx = settings_window_context(&mut main_cx);
-    select_settings_scope(&mut settings_cx, SettingsScope::Device);
-
-    let settings_scroll_origin = settings_cx
-        .debug_bounds("settings-restore-last-session-row")
-        .expect("general settings rows should be visible")
-        .center();
-    settings_cx.simulate_event(gpui::ScrollWheelEvent {
-        position: settings_scroll_origin,
-        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-240.0))),
-        ..Default::default()
-    });
-    settings_cx.run_until_parked();
-    settings_cx.refresh().unwrap();
-
-    let system_toggle = settings_cx
-        .debug_bounds("settings-system-performance-metrics")
-        .expect("general settings should expose the system performance switch");
-    settings_cx.simulate_click(system_toggle.center(), gpui::Modifiers::none());
-    settings_cx.run_until_parked();
-    main_cx.refresh().unwrap();
-    main_cx.read(|app| {
-        let root = root.read(app);
-        assert!(root.system_performance_metrics_enabled());
-        let metrics = root
-            .visible_performance_info()
-            .expect("system metrics should be visible after enabling");
-        let system = metrics.system.expect("system metrics should have a sample");
-        assert_ne!(system.cpu.value, "—");
-        assert_ne!(system.memory.value, "—");
-        assert!(system.cpu.value.ends_with('%'));
-        assert!(system.memory.value.ends_with('%'));
-        assert!(system.cpu.tooltip.starts_with("System CPU: "));
-        assert!(system.memory.tooltip.starts_with("System memory: "));
-    });
-    assert!(main_cx.debug_bounds("window-bar-system-cpu").is_some());
-    assert!(main_cx.debug_bounds("window-bar-system-memory").is_some());
-    assert!(
-        load_settings(&paths)
-            .unwrap()
-            .settings
-            .general
-            .system_performance_metrics_enabled
+    focus_surface_window(&mut main_cx, "layout-editor-window");
+    assert!(main_cx.debug_bounds("bars-editor-preview").is_some());
+    for selector in [
+        "window-bar-app-cpu",
+        "window-bar-app-memory",
+        "window-bar-system-cpu",
+        "window-bar-system-memory",
+    ] {
+        assert!(
+            main_cx.debug_bounds(selector).is_some(),
+            "{selector} should render in the unsaved bars preview"
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(paths.bars_file()).unwrap(),
+        persisted_before_draft,
+        "the preview must use the cached sample without saving the draft"
     );
+    assert_cached_performance(&root, &main_cx);
 
-    let application_toggle = settings_cx
-        .debug_bounds("settings-performance-metrics")
-        .expect("application performance switch should remain available");
-    settings_cx.simulate_click(application_toggle.center(), gpui::Modifiers::none());
-    settings_cx.run_until_parked();
-    main_cx.refresh().unwrap();
-    main_cx.read(|app| {
-        let root = root.read(app);
-        assert!(!root.performance_metrics_enabled());
-        let metrics = root
-            .visible_performance_info()
-            .expect("system metrics should remain independently visible");
-        assert!(metrics.application.is_none());
-        assert!(metrics.system.is_some());
+    root.update(main_cx, |root, cx| {
+        root.save_layout_toml_editor().unwrap();
+        cx.notify();
     });
-    assert!(main_cx.debug_bounds("window-bar-app-cpu").is_none());
-    assert!(main_cx.debug_bounds("window-bar-system-cpu").is_some());
+    main_cx.run_until_parked();
+    focus_surface_window(&mut main_cx, "window-bar");
+    for selector in [
+        "window-bar-app-cpu",
+        "window-bar-app-memory",
+        "window-bar-system-cpu",
+        "window-bar-system-memory",
+    ] {
+        assert!(
+            main_cx.debug_bounds(selector).is_some(),
+            "{selector} should render after its bar template is saved"
+        );
+    }
+    assert_cached_performance(&root, &main_cx);
 
-    let system_toggle = settings_cx
-        .debug_bounds("settings-system-performance-metrics")
-        .expect("system performance switch should remain available");
-    settings_cx.simulate_click(system_toggle.center(), gpui::Modifiers::none());
-    settings_cx.run_until_parked();
-    main_cx.refresh().unwrap();
-    main_cx.read(|app| {
-        let root = root.read(app);
-        assert!(!root.system_performance_metrics_enabled());
-        assert!(root.visible_performance_info().is_none());
+    let bars_without_metrics_draft = toml::to_string_pretty(&bars_without_metrics).unwrap();
+    root.update(main_cx, |root, cx| {
+        root.open_bars_toml_editor().unwrap();
+        root.set_layout_toml_editor_value(bars_without_metrics_draft.clone());
+        root.save_layout_toml_editor().unwrap();
+        cx.notify();
     });
-    assert!(main_cx.debug_bounds("window-bar-app-cpu").is_none());
+    main_cx.run_until_parked();
+    main_cx.refresh().unwrap();
+    for selector in [
+        "window-bar-app-cpu",
+        "window-bar-app-memory",
+        "window-bar-system-cpu",
+        "window-bar-system-memory",
+    ] {
+        assert!(
+            main_cx.debug_bounds(selector).is_none(),
+            "{selector} should disappear when its bar module is removed"
+        );
+    }
+    assert_cached_performance(&root, &main_cx);
+
+    let mut status_disabled_bars = bars_without_metrics;
+    status_disabled_bars.status.enabled = false;
+    status_disabled_bars.status.layout.left = metric_bars.window.layout.left.clone();
+    let status_disabled_draft = toml::to_string_pretty(&status_disabled_bars).unwrap();
+    root.update(main_cx, |root, cx| {
+        root.open_bars_toml_editor().unwrap();
+        root.set_layout_toml_editor_value(status_disabled_draft.clone());
+        root.save_layout_toml_editor().unwrap();
+        cx.notify();
+    });
+    main_cx.run_until_parked();
+    main_cx.refresh().unwrap();
     assert!(
-        !load_settings(&paths)
-            .unwrap()
-            .settings
-            .general
-            .system_performance_metrics_enabled
+        main_cx.debug_bounds("status-bar").is_none(),
+        "the status bar should not render when disabled"
     );
-
-    let application_toggle = settings_cx
-        .debug_bounds("settings-performance-metrics")
-        .expect("application performance switch should remain available");
-    settings_cx.simulate_click(application_toggle.center(), gpui::Modifiers::none());
-    settings_cx.run_until_parked();
-    main_cx.refresh().unwrap();
-    main_cx.read(|app| {
-        let root = root.read(app);
-        assert!(root.performance_metrics_enabled());
-        let metrics = root
-            .visible_performance_info()
-            .expect("re-enabled application metrics should be visible");
-        let application = metrics
-            .application
-            .expect("application metrics should have a sample");
-        assert!(metrics.system.is_none());
-        assert_ne!(application.cpu.value, "—");
-        assert!(application.memory.value.ends_with(" MiB"));
-    });
-    assert!(main_cx.debug_bounds("window-bar-app-cpu").is_some());
+    assert_cached_performance(&root, &main_cx);
 }
 
 fn english_test_config_paths(temp: &tempfile::TempDir) -> AppConfigPaths {
@@ -226,7 +252,7 @@ fn english_test_config_paths(temp: &tempfile::TempDir) -> AppConfigPaths {
 [general]
 language = "en"
 onboarding_completed = true
-performance_metrics_enabled = true
+performance_metrics_enabled = false
 system_performance_metrics_enabled = false
 "#,
     )

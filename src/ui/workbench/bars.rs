@@ -1,9 +1,14 @@
+use std::{
+    collections::HashSet,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
 use gpui::{
     AnyElement, Context, Font, FontFeatures, FontStyle, FontWeight, IntoElement as _, TextRun,
     Window, black, div, prelude::*, px,
 };
 use gpui_component::{Icon, IconName, StyledExt};
-use yttt_agent_core::AgentViewState;
+use yttt_agent_core::{AgentSnapshot, AgentTurnState, AgentViewState, WaitingReason};
 use yttt_protocol::ssh::SshConnectionState as ConnectionState;
 
 use super::{WorkbenchView, performance::PerformanceInfo, state::update::UpdateStatus};
@@ -72,11 +77,24 @@ struct EditorBarInfo {
     character: Option<usize>,
     dirty: bool,
     diagnostics: (usize, usize, usize),
+    selection: Option<crate::ui::editor::EditorSelectionInfo>,
+    tab_size: usize,
+    soft_wrap: bool,
 }
-
 struct TerminalBarInfo {
     title: String,
     running: bool,
+    exit: Option<(Option<i32>, yttt_terminal::ExitReason)>,
+    viewport_size: Option<(usize, usize)>,
+}
+
+struct AgentBarInfo {
+    state: AgentViewState,
+    waiting_reason: Option<WaitingReason>,
+    waiting_message: Option<String>,
+    model: Option<String>,
+    active_children: usize,
+    state_started_at: u64,
 }
 
 struct SshBarInfo {
@@ -101,6 +119,7 @@ struct ShellBarData {
     git_branch: Option<String>,
     git_changes: Option<(String, bool)>,
     agent_state: Option<AgentViewState>,
+    active_agent: Option<AgentBarInfo>,
     ssh: Option<SshBarInfo>,
     update: UpdateBarInfo,
     surface: &'static str,
@@ -114,12 +133,38 @@ enum BarSectionEntry {
     Separator(AnyElement),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BarUnavailableReason {
+    NoProject,
+    NoEditor,
+    NoCodeEditor,
+    NoSelection,
+    NoTerminal,
+    TerminalNotExited,
+    TerminalSizeUnavailable,
+    NoAgent,
+    AgentNotWaiting,
+    AgentModelUnavailable,
+    NoActiveChildren,
+    NoGit,
+    GitClean,
+    NoSsh,
+    VimDisabled,
+    NoVimDetail,
+    NoVimKeys,
+    EditorClean,
+    NoDiagnostics,
+    PerformanceUnavailable,
+    NoUpdate,
+}
+
 impl WorkbenchView {
     pub(super) fn shell_bar_sections(
-        &self,
+        &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> (BarSections, Option<BarSections>) {
+        self.sync_bar_state_duration_refresh(cx);
         let data = self.shell_bar_data(cx, None);
         let window_sections = self.render_bar_sections(
             BarHost::Window,
@@ -387,6 +432,9 @@ impl WorkbenchView {
                 character: position.map(|position| position.character as usize + 1),
                 dirty: document.model().is_dirty(),
                 diagnostics,
+                selection: document.bar_selection_info(),
+                tab_size: editor.config().tab_size(),
+                soft_wrap: document.appearance().soft_wrap,
             }
         });
         let terminal = self.active_terminal_pane().map(|pane| {
@@ -394,6 +442,8 @@ impl WorkbenchView {
             TerminalBarInfo {
                 title: pane.title().to_string(),
                 running: pane.is_running(),
+                exit: pane.terminal_exit(),
+                viewport_size: pane.terminal_viewport_size(),
             }
         });
         let active_item = match self.active_work_item() {
@@ -441,11 +491,278 @@ impl WorkbenchView {
             git_branch,
             git_changes,
             agent_state,
+            active_agent: self.active_agent_bar_info(),
             ssh,
             update: update_bar_info(&self.update.status, &self.ui_text),
             surface: self.vim.surface().label(),
             vim: self.vim.current_status(),
             performance,
+        }
+    }
+
+    fn active_agent_snapshot(&self) -> Option<&AgentSnapshot> {
+        self.active_terminal_pane()?;
+        let project = self
+            .workspace
+            .selected_project_id()
+            .and_then(|project_id| self.workspace.project(project_id))?;
+        let tab = project.tab_state(&project.selected_tab_id)?;
+        let pane_id = tab.focused_pane_id.as_deref()?;
+        tab.pane_states
+            .iter()
+            .find(|pane| pane.pane_id == pane_id)?
+            .agent_snapshot
+            .as_ref()
+    }
+
+    fn active_agent_bar_info(&self) -> Option<AgentBarInfo> {
+        let snapshot = self.active_agent_snapshot()?;
+        Some(AgentBarInfo {
+            state: snapshot.view_state(),
+            waiting_reason: snapshot.waiting_reason,
+            waiting_message: snapshot
+                .waiting_message
+                .as_deref()
+                .filter(|message| !message.trim().is_empty())
+                .map(ToOwned::to_owned),
+            model: snapshot
+                .session
+                .as_ref()
+                .and_then(|session| session.model.as_deref())
+                .filter(|model| !model.trim().is_empty())
+                .map(ToOwned::to_owned),
+            active_children: snapshot
+                .children
+                .iter()
+                .filter(|child| {
+                    matches!(
+                        child.turn_state,
+                        AgentTurnState::Working | AgentTurnState::Waiting
+                    )
+                })
+                .count(),
+            state_started_at: snapshot.state_started_at,
+        })
+    }
+
+    fn agent_state_duration_requested(&self) -> bool {
+        self.app_settings
+            .bars
+            .contains(&ShellBarModule::AgentStateDuration)
+            || self
+                .overlays
+                .layout_toml_editor
+                .as_ref()
+                .and_then(|session| session.bars_preview())
+                .is_some_and(|bars| bars.contains(&ShellBarModule::AgentStateDuration))
+    }
+
+    pub(super) fn sync_bar_state_duration_refresh(&mut self, cx: &mut Context<Self>) {
+        if !self.agent_state_duration_requested() || self.active_agent_snapshot().is_none() {
+            self.bar_state_duration_refresh_task = None;
+            return;
+        }
+        if self.bar_state_duration_refresh_task.is_some() {
+            return;
+        }
+        self.bar_state_duration_refresh_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(1)).await;
+            let _ = this.update(cx, |view, cx| {
+                view.bar_state_duration_refresh_task = None;
+                if view.agent_state_duration_requested() && view.active_agent_snapshot().is_some() {
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
+    pub(super) fn bar_preview_unavailable(
+        &self,
+        layout: &BarLayoutSettings,
+        cx: &gpui::App,
+    ) -> Vec<(String, BarUnavailableReason)> {
+        let data = self.shell_bar_data(cx, Some(layout));
+        let mut seen = HashSet::new();
+        layout
+            .left
+            .iter()
+            .chain(&layout.center)
+            .chain(&layout.right)
+            .filter_map(|module| {
+                if !seen.insert(module.as_str()) {
+                    return None;
+                }
+                let reason = self.bar_unavailable_reason(module, &data)?;
+                let settings = layout.module_settings(module);
+                if settings.hide_when_empty || bar_module_view(module, &data, settings).is_none() {
+                    Some((module.as_str().to_string(), reason))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn bar_unavailable_reason(
+        &self,
+        module: &ShellBarModule,
+        data: &ShellBarData,
+    ) -> Option<BarUnavailableReason> {
+        match module {
+            ShellBarModule::ProjectPath => data
+                .project_path
+                .is_none()
+                .then_some(BarUnavailableReason::NoProject),
+            ShellBarModule::ActiveItem => data
+                .active_item
+                .is_none()
+                .then_some(BarUnavailableReason::NoEditor),
+            ShellBarModule::VimMode => data
+                .vim
+                .is_none()
+                .then_some(BarUnavailableReason::VimDisabled),
+            ShellBarModule::VimDetail => {
+                let Some(status) = data.vim.as_ref() else {
+                    return Some(BarUnavailableReason::VimDisabled);
+                };
+                status
+                    .detail
+                    .as_ref()
+                    .filter(|detail| !detail.eq_ignore_ascii_case(status.mode.label()))
+                    .is_none()
+                    .then_some(BarUnavailableReason::NoVimDetail)
+            }
+            ShellBarModule::VimKeys => {
+                let Some(status) = data.vim.as_ref() else {
+                    return Some(BarUnavailableReason::VimDisabled);
+                };
+                status
+                    .key_feedback
+                    .is_empty()
+                    .then_some(BarUnavailableReason::NoVimKeys)
+            }
+            ShellBarModule::EditorLanguage
+            | ShellBarModule::EditorDirty
+            | ShellBarModule::EditorDiagnostics
+            | ShellBarModule::EditorSelection
+            | ShellBarModule::EditorTabSize
+            | ShellBarModule::EditorWrap => {
+                let Some(editor) = data.editor.as_ref() else {
+                    return Some(BarUnavailableReason::NoEditor);
+                };
+                match module {
+                    ShellBarModule::EditorDirty => {
+                        (!editor.dirty).then_some(BarUnavailableReason::EditorClean)
+                    }
+                    ShellBarModule::EditorDiagnostics => (editor.diagnostics == (0, 0, 0))
+                        .then_some(BarUnavailableReason::NoDiagnostics),
+                    ShellBarModule::EditorSelection => editor
+                        .selection
+                        .is_none()
+                        .then_some(BarUnavailableReason::NoSelection),
+                    _ => None,
+                }
+            }
+            ShellBarModule::EditorPosition => {
+                let Some(editor) = data.editor.as_ref() else {
+                    return Some(BarUnavailableReason::NoEditor);
+                };
+                (editor.line.is_none() || editor.character.is_none())
+                    .then_some(BarUnavailableReason::NoCodeEditor)
+            }
+            ShellBarModule::TerminalTitle | ShellBarModule::TerminalState => data
+                .terminal
+                .is_none()
+                .then_some(BarUnavailableReason::NoTerminal),
+            ShellBarModule::TerminalExit => {
+                let Some(terminal) = data.terminal.as_ref() else {
+                    return Some(BarUnavailableReason::NoTerminal);
+                };
+                terminal
+                    .exit
+                    .is_none()
+                    .then_some(BarUnavailableReason::TerminalNotExited)
+            }
+            ShellBarModule::TerminalSize => {
+                let Some(terminal) = data.terminal.as_ref() else {
+                    return Some(BarUnavailableReason::NoTerminal);
+                };
+                terminal
+                    .viewport_size
+                    .is_none()
+                    .then_some(BarUnavailableReason::TerminalSizeUnavailable)
+            }
+            ShellBarModule::GitBranch | ShellBarModule::GitChanges => {
+                if matches!(module, ShellBarModule::GitChanges)
+                    && data.git_changes.as_ref().is_some_and(|(_, clean)| *clean)
+                {
+                    return Some(BarUnavailableReason::GitClean);
+                }
+                let git = match module {
+                    ShellBarModule::GitBranch => data.git_branch.is_some(),
+                    ShellBarModule::GitChanges => data.git_changes.is_some(),
+                    _ => unreachable!(),
+                };
+                (!git).then_some(BarUnavailableReason::NoGit)
+            }
+            ShellBarModule::AgentState => data
+                .agent_state
+                .is_none()
+                .then_some(BarUnavailableReason::NoAgent),
+            ShellBarModule::AgentWaiting => {
+                let Some(agent) = data.active_agent.as_ref() else {
+                    return Some(BarUnavailableReason::NoAgent);
+                };
+                (agent.state != AgentViewState::Waiting)
+                    .then_some(BarUnavailableReason::AgentNotWaiting)
+            }
+            ShellBarModule::AgentModel => {
+                let Some(agent) = data.active_agent.as_ref() else {
+                    return Some(BarUnavailableReason::NoAgent);
+                };
+                agent
+                    .model
+                    .is_none()
+                    .then_some(BarUnavailableReason::AgentModelUnavailable)
+            }
+            ShellBarModule::AgentChildren => {
+                let Some(agent) = data.active_agent.as_ref() else {
+                    return Some(BarUnavailableReason::NoAgent);
+                };
+                (agent.active_children == 0).then_some(BarUnavailableReason::NoActiveChildren)
+            }
+            ShellBarModule::AgentStateDuration => data
+                .active_agent
+                .is_none()
+                .then_some(BarUnavailableReason::NoAgent),
+            ShellBarModule::Ssh => data.ssh.is_none().then_some(BarUnavailableReason::NoSsh),
+            ShellBarModule::Update => data.update.empty.then_some(BarUnavailableReason::NoUpdate),
+            ShellBarModule::ProjectsCount
+            | ShellBarModule::TerminalsCount
+            | ShellBarModule::TabsCount
+            | ShellBarModule::EditorsCount
+            | ShellBarModule::AppCpu
+            | ShellBarModule::AppMemory => data
+                .performance
+                .as_ref()
+                .and_then(|performance| performance.application.as_ref())
+                .is_none()
+                .then_some(BarUnavailableReason::PerformanceUnavailable),
+            ShellBarModule::SystemCpu | ShellBarModule::SystemMemory => data
+                .performance
+                .as_ref()
+                .and_then(|performance| performance.system.as_ref())
+                .is_none()
+                .then_some(BarUnavailableReason::PerformanceUnavailable),
+            ShellBarModule::ProjectName
+            | ShellBarModule::Surface
+            | ShellBarModule::CommandPalette
+            | ShellBarModule::Settings
+            | ShellBarModule::Space(_)
+            | ShellBarModule::Text(_)
+            | ShellBarModule::Icon(_)
+            | ShellBarModule::Separator
+            | ShellBarModule::Unknown(_) => None,
         }
     }
 }
@@ -681,6 +998,57 @@ fn bar_module_view(
             };
             view
         }
+        ShellBarModule::EditorSelection => {
+            let editor = data.editor.as_ref()?;
+            let mut view = match editor.selection {
+                Some(selection) => {
+                    let label = format!(
+                        "{} chars · {} {}",
+                        selection.characters,
+                        selection.lines,
+                        if selection.lines == 1 {
+                            "line"
+                        } else {
+                            "lines"
+                        }
+                    );
+                    let mut view = BarModuleView::text(label);
+                    view.tooltip = Some(format!(
+                        "{} Unicode scalar characters across {} selected {}",
+                        selection.characters,
+                        selection.lines,
+                        if selection.lines == 1 {
+                            "line"
+                        } else {
+                            "lines"
+                        }
+                    ));
+                    view
+                }
+                None => BarModuleView::text("no selection"),
+            };
+            view.empty = editor.selection.is_none();
+            view
+        }
+        ShellBarModule::EditorTabSize => {
+            let editor = data.editor.as_ref()?;
+            let mut view = BarModuleView::text(format!("tab {}", editor.tab_size));
+            view.tooltip = Some(format!("Tab size: {} spaces", editor.tab_size));
+            view
+        }
+        ShellBarModule::EditorWrap => {
+            let editor = data.editor.as_ref()?;
+            let mut view = BarModuleView::text(if editor.soft_wrap { "wrap" } else { "no wrap" });
+            view.tooltip = Some(
+                if editor.soft_wrap {
+                    "Soft wrapping enabled"
+                } else {
+                    "Soft wrapping disabled"
+                }
+                .to_string(),
+            );
+            view
+        }
         ShellBarModule::TerminalTitle => BarModuleView::text(data.terminal.as_ref()?.title.clone()),
         ShellBarModule::TerminalState => {
             let terminal = data.terminal.as_ref()?;
@@ -694,6 +1062,28 @@ fn bar_module_view(
             } else {
                 BarTone::Danger
             };
+            view
+        }
+        ShellBarModule::TerminalExit => {
+            let terminal = data.terminal.as_ref()?;
+            let (code, reason) = terminal.exit.as_ref()?;
+            let mut view = BarModuleView::text(match code {
+                Some(code) => format!("exit {code} · {}", terminal_exit_reason_label(reason)),
+                None => format!("exit · {}", terminal_exit_reason_label(reason)),
+            });
+            view.tone = terminal_exit_reason_tone(reason);
+            view
+        }
+        ShellBarModule::TerminalSize => {
+            let terminal = data.terminal.as_ref()?;
+            let mut view = match terminal.viewport_size {
+                Some((cols, rows)) => BarModuleView::text(format!("{cols}×{rows}")),
+                None => BarModuleView::text("—"),
+            };
+            view.tooltip = terminal
+                .viewport_size
+                .map(|(cols, rows)| format!("{cols} columns × {rows} rows"));
+            view.empty = terminal.viewport_size.is_none();
             view
         }
         ShellBarModule::GitBranch => {
@@ -721,6 +1111,44 @@ fn bar_module_view(
             let mut view = BarModuleView::text(agent_status_label(state));
             view.icon = Some(IconName::Bot);
             view.tone = agent_state_tone(state);
+            view
+        }
+        ShellBarModule::AgentWaiting => {
+            let agent = data.active_agent.as_ref()?;
+            if agent.state != AgentViewState::Waiting {
+                return None;
+            }
+            let text = agent
+                .waiting_reason
+                .map(|reason| format!("waiting · {}", waiting_reason_label(reason)))
+                .unwrap_or_else(|| "waiting".to_string());
+            let mut view = BarModuleView::text(text);
+            view.icon = Some(IconName::Bot);
+            view.tooltip = agent.waiting_message.clone();
+            view.tone = BarTone::Warning;
+            view
+        }
+        ShellBarModule::AgentModel => {
+            let model = data.active_agent.as_ref()?.model.as_ref()?;
+            let mut view = BarModuleView::text(format!("model {model}"));
+            view.icon = Some(IconName::Bot);
+            view.tooltip = Some(format!("Agent model: {model}"));
+            view
+        }
+        ShellBarModule::AgentChildren => {
+            let agent = data.active_agent.as_ref()?;
+            let mut view = BarModuleView::text(format!("children {}", agent.active_children));
+            view.icon = Some(IconName::Bot);
+            view.tooltip = Some(format!("{} active child agents", agent.active_children));
+            view.empty = agent.active_children == 0;
+            view
+        }
+        ShellBarModule::AgentStateDuration => {
+            let agent = data.active_agent.as_ref()?;
+            let elapsed = current_unix_millis().saturating_sub(agent.state_started_at);
+            let mut view = BarModuleView::text(format_state_duration(elapsed));
+            view.tooltip = Some("Current selected agent state duration".to_string());
+            view.tone = agent_state_tone(agent.state);
             view
         }
         ShellBarModule::Ssh => {
@@ -990,6 +1418,7 @@ fn default_module_max_width(host: BarHost, module: &ShellBarModule) -> Option<f3
         ShellBarModule::ActiveItem => Some(280.0),
         ShellBarModule::VimDetail | ShellBarModule::VimKeys => Some(220.0),
         ShellBarModule::TerminalTitle => Some(240.0),
+        ShellBarModule::AgentWaiting | ShellBarModule::AgentModel => Some(180.0),
         ShellBarModule::GitBranch => Some(180.0),
         ShellBarModule::Ssh => Some(220.0),
         ShellBarModule::Update => Some(180.0),
@@ -1026,6 +1455,56 @@ fn agent_state_tone(state: AgentViewState) -> BarTone {
         AgentViewState::Failed | AgentViewState::Interrupted => BarTone::Danger,
         AgentViewState::Idle | AgentViewState::Stale => BarTone::Muted,
     }
+}
+
+fn waiting_reason_label(reason: WaitingReason) -> &'static str {
+    match reason {
+        WaitingReason::Approval => "approval",
+        WaitingReason::UserInput => "input",
+        WaitingReason::External => "external",
+    }
+}
+
+fn terminal_exit_reason_label(reason: &yttt_terminal::ExitReason) -> &'static str {
+    match reason {
+        yttt_terminal::ExitReason::Completed => "completed",
+        yttt_terminal::ExitReason::Failed => "failed",
+        yttt_terminal::ExitReason::KilledByUser => "killed",
+    }
+}
+
+fn terminal_exit_reason_tone(reason: &yttt_terminal::ExitReason) -> BarTone {
+    match reason {
+        yttt_terminal::ExitReason::Completed => BarTone::Success,
+        yttt_terminal::ExitReason::Failed => BarTone::Danger,
+        yttt_terminal::ExitReason::KilledByUser => BarTone::Warning,
+    }
+}
+
+fn current_unix_millis() -> u64 {
+    u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX)
+}
+
+fn format_state_duration(elapsed_millis: u64) -> String {
+    let seconds = elapsed_millis / 1_000;
+    if seconds < 60 {
+        return format!("{seconds}s");
+    }
+    let minutes = seconds / 60;
+    if minutes < 60 {
+        return format!("{minutes}m {}s", seconds % 60);
+    }
+    let hours = minutes / 60;
+    if hours < 24 {
+        return format!("{hours}h {}m", minutes % 60);
+    }
+    format!("{}d {}h", hours / 24, hours % 24)
 }
 
 fn ssh_state_label(state: ConnectionState) -> &'static str {

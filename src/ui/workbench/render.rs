@@ -1,6 +1,6 @@
 use super::{
-    layout_editor::{BarEditorRegion, LayoutEditorTarget},
-    layout_editor_controller::validate_bars_editor_source,
+    bars::BarUnavailableReason,
+    layout_editor::{BarEditorPreset, BarEditorRegion, LayoutEditorTarget},
     shell::bar::{BarHost, bar_sections_content},
 };
 
@@ -8,6 +8,7 @@ use super::*;
 
 impl Render for WorkbenchView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.performance.attach(window, cx);
         self.flush_pending_settings_save(window, cx);
         self.flush_pending_project_settings_save(window, cx);
         self.flush_pending_onboarding_completion(window, cx);
@@ -518,39 +519,279 @@ pub(super) fn split_child(child: Div, basis: f32) -> Div {
         .child(child)
 }
 
-const BAR_COMPONENT_IDS: [&str; 32] = [
-    "project-name",
-    "project-path",
-    "active-item",
-    "surface",
-    "vim-mode",
-    "vim-detail",
-    "vim-keys",
-    "editor-language",
-    "editor-position",
-    "editor-dirty",
-    "editor-diagnostics",
-    "terminal-title",
-    "terminal-state",
-    "git-branch",
-    "git-changes",
-    "agent-state",
-    "ssh",
-    "update",
-    "projects-count",
-    "terminals-count",
-    "tabs-count",
-    "editors-count",
-    "app-cpu",
-    "app-memory",
-    "system-cpu",
-    "system-memory",
-    "command-palette",
-    "settings",
-    "Space*5",
-    "text:Text",
-    "icon:settings",
-    "|",
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BarComponentCategory {
+    Project,
+    EditorVim,
+    Terminal,
+    Agent,
+    Performance,
+    LayoutActions,
+}
+
+#[derive(Clone, Copy)]
+struct BarComponentCatalog {
+    id: &'static str,
+    name: UiTextKey,
+    description: UiTextKey,
+    category: BarComponentCategory,
+}
+const BAR_COMPONENT_CATEGORIES: [BarComponentCategory; 6] = [
+    BarComponentCategory::Project,
+    BarComponentCategory::EditorVim,
+    BarComponentCategory::Terminal,
+    BarComponentCategory::Agent,
+    BarComponentCategory::Performance,
+    BarComponentCategory::LayoutActions,
+];
+
+const BAR_COMPONENT_CATALOG: [BarComponentCatalog; 41] = [
+    BarComponentCatalog {
+        id: "project-name",
+        name: UiTextKey::BarsComponentProjectNameName,
+        description: UiTextKey::BarsComponentProjectNameDescription,
+        category: BarComponentCategory::Project,
+    },
+    BarComponentCatalog {
+        id: "project-path",
+        name: UiTextKey::BarsComponentProjectPathName,
+        description: UiTextKey::BarsComponentProjectPathDescription,
+        category: BarComponentCategory::Project,
+    },
+    BarComponentCatalog {
+        id: "git-branch",
+        name: UiTextKey::BarsComponentGitBranchName,
+        description: UiTextKey::BarsComponentGitBranchDescription,
+        category: BarComponentCategory::Project,
+    },
+    BarComponentCatalog {
+        id: "git-changes",
+        name: UiTextKey::BarsComponentGitChangesName,
+        description: UiTextKey::BarsComponentGitChangesDescription,
+        category: BarComponentCategory::Project,
+    },
+    BarComponentCatalog {
+        id: "ssh",
+        name: UiTextKey::BarsComponentSshName,
+        description: UiTextKey::BarsComponentSshDescription,
+        category: BarComponentCategory::Project,
+    },
+    BarComponentCatalog {
+        id: "update",
+        name: UiTextKey::BarsComponentUpdateName,
+        description: UiTextKey::BarsComponentUpdateDescription,
+        category: BarComponentCategory::Project,
+    },
+    BarComponentCatalog {
+        id: "active-item",
+        name: UiTextKey::BarsComponentActiveItemName,
+        description: UiTextKey::BarsComponentActiveItemDescription,
+        category: BarComponentCategory::EditorVim,
+    },
+    BarComponentCatalog {
+        id: "surface",
+        name: UiTextKey::BarsComponentSurfaceName,
+        description: UiTextKey::BarsComponentSurfaceDescription,
+        category: BarComponentCategory::EditorVim,
+    },
+    BarComponentCatalog {
+        id: "vim-mode",
+        name: UiTextKey::BarsComponentVimModeName,
+        description: UiTextKey::BarsComponentVimModeDescription,
+        category: BarComponentCategory::EditorVim,
+    },
+    BarComponentCatalog {
+        id: "vim-detail",
+        name: UiTextKey::BarsComponentVimDetailName,
+        description: UiTextKey::BarsComponentVimDetailDescription,
+        category: BarComponentCategory::EditorVim,
+    },
+    BarComponentCatalog {
+        id: "vim-keys",
+        name: UiTextKey::BarsComponentVimKeysName,
+        description: UiTextKey::BarsComponentVimKeysDescription,
+        category: BarComponentCategory::EditorVim,
+    },
+    BarComponentCatalog {
+        id: "editor-language",
+        name: UiTextKey::BarsComponentEditorLanguageName,
+        description: UiTextKey::BarsComponentEditorLanguageDescription,
+        category: BarComponentCategory::EditorVim,
+    },
+    BarComponentCatalog {
+        id: "editor-position",
+        name: UiTextKey::BarsComponentEditorPositionName,
+        description: UiTextKey::BarsComponentEditorPositionDescription,
+        category: BarComponentCategory::EditorVim,
+    },
+    BarComponentCatalog {
+        id: "editor-dirty",
+        name: UiTextKey::BarsComponentEditorDirtyName,
+        description: UiTextKey::BarsComponentEditorDirtyDescription,
+        category: BarComponentCategory::EditorVim,
+    },
+    BarComponentCatalog {
+        id: "editor-diagnostics",
+        name: UiTextKey::BarsComponentEditorDiagnosticsName,
+        description: UiTextKey::BarsComponentEditorDiagnosticsDescription,
+        category: BarComponentCategory::EditorVim,
+    },
+    BarComponentCatalog {
+        id: "editor-selection",
+        name: UiTextKey::BarsComponentEditorSelectionName,
+        description: UiTextKey::BarsComponentEditorSelectionDescription,
+        category: BarComponentCategory::EditorVim,
+    },
+    BarComponentCatalog {
+        id: "editor-tab-size",
+        name: UiTextKey::BarsComponentEditorTabSizeName,
+        description: UiTextKey::BarsComponentEditorTabSizeDescription,
+        category: BarComponentCategory::EditorVim,
+    },
+    BarComponentCatalog {
+        id: "editor-wrap",
+        name: UiTextKey::BarsComponentEditorWrapName,
+        description: UiTextKey::BarsComponentEditorWrapDescription,
+        category: BarComponentCategory::EditorVim,
+    },
+    BarComponentCatalog {
+        id: "terminal-title",
+        name: UiTextKey::BarsComponentTerminalTitleName,
+        description: UiTextKey::BarsComponentTerminalTitleDescription,
+        category: BarComponentCategory::Terminal,
+    },
+    BarComponentCatalog {
+        id: "terminal-state",
+        name: UiTextKey::BarsComponentTerminalStateName,
+        description: UiTextKey::BarsComponentTerminalStateDescription,
+        category: BarComponentCategory::Terminal,
+    },
+    BarComponentCatalog {
+        id: "terminal-exit",
+        name: UiTextKey::BarsComponentTerminalExitName,
+        description: UiTextKey::BarsComponentTerminalExitDescription,
+        category: BarComponentCategory::Terminal,
+    },
+    BarComponentCatalog {
+        id: "terminal-size",
+        name: UiTextKey::BarsComponentTerminalSizeName,
+        description: UiTextKey::BarsComponentTerminalSizeDescription,
+        category: BarComponentCategory::Terminal,
+    },
+    BarComponentCatalog {
+        id: "agent-state",
+        name: UiTextKey::BarsComponentAgentStateName,
+        description: UiTextKey::BarsComponentAgentStateDescription,
+        category: BarComponentCategory::Agent,
+    },
+    BarComponentCatalog {
+        id: "agent-waiting",
+        name: UiTextKey::BarsComponentAgentWaitingName,
+        description: UiTextKey::BarsComponentAgentWaitingDescription,
+        category: BarComponentCategory::Agent,
+    },
+    BarComponentCatalog {
+        id: "agent-model",
+        name: UiTextKey::BarsComponentAgentModelName,
+        description: UiTextKey::BarsComponentAgentModelDescription,
+        category: BarComponentCategory::Agent,
+    },
+    BarComponentCatalog {
+        id: "agent-children",
+        name: UiTextKey::BarsComponentAgentChildrenName,
+        description: UiTextKey::BarsComponentAgentChildrenDescription,
+        category: BarComponentCategory::Agent,
+    },
+    BarComponentCatalog {
+        id: "agent-state-duration",
+        name: UiTextKey::BarsComponentAgentStateDurationName,
+        description: UiTextKey::BarsComponentAgentStateDurationDescription,
+        category: BarComponentCategory::Agent,
+    },
+    BarComponentCatalog {
+        id: "projects-count",
+        name: UiTextKey::BarsComponentProjectsCountName,
+        description: UiTextKey::BarsComponentProjectsCountDescription,
+        category: BarComponentCategory::Performance,
+    },
+    BarComponentCatalog {
+        id: "terminals-count",
+        name: UiTextKey::BarsComponentTerminalsCountName,
+        description: UiTextKey::BarsComponentTerminalsCountDescription,
+        category: BarComponentCategory::Performance,
+    },
+    BarComponentCatalog {
+        id: "tabs-count",
+        name: UiTextKey::BarsComponentTabsCountName,
+        description: UiTextKey::BarsComponentTabsCountDescription,
+        category: BarComponentCategory::Performance,
+    },
+    BarComponentCatalog {
+        id: "editors-count",
+        name: UiTextKey::BarsComponentEditorsCountName,
+        description: UiTextKey::BarsComponentEditorsCountDescription,
+        category: BarComponentCategory::Performance,
+    },
+    BarComponentCatalog {
+        id: "app-cpu",
+        name: UiTextKey::BarsComponentAppCpuName,
+        description: UiTextKey::BarsComponentAppCpuDescription,
+        category: BarComponentCategory::Performance,
+    },
+    BarComponentCatalog {
+        id: "app-memory",
+        name: UiTextKey::BarsComponentAppMemoryName,
+        description: UiTextKey::BarsComponentAppMemoryDescription,
+        category: BarComponentCategory::Performance,
+    },
+    BarComponentCatalog {
+        id: "system-cpu",
+        name: UiTextKey::BarsComponentSystemCpuName,
+        description: UiTextKey::BarsComponentSystemCpuDescription,
+        category: BarComponentCategory::Performance,
+    },
+    BarComponentCatalog {
+        id: "system-memory",
+        name: UiTextKey::BarsComponentSystemMemoryName,
+        description: UiTextKey::BarsComponentSystemMemoryDescription,
+        category: BarComponentCategory::Performance,
+    },
+    BarComponentCatalog {
+        id: "command-palette",
+        name: UiTextKey::BarsComponentCommandPaletteName,
+        description: UiTextKey::BarsComponentCommandPaletteDescription,
+        category: BarComponentCategory::LayoutActions,
+    },
+    BarComponentCatalog {
+        id: "settings",
+        name: UiTextKey::BarsComponentSettingsName,
+        description: UiTextKey::BarsComponentSettingsDescription,
+        category: BarComponentCategory::LayoutActions,
+    },
+    BarComponentCatalog {
+        id: "Space: 5",
+        name: UiTextKey::BarsComponentSpaceName,
+        description: UiTextKey::BarsComponentSpaceDescription,
+        category: BarComponentCategory::LayoutActions,
+    },
+    BarComponentCatalog {
+        id: "text:Text",
+        name: UiTextKey::BarsComponentTextName,
+        description: UiTextKey::BarsComponentTextDescription,
+        category: BarComponentCategory::LayoutActions,
+    },
+    BarComponentCatalog {
+        id: "icon:settings",
+        name: UiTextKey::BarsComponentIconName,
+        description: UiTextKey::BarsComponentIconDescription,
+        category: BarComponentCategory::LayoutActions,
+    },
+    BarComponentCatalog {
+        id: "|",
+        name: UiTextKey::BarsComponentSeparatorName,
+        description: UiTextKey::BarsComponentSeparatorDescription,
+        category: BarComponentCategory::LayoutActions,
+    },
 ];
 
 pub(super) fn layout_toml_editor_window_content(
@@ -628,71 +869,95 @@ fn bars_toml_editor_window_content(
     window: &mut Window,
     cx: &mut Context<WorkbenchView>,
 ) -> Div {
+    root.sync_bar_state_duration_refresh(cx);
     let appearance = root.theme_runtime();
     let theme = appearance.ui;
     let style = appearance.style;
     let text = root.ui_text;
-    let Some((source, path, editor_appearance, error, query, selected_region)) = root
+    let component_search = root.bar_component_search_input(window, cx);
+    let Some(session) = root
         .overlays
         .layout_toml_editor
         .as_ref()
         .filter(|session| matches!(session.target(), LayoutEditorTarget::Bars))
-        .map(|session| {
-            (
-                session.editor().value().to_string(),
-                session.editor().path().display().to_string(),
-                session.appearance().clone(),
-                session.editor().error().map(str::to_string),
-                session.bar_component_query().to_string(),
-                session.bar_insert_region(),
-            )
-        })
     else {
         return div();
     };
-    let component_search = root.bar_component_search_input(window, cx);
-    let normalized_query = query.trim().to_ascii_lowercase();
-    let visible_components = BAR_COMPONENT_IDS.into_iter().filter(|component| {
-        normalized_query.is_empty()
-            || component
-                .as_bytes()
-                .windows(normalized_query.len())
-                .any(|part| part.eq_ignore_ascii_case(normalized_query.as_bytes()))
-    });
-    let preview = match validate_bars_editor_source(&source, &text) {
-        Ok(bars) => {
-            let performance_hint =
-                bars_preview_performance_hint(root, &bars).map(|key| text.get(key));
-            let window_preview =
-                bars_preview_surface(root, BarHost::Window, &bars.window.layout, window, cx);
-            let status_preview = bars.status.enabled.then(|| {
-                bars_preview_surface(root, BarHost::Status, &bars.status.layout, window, cx)
-            });
-            div()
-                .debug_selector(|| "bars-editor-preview".to_string())
-                .flex()
-                .flex_col()
-                .gap(style.spacing.sm)
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.text_muted)
-                        .child(text.get(UiTextKey::BarsEditorPreview)),
-                )
-                .child(window_preview)
-                .when_some(status_preview, |preview, status_preview| {
-                    preview.child(status_preview)
-                })
-                .when_some(performance_hint, |preview, hint| {
-                    preview.child(div().text_xs().text_color(theme.text_muted).child(hint))
-                })
-        }
-        Err(_) => div()
-            .debug_selector(|| "bars-editor-preview-unavailable".to_string())
-            .text_xs()
-            .text_color(theme.text_muted)
-            .child(text.get(UiTextKey::BarsEditorPreviewUnavailable)),
-    };
+    let path = session.editor().path().display().to_string();
+    let editor_appearance = session.appearance();
+    let error = session.editor().error();
+    let query = session.bar_component_query().trim();
+    let selected_region = session.bar_insert_region();
+    let visible_components = BAR_COMPONENT_CATALOG
+        .iter()
+        .filter(|component| bar_component_matches(component, query, text))
+        .collect::<Vec<_>>();
+    let preview =
+        match session.bars_preview() {
+            Some(bars) => {
+                let unavailable = bars_preview_unavailable(root, bars, cx);
+                let window_preview =
+                    bars_preview_surface(root, BarHost::Window, &bars.window.layout, window, cx);
+                let status_preview = bars.status.enabled.then(|| {
+                    bars_preview_surface(root, BarHost::Status, &bars.status.layout, window, cx)
+                });
+                div()
+                    .debug_selector(|| "bars-editor-preview".to_string())
+                    .flex()
+                    .flex_col()
+                    .gap(style.spacing.sm)
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.text_muted)
+                            .child(text.get(UiTextKey::BarsEditorPreview)),
+                    )
+                    .child(window_preview)
+                    .when_some(status_preview, |preview, status_preview| {
+                        preview.child(status_preview)
+                    })
+                    .when(!bars.status.enabled, |preview| {
+                        preview.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(text.get(UiTextKey::BarsEditorPreviewStatusDisabled)),
+                        )
+                    })
+                    .when(!unavailable.is_empty(), |preview| {
+                        preview.child(
+                            div()
+                                .id("bars-preview-unavailable-scroll")
+                                .debug_selector(|| {
+                                    "bars-editor-preview-unavailable-components".to_string()
+                                })
+                                .flex()
+                                .flex_col()
+                                .gap(style.spacing.xs)
+                                .max_h(px(96.0))
+                                .overflow_y_scroll()
+                                .pt(style.spacing.xs)
+                                .border_t(style.border.hairline)
+                                .border_color(theme.border_variant)
+                                .child(div().text_xs().text_color(theme.text_muted).child(
+                                    text.get(UiTextKey::BarsEditorPreviewUnavailableModules),
+                                ))
+                                .children(unavailable.into_iter().map(|(component, reason)| {
+                                    div().text_xs().text_color(theme.text_muted).child(format!(
+                                        "{} — {}",
+                                        bar_component_name(&component, text),
+                                        text.get(bar_unavailable_reason_key(reason))
+                                    ))
+                                })),
+                        )
+                    })
+            }
+            None => div()
+                .debug_selector(|| "bars-editor-preview-unavailable".to_string())
+                .text_xs()
+                .text_color(theme.text_muted)
+                .child(text.get(UiTextKey::BarsEditorPreviewUnavailable)),
+        };
 
     div()
         .flex()
@@ -748,6 +1013,116 @@ fn bars_toml_editor_window_content(
                         })
                         .child(
                             div()
+                                .debug_selector(|| "bars-editor-presets".to_string())
+                                .flex_none()
+                                .flex()
+                                .flex_col()
+                                .gap(style.spacing.xs)
+                                .px(gpui::rems(0.75))
+                                .pb(gpui::rems(0.5))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.text_muted)
+                                        .child(text.get(UiTextKey::BarsEditorPresets)),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_wrap()
+                                        .gap(style.spacing.xs)
+                                        .child(
+                                            settings_button(
+                                                "bars-editor-preset-recommended",
+                                                text.get(UiTextKey::BarsEditorPresetRecommended),
+                                                false,
+                                                theme,
+                                                cx,
+                                                cx.listener(|this, _, _window, cx| {
+                                                    this.apply_bar_editor_preset(
+                                                        BarEditorPreset::Recommended,
+                                                    );
+                                                    cx.notify();
+                                                }),
+                                            )
+                                            .debug_selector(|| {
+                                                "bars-editor-preset-recommended".to_string()
+                                            }),
+                                        )
+                                        .child(
+                                            settings_button(
+                                                "bars-editor-preset-minimal",
+                                                text.get(UiTextKey::BarsEditorPresetMinimal),
+                                                false,
+                                                theme,
+                                                cx,
+                                                cx.listener(|this, _, _window, cx| {
+                                                    this.apply_bar_editor_preset(
+                                                        BarEditorPreset::Minimal,
+                                                    );
+                                                    cx.notify();
+                                                }),
+                                            )
+                                            .debug_selector(|| {
+                                                "bars-editor-preset-minimal".to_string()
+                                            }),
+                                        )
+                                        .child(
+                                            settings_button(
+                                                "bars-editor-preset-development",
+                                                text.get(UiTextKey::BarsEditorPresetDevelopment),
+                                                false,
+                                                theme,
+                                                cx,
+                                                cx.listener(|this, _, _window, cx| {
+                                                    this.apply_bar_editor_preset(
+                                                        BarEditorPreset::Development,
+                                                    );
+                                                    cx.notify();
+                                                }),
+                                            )
+                                            .debug_selector(|| {
+                                                "bars-editor-preset-development".to_string()
+                                            }),
+                                        )
+                                        .child(
+                                            settings_button(
+                                                "bars-editor-preset-agent",
+                                                text.get(UiTextKey::BarsEditorPresetAgent),
+                                                false,
+                                                theme,
+                                                cx,
+                                                cx.listener(|this, _, _window, cx| {
+                                                    this.apply_bar_editor_preset(
+                                                        BarEditorPreset::Agent,
+                                                    );
+                                                    cx.notify();
+                                                }),
+                                            )
+                                            .debug_selector(|| {
+                                                "bars-editor-preset-agent".to_string()
+                                            }),
+                                        )
+                                        .child(
+                                            settings_button(
+                                                "bars-editor-restore-defaults",
+                                                text.get(UiTextKey::BarsEditorRestoreDefaults),
+                                                false,
+                                                theme,
+                                                cx,
+                                                cx.listener(|this, _, _window, cx| {
+                                                    this.restore_bar_editor_defaults();
+                                                    cx.notify();
+                                                }),
+                                            )
+                                            .debug_selector(|| {
+                                                "bars-editor-restore-defaults".to_string()
+                                            }),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
                                 .id("bars-component-list")
                                 .flex()
                                 .flex_col()
@@ -756,24 +1131,39 @@ fn bars_toml_editor_window_content(
                                 .overflow_y_scroll()
                                 .px(gpui::rems(0.5))
                                 .pb(gpui::rems(0.75))
-                                .gap(style.spacing.xs)
-                                .children(visible_components.map(|component| {
-                                    settings_button(
-                                        format!("bars-editor-insert-{component}"),
-                                        component,
-                                        false,
-                                        theme,
-                                        cx,
-                                        cx.listener(move |this, _, _window, cx| {
-                                            this.insert_bar_component(component);
-                                            cx.notify();
-                                        }),
-                                    )
-                                    .debug_selector(move || {
-                                        format!("bars-editor-insert-{component}")
-                                    })
-                                    .w_full()
-                                })),
+                                .gap(style.spacing.sm)
+                                .children(BAR_COMPONENT_CATEGORIES.into_iter().filter_map(
+                                    |category| {
+                                        let mut components = visible_components
+                                            .iter()
+                                            .copied()
+                                            .filter(|component| component.category == category);
+                                        let first = components.next()?;
+                                        Some(
+                                            div()
+                                                .flex()
+                                                .flex_col()
+                                                .gap(style.spacing.xs)
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(theme.text_muted)
+                                                        .child(bar_component_category_name(
+                                                            category, text,
+                                                        )),
+                                                )
+                                                .children(
+                                                    std::iter::once(first).chain(components).map(
+                                                        |component| {
+                                                            bar_component_catalog_entry(
+                                                                component, text, theme, style, cx,
+                                                            )
+                                                        },
+                                                    ),
+                                                ),
+                                        )
+                                    },
+                                )),
                         ),
                 )
                 .child(
@@ -789,9 +1179,7 @@ fn bars_toml_editor_window_content(
                                 .flex_1()
                                 .min_h_0()
                                 .overflow_hidden()
-                                .child(
-                                    styled_code_editor_input(input, &editor_appearance).h_full(),
-                                ),
+                                .child(styled_code_editor_input(input, editor_appearance).h_full()),
                         )
                         .when_some(error, |editor, error| {
                             editor.child(
@@ -802,7 +1190,7 @@ fn bars_toml_editor_window_content(
                                     .border_color(theme.border_variant)
                                     .text_sm()
                                     .text_color(theme.danger)
-                                    .child(error),
+                                    .child(error.to_string()),
                             )
                         })
                         .child(
@@ -851,32 +1239,135 @@ fn bars_toml_editor_window_content(
         .child(layout_toml_editor_footer(root, theme, style, cx))
 }
 
-fn bars_preview_performance_hint(
+fn bar_component_matches(component: &BarComponentCatalog, query: &str, text: UiText) -> bool {
+    query.is_empty()
+        || [
+            component.id,
+            text.get(component.name),
+            text.get(component.description),
+        ]
+        .into_iter()
+        .any(|candidate| ascii_case_insensitive_contains(candidate, query))
+}
+
+fn ascii_case_insensitive_contains(candidate: &str, query: &str) -> bool {
+    candidate
+        .as_bytes()
+        .windows(query.len())
+        .any(|part| part.eq_ignore_ascii_case(query.as_bytes()))
+}
+
+fn bar_component_catalog_entry(
+    component: &BarComponentCatalog,
+    text: UiText,
+    theme: WorkbenchTheme,
+    style: UiStyle,
+    cx: &mut Context<WorkbenchView>,
+) -> Div {
+    let id = component.id;
+    div()
+        .flex()
+        .flex_col()
+        .gap(style.spacing.xs)
+        .pb(style.spacing.xs)
+        .child(
+            settings_button(
+                format!("bars-editor-insert-{id}"),
+                format!("{} · {id}", text.get(component.name)),
+                false,
+                theme,
+                cx,
+                cx.listener(move |this, _, _window, cx| {
+                    this.insert_bar_component(id);
+                    cx.notify();
+                }),
+            )
+            .debug_selector(move || format!("bars-editor-insert-{id}"))
+            .w_full(),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.text_muted)
+                .child(text.get(component.description)),
+        )
+        .child(div().text_xs().text_color(theme.text_muted).child(format!(
+            "{}: {}",
+            text.get(UiTextKey::BarsEditorCatalogSample),
+            format!("[{}]", component.id)
+        )))
+        .child(div().text_xs().text_color(theme.text_muted).child(format!(
+            "{}: {}",
+            text.get(UiTextKey::BarsEditorCatalogScope),
+            bar_component_category_name(component.category, text)
+        )))
+}
+
+fn bar_component_category_name(category: BarComponentCategory, text: UiText) -> &'static str {
+    text.get(match category {
+        BarComponentCategory::Project => UiTextKey::BarsEditorCategoryProject,
+        BarComponentCategory::EditorVim => UiTextKey::BarsEditorCategoryEditorVim,
+        BarComponentCategory::Terminal => UiTextKey::BarsEditorCategoryTerminal,
+        BarComponentCategory::Agent => UiTextKey::BarsEditorCategoryAgent,
+        BarComponentCategory::Performance => UiTextKey::BarsEditorCategoryPerformance,
+        BarComponentCategory::LayoutActions => UiTextKey::BarsEditorCategoryLayoutActions,
+    })
+}
+
+fn bar_component_name<'a>(id: &'a str, text: UiText) -> &'a str {
+    BAR_COMPONENT_CATALOG
+        .iter()
+        .find(|component| component.id == id)
+        .map(|component| text.get(component.name))
+        .unwrap_or(id)
+}
+
+fn bars_preview_unavailable(
     root: &WorkbenchView,
     bars: &crate::config::bars::ShellBarsSettings,
-) -> Option<UiTextKey> {
-    use crate::config::bars::ShellBarModule;
-
-    let performance_modules = [
-        ShellBarModule::AppCpu,
-        ShellBarModule::AppMemory,
-        ShellBarModule::SystemCpu,
-        ShellBarModule::SystemMemory,
-    ];
-    let requests_performance = performance_modules
-        .iter()
-        .any(|module| bars.contains(module));
-    let requests_application_performance = [ShellBarModule::AppCpu, ShellBarModule::AppMemory]
-        .iter()
-        .any(|module| bars.contains(module));
-    if requests_application_performance && !root.app_settings.general.performance_metrics_enabled {
-        return Some(UiTextKey::BarsEditorPreviewPerformanceDisabled);
+    cx: &gpui::App,
+) -> Vec<(String, BarUnavailableReason)> {
+    let mut unavailable = root.bar_preview_unavailable(&bars.window.layout, cx);
+    if bars.status.enabled {
+        unavailable.extend(root.bar_preview_unavailable(&bars.status.layout, cx));
     }
-    (requests_performance
-        && performance_modules
-            .iter()
-            .any(|module| bars.contains(module) && !root.app_settings.bars.contains(module)))
-    .then_some(UiTextKey::BarsEditorPreviewPerformanceCached)
+    let mut reported = std::collections::BTreeSet::new();
+    unavailable
+        .into_iter()
+        .filter(|(module, _)| reported.insert(module.clone()))
+        .collect()
+}
+
+fn bar_unavailable_reason_key(reason: BarUnavailableReason) -> UiTextKey {
+    match reason {
+        BarUnavailableReason::NoProject => UiTextKey::BarsEditorReasonNoProject,
+        BarUnavailableReason::NoEditor => UiTextKey::BarsEditorReasonNoEditor,
+        BarUnavailableReason::NoCodeEditor => UiTextKey::BarsEditorReasonNoCodeEditor,
+        BarUnavailableReason::NoSelection => UiTextKey::BarsEditorReasonNoSelection,
+        BarUnavailableReason::NoTerminal => UiTextKey::BarsEditorReasonNoTerminal,
+        BarUnavailableReason::TerminalNotExited => UiTextKey::BarsEditorReasonTerminalNotExited,
+        BarUnavailableReason::TerminalSizeUnavailable => {
+            UiTextKey::BarsEditorReasonTerminalSizeUnavailable
+        }
+        BarUnavailableReason::NoAgent => UiTextKey::BarsEditorReasonNoAgent,
+        BarUnavailableReason::AgentNotWaiting => UiTextKey::BarsEditorReasonAgentNotWaiting,
+        BarUnavailableReason::AgentModelUnavailable => {
+            UiTextKey::BarsEditorReasonAgentModelUnavailable
+        }
+        BarUnavailableReason::NoActiveChildren => UiTextKey::BarsEditorReasonNoActiveChildren,
+        BarUnavailableReason::NoGit => UiTextKey::BarsEditorReasonNoGit,
+        BarUnavailableReason::GitClean => UiTextKey::BarsEditorReasonGitClean,
+        BarUnavailableReason::NoSsh => UiTextKey::BarsEditorReasonNoSsh,
+        BarUnavailableReason::VimDisabled => UiTextKey::BarsEditorReasonVimDisabled,
+        BarUnavailableReason::NoVimDetail => UiTextKey::BarsEditorReasonNoVimDetail,
+        BarUnavailableReason::NoVimKeys => UiTextKey::BarsEditorReasonNoVimKeys,
+        BarUnavailableReason::EditorClean => UiTextKey::BarsEditorReasonEditorClean,
+        BarUnavailableReason::NoDiagnostics => UiTextKey::BarsEditorReasonNoDiagnostics,
+        BarUnavailableReason::PerformanceUnavailable => {
+            UiTextKey::BarsEditorReasonPerformanceUnavailable
+        }
+        BarUnavailableReason::NoUpdate => UiTextKey::BarsEditorReasonNoUpdate,
+    }
 }
 
 fn bars_preview_surface(
@@ -968,7 +1459,7 @@ fn layout_toml_editor_footer(
                         theme,
                         cx,
                         cx.listener(|this, _, _window, cx| {
-                            let _ = this.save_layout_toml_editor_with_runtime_refresh(cx);
+                            let _ = this.save_layout_toml_editor();
                             cx.notify();
                         }),
                     )

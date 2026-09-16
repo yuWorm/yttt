@@ -4,6 +4,25 @@
 
 ### Added
 
+- Replaced application/system performance switches with one always-on background sampler shared
+  by GUI workbench windows. Bar templates now control display only; live draft previews read the
+  same latest-sample cache, and sampling refreshes only metric-bearing windows and previews.
+  Legacy switches are ignored on load and omitted on the next Device settings save.
+
+- Changed built-in bars to a quieter project/Git header and contextual Vim, editor, Agent and
+  error status, without performance metrics or duplicate path/tab labels. Added Recommended
+  alongside Minimal, Development and Agent draft presets; Minimal retains mode and error cues,
+  and Development adds editor tab width and wrapping. Existing explicit bar preferences remain
+  unchanged unless a preset is saved.
+
+- Added nine state-backed bar components for Agent waits/models/active children/state duration,
+  Unicode editor selections, tab width, soft wrapping, terminal exits and live viewport dimensions.
+  Agent detail components follow the active pane; selections support code and Markdown source ranges.
+- Added a localized, grouped 41-entry bar component catalog, hidden-component explanations,
+  draft-only presets and Restore Defaults. Preview parsing is cached without freezing live state.
+- Changed bar spacing syntax to `[Space: number]` (1–256 font-relative spaces), including
+  component insertion and canonical saves. Replace earlier `[Space]` / `[Space*N]` templates
+  with `[Space: 1]` / `[Space: N]`; earlier spacing forms now report a validation error.
 - Added bracket templates for Window and Status bars, including font-relative spaces, literal text,
   bundled icons and adaptive separators. Existing module arrays migrate on save; project identity
   can now be moved, repeated or hidden without affecting native window controls.

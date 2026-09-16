@@ -889,6 +889,7 @@ impl WorkbenchView {
             ProjectEditorDocumentEvent::Changed { generation } => {
                 self.schedule_delayed_autosave(document_id, *generation, window, cx);
             }
+            ProjectEditorDocumentEvent::SelectionChanged => {}
             ProjectEditorDocumentEvent::Focused => {
                 let _ = self.select_work_item(WorkItemId::File(document_id.clone()));
                 self.check_document_for_external_changes(document_id, window, cx);

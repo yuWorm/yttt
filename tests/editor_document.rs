@@ -101,6 +101,72 @@ fn canceling_a_conflicted_save_returns_to_idle_without_changing_text() {
 }
 
 #[gpui::test]
+fn bar_selection_counts_unicode_and_refreshes_after_same_range_edit(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let (document, cx) = cx.add_window_view(|window, cx| {
+        ProjectEditorDocument::new(
+            project_model("中🙂\nA\n", fingerprint(10, 1)),
+            EditorAppearance::default(),
+            window,
+            cx,
+        )
+    });
+    let input = cx.read(|app| document.read(app).input().clone());
+    input.update(cx, |input, cx| input.set_selection(9, 0, cx));
+    cx.run_until_parked();
+    let selection = cx.read(|app| document.read(app).bar_selection_info().unwrap());
+    assert_eq!((selection.characters, selection.lines), (4, 2));
+
+    input.update_in(cx, |input, window, cx| {
+        input.set_value("1234567\nA\n", window, cx);
+        input.set_selection(9, 0, cx);
+    });
+    cx.run_until_parked();
+    let selection = cx.read(|app| document.read(app).bar_selection_info().unwrap());
+    assert_eq!((selection.characters, selection.lines), (9, 2));
+
+    input.update(cx, |input, cx| input.set_selection(0, 0, cx));
+    cx.run_until_parked();
+    assert!(cx.read(|app| document.read(app).bar_selection_info().is_none()));
+}
+
+#[gpui::test]
+fn markdown_bar_selection_tracks_source_mode_edits(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let mut model = project_model("中🙂\nA\n", fingerprint(10, 1));
+    model.relocate(
+        DocumentId {
+            project_id: ProjectId::new("project-a"),
+            canonical_path: PathBuf::from("/project-a/selection.md"),
+        },
+        "selection.md",
+    );
+    let (document, cx) = cx.add_window_view(|window, cx| {
+        ProjectEditorDocument::new(model, EditorAppearance::default(), window, cx)
+    });
+    let markdown = cx.read(|app| document.read(app).markdown_editor().unwrap().clone());
+    markdown.update(cx, |editor, cx| {
+        editor.set_mode(gpui_markdown_editor::MarkdownEditorMode::Source, cx);
+        editor.replace_markdown("中🙂\nA\n", cx);
+        editor.set_source_selection(
+            gpui_markdown_editor::SourceSelection {
+                range: 0..9,
+                reversed: true,
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let selection = cx.read(|app| document.read(app).bar_selection_info().unwrap());
+    assert_eq!((selection.characters, selection.lines), (4, 2));
+    markdown.update(cx, |editor, cx| {
+        editor.set_source_selection(gpui_markdown_editor::SourceSelection::default(), cx);
+    });
+    cx.run_until_parked();
+    assert!(cx.read(|app| document.read(app).bar_selection_info().is_none()));
+}
+
+#[gpui::test]
 fn project_editor_document_syncs_input_changes_and_emits_changed(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let model = project_model("old", fingerprint(3, 1));

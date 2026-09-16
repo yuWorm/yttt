@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use gpui::{
     AnyElement, AppContext as _, Context, Entity, EventEmitter, Focusable as _,
@@ -52,6 +52,12 @@ impl EditorAppearance {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EditorSelectionInfo {
+    pub characters: usize,
+    pub lines: usize,
+}
+
 impl Default for EditorAppearance {
     fn default() -> Self {
         Self {
@@ -79,6 +85,7 @@ impl From<&EditorSettings> for EditorAppearance {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProjectEditorDocumentEvent {
     Changed { generation: u64 },
+    SelectionChanged,
     Focused,
     Blurred,
     Error { message: String },
@@ -355,6 +362,8 @@ pub struct ProjectEditorDocument {
     symbols: Vec<EditorSymbol>,
     breadcrumbs: Vec<EditorSymbol>,
     breadcrumb_cursor_line: usize,
+    bar_selection: Option<EditorSelectionInfo>,
+    markdown_selection_range: Option<Range<usize>>,
     vim_enabled: bool,
     vim: Option<VimState>,
     _vim_keystroke_subscription: Subscription,
@@ -403,6 +412,8 @@ impl ProjectEditorDocument {
             symbols,
             breadcrumbs,
             breadcrumb_cursor_line: 0,
+            bar_selection: None,
+            markdown_selection_range: None,
             vim_enabled: false,
             vim: None,
             _vim_keystroke_subscription: vim_keystroke_subscription,
@@ -576,6 +587,8 @@ impl ProjectEditorDocument {
         self.model.relocate(document_id, title);
         self.breadcrumb_header = breadcrumb_header.into();
 
+        self.bar_selection = None;
+        self.markdown_selection_range = None;
         let is_markdown = self.model.editor().language_id() == super::EditorLanguageId::Markdown;
         if was_markdown != is_markdown {
             if let (Some(input), Some(mut vim)) = (self.code_input().cloned(), self.vim.take()) {
@@ -617,6 +630,10 @@ impl ProjectEditorDocument {
 
     pub fn appearance(&self) -> &EditorAppearance {
         &self.appearance
+    }
+
+    pub fn bar_selection_info(&self) -> Option<EditorSelectionInfo> {
+        self.bar_selection
     }
 
     pub fn symbols(&self) -> &[EditorSymbol] {
@@ -808,18 +825,17 @@ impl ProjectEditorDocument {
     ) {
         match event {
             InputEvent::Change => {
-                let (value, cursor_line) = {
-                    let input = input.read(cx);
-                    (
-                        input.value().to_string(),
-                        input.cursor_position().line as usize,
-                    )
-                };
+                let input = input.read(cx);
+                let selection_changed = self.update_code_bar_selection(input);
+                let value = input.value().to_string();
+                let cursor_line = input.cursor_position().line as usize;
                 let previous_generation = self.model.generation();
                 let generation = self.model.on_input_changed(value);
                 if generation != previous_generation {
                     self.refresh_breadcrumbs(cursor_line);
                     cx.emit(ProjectEditorDocumentEvent::Changed { generation });
+                    cx.notify();
+                } else if selection_changed {
                     cx.notify();
                 }
             }
@@ -835,18 +851,26 @@ impl ProjectEditorDocument {
 
     fn on_markdown_editor_event(
         &mut self,
-        _editor: &Entity<MarkdownEditor>,
+        editor: &Entity<MarkdownEditor>,
         event: &MarkdownEditorEvent,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match event {
             MarkdownEditorEvent::Changed { .. } => {
+                self.update_markdown_bar_selection(editor.read(cx), cx, true);
                 let generation = self.model.on_external_changed();
                 cx.emit(ProjectEditorDocumentEvent::Changed { generation });
                 cx.notify();
             }
-            MarkdownEditorEvent::ModeChanged { .. } | MarkdownEditorEvent::SelectionChanged(_) => {
+            MarkdownEditorEvent::ModeChanged { .. } => {
+                self.update_markdown_bar_selection(editor.read(cx), cx, false);
+                cx.notify();
+            }
+            MarkdownEditorEvent::SelectionChanged(_) => {
+                if self.update_markdown_bar_selection(editor.read(cx), cx, false) {
+                    cx.emit(ProjectEditorDocumentEvent::SelectionChanged);
+                }
                 cx.notify();
             }
             MarkdownEditorEvent::OpenLinkRequested(request) => {
@@ -873,12 +897,73 @@ impl ProjectEditorDocument {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let cursor_line = input.read(cx).cursor_position().line as usize;
-        if cursor_line != self.breadcrumb_cursor_line {
+        let input = input.read(cx);
+        let cursor_line = input.cursor_position().line as usize;
+        let selection_changed = self.update_code_bar_selection(input);
+        let cursor_line_changed = cursor_line != self.breadcrumb_cursor_line;
+        if cursor_line_changed {
             self.breadcrumb_cursor_line = cursor_line;
             self.breadcrumbs = breadcrumbs_at(&self.symbols, cursor_line);
+        }
+        if selection_changed {
+            cx.emit(ProjectEditorDocumentEvent::SelectionChanged);
+        }
+        if cursor_line_changed || selection_changed {
             cx.notify();
         }
+    }
+    fn update_markdown_bar_selection(
+        &mut self,
+        editor: &MarkdownEditor,
+        cx: &gpui::App,
+        force: bool,
+    ) -> bool {
+        let selection = editor.source_selection(cx).range;
+        if !force && self.markdown_selection_range.as_ref() == Some(&selection) {
+            return false;
+        }
+        self.markdown_selection_range = Some(selection.clone());
+        if selection.is_empty() {
+            return self.set_bar_selection("", selection);
+        }
+        let source = editor.markdown(cx);
+        self.set_bar_selection(&source, selection)
+    }
+
+    fn update_code_bar_selection(&mut self, input: &InputState) -> bool {
+        use gpui_component::RopeExt as _;
+
+        let range = input.selected_range();
+        let next = (!range.is_empty()).then(|| {
+            let text = input.text();
+            EditorSelectionInfo {
+                characters: text.slice(range.clone()).len_chars(),
+                lines: text.offset_to_point(range.end - 1).row
+                    - text.offset_to_point(range.start).row
+                    + 1,
+            }
+        });
+        if self.bar_selection == next {
+            return false;
+        }
+        self.bar_selection = next;
+        true
+    }
+
+    fn set_bar_selection(&mut self, source: &str, selection: Range<usize>) -> bool {
+        let selection = Self::utf8_selection_range(source, selection);
+        let next = (!selection.is_empty()).then(|| {
+            let selected = &source[selection];
+            EditorSelectionInfo {
+                characters: selected.chars().count(),
+                lines: selected.lines().count().max(1),
+            }
+        });
+        if self.bar_selection == next {
+            return false;
+        }
+        self.bar_selection = next;
+        true
     }
 
     fn refresh_breadcrumbs(&mut self, cursor_line: usize) {
@@ -1109,6 +1194,18 @@ impl ProjectEditorDocument {
         self.breadcrumb_cursor_line = symbol.start_line;
         self.breadcrumbs = breadcrumbs_at(&self.symbols, symbol.start_line);
         cx.notify();
+    }
+
+    fn utf8_selection_range(source: &str, selection: Range<usize>) -> Range<usize> {
+        let mut start = selection.start.min(source.len());
+        let mut end = selection.end.min(source.len()).max(start);
+        while start > 0 && !source.is_char_boundary(start) {
+            start -= 1;
+        }
+        while end > start && !source.is_char_boundary(end) {
+            end -= 1;
+        }
+        start..end
     }
 }
 

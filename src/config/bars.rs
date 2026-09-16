@@ -170,17 +170,17 @@ impl Default for WindowBarSettings {
     fn default() -> Self {
         Self {
             layout: BarLayoutSettings {
-                left: window_identity_template(),
+                left: vec![
+                    ShellBarModule::ProjectName,
+                    ShellBarModule::Space(2),
+                    ShellBarModule::GitBranch,
+                    ShellBarModule::GitChanges,
+                ],
                 center: Vec::new(),
                 right: vec![
-                    ShellBarModule::ProjectsCount,
-                    ShellBarModule::TerminalsCount,
-                    ShellBarModule::TabsCount,
-                    ShellBarModule::EditorsCount,
-                    ShellBarModule::AppCpu,
-                    ShellBarModule::AppMemory,
-                    ShellBarModule::SystemCpu,
-                    ShellBarModule::SystemMemory,
+                    ShellBarModule::AgentState,
+                    ShellBarModule::Space(2),
+                    ShellBarModule::Update,
                     ShellBarModule::CommandPalette,
                     ShellBarModule::Settings,
                 ],
@@ -208,21 +208,21 @@ impl Default for StatusBarSettings {
             layout: BarLayoutSettings {
                 left: vec![
                     ShellBarModule::VimMode,
-                    ShellBarModule::Surface,
                     ShellBarModule::VimDetail,
-                    ShellBarModule::ActiveItem,
+                    ShellBarModule::VimKeys,
+                    ShellBarModule::Space(2),
+                    ShellBarModule::AgentWaiting,
+                    ShellBarModule::AgentChildren,
                 ],
-                center: vec![ShellBarModule::VimKeys],
+                center: Vec::new(),
                 right: vec![
                     ShellBarModule::EditorLanguage,
                     ShellBarModule::EditorPosition,
-                    ShellBarModule::EditorDirty,
+                    ShellBarModule::EditorSelection,
+                    ShellBarModule::AgentModel,
+                    ShellBarModule::Space(2),
                     ShellBarModule::EditorDiagnostics,
-                    ShellBarModule::GitBranch,
-                    ShellBarModule::GitChanges,
-                    ShellBarModule::AgentState,
-                    ShellBarModule::Ssh,
-                    ShellBarModule::Update,
+                    ShellBarModule::TerminalExit,
                 ],
                 modules: BTreeMap::new(),
                 legacy_left: false,
@@ -351,11 +351,20 @@ pub enum ShellBarModule {
     EditorPosition,
     EditorDirty,
     EditorDiagnostics,
+    EditorSelection,
+    EditorTabSize,
+    EditorWrap,
     TerminalTitle,
     TerminalState,
+    TerminalExit,
+    TerminalSize,
     GitBranch,
     GitChanges,
     AgentState,
+    AgentWaiting,
+    AgentModel,
+    AgentChildren,
+    AgentStateDuration,
     Ssh,
     Update,
     ProjectsCount,
@@ -391,11 +400,20 @@ impl ShellBarModule {
             "editor-position" => Self::EditorPosition,
             "editor-dirty" => Self::EditorDirty,
             "editor-diagnostics" => Self::EditorDiagnostics,
+            "editor-selection" => Self::EditorSelection,
+            "editor-tab-size" => Self::EditorTabSize,
+            "editor-wrap" => Self::EditorWrap,
             "terminal-title" => Self::TerminalTitle,
             "terminal-state" => Self::TerminalState,
+            "terminal-exit" => Self::TerminalExit,
+            "terminal-size" => Self::TerminalSize,
             "git-branch" => Self::GitBranch,
             "git-changes" => Self::GitChanges,
             "agent-state" => Self::AgentState,
+            "agent-waiting" => Self::AgentWaiting,
+            "agent-model" => Self::AgentModel,
+            "agent-children" => Self::AgentChildren,
+            "agent-state-duration" => Self::AgentStateDuration,
             "ssh" => Self::Ssh,
             "update" => Self::Update,
             "projects-count" => Self::ProjectsCount,
@@ -425,11 +443,20 @@ impl ShellBarModule {
             Self::EditorPosition => "editor-position",
             Self::EditorDirty => "editor-dirty",
             Self::EditorDiagnostics => "editor-diagnostics",
+            Self::EditorSelection => "editor-selection",
+            Self::EditorTabSize => "editor-tab-size",
+            Self::EditorWrap => "editor-wrap",
             Self::TerminalTitle => "terminal-title",
             Self::TerminalState => "terminal-state",
+            Self::TerminalExit => "terminal-exit",
+            Self::TerminalSize => "terminal-size",
             Self::GitBranch => "git-branch",
             Self::GitChanges => "git-changes",
             Self::AgentState => "agent-state",
+            Self::AgentWaiting => "agent-waiting",
+            Self::AgentModel => "agent-model",
+            Self::AgentChildren => "agent-children",
+            Self::AgentStateDuration => "agent-state-duration",
             Self::Ssh => "ssh",
             Self::Update => "update",
             Self::ProjectsCount => "projects-count",
@@ -595,9 +622,8 @@ pub fn format_bar_template(modules: &[ShellBarModule]) -> String {
             template.push(' ');
         }
         match module {
-            ShellBarModule::Space(1) => template.push_str("[Space]"),
             ShellBarModule::Space(count) => {
-                template.push_str("[Space*");
+                template.push_str("[Space: ");
                 template.push_str(&count.to_string());
                 template.push(']');
             }
@@ -694,6 +720,21 @@ fn parse_bar_template_token(token: &str, position: usize) -> Result<ShellBarModu
             })?;
             return Ok(ShellBarModule::Icon(icon.to_string()));
         }
+        if keyword.eq_ignore_ascii_case("space") {
+            let count = value.trim().parse::<u16>().map_err(|_| {
+                template_error(
+                    position,
+                    "[Space: number] requires an integer between 1 and 256",
+                )
+            })?;
+            if !(1..=MAX_BAR_SPACE_COUNT).contains(&count) {
+                return Err(template_error(
+                    position,
+                    "space count must be between 1 and 256",
+                ));
+            }
+            return Ok(ShellBarModule::Space(count));
+        }
         return Err(template_error(
             position,
             format!("unknown token keyword {:?}", keyword),
@@ -703,22 +744,15 @@ fn parse_bar_template_token(token: &str, position: usize) -> Result<ShellBarModu
     if trimmed.eq_ignore_ascii_case("text") || trimmed.eq_ignore_ascii_case("icon") {
         return Err(template_error(position, "token requires ':'"));
     }
-    if trimmed.eq_ignore_ascii_case("space") {
-        return Ok(ShellBarModule::Space(1));
-    }
-    if let Some((keyword, count)) = trimmed.split_once('*')
-        && keyword.trim().eq_ignore_ascii_case("space")
+    if trimmed.eq_ignore_ascii_case("space")
+        || trimmed
+            .split_once('*')
+            .is_some_and(|(keyword, _)| keyword.trim().eq_ignore_ascii_case("space"))
     {
-        let count = count.trim().parse::<u16>().map_err(|_| {
-            template_error(position, "space count must be an integer between 1 and 256")
-        })?;
-        if !(1..=MAX_BAR_SPACE_COUNT).contains(&count) {
-            return Err(template_error(
-                position,
-                "space count must be between 1 and 256",
-            ));
-        }
-        return Ok(ShellBarModule::Space(count));
+        return Err(template_error(
+            position,
+            "use [Space: number] to specify spacing",
+        ));
     }
 
     let module = ShellBarModule::from_name(trimmed);
@@ -747,6 +781,7 @@ fn template_error(position: usize, message: impl AsRef<str>) -> String {
     format!("bar template at byte {position}: {}", message.as_ref())
 }
 
+// Preserve the former fixed identity prefix when reading legacy array layouts.
 fn window_identity_template() -> Vec<ShellBarModule> {
     vec![
         ShellBarModule::ProjectName,

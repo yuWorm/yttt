@@ -4,6 +4,7 @@ use std::{
 };
 
 use crate::{
+    config::bars::{ShellBarModule, ShellBarsSettings},
     model::ids::ProjectId,
     ui::editor::{CodeEditorState, EditorAppearance},
 };
@@ -48,6 +49,99 @@ impl BarEditorRegion {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BarEditorPreset {
+    Recommended,
+    Minimal,
+    Development,
+    Agent,
+}
+
+impl BarEditorPreset {
+    pub(super) fn apply(self, bars: &mut ShellBarsSettings) {
+        let (
+            window_left,
+            window_center,
+            window_right,
+            status_enabled,
+            status_left,
+            status_center,
+            status_right,
+        ) = match self {
+            Self::Recommended | Self::Development => {
+                let mut defaults = ShellBarsSettings::default();
+                if self == Self::Development {
+                    defaults.status.layout.right.extend([
+                        ShellBarModule::Space(2),
+                        ShellBarModule::EditorTabSize,
+                        ShellBarModule::EditorWrap,
+                    ]);
+                }
+                (
+                    defaults.window.layout.left,
+                    defaults.window.layout.center,
+                    defaults.window.layout.right,
+                    defaults.status.enabled,
+                    defaults.status.layout.left,
+                    defaults.status.layout.center,
+                    defaults.status.layout.right,
+                )
+            }
+            Self::Minimal => (
+                vec![ShellBarModule::ProjectName],
+                Vec::new(),
+                vec![
+                    ShellBarModule::Update,
+                    ShellBarModule::CommandPalette,
+                    ShellBarModule::Settings,
+                ],
+                true,
+                vec![
+                    ShellBarModule::VimMode,
+                    ShellBarModule::Space(2),
+                    ShellBarModule::AgentWaiting,
+                ],
+                Vec::new(),
+                vec![
+                    ShellBarModule::EditorDiagnostics,
+                    ShellBarModule::TerminalExit,
+                ],
+            ),
+            Self::Agent => {
+                let window = crate::config::bars::WindowBarSettings::default();
+                (
+                    window.layout.left,
+                    window.layout.center,
+                    window.layout.right,
+                    true,
+                    vec![
+                        ShellBarModule::VimMode,
+                        ShellBarModule::VimKeys,
+                        ShellBarModule::Space(2),
+                        ShellBarModule::AgentWaiting,
+                    ],
+                    Vec::new(),
+                    vec![
+                        ShellBarModule::AgentModel,
+                        ShellBarModule::Space(2),
+                        ShellBarModule::AgentChildren,
+                        ShellBarModule::AgentStateDuration,
+                        ShellBarModule::Space(2),
+                        ShellBarModule::TerminalExit,
+                    ],
+                )
+            }
+        };
+        bars.window.layout.left = window_left;
+        bars.window.layout.center = window_center;
+        bars.window.layout.right = window_right;
+        bars.status.enabled = status_enabled;
+        bars.status.layout.left = status_left;
+        bars.status.layout.center = status_center;
+        bars.status.layout.right = status_right;
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LayoutEditorTarget {
     Bars,
@@ -89,6 +183,7 @@ pub struct LayoutEditorSession {
     appearance: EditorAppearance,
     bar_component_query: String,
     bar_insert_region: BarEditorRegion,
+    bars_preview: Option<ShellBarsSettings>,
 }
 
 impl LayoutEditorSession {
@@ -103,6 +198,7 @@ impl LayoutEditorSession {
             appearance,
             bar_component_query: String::new(),
             bar_insert_region: BarEditorRegion::WindowLeft,
+            bars_preview: None,
         }
     }
 
@@ -140,6 +236,15 @@ impl LayoutEditorSession {
 
     pub fn set_bar_insert_region(&mut self, region: BarEditorRegion) {
         self.bar_insert_region = region;
+    }
+
+    /// Contains only the most recently validated draft, never a stale preview.
+    pub(super) fn bars_preview(&self) -> Option<&ShellBarsSettings> {
+        self.bars_preview.as_ref()
+    }
+
+    pub(super) fn set_bars_preview(&mut self, bars_preview: Option<ShellBarsSettings>) {
+        self.bars_preview = bars_preview;
     }
 }
 

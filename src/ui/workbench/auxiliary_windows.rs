@@ -209,8 +209,24 @@ impl AuxiliaryWindow {
     ) -> Self {
         let handle = window.window_handle();
         let weak_owner = owner.downgrade();
+        let performance_monitor = performance::PerformanceMonitor::shared(cx);
         let subscriptions = vec![
             cx.observe(owner, |_, _, cx| cx.notify()),
+            cx.observe(&performance_monitor, |this, _, cx| {
+                if this.kind == AuxiliaryWindowKind::LayoutEditor
+                    && this.owner.upgrade().is_some_and(|owner| {
+                        owner
+                            .read(cx)
+                            .overlays
+                            .layout_toml_editor
+                            .as_ref()
+                            .and_then(|session| session.bars_preview())
+                            .is_some_and(performance::uses_performance_samples)
+                    })
+                {
+                    cx.notify();
+                }
+            }),
             cx.observe_release_in(owner, window, |_, _, window, _| window.remove_window()),
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
@@ -366,7 +382,7 @@ impl Render for AuxiliaryWindow {
                             event.keystroke.modifiers.control
                         }
                     {
-                        let _ = root.save_layout_toml_editor_with_runtime_refresh(cx);
+                        let _ = root.save_layout_toml_editor();
                         cx.stop_propagation();
                         cx.notify();
                         return;

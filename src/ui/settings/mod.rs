@@ -154,16 +154,6 @@ pub fn settings_rows_for_group(group: SettingsGroupId, text: &UiText) -> Vec<Set
                 UiTextKey::SettingsRestoreLastSessionDescription,
             ),
             row(
-                "general.performance_metrics_enabled",
-                UiTextKey::SettingsPerformanceMetrics,
-                UiTextKey::SettingsPerformanceMetricsDescription,
-            ),
-            row(
-                "general.system_performance_metrics_enabled",
-                UiTextKey::SettingsSystemPerformanceMetrics,
-                UiTextKey::SettingsSystemPerformanceMetricsDescription,
-            ),
-            row(
                 "general.new_tab_command_picker_enabled",
                 UiTextKey::SettingsNewTabCommandPicker,
                 UiTextKey::SettingsNewTabCommandPickerDescription,

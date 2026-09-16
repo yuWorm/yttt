@@ -1995,7 +1995,8 @@ impl WorkbenchView {
                 cx.notify();
             }
             TerminalPaneEvent::AgentStatusFrame { .. } => {}
-            TerminalPaneEvent::TitleChanged { .. } => {
+            TerminalPaneEvent::TitleChanged { .. }
+            | TerminalPaneEvent::ViewportSizeChanged { .. } => {
                 cx.notify();
             }
             TerminalPaneEvent::Exited(event) => {

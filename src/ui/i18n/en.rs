@@ -284,9 +284,178 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::BarsEditorPreviewUnavailable => "Fix the TOML to preview this layout.",
         UiTextKey::BarsEditorWindow => "Window",
         UiTextKey::BarsEditorStatus => "Status",
-        UiTextKey::BarsEditorPreviewPerformanceDisabled => "Performance metrics are disabled.",
-        UiTextKey::BarsEditorPreviewPerformanceCached => {
-            "New performance modules preview cached samples only until saved."
+        UiTextKey::BarsEditorPresets => "Draft presets",
+        UiTextKey::BarsEditorPresetRecommended => "Recommended",
+        UiTextKey::BarsEditorPresetMinimal => "Minimal",
+        UiTextKey::BarsEditorPresetDevelopment => "Development",
+        UiTextKey::BarsEditorPresetAgent => "Agent",
+        UiTextKey::BarsEditorRestoreDefaults => "Restore Defaults",
+        UiTextKey::BarsEditorCatalogSample => "Example",
+        UiTextKey::BarsEditorCatalogScope => "Scope",
+        UiTextKey::BarsEditorPreviewStatusDisabled => "Status bar is disabled in this draft.",
+        UiTextKey::BarsEditorPreviewUnavailableModules => "Unavailable components",
+        UiTextKey::BarsEditorCategoryProject => "Project",
+        UiTextKey::BarsEditorCategoryEditorVim => "Editor & Vim",
+        UiTextKey::BarsEditorCategoryTerminal => "Terminal",
+        UiTextKey::BarsEditorCategoryAgent => "Agent",
+        UiTextKey::BarsEditorCategoryPerformance => "Performance",
+        UiTextKey::BarsEditorCategoryLayoutActions => "Layout & actions",
+        UiTextKey::BarsEditorReasonNoProject => "Open a project to show this component.",
+        UiTextKey::BarsEditorReasonNoEditor => "Open an editor to show this component.",
+        UiTextKey::BarsEditorReasonNoCodeEditor => {
+            "This component is available only in a code editor."
+        }
+        UiTextKey::BarsEditorReasonNoSelection => "Select text to show this component.",
+        UiTextKey::BarsEditorReasonNoTerminal => "Open a terminal to show this component.",
+        UiTextKey::BarsEditorReasonTerminalNotExited => {
+            "This component appears after the active terminal exits."
+        }
+        UiTextKey::BarsEditorReasonTerminalSizeUnavailable => {
+            "The active terminal has not reported its size."
+        }
+        UiTextKey::BarsEditorReasonNoAgent => "The active terminal is not an Agent pane.",
+        UiTextKey::BarsEditorReasonAgentNotWaiting => "The active Agent is not waiting for input.",
+        UiTextKey::BarsEditorReasonAgentModelUnavailable => {
+            "The active Agent has not reported a model."
+        }
+        UiTextKey::BarsEditorReasonNoActiveChildren => {
+            "The active Agent has no active child tasks."
+        }
+        UiTextKey::BarsEditorReasonNoGit => "The selected project has no Git status.",
+        UiTextKey::BarsEditorReasonGitClean => "The working tree has no changes.",
+        UiTextKey::BarsEditorReasonNoSsh => "The selected project is not connected over SSH.",
+        UiTextKey::BarsEditorReasonVimDisabled => "Enable Vim mode to show this component.",
+        UiTextKey::BarsEditorReasonNoVimDetail => "The current Vim mode has no additional detail.",
+        UiTextKey::BarsEditorReasonNoVimKeys => "The current Vim mode has no pending keys.",
+        UiTextKey::BarsEditorReasonEditorClean => "The active editor has no unsaved changes.",
+        UiTextKey::BarsEditorReasonNoDiagnostics => "The active editor has no diagnostics.",
+        UiTextKey::BarsEditorReasonPerformanceUnavailable => {
+            "Performance metrics are not available yet."
+        }
+        UiTextKey::BarsEditorReasonNoUpdate => "No update is available.",
+        UiTextKey::BarsComponentProjectNameName => "Project name",
+        UiTextKey::BarsComponentProjectNameDescription => "The selected project's display name.",
+        UiTextKey::BarsComponentProjectPathName => "Project path",
+        UiTextKey::BarsComponentProjectPathDescription => {
+            "The selected project's local or remote path."
+        }
+        UiTextKey::BarsComponentGitBranchName => "Git branch",
+        UiTextKey::BarsComponentGitBranchDescription => "Current branch for the selected project.",
+        UiTextKey::BarsComponentGitChangesName => "Git changes",
+        UiTextKey::BarsComponentGitChangesDescription => {
+            "Working-tree change summary for the selected project."
+        }
+        UiTextKey::BarsComponentSshName => "SSH connection",
+        UiTextKey::BarsComponentSshDescription => "Remote connection name and state.",
+        UiTextKey::BarsComponentUpdateName => "Update status",
+        UiTextKey::BarsComponentUpdateDescription => "Available application update status.",
+        UiTextKey::BarsComponentActiveItemName => "Active item",
+        UiTextKey::BarsComponentActiveItemDescription => {
+            "Title and icon for the active file or terminal."
+        }
+        UiTextKey::BarsComponentSurfaceName => "Surface",
+        UiTextKey::BarsComponentSurfaceDescription => {
+            "Current work surface, such as editor or terminal."
+        }
+        UiTextKey::BarsComponentVimModeName => "Vim mode",
+        UiTextKey::BarsComponentVimModeDescription => "Current Vim mode.",
+        UiTextKey::BarsComponentVimDetailName => "Vim detail",
+        UiTextKey::BarsComponentVimDetailDescription => {
+            "Additional state for the current Vim mode."
+        }
+        UiTextKey::BarsComponentVimKeysName => "Vim keys",
+        UiTextKey::BarsComponentVimKeysDescription => "Pending Vim key sequence.",
+        UiTextKey::BarsComponentEditorLanguageName => "Editor language",
+        UiTextKey::BarsComponentEditorLanguageDescription => "Language of the active code editor.",
+        UiTextKey::BarsComponentEditorPositionName => "Editor position",
+        UiTextKey::BarsComponentEditorPositionDescription => {
+            "Cursor line and column in the active editor."
+        }
+        UiTextKey::BarsComponentEditorDirtyName => "Unsaved changes",
+        UiTextKey::BarsComponentEditorDirtyDescription => {
+            "Whether the active editor has unsaved changes."
+        }
+        UiTextKey::BarsComponentEditorDiagnosticsName => "Editor diagnostics",
+        UiTextKey::BarsComponentEditorDiagnosticsDescription => {
+            "Errors, warnings, and information from the active editor."
+        }
+        UiTextKey::BarsComponentEditorSelectionName => "Editor selection",
+        UiTextKey::BarsComponentEditorSelectionDescription => "Selected character and line counts.",
+        UiTextKey::BarsComponentEditorTabSizeName => "Tab size",
+        UiTextKey::BarsComponentEditorTabSizeDescription => {
+            "Indent width used by the active editor."
+        }
+        UiTextKey::BarsComponentEditorWrapName => "Line wrapping",
+        UiTextKey::BarsComponentEditorWrapDescription => {
+            "Whether soft wrapping is enabled in the active editor."
+        }
+        UiTextKey::BarsComponentTerminalTitleName => "Terminal title",
+        UiTextKey::BarsComponentTerminalTitleDescription => "Title of the active terminal.",
+        UiTextKey::BarsComponentTerminalStateName => "Terminal state",
+        UiTextKey::BarsComponentTerminalStateDescription => {
+            "Whether the active terminal is running."
+        }
+        UiTextKey::BarsComponentTerminalExitName => "Terminal exit",
+        UiTextKey::BarsComponentTerminalExitDescription => {
+            "Exit status after the active terminal stops."
+        }
+        UiTextKey::BarsComponentTerminalSizeName => "Terminal size",
+        UiTextKey::BarsComponentTerminalSizeDescription => {
+            "Columns and rows of the active terminal."
+        }
+        UiTextKey::BarsComponentAgentStateName => "Agent state",
+        UiTextKey::BarsComponentAgentStateDescription => "Current state of the active Agent.",
+        UiTextKey::BarsComponentAgentWaitingName => "Agent waiting",
+        UiTextKey::BarsComponentAgentWaitingDescription => {
+            "Shows when the active Agent awaits input."
+        }
+        UiTextKey::BarsComponentAgentModelName => "Agent model",
+        UiTextKey::BarsComponentAgentModelDescription => "Model reported by the active Agent.",
+        UiTextKey::BarsComponentAgentChildrenName => "Agent children",
+        UiTextKey::BarsComponentAgentChildrenDescription => {
+            "Active child-task count for the active Agent."
+        }
+        UiTextKey::BarsComponentAgentStateDurationName => "Agent state duration",
+        UiTextKey::BarsComponentAgentStateDurationDescription => {
+            "Time spent in the active Agent's current state."
+        }
+        UiTextKey::BarsComponentProjectsCountName => "Projects count",
+        UiTextKey::BarsComponentProjectsCountDescription => "Number of open projects.",
+        UiTextKey::BarsComponentTerminalsCountName => "Terminals count",
+        UiTextKey::BarsComponentTerminalsCountDescription => "Number of open terminals.",
+        UiTextKey::BarsComponentTabsCountName => "Tabs count",
+        UiTextKey::BarsComponentTabsCountDescription => "Number of open tabs.",
+        UiTextKey::BarsComponentEditorsCountName => "Editors count",
+        UiTextKey::BarsComponentEditorsCountDescription => "Number of open editors.",
+        UiTextKey::BarsComponentAppCpuName => "Application CPU",
+        UiTextKey::BarsComponentAppCpuDescription => "CPU used by yttt.",
+        UiTextKey::BarsComponentAppMemoryName => "Application memory",
+        UiTextKey::BarsComponentAppMemoryDescription => "Memory used by yttt.",
+        UiTextKey::BarsComponentSystemCpuName => "System CPU",
+        UiTextKey::BarsComponentSystemCpuDescription => "Total system CPU usage.",
+        UiTextKey::BarsComponentSystemMemoryName => "System memory",
+        UiTextKey::BarsComponentSystemMemoryDescription => "Total system memory usage.",
+        UiTextKey::BarsComponentCommandPaletteName => "Command palette",
+        UiTextKey::BarsComponentCommandPaletteDescription => {
+            "Button that opens the command palette."
+        }
+        UiTextKey::BarsComponentSettingsName => "Settings",
+        UiTextKey::BarsComponentSettingsDescription => "Button that opens Settings.",
+        UiTextKey::BarsComponentSpaceName => "Space",
+        UiTextKey::BarsComponentSpaceDescription => {
+            "Fixed blank space; change the count in the template."
+        }
+        UiTextKey::BarsComponentTextName => "Text",
+        UiTextKey::BarsComponentTextDescription => {
+            "Literal text; replace the example text in the template."
+        }
+        UiTextKey::BarsComponentIconName => "Icon",
+        UiTextKey::BarsComponentIconDescription => {
+            "Bundled icon; replace the example icon name in the template."
+        }
+        UiTextKey::BarsComponentSeparatorName => "Separator",
+        UiTextKey::BarsComponentSeparatorDescription => {
+            "Vertical separator between bar components."
         }
         UiTextKey::CommandPaletteOpenTitle => "Open Command Palette",
         UiTextKey::CommandPaletteOpenDescription => "Search and run commands",
@@ -422,7 +591,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsUseHostDefault => "Use Host default",
         UiTextKey::SettingsSectionApplicationInteraction => "Application & interaction",
         UiTextKey::SettingsSectionStartupNotifications => "Startup & notifications",
-        UiTextKey::SettingsSectionPerformance => "Performance",
         UiTextKey::SettingsSectionNewTabs => "New tabs",
         UiTextKey::SettingsSectionConnections => "Connections",
         UiTextKey::SettingsSectionUpdates => "Updates",
@@ -681,14 +849,6 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsRestoreLastSession => "Restore projects on startup",
         UiTextKey::SettingsRestoreLastSessionDescription => {
             "Open every project that was still open when YTTT last exited."
-        }
-        UiTextKey::SettingsPerformanceMetrics => "Application performance metrics",
-        UiTextKey::SettingsPerformanceMetricsDescription => {
-            "Show project, terminal, tab, editor, and application resource metrics in the title bar."
-        }
-        UiTextKey::SettingsSystemPerformanceMetrics => "System-wide CPU and memory",
-        UiTextKey::SettingsSystemPerformanceMetricsDescription => {
-            "Show total system CPU and memory usage in the title bar."
         }
         UiTextKey::PerformanceProjects => "Projects",
         UiTextKey::PerformanceTerminals => "Terminals",

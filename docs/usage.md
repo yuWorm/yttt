@@ -533,6 +533,45 @@ or executing actions. Save (Cmd-S on macOS, Ctrl-S elsewhere) validates and pers
 preferences; Cancel or closing the editor discards unsaved changes. Opening or previewing does
 not create a file. Device bar preferences remain editable without shared Host control.
 
+The component directory groups Project, Editor & Vim, Terminal, Agent, Performance, and
+Layout & actions entries. Search accepts module IDs and localized names/descriptions. Each entry
+shows its template syntax and a description; preview hints explain hidden components, such as
+an absent editor, an unreported Agent model, a clean working tree, or unavailable performance samples.
+The source is parsed when edited, while runtime values continue to refresh in the preview.
+
+**Recommended**, **Minimal**, **Development**, and **Agent** presets replace the six region
+templates and status-bar visibility in the draft, retaining valid per-module overrides.
+**Recommended** uses the built-in defaults below. **Minimal** keeps the status bar enabled for
+Vim mode, Agent waits, editor diagnostics, and terminal exits. **Development** extends Recommended
+with editor tab width and soft-wrap state, without performance metrics. **Agent** emphasizes the
+active pane's model, active children, state duration, waits, and terminal exit; project-wide Agent
+state remains in the window bar.
+
+**Restore Defaults** resets the whole draft, including overrides. Both presets and defaults can
+recover an invalid draft; neither writes a file nor changes the live bars until Save.
+Cancel discards these changes.
+ 
+The built-in layout keeps project identity and Git information at the top, with mode, active-pane
+details, and attention/error cues at the bottom. It omits performance metrics, counters, and
+duplicated paths or tab names:
+
+```toml
+[window]
+left = '[project-name] [Space: 2] [git-branch] [git-changes]'
+center = ''
+right = '[agent-state] [Space: 2] [update] [command-palette] [settings]'
+
+[status]
+enabled = true
+left = '[vim-mode] [vim-detail] [vim-keys] [Space: 2] [agent-waiting] [agent-children]'
+center = ''
+right = '[editor-language] [editor-position] [editor-selection] [agent-model] [Space: 2] [editor-diagnostics] [terminal-exit]'
+```
+
+These defaults apply when no bar preferences exist. Existing explicit templates, empty regions,
+status visibility, and per-module overrides are preserved; new default components are not appended
+to custom templates. Choose Recommended and Save to adopt the layout while retaining overrides.
+
 Both bars use independent `left`, `center`, and `right` template strings. Project identity and Git
 information are ordinary configurable modules; an explicit empty string hides that region.
 Native window controls and the essential local/remote Profile control surface are not template
@@ -544,12 +583,15 @@ fixed identity prefix; saving writes template strings only. Repeated modules are
 
 ```toml
 [status]
-right = '[app-memory] [Space*5] [text:ssssss] [icon:settings] [|] [update]'
+right = '[app-memory] [Space: 5] [text:ssssss] [icon:settings] [|] [update]'
 ```
 
 - `[module-id]` renders a dynamic module with its existing icon, tooltip and action.
-- `[Space]` or `[Space*N]` inserts N font-relative space widths (1–256). Explicit spaces replace
-  the default gap at that position rather than adding another gap on either side.
+- `[Space: number]`, for example `[Space: 5]`, inserts 1–256 font-relative space widths.
+  Change the integer to adjust the gap in the live preview; Save applies it to the actual bars.
+  Explicit spaces replace the default gap at that position rather than adding another gap on
+  either side. `[Space]` and `[Space*N]` are no longer accepted; replace them with `[Space: 1]`
+  and `[Space: N]` respectively.
 - `[text:literal text]` preserves text and internal whitespace. Use `\[`, `\]`, and `\\`
   for literal brackets and backslashes; TOML single-quoted strings avoid double escaping.
 - `[icon:name]` is a static icon, not an action. `[icon:settings]` is decorative;
@@ -565,19 +607,55 @@ Available static icon names: `settings`, `info`, `cpu`, `memory-stick`, `search`
 `circle-x`, `play`, and `pause`. Icons are bundled assets; arbitrary paths and URLs are not accepted.
 
 Application CPU/memory describe the local GUI process, not remote Host or terminal subprocesses.
-System metrics describe this device. Existing performance switches still apply; previews use
-available cached samples and explain when a metric is disabled or requires saving to begin sampling.
+System metrics describe this device. A single sampler shared by all workbench windows collects
+application and system CPU/memory about once per second in the background, even when no metric
+components are displayed. It retains only the latest sample, not a history.
+
+Bar templates control display, not collection. Only windows displaying metric components and
+bar-editor previews using them refresh on samples; unrelated windows do not refresh for sampling.
+Unsaved previews read the same live cache immediately, without enabling a setting or saving first.
+Closing a workbench window does not stop sampling for the remaining windows.
+
+The former `general.performance_metrics_enabled` and `general.system_performance_metrics_enabled`
+settings have been removed. Existing keys are ignored when loading, including `false` values;
+the next Device settings save omits them. Existing bar templates remain unchanged.
 
 Available module IDs are:
 
 - Workspace: `project-name`, `project-path`, `active-item`, `surface`
 - Vim: `vim-mode`, `vim-detail`, `vim-keys`
-- Editor and terminal: `editor-language`, `editor-position`, `editor-dirty`,
-  `editor-diagnostics`, `terminal-title`, `terminal-state`
-- Repository and runtime: `git-branch`, `git-changes`, `agent-state`, `ssh`, `update`
+- Editor: `editor-language`, `editor-position`, `editor-dirty`, `editor-diagnostics`,
+  `editor-selection`, `editor-tab-size`, `editor-wrap`
+- Terminal: `terminal-title`, `terminal-state`, `terminal-exit`, `terminal-size`
+- Agent: `agent-state`, `agent-waiting`, `agent-model`, `agent-children`, `agent-state-duration`
+- Repository and runtime: `git-branch`, `git-changes`, `ssh`, `update`
 - Performance: `projects-count`, `terminals-count`, `tabs-count`, `editors-count`, `app-cpu`,
   `app-memory`, `system-cpu`, `system-memory`
 - Actions: `command-palette`, `settings`
+
+The additional Agent modules describe the **active terminal pane**, not an arbitrary Agent in the
+project. The existing `agent-state` remains a project-level aggregate:
+
+| Module | Meaning |
+| --- | --- |
+| `agent-waiting` | Current wait reason; the full waiting message is available in the tooltip. Hidden when not waiting. |
+| `agent-model` | Model reported by the active Agent session. Missing or blank models are hidden rather than inferred. |
+| `agent-children` | Number of tracked child Agents currently working or waiting. Completed, interrupted, failed and idle children do not count; this is not a lifetime total. |
+| `agent-state-duration` | Time since the active Agent's current state began, refreshed once per second while requested. Not total task duration; clock skew is clamped at zero. |
+| `editor-selection` | Selected Unicode scalar characters and lines, excluding an unselected line after a trailing newline. Code and Markdown editors are supported; Markdown uses the corresponding source range, including any selected syntax. |
+| `editor-tab-size` | Active document's configured tab width, not indentation detected from file contents. |
+| `editor-wrap` | Active editor's soft-wrap setting. |
+| `terminal-exit` | Final process exit code (when available) and exit reason. Hidden before exit and cleared when restarting. |
+| `terminal-size` | Actual terminal viewport columns × rows, updated on resize rather than taken from the initial spawn settings. |
+
+For example:
+
+```toml
+[status]
+left = '[agent-waiting] [Space: 5] [agent-model]'
+center = '[agent-children] [agent-state-duration]'
+right = '[editor-selection] [editor-tab-size] [editor-wrap] [terminal-exit] [terminal-size]'
+```
 
 Modules without data for the active surface are omitted. Per-module width and empty-state behavior
 can be overridden with a module table; width accepts 24–640 px:
