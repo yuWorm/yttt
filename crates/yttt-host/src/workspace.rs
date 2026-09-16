@@ -1444,6 +1444,7 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8], sequence: u64) -> io::Resu
         file.sync_all()?;
         drop(file);
         fs::rename(&temporary, path)?;
+        #[cfg(unix)]
         File::open(parent)?.sync_all()?;
         Ok(())
     })();

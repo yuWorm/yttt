@@ -52,6 +52,7 @@ pre-1.0 版本路线，因此本次版本为 **0.3.0**，不是旧版 1.0.0 的�
   修复版本准备脚本跳过锁文件解析的问题，确保升级工作区版本后可使用 `--locked` 构建。
   发布前清理 Clippy 阻塞，修正跨平台测试路径、快捷键和编辑器初始化，隔离 Agent 安装测试继承的环境；
   macOS 打包测试改为验证实际生成的应用包与 fixture shell，不再依赖旧图标源文件。
+  修复 Windows Host 持久化时的目录同步错误，以及同名档案使用不同运行目录时的命名管道冲突。
   新增持久化全局终端环境变量，自动注入新启动的本地／SSH shell 和 CLI 命令。
 
 #### 主要修复
@@ -153,6 +154,8 @@ pre-1.0 versioning: **0.3.0 is the new release, not an older build of 1.0.0**.
   Cleared release-blocking Clippy diagnostics, corrected cross-platform test paths, shortcuts and editor
   setup, and isolated inherited Agent installation-test environments. macOS packaging tests now check
   the generated bundle and fixture shell instead of obsolete icon-source files.
+  Fixed Windows Host persistence failing on directory synchronization and named-pipe collisions
+  between same-named profiles using separate runtime directories.
   Persistent global terminal environment variables are injected into newly launched local/SSH shells
   and CLI commands.
 

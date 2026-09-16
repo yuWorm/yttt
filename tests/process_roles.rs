@@ -96,10 +96,12 @@ async fn start_previous_build_host(
     ]));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        assert!(
-            !host.is_finished(),
-            "incompatible Host exited before readiness"
-        );
+        if host.is_finished() {
+            panic!(
+                "incompatible Host exited before readiness: {:?}",
+                host.await
+            );
+        }
         if profile.paths().runtime.join("host-ready.json").exists() {
             return host;
         }
@@ -139,7 +141,11 @@ fn desktop_host_cli_starts_reports_reuses_and_stops_the_profile_host() {
     };
 
     let started = invoke("--start-host");
-    assert!(started.status.success(), "{started:?}");
+    assert!(
+        started.status.success(),
+        "{started:?}; Host log: {:?}",
+        fs::read_to_string(profile.paths().logs.join("host.log"))
+    );
     assert_eq!(
         String::from_utf8_lossy(&started.stdout).trim(),
         "Host started"

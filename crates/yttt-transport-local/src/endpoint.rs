@@ -17,16 +17,27 @@ pub struct LocalEndpoint {
     address: EndpointAddress,
 }
 
+#[cfg(windows)]
+fn windows_pipe_address(
+    profile_id: &ProfileId,
+    runtime_root: &Path,
+    role: &str,
+) -> EndpointAddress {
+    let profile_hash = crc32fast::hash(profile_id.as_str().as_bytes());
+    // Do not canonicalize: endpoint construction must not require this root to exist.
+    let runtime_root_hash = crc32fast::hash(runtime_root.to_string_lossy().as_bytes());
+    EndpointAddress::WindowsPipe(format!(
+        r"\\.\pipe\yttt-{profile_hash:08x}-{runtime_root_hash:08x}-{role}"
+    ))
+}
+
 impl LocalEndpoint {
     pub fn for_profile(profile_id: ProfileId, runtime_root: impl Into<PathBuf>) -> Self {
         let runtime_root = runtime_root.into();
         #[cfg(unix)]
         let address = EndpointAddress::Unix(runtime_root.join("host.sock"));
         #[cfg(windows)]
-        let address = {
-            let profile_hash = crc32fast::hash(profile_id.as_str().as_bytes());
-            EndpointAddress::WindowsPipe(format!(r"\\.\pipe\yttt-{profile_hash:08x}-host"))
-        };
+        let address = windows_pipe_address(&profile_id, &runtime_root, "host");
         Self {
             profile_id,
             runtime_root,
@@ -38,10 +49,7 @@ impl LocalEndpoint {
         #[cfg(unix)]
         let address = EndpointAddress::Unix(runtime_root.join("desktop.sock"));
         #[cfg(windows)]
-        let address = {
-            let profile_hash = crc32fast::hash(profile_id.as_str().as_bytes());
-            EndpointAddress::WindowsPipe(format!(r"\\.\pipe\yttt-{profile_hash:08x}-desktop"))
-        };
+        let address = windows_pipe_address(&profile_id, &runtime_root, "desktop");
         Self {
             profile_id,
             runtime_root,
@@ -54,10 +62,7 @@ impl LocalEndpoint {
         #[cfg(unix)]
         let address = EndpointAddress::Unix(runtime_root.join("work.sock"));
         #[cfg(windows)]
-        let address = {
-            let profile_hash = crc32fast::hash(profile_id.as_str().as_bytes());
-            EndpointAddress::WindowsPipe(format!(r"\\.\pipe\yttt-{profile_hash:08x}-work"))
-        };
+        let address = windows_pipe_address(&profile_id, &runtime_root, "work");
         Self {
             profile_id,
             runtime_root,

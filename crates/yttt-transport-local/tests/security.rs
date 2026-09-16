@@ -106,6 +106,86 @@ async fn windows_named_pipe_is_single_instance_and_connects_same_user() {
 }
 
 #[tokio::test]
+async fn runtime_roots_isolate_same_profile_endpoints() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let temp = tempfile::tempdir().unwrap();
+    let profile_id = ProfileId::new(format!("runtime-root-isolation-{}", std::process::id()));
+    let first_root = temp.path().join("first-runtime");
+    let second_root = temp.path().join("second-runtime");
+    let first = LocalEndpoint::for_profile(profile_id.clone(), first_root.clone());
+    let same_first = LocalEndpoint::for_profile(profile_id.clone(), first_root.clone());
+    let second = LocalEndpoint::for_profile(profile_id.clone(), second_root.clone());
+
+    assert_eq!(first.address(), same_first.address());
+    assert_ne!(first.address(), second.address());
+    assert_ne!(
+        LocalEndpoint::for_desktop_shell(profile_id.clone(), first_root.clone()).address(),
+        LocalEndpoint::for_desktop_shell(profile_id.clone(), second_root.clone()).address()
+    );
+    assert_ne!(
+        LocalEndpoint::for_remote_work(profile_id.clone(), first_root).address(),
+        LocalEndpoint::for_remote_work(profile_id, second_root).address()
+    );
+
+    let first_listener = LocalListener::bind(first.clone()).await.unwrap();
+    let second_listener = LocalListener::bind(second.clone()).await.unwrap();
+    let (first_client, first_server, second_client, second_server) = tokio::join!(
+        connect(&first),
+        first_listener.accept(),
+        connect(&second),
+        second_listener.accept(),
+    );
+    let (mut first_client, mut first_server, mut second_client, mut second_server) = (
+        first_client.unwrap(),
+        first_server.unwrap(),
+        second_client.unwrap(),
+        second_server.unwrap(),
+    );
+
+    let (first_write, second_write) = tokio::join!(
+        first_client.write_all(b"first"),
+        second_client.write_all(b"second"),
+    );
+    first_write.unwrap();
+    second_write.unwrap();
+
+    let mut first_request = [0; 5];
+    let mut second_request = [0; 6];
+    let (first_read, second_read) = tokio::join!(
+        first_server.read_exact(&mut first_request),
+        second_server.read_exact(&mut second_request),
+    );
+    first_read.unwrap();
+    second_read.unwrap();
+    assert_eq!(&first_request, b"first");
+    assert_eq!(&second_request, b"second");
+
+    let (first_reply, second_reply) = tokio::join!(
+        first_server.write_all(b"one"),
+        second_server.write_all(b"two"),
+    );
+    first_reply.unwrap();
+    second_reply.unwrap();
+
+    let mut first_response = [0; 3];
+    let mut second_response = [0; 3];
+    let (first_read, second_read) = tokio::join!(
+        first_client.read_exact(&mut first_response),
+        second_client.read_exact(&mut second_response),
+    );
+    first_read.unwrap();
+    second_read.unwrap();
+    assert_eq!(&first_response, b"one");
+    assert_eq!(&second_response, b"two");
+
+    assert!(matches!(
+        LocalListener::bind(same_first).await,
+        Err(TransportError::EndpointInUse)
+    ));
+}
+
+#[tokio::test]
 async fn bounded_control_send_rejects_the_frame_before_writing() {
     use tokio::io::AsyncReadExt as _;
 

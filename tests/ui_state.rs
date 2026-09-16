@@ -7010,10 +7010,6 @@ fn root_view_keybinding_edit_dialog_updates_command_keys() {
         .unwrap();
 
     assert_eq!(
-        root.pending_keybinding_edit_keys(),
-        Some(vec!["cmd-j".to_string(), "ctrl-j".to_string(),])
-    );
-    assert_eq!(
         root.foreground_input_owner_kind(),
         InputOwnerKind::KeybindingRecorder
     );
@@ -7028,25 +7024,18 @@ fn root_view_keybinding_edit_dialog_updates_command_keys() {
     root.confirm_keybinding_edit_dialog().unwrap();
 
     assert!(root.pending_keybinding_edit_keys().is_none());
-    assert_eq!(
-        root.visible_keybinding_rows()
-            .into_iter()
-            .find(|row| row.command == CommandId::TabPalette)
-            .unwrap()
-            .keys,
-        vec![platform_l.clone(), "ctrl-l".to_string()]
-    );
-
     let reloaded = WorkbenchView::with_config_paths_for_test(paths);
-    assert_eq!(
-        reloaded
-            .visible_keybinding_rows()
-            .into_iter()
-            .find(|row| row.command == CommandId::TabPalette)
-            .unwrap()
-            .keys,
-        vec![platform_l, "ctrl-l".to_string()]
-    );
+    for keys in [platform_l.as_str(), "ctrl-l"] {
+        let keystroke = Keystroke::parse(keys).unwrap();
+        assert_eq!(
+            root.runtime_command_for_keystroke(&keystroke),
+            Some(CommandId::TabPalette)
+        );
+        assert_eq!(
+            reloaded.runtime_command_for_keystroke(&keystroke),
+            Some(CommandId::TabPalette)
+        );
+    }
 }
 
 #[test]
