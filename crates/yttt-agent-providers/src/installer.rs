@@ -468,6 +468,25 @@ mod tests {
 
     use super::*;
 
+    fn rerun_with_isolated_provider_environment(test: &str) -> bool {
+        const CHILD_TEST: &str = "YTTT_ISOLATED_PROVIDER_TEST";
+        if std::env::var(CHILD_TEST).as_deref() == Ok(test) {
+            return false;
+        }
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture"])
+            .env(CHILD_TEST, test)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("CODEX_HOME")
+            .env_remove("GROK_HOME")
+            .env_remove("OPENCODE_CONFIG_DIR")
+            .env_remove("XDG_CONFIG_HOME")
+            .status()
+            .expect("run isolated provider installation test");
+        assert!(status.success(), "isolated provider test failed: {test}");
+        true
+    }
+
     #[cfg(unix)]
     #[test]
     fn posix_adapter_ignores_claude_hooks_reexported_by_grok() {
@@ -521,6 +540,11 @@ mod tests {
 
     #[test]
     fn installs_all_managed_adapters_without_replacing_user_entries() {
+        if rerun_with_isolated_provider_environment(
+            "installer::tests::installs_all_managed_adapters_without_replacing_user_entries",
+        ) {
+            return;
+        }
         let temp = TempDir::new().unwrap();
         let config_dir = temp.path().join("yttt");
         let home = temp.path().join("home");
@@ -617,6 +641,11 @@ mod tests {
 
     #[test]
     fn malformed_user_hook_config_is_not_overwritten() {
+        if rerun_with_isolated_provider_environment(
+            "installer::tests::malformed_user_hook_config_is_not_overwritten",
+        ) {
+            return;
+        }
         let temp = TempDir::new().unwrap();
         let config_dir = temp.path().join("yttt");
         let home = temp.path().join("home");

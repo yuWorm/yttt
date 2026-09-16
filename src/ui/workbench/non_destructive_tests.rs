@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui::{EntityId, TestAppContext};
+use gpui::{EntityId, Keystroke, TestAppContext};
 use tempfile::tempdir;
 
 use super::*;
@@ -17,6 +17,7 @@ use crate::model::{
     layout::TabStartup,
     workspace::{PaneProcessState, TabStartState},
 };
+use crate::ui::settings::keybinding_display::recorded_keybinding;
 
 struct RemoteManagerTestSurface(Entity<WorkbenchView>);
 
@@ -396,11 +397,12 @@ fn ssh_project_directory_rows_show_icons_align_left_and_scroll(cx: &mut TestAppC
     let input = root.read_with(cx, |root, _| {
         root.ssh.project_picker.path_input.clone().unwrap()
     });
-    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+    let select_all = if cfg!(target_os = "macos") {
         "cmd-a"
     } else {
         "ctrl-a"
-    });
+    };
+    cx.simulate_keystrokes(select_all);
     cx.simulate_input("/directory-2");
     cx.run_until_parked();
     assert!(
@@ -430,7 +432,7 @@ fn ssh_project_directory_rows_show_icons_align_left_and_scroll(cx: &mut TestAppC
         cx.notify();
     });
     cx.run_until_parked();
-    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_keystrokes(select_all);
     cx.simulate_input("/directory-23");
     cx.run_until_parked();
     cx.update(|_, app| {
@@ -440,7 +442,7 @@ fn ssh_project_directory_rows_show_icons_align_left_and_scroll(cx: &mut TestAppC
         root.ssh.project_picker.loading = false;
         cx.notify();
     });
-    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_keystrokes(select_all);
     cx.simulate_input("/missing");
     cx.run_until_parked();
     assert!(cx.debug_bounds("ssh-project-directory-name").is_none());
@@ -451,7 +453,7 @@ fn ssh_project_directory_rows_show_icons_align_left_and_scroll(cx: &mut TestAppC
             "no matches must not open the parent project"
         );
     });
-    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_keystrokes(select_all);
     cx.simulate_input("/");
     cx.run_until_parked();
     assert!(
@@ -568,13 +570,22 @@ fn keybinding_recorder_renders_focuses_and_records(cx: &mut TestAppContext) {
 
     cx.update(|window, app| {
         let root = root.read(app);
+        let keybindings = root
+            .pending_keybinding_edit_keys()
+            .expect("recorded shortcut must be retained");
+        assert_eq!(keybindings.len(), 1);
+        let keybinding = &keybindings[0];
+        let parsed =
+            Keystroke::parse(keybinding).expect("recording must produce a parsable keybinding");
+        assert_eq!(parsed.key, "l");
+        assert!(
+            parsed.modifiers.platform,
+            "cmd-l must retain the platform modifier"
+        );
         assert_eq!(
-            root.pending_keybinding_edit_keys(),
-            Some(vec![if cfg!(target_os = "windows") {
-                "win-l".to_string()
-            } else {
-                "cmd-l".to_string()
-            }])
+            recorded_keybinding(&parsed).as_deref(),
+            Some(keybinding.as_str()),
+            "recorded shortcut must round-trip through the serializer"
         );
         assert!(
             root.focus_handle

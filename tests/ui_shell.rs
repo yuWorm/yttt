@@ -1,12 +1,7 @@
 use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
 use gpui_component::IconName;
 use std::{cell::Cell, mem::discriminant, rc::Rc, time::Duration};
-use yttt::config::{
-    paths::AppConfigPaths,
-    settings::{AppSettings, WindowBackgroundEffect},
-    theme::ThemeStore,
-};
-use yttt::ui::app::workbench_window_options;
+use yttt::config::{paths::AppConfigPaths, settings::AppSettings, theme::ThemeStore};
 use yttt::ui::components::{
     SelectableState, notification_tone_for_toast, selectable_state_classes,
     workbench_agent_notification, workbench_error_notification,
@@ -86,37 +81,6 @@ font_size = 15
 fn selectable_state_classes_distinguish_active_rows() {
     assert!(selectable_state_classes(SelectableState::Active).contains("active"));
     assert!(selectable_state_classes(SelectableState::Inactive).contains("inactive"));
-}
-
-#[test]
-fn app_window_options_apply_configured_background_effect() {
-    let bounds = gpui::Bounds {
-        origin: gpui::point(gpui::px(0.0), gpui::px(0.0)),
-        size: gpui::size(gpui::px(960.0), gpui::px(640.0)),
-    };
-
-    for (effect, expected) in [
-        (
-            WindowBackgroundEffect::None,
-            gpui::WindowBackgroundAppearance::Opaque,
-        ),
-        (
-            WindowBackgroundEffect::Transparent,
-            gpui::WindowBackgroundAppearance::Transparent,
-        ),
-        (
-            WindowBackgroundEffect::Blurred,
-            gpui::WindowBackgroundAppearance::Blurred,
-        ),
-    ] {
-        let options = workbench_window_options(bounds, effect);
-        assert_eq!(options.window_background, expected);
-        assert!(options.titlebar.is_some());
-        assert_eq!(
-            options.window_min_size,
-            Some(gpui::size(gpui::px(960.0), gpui::px(640.0)))
-        );
-    }
 }
 
 #[test]

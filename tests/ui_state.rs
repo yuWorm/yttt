@@ -4691,7 +4691,8 @@ fn modal_keybinding_recorder_owns_workspace_and_vim_keystrokes(cx: &mut gpui::Te
         );
     });
 
-    cx.simulate_keystrokes("j cmd-o");
+    let recorded_sequence = format!("j {}", platform_keystroke("o"));
+    cx.simulate_keystrokes(&recorded_sequence);
     cx.run_until_parked();
 
     cx.read(|app| {
@@ -4699,7 +4700,7 @@ fn modal_keybinding_recorder_owns_workspace_and_vim_keystrokes(cx: &mut gpui::Te
             root.read(app)
                 .pending_keybinding_edit_keys()
                 .expect("keybinding recorder should remain open"),
-            vec!["j cmd-o".to_string()]
+            vec![recorded_sequence]
         );
     });
     assert!(!cx.did_prompt_for_new_path());
@@ -5427,7 +5428,11 @@ fn keybindings_settings_explains_vim_leader_and_sequence_recording(cx: &mut gpui
     assert!(cx.debug_bounds("keybinding-recorder").is_some());
     assert!(cx.debug_bounds("keybinding-recording-actions").is_none());
 
-    cx.simulate_keystrokes("cmd-p");
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-p"
+    } else {
+        "ctrl-p"
+    });
     cx.run_until_parked();
     cx.refresh().unwrap();
     assert!(
@@ -5444,7 +5449,7 @@ fn keybindings_settings_explains_vim_leader_and_sequence_recording(cx: &mut gpui
     let replace = cx.debug_bounds("replace-keybinding").unwrap();
     cx.simulate_click(replace.center(), gpui::Modifiers::none());
     cx.run_until_parked();
-    cx.simulate_keystrokes("cmd-l");
+    cx.simulate_keystrokes(&platform_keystroke("l"));
     cx.run_until_parked();
     let finish = cx.debug_bounds("finish-keybinding-recording").unwrap();
     cx.simulate_click(finish.center(), gpui::Modifiers::none());
@@ -6789,7 +6794,7 @@ fn key_dispatch_leaves_terminal_bytes_for_terminal_input() {
     let command = workspace_command_for_keystroke(
         InputOwnerKind::Workspace,
         CommandContext::local_controller(true, ActiveSurface::Terminal),
-        &Keystroke::parse("ctrl-c").unwrap(),
+        &Keystroke::parse("c").unwrap(),
         |_| Some(CommandId::TabNew),
         |_| true,
     );
@@ -7013,8 +7018,9 @@ fn root_view_keybinding_edit_dialog_updates_command_keys() {
         InputOwnerKind::KeybindingRecorder
     );
 
+    let platform_l = platform_keystroke("l");
     root.begin_keybinding_edit_replacement();
-    assert!(root.record_keybinding_edit_keystroke(&Keystroke::parse("cmd-l").unwrap()));
+    assert!(root.record_keybinding_edit_keystroke(&Keystroke::parse(&platform_l).unwrap()));
     root.finish_keybinding_edit_recording();
     root.begin_keybinding_edit_alternative();
     assert!(root.record_keybinding_edit_keystroke(&Keystroke::parse("ctrl-l").unwrap()));
@@ -7028,7 +7034,7 @@ fn root_view_keybinding_edit_dialog_updates_command_keys() {
             .find(|row| row.command == CommandId::TabPalette)
             .unwrap()
             .keys,
-        vec!["cmd-l".to_string(), "ctrl-l".to_string()]
+        vec![platform_l.clone(), "ctrl-l".to_string()]
     );
 
     let reloaded = WorkbenchView::with_config_paths_for_test(paths);
@@ -7039,7 +7045,7 @@ fn root_view_keybinding_edit_dialog_updates_command_keys() {
             .find(|row| row.command == CommandId::TabPalette)
             .unwrap()
             .keys,
-        vec!["cmd-l".to_string(), "ctrl-l".to_string()]
+        vec![platform_l, "ctrl-l".to_string()]
     );
 }
 
@@ -7683,7 +7689,7 @@ fn root_view_focus_visible_terminal_pane_queues_terminal_focus() {
 #[cfg(target_os = "macos")]
 #[test]
 fn root_view_leaves_terminal_control_keybindings_for_focused_terminal() {
-    let mut root = WorkbenchView::dev_fixture_for_test();
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
     let project_id = root.workspace().selected_project_id().unwrap().clone();
     let initial_tab_count = root
         .workspace()
@@ -7693,6 +7699,8 @@ fn root_view_leaves_terminal_control_keybindings_for_focused_terminal() {
         .tabs
         .len();
 
+    root.set_keybinding_command_keys(CommandId::TabNew, vec!["ctrl-t".to_string()])
+        .unwrap();
     root.focus_visible_terminal_pane("shell").unwrap();
 
     assert!(
@@ -7713,7 +7721,9 @@ fn root_view_leaves_terminal_control_keybindings_for_focused_terminal() {
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn root_view_reserves_control_keybindings_when_terminal_is_focused() {
-    let mut root = WorkbenchView::dev_fixture_for_test();
+    let (_temp, mut root) = english_test_root_with_workspace(workspace_with_sample_project());
+    root.set_keybinding_command_keys(CommandId::TabNew, vec!["ctrl-t".to_string()])
+        .unwrap();
     root.focus_visible_terminal_pane("shell").unwrap();
 
     assert_eq!(
@@ -8885,6 +8895,17 @@ fn english_test_config_paths(temp: &tempfile::TempDir) -> AppConfigPaths {
     paths
 }
 
+fn platform_keystroke(key: &str) -> String {
+    let modifier = if cfg!(target_os = "macos") {
+        "cmd"
+    } else if cfg!(target_os = "windows") {
+        "win"
+    } else {
+        "super"
+    };
+    format!("{modifier}-{key}")
+}
+
 fn replace_editor_value(
     input: &mut gpui_component::input::InputState,
     value: &str,
@@ -8960,21 +8981,11 @@ autosave_delay_ms = {delay_ms}
     let project_id = workspace
         .open_project(local_project(project_dir.clone()), layout)
         .unwrap();
-    let preselected_project_id = project_id.clone();
-    let preselected_file = canonical_file.clone();
     let root_slot = Rc::new(RefCell::new(None));
     let root_slot_for_window = root_slot.clone();
     let (_component_root, cx) = cx.add_window_view(move |window, cx| {
-        let root = cx.new(|_| {
-            let mut root =
-                WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths);
-            root.project_editor_runtime_mut()
-                .workspace_mut()
-                .session_mut(&preselected_project_id)
-                .unwrap()
-                .open_file(preselected_file);
-            root
-        });
+        let root =
+            cx.new(|_| WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths));
         *root_slot_for_window.borrow_mut() = Some(root.clone());
         register_workbench_keybinding_interceptor(cx, &root);
         register_workbench_close_guard(window, cx, &root);

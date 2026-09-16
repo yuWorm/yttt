@@ -1361,11 +1361,14 @@ fn keybindings_editor_localizes_every_vim_action_presentation() {
 }
 
 #[test]
-fn recorded_keybindings_accept_shortcuts_and_ignore_incomplete_input() {
-    assert_eq!(
-        recorded_keybinding(&Keystroke::parse("cmd-shift-k").unwrap()).as_deref(),
-        Some("cmd-shift-k")
-    );
+fn recorded_keybindings_preserve_shortcut_semantics_and_ignore_incomplete_input() {
+    let recorded = recorded_keybinding(&Keystroke::parse("cmd-shift-k").unwrap())
+        .expect("shortcut must be recorded");
+    let round_trip = Keystroke::parse(&recorded).expect("recorded shortcut must be parsable");
+    assert_eq!(round_trip.key, "k");
+    assert!(round_trip.modifiers.platform);
+    assert!(round_trip.modifiers.shift);
+    assert_eq!(recorded_keybinding(&round_trip), Some(recorded));
     assert_eq!(
         recorded_keybinding(&Keystroke::parse("enter").unwrap()).as_deref(),
         Some("enter")
