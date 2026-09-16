@@ -2,257 +2,205 @@
 
 ## Unreleased
 
-### Added
+## 0.3.0 - 2026-09-16
 
-- Unified Zed-style settings actions as compact filled buttons, including path, import,
-  TOML and keybinding actions. Configuration details now expand below the category heading
-  into aligned, truncating path rows with full-path tooltips and copy controls.
-- Tightened Agent notifications into a title/context block and a shared status/action row;
-  their filled action buttons remain readable on opaque toasts in translucent windows.
-- Fixed active tab bottom borders leaking through transparent and blurred backgrounds.
-  Only inactive tabs and the unused tab-strip area now draw a bottom edge.
+### 中文
 
-- Unified automatic and manual Host workspace restoration, preserving dynamic terminal/file
-  tabs, split layouts and active work items. Surviving processes reattach; cold restoration
-  rebuilds clean shells and resumes saved Agent sessions, including started lazy tabs, without
-  replaying arbitrary commands or old prompts. Failed resume retains the original session.
-  The restore preference now gates local and remote startup and defaults on for new preferences.
+本次发布以实际公开版本 [v1.0.0](https://github.com/yuWorm/yttt/releases/tag/v1.0.0) 为基线，
+汇总其后的 87 个提交（截至 `62fcc99`，包含合并提交）。开发分支在 `e8816c0` 中明确回到
+pre-1.0 版本路线，因此本次版本为 **0.3.0**，不是旧版 1.0.0 的旧构建。
 
-- Redesigned the application icon with an angular Y, terminal prompt, and separate
-  underscore cursor. Platform icons now regenerate from an editable SVG source.
+#### 新增与改进
 
-- Replaced application/system performance switches with one always-on background sampler shared
-  by GUI workbench windows. Bar templates now control display only; live draft previews read the
-  same latest-sample cache, and sampling refreshes only metric-bearing windows and previews.
-  Legacy switches are ignored on load and omitted on the next Device settings save.
+- **独立 Host 与桌面生命周期**：终端、项目文件、Git、SSH 和 Agent 资源迁移到按配置档案隔离的
+  无界面 Host；本地 IPC 带认证、资源目录、输入租约和重连恢复。每个档案由单一桌面托盘／菜单栏
+  管理，可重新打开窗口、查看资源数量、启动／停止／重启 Host 和打开日志。新增对应 CLI 命令及
+  macOS、Windows、Linux 的可选登录启动配置和权限说明。
+- **SSH 与 TLS 远程工作区**：SSH 可部署独立的 `yttt-server`，支持 Linux/macOS 的 x86_64 和
+  aarch64，通过私有 Unix socket 连接。也可通过默认关闭的 TLS 1.3 监听器连接现有桌面 Host，
+  使用证书绑定的 Base64 连接码、TCP 转发和可选系统钥匙串凭据。远程配置、Git、Agent 和草稿
+  归所属 Host 管理；控制权在整个档案内交接，过期控制端不能继续输入或写入。
+- **完整会话恢复**：自动恢复和手动“恢复上次会话”使用同一路径，保留多个工作窗口、动态终端／
+  文件标签、分屏和活动项，也保留确认过的空工作区。存活进程直接重新连接；冷启动重建干净 shell，
+  并恢复已保存的 Agent 会话，包括曾启动过的延迟标签。恢复失败保留原会话，不重放任意命令或旧提示词。
+- **统一远程服务入口**：“远程连接”统一管理 SSH 和网络 Host；提供独立的新增／编辑弹窗、
+  保存与保存并连接操作、缺失凭据提示、连接码导入，以及中英双语的连接、接管和重试流程。
+  远程目录选择器支持路径前缀过滤、键盘补全、隐藏目录和打开当前目录；SSH 项目按服务器分组。
+- **按功能组织设置**：独立设置窗口支持跨分类搜索中文／英文名称和配置键。控件明确标注本地偏好、
+  当前环境或当前项目的归属、生效时机和只读原因，不再要求先理解 Device/Host/Project 标签页。
+  外观、字体、快捷键、Vim 和通知保留在本机；环境执行配置由 Host 持有。项目可单独覆盖编辑器
+  缩进与语言设置，并恢复环境默认值。
+- **可靠的配置与草稿保存**：读取配置不再隐式写文件；本机设置采用文件锁、重读和基线比较，避免
+  多客户端覆盖新值。控制权丢失、断线或 Host 重启时保留失败的设置候选和未发布编辑草稿，支持显式
+  重试／复制／丢弃。项目配置读写保留边界检查和版本冲突保护。
+- **全局 Vim 与统一快捷键**：新增 Global / Editor only / Disabled 三种模式，统一终端、编辑器、
+  项目树、面板、设置与命令面板的上下文快捷键。支持 leader、多键序列录制、备选绑定、单动作解绑、
+  热重载和快速指南；状态栏显示模式与待完成按键。项目树提供 neo-tree 风格操作，`Ctrl-W h/j/k/l`
+  可穿越左右侧栏和工作区面板；终端模式下 `Escape` 和 `Ctrl-[` 交给进程，`Ctrl-\ Ctrl-N` 返回 Normal。
+- **Agent 集成**：统一 Codex、Claude Code、Grok Build／Groky、OpenCode、Pi 和 Oh My Pi 的适配器，
+  检测在普通 shell 中手动启动的 Agent，提供分组／搜索的历史会话列表、原生命令恢复、稳定会话标题、
+  任务／工具／子 Agent 状态，以及等待输入、完成或失败时的应用内和可选系统通知。
+- **可配置标题栏和状态栏**：使用 bracket 模板自由排列项目、Git、Vim、编辑器、终端、Agent 与性能
+  信息；独立 TOML 编辑窗口提供 41 项可搜索组件、实时草稿预览、校验和恢复默认值。提供 Recommended、
+  Minimal、Development、Agent 预设；默认布局更安静，不展示性能指标。多个窗口共用始终运行的后台
+  性能采样器，模板只控制是否显示数据。
+- **统一 Zed 风格**：引入统一 UI 原语与实时外观配置，细化语义颜色、字体回退、菜单、选择器、Git diff、
+  标题／状态栏、侧栏、分屏与通知。设置和远程服务使用可复用的独立原生窗口；布局 TOML 使用独立编辑窗口。
+  更新应用图标为棱角 Y、终端提示符和独立下划线光标，并保留可编辑 SVG 源文件。
+- **更新与发布工具**：新增非阻塞应用更新检查、每日缓存、手动检查、按平台下载，以及基于 changelog 的
+  发布说明、更新清单和校验和生成。发布流程在三平台验证通过后打包，并拒绝覆盖已经发布的资产。
+  新增持久化全局终端环境变量，自动注入新启动的本地／SSH shell 和 CLI 命令。
 
-- Changed built-in bars to a quieter project/Git header and contextual Vim, editor, Agent and
-  error status, without performance metrics or duplicate path/tab labels. Added Recommended
-  alongside Minimal, Development and Agent draft presets; Minimal retains mode and error cues,
-  and Development adds editor tab width and wrapping. Existing explicit bar preferences remain
-  unchanged unless a preset is saved.
+#### 主要修复
 
-- Added nine state-backed bar components for Agent waits/models/active children/state duration,
-  Unicode editor selections, tab width, soft wrapping, terminal exits and live viewport dimensions.
-  Agent detail components follow the active pane; selections support code and Markdown source ranges.
-- Added a localized, grouped 41-entry bar component catalog, hidden-component explanations,
-  draft-only presets and Restore Defaults. Preview parsing is cached without freezing live state.
-- Changed bar spacing syntax to `[Space: number]` (1–256 font-relative spaces), including
-  component insertion and canonical saves. Replace earlier `[Space]` / `[Space*N]` templates
-  with `[Space: 1]` / `[Space: N]`; earlier spacing forms now report a validation error.
-- Added bracket templates for Window and Status bars, including font-relative spaces, literal text,
-  bundled icons and adaptive separators. Existing module arrays migrate on save; project identity
-  can now be moved, repeated or hidden without affecting native window controls.
-- Added a Bars target to the popup TOML editor with searchable component insertion, draft-only
-  live previews, validation and Device-scoped saving; unsaved and failed drafts remain recoverable.
-- Unified settings navigation around feature categories instead of Device/Host/Project tabs.
-  Search finds localized/English setting names and configuration keys across destinations,
-  while controls retain explicit local/environment ownership, read-only reasons and apply timing.
-  Environment identity and profile details no longer require understanding Host terminology.
-- Added inline, allowlisted project editor overrides with explicit project identity and
-  restore-environment-default actions. Stale controls cannot write to a newly selected project,
-  and unchanged inputs do not create overrides. Normal/Overlay/ReadOnly routing is preserved;
-  local preferences remain editable by observers while shared writes require connected control.
-- Preserved failed settings candidates and unpublished editor drafts across control loss,
-  disconnects and Host epoch changes, with Device-private recovery and explicit retry/copy/discard.
+- 拆分 Host 的控制、终端交互、终端数据和状态事件通道，移除逐键响应和渲染期间的同步 PATH 扫描；
+  合并终端帧、使用损坏行更新与有界 UI 批处理，降低输入延迟、卡顿和长时间运行的线程开销。
+  Host 终端的拖选、词／行选择和复制正确处理软换行与宽字符。
+- Agent Hook 使用有序投递、确认、有限重试和去重；修复完成后仍显示运行、退出后残留状态、嵌套 Agent
+  状态串扰、关闭后重建标签继承旧身份、Host 替换后无法重连，以及已完成 Agent 标签无法关闭。
+- 修复首次远程窗口丢失工作区、连接交接提前关闭最后一个窗口、默认布局写入失败，以及后台／遮挡窗口
+  中的辅助设置操作失效。
+- 本地和 SSH 项目树支持项目内部的目录符号链接，保留循环和根边界检查；删除操作只删除链接本身。
+  修复远程目录名过度省略、异步结果与输入不同步、远程 `~` 展开错误。
+- 修复 Global Vim 的 `Ctrl-W` 前缀迁移、大小写按键提示和 Normal 模式下 IME／文本泄漏；修复项目树
+  hover 崩溃、常见文件类型图标缺失、长 Agent 标题撑开侧栏，以及透明背景下选中态和标签底边异常。
+- 被外部删除的已打开文件仍可编辑，标签以删除线提示，保存直接重建文件。通知在透明窗口中保持不透明，
+  操作按钮、上下文与状态信息保持可读。
 
-- Fixed directory symlinks being omitted from remote directory pickers and blocked in project
-  trees. Local and SSH trees now follow in-project directory aliases with cycle and root-boundary
-  checks; directory actions treat links as folders while deletion still removes only the link.
-- Added live path-prefix filtering to the remote directory picker, with automatic first-match
-  selection, keyboard completion, and editable input while remote directories load.
-- Added **Remote services** to the homepage, reusing SSH connection management and supporting
-  multiple remembered TLS Host connections without storing their secrets in metadata files.
-- Moved local/remote identity and control status into the bottom status bar instead of a
-  permanent controller/UUID/revision banner.
-- Fixed the first remote window creating a new empty workspace instead of restoring its Host
-  workspace. Local and remote startup now preserve confirmed empty states and restore saved
-  project windows before allowing eager terminal/Agent initialization.
-- Added opt-in TLS 1.3 access to the existing desktop Host and a separate **Connect to existing
-  yttt** Client flow, including certificate-bound connection information, general TCP forwarding,
-  optional OS-keychain credentials, local disconnect/reclaim/reset controls and lifetime-aware quit confirmation.
-- Added profile-wide control handoff across local work windows, execution-time control-epoch
-  fencing, stable multi-workspace publication and separate bounded recoverable draft objects.
-- Unified local and remote shared configuration through the Host's explicit original config root;
-  isolated device preferences and split SSH work credentials from local Host administration.
+#### 升级与兼容性
 
-- Added independent remote workspace Clients over SSH and a standalone, GUI-free `yttt-server`
-  for Linux/macOS x86_64 and aarch64, with authenticated private-socket transport and safe,
-  busy-aware deployment.
-- Added Host-owned remote configuration, project/Git operations, Agent integration, workspace
-  snapshots and editor drafts, with durable revision-checked commits, idempotent retries, and
-  explicit single-controller takeover.
-- Remote Client exit preserves remote tasks; Host restart preserves workspace state and rebuilds
-  shells or resumes Agent sessions without silently replaying arbitrary commands.
-- Added a unified, live-reloadable GPUI keymap covering commands, palettes, project tree, Git diff, terminal, editor Vim, and modal UI actions, with contextual sequences and per-action unbinding.
-- Added a single `Global` / `Editor only` / `Disabled` Vim setting backed by one window-level mode controller and a persistent mode/context status bar; Global mode spans editors, terminals, project trees, settings, panes, tabs, and command palettes.
-- Added configurable Vim leader expansion, multi-keystroke shortcut recording, alternative shortcut sequences, and an in-app quick-start guide for the unified keymap.
-- Added transient pressed-key feedback to the Vim status bar for normal-mode commands and pending multi-key sequences without echoing insert or terminal text.
-- Added configurable neo-tree-style Global Vim controls for the Projects list (`j/k`, `gg/G`) and project files (`j/k`, `h/l`, `gg/G`, Enter/`o`, create, rename, delete, copy, cut, paste, collapse-all, hidden-file, refresh, finder, and panel-close actions).
-- Added centered, extensible Project Panel icon tabs with an accent-highlighted Files tab, muted Search/Git/Terminal placeholders, and Vim page navigation (`[ p`, `] p`, `g p f`) scoped independently from file-tree commands.
-- Added persistent global terminal environment variables that are automatically injected into newly started local and SSH shells and CLI commands.
-- Added local process-tree discovery for Codex, Claude Code, Grok, OpenCode, Pi, and Oh My Pi
-  launched manually from an existing shell tab or pane.
-- Added in-app and optional native desktop notifications when hook-backed agents need input,
-  complete a task, or fail.
-- Added first-class Grok Build integration, including the `groky` fork alias and shared Grok icon,
-  native personal hooks, live task/tool/subagent state, local session discovery, and `--resume`
-  restoration.
-- Added a cross-platform Permissions settings page for reviewing core and optional desktop access,
-  opening native macOS and Windows settings, and explaining Linux desktop/portal-managed
-  authorization.
-- Added an authenticated, profile-isolated headless Host process with versioned local IPC, resource catalogs, terminal checkpoints, lease-controlled input, reconnect recovery, and semantic terminal mirrors.
-- Added one desktop shell and native tray/menu-bar owner per profile, with window reopening, Host
-  status and resource counts, safe start/stop/restart controls, log access, and separate desktop
-  versus all-process quit actions.
-- Added tray-independent Host lifecycle CLI commands for status, start, safe stop, restart, force
-  stop, and opening profile logs.
-- Added explicit, profile-scoped **Start Host at login** controls with macOS `SMAppService`,
-  Windows current-user Run-key registration, Linux systemd-user/XDG fallback, CLI management,
-  approval status, and secret-free startup arguments.
+- **版本路线回退**：0.3.0 延续开发分支的 pre-1.0 决策。旧公开版 1.0.0 的用户请从本次 Release
+  手动下载安装；不要依赖 SemVer 更新检查将较小的 0.3.0 识别为升级。历史 Git 标签和已发布资产不变。
+- **Host 协议版本为 8**：Client 和 Host 应使用兼容构建。不兼容且仍有任务的 Host 会阻止自动替换；
+  请先保存工作并安排重启，不要强制终止正在运行的任务。
+- **关闭窗口不等于退出**：关闭最后一个本地窗口保留托盘和桌面所属 Host；退出桌面会终止其所属 Host
+  与资源。显式 CLI／登录启动的独立 Host，以及 SSH 部署的远程 Host，具有独立生命周期。
+- **恢复不是命令重放**：新偏好默认启用“恢复上次会话”；冷恢复重建 shell、恢复可恢复的 Agent，
+  其他命令进程保持停止，观察者不会启动它们。先备份重要配置和未保存内容。
+- **配置迁移**：旧本地外观、主题、图标、快捷键和 bars 偏好迁入本机 profile 的 `device` 目录。
+  设置现按功能分类；远程访问入口为“远程服务 → 远程访问此计算机”，不再位于“权限”。
+- **Bars 模板**：旧模块数组在保存时迁为模板；早期 `[Space]` / `[Space*N]` 必须改为
+  `[Space: 1]` / `[Space: N]`（1–256）。已有显式布局不会自动替换；选择预设并保存才能应用新布局。
+  旧性能采样开关不再生效，并在下次保存本机设置时移除。
+- **安全与包格式**：连接码包含访问密钥，只应私下分享。桌面包提供 macOS arm64 DMG、Windows x86_64
+  安装器和 Linux x86_64 tarball；另附四种平台／架构的无界面 Server、`update.json` 和 `SHA256SUMS`。
+  macOS 包仍为 ad-hoc 签名，未做 Developer ID 签名或公证。
 
-### Changed
+### English
 
-- Made configuration/default-layout reads and Agent-manager construction read-only. Legacy Device
-  migration, explicit saves/imports, onboarding completion and controlled Host hook provisioning are
-  separate write boundaries.
-- Unified shared-mutation authority across commands, buttons and shortcuts without blocking
-  observer Device preferences or attachment to existing terminal sessions.
-- Fixed remote connection handoff closing the last window before creating its workspaces, and
-  fixed auxiliary settings actions when the main workbench is occluded.
-- Advanced the resource protocol to version 8 for Host project-configuration routing and bounded
-  Project configuration IO; older Hosts require an explicit compatible upgrade.
+This release compares against the last publicly shipped version,
+[v1.0.0](https://github.com/yuWorm/yttt/releases/tag/v1.0.0), covering 87 subsequent commits
+through `62fcc99`, including merges. Commit `e8816c0` explicitly returned development to
+pre-1.0 versioning: **0.3.0 is the new release, not an older build of 1.0.0**.
 
-- Integrated the remote connection window with the launching window's live theme, typography,
-  window effect, and UI style from its first frame. Replaced oversized warning cards with compact
-  workbench layouts, expandable connection details, and fixed bottom actions.
-- Localized connection progress, SSH verification, takeover/force-transfer decisions, retry,
-  cancellation, and connection-form validation in English and Chinese.
-- Replaced the separate SSH and TLS Host tabs with one saved **Remote connections** list beside
-  **Remote access to this computer**. Rows connect directly; type-specific add/edit modals use
-  separate Save and Save-and-connect actions, with small prompts for missing credentials.
-- Preserved existing SSH/Host records and keychain storage; network Host names and routes can
-  now be saved or edited independently of credentials.
-- Changed connection-info copying to a Base64 code containing the endpoint, certificate and
-  access key; pasting it fills the connection address and credentials automatically.
-- Reworked remote directory selection into a compact, connection-labelled picker with the Host home
-  as its default, hidden folders, an inline open-current action, and keyboard directory navigation.
-- Unified workbench controls, dialogs, overlays, rows, panels, tabs, sidebars, notifications, and split handles behind the `yttt-ui` primitive layer; one live appearance runtime now drives application colors, typography, spacing, radii, shadows, density, and the complete `gpui-component` theme bridge.
-- Reworked the Zed UI style around imported Zed semantic state colors and compact control geometry, with a full-size flat settings layout, precise button/select/menu states, focused project-tree rows, and native active/inactive tab surfaces.
-- Aligned the Zed style's independent text/icon and shell-surface colors, bundled IBM Plex Sans
-  fallback, font-relative picker geometry, menus, tooltips, editor search and terminal grid metrics.
-- Grouped SSH project choices by server with searchable recent paths, preserved server context
-  while filtering, and corrected mixed-height section headers and Escape cancellation.
-- Moved Settings and Remote services into reusable native windows with independent focus,
-  window-local dialogs, and input controls that remain functional after closing and reopening.
-- Refined Zed title/status-bar gutters, icon-group spacing, and picker-row gaps; flattened the
-  Git diff toolbar, aligned file/code headers, and softened change backgrounds and footer hints.
-- Replaced the status bar's fixed height with content-driven sizing and font-relative vertical
-  insets; compact action buttons and text now stay centered without touching or crossing its edges.
-- Moved layout TOML editing into an independent single-file window with a compact path strip,
-  save shortcut, and inline validation errors; closing Settings no longer discards its buffer.
-- Moved local remote-access controls out of Permissions into a dedicated Remote services page,
-  with localized listener status, address controls, and connected-device management.
-- Replaced blue settings section accents with muted headings and fine separators, and aligned
-  notification icons, titles, close controls, and wrapping body text in normal layout flow.
-- Removed decorative outlines from work-area groups, including terminal surfaces, and from every icon-button variant while retaining structural separators and focus indicators.
-- Moved the tab-bar baseline behind tab items so the selected tab covers its segment and merges visually with the active content surface, matching Zed.
-- Replaced the Project Panel title/action toolbar with icon tabs and a stateful right-side-panel toggle in the workbench tab bar; create, refresh, hidden-file, and project-layout actions now live in row or empty-area context menus.
-- Clippy boundary rules now reject direct construction of style-sensitive `gpui-component` controls in business UI modules.
-- Legacy workspace, settings, editor, and terminal Vim toggles now migrate to the least restrictive equivalent unified mode, and legacy `WorkspaceVim` keybinding contexts migrate to the Global scope.
-- Consolidated all built-in agent adapters and embedded hook sources into the extensible `yttt-agent-providers` crate instead of keeping Oh My Pi in a separate crate.
-- Restored running Claude, Codex, Grok, OpenCode, Pi, and Oh My Pi sessions with provider-specific resume commands after workspace restart; provider titles or stable first-prompt titles now persist with the session while custom pane titles remain authoritative.
-- The Permissions page now detects native authorization where the operating system supports it,
-  requests macOS Notifications, Accessibility, and Screen Recording access in place, refreshes
-  after returning from system settings, and reports unsupported status checks explicitly.
-- Moved local and SSH terminal processes, project file trees and writes, Git execution, project watchers, Agent hook ingress, SSH connections, and SSH credential access out of the GPUI process and into the Host; closing a window now detaches without terminating Host-owned resources.
-- Release packages keep one executable with separate desktop and headless Host process roles on macOS, Windows, and Linux.
-- Desktop startup now detects Host build/resource incompatibility before using the resource
-  protocol, replaces an idle old Host through the lifecycle protocol, preserves a busy Host with
-  typed blockers, isolates development builds into executable-scoped profile runtimes, and reports
-  unrecoverable live-Host lock states instead of killing resources or spawning a duplicate Host.
-- Production desktop shells use explicit quit semantics: closing the last window keeps the
-  desktop control plane and its owned Host available through the tray, while quitting or losing
-  the desktop shell terminates that Host and its resources. Explicit CLI/login-started background
-  Hosts remain independent.
-- Isolated each Host client into control, terminal-interactive, per-terminal data, and state-event
-  connections; resource catalogs are now cached and refreshed from invalidation events instead of
-  being embedded in viewport synchronization or fetched before every terminal creation.
-- Reduced long-running Host overhead by moving terminal event and child monitoring from dedicated
-  OS threads to lightweight runtime tasks and sampling process diagnostics every five seconds.
+#### Added and changed
 
-### Fixed
+- **Independent Host and desktop lifecycle:** terminals, project files, Git, SSH and Agent resources
+  now belong to a profile-isolated headless Host, with authenticated local IPC, resource catalogs,
+  input leases and reconnect recovery. One tray/menu-bar owner per profile can reopen windows,
+  inspect resource counts, manage Host lifecycle and open logs. Equivalent CLI controls and opt-in
+  login startup are available on macOS, Windows and Linux, with desktop permission guidance.
+- **SSH and TLS workspaces:** SSH deploys a standalone `yttt-server` for Linux/macOS x86_64 and
+  aarch64 over a private Unix socket. An opt-in TLS 1.3 listener also exposes an existing desktop
+  Host using certificate-bound Base64 connection codes, TCP forwarding and optional OS-keychain
+  credentials. Remote configuration, Git, Agents and drafts stay on their owning Host. Profile-wide
+  control handoff fences stale controllers from terminal input and shared writes.
+- **Complete workspace restoration:** automatic and manual restoration share one path for multiple
+  windows, dynamic terminal/file tabs, split layouts and active items, including confirmed empty
+  workspaces. Surviving processes reattach; cold restoration recreates clean shells and resumes saved
+  Agent sessions, including previously started lazy tabs. Failed resume preserves the original
+  session rather than replaying arbitrary commands or old prompts.
+- **Unified Remote services:** one saved-connections list manages SSH and network Hosts, with
+  type-specific add/edit modals, separate Save and Save-and-connect actions, credential prompts,
+  connection-code import and English/Chinese connection, takeover and retry flows. Remote directory
+  selection adds path-prefix filtering, keyboard completion, hidden folders and open-current actions;
+  SSH projects are grouped by server.
+- **Feature-oriented settings:** a separate native settings window searches localized/English labels
+  and configuration keys across categories. Controls identify local, environment and project ownership,
+  application timing and read-only reasons instead of requiring Device/Host/Project navigation.
+  Appearance, fonts, keybindings, Vim and notifications remain local; execution settings belong to the
+  Host. Projects can override editor tab size and language settings and restore environment defaults.
+- **Safer configuration and draft writes:** configuration reads no longer create files. Device saves
+  lock, reload and compare their baseline before writing, preventing concurrent Clients from losing
+  newer preferences. Control loss, disconnects and Host restarts retain failed settings candidates and
+  unpublished editor drafts for explicit retry/copy/discard. Project IO remains bounded and revision-checked.
+- **Global Vim and unified keybindings:** Global / Editor only / Disabled modes share contextual
+  bindings across terminals, editors, project trees, panes, settings and palettes. Leader expansion,
+  multi-keystroke recording, alternatives, per-action unbinding, live reload and a quick-start guide
+  accompany mode/pending-key feedback. Neo-tree-style file actions and `Ctrl-W h/j/k/l` span both
+  sidebars and work areas. Terminal mode passes `Escape` and `Ctrl-[` through; `Ctrl-\ Ctrl-N`
+  returns to Normal mode.
+- **Agent integration:** unified adapters cover Codex, Claude Code, Grok Build/Groky, OpenCode, Pi and
+  Oh My Pi, including Agents launched manually in shell panes. Added grouped/searchable session history,
+  native resume commands, persistent session titles, task/tool/subagent state and in-app plus optional
+  desktop notifications for input requests, completion and failure.
+- **Configurable window/status bars:** bracket templates arrange project, Git, Vim, editor, terminal,
+  Agent and performance components. A dedicated TOML editor provides a searchable 41-entry catalog,
+  live draft previews, validation and Restore Defaults. Recommended, Minimal, Development and Agent
+  presets complement quieter defaults without performance metrics. Workbench windows share one always-on
+  background performance sampler; templates control display only.
+- **Consistent Zed styling:** shared UI primitives and live appearance settings refine semantic colors,
+  font fallbacks, menus, pickers, Git diff, bars, sidebars, splits and notifications. Settings and Remote
+  services use reusable native windows; layout TOML has an independent editor. The application icon now
+  combines an angular Y, terminal prompt and separate underscore cursor, backed by editable SVG artwork.
+- **Updates and release tooling:** non-blocking update checks, daily caching, manual checks and
+  platform-specific downloads use changelog-backed release notes, update manifests and checksums.
+  Packaging is gated on three-platform validation and refuses to overwrite published assets.
+  Persistent global terminal environment variables are injected into newly launched local/SSH shells
+  and CLI commands.
 
-- Prevented concurrent Clients from overwriting newer Device `settings.toml` preferences:
-  saves now lock, reload and compare the confirmed baseline before atomically writing.
-  Conflicting or unreadable files remain untouched, and failed candidates remain available.
-- Kept onboarding language detection and selection as a preview until completion, so the first
-  Device save does not report a false conflict or prematurely persist the preview language.
-- Fixed observer Project configuration reads incorrectly requiring mutable project registration.
-  Reads now use a bounded Host namespace, writes/deletes retain CAS protection, and load failures
-  are shown explicitly instead of being presented as confirmed Host defaults.
-- Fixed remote directory names collapsing to ellipses and asynchronous directory results leaving
-  the path input stale; remote `~` expansion now uses the connected user's home.
-- Fixed cold-start default layout creation, saving and reset with Host-backed configuration:
-  submit the final configuration path to the shared atomic writer instead of attempting
-  client-side temporary-file writes rejected by the Host allowlist.
-- Fixed the project-file panel crashing with `hover style already set` by defining menu icon-button hover state only through its custom button variant.
-- Fixed schema-4 `ctrl-w` pane-close overrides shadowing the `ctrl-w h/j/k/l` sequence; migration now removes the obsolete single-key override so pending Vim prefixes resolve correctly.
-- Fixed Vim status-bar key feedback to preserve printable key case, so `g` and `G` remain distinguishable.
-- Fixed `ctrl-w h/j/k/l` navigation to cross the left Projects list, edge terminal panes, adjacent work-area groups, and the right project tree, with the standard held-Control variants `ctrl-w ctrl-h/j/k/l`; focus transitions now update in one frame and use restrained pane-edge, panel-header, and current-row indicators instead of stacked full-panel outlines.
-- Fixed active and selected states losing contrast on translucent backgrounds by deriving interaction overlays from backdrop visibility and using focused foreground colors for keyboard-owned rows.
-- Fixed project-file hover feedback to match the focused-row background and removed the focused-row side marker from the workbench file tree.
-- Fixed platform text and IME composition reaching palette inputs or terminal panes while Global Vim is in Normal mode; Insert and Terminal modes continue to accept composed text.
-- Fixed long Agent session titles expanding the project panel beyond its layout and preventing metadata tooltips from receiving hover input.
-- Fixed Global Vim Terminal mode intercepting `Escape` and `Ctrl-[`; both now reach the terminal process, while `Ctrl-\ Ctrl-N` returns to yttt Normal mode.
-- Fixed Zed-compatible icon themes falling back to the generic file icon for common extensions, including TypeScript, when the theme relies on Zed's built-in file associations.
-- Open files deleted outside yttt now stay editable with a struck-through tab title and are recreated directly on save instead of blocking on a confirmation dialog.
-- Restored Host-owned process-tree monitoring for manually launched Codex, Claude Code, Grok,
-  OpenCode, Pi, and Oh My Pi CLIs. Two missed samples now end the live sidebar snapshot even when
-  the parent shell remains running or the Agent cannot emit its `SessionEnd`/`session_shutdown`
-  hook.
-- Fixed closed and immediately recreated terminal tabs inheriting an old Agent identity by dropping
-  pane caches and retained snapshots synchronously, rejecting late updates for absent tabs, and
-  clearing the Host record before binding a new terminal incarnation.
-- Fixed Grok detection in development builds by installing the shared stateless hook adapter outside
-  the profile runtime, accepting Grok's native `snake_case` lifecycle events, and dropping the
-  duplicate Claude-hook delivery that Grok's compatibility loader re-exports.
-- Fixed Host terminal input feeling network-lagged by isolating slow project/file/Git requests from
-  the terminal-interactive lane, making control and interactive frame readers cancellation-safe,
-  coalescing semantic terminal data to a 16 ms frame cadence, and keeping terminal frames off
-  generic GPUI event listeners.
-- Fixed residual Host terminal UI stalls by detecting shell candidates once at Workbench startup
-  instead of synchronously scanning every `PATH` entry during each GPUI render.
-- Agent panes without an authoritative snapshot now display `Stale` instead of inferring `Working`
-  from a live terminal process, and the Host snapshot bridge coalesces the latest sequenced update
-  per terminal session instead of dropping final states when a bounded queue fills.
-- Fixed residual rapid-input latency in Host terminals by sending terminal input as an ordered
-  one-way resource-protocol v3 message, removing per-keystroke responses, and coalescing adjacent
-  writer commands without copying their byte payloads.
-- Fixed mouse selection in Host terminals by maintaining an ephemeral Client-side range over the
-  authoritative semantic viewport; drag, word, and line selection now highlight and copy the same
-  text as Direct terminals without a Host round trip, including soft-wrapped and wide-character
-  rows.
-- Host semantic capture now encodes Alacritty damage rows instead of rescanning every visible cell;
-  the background receiver only queues immutable updates, while GPUI applies one bounded batch per
-  redraw and serves key/text callbacks from foreground-owned mode state. Async mailbox delivery now
-  defers refresh of the owning window until any in-flight draw completes, preventing the final
-  terminal update from remaining behind a coalesced wakeup. Performance reports expose real input
-  callback time, semantic queue age, render-state lock wait, queue high-water, and coalesced update
-  counts in addition to end-to-end input-to-first-paint latency.
-- Fixed Host-owned Agent panes remaining `running` after completion, restart, or delayed hook
-  delivery. Hook events now carry a delivery stream and monotonic sequence, retry with bounded
-  exponential backoff until acknowledged, buffer small gaps, ignore duplicates, and cannot
-  overwrite a terminal's final exit state; desktop reconciliation remains keyed by terminal
-  placement and clears state when the backing Host terminal is lost.
-- Fixed desktop Host replacement leaving panes permanently bound to an old Host identity:
-  missing `Bound`, `ClosePending`, and `Lost` placements now start a fresh session, and successful
-  terminal-exit acknowledgements persist `Closed`.
-- Fixed completed manual-restart Agent tabs refusing to close in Host mode: a terminal placement
-  already acknowledged as `Closed` now makes repeated close preparation an idempotent no-op instead
-  of failing with `NotBound` before the local tab can be removed.
+#### Key fixes
 
-## 0.2.0 - 2026-07-18
+- Isolated Host control, terminal-interactive, terminal-data and state-event channels; removed
+  per-keystroke responses and synchronous render-time PATH scans. Coalesced frames, damage-row updates
+  and bounded UI batches reduce input latency, stalls and long-running thread overhead. Host terminal
+  drag, word and line selection/copy now handle soft-wrapped and wide-character text correctly.
+- Ordered, acknowledged, bounded-retry and deduplicated Agent hooks fix stale running/completion state,
+  missed process exits, nested Agent identity leakage, recreated tabs inheriting old identities,
+  reconnecting after Host replacement and closing completed Agent tabs.
+- Fixed first-remote-window workspace loss, closing the last window too early during connection handoff,
+  Host-backed default-layout writes and auxiliary settings actions in occluded workbenches.
+- Local and SSH trees now follow in-project directory symlinks with cycle/root-boundary checks;
+  deletion removes only the link. Fixed over-truncated directory names, stale asynchronous path input
+  and remote-user `~` expansion.
+- Fixed Global Vim `Ctrl-W` prefix migration, case-sensitive key feedback and Normal-mode IME/text
+  leakage; project-tree hover crashes, missing common file icons, oversized Agent sidebar titles,
+  translucent selection contrast and active-tab bottom borders.
+- Externally deleted open files remain editable, show struck-through tab titles and are recreated on
+  save. Notifications remain opaque in translucent windows, with readable actions, context and status.
+
+#### Upgrade and compatibility notes
+
+- **Version reset:** 0.3.0 follows the development branch's explicit pre-1.0 decision. Users of the old
+  public 1.0.0 release must download and install this release manually; SemVer update checks do not
+  consider the numerically smaller 0.3.0 an upgrade. Historical tags and published assets remain unchanged.
+- **Host resource protocol is version 8:** use compatible Client/Host builds. Busy incompatible Hosts
+  refuse automatic replacement; save work and plan a restart instead of force-stopping live tasks.
+- **Closing is not quitting:** closing the last local window retains the tray and desktop-owned Host.
+  Quitting the desktop stops its Host and resources. Explicit CLI/login-started Hosts and SSH-deployed
+  remote Hosts have independent lifetimes.
+- **Restoration is not command replay:** Restore last session defaults on for new preferences. Cold
+  restore recreates shells and resumes supported Agents; other commands remain stopped and observers
+  never spawn them. Back up important configuration and unsaved work first.
+- **Configuration migration:** legacy local appearance, themes, icons, keybindings and bars migrate into
+  the local profile's `device` directory. Settings are organized by feature. Remote access now lives in
+  **Remote services → Remote access to this computer**, not Permissions.
+- **Bar templates:** legacy module arrays migrate on save. Replace early `[Space]` / `[Space*N]` syntax
+  with `[Space: 1]` / `[Space: N]` (1–256). Explicit layouts remain unchanged until a preset is saved.
+  Legacy performance-sampling switches are ignored and removed on the next Device-settings save.
+- **Security and packages:** connection codes contain access keys; share them privately. Desktop assets
+  are macOS arm64 DMG, Windows x86_64 installer and Linux x86_64 tarball, alongside four headless Server
+  platform/architecture builds, `update.json` and `SHA256SUMS`. macOS remains ad-hoc signed, without
+  Developer ID signing or notarization.
+
+**完整提交对比 / Full comparison:** https://github.com/yuWorm/yttt/compare/v1.0.0...v0.3.0
+
+**使用文档 / Usage:** https://github.com/yuWorm/yttt/blob/v0.3.0/docs/usage.md
+
+## 1.0.0 - 2026-07-18
+
+Historical public release. The development branch later relabeled this section as 0.2.0;
+that label was not a published release. This heading follows the actual v1.0.0 tag.
 
 ### Added
 
@@ -262,8 +210,6 @@
 - Added operating-system credential-store integration for remembered SSH passwords and endpoint-bound credential metadata.
 - Added drag-to-edge work-area splitting for terminal and file tabs, with independent tab groups and resizable dividers.
 - Added a project-wide file finder with Git-ignore-aware local and SSH indexing, fuzzy path ranking, file previews, and `cmd-p`/`ctrl-p` shortcuts.
-- Added non-blocking application update checks with daily caching, manual checks, localized settings, and platform-specific release downloads.
-- Added release preparation and metadata tooling that generates changelog-backed GitHub Release notes, checksums, and the client update manifest.
 
 ### Changed
 
