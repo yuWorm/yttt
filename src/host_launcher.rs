@@ -300,7 +300,11 @@ impl HostLauncher {
                 if replacement_became_unnecessary {
                     return self.attach_existing(token_file, &token).await;
                 }
-                match lifecycle.request(LifecycleRequest::StopIfIdle).await? {
+                let response = lifecycle.request(LifecycleRequest::StopIfIdle).await?;
+                // The stop request's client-side pipe handle must close before a
+                // replacement binds the single-instance Windows named pipe.
+                drop(lifecycle);
+                match response {
                     LifecycleResponse::Stopping => self.wait_for_existing_host_exit().await?,
                     LifecycleResponse::Busy { blockers } => {
                         return Err(HostLaunchError::HostBusy(blockers));
@@ -681,7 +685,11 @@ impl ManagedHostProcess {
             .launcher
             .connect_lifecycle_with_token(&token, true)
             .await?;
-        match client.request(LifecycleRequest::ForceStop).await? {
+        let response = client.request(LifecycleRequest::ForceStop).await?;
+        // Like replacement shutdown, release the client-side pipe endpoint before
+        // waiting for the Host to stop.
+        drop(client);
+        match response {
             LifecycleResponse::Draining => {}
             _ => return Err(HostLaunchError::UnexpectedMessage),
         }

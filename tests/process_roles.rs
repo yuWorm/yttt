@@ -133,11 +133,19 @@ fn desktop_host_cli_starts_reports_reuses_and_stops_the_profile_host() {
     let profile = installer_profile(&profile_root);
     let executable = test_executable();
     let invoke = |argument: &str| {
-        Command::new(&executable)
+        #[cfg(windows)]
+        eprintln!("[process_roles] desktop Host CLI: invoking {argument}");
+        let output = Command::new(&executable)
             .arg(argument)
             .env("YTTT_PROFILE_ROOT", &profile_root)
             .output()
-            .unwrap()
+            .unwrap();
+        #[cfg(windows)]
+        eprintln!(
+            "[process_roles] desktop Host CLI: completed {argument} with {:?}",
+            output.status
+        );
+        output
     };
 
     let started = invoke("--start-host");

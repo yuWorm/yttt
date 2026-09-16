@@ -149,7 +149,7 @@ jobs:
         run: cargo test --locked -p yttt-transport-local --test security
 
       - name: Test library, profile, and process lifecycle contracts
-        run: cargo test --locked -p yttt --lib --test app_profile --test process_roles
+        run: cargo test --locked -p yttt --lib --test app_profile --test process_roles -- --nocapture
 
       - name: Test Windows titlebar actions
         run: cargo test --locked -p yttt --test ui_state titlebar_action_buttons_open_command_picker_and_settings

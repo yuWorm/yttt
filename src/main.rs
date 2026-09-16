@@ -213,7 +213,9 @@ fn run_desktop_cli(profile: AppProfile, command: DesktopCliCommand) -> i32 {
             DesktopCliCommand::StopHost | DesktopCliCommand::RestartHost => {
                 if host_runtime_artifacts_exist(profile.paths().runtime.as_path()) {
                     let mut client = launcher.connect_lifecycle(false).await?;
-                    match client.request(LifecycleRequest::StopIfIdle).await? {
+                    let response = client.request(LifecycleRequest::StopIfIdle).await?;
+                    drop(client);
+                    match response {
                         LifecycleResponse::Stopping => {}
                         LifecycleResponse::Busy { blockers } => {
                             return Err(anyhow::anyhow!(
@@ -242,7 +244,9 @@ fn run_desktop_cli(profile: AppProfile, command: DesktopCliCommand) -> i32 {
                     return Ok("Host stopped".to_string());
                 }
                 let mut client = launcher.connect_lifecycle(true).await?;
-                match client.request(LifecycleRequest::ForceStop).await? {
+                let response = client.request(LifecycleRequest::ForceStop).await?;
+                drop(client);
+                match response {
                     LifecycleResponse::Draining => {
                         wait_for_host_artifacts_to_clear(profile.paths().runtime.as_path())?;
                         Ok("Host force-stopped".to_string())
