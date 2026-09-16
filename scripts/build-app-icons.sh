@@ -4,7 +4,8 @@ set -euo pipefail
 
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source_png="$repo_root/assets/app-icon/source/yttt-icon.png"
+source_svg="$repo_root/assets/app-icon/source/yttt-icon.svg"
+source_png="$repo_root/target/app-icons/yttt-icon.png"
 png_dir="$repo_root/assets/app-icon/png"
 macos_dir="$repo_root/assets/app-icon/macos"
 windows_dir="$repo_root/assets/app-icon/windows"
@@ -12,8 +13,13 @@ iconset="$repo_root/target/app-icons/AppIcon.iconset"
 icns="$macos_dir/AppIcon.icns"
 ico="$windows_dir/AppIcon.ico"
 
-if [[ ! -f "$source_png" ]]; then
-  echo "Missing app icon source PNG: $source_png" >&2
+if [[ ! -f "$source_svg" ]]; then
+  echo "Missing app icon source SVG: $source_svg" >&2
+  exit 1
+fi
+
+if ! command -v rsvg-convert >/dev/null 2>&1; then
+  echo "Missing rsvg-convert (librsvg), required to render the app icon SVG." >&2
   exit 1
 fi
 
@@ -29,6 +35,7 @@ else
 fi
 
 mkdir -p "$png_dir" "$macos_dir" "$windows_dir" "$(dirname "$iconset")"
+rsvg-convert --output "$source_png" "$source_svg"
 
 for size in 16 32 48 64 128 256 512 1024; do
   render_png "$size" "$png_dir/$size.png"

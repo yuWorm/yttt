@@ -4,6 +4,9 @@
 
 ### Added
 
+- Redesigned the application icon with an angular Y, terminal prompt, and separate
+  underscore cursor. Platform icons now regenerate from an editable SVG source.
+
 - Replaced application/system performance switches with one always-on background sampler shared
   by GUI workbench windows. Bar templates now control display only; live draft previews read the
   same latest-sample cache, and sampling refreshes only metric-bearing windows and previews.
