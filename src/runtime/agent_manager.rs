@@ -473,13 +473,11 @@ impl AgentManager {
             .contains(&address.project_id)
             .then(|| self.retained_snapshots.get(&address).cloned())
             .flatten();
-        let Some((prepared, _)) = self.runtime.prepare_launch_with_snapshot(
+        let (prepared, _) = self.runtime.prepare_launch_with_snapshot(
             command,
             address.scope_key(),
             restored.as_ref(),
-        ) else {
-            return None;
-        };
+        )?;
         let restored_for_view = restored.as_ref().map(disconnected_snapshot);
         let mut additional_args = prepared.resume_arguments().to_vec();
         let resuming_session = !prepared.resume_arguments().is_empty();

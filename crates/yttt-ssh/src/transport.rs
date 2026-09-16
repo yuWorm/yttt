@@ -1318,10 +1318,10 @@ async fn runtime_loop(
                     let _ = reply.send(Err(TransportError::NotConnected));
                     continue;
                 };
-                if let Err(error) = actor.send(ConnectionCommand::StreamLocal { socket, reply }) {
-                    if let ConnectionCommand::StreamLocal { reply, .. } = error.0 {
-                        let _ = reply.send(Err(TransportError::NotConnected));
-                    }
+                if let Err(error) = actor.send(ConnectionCommand::StreamLocal { socket, reply })
+                    && let ConnectionCommand::StreamLocal { reply, .. } = error.0
+                {
+                    let _ = reply.send(Err(TransportError::NotConnected));
                 }
             }
             RuntimeCommand::Shutdown => {

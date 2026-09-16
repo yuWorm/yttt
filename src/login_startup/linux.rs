@@ -1,8 +1,9 @@
+#[cfg(target_os = "linux")]
+use std::process::{Command, Stdio};
 use std::{
     fs::{self, OpenOptions},
     io::{self, Write as _},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::Arc,
 };
 
@@ -19,6 +20,7 @@ pub(super) struct LinuxLoginStartupBackend {
 }
 
 impl LinuxLoginStartupBackend {
+    #[cfg(target_os = "linux")]
     pub(super) fn for_current_user() -> Self {
         Self {
             config_home: xdg_config_home(),
@@ -165,8 +167,10 @@ trait SystemctlRunner: Send + Sync {
     fn succeeds(&self, arguments: &[&str]) -> io::Result<bool>;
 }
 
+#[cfg(target_os = "linux")]
 struct ProcessSystemctlRunner;
 
+#[cfg(target_os = "linux")]
 impl SystemctlRunner for ProcessSystemctlRunner {
     fn succeeds(&self, arguments: &[&str]) -> io::Result<bool> {
         Ok(Command::new("systemctl")
@@ -197,6 +201,7 @@ fn require_systemctl(
     }
 }
 
+#[cfg(target_os = "linux")]
 fn xdg_config_home() -> Option<PathBuf> {
     std::env::var_os("XDG_CONFIG_HOME")
         .filter(|value| !value.is_empty())

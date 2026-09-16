@@ -300,7 +300,7 @@ pub fn read_remote_launch() -> io::Result<RemoteLaunch> {
     io::stdin()
         .lock()
         .take((MAX_REMOTE_LAUNCH_BYTES + 1) as u64)
-        .read_to_end(&mut *payload)?;
+        .read_to_end(&mut payload)?;
     if payload.len() > MAX_REMOTE_LAUNCH_BYTES {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,

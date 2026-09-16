@@ -1400,7 +1400,7 @@ impl TerminalPaneView {
         let PaneLifecycle::Exited { code, reason } = &self.lifecycle else {
             return None;
         };
-        Some((*code, reason.clone()))
+        Some((*code, *reason))
     }
 
     pub fn terminal_viewport_size(&self) -> Option<(usize, usize)> {

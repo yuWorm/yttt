@@ -381,7 +381,7 @@ pub enum ScopedSettingsSaveError {
     #[error("failed to reload Host settings at {path}: {source}")]
     LoadHost {
         path: PathBuf,
-        source: super::settings::SettingsLoadError,
+        source: Box<super::settings::SettingsLoadError>,
     },
     #[error("failed to create {scope:?} settings directory {path}: {source}")]
     CreateDirectory {
@@ -502,7 +502,7 @@ fn save_scoped_settings_to_paths(
         let current = super::settings::load_settings(host_paths).map_err(|source| {
             ScopedSettingsSaveError::LoadHost {
                 path: host_paths.settings_file(),
-                source,
+                source: Box::new(source),
             }
         })?;
         if host_settings_changed(&current.settings, confirmed) {
@@ -532,7 +532,7 @@ fn save_scoped_settings_to_paths(
                 super::settings::load_settings(host_paths)
                     .map_err(|source| ScopedSettingsSaveError::LoadHost {
                         path: host_paths.settings_file(),
-                        source,
+                        source: Box::new(source),
                     })?
                     .settings
             }

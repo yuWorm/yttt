@@ -109,7 +109,7 @@ fn performance_metrics_are_cached_independently_of_bar_configuration(
             });
         };
 
-    assert_cached_performance(&root, &main_cx);
+    assert_cached_performance(&root, main_cx);
     let first_window = main_cx.update(|window, _| window.window_handle());
     let second_root_slot = Rc::new(RefCell::new(None));
     let second_root_slot_for_window = second_root_slot.clone();
@@ -123,7 +123,7 @@ fn performance_metrics_are_cached_independently_of_bar_configuration(
         gpui_component::Root::new(root, window, cx)
     });
     let second_root = second_root_slot.borrow_mut().take().unwrap();
-    assert_cached_performance(&second_root, &second_cx);
+    assert_cached_performance(&second_root, second_cx);
 
     first_window
         .update(second_cx, |_, window, _| window.remove_window())
@@ -139,10 +139,10 @@ fn performance_metrics_are_cached_independently_of_bar_configuration(
         .background_executor
         .advance_clock(Duration::from_secs(1));
     second_cx.run_until_parked();
-    assert_cached_performance(&second_root, &second_cx);
+    assert_cached_performance(&second_root, second_cx);
 
     let root = second_root;
-    let mut main_cx = second_cx;
+    let main_cx = second_cx;
     for selector in [
         "window-bar-app-cpu",
         "window-bar-app-memory",
@@ -162,7 +162,7 @@ fn performance_metrics_are_cached_independently_of_bar_configuration(
         cx.notify();
     });
     main_cx.run_until_parked();
-    focus_surface_window(&mut main_cx, "layout-editor-window");
+    focus_surface_window(main_cx, "layout-editor-window");
     assert!(main_cx.debug_bounds("bars-editor-preview").is_some());
     for selector in [
         "window-bar-app-cpu",
@@ -180,14 +180,14 @@ fn performance_metrics_are_cached_independently_of_bar_configuration(
         persisted_before_draft,
         "the preview must use the cached sample without saving the draft"
     );
-    assert_cached_performance(&root, &main_cx);
+    assert_cached_performance(&root, main_cx);
 
     root.update(main_cx, |root, cx| {
         root.save_layout_toml_editor().unwrap();
         cx.notify();
     });
     main_cx.run_until_parked();
-    focus_surface_window(&mut main_cx, "window-bar");
+    focus_surface_window(main_cx, "window-bar");
     for selector in [
         "window-bar-app-cpu",
         "window-bar-app-memory",
@@ -199,7 +199,7 @@ fn performance_metrics_are_cached_independently_of_bar_configuration(
             "{selector} should render after its bar template is saved"
         );
     }
-    assert_cached_performance(&root, &main_cx);
+    assert_cached_performance(&root, main_cx);
 
     let bars_without_metrics_draft = toml::to_string_pretty(&bars_without_metrics).unwrap();
     root.update(main_cx, |root, cx| {
@@ -221,7 +221,7 @@ fn performance_metrics_are_cached_independently_of_bar_configuration(
             "{selector} should disappear when its bar module is removed"
         );
     }
-    assert_cached_performance(&root, &main_cx);
+    assert_cached_performance(&root, main_cx);
 
     let mut status_disabled_bars = bars_without_metrics;
     status_disabled_bars.status.enabled = false;
@@ -239,7 +239,7 @@ fn performance_metrics_are_cached_independently_of_bar_configuration(
         main_cx.debug_bounds("status-bar").is_none(),
         "the status bar should not render when disabled"
     );
-    assert_cached_performance(&root, &main_cx);
+    assert_cached_performance(&root, main_cx);
 }
 
 fn english_test_config_paths(temp: &tempfile::TempDir) -> AppConfigPaths {

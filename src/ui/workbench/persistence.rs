@@ -2421,7 +2421,7 @@ fn missing_disk_fingerprint() -> DiskFingerprint {
     }
 }
 
-fn validate_relative_path(path: &PathBuf) -> Result<(), String> {
+fn validate_relative_path(path: &Path) -> Result<(), String> {
     if path.as_os_str().is_empty()
         || path
             .components()

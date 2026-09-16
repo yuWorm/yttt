@@ -600,7 +600,7 @@ pub(crate) fn confirm_desktop_quit(stop_all: bool, window: &mut Window, cx: &mut
             runtime.cancel_exit_publication();
             cx.update(|cx| {
                 let _ = window_handle.update(cx, |_, window, cx| {
-                    let _ = window.prompt(gpui::PromptLevel::Warning, "Desktop remains open", Some(&error), &["OK"], cx);
+                    std::mem::drop(window.prompt(gpui::PromptLevel::Warning, "Desktop remains open", Some(&error), &["OK"], cx));
                 });
                 cx.refresh_windows();
             });
@@ -612,7 +612,7 @@ pub(crate) fn confirm_desktop_quit(stop_all: bool, window: &mut Window, cx: &mut
                 runtime.cancel_exit_publication();
                 cx.update(|cx| {
                     let _ = window_handle.update(cx, |_, window, cx| {
-                        let _ = window.prompt(gpui::PromptLevel::Warning, "Host stop failed", Some("The desktop remains connected. Retry after checking Host status."), &["OK"], cx);
+                        std::mem::drop(window.prompt(gpui::PromptLevel::Warning, "Host stop failed", Some("The desktop remains connected. Retry after checking Host status."), &["OK"], cx));
                     });
                 });
                 return;

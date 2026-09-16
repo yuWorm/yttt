@@ -1475,6 +1475,7 @@ mod tests {
 
     #[test]
     fn host_project_service_reregisters_after_host_state_loss() {
+        let project_root = tempfile::tempdir().unwrap();
         let transport = Arc::new(RecoveringProjectHost {
             registrations: AtomicU64::new(0),
             reads: AtomicU64::new(0),
@@ -1483,7 +1484,7 @@ mod tests {
         let services = ProjectServices::host_with_transport(
             transport.clone(),
             ProjectId::new("project"),
-            PathBuf::from("/project"),
+            project_root.path().to_path_buf(),
         )
         .unwrap();
 
@@ -1512,12 +1513,7 @@ mod tests {
                         false,
                     ),
                 )),
-                Request::Project(ProjectRequest::RegisterSsh {
-                    project_id,
-                    connection_id,
-                    root,
-                    ..
-                }) => {
+                Request::Project(ProjectRequest::RegisterSsh { .. }) => {
                     let registration_epoch = self.registrations.fetch_add(1, Ordering::Relaxed) + 1;
                     Ok(Response::Project(ProjectResponse::Registered {
                         registration_epoch,
@@ -1525,11 +1521,7 @@ mod tests {
                         null_device: "/dev/null".to_string(),
                     }))
                 }
-                Request::RemoteFile(RemoteFileRequest::Read {
-                    project_id,
-                    relative_path,
-                    maximum_bytes,
-                }) => {
+                Request::RemoteFile(RemoteFileRequest::Read { relative_path, .. }) => {
                     let attempt = self.reads.fetch_add(1, Ordering::Relaxed) + 1;
                     if attempt <= 2 {
                         return Err(ClientCoreError::Protocol(
@@ -1553,11 +1545,7 @@ mod tests {
                         },
                     )))
                 }
-                Request::Project(ProjectRequest::Close {
-                    project_id,
-                    registration_epoch,
-                    ..
-                }) => {
+                Request::Project(ProjectRequest::Close { .. }) => {
                     self.closes.fetch_add(1, Ordering::Relaxed);
                     Ok(Response::Project(ProjectResponse::Closed))
                 }

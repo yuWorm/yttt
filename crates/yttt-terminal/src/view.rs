@@ -3949,8 +3949,7 @@ impl Render for TerminalView {
                         measured_renderer.paint(
                             bounds,
                             origin,
-                            effective_padding,
-                            show_scrollbar,
+                            show_scrollbar.then_some(effective_padding),
                             &prepared_frame,
                             window,
                             cx,

@@ -1,6 +1,7 @@
 use std::{
     io,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 use crate::config::{
@@ -32,8 +33,12 @@ impl ProjectEditorSettingKey {
             Self::DefaultLanguage => "editor.default_language",
         }
     }
+}
 
-    pub fn from_str(key: &str) -> Result<Self, ProjectSettingsError> {
+impl FromStr for ProjectEditorSettingKey {
+    type Err = ProjectSettingsError;
+
+    fn from_str(key: &str) -> Result<Self, Self::Err> {
         if !supports_project_override(key) {
             return Err(ProjectSettingsError::UnsupportedKey {
                 key: key.to_string(),
@@ -504,7 +509,7 @@ mod tests {
             Err(ProjectSettingsError::InvalidValue { .. })
         ));
         assert!(matches!(
-            ProjectEditorSettingKey::from_str("editor.line_numbers"),
+            "editor.line_numbers".parse::<ProjectEditorSettingKey>(),
             Err(ProjectSettingsError::UnsupportedKey { .. })
         ));
     }

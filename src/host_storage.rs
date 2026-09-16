@@ -171,7 +171,7 @@ impl HostStorage {
             let request = match state.project_config_targets.get(path) {
                 Some((project_root, file)) => WorkspaceRequest::ReadProjectConfig {
                     project_root: project_root.clone(),
-                    file: file.clone(),
+                    file: *file,
                 },
                 None => WorkspaceRequest::ReadConfig {
                     relative_path: self.config_relative(path)?,
@@ -242,12 +242,12 @@ impl ConfigStorage for HostStorage {
         })
     }
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
-        self.with_state(|mut state| {
+        self.with_state(|state| {
             if path.starts_with(&self.config_root)
                 || state.project_config_targets.contains_key(path)
             {
                 if !state.config_revisions.contains_key(path) {
-                    match self.read_locked(&mut state, path) {
+                    match self.read_locked(state, path) {
                         Ok(_) => {}
                         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                         Err(error) => return Err(error),
@@ -257,7 +257,7 @@ impl ConfigStorage for HostStorage {
                 let request = match state.project_config_targets.get(path) {
                     Some((project_root, file)) => WorkspaceRequest::WriteProjectConfig {
                         project_root: project_root.clone(),
-                        file: file.clone(),
+                        file: *file,
                         expected_revision,
                         bytes: bytes.to_vec(),
                     },
@@ -276,9 +276,9 @@ impl ConfigStorage for HostStorage {
                     .insert(path.to_owned(), Some(revision));
                 Ok(())
             } else {
-                let (project_id, relative_path) = self.location(&mut state, path)?;
+                let (project_id, relative_path) = self.location(state, path)?;
                 if !state.file_revisions.contains_key(path) {
-                    match self.read_locked(&mut state, path) {
+                    match self.read_locked(state, path) {
                         Ok(_) => {}
                         Err(error) if error.kind() == io::ErrorKind::NotFound => {
                             let mut parent = relative_path.clone();
@@ -288,7 +288,7 @@ impl ConfigStorage for HostStorage {
                                 relative_parent: parent,
                                 input: name.to_os_string().to_string_lossy().into_owned(),
                             })?;
-                            self.read_locked(&mut state, path)?;
+                            self.read_locked(state, path)?;
                         }
                         Err(error) => return Err(error),
                     }
@@ -344,12 +344,12 @@ impl ConfigStorage for HostStorage {
         })
     }
     fn remove_file(&self, path: &Path) -> io::Result<()> {
-        self.with_state(|mut state| {
+        self.with_state(|state| {
             if path.starts_with(&self.config_root)
                 || state.project_config_targets.contains_key(path)
             {
                 if !state.config_revisions.contains_key(path) {
-                    self.read_locked(&mut state, path)?;
+                    self.read_locked(state, path)?;
                 }
                 let revision = state
                     .config_revisions
@@ -362,7 +362,7 @@ impl ConfigStorage for HostStorage {
                 let request = match state.project_config_targets.get(path) {
                     Some((project_root, file)) => WorkspaceRequest::DeleteProjectConfig {
                         project_root: project_root.clone(),
-                        file: file.clone(),
+                        file: *file,
                         expected_revision: revision,
                     },
                     None => WorkspaceRequest::DeleteConfig {
@@ -373,7 +373,7 @@ impl ConfigStorage for HostStorage {
                 self.workspace(request)?;
                 state.config_revisions.insert(path.to_owned(), None);
             } else {
-                let (project_id, relative_path) = self.location(&mut state, path)?;
+                let (project_id, relative_path) = self.location(state, path)?;
                 self.project(ProjectRequest::DeleteEntry {
                     project_id,
                     relative_path,

@@ -30,9 +30,7 @@ fn transfer_readiness(
         if let Some(error) = &publication.error {
             return Some(Err(error.clone()));
         }
-        let Some(revision) = publication.revision else {
-            return None;
-        };
+        let revision = publication.revision?;
         revisions.push(WorkspaceRevision {
             workspace_id: id.clone(),
             revision,

@@ -39,8 +39,13 @@ static TEST_ROOTS: LazyLock<RwLock<Vec<PathBuf>>> = LazyLock::new(|| RwLock::new
 /// Pure configuration tests and explicit UI fixtures may opt into their own local files.
 /// This is never inferred from a failed connection or an unbound production profile.
 pub(crate) fn allow_test_root(path: &Path) {
+    // `std::fs::canonicalize` uses verbatim paths on Windows while `dunce` removes that prefix.
+    let canonical = dunce::canonicalize(path).ok();
     let mut roots = TEST_ROOTS.write();
-    for root in std::iter::once(path.to_path_buf()).chain(std::fs::canonicalize(path).ok()) {
+    for root in std::iter::once(path.to_path_buf())
+        .chain(std::fs::canonicalize(path).ok())
+        .chain(canonical)
+    {
         if !roots.iter().any(|existing| root.starts_with(existing)) {
             roots.push(root);
         }

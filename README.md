@@ -33,7 +33,7 @@ Download the package for your platform from the release page:
 | Linux x86_64 | `yttt-0.3.0-linux-x86_64.tar.gz` |
 
 Open the DMG and copy yttt to Applications, run the Windows installer, or extract the Linux
-archive and launch its `yttt` executable. 校验下载文件时使用 Release 附带的 `SHA256SUMS`。
+archive and launch `yttt-0.3.0-linux-x86_64/bin/yttt`. 校验下载文件时使用 Release 附带的 `SHA256SUMS`。
 Verify downloads against the supplied `SHA256SUMS`. macOS packages are ad-hoc signed, not
 Developer ID signed or notarized. 无界面 `yttt-server` 另提供 Linux/macOS 的 x86_64 和 aarch64
 构建；桌面 SSH 连接可部署对应 Server。Headless Server builds cover Linux/macOS x86_64 and aarch64.

@@ -885,8 +885,7 @@ impl TerminalRenderer {
         &self,
         bounds: Bounds<Pixels>,
         origin: Point<Pixels>,
-        padding: Edges<Pixels>,
-        show_scrollbar: bool,
+        scrollbar_padding: Option<Edges<Pixels>>,
         prepared: &PreparedTerminalFrame,
         window: &mut Window,
         cx: &mut App,
@@ -962,7 +961,7 @@ impl TerminalRenderer {
         );
 
         self.paint_cursor(origin, snapshot.cursor, window);
-        if show_scrollbar {
+        if let Some(padding) = scrollbar_padding {
             self.paint_scrollbar(bounds, padding, snapshot, window);
         }
         self.diagnostics

@@ -1505,9 +1505,9 @@ impl WorkbenchView {
             || (!self
                 .agent_manager
                 .requires_initialization(&context.pane.command)
-                && !self
+                && self
                     .terminal_pane_state(context)
-                    .is_some_and(|state| state.agent_snapshot.is_some()))
+                    .is_none_or(|state| state.agent_snapshot.is_none()))
         {
             return false;
         }
@@ -1551,9 +1551,9 @@ impl WorkbenchView {
         if restoring
             && !attach_only
             && !crate::ui::terminal::status::is_agent_pane(&context.pane)
-            && !self
+            && self
                 .terminal_pane_state(&context)
-                .is_some_and(|state| state.agent_snapshot.is_some())
+                .is_none_or(|state| state.agent_snapshot.is_none())
         {
             // Restoring a shell must never replay its old startup command.
             context.pane.command.clear();
@@ -1679,6 +1679,7 @@ impl WorkbenchView {
                     &input.pane.id,
                 ));
         if remote_lost {
+            let appearance = self.theme_runtime();
             let project_id = ProjectId::new(input.project_id);
             let tab_id = input.tab_id.to_string();
             let pane_id = input.pane.id.clone();
@@ -1691,29 +1692,35 @@ impl WorkbenchView {
                 .gap_3()
                 .child("The previous process ended. Commands are not replayed automatically.")
                 .child(
-                    gpui_component::button::Button::new("restart-lost-remote-pane")
-                        .label("Start a new process")
-                        .disabled(!self.shared_mutation_allowed())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if !this.require_shared_mutation_control() {
-                                return;
-                            }
-                            this.agent_manager.forget_pane(&AgentPaneAddress::new(
-                                project_id.as_str(),
-                                &tab_id,
-                                &pane_id,
-                            ));
-                            let _ =
-                                this.workspace
-                                    .clear_agent_snapshot(&project_id, &tab_id, &pane_id);
-                            if let Err(error) =
-                                this.workspace
-                                    .mark_pane_running(&project_id, &tab_id, &pane_id)
-                            {
-                                this.load_error = Some(error.to_string());
-                            }
-                            cx.notify();
-                        })),
+                    yttt_button(
+                        "restart-lost-remote-pane",
+                        "Start a new process",
+                        YtttButtonVariant::Secondary,
+                        appearance.ui,
+                        appearance.style,
+                        cx,
+                    )
+                    .disabled(!self.shared_mutation_allowed())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.require_shared_mutation_control() {
+                            return;
+                        }
+                        this.agent_manager.forget_pane(&AgentPaneAddress::new(
+                            project_id.as_str(),
+                            &tab_id,
+                            &pane_id,
+                        ));
+                        let _ = this
+                            .workspace
+                            .clear_agent_snapshot(&project_id, &tab_id, &pane_id);
+                        if let Err(error) =
+                            this.workspace
+                                .mark_pane_running(&project_id, &tab_id, &pane_id)
+                        {
+                            this.load_error = Some(error.to_string());
+                        }
+                        cx.notify();
+                    })),
                 );
         }
         let context = TerminalPaneContext {
@@ -1743,6 +1750,7 @@ impl WorkbenchView {
                         .to_string()
                 }
             });
+            let appearance = self.theme_runtime();
             return div()
                 .flex()
                 .flex_1()
@@ -1753,17 +1761,23 @@ impl WorkbenchView {
                 .child(message)
                 .when(self.agent_initialization_error.is_some(), |view| {
                     view.child(
-                        Button::new("retry-agent-initialization")
-                            .label(self.ui_text.get(UiTextKey::AgentInitializationRetry))
-                            .disabled(!can_initialize || self.agent_initialization_task.is_some())
-                            .on_click(cx.listener(|this, _, _window, cx| {
-                                if !this.require_shared_mutation_control() {
-                                    return;
-                                }
-                                this.agent_initialization_attempt = None;
-                                this.agent_initialization_error = None;
-                                cx.notify();
-                            })),
+                        yttt_button(
+                            "retry-agent-initialization",
+                            self.ui_text.get(UiTextKey::AgentInitializationRetry),
+                            YtttButtonVariant::Secondary,
+                            appearance.ui,
+                            appearance.style,
+                            cx,
+                        )
+                        .disabled(!can_initialize || self.agent_initialization_task.is_some())
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            if !this.require_shared_mutation_control() {
+                                return;
+                            }
+                            this.agent_initialization_attempt = None;
+                            this.agent_initialization_error = None;
+                            cx.notify();
+                        })),
                     )
                 });
         }
@@ -1910,13 +1924,12 @@ impl WorkbenchView {
         address: AgentPaneAddress,
         snapshot: AgentSnapshot,
     ) -> Result<(), WorkspaceError> {
-        let result = self.workspace.record_agent_snapshot(
+        self.workspace.record_agent_snapshot(
             &ProjectId::new(&address.project_id),
             &address.tab_id,
             &address.pane_id,
             snapshot,
-        );
-        result
+        )
     }
     pub(super) fn record_agent_event_snapshot(
         &mut self,

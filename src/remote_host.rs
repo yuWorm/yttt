@@ -293,27 +293,24 @@ fn connect_ssh(
                     TransportEvent::CredentialSaved { credential, .. } => {
                         if let Ok(mut connections) =
                             crate::config::ssh::load_ssh_connections(&config)
-                        {
-                            if let Some(connection) = connections
+                            && let Some(connection) = connections
                                 .connections
                                 .iter_mut()
                                 .find(|connection| connection.id == saved_connection.id)
-                            {
-                                connection.credential = Some(crate::config::ssh::CredentialRef {
-                                    id: credential.id,
-                                    kind: crate::config::ssh::CredentialKind::LoginPassword,
-                                    binding: crate::config::ssh::CredentialBinding {
-                                        connection_id: connection.id.clone(),
-                                        effective_user: credential.effective_user,
-                                        resolved_host: credential.resolved_host,
-                                        port: credential.port,
-                                        host_key_sha256: credential.host_key_sha256,
-                                        private_key_identity: credential.private_key_identity,
-                                    },
-                                });
-                                let _ =
-                                    crate::config::ssh::save_ssh_connections(&config, &connections);
-                            }
+                        {
+                            connection.credential = Some(crate::config::ssh::CredentialRef {
+                                id: credential.id,
+                                kind: crate::config::ssh::CredentialKind::LoginPassword,
+                                binding: crate::config::ssh::CredentialBinding {
+                                    connection_id: connection.id.clone(),
+                                    effective_user: credential.effective_user,
+                                    resolved_host: credential.resolved_host,
+                                    port: credential.port,
+                                    host_key_sha256: credential.host_key_sha256,
+                                    private_key_identity: credential.private_key_identity,
+                                },
+                            });
+                            let _ = crate::config::ssh::save_ssh_connections(&config, &connections);
                         }
                     }
                 }
@@ -430,44 +427,45 @@ fn initialize_environment(
     };
     if take_control {
         control = request_control(yttt_protocol::session::ProfileControlRequest::RequestControl)?;
-    }
-    while take_control {
-        if control.owner.as_ref() == Some(client.client_id()) {
-            break;
-        }
-        let transfer = control.transfer.as_ref().ok_or_else(|| {
-            "profile transfer was cancelled; the previous Client retains its work".to_string()
-        })?;
-        if events.is_disconnected() {
-            let _ = request_control(yttt_protocol::session::ProfileControlRequest::Cancel {
-                transfer_id: transfer.id.clone(),
-            });
-            return Err("remote connection window closed".to_string());
-        }
-        if transfer.phase == yttt_protocol::session::TransferPhase::ForceConfirmationRequired {
-            if confirm_transfer(
-                &events,
-                RemoteControlOwner {
-                    client_id: transfer.previous_owner.as_ref().map(ToString::to_string),
-                    ..takeover_owner.clone()
-                },
-                true,
-            )
-            .is_err()
-            {
+        loop {
+            if control.owner.as_ref() == Some(client.client_id()) {
+                break;
+            }
+            let transfer = control.transfer.as_ref().ok_or_else(|| {
+                "profile transfer was cancelled; the previous Client retains its work".to_string()
+            })?;
+            if events.is_disconnected() {
                 let _ = request_control(yttt_protocol::session::ProfileControlRequest::Cancel {
                     transfer_id: transfer.id.clone(),
                 });
-                break;
+                return Err("remote connection window closed".to_string());
             }
-            control = request_control(
-                yttt_protocol::session::ProfileControlRequest::ConfirmForce {
-                    transfer_id: transfer.id.clone(),
-                },
-            )?;
-        } else {
-            std::thread::sleep(Duration::from_millis(100));
-            control = request_control(yttt_protocol::session::ProfileControlRequest::Status)?;
+            if transfer.phase == yttt_protocol::session::TransferPhase::ForceConfirmationRequired {
+                if confirm_transfer(
+                    &events,
+                    RemoteControlOwner {
+                        client_id: transfer.previous_owner.as_ref().map(ToString::to_string),
+                        ..takeover_owner.clone()
+                    },
+                    true,
+                )
+                .is_err()
+                {
+                    let _ =
+                        request_control(yttt_protocol::session::ProfileControlRequest::Cancel {
+                            transfer_id: transfer.id.clone(),
+                        });
+                    break;
+                }
+                control = request_control(
+                    yttt_protocol::session::ProfileControlRequest::ConfirmForce {
+                        transfer_id: transfer.id.clone(),
+                    },
+                )?;
+            } else {
+                std::thread::sleep(Duration::from_millis(100));
+                control = request_control(yttt_protocol::session::ProfileControlRequest::Status)?;
+            }
         }
     }
     let config_root = environment

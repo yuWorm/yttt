@@ -16,14 +16,13 @@ enum Target {
 
 impl WorkbenchView {
     fn ensure_existing_hosts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.auxiliary_windows.existing_host.is_none() {
-            if let Some(profile) = self.config_paths.profile().cloned() {
-                let hosts =
-                    crate::ui::app::existing_host::create(profile, self.ui_text, window, cx);
-                self.auxiliary_windows.existing_host_subscription =
-                    Some(cx.observe(&hosts, |_, _, cx| cx.notify()));
-                self.auxiliary_windows.existing_host = Some(hosts);
-            }
+        if self.auxiliary_windows.existing_host.is_none()
+            && let Some(profile) = self.config_paths.profile().cloned()
+        {
+            let hosts = crate::ui::app::existing_host::create(profile, self.ui_text, window, cx);
+            self.auxiliary_windows.existing_host_subscription =
+                Some(cx.observe(&hosts, |_, _, cx| cx.notify()));
+            self.auxiliary_windows.existing_host = Some(hosts);
         }
         if self.auxiliary_windows.pending_new_host_editor
             && self

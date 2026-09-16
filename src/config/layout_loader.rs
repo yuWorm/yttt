@@ -616,7 +616,7 @@ fn write_new_file(path: &Path, contents: &[u8]) -> io::Result<bool> {
     let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            return if crate::config::storage::is_file(&path) {
+            return if crate::config::storage::is_file(path) {
                 Ok(false)
             } else {
                 Err(io::Error::new(

@@ -810,13 +810,16 @@ impl WorkbenchView {
         }
         self.ssh.error = error;
         if let Some(inputs) = self.ssh_connection_form_inputs(window, cx) {
-            let input = self
+            let input = if self
                 .ssh
                 .form
                 .as_ref()
                 .is_some_and(|form| form.auth == SshConnectionFormMode::Password)
-                .then_some(&inputs.password)
-                .unwrap_or(&inputs.key_passphrase);
+            {
+                &inputs.password
+            } else {
+                &inputs.key_passphrase
+            };
             input.update(cx, |input, cx| input.focus(window, cx));
         }
         cx.notify();

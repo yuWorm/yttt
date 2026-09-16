@@ -396,7 +396,11 @@ fn ssh_project_directory_rows_show_icons_align_left_and_scroll(cx: &mut TestAppC
     let input = root.read_with(cx, |root, _| {
         root.ssh.project_picker.path_input.clone().unwrap()
     });
-    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-a"
+    } else {
+        "ctrl-a"
+    });
     cx.simulate_input("/directory-2");
     cx.run_until_parked();
     assert!(

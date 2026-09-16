@@ -715,7 +715,7 @@ impl WorkbenchView {
     ) -> Result<(), WorkbenchError> {
         self.app_settings.notifications.system = enabled;
         if !self.persist_app_settings(false)? {
-            return Ok(Default::default());
+            return Ok(());
         }
         self.system_notifications_enabled = enabled;
         Ok(())
@@ -730,7 +730,7 @@ impl WorkbenchView {
     ) -> Result<(), WorkbenchError> {
         self.app_settings.general.restore_last_session = enabled;
         if !self.persist_app_settings(false)? {
-            return Ok(Default::default());
+            return Ok(());
         }
         Ok(())
     }
@@ -743,7 +743,7 @@ impl WorkbenchView {
     ) -> Result<(), WorkbenchError> {
         self.app_settings.vim.mode = mode;
         if !self.persist_app_settings(false)? {
-            return Ok(Default::default());
+            return Ok(());
         }
         self.vim.set_support(mode);
         self.sync_editor_vim_modes(window, cx);
@@ -780,7 +780,7 @@ impl WorkbenchView {
     ) -> Result<(), WorkbenchError> {
         self.app_settings.general.new_tab_command_picker_enabled = enabled;
         if !self.persist_app_settings(false)? {
-            return Ok(Default::default());
+            return Ok(());
         }
         Ok(())
     }
@@ -824,7 +824,7 @@ impl WorkbenchView {
     pub fn set_language(&mut self, language: LanguageSetting) -> Result<(), WorkbenchError> {
         self.app_settings.general.language = language;
         if !self.persist_app_settings(false)? {
-            return Ok(Default::default());
+            return Ok(());
         }
         self.ui_text = ui_text_for_language(language);
         self.settings.keybinding_rows_cache = None;
@@ -1857,7 +1857,7 @@ impl WorkbenchView {
 
     pub(super) fn save_app_settings_and_refresh_runtime(&mut self) -> Result<(), WorkbenchError> {
         if !self.persist_app_settings(false)? {
-            return Ok(Default::default());
+            return Ok(());
         }
         self.refresh_theme_runtime_from_settings();
         Ok(())

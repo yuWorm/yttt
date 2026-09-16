@@ -50,6 +50,8 @@ pre-1.0 版本路线，因此本次版本为 **0.3.0**，不是旧版 1.0.0 的�
 - **更新与发布工具**：新增非阻塞应用更新检查、每日缓存、手动检查、按平台下载，以及基于 changelog 的
   发布说明、更新清单和校验和生成。发布流程在三平台验证通过后打包，并拒绝覆盖已经发布的资产。
   修复版本准备脚本跳过锁文件解析的问题，确保升级工作区版本后可使用 `--locked` 构建。
+  发布前清理 Clippy 阻塞，修正 Windows 测试路径与快捷键，并将 macOS 打包测试从旧图标源文件断言
+  改为验证实际生成的应用包与 fixture shell。
   新增持久化全局终端环境变量，自动注入新启动的本地／SSH shell 和 CLI 命令。
 
 #### 主要修复
@@ -148,6 +150,8 @@ pre-1.0 versioning: **0.3.0 is the new release, not an older build of 1.0.0**.
   platform-specific downloads use changelog-backed release notes, update manifests and checksums.
   Packaging is gated on three-platform validation and refuses to overwrite published assets.
   Release preparation now resolves the lockfile so bumped workspace versions support `--locked` builds.
+  Cleared release-blocking Clippy diagnostics, corrected Windows test paths and shortcuts, and replaced
+  obsolete icon-source assertions with checks of the generated macOS bundle and fixture shell.
   Persistent global terminal environment variables are injected into newly launched local/SSH shells
   and CLI commands.
 

@@ -1292,9 +1292,9 @@ fn bar_component_catalog_entry(
                 .child(text.get(component.description)),
         )
         .child(div().text_xs().text_color(theme.text_muted).child(format!(
-            "{}: {}",
+            "{}: [{}]",
             text.get(UiTextKey::BarsEditorCatalogSample),
-            format!("[{}]", component.id)
+            component.id
         )))
         .child(div().text_xs().text_color(theme.text_muted).child(format!(
             "{}: {}",
@@ -1314,7 +1314,7 @@ fn bar_component_category_name(category: BarComponentCategory, text: UiText) -> 
     })
 }
 
-fn bar_component_name<'a>(id: &'a str, text: UiText) -> &'a str {
+fn bar_component_name(id: &str, text: UiText) -> &str {
     BAR_COMPONENT_CATALOG
         .iter()
         .find(|component| component.id == id)
