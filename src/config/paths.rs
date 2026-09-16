@@ -587,7 +587,7 @@ mod tests {
     #[test]
     fn canonical_project_paths_prefer_drive_letter_form() {
         let temp = tempfile::tempdir().unwrap();
-        super::storage::allow_test_root(temp.path());
+        crate::config::storage::allow_test_root(temp.path());
 
         let canonical = canonicalize_path(temp.path()).unwrap();
 
