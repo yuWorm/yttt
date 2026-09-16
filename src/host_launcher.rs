@@ -557,9 +557,14 @@ impl HostLauncher {
             }
             match self.connect_with_token(token).await {
                 Ok(_) => {
-                    let actual_lifetime = self.live_host_metadata()?.lifetime;
+                    let metadata = self.live_host_metadata()?;
+                    // A successful handshake confirms that this metadata belongs
+                    // to the Host we must attach to or replace.
+                    if host_build_requires_replacement(&self.build, &metadata.build) {
+                        return Ok(ExistingHostAction::ReplaceBuild);
+                    }
                     if self.lifetime == yttt_host::HostLifetime::Independent
-                        && actual_lifetime == yttt_host::HostLifetime::DesktopOwned
+                        && metadata.lifetime == yttt_host::HostLifetime::DesktopOwned
                     {
                         return Ok(ExistingHostAction::ReplaceLifetime);
                     }
@@ -768,7 +773,17 @@ impl ManagedHostProcess {
             }
             attempts += 1;
             match self.launcher.connect_with_token(token).await {
-                Ok(_) => return Ok(()),
+                Ok(_) => {
+                    if let Some(child_id) = self.child.as_ref().map(Child::id) {
+                        let ready = self.launcher.live_host_metadata()?;
+                        // A concurrent launcher can connect the winning Host before
+                        // its losing child observes the profile-lock failure.
+                        if ready.pid != child_id {
+                            self.child = None;
+                        }
+                    }
+                    return Ok(());
+                }
                 Err(error) => last_connect_error = Some(error),
             }
             if tokio::time::Instant::now() >= deadline {

@@ -162,6 +162,16 @@ fn run_desktop_cli(profile: AppProfile, command: DesktopCliCommand) -> i32 {
             }
         };
     }
+    #[cfg(windows)]
+    if matches!(
+        command,
+        DesktopCliCommand::StartHost | DesktopCliCommand::RestartHost
+    ) && let Err(error) = prevent_detached_host_stdio_inheritance()
+    {
+        eprintln!("failed to isolate detached Host from desktop CLI stdio: {error}");
+        return 1;
+    }
+
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -276,6 +286,32 @@ fn run_desktop_cli(profile: AppProfile, command: DesktopCliCommand) -> i32 {
             }
         }
     }
+}
+
+#[cfg(windows)]
+fn prevent_detached_host_stdio_inheritance() -> std::io::Result<()> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Foundation::{
+        ERROR_INVALID_HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation,
+    };
+
+    for handle in [
+        std::io::stdin().as_raw_handle(),
+        std::io::stdout().as_raw_handle(),
+        std::io::stderr().as_raw_handle(),
+    ] {
+        if handle.is_null() {
+            continue;
+        }
+        // SAFETY: `handle` belongs to this process and only its inheritability flag is cleared.
+        if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(ERROR_INVALID_HANDLE as i32) {
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn host_runtime_artifacts_exist(runtime_root: &Path) -> bool {

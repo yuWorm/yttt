@@ -11432,6 +11432,7 @@ dependencies = [
  "tree-sitter-zig",
  "uuid",
  "winreg 0.56.0",
+ "windows-sys 0.61.2",
  "winresource",
  "yttt-agent-core",
  "yttt-agent-providers",
