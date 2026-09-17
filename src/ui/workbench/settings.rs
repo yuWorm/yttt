@@ -922,7 +922,6 @@ impl WorkbenchView {
         self.terminal
             .environment
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone_from(&self.app_settings.terminal.environment);
     }
 

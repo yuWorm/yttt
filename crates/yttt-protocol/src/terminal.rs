@@ -550,6 +550,8 @@ pub struct TerminalSearchResults {
 pub struct TerminateTerminalRequest {
     pub request_id: u64,
     pub session_id: TerminalSessionId,
+    pub host_epoch: u64,
+    pub session_epoch: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

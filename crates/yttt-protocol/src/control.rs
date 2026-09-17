@@ -117,7 +117,11 @@ pub enum Request {
         sent_millis: u64,
     },
     ListResources,
-    SpawnTerminal(TerminalSpawnSpec),
+    SpawnTerminal {
+        spec: TerminalSpawnSpec,
+        start_id: String,
+        expected_host_epoch: u64,
+    },
     AttachTerminal(AttachTerminal),
     DetachTerminal {
         session_id: TerminalSessionId,
@@ -146,6 +150,8 @@ pub enum Request {
     },
     TerminateTerminal {
         session_id: TerminalSessionId,
+        host_epoch: u64,
+        session_epoch: u64,
         mode: TerminationMode,
     },
     TerminateMany {
@@ -199,7 +205,7 @@ impl Request {
             | Self::RequestCheckpoint { .. }
             | Self::AcknowledgeTerminalExit { .. }
             | Self::ReadAgentSnapshots { .. } => None,
-            Self::SpawnTerminal(_)
+            Self::SpawnTerminal { .. }
             | Self::TerminalInput(_)
             | Self::ResizeTerminal(_)
             | Self::SetTerminalQueryPalette(_)
@@ -212,12 +218,7 @@ impl Request {
             Self::AcquireTerminalLease { mode, .. } => {
                 (*mode == TerminalLeaseMode::Interactive).then_some(Capability::TerminalInteractive)
             }
-            Self::TerminateTerminal { mode, .. } => match mode {
-                TerminationMode::Detach => None,
-                TerminationMode::Terminate | TerminationMode::TerminateMany => {
-                    Some(Capability::TerminalInteractive)
-                }
-            },
+            Self::TerminateTerminal { .. } => Some(Capability::TerminalInteractive),
             Self::SshConnect(_) | Self::SshDisconnect { .. } | Self::DeleteSshCredential { .. } => {
                 Some(Capability::SshConnect)
             }
@@ -257,7 +258,7 @@ impl Request {
 
     pub fn audit_resource(&self) -> String {
         match self {
-            Self::SpawnTerminal(spec) => spec.session_id.to_string(),
+            Self::SpawnTerminal { spec, .. } => spec.session_id.to_string(),
             Self::AttachTerminal(attach) => attach.session_id.to_string(),
             Self::DetachTerminal { session_id }
             | Self::AcquireTerminalLease { session_id, .. }
@@ -476,6 +477,7 @@ pub struct TerminalPlacement {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FailureCode {
     InvalidRequest,
+    OutcomeUnknown,
     NotFound,
     AlreadyExists,
     AddressConflict,
@@ -545,23 +547,27 @@ mod capability_tests {
     #[test]
     fn mutating_requests_declare_a_capability() {
         let mutating = [
-            Request::SpawnTerminal(crate::terminal::TerminalSpawnSpec {
-                session_id: session(),
-                project_id: project(),
-                cwd: crate::ProjectRelativePath::root(),
-                execution: crate::terminal::TerminalExecutionSpec::Shell {
-                    program: "/bin/sh".to_string(),
-                    args: Vec::new(),
-                    initial_command: None,
+            Request::SpawnTerminal {
+                spec: crate::terminal::TerminalSpawnSpec {
+                    session_id: session(),
+                    project_id: project(),
+                    cwd: crate::ProjectRelativePath::root(),
+                    execution: crate::terminal::TerminalExecutionSpec::Shell {
+                        program: "/bin/sh".to_string(),
+                        args: Vec::new(),
+                        initial_command: None,
+                    },
+                    geometry: TerminalGeometry::default(),
+                    geometry_epoch: 1,
+                    query_palette: Vec::new(),
+                    palette_revision: 1,
+                    environment: Vec::new(),
+                    removed_environment: Vec::new(),
+                    scrollback_limit: 1,
                 },
-                geometry: TerminalGeometry::default(),
-                geometry_epoch: 1,
-                query_palette: Vec::new(),
-                palette_revision: 1,
-                environment: Vec::new(),
-                removed_environment: Vec::new(),
-                scrollback_limit: 1,
-            }),
+                start_id: "capability-test".to_string(),
+                expected_host_epoch: 1,
+            },
             Request::AttachTerminal(attach(TerminalLeaseMode::Interactive)),
             Request::AcquireTerminalLease {
                 session_id: session(),
@@ -578,6 +584,8 @@ mod capability_tests {
             },
             Request::TerminateTerminal {
                 session_id: session(),
+                host_epoch: 1,
+                session_epoch: 1,
                 mode: TerminationMode::Terminate,
             },
             Request::SshConnect(crate::ssh::SshConnectSpec {

@@ -14,8 +14,10 @@
 ## 当前版本
 
 - 帧头：`FRAME_FORMAT_VERSION = 1`
-- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 5`（control / terminal-interactive /
-  terminal-data / state-events 通道隔离；viewport-free placement；event-driven catalog
-  invalidation）。ordered one-way `TerminalInput` 于 v3 引入。
-- lifecycle：`LIFECYCLE_PROTOCOL_VERSION = 2`
+- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 9`。v9 是终端生命周期的明确不兼容切换：
+  `SpawnTerminal` 改为具名字段 `spec`、`start_id`、`expected_host_epoch`；
+  单个及批量终止请求必须携带 `host_epoch`、`session_epoch`，新增 `OutcomeUnknown`。
+  缺失 epoch 不提供宽松默认值；旧客户端和 Host 必须同步更新，版本无交集时拒绝连接。
+  ordered one-way `TerminalInput` 于 v3 引入，独立终端通道于 v5 引入。
+- lifecycle：`LIFECYCLE_PROTOCOL_VERSION = 3`
 - desktop-shell：`DESKTOP_SHELL_PROTOCOL_VERSION = 2`

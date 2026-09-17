@@ -32,5 +32,4 @@ pub mod settings;
 pub mod ssh;
 pub mod ssh_command;
 pub mod storage;
-pub mod terminal_placements;
 pub mod theme;

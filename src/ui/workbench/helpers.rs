@@ -1,4 +1,5 @@
 use super::*;
+use parking_lot::RwLock;
 
 pub(super) fn terminal_pane_key(project_id: &str, tab_id: &str, pane_id: &str) -> String {
     format!("{project_id}:{tab_id}:{pane_id}")

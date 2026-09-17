@@ -61,8 +61,9 @@ use yttt_protocol::{
     RESOURCE_PROTOCOL_VERSION, Request, ResourceCatalog, Response, ServerEvent,
     TerminalInteractiveMessage, TerminalTerminationResult,
     terminal::{
-        AttachTerminal, TerminalLeaseMode, TerminalStreamApply, TerminalStreamUpdate,
-        TerminalViewportAnchor, TerminalViewportRead, TerminationMode,
+        AttachTerminal, TerminalLeaseMode, TerminalSpawnSpec, TerminalStreamApply,
+        TerminalStreamUpdate, TerminalViewportAnchor, TerminalViewportRead, TerminatedTerminal,
+        TerminationMode,
     },
     workspace::WorkspaceProjectConfig,
 };
@@ -243,6 +244,7 @@ where
     let next_host_sequence = Arc::new(AtomicU64::new(1));
     let request_journals = Arc::new(Mutex::new(HashMap::new()));
     let client_attachments = Arc::new(Mutex::new(HashMap::new()));
+    let start_attempts = Arc::new(Mutex::new(StartAttemptRegistry::default()));
     let sessions = Arc::new(Mutex::new(HashMap::new()));
     let mutation_gate = Arc::new(tokio::sync::RwLock::new(()));
     let (profile_changes, _) = watch::channel(0_u64);
@@ -349,6 +351,7 @@ where
         handshake_deadline: None,
         mutation_gate: mutation_gate.clone(),
         request_journals: request_journals.clone(),
+        start_attempts: start_attempts.clone(),
         client_attachments: client_attachments.clone(),
         sessions: sessions.clone(),
         profile_changes: profile_changes.clone(),
@@ -484,6 +487,7 @@ struct ConnectionContext {
     mutation_gate: Arc<tokio::sync::RwLock<()>>,
     request_journals:
         Arc<Mutex<HashMap<ClientInstanceId, Arc<tokio::sync::Mutex<RequestJournal>>>>>,
+    start_attempts: Arc<Mutex<StartAttemptRegistry>>,
     client_attachments: Arc<Mutex<HashMap<ClientInstanceId, SharedTerminalAttachments>>>,
     sessions: Arc<Mutex<HashMap<ClientInstanceId, SessionBinding>>>,
     profile_changes: watch::Sender<u64>,
@@ -535,7 +539,51 @@ impl TerminalAttachment {
     }
 }
 
+// Records retain only bounded start IDs and fixed-size address digests. The terminal
+// runtime owns the potentially large original spawn specification while it is live.
 const MAX_REQUEST_JOURNAL_ENTRIES: usize = 256;
+const MAX_START_ATTEMPTS: usize = 4_096;
+// Bounds retained start-ID bytes to at most one MiB across the registry.
+const MAX_START_ID_BYTES: usize = 256;
+
+#[derive(Default)]
+struct StartAttemptRegistry {
+    records: HashMap<String, StartAttemptRecord>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StartAttemptIdentity([u8; 32]);
+
+impl StartAttemptIdentity {
+    // This is computed before secure_terminal_environment mutates the spawn spec.
+    fn from_spec(spec: &TerminalSpawnSpec) -> Self {
+        let mut writer = DigestWriter(Sha256::new());
+        serde_json::to_writer(
+            &mut writer,
+            &(
+                &spec.session_id,
+                &spec.project_id,
+                &spec.cwd,
+                &spec.execution,
+            ),
+        )
+        .expect("terminal start address must serialize");
+        Self(writer.0.finalize().into())
+    }
+}
+
+struct StartAttemptRecord {
+    host_epoch: u64,
+    identity: StartAttemptIdentity,
+    outcome: StartAttemptOutcome,
+}
+
+#[derive(Clone, Copy)]
+enum StartAttemptOutcome {
+    Starting,
+    Spawned { session_epoch: u64 },
+    Failed(FailureCode),
+}
 const MAX_REQUEST_JOURNAL_BYTES: usize = 4 * 1024 * 1024;
 
 struct DigestWriter(Sha256);
@@ -635,6 +683,7 @@ fn request_is_journalable(request: &Request) -> bool {
             | Request::CredentialAnswer { .. }
             | Request::ProfileControl(_)
             | Request::RemoteAccess(_)
+            | Request::TerminateMany { .. }
     )
 }
 
@@ -881,7 +930,7 @@ fn shared_terminal_attachments(
 fn request_uses_terminal_attachments(request: &Request) -> bool {
     matches!(
         request,
-        Request::SpawnTerminal(_)
+        Request::SpawnTerminal { .. }
             | Request::AttachTerminal(_)
             | Request::DetachTerminal { .. }
             | Request::AcquireTerminalLease { .. }
@@ -909,7 +958,7 @@ fn interactive_lane_request(request: &Request) -> bool {
 }
 fn request_changes_resource_catalog(request: &Request) -> bool {
     match request {
-        Request::SpawnTerminal(_)
+        Request::SpawnTerminal { .. }
         | Request::AttachTerminal(_)
         | Request::DetachTerminal { .. }
         | Request::AcquireTerminalLease { .. }
@@ -1010,8 +1059,16 @@ async fn process_control_request(
             };
         }
     };
+    if let Err(failure) =
+        authorize_terminal_termination(&request.body, context, client_id, subscriptions)
+    {
+        return HostResponse {
+            request_id: request.request_id,
+            result: Err(failure),
+        };
+    }
     let subscription = match &request.body {
-        Request::SpawnTerminal(spec) => Some((
+        Request::SpawnTerminal { spec, .. } => Some((
             spec.session_id.clone(),
             TerminalLeaseMode::Interactive,
             true,
@@ -1042,7 +1099,27 @@ async fn process_control_request(
         let fingerprint = request_fingerprint(&request.body);
         let mut journal = request_journal.lock().await;
         match journal.lookup(request.request_id, &fingerprint) {
-            JournalLookup::Replay(response) => (*response, false),
+            JournalLookup::Replay(response) => match &request.body {
+                Request::SpawnTerminal {
+                    spec,
+                    start_id,
+                    expected_host_epoch,
+                } => (
+                    HostResponse {
+                        request_id: request.request_id,
+                        result: spawn_terminal(
+                            spec.clone(),
+                            start_id.clone(),
+                            *expected_host_epoch,
+                            context,
+                            client_id,
+                            false,
+                        ),
+                    },
+                    true,
+                ),
+                _ => (*response, false),
+            },
             JournalLookup::Conflict => (
                 HostResponse {
                     request_id: request.request_id,
@@ -2045,30 +2122,18 @@ async fn handle_request(
             ssh_connections: ssh.connections(),
             projects: projects.projects(),
         })),
-        Request::SpawnTerminal(mut spec) => {
-            let scope = agent_hooks.secure_terminal_environment(&mut spec);
-            let local_cwd = projects
-                .local_root(&spec.project_id)
-                .ok()
-                .map(|root| spec.cwd.join_under(&root));
-            match runtime.spawn_with_transport(spec, Some(ssh.transport()), local_cwd) {
-                Ok(terminal) => runtime
-                    .acquire_lease(
-                        terminal.session_id(),
-                        client_id,
-                        TerminalLeaseMode::Interactive,
-                    )
-                    .map(|lease| Response::TerminalSpawned {
-                        lease,
-                        session_epoch: terminal.session_epoch(),
-                    })
-                    .map_err(runtime_failure),
-                Err(error) => {
-                    agent_hooks.cancel_terminal(&scope);
-                    Err(runtime_failure(error))
-                }
-            }
-        }
+        Request::SpawnTerminal {
+            spec,
+            start_id,
+            expected_host_epoch,
+        } => spawn_terminal(
+            spec,
+            start_id,
+            expected_host_epoch,
+            context,
+            client_id,
+            true,
+        ),
         Request::AttachTerminal(attach) => {
             if attach.mode == TerminalLeaseMode::Observer
                 && attachments
@@ -2291,40 +2356,65 @@ async fn handle_request(
             .acknowledge_terminal_exit(&session_id, session_epoch, final_sequence)
             .map(|()| Response::TerminalExitAcknowledged)
             .map_err(runtime_failure),
-        Request::TerminateTerminal { session_id, mode } => match mode {
-            TerminationMode::Detach => {
-                if attachments
-                    .get(&session_id)
-                    .is_some_and(|attachment| attachment.mode == TerminalLeaseMode::Interactive)
-                {
-                    runtime.release_lease(&session_id, client_id);
-                }
-                Ok(Response::TerminalDetached)
+        Request::TerminateTerminal {
+            session_id,
+            host_epoch,
+            session_epoch,
+            mode,
+        } => {
+            if mode == TerminationMode::Detach {
+                Err(ProtocolFailure::new(
+                    FailureCode::InvalidRequest,
+                    "use DetachTerminal to detach without terminating the Host terminal",
+                    false,
+                ))
+            } else {
+                terminate_terminal(
+                    identity.host_epoch,
+                    host_epoch,
+                    runtime,
+                    attachments,
+                    client_id,
+                    &session_id,
+                    session_epoch,
+                )
+                .map(|terminated| {
+                    Response::TerminalTerminated(terminated.unwrap_or(TerminatedTerminal {
+                        session_epoch,
+                        final_sequence: 0,
+                    }))
+                })
+                .map_err(runtime_failure)
             }
-            TerminationMode::Terminate | TerminationMode::TerminateMany => (|| {
-                require_interactive_attachment(attachments, &session_id)?;
-                runtime.validate_lease(&session_id, client_id)?;
-                runtime
-                    .terminate(&session_id)
-                    .map(Response::TerminalTerminated)
-            })()
-            .map_err(runtime_failure),
-        },
+        }
         Request::TerminateMany { requests } => {
             let results = requests
                 .into_iter()
                 .map(|request| {
                     let session_id = request.session_id;
                     let result = (|| {
-                        require_interactive_attachment(attachments, &session_id)?;
-                        runtime.validate_lease(&session_id, client_id)?;
-                        let terminated = runtime.terminate(&session_id)?;
-                        runtime.acknowledge_terminal_exit(
+                        let terminated = terminate_terminal(
+                            identity.host_epoch,
+                            request.host_epoch,
+                            runtime,
+                            attachments,
+                            client_id,
                             &session_id,
-                            terminated.session_epoch,
-                            terminated.final_sequence,
+                            request.session_epoch,
                         )?;
-                        Ok(terminated)
+                        if let Some(terminated) = terminated {
+                            runtime.acknowledge_terminal_exit(
+                                &session_id,
+                                terminated.session_epoch,
+                                terminated.final_sequence,
+                            )?;
+                            Ok(terminated)
+                        } else {
+                            Ok(TerminatedTerminal {
+                                session_epoch: request.session_epoch,
+                                final_sequence: 0,
+                            })
+                        }
                     })()
                     .map_err(runtime_failure);
                     TerminalTerminationResult {
@@ -2459,6 +2549,70 @@ fn require_interactive_attachment(
     } else {
         Err(HostRuntimeError::LeaseRequired(session_id.clone()))
     }
+}
+
+fn authorize_terminal_termination(
+    request: &Request,
+    context: &ConnectionContext,
+    client_id: &ClientInstanceId,
+    attachments: &HashMap<TerminalSessionId, TerminalAttachment>,
+) -> Result<(), ProtocolFailure> {
+    let Request::TerminateTerminal {
+        session_id,
+        host_epoch,
+        session_epoch,
+        ..
+    } = request
+    else {
+        return Ok(());
+    };
+    if *host_epoch != context.identity.host_epoch {
+        return Err(runtime_failure(HostRuntimeError::StaleHostEpoch {
+            expected: context.identity.host_epoch,
+            actual: *host_epoch,
+        }));
+    }
+    let Some(terminal) = context.runtime.terminal(session_id) else {
+        return Ok(());
+    };
+    validate_terminal_session_epoch(&terminal, *session_epoch).map_err(runtime_failure)?;
+    require_interactive_attachment(attachments, session_id).map_err(runtime_failure)?;
+    context
+        .runtime
+        .validate_lease(session_id, client_id)
+        .map_err(runtime_failure)?;
+    Ok(())
+}
+
+fn terminate_terminal(
+    current_host_epoch: u64,
+    requested_host_epoch: u64,
+    runtime: &HostRuntime,
+    attachments: &HashMap<TerminalSessionId, TerminalAttachment>,
+    client_id: &ClientInstanceId,
+    session_id: &TerminalSessionId,
+    requested_session_epoch: u64,
+) -> Result<Option<TerminatedTerminal>, HostRuntimeError> {
+    if requested_host_epoch != current_host_epoch {
+        return Err(HostRuntimeError::StaleHostEpoch {
+            expected: current_host_epoch,
+            actual: requested_host_epoch,
+        });
+    }
+    let Some(terminal) = runtime.terminal(session_id) else {
+        return Ok(None);
+    };
+    validate_terminal_session_epoch(&terminal, requested_session_epoch)?;
+    require_interactive_attachment(attachments, session_id)?;
+    runtime.validate_lease(session_id, client_id)?;
+    terminal.terminate()?;
+    let final_sequence = terminal
+        .checkpoint()
+        .map_or(0, |checkpoint| checkpoint.viewport.sequence);
+    Ok(Some(TerminatedTerminal {
+        session_epoch: terminal.session_epoch(),
+        final_sequence,
+    }))
 }
 
 fn validate_terminal_mutation(
@@ -2602,10 +2756,158 @@ fn attach_terminal(
     Ok(Response::TerminalAttached { lease, checkpoint })
 }
 
+fn spawn_terminal(
+    mut spec: TerminalSpawnSpec,
+    start_id: String,
+    expected_host_epoch: u64,
+    context: &ConnectionContext,
+    client_id: &ClientInstanceId,
+    allow_new: bool,
+) -> Result<Response, ProtocolFailure> {
+    if expected_host_epoch != context.identity.host_epoch {
+        return Err(runtime_failure(HostRuntimeError::StaleHostEpoch {
+            expected: context.identity.host_epoch,
+            actual: expected_host_epoch,
+        }));
+    }
+    if start_id.is_empty() || start_id.len() > MAX_START_ID_BYTES {
+        return Err(ProtocolFailure::new(
+            FailureCode::InvalidRequest,
+            format!("terminal start ID must contain 1..={MAX_START_ID_BYTES} bytes"),
+            false,
+        ));
+    }
+
+    let attempt_identity = StartAttemptIdentity::from_spec(&spec);
+    let mut attempts = context.start_attempts.lock();
+    if let Some(record) = attempts.records.get(&start_id) {
+        if record.host_epoch != context.identity.host_epoch || record.identity != attempt_identity {
+            return Err(ProtocolFailure::new(
+                FailureCode::AddressConflict,
+                "terminal start ID was already used for a different terminal address",
+                false,
+            ));
+        }
+        return match record.outcome {
+            StartAttemptOutcome::Starting => Err(outcome_unknown_failure(&start_id)),
+            StartAttemptOutcome::Failed(code) => Err(failed_start_attempt_failure(&start_id, code)),
+            StartAttemptOutcome::Spawned { session_epoch } => {
+                let Some(terminal) = context.runtime.terminal(&spec.session_id) else {
+                    return Err(outcome_unknown_failure(&start_id));
+                };
+                if terminal.session_epoch() != session_epoch || terminal.is_exited() {
+                    return Err(outcome_unknown_failure(&start_id));
+                }
+                context
+                    .runtime
+                    .acquire_lease(&spec.session_id, client_id, TerminalLeaseMode::Interactive)
+                    .map(|lease| Response::TerminalSpawned {
+                        lease,
+                        session_epoch,
+                    })
+                    .map_err(runtime_failure)
+            }
+        };
+    }
+    if !allow_new {
+        return Err(outcome_unknown_failure(&start_id));
+    }
+    if attempts.records.len() >= MAX_START_ATTEMPTS {
+        return Err(ProtocolFailure::new(
+            FailureCode::ResourceLimit,
+            "Host has reached its terminal start-attempt retention limit",
+            false,
+        ));
+    }
+
+    attempts.records.insert(
+        start_id.clone(),
+        StartAttemptRecord {
+            host_epoch: context.identity.host_epoch,
+            identity: attempt_identity,
+            outcome: StartAttemptOutcome::Starting,
+        },
+    );
+
+    // A different attempt must not replace the hook credentials of a live session.
+    if let Some(existing) = context.runtime.terminal(&spec.session_id) {
+        let expected_fingerprint = existing.spec().address_fingerprint();
+        let actual_fingerprint = spec.address_fingerprint();
+        let failure = runtime_failure(if expected_fingerprint == actual_fingerprint {
+            HostRuntimeError::AlreadyExists(spec.session_id)
+        } else {
+            HostRuntimeError::AddressConflict {
+                session_id: spec.session_id,
+                expected_fingerprint,
+                actual_fingerprint,
+            }
+        });
+        attempts.records.get_mut(&start_id).unwrap().outcome =
+            StartAttemptOutcome::Failed(failure.code);
+        return Err(failure);
+    }
+
+    let scope = context.agent_hooks.secure_terminal_environment(&mut spec);
+    let local_cwd = context
+        .projects
+        .local_root(&spec.project_id)
+        .ok()
+        .map(|root| spec.cwd.join_under(&root));
+    let (outcome, response) =
+        match context
+            .runtime
+            .spawn_with_transport(spec, Some(context.ssh.transport()), local_cwd)
+        {
+            Ok(terminal) => {
+                let session_epoch = terminal.session_epoch();
+                let response = context
+                    .runtime
+                    .acquire_lease(
+                        terminal.session_id(),
+                        client_id,
+                        TerminalLeaseMode::Interactive,
+                    )
+                    .map(|lease| Response::TerminalSpawned {
+                        lease,
+                        session_epoch,
+                    })
+                    .map_err(runtime_failure);
+                (StartAttemptOutcome::Spawned { session_epoch }, response)
+            }
+            Err(error) => {
+                context.agent_hooks.cancel_terminal(&scope);
+                let failure = runtime_failure(error);
+                (StartAttemptOutcome::Failed(failure.code), Err(failure))
+            }
+        };
+    attempts
+        .records
+        .get_mut(&start_id)
+        .expect("reserved terminal start attempt must remain recorded")
+        .outcome = outcome;
+    response
+}
+
+fn outcome_unknown_failure(start_id: &str) -> ProtocolFailure {
+    ProtocolFailure::new(
+        FailureCode::OutcomeUnknown,
+        format!("terminal start attempt {start_id:?} no longer has a replayable outcome"),
+        false,
+    )
+}
+
+fn failed_start_attempt_failure(start_id: &str, code: FailureCode) -> ProtocolFailure {
+    ProtocolFailure::new(
+        code,
+        format!("terminal start attempt {start_id:?} previously failed"),
+        false,
+    )
+}
+
 fn request_creates_resource(request: &Request) -> bool {
     matches!(
         request,
-        Request::SpawnTerminal(_)
+        Request::SpawnTerminal { .. }
             | Request::SshConnect(_)
             | Request::Project(
                 yttt_protocol::project::ProjectRequest::Register { .. }
@@ -2883,28 +3185,32 @@ mod request_journal_tests {
             },
             reconnect: false,
         });
-        let non_secret = Request::SpawnTerminal(TerminalSpawnSpec {
-            session_id: TerminalSessionId::new("safe"),
-            project_id: ProjectId::new("project"),
-            cwd: yttt_protocol::ProjectRelativePath::root(),
-            execution: TerminalExecutionSpec::Shell {
-                program: "/bin/sh".to_string(),
-                args: Vec::new(),
-                initial_command: None,
+        let non_secret = Request::SpawnTerminal {
+            spec: TerminalSpawnSpec {
+                session_id: TerminalSessionId::new("safe"),
+                project_id: ProjectId::new("project"),
+                cwd: yttt_protocol::ProjectRelativePath::root(),
+                execution: TerminalExecutionSpec::Shell {
+                    program: "/bin/sh".to_string(),
+                    args: Vec::new(),
+                    initial_command: None,
+                },
+                geometry: TerminalGeometry {
+                    cols: 80,
+                    rows: 24,
+                    cell_width: 0,
+                    cell_height: 0,
+                },
+                geometry_epoch: 1,
+                query_palette: Vec::new(),
+                palette_revision: 1,
+                scrollback_limit: 100,
+                environment: Vec::new(),
+                removed_environment: Vec::new(),
             },
-            geometry: TerminalGeometry {
-                cols: 80,
-                rows: 24,
-                cell_width: 0,
-                cell_height: 0,
-            },
-            geometry_epoch: 1,
-            query_palette: Vec::new(),
-            palette_revision: 1,
-            scrollback_limit: 100,
-            environment: Vec::new(),
-            removed_environment: Vec::new(),
-        });
+            start_id: "journal-safe".to_string(),
+            expected_host_epoch: 1,
+        };
         assert!(!request_is_journalable(&sensitive));
         assert!(!request_is_journalable(&ssh));
         assert!(request_is_journalable(&non_secret));

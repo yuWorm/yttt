@@ -67,6 +67,19 @@ use the provider's resume command, including previously started lazy tabs. Faile
 resume retains the original session and tab rather than silently starting a fresh conversation.
 Other command processes remain stopped until explicitly started; observers never spawn them.
 
+If a terminal launch loses its response, the pane shows **Reconciling** with **Retry**, rather
+than claiming that the command failed. Retry preserves the original launch identity; it does not
+start a second copy of that command. The client checks the Host catalog and reattaches when the
+terminal is present. If the result can no longer be established, the pane remains unresolved.
+A changed Host epoch ends the old attempt without replaying it; a subsequent explicit start is a
+new attempt. Ordinary confirmed failures and exits use **Restart** instead.
+
+The legacy `terminal-placements.json` file is no longer read or written and can be left untouched.
+Its contents or revision cannot block terminal startup. Resource protocol v9 requires matching
+client and Host updates. A Host retains at most 4,096 launch-attempt records for its lifetime;
+at capacity it refuses new launches instead of forgetting old attempts and risking duplicate
+execution. It never restarts itself or interrupts active jobs to clear this limit.
+
 For onboarding development or demos, force the flow even after it has been completed:
 
 ```sh

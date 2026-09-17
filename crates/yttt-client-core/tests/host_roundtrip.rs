@@ -120,6 +120,12 @@ impl RunningHost {
             .or_insert_with(yttt_transport::new_session_nonce)
     }
 
+    fn host_epoch(&self) -> u64 {
+        yttt_host::read_ready_metadata(&self.bootstrap.ready_file())
+            .unwrap()
+            .host_epoch
+    }
+
     async fn client(&self, id: &str) -> ClientCore {
         let client = ClientCore::connect(
             LocalConnector::new(host_endpoint(&self.bootstrap)),
@@ -309,7 +315,7 @@ async fn raw_request(
     let mut request = ClientRequest::new(request_id, body);
     if matches!(
         request.body,
-        Request::SpawnTerminal(_)
+        Request::SpawnTerminal { .. }
             | Request::TerminateTerminal { .. }
             | Request::AcknowledgeTerminalExit { .. }
     ) {
@@ -436,6 +442,15 @@ fn spawn_spec() -> TerminalSpawnSpec {
     }
 }
 
+fn spawn_request(spec: TerminalSpawnSpec, expected_host_epoch: u64) -> Request {
+    let start_id = format!("test-start-{}", spec.session_id);
+    Request::SpawnTerminal {
+        spec,
+        start_id,
+        expected_host_epoch,
+    }
+}
+
 fn viewport_text(viewport: &yttt_protocol::terminal::SemanticViewport) -> String {
     viewport
         .rows
@@ -471,7 +486,7 @@ async fn terminal_output_uses_a_dedicated_data_connection() {
     let Response::TerminalSpawned {
         lease,
         session_epoch,
-    } = raw_request(&mut control, 1, Request::SpawnTerminal(spec))
+    } = raw_request(&mut control, 1, spawn_request(spec, host.host_epoch()))
         .await
         .unwrap()
     else {
@@ -559,6 +574,8 @@ async fn terminal_output_uses_a_dedicated_data_connection() {
         4,
         Request::TerminateTerminal {
             session_id: session_id.clone(),
+            host_epoch: host.host_epoch(),
+            session_epoch,
             mode: TerminationMode::Terminate,
         },
     )
@@ -652,7 +669,10 @@ async fn blocked_project_request_does_not_delay_terminal_input() {
     let Response::TerminalSpawned {
         lease,
         session_epoch,
-    } = client.request(Request::SpawnTerminal(spec)).await.unwrap()
+    } = client
+        .request(spawn_request(spec, host.host_epoch()))
+        .await
+        .unwrap()
     else {
         panic!("unexpected spawn response");
     };
@@ -720,6 +740,8 @@ async fn blocked_project_request_does_not_delay_terminal_input() {
     let Response::TerminalTerminated(terminated) = client
         .request(Request::TerminateTerminal {
             session_id: session_id.clone(),
+            host_epoch: host.host_epoch(),
+            session_epoch,
             mode: TerminationMode::Terminate,
         })
         .await
@@ -747,6 +769,7 @@ async fn many_terminals_keep_catalog_and_interactive_lanes_responsive() {
     let host = RunningHost::start().await;
     let client = host.client("many-terminals").await;
     let mut session_ids = Vec::with_capacity(TERMINAL_COUNT);
+    let mut session_epochs = Vec::with_capacity(TERMINAL_COUNT);
     let mut first_lease = None;
     for index in 0..TERMINAL_COUNT {
         let mut spec = spawn_spec();
@@ -764,7 +787,10 @@ async fn many_terminals_keep_catalog_and_interactive_lanes_responsive() {
         let Response::TerminalSpawned {
             lease,
             session_epoch,
-        } = client.request(Request::SpawnTerminal(spec)).await.unwrap()
+        } = client
+            .request(spawn_request(spec, host.host_epoch()))
+            .await
+            .unwrap()
         else {
             panic!("unexpected spawn response");
         };
@@ -772,6 +798,7 @@ async fn many_terminals_keep_catalog_and_interactive_lanes_responsive() {
             first_lease = Some((lease, session_epoch));
         }
         session_ids.push(session_id);
+        session_epochs.push(session_epoch);
     }
 
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -829,11 +856,16 @@ async fn many_terminals_keep_catalog_and_interactive_lanes_responsive() {
         .request(Request::TerminateMany {
             requests: session_ids
                 .into_iter()
+                .zip(session_epochs)
                 .enumerate()
-                .map(|(index, session_id)| TerminateTerminalRequest {
-                    request_id: index as u64,
-                    session_id,
-                })
+                .map(
+                    |(index, (session_id, session_epoch))| TerminateTerminalRequest {
+                        request_id: index as u64,
+                        session_id,
+                        host_epoch: host.host_epoch(),
+                        session_epoch,
+                    },
+                )
                 .collect(),
         })
         .await
@@ -856,6 +888,7 @@ async fn host_terminal_scale_performance_probe() {
     let mut session_ids = Vec::with_capacity(*TERMINAL_COUNTS.last().unwrap());
     let mut first_lease = None;
     let mut client_sequence = 0_u64;
+    let mut session_epochs = Vec::with_capacity(*TERMINAL_COUNTS.last().unwrap());
     let mut p95_measurements = Vec::new();
 
     for terminal_count in TERMINAL_COUNTS {
@@ -877,7 +910,10 @@ async fn host_terminal_scale_performance_probe() {
             let Response::TerminalSpawned {
                 lease,
                 session_epoch,
-            } = client.request(Request::SpawnTerminal(spec)).await.unwrap()
+            } = client
+                .request(spawn_request(spec, host.host_epoch()))
+                .await
+                .unwrap()
             else {
                 panic!("unexpected scale terminal spawn response");
             };
@@ -885,6 +921,7 @@ async fn host_terminal_scale_performance_probe() {
                 first_lease = Some((lease, session_epoch));
             }
             session_ids.push(session_id);
+            session_epochs.push(session_epoch);
         }
 
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -966,11 +1003,16 @@ async fn host_terminal_scale_performance_probe() {
         .request(Request::TerminateMany {
             requests: session_ids
                 .into_iter()
+                .zip(session_epochs)
                 .enumerate()
-                .map(|(index, session_id)| TerminateTerminalRequest {
-                    request_id: index as u64,
-                    session_id,
-                })
+                .map(
+                    |(index, (session_id, session_epoch))| TerminateTerminalRequest {
+                        request_id: index as u64,
+                        session_id,
+                        host_epoch: host.host_epoch(),
+                        session_epoch,
+                    },
+                )
                 .collect(),
         })
         .await
@@ -1003,7 +1045,7 @@ async fn force_capable_control_client_uses_restricted_terminal_data_channel_and_
     let host = RunningHost::start().await;
     let first = host.client("first-client").await;
     let spawned = first
-        .request(Request::SpawnTerminal(spawn_spec()))
+        .request(spawn_request(spawn_spec(), host.host_epoch()))
         .await
         .unwrap();
     let Response::TerminalSpawned { session_epoch, .. } = spawned else {
@@ -1073,6 +1115,8 @@ async fn force_capable_control_client_uses_restricted_terminal_data_channel_and_
     let terminated = second
         .request(Request::TerminateTerminal {
             session_id: TerminalSessionId::new("host-owned"),
+            host_epoch: host.host_epoch(),
+            session_epoch,
             mode: TerminationMode::Terminate,
         })
         .await
@@ -1235,12 +1279,20 @@ async fn request_journal_replays_mutations_without_repeating_side_effects() {
     let spec = spawn_spec();
     let session_id = spec.session_id.clone();
 
-    let first = raw_request(&mut client, 41, Request::SpawnTerminal(spec.clone()))
-        .await
-        .unwrap();
-    let replay = raw_request(&mut client, 41, Request::SpawnTerminal(spec.clone()))
-        .await
-        .unwrap();
+    let first = raw_request(
+        &mut client,
+        41,
+        spawn_request(spec.clone(), host.host_epoch()),
+    )
+    .await
+    .unwrap();
+    let replay = raw_request(
+        &mut client,
+        41,
+        spawn_request(spec.clone(), host.host_epoch()),
+    )
+    .await
+    .unwrap();
     assert_eq!(replay, first);
 
     let conflicting = raw_request(
@@ -1248,6 +1300,8 @@ async fn request_journal_replays_mutations_without_repeating_side_effects() {
         41,
         Request::TerminateTerminal {
             session_id: session_id.clone(),
+            host_epoch: host.host_epoch(),
+            session_epoch: 1,
             mode: TerminationMode::Terminate,
         },
     )
@@ -1260,25 +1314,27 @@ async fn request_journal_replays_mutations_without_repeating_side_effects() {
         42,
         Request::TerminateTerminal {
             session_id: session_id.clone(),
+            host_epoch: host.host_epoch(),
+            session_epoch: 1,
             mode: TerminationMode::Terminate,
         },
     )
     .await
     .unwrap();
     assert!(matches!(terminated, Response::TerminalTerminated(_)));
-    assert_eq!(
-        raw_request(
-            &mut client,
-            42,
-            Request::TerminateTerminal {
-                session_id: session_id.clone(),
-                mode: TerminationMode::Terminate,
-            },
-        )
-        .await
-        .unwrap(),
-        terminated
-    );
+    let replay_denied = raw_request(
+        &mut client,
+        42,
+        Request::TerminateTerminal {
+            session_id: session_id.clone(),
+            host_epoch: host.host_epoch(),
+            session_epoch: 1,
+            mode: TerminationMode::Terminate,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(replay_denied.code, FailureCode::PermissionDenied);
     let Response::TerminalSpawned { session_epoch, .. } = first else {
         panic!("unexpected spawn response");
     };
@@ -1342,14 +1398,14 @@ async fn request_journal_replays_mutations_without_repeating_side_effects() {
     )
     .await
     .unwrap();
-    let mut stale_replay = ClientRequest::new(41, Request::SpawnTerminal(spec.clone()));
+    let mut stale_replay = ClientRequest::new(41, spawn_request(spec.clone(), host.host_epoch()));
     stale_replay.control = Some(old_control.context);
     assert_eq!(
         raw_send(&mut client, stale_replay).await.unwrap_err().code,
         FailureCode::StaleEpoch
     );
     assert_eq!(
-        raw_request(&mut client, 41, Request::SpawnTerminal(spec))
+        raw_request(&mut client, 41, spawn_request(spec, host.host_epoch()))
             .await
             .unwrap_err()
             .code,
@@ -1364,6 +1420,249 @@ async fn request_journal_replays_mutations_without_repeating_side_effects() {
         "denied replay must not respawn acknowledged terminals"
     );
 
+    assert_eq!(
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
+    );
+    tokio::time::timeout(Duration::from_secs(5), host.task)
+        .await
+        .expect("Host shutdown timeout")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn completed_start_attempt_never_replays_after_its_terminal_is_removed() {
+    let host = RunningHost::start().await;
+    let client = host.client("completed-attempt").await;
+    let mut spec = spawn_spec();
+    spec.session_id = TerminalSessionId::new("completed-attempt");
+    let session_id = spec.session_id.clone();
+    let Response::TerminalSpawned { session_epoch, .. } = client
+        .request(spawn_request(spec.clone(), host.host_epoch()))
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected spawn response");
+    };
+    let Response::TerminalSpawned {
+        session_epoch: replayed_session_epoch,
+        ..
+    } = client
+        .request(spawn_request(spec.clone(), host.host_epoch()))
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected replayed spawn response");
+    };
+    assert_eq!(replayed_session_epoch, session_epoch);
+    let Response::TerminalTerminated(terminated) = client
+        .request(Request::TerminateTerminal {
+            session_id: session_id.clone(),
+            host_epoch: host.host_epoch(),
+            session_epoch,
+            mode: TerminationMode::Terminate,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected terminate response");
+    };
+    let exited_replay = client
+        .request(spawn_request(spec.clone(), host.host_epoch()))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        exited_replay,
+        ClientCoreError::Protocol(failure) if failure.code == FailureCode::OutcomeUnknown
+    ));
+    assert_eq!(
+        client
+            .request(Request::AcknowledgeTerminalExit {
+                session_id: session_id.clone(),
+                session_epoch,
+                final_sequence: terminated.final_sequence,
+            })
+            .await
+            .unwrap(),
+        Response::TerminalExitAcknowledged
+    );
+    assert_eq!(
+        client
+            .request(Request::TerminateTerminal {
+                session_id: session_id.clone(),
+                host_epoch: host.host_epoch(),
+                session_epoch,
+                mode: TerminationMode::Terminate,
+            })
+            .await
+            .unwrap(),
+        Response::TerminalTerminated(yttt_protocol::terminal::TerminatedTerminal {
+            session_epoch,
+            final_sequence: 0,
+        })
+    );
+
+    let replay = client
+        .request(spawn_request(spec, host.host_epoch()))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        replay,
+        ClientCoreError::Protocol(failure)
+            if failure.code == FailureCode::OutcomeUnknown && !failure.retryable
+    ));
+    let Response::Resources(resources) = client.request(Request::ListResources).await.unwrap()
+    else {
+        panic!("resource catalog");
+    };
+    assert!(
+        !resources
+            .terminals
+            .iter()
+            .any(|terminal| terminal.session_id == session_id)
+    );
+    assert_eq!(
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
+    );
+    tokio::time::timeout(Duration::from_secs(5), host.task)
+        .await
+        .expect("Host shutdown timeout")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn expected_host_epoch_fences_terminal_start_before_execution() {
+    let host = RunningHost::start().await;
+    let client = host.client("start-fence").await;
+    let error = client
+        .request(spawn_request(
+            spawn_spec(),
+            host.host_epoch().saturating_sub(1),
+        ))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ClientCoreError::Protocol(failure) if failure.code == FailureCode::StaleEpoch
+    ));
+    let Response::Resources(resources) = client.request(Request::ListResources).await.unwrap()
+    else {
+        panic!("resource catalog");
+    };
+    assert!(resources.terminals.is_empty());
+    assert_eq!(
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
+    );
+    tokio::time::timeout(Duration::from_secs(5), host.task)
+        .await
+        .expect("Host shutdown timeout")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn stale_close_cannot_terminate_a_new_terminal_generation() {
+    let host = RunningHost::start().await;
+    let client = host.client("stale-close").await;
+    let mut spec = spawn_spec();
+    spec.session_id = TerminalSessionId::new("stale-close");
+    let session_id = spec.session_id.clone();
+    let Response::TerminalSpawned {
+        session_epoch: old_session_epoch,
+        ..
+    } = client
+        .request(spawn_request(spec.clone(), host.host_epoch()))
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected initial spawn response");
+    };
+    let Response::TerminalTerminated(first_termination) = client
+        .request(Request::TerminateTerminal {
+            session_id: session_id.clone(),
+            host_epoch: host.host_epoch(),
+            session_epoch: old_session_epoch,
+            mode: TerminationMode::Terminate,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected initial termination response");
+    };
+    client
+        .request(Request::AcknowledgeTerminalExit {
+            session_id: session_id.clone(),
+            session_epoch: old_session_epoch,
+            final_sequence: first_termination.final_sequence,
+        })
+        .await
+        .unwrap();
+
+    let Response::TerminalSpawned {
+        session_epoch: new_session_epoch,
+        ..
+    } = client
+        .request(Request::SpawnTerminal {
+            spec: spec.clone(),
+            start_id: "test-new-stale-close".to_string(),
+            expected_host_epoch: host.host_epoch(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected replacement spawn response");
+    };
+    assert_ne!(new_session_epoch, old_session_epoch);
+    let stale = client
+        .request(Request::TerminateTerminal {
+            session_id: session_id.clone(),
+            host_epoch: host.host_epoch(),
+            session_epoch: old_session_epoch,
+            mode: TerminationMode::Terminate,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        stale,
+        ClientCoreError::Protocol(failure) if failure.code == FailureCode::StaleEpoch
+    ));
+    let Response::Resources(resources) = client.request(Request::ListResources).await.unwrap()
+    else {
+        panic!("resource catalog");
+    };
+    assert!(resources.terminals.iter().any(|terminal| {
+        terminal.session_id == session_id
+            && terminal.session_epoch == new_session_epoch
+            && !matches!(terminal.process_state, TerminalProcessState::Exited { .. })
+    }));
+
+    let Response::TerminalTerminated(replacement_termination) = client
+        .request(Request::TerminateTerminal {
+            session_id: session_id.clone(),
+            host_epoch: host.host_epoch(),
+            session_epoch: new_session_epoch,
+            mode: TerminationMode::Terminate,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected replacement termination response");
+    };
+    client
+        .request(Request::AcknowledgeTerminalExit {
+            session_id,
+            session_epoch: new_session_epoch,
+            final_sequence: replacement_termination.final_sequence,
+        })
+        .await
+        .unwrap();
     assert_eq!(
         host.lifecycle_request(LifecycleRequest::BeginDrain, false)
             .await,
@@ -1392,7 +1691,10 @@ async fn exited_terminal_reconnects_with_its_final_checkpoint_until_acknowledged
         return_to_shell: false,
     };
     let session_id = spec.session_id.clone();
-    let spawned = first.request(Request::SpawnTerminal(spec)).await.unwrap();
+    let spawned = first
+        .request(spawn_request(spec, host.host_epoch()))
+        .await
+        .unwrap();
     let Response::TerminalSpawned { session_epoch, .. } = spawned else {
         panic!("unexpected spawn response: {spawned:?}");
     };
@@ -1476,8 +1778,10 @@ async fn stop_if_idle_is_atomic_and_drain_waits_for_terminal_ack() {
         return_to_shell: false,
     };
     let session_id = spec.session_id.clone();
-    let Response::TerminalSpawned { session_epoch, .. } =
-        client.request(Request::SpawnTerminal(spec)).await.unwrap()
+    let Response::TerminalSpawned { session_epoch, .. } = client
+        .request(spawn_request(spec, host.host_epoch()))
+        .await
+        .unwrap()
     else {
         panic!("unexpected spawn response");
     };
@@ -1617,14 +1921,14 @@ async fn host_rejects_terminal_session_address_collisions() {
     let client = host.client("address-conflict").await;
     let original = spawn_spec();
     client
-        .request(Request::SpawnTerminal(original.clone()))
+        .request(spawn_request(original.clone(), host.host_epoch()))
         .await
         .unwrap();
 
     let mut conflicting = original.clone();
     conflicting.cwd = yttt_protocol::ProjectRelativePath::from_utf8("different-address").unwrap();
     let error = client
-        .request(Request::SpawnTerminal(conflicting))
+        .request(spawn_request(conflicting, host.host_epoch()))
         .await
         .unwrap_err();
     assert!(matches!(
@@ -1636,6 +1940,8 @@ async fn host_rejects_terminal_session_address_collisions() {
     let terminated = client
         .request(Request::TerminateTerminal {
             session_id: original.session_id.clone(),
+            host_epoch: host.host_epoch(),
+            session_epoch: 1,
             mode: TerminationMode::Terminate,
         })
         .await
@@ -1688,7 +1994,10 @@ async fn host_roundtrip_preserves_input_resize_scroll_environment_and_title() {
         ],
         return_to_shell: false,
     };
-    let spawned = client.request(Request::SpawnTerminal(spec)).await.unwrap();
+    let spawned = client
+        .request(spawn_request(spec, host.host_epoch()))
+        .await
+        .unwrap();
     let Response::TerminalSpawned {
         lease,
         session_epoch,
@@ -1850,6 +2159,8 @@ async fn host_roundtrip_preserves_input_resize_scroll_environment_and_title() {
             requests: vec![TerminateTerminalRequest {
                 request_id: 1,
                 session_id: session_id.clone(),
+                host_epoch: host.host_epoch(),
+                session_epoch,
             }],
         })
         .await
@@ -1908,7 +2219,10 @@ async fn multiple_clients_keep_independent_viewports_and_a_single_input_owner() 
         return_to_shell: false,
     };
     let session_id = spec.session_id.clone();
-    let spawned = owner.request(Request::SpawnTerminal(spec)).await.unwrap();
+    let spawned = owner
+        .request(spawn_request(spec, host.host_epoch()))
+        .await
+        .unwrap();
     let Response::TerminalSpawned {
         lease: owner_lease,
         session_epoch,
@@ -2214,6 +2528,8 @@ async fn multiple_clients_keep_independent_viewports_and_a_single_input_owner() 
     let terminated = observer
         .request(Request::TerminateTerminal {
             session_id: session_id.clone(),
+            host_epoch: host.host_epoch(),
+            session_epoch,
             mode: TerminationMode::Terminate,
         })
         .await
@@ -2257,7 +2573,10 @@ async fn slow_observer_does_not_block_the_owner_or_change_canonical_geometry() {
         return_to_shell: false,
     };
     let session_id = spec.session_id.clone();
-    let spawned = owner.request(Request::SpawnTerminal(spec)).await.unwrap();
+    let spawned = owner
+        .request(spawn_request(spec, host.host_epoch()))
+        .await
+        .unwrap();
     let Response::TerminalSpawned {
         lease: owner_lease,
         session_epoch,
@@ -2371,6 +2690,8 @@ async fn slow_observer_does_not_block_the_owner_or_change_canonical_geometry() {
     let terminated = owner
         .request(Request::TerminateTerminal {
             session_id: session_id.clone(),
+            host_epoch: host.host_epoch(),
+            session_epoch,
             mode: TerminationMode::Terminate,
         })
         .await
@@ -2410,7 +2731,7 @@ async fn client_reconciles_stale_terminal_after_host_restart() {
     let session_id = spawn_spec().session_id.clone();
     assert!(matches!(
         client
-            .request(Request::SpawnTerminal(spawn_spec()))
+            .request(spawn_request(spawn_spec(), old_host_epoch))
             .await
             .unwrap(),
         Response::TerminalSpawned { .. }
@@ -2517,8 +2838,10 @@ async fn host_owns_authenticated_agent_state_and_resyncs_snapshots() {
         ],
         return_to_shell: false,
     };
-    let Response::TerminalSpawned { session_epoch, .. } =
-        client.request(Request::SpawnTerminal(spec)).await.unwrap()
+    let Response::TerminalSpawned { session_epoch, .. } = client
+        .request(spawn_request(spec, host.host_epoch()))
+        .await
+        .unwrap()
     else {
         panic!("unexpected terminal spawn response");
     };
@@ -2664,6 +2987,8 @@ async fn host_owns_authenticated_agent_state_and_resyncs_snapshots() {
     let Response::TerminalTerminated(terminated) = observer
         .request(Request::TerminateTerminal {
             session_id: session_id.clone(),
+            host_epoch: host.host_epoch(),
+            session_epoch,
             mode: TerminationMode::Terminate,
         })
         .await
@@ -2951,8 +3276,10 @@ async fn terminate_many_reports_each_terminal_result_without_rolling_back_succes
     let client = host.client("terminate-many").await;
     let spec = spawn_spec();
     let session_id = spec.session_id.clone();
-    let Response::TerminalSpawned { session_epoch, .. } =
-        client.request(Request::SpawnTerminal(spec)).await.unwrap()
+    let Response::TerminalSpawned { session_epoch, .. } = client
+        .request(spawn_request(spec, host.host_epoch()))
+        .await
+        .unwrap()
     else {
         panic!("unexpected spawn response");
     };
@@ -2964,10 +3291,14 @@ async fn terminate_many_reports_each_terminal_result_without_rolling_back_succes
                 TerminateTerminalRequest {
                     request_id: 41,
                     session_id: session_id.clone(),
+                    host_epoch: host.host_epoch(),
+                    session_epoch,
                 },
                 TerminateTerminalRequest {
                     request_id: 42,
                     session_id: missing_session_id.clone(),
+                    host_epoch: host.host_epoch(),
+                    session_epoch: 1,
                 },
             ],
         })
@@ -2989,10 +3320,16 @@ async fn terminate_many_reports_each_terminal_result_without_rolling_back_succes
     );
     assert_eq!(results[1].request_id, 42);
     assert_eq!(results[1].session_id, missing_session_id);
-    assert!(matches!(
-        &results[1].result,
-        Err(failure) if failure.code == FailureCode::PermissionDenied
-    ));
+    assert_eq!(
+        results[1]
+            .result
+            .as_ref()
+            .expect("an absent terminal termination is idempotent"),
+        &yttt_protocol::terminal::TerminatedTerminal {
+            session_epoch: 1,
+            final_sequence: 0,
+        }
+    );
 
     assert_eq!(
         host.lifecycle_request(LifecycleRequest::BeginDrain, false)
@@ -3219,7 +3556,10 @@ async fn host_ssh_product_smoke_covers_host_key_sftp_git_and_terminal() {
     let Response::TerminalSpawned {
         lease,
         session_epoch,
-    } = client.request(Request::SpawnTerminal(spec)).await.unwrap()
+    } = client
+        .request(spawn_request(spec, host.host_epoch()))
+        .await
+        .unwrap()
     else {
         panic!("unexpected SSH terminal spawn response");
     };
@@ -3307,6 +3647,8 @@ async fn host_ssh_product_smoke_covers_host_key_sftp_git_and_terminal() {
     let Response::TerminalTerminated(terminated) = client
         .request(Request::TerminateTerminal {
             session_id: session_id.clone(),
+            host_epoch: host.host_epoch(),
+            session_epoch,
             mode: TerminationMode::Terminate,
         })
         .await
@@ -3376,8 +3718,10 @@ async fn host_terminal_performance_probe() {
         return_to_shell: false,
     };
     let started = std::time::Instant::now();
-    let Response::TerminalSpawned { session_epoch, .. } =
-        client.request(Request::SpawnTerminal(spec)).await.unwrap()
+    let Response::TerminalSpawned { session_epoch, .. } = client
+        .request(spawn_request(spec, host.host_epoch()))
+        .await
+        .unwrap()
     else {
         panic!("unexpected performance terminal spawn response");
     };
@@ -3432,6 +3776,8 @@ async fn host_terminal_performance_probe() {
     let Response::TerminalTerminated(terminated) = client
         .request(Request::TerminateTerminal {
             session_id: session_id.clone(),
+            host_epoch: host.host_epoch(),
+            session_epoch,
             mode: TerminationMode::Terminate,
         })
         .await
@@ -3478,8 +3824,10 @@ async fn attach_and_checkpoint_omit_raw_replay_tail_and_recover_visible_output()
         return_to_shell: false,
     };
     let session_id = spec.session_id.clone();
-    let Response::TerminalSpawned { session_epoch, .. } =
-        first.request(Request::SpawnTerminal(spec)).await.unwrap()
+    let Response::TerminalSpawned { session_epoch, .. } = first
+        .request(spawn_request(spec, host.host_epoch()))
+        .await
+        .unwrap()
     else {
         panic!("unexpected spawn response");
     };
@@ -3547,6 +3895,8 @@ async fn attach_and_checkpoint_omit_raw_replay_tail_and_recover_visible_output()
     let termination = second
         .request(Request::TerminateTerminal {
             session_id: session_id.clone(),
+            host_epoch: host.host_epoch(),
+            session_epoch,
             mode: TerminationMode::Terminate,
         })
         .await;

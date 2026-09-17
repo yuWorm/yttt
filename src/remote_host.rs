@@ -496,7 +496,6 @@ fn initialize_environment(
         token,
         environment,
         label.clone(),
-        &config_paths,
     )
     .map_err(|error| error.to_string())?;
     Ok(RemoteEnvironment {

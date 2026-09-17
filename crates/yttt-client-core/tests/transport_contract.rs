@@ -146,6 +146,15 @@ fn contract_spawn_spec() -> TerminalSpawnSpec {
     }
 }
 
+fn spawn_request(spec: TerminalSpawnSpec, expected_host_epoch: u64) -> Request {
+    let start_id = format!("contract-start-{}", spec.session_id);
+    Request::SpawnTerminal {
+        spec,
+        start_id,
+        expected_host_epoch,
+    }
+}
+
 async fn assert_host_contract<C: TransportConnector + Clone>(host: ContractHost<C>) {
     let owner = connect_client(&host, "contract-owner").await;
     owner
@@ -162,7 +171,10 @@ async fn assert_host_contract<C: TransportConnector + Clone>(host: ContractHost<
 
     let spec = contract_spawn_spec();
     let session_id = spec.session_id.clone();
-    let spawned = owner.request(Request::SpawnTerminal(spec)).await.unwrap();
+    let spawned = owner
+        .request(spawn_request(spec, catalog.host_epoch))
+        .await
+        .unwrap();
     let Response::TerminalSpawned {
         lease,
         session_epoch,
@@ -288,7 +300,10 @@ async fn a_new_session_cannot_inherit_an_existing_actors_journal_or_terminals() 
         .await
         .unwrap();
     owner
-        .request(Request::SpawnTerminal(contract_spawn_spec()))
+        .request(spawn_request(
+            contract_spawn_spec(),
+            owner.control_status().unwrap().context.host_epoch,
+        ))
         .await
         .unwrap();
     let identity = ClientIdentity {
@@ -357,7 +372,13 @@ async fn tls_existing_host_authentication_rotation_and_shutdown_preserve_local_r
         .unwrap();
     let spec = contract_spawn_spec();
     let session_id = spec.session_id.clone();
-    local.request(Request::SpawnTerminal(spec)).await.unwrap();
+    local
+        .request(spawn_request(
+            spec,
+            local.control_status().unwrap().context.host_epoch,
+        ))
+        .await
+        .unwrap();
     let epoch = local.control_status().unwrap().context.host_epoch;
     let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = occupied.local_addr().unwrap();

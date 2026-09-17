@@ -109,14 +109,19 @@ fn desktop_disconnect_stops_owned_host_even_with_active_resources() {
 }
 
 #[test]
-fn confirmed_terminal_close_is_idempotent_after_host_acknowledgement() {
+fn confirmed_terminal_close_is_idempotent_without_reading_legacy_client_placement_state() {
     let temporary = tempdir().unwrap();
     let profile = isolated_profile(temporary.path());
+    let legacy_placements = profile.paths().config.join("terminal-placements.json");
+    let legacy_contents = br#"{ this is not terminal placement json }"#;
+    std::fs::create_dir_all(legacy_placements.parent().unwrap()).unwrap();
+    std::fs::write(&legacy_placements, legacy_contents).unwrap();
     let executable = std::path::PathBuf::from(env!("CARGO_BIN_EXE_yttt"));
     let project_root = temporary.path().join("agent-close-project");
     std::fs::create_dir_all(&project_root).unwrap();
     let project_id = ProjectId::new("agent-close-project");
     let desktop = DesktopHostRuntime::start_with_executable(profile.clone(), executable).unwrap();
+    assert_eq!(std::fs::read(&legacy_placements).unwrap(), legacy_contents);
     let Response::Project(ProjectResponse::Registered {
         registration_epoch, ..
     }) = desktop
@@ -158,27 +163,20 @@ fn confirmed_terminal_close_is_idempotent_after_host_acknowledgement() {
         environment: Vec::new(),
         removed_environment: Vec::new(),
     };
-    let spawn_fingerprint = spec.address_fingerprint();
     let request = desktop
         .terminal_start_request(
             spec.clone(),
             &catalog,
             yttt::host_runtime::TerminalStartIntent::Fresh,
+            &yttt::host_runtime::TerminalStartAttempt {
+                start_id: "close-test-start".to_string(),
+                expected_host_epoch: catalog.host_epoch,
+            },
         )
         .unwrap();
-    let Response::TerminalSpawned { session_epoch, .. } =
-        desktop.request_blocking_typed(request).unwrap()
-    else {
+    let Response::TerminalSpawned { .. } = desktop.request_blocking_typed(request).unwrap() else {
         panic!("Host did not spawn the Agent close test terminal");
     };
-    desktop
-        .bind_terminal(
-            &catalog,
-            spec.session_id.clone(),
-            session_epoch,
-            spawn_fingerprint,
-        )
-        .unwrap();
 
     let first = desktop
         .terminate_many_confirmed(vec![spec.session_id.clone()])
@@ -190,8 +188,9 @@ fn confirmed_terminal_close_is_idempotent_after_host_acknowledgement() {
             .terminate_many_confirmed(vec![spec.session_id])
             .unwrap()
             .is_empty(),
-        "closing a Host Agent tab after its terminal is Closed must be a local no-op"
+        "closing a Host Agent tab after its terminal is already closed must be a no-op"
     );
+    assert_eq!(std::fs::read(&legacy_placements).unwrap(), legacy_contents);
 
     assert_eq!(
         desktop
