@@ -76,6 +76,10 @@ v0.3.0 标签保留，但 Windows 安装脚本编译失败，未发布 GitHub Re
 
 #### 升级与兼容性
 
+- **已知性能验证结果**：macOS CI 的 debug 构建在 Host 终端重连性能 smoke 中未达到约 60 FPS
+  的现有阈值；两次测量的绘制 p50/p95 分别为 21.28/38.96 ms 和 20.82/41.25 ms。
+  三平台 Required validation 已通过。本版保留原性能标准并披露此结果继续发布；
+  该测量不等同于优化后的 Release 安装包帧率保证。
 - **版本路线回退**：0.3.1 延续开发分支的 pre-1.0 决策。旧公开版 1.0.0 的用户请从本次 Release
   手动下载安装；不要依赖 SemVer 更新检查将较小的 0.3.1 识别为升级。历史 Git 标签和已发布资产不变。
 - **Host 协议版本为 8**：Client 和 Host 应使用兼容构建。不兼容且仍有任务的 Host 会阻止自动替换；
@@ -188,6 +192,11 @@ preprocessor directive. The complete changes since the last public release follo
 
 #### Upgrade and compatibility notes
 
+- **Known performance validation result:** the macOS CI debug build missed the existing approximately
+  60 FPS threshold in the Host terminal reattach smoke. Two runs measured paint p50/p95 of
+  21.28/38.96 ms and 20.82/41.25 ms. Three-platform Required validation passed.
+  This release proceeds with the result disclosed and the performance threshold unchanged;
+  these debug measurements do not establish the optimized release package's frame rate.
 - **Version reset:** 0.3.1 follows the development branch's explicit pre-1.0 decision. Users of the old
   public 1.0.0 release must download and install this release manually; SemVer update checks do not
   consider the numerically smaller 0.3.1 an upgrade. Historical tags and published assets remain unchanged.
