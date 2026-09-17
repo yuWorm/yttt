@@ -608,6 +608,7 @@ mod tests {
             1,
         );
         let mut snapshot = reducer.snapshot().clone();
+        snapshot.process_state = AgentProcessState::Exited;
         snapshot.session = Some(yttt_agent_core::AgentSessionMetadata {
             session_id: Some("saved-session".into()),
             ..Default::default()

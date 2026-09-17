@@ -489,6 +489,7 @@ Disconnected -> Connecting -> Ready
 - 重连成功：更新 host epoch/connection sequence，立即请求 catalog。
 - Host 在断线期间仍存活：相同 terminal ID 通过 checkpoint/delta 继续。
 - Host 已死亡并由 launcher/外部 supervisor 重启：新 catalog 不含旧进程资源；Client 删除 stale mirror，但保留 tab、pane 和编辑器布局，将缺失的运行中 pane 标记为 `Restoring`。控制 Client 自动重建 shell（不执行旧启动命令）并以 provider resume 恢复 Agent 会话；已启动的 lazy tab 也参与。其他命令保持停止，观察者不创建进程。
+- 工作区恢复／重连的 catalog reconciliation 同样将带有 Agent session 元数据的 `Exited` pane 标记为 `Restoring`，包括普通 shell 中启动的 Agent；按保存的 provider 恢复原会话，不重放 pane 原命令。无保存会话的已退出 pane 仍保持停止；普通进程退出事件不会触发自动重启。
 - 恢复前再次检查 catalog：相同 project/session 的存活进程直接 attach，即使 resume 参数与原启动参数不同也不重复 spawn。仅允许 attach 的命令在此时丢失资源则报错，不能降级为重新执行。
 - Agent resume 失败或缺少可恢复元数据时保留原 session 与 tab，不自动替换成新会话。用户显式启动新进程才可放弃旧会话。
 - Host 确认 `AcknowledgeTerminalExit` 后，Client 将 durable placement 写为 `Closed`，不得留下指向已回收进程的 `Bound`。

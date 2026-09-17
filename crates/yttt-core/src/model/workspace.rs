@@ -69,7 +69,8 @@ impl Workspace {
     /// Reconciles persisted pane activity with the authoritative Host catalog.
     ///
     /// Missing running panes retain their place and become pending recovery.
-    /// Explicitly exited panes and never-started panes are not restarted.
+    /// Exited Agent panes with saved sessions also become pending recovery.
+    /// Other exited panes and never-started panes are not restarted.
     pub fn reconcile_host_resources(
         &mut self,
         available_terminal_sessions: &HashSet<String>,
@@ -83,16 +84,24 @@ impl Workspace {
                         pane.process_state = PaneProcessState::Running;
                         continue;
                     }
-                    if pane.process_state == PaneProcessState::Running {
+                    let was_running = pane.process_state == PaneProcessState::Running;
+                    let has_exited_agent_session = pane.process_state == PaneProcessState::Exited
+                        && pane
+                            .agent_snapshot
+                            .as_ref()
+                            .is_some_and(|snapshot| snapshot.session.is_some());
+                    if was_running || has_exited_agent_session {
                         pane.process_state = PaneProcessState::Restoring;
                         if let Some(snapshot) = pane.agent_snapshot.as_mut() {
                             snapshot.mark_disconnected();
                         }
-                        losses.push(RemoteResourceLoss {
-                            project_id: project.id.clone(),
-                            tab_id: tab.tab_id.clone(),
-                            pane_id: pane.pane_id.clone(),
-                        });
+                        if was_running {
+                            losses.push(RemoteResourceLoss {
+                                project_id: project.id.clone(),
+                                tab_id: tab.tab_id.clone(),
+                                pane_id: pane.pane_id.clone(),
+                            });
+                        }
                     }
                 }
             }

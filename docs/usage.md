@@ -63,8 +63,11 @@ same restoration path. Opening a directory or a new empty window remains a separ
 
 Surviving Host processes are reattached, not duplicated. After a cold Host restart, previously
 running shells are recreated without replaying their startup commands, and saved Agent sessions
-use the provider's resume command, including previously started lazy tabs. Failed or unavailable
-resume retains the original session and tab rather than silently starting a fresh conversation.
+use the provider's resume command, including previously started lazy tabs. Workspace restoration
+also resumes saved Agent sessions whose panes were already marked exited, including Agents
+started inside a shell. This happens during Host resource reconciliation, not immediately on
+process exit. Failed or unavailable resume retains the original session and tab rather than
+silently starting a fresh conversation; exited Agents without a saved session remain stopped.
 Other command processes remain stopped until explicitly started; observers never spawn them.
 
 If a terminal launch loses its response, the pane shows **Reconciling** with **Retry**, rather

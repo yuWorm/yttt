@@ -4,6 +4,8 @@
 
 ### 中文
 
+- 修复恢复工作区时已退出的 Agent 被当作普通命令拦截的问题：有保存会话时恢复原会话，
+  包括 shell 内启动的 Agent；恢复失败保留会话，无保存会话的已退出进程仍保持停止。
 - 终端启动、重试和关闭改由 Host 统一维护，不再读写旧的 `terminal-placements.json`；
   损坏文件和配置 revision 冲突不再阻断终端。旧文件保留原样。
 - 启动响应丢失时保留同一次启动标识并核对 Host 状态，不自动重复执行命令；
@@ -18,6 +20,9 @@
 
 ### English
 
+- Fixed workspace restoration leaving exited Agents stopped despite a saved session.
+  Saved sessions now resume, including Agents launched inside shells; failed resumes retain
+  the session, and exited processes without saved sessions remain stopped.
 - Fixed horizontally scrolled editor content bleeding into the line-number gutter. Separate
   content and gutter clipping preserves the configured window opacity.
 - Moved breadcrumb symbol parsing off the per-keystroke input path using Rope snapshots,
