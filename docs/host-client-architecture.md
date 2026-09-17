@@ -1,8 +1,8 @@
 # yttt Host/Client 架构规范
 
 - 状态：桌面既有 Host 远程访问已接入；平台与实际 UI 验收结果见实施计划
-- 更新：2026-09-06
-- 适用协议：`yttt-protocol` 资源 v7、lifecycle v3、desktop-shell v2；帧头 v1
+- 更新：2026-09-17
+- 适用协议：`yttt-protocol` 资源 v9、lifecycle v3、desktop-shell v2；帧头 v1
 - 相关设计：[`p2p-relay-architecture.md`](./p2p-relay-architecture.md)
 
 本文定义 yttt 的标准 Host/Client 边界、资源所有权、终端同步协议、本地安全模型、生命周期和恢复语义。P2P、Relay、移动端等连接路径只能扩展本规范，不能改变资源所有权。
@@ -225,9 +225,9 @@ delta 和按需 checkpoint 同步。
 Desktop 的 Agent snapshot bridge 必须按 `terminal_session_id` 和 `(host_epoch, generation, sequence)` 合并最新值，不能让有界事件队列在 UI 暂停消费时静默丢失最终状态。Agent 进程存活但尚无权威 snapshot 只表示状态未知，UI 显示 `Stale`，不能推断为 `Working`。
 
 连接成功或重连成功后，`ClientCore` 第一项内部请求是 `ListResources`。此后 Host 只发送
-`ResourceCatalogChanged` invalidation；Client 合并重复通知并异步刷新一次 catalog。创建
-terminal 不再无条件请求完整 catalog，而是读取这份缓存；cache 尚未建立时才同步回退到
-`ListResources`。对账规则：
+`ResourceCatalogChanged` invalidation；Client 合并重复通知并异步刷新一次 catalog。
+终端启动、重试与批量关闭另行读取权威 catalog，避免根据过期缓存决定创建或关闭的目标。
+对账规则：
 
 1. catalog 中存在的 session 建立独立 terminal-data connection；initial snapshot 建立或替换 mirror。
 2. data sequence gap、epoch 变化或 `ResyncRequired` 触发 checkpoint。
@@ -262,7 +262,8 @@ ensure 的管理连接仍使用另一个本机 socket/token；关闭桌面 TLS �
 
 ### 7.1 创建
 
-`SpawnTerminal` 必须携带完整、可序列化的 `TerminalSpawnSpec`：
+`SpawnTerminal` 携带稳定的 `start_id`、`expected_host_epoch` 和完整的
+`TerminalSpawnSpec`。重试同一次启动沿用标识；明确的新启动使用新标识。spec 包含：
 
 - stable IDs
 - cwd
@@ -282,6 +283,31 @@ Host 创建 PTY、spawn child、关闭 slave 副本，然后创建：
 - semantic snapshotter
 
 Client 不接收 PTY fd/handle。
+
+#### 启动结果与关闭对账
+
+Host 是终端生命周期的唯一权威。客户端不再维护 `OpenPending`/`Bound`/`ClosePending`
+文件状态；工作区仍持久化布局和恢复意图，活跃资源以 Host catalog 为准。
+旧 `terminal-placements.json` 不再读取、写入或自动删除，通用共享配置入口也不再允许访问它。
+
+Host 在修改 Agent Hook 环境和创建进程前原子保留启动记录，使用原始
+`(session_id, project_id, cwd, execution)` 的 SHA-256 识别地址。同标识不同地址被拒绝；
+同标识仍对应存活资源时返回该资源，已清理或无法确认时返回 `OutcomeUnknown`，不能重新执行。
+认证、控制权和 epoch 校验先于结果重放；Host 重启后旧 `expected_host_epoch` 必须被拒绝。
+
+记录仅保留在当前 Host 内存，不承诺跨 Host 重启的 exactly-once。每个 Host epoch 最多保留
+4,096 条记录，标识上限 256 字节；记录不保存原始命令参数，且不淘汰后重新接受旧标识。
+达到上限返回 `ResourceLimit`，不会自动重启 Host 或终止正在运行的任务。
+
+客户端收到通信失败或 `OutcomeUnknown` 后保留启动标识，显示 Reconciling/Retry 并读取
+catalog；自动对账只在观察到对应资源时重新附加，不自动重发缺失资源的创建请求。
+显式 Retry 仍沿用同一次启动标识。Host epoch 变化会终结旧尝试，不自动重放命令；
+明确失败或退出后的新启动才分配新标识。Attach-only 恢复仍不能创建缺失的任意命令。
+
+终止请求携带目标 `host_epoch` 和 `session_epoch`，先校验再操作资源；旧请求不能结束
+同一 session ID 下的新一代进程。目标已不存在时幂等完成，仍存在时必须具有交互租约。
+批量关闭按项返回结果；通信失败不再通过客户端文件把状态“回滚”为运行中。
+
 
 ### 7.2 输出路径
 

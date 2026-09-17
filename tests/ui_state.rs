@@ -60,9 +60,8 @@ use yttt::{
     ui::project_tree::{DirectorySnapshot, ProjectTreeEntry, ProjectTreeEntryKind},
     ui::surface::WorkbenchSurface,
     ui::terminal::pane::{
-        PaneLifecycle, TerminalPaneExitInput, TerminalPaneExitedEvent, TerminalPaneStartedEvent,
-        TerminalSpawnFailure, notification_for_terminal_pane_exit, pane_lifecycle_label,
-        spawn_failure_lines,
+        TerminalPaneExitInput, TerminalPaneExitedEvent, TerminalPaneStartedEvent,
+        notification_for_terminal_pane_exit,
     },
     ui::vim::WorkbenchVimMode,
     ui::workbench::shell::sidebar::visible_project_items,
@@ -6527,10 +6526,7 @@ fn root_view_terminal_environment_persists_and_updates_existing_panes() {
         .unwrap()
         .environment;
     assert_eq!(
-        environment
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get("YTTT_PROFILE"),
+        environment.read().get("YTTT_PROFILE"),
         Some(&"development".to_string())
     );
 
@@ -6539,10 +6535,7 @@ fn root_view_terminal_environment_persists_and_updates_existing_panes() {
             .unwrap()
     );
     assert_eq!(
-        environment
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get("YTTT_PROFILE"),
+        environment.read().get("YTTT_PROFILE"),
         Some(&"production".to_string())
     );
     assert_eq!(
@@ -6559,12 +6552,7 @@ fn root_view_terminal_environment_persists_and_updates_existing_panes() {
         root.remove_terminal_environment_variable("YTTT_PROFILE")
             .unwrap()
     );
-    assert!(
-        environment
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .is_empty()
-    );
+    assert!(environment.read().is_empty());
 }
 
 #[test]
@@ -8718,51 +8706,6 @@ fn terminal_pane_exit_event_preserves_process_identity() {
     assert_eq!(event.tab_id, "dev");
     assert_eq!(event.pane_id, "server");
     assert_eq!(event.exit_behavior, ProcessExitBehavior::ManualRestart);
-}
-
-#[test]
-fn terminal_pane_lifecycle_labels_are_visible() {
-    assert_eq!(pane_lifecycle_label(&PaneLifecycle::Running), "running");
-    assert_eq!(
-        pane_lifecycle_label(&PaneLifecycle::Stopping {
-            reason: ExitReason::Completed,
-        }),
-        "stopping"
-    );
-    assert_eq!(
-        pane_lifecycle_label(&PaneLifecycle::Exited {
-            code: Some(0),
-            reason: ExitReason::Completed,
-        }),
-        "exited 0"
-    );
-    assert_eq!(
-        pane_lifecycle_label(&PaneLifecycle::SpawnFailed {
-            message: "no such command".to_string(),
-        }),
-        "spawn failed"
-    );
-    assert_eq!(
-        pane_lifecycle_label(&PaneLifecycle::Exited {
-            code: None,
-            reason: ExitReason::KilledByUser,
-        }),
-        "killed"
-    );
-}
-
-#[test]
-fn terminal_spawn_failure_summary_includes_command_and_cwd() {
-    let lines = spawn_failure_lines(&TerminalSpawnFailure {
-        command: "missing-command".to_string(),
-        cwd: PathBuf::from("/tmp/yttt"),
-        message: "not found".to_string(),
-    });
-
-    assert_eq!(lines[0], "Failed to start terminal");
-    assert_eq!(lines[1], "command: missing-command");
-    assert_eq!(lines[2], "cwd: /tmp/yttt");
-    assert_eq!(lines[3], "error: not found");
 }
 
 #[test]

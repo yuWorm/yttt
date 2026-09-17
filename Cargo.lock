@@ -11461,7 +11461,7 @@ dependencies = [
 
 [[package]]
 name = "yttt"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -11520,6 +11520,7 @@ dependencies = [
  "tree-sitter-xml",
  "tree-sitter-zig",
  "uuid",
+ "windows-sys 0.61.2",
  "winreg 0.56.0",
  "winresource",
  "yttt-agent-core",
@@ -11541,7 +11542,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-agent-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -11551,7 +11552,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-agent-providers"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -11563,7 +11564,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-agent-runtime"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -11575,7 +11576,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-client-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "parking_lot",
  "rcgen",
@@ -11594,7 +11595,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -11604,7 +11605,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-host"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -11642,7 +11643,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-project-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "sha2 0.10.9",
  "tempfile",
@@ -11652,7 +11653,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-protocol"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "ciborium",
  "crc32fast",
@@ -11669,7 +11670,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-server"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "fs2",
  "rand 0.8.6",
@@ -11689,7 +11690,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-ssh"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-channel 2.5.0",
  "flume 0.12.0",
@@ -11710,7 +11711,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-terminal"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -11733,7 +11734,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-terminal-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "alacritty_terminal",
  "parking_lot",
@@ -11743,7 +11744,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-transport"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "hmac 0.12.1",
  "rand 0.8.6",
@@ -11758,7 +11759,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-transport-local"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "crc32fast",
  "rustix 1.1.4",
@@ -11773,7 +11774,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-transport-tls"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "rustls",
  "tokio",
@@ -11784,7 +11785,7 @@ dependencies = [
 
 [[package]]
 name = "yttt-ui"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "gpui",
  "gpui-component",

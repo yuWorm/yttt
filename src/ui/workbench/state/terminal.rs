@@ -1,9 +1,10 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::{Arc, RwLock},
+    sync::Arc,
 };
 
 use gpui::{Entity, Subscription, Task};
+use parking_lot::RwLock;
 
 use crate::{
     host_runtime::DesktopHostRuntime,

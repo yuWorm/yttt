@@ -90,7 +90,7 @@ use std::{
     ops::Range,
     path::{Path, PathBuf},
     rc::Rc,
-    sync::{Arc, RwLock},
+    sync::Arc,
     time::Duration,
 };
 

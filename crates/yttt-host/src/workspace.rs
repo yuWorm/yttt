@@ -1348,7 +1348,6 @@ fn config_path_is_shared(path: &ProjectRelativePath) -> bool {
                     | "bars.toml"
                     | "default-layout.toml"
                     | "recent-projects.toml"
-                    | "terminal-placements.json"
                     | "agent-state.json"
             ))
 }
@@ -2538,6 +2537,21 @@ mod publication_tests {
                 .code,
             FailureCode::PermissionDenied
         );
+        for request in [
+            WorkspaceRequest::ReadConfig {
+                relative_path: path("terminal-placements.json"),
+            },
+            WorkspaceRequest::WriteConfig {
+                relative_path: path("terminal-placements.json"),
+                expected_revision: None,
+                bytes: b"obsolete".to_vec(),
+            },
+        ] {
+            assert_eq!(
+                service.handle(&client, request).unwrap_err().code,
+                FailureCode::PermissionDenied
+            );
+        }
         fs::rename(
             root.path().join("config"),
             root.path().join("original-config"),

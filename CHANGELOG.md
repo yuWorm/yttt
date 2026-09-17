@@ -4,6 +4,12 @@
 
 ### 中文
 
+- 终端启动、重试和关闭改由 Host 统一维护，不再读写旧的 `terminal-placements.json`；
+  损坏文件和配置 revision 冲突不再阻断终端。旧文件保留原样。
+- 启动响应丢失时保留同一次启动标识并核对 Host 状态，不自动重复执行命令；
+  UI 区分结果待确认与明确启动失败。关闭请求校验 Host/session epoch，防止旧请求结束新进程。
+- 资源协议升级至 v9，客户端与 Host 需要同步更新。Host 在同一 epoch 内保留最多 4,096 次
+  启动记录，达到上限会拒绝新启动而非遗忘旧记录后重复执行；不会自动重启 Host。
 - 修复编辑器横向滚动时正文穿透行号区域的问题；正文与行号独立裁剪，保留窗口透明度设置。
 - 将面包屑符号解析移出逐键输入路径：使用 Rope 快照、50 ms 防抖和后台解析，合并连续编辑，
   并丢弃编辑、语言切换或磁盘重载后过期的解析结果。
@@ -21,13 +27,16 @@
   fixed TSX/JSX tag and component highlighting, and added dedicated SCSS,
   Dockerfile/Containerfile, HCL/Terraform, and Nix grammars.
 
-## 0.3.0 - 2026-09-16
+## 0.3.1 - 2026-09-16
 
 ### 中文
 
 本次发布以实际公开版本 [v1.0.0](https://github.com/yuWorm/yttt/releases/tag/v1.0.0) 为基线，
 汇总其后的 87 个提交（截至 `62fcc99`，包含合并提交）。开发分支在 `e8816c0` 中明确回到
-pre-1.0 版本路线，因此本次版本为 **0.3.0**，不是旧版 1.0.0 的旧构建。
+pre-1.0 版本路线，因此本次版本为 **0.3.1**，不是旧版 1.0.0 的旧构建。
+
+v0.3.0 标签保留，但 Windows 安装脚本编译失败，未发布 GitHub Release。0.3.1 修复 Inno Setup
+将行首换行字符常量误识别为预处理指令的问题；以下为相对上一公开版的完整更新说明。
 
 #### 新增与改进
 
@@ -92,8 +101,12 @@ pre-1.0 版本路线，因此本次版本为 **0.3.0**，不是旧版 1.0.0 的�
 
 #### 升级与兼容性
 
-- **版本路线回退**：0.3.0 延续开发分支的 pre-1.0 决策。旧公开版 1.0.0 的用户请从本次 Release
-  手动下载安装；不要依赖 SemVer 更新检查将较小的 0.3.0 识别为升级。历史 Git 标签和已发布资产不变。
+- **已知性能验证结果**：macOS CI 的 debug 构建在 Host 终端重连性能 smoke 中未达到约 60 FPS
+  的现有阈值；两次测量的绘制 p50/p95 分别为 21.28/38.96 ms 和 20.82/41.25 ms。
+  三平台 Required validation 已通过。本版保留原性能标准并披露此结果继续发布；
+  该测量不等同于优化后的 Release 安装包帧率保证。
+- **版本路线回退**：0.3.1 延续开发分支的 pre-1.0 决策。旧公开版 1.0.0 的用户请从本次 Release
+  手动下载安装；不要依赖 SemVer 更新检查将较小的 0.3.1 识别为升级。历史 Git 标签和已发布资产不变。
 - **Host 协议版本为 8**：Client 和 Host 应使用兼容构建。不兼容且仍有任务的 Host 会阻止自动替换；
   请先保存工作并安排重启，不要强制终止正在运行的任务。
 - **关闭窗口不等于退出**：关闭最后一个本地窗口保留托盘和桌面所属 Host；退出桌面会终止其所属 Host
@@ -114,7 +127,11 @@ pre-1.0 版本路线，因此本次版本为 **0.3.0**，不是旧版 1.0.0 的�
 This release compares against the last publicly shipped version,
 [v1.0.0](https://github.com/yuWorm/yttt/releases/tag/v1.0.0), covering 87 subsequent commits
 through `62fcc99`, including merges. Commit `e8816c0` explicitly returned development to
-pre-1.0 versioning: **0.3.0 is the new release, not an older build of 1.0.0**.
+pre-1.0 versioning: **0.3.1 is the new release, not an older build of 1.0.0**.
+
+The v0.3.0 tag is retained, but no GitHub Release was published because Windows installer compilation
+failed. Version 0.3.1 fixes Inno Setup interpreting a line-leading newline character constant as a
+preprocessor directive. The complete changes since the last public release follow.
 
 #### Added and changed
 
@@ -200,9 +217,14 @@ pre-1.0 versioning: **0.3.0 is the new release, not an older build of 1.0.0**.
 
 #### Upgrade and compatibility notes
 
-- **Version reset:** 0.3.0 follows the development branch's explicit pre-1.0 decision. Users of the old
+- **Known performance validation result:** the macOS CI debug build missed the existing approximately
+  60 FPS threshold in the Host terminal reattach smoke. Two runs measured paint p50/p95 of
+  21.28/38.96 ms and 20.82/41.25 ms. Three-platform Required validation passed.
+  This release proceeds with the result disclosed and the performance threshold unchanged;
+  these debug measurements do not establish the optimized release package's frame rate.
+- **Version reset:** 0.3.1 follows the development branch's explicit pre-1.0 decision. Users of the old
   public 1.0.0 release must download and install this release manually; SemVer update checks do not
-  consider the numerically smaller 0.3.0 an upgrade. Historical tags and published assets remain unchanged.
+  consider the numerically smaller 0.3.1 an upgrade. Historical tags and published assets remain unchanged.
 - **Host resource protocol is version 8:** use compatible Client/Host builds. Busy incompatible Hosts
   refuse automatic replacement; save work and plan a restart instead of force-stopping live tasks.
 - **Closing is not quitting:** closing the last local window retains the tray and desktop-owned Host.
@@ -222,9 +244,15 @@ pre-1.0 versioning: **0.3.0 is the new release, not an older build of 1.0.0**.
   platform/architecture builds, `update.json` and `SHA256SUMS`. macOS remains ad-hoc signed, without
   Developer ID signing or notarization.
 
-**完整提交对比 / Full comparison:** https://github.com/yuWorm/yttt/compare/v1.0.0...v0.3.0
+**完整提交对比 / Full comparison:** https://github.com/yuWorm/yttt/compare/v1.0.0...v0.3.1
 
-**使用文档 / Usage:** https://github.com/yuWorm/yttt/blob/v0.3.0/docs/usage.md
+**使用文档 / Usage:** https://github.com/yuWorm/yttt/blob/v0.3.1/docs/usage.md
+
+## 0.3.0 - 2026-09-16
+
+- 中文：仅创建标签；Windows 安装包编译失败，未发布 GitHub Release。完整更新内容随 0.3.1 发布。
+- English: tagged only; Windows installer compilation failed and no GitHub Release was published.
+  The complete release notes are included in 0.3.1.
 
 ## 1.0.0 - 2026-07-18
 

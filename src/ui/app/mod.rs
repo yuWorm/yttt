@@ -13,6 +13,8 @@ use gpui::{
 #[cfg(feature = "perf-metrics")]
 use gpui::{IntoElement, ParentElement, Render, WindowKind, div, point};
 use gpui_component::{Root as ComponentRoot, Theme, TitleBar};
+#[cfg(feature = "perf-metrics")]
+use parking_lot::RwLock;
 use reqwest_client::ReqwestClient;
 
 use crate::{
@@ -791,7 +793,7 @@ fn terminal_performance_contexts() -> Vec<crate::ui::terminal::pane::TerminalPan
     let tab_id = tab.id.clone();
     let tab_title = tab.title.clone();
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let environment = Arc::new(std::sync::RwLock::new(std::collections::BTreeMap::new()));
+    let environment = Arc::new(RwLock::new(std::collections::BTreeMap::new()));
     panes
         .into_iter()
         .map(|pane| {

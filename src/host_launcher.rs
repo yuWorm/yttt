@@ -300,7 +300,11 @@ impl HostLauncher {
                 if replacement_became_unnecessary {
                     return self.attach_existing(token_file, &token).await;
                 }
-                match lifecycle.request(LifecycleRequest::StopIfIdle).await? {
+                let response = lifecycle.request(LifecycleRequest::StopIfIdle).await?;
+                // The stop request's client-side pipe handle must close before a
+                // replacement binds the single-instance Windows named pipe.
+                drop(lifecycle);
+                match response {
                     LifecycleResponse::Stopping => self.wait_for_existing_host_exit().await?,
                     LifecycleResponse::Busy { blockers } => {
                         return Err(HostLaunchError::HostBusy(blockers));
@@ -553,9 +557,14 @@ impl HostLauncher {
             }
             match self.connect_with_token(token).await {
                 Ok(_) => {
-                    let actual_lifetime = self.live_host_metadata()?.lifetime;
+                    let metadata = self.live_host_metadata()?;
+                    // A successful handshake confirms that this metadata belongs
+                    // to the Host we must attach to or replace.
+                    if host_build_requires_replacement(&self.build, &metadata.build) {
+                        return Ok(ExistingHostAction::ReplaceBuild);
+                    }
                     if self.lifetime == yttt_host::HostLifetime::Independent
-                        && actual_lifetime == yttt_host::HostLifetime::DesktopOwned
+                        && metadata.lifetime == yttt_host::HostLifetime::DesktopOwned
                     {
                         return Ok(ExistingHostAction::ReplaceLifetime);
                     }
@@ -681,7 +690,11 @@ impl ManagedHostProcess {
             .launcher
             .connect_lifecycle_with_token(&token, true)
             .await?;
-        match client.request(LifecycleRequest::ForceStop).await? {
+        let response = client.request(LifecycleRequest::ForceStop).await?;
+        // Like replacement shutdown, release the client-side pipe endpoint before
+        // waiting for the Host to stop.
+        drop(client);
+        match response {
             LifecycleResponse::Draining => {}
             _ => return Err(HostLaunchError::UnexpectedMessage),
         }
@@ -760,7 +773,17 @@ impl ManagedHostProcess {
             }
             attempts += 1;
             match self.launcher.connect_with_token(token).await {
-                Ok(_) => return Ok(()),
+                Ok(_) => {
+                    if let Some(child_id) = self.child.as_ref().map(Child::id) {
+                        let ready = self.launcher.live_host_metadata()?;
+                        // A concurrent launcher can connect the winning Host before
+                        // its losing child observes the profile-lock failure.
+                        if ready.pid != child_id {
+                            self.child = None;
+                        }
+                    }
+                    return Ok(());
+                }
                 Err(error) => last_connect_error = Some(error),
             }
             if tokio::time::Instant::now() >= deadline {

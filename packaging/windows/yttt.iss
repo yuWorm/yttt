@@ -96,8 +96,8 @@ begin
       Detail := 'The installed yttt Host did not provide blocker details.';
     if ResultCode = 2 then
       Result :=
-        'yttt cannot be upgraded while the Host owns running or unacknowledged resources.' +
-        #13#10 + Trim(Detail)
+        'yttt cannot be upgraded while the Host owns running or unacknowledged resources.' + #13#10 +
+        Trim(Detail)
     else
       Result := 'yttt Host upgrade preflight failed.' + #13#10 + Trim(Detail);
   end;
