@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.2 - 2026-09-17
+
 ### 中文
 
 - 修复恢复工作区时已退出的 Agent 被当作普通命令拦截的问题：有保存会话时恢复原会话，
@@ -23,6 +25,15 @@
 - Fixed workspace restoration leaving exited Agents stopped despite a saved session.
   Saved sessions now resume, including Agents launched inside shells; failed resumes retain
   the session, and exited processes without saved sessions remain stopped.
+- Centralized terminal launch, retry, and shutdown in the Host, eliminating reads and writes
+  of the legacy `terminal-placements.json`. Malformed files and configuration revision conflicts
+  no longer block terminals; existing legacy files are retained unchanged.
+- When a launch response is lost, retain the same launch identifier and check Host state rather
+  than issuing the command again. The UI distinguishes a pending confirmation from an explicit
+  launch failure. Shutdown requests validate the Host and session epoch so stale requests cannot
+  end a newer process. Resource protocol v9 requires matching Client and Host builds; the Host
+  retains up to 4,096 launch records per epoch and rejects new launches at capacity rather than
+  discarding history and risking a duplicate command. It does not restart automatically.
 - Fixed horizontally scrolled editor content bleeding into the line-number gutter. Separate
   content and gutter clipping preserves the configured window opacity.
 - Moved breadcrumb symbol parsing off the per-keystroke input path using Rope snapshots,
