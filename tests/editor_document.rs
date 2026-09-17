@@ -6,7 +6,7 @@ use std::{
     cell::{Cell, RefCell},
     path::PathBuf,
     rc::Rc,
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use yttt::{
@@ -248,6 +248,9 @@ fn project_editor_document_tracks_breadcrumbs_at_the_cursor(cx: &mut gpui::TestA
         input.set_cursor_position(gpui_component::input::Position::new(1, 4), window, input_cx);
     });
     cx.run_until_parked();
+    cx.background_executor
+        .advance_clock(Duration::from_millis(200));
+    cx.run_until_parked();
     assert_eq!(
         cx.read(|app| document.read(app).breadcrumb_header().to_string()),
         "src/app.rs"
@@ -275,6 +278,158 @@ fn project_editor_document_tracks_breadcrumbs_at_the_cursor(cx: &mut gpui::TestA
         breadcrumb_names,
         vec!["app".to_string(), "render".to_string()]
     );
+}
+
+#[gpui::test]
+fn breadcrumb_parsing_debounces_edits_and_uses_the_latest_cursor(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let document_slot = Rc::new(RefCell::new(None));
+    let slot = document_slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let document = cx.new(|cx| {
+            ProjectEditorDocument::new(
+                project_model(
+                    "mod stale {\n    fn discarded() {}\n}\n",
+                    fingerprint(36, 1),
+                ),
+                EditorAppearance::default(),
+                window,
+                cx,
+            )
+        });
+        *slot.borrow_mut() = Some(document.clone());
+        gpui_component::Root::new(document, window, cx)
+    });
+    let document = document_slot.borrow_mut().take().unwrap();
+    let input = cx.read(|app| document.read(app).input().clone());
+    cx.run_until_parked();
+    cx.background_executor
+        .advance_clock(Duration::from_millis(200));
+    cx.run_until_parked();
+    assert_eq!(
+        cx.read(|app| document.read(app).symbols()[0].name.clone()),
+        "stale"
+    );
+
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_selection(input.text().len(), 0, input_cx);
+        input.replace("mod current {\n    fn selected() {}\n}\n", window, input_cx);
+    });
+    cx.run_until_parked();
+    // Edits must not synchronously parse; the last outline stays usable until
+    // the background refresh completes.
+    assert_eq!(
+        cx.read(|app| document.read(app).symbols()[0].name.clone()),
+        "stale"
+    );
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_cursor_position(gpui_component::input::Position::new(1, 4), window, input_cx);
+    });
+    cx.run_until_parked();
+    for _ in 0..2 {
+        cx.background_executor
+            .advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+    }
+
+    let (symbol_names, breadcrumb_names) = cx.read(|app| {
+        let document = document.read(app);
+        (
+            document
+                .symbols()
+                .iter()
+                .map(|symbol| symbol.name.clone())
+                .collect::<Vec<_>>(),
+            document
+                .breadcrumbs()
+                .iter()
+                .map(|symbol| symbol.name.clone())
+                .collect::<Vec<_>>(),
+        )
+    });
+    assert_eq!(
+        symbol_names,
+        vec!["current".to_string(), "selected".to_string()]
+    );
+    assert_eq!(
+        breadcrumb_names,
+        vec!["current".to_string(), "selected".to_string()]
+    );
+}
+
+#[gpui::test]
+fn breadcrumb_parsing_ignores_stale_language_and_disk_results(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let document_slot = Rc::new(RefCell::new(None));
+    let slot = document_slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let document = cx.new(|cx| {
+            ProjectEditorDocument::new(
+                project_model("fn discarded() {}\n", fingerprint(18, 1)),
+                EditorAppearance::default(),
+                window,
+                cx,
+            )
+        });
+        *slot.borrow_mut() = Some(document.clone());
+        gpui_component::Root::new(document, window, cx)
+    });
+    let document = document_slot.borrow_mut().take().unwrap();
+    let input = cx.read(|app| document.read(app).input().clone());
+    document.update_in(cx, |document, window, document_cx| {
+        document.relocate(
+            DocumentId {
+                project_id: ProjectId::new("project-a"),
+                canonical_path: PathBuf::from("/project-a/src/current.ts"),
+            },
+            "src/current.ts",
+            window,
+            document_cx,
+        );
+        document.replace_from_disk(
+            "class Current {\n    render() {}\n}\n",
+            fingerprint(34, 2),
+            window,
+            document_cx,
+        );
+    });
+    input.update_in(cx, |input, window, input_cx| {
+        input.set_cursor_position(gpui_component::input::Position::new(1, 4), window, input_cx);
+    });
+    cx.run_until_parked();
+    for _ in 0..2 {
+        cx.background_executor
+            .advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+    }
+
+    let (symbol_names, breadcrumb_names, generation, dirty) = cx.read(|app| {
+        let document = document.read(app);
+        (
+            document
+                .symbols()
+                .iter()
+                .map(|symbol| symbol.name.clone())
+                .collect::<Vec<_>>(),
+            document
+                .breadcrumbs()
+                .iter()
+                .map(|symbol| symbol.name.clone())
+                .collect::<Vec<_>>(),
+            document.model().generation(),
+            document.model().is_dirty(),
+        )
+    });
+    assert_eq!(
+        symbol_names,
+        vec!["Current".to_string(), "render".to_string()]
+    );
+    assert_eq!(
+        breadcrumb_names,
+        vec!["Current".to_string(), "render".to_string()]
+    );
+    assert_eq!(generation, 1);
+    assert!(!dirty);
 }
 #[gpui::test]
 fn vim_mode_blocks_normal_input_and_handles_unicode_edits(cx: &mut gpui::TestAppContext) {

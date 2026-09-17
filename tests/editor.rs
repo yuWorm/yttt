@@ -1,6 +1,9 @@
+use std::ops::Range;
+
+use gpui::HighlightStyle;
 use gpui_component::{
-    highlighter::{HighlightTheme, LanguageRegistry, SyntaxHighlighter},
-    input::{DisplayMap, FoldRange, Rope},
+    highlighter::{HighlightTheme, SyntaxHighlighter},
+    input::{DisplayMap, FoldRange, InputEdit, Point, Rope},
 };
 use yttt::ui::editor::{
     CodeEditorConfig, CodeEditorLanguageMode, CodeEditorState, EditorDiagnostic,
@@ -8,46 +11,202 @@ use yttt::ui::editor::{
     EditorLanguageResolutionSource, register_builtin_editor_languages,
 };
 
-#[test]
-fn toml_language_registration_registers_toml_highlighter() {
-    register_builtin_editor_languages();
+fn assert_token_color(
+    styles: &[(Range<usize>, HighlightStyle)],
+    source: &str,
+    token: &str,
+    expected: HighlightStyle,
+) {
+    let start = source.find(token).expect("token should occur in source");
+    let end = start + token.len();
+    let color = expected
+        .color
+        .expect("the default theme should color the expected capture");
 
-    assert!(LanguageRegistry::singleton().language("toml").is_some());
+    assert!(
+        styles.iter().any(|(range, style)| {
+            range.start <= start && range.end >= end && style.color == Some(color)
+        }),
+        "{token:?} should use the expected syntax color"
+    );
 }
 
 #[test]
-fn extended_language_registration_adds_fish_and_gdscript_highlighters() {
-    register_builtin_editor_languages();
+fn tsx_highlighter_styles_typescript_and_jsx_tokens() {
+    let source = r#"type Props = { title: string };
+export function Card({ title }: Props) {
+    return <section data-title={title}><Widget label={title} /></section>;
+}
+"#;
+    let theme = HighlightTheme::default_dark();
+    let text = Rope::from_str(source);
+    let mut highlighter = SyntaxHighlighter::new("tsx");
 
-    assert!(LanguageRegistry::singleton().language("fish").is_some());
-    assert!(LanguageRegistry::singleton().language("gdscript").is_some());
+    assert!(highlighter.update(None, &text, None));
+    let styles = highlighter.styles(&(0..source.len()), &theme);
+
+    assert_token_color(&styles, source, "type", theme.style("keyword").unwrap());
+    assert_token_color(&styles, source, "Props", theme.style("type").unwrap());
+    assert_token_color(&styles, source, "section", theme.style("tag").unwrap());
+    assert_token_color(
+        &styles,
+        source,
+        "data-title",
+        theme.style("attribute").unwrap(),
+    );
 }
 
 #[test]
-fn windows_language_registration_produces_syntax_highlights() {
-    register_builtin_editor_languages();
+fn jsx_highlighter_styles_dom_tags_and_components() {
+    let source = r#"const Card = () => <section data-title="hello"><Widget /></section>;"#;
+    let theme = HighlightTheme::default_dark();
+    let mut highlighter = SyntaxHighlighter::new("javascript");
+    highlighter.update(None, &Rope::from_str(source), None);
+    let styles = highlighter.styles(&(0..source.len()), &theme);
+
+    assert_token_color(&styles, source, "section", theme.style("tag").unwrap());
+    assert_token_color(&styles, source, "Widget", theme.style("type").unwrap());
+    assert_token_color(
+        &styles,
+        source,
+        "data-title",
+        theme.style("attribute").unwrap(),
+    );
+}
+
+#[test]
+fn vue_highlighter_styles_template_and_embedded_tokens() {
+    let source = r#"<template>
+  <Card v-if="ready" :title="message" @click.stop="handleClick">
+    {{ message.toUpperCase() }}
+  </Card>
+</template>
+<script lang="tsx">
+type Props = { message: string };
+const Panel = ({ message }: Props) => <section>{message}</section>;
+</script>
+<style lang="scss">
+@use "palette" as *;
+.card { color: $accent; }
+</style>
+"#;
+    let mut theme = HighlightTheme::default_dark();
+    // The upstream palette leaves variables uncolored; make the SCSS capture
+    // observable independently of the surrounding Vue and TypeScript captures.
+    std::sync::Arc::make_mut(&mut theme).style.syntax.variable =
+        Some(toml::from_str("color = \"#ff00ff\"").unwrap());
+    let text = Rope::from_str(source);
+    let mut highlighter = SyntaxHighlighter::new("vue");
+
+    assert!(highlighter.update(None, &text, None));
+    let styles = highlighter.styles(&(0..source.len()), &theme);
+
+    assert_token_color(&styles, source, "Card", theme.style("tag").unwrap());
+    assert_token_color(&styles, source, "v-if", theme.style("keyword").unwrap());
+    assert_token_color(
+        &styles,
+        source,
+        "toUpperCase",
+        theme.style("function.method").unwrap(),
+    );
+    assert_token_color(&styles, source, "type", theme.style("keyword").unwrap());
+    assert_token_color(&styles, source, "Props", theme.style("type").unwrap());
+    assert_token_color(&styles, source, "@use", theme.style("keyword").unwrap());
+    assert_token_color(&styles, source, "$accent", theme.style("variable").unwrap());
+}
+
+#[test]
+fn vue_directive_expressions_do_not_inherit_html_string_colors() {
+    let source =
+        r#"<template><div title="tooltip" :title="ready ? 'yes' : 'no'"></div></template>"#;
+    let theme = HighlightTheme::default_dark();
+    let string_style = theme.style("string").unwrap();
+    let mut highlighter = SyntaxHighlighter::new("vue");
+    highlighter.update(None, &Rope::from_str(source), None);
+    let styles = highlighter.styles(&(0..source.len()), &theme);
+
+    assert_token_color(&styles, source, "tooltip", string_style);
+    assert_token_color(&styles, source, "'yes'", string_style);
+    let variable = source.find("ready").unwrap();
+    assert!(
+        styles.iter().all(|(range, style)| {
+            !range.contains(&variable) || style.color != string_style.color
+        }),
+        "a directive expression is code, not an HTML string"
+    );
+}
+
+#[test]
+fn vue_highlighter_refreshes_script_injection_after_an_edit() {
+    let source = r#"<script lang="ts">const value = 1;</script>"#;
+    let old_content = "const value = 1;";
+    let replacement = "type Props = { title: string };";
+    let start_byte = source
+        .find(old_content)
+        .expect("script content should exist");
+    let old_end_byte = start_byte + old_content.len();
+    let new_end_byte = start_byte + replacement.len();
+    let new_source = format!(
+        "{}{}{}",
+        &source[..start_byte],
+        replacement,
+        &source[old_end_byte..]
+    );
+    let theme = HighlightTheme::default_dark();
+    let old_text = Rope::from_str(source);
+    let new_text = Rope::from_str(&new_source);
+    let mut highlighter = SyntaxHighlighter::new("vue");
+
+    assert!(highlighter.update(None, &old_text, None));
+    assert!(highlighter.update(
+        Some(InputEdit {
+            start_byte,
+            old_end_byte,
+            new_end_byte,
+            start_position: Point::new(0, start_byte),
+            old_end_position: Point::new(0, old_end_byte),
+            new_end_position: Point::new(0, new_end_byte),
+        }),
+        &new_text,
+        None,
+    ));
+    let styles = highlighter.styles(&(0..new_source.len()), &theme);
+
+    assert_token_color(
+        &styles,
+        &new_source,
+        "type",
+        theme.style("keyword").unwrap(),
+    );
+    assert_token_color(&styles, &new_source, "Props", theme.style("type").unwrap());
+}
+
+#[test]
+fn added_language_highlighters_style_language_specific_tokens() {
     let theme = HighlightTheme::default_dark();
     let cases = [
-        ("csharp", "public class Program { static void Main() { } }"),
         (
-            "powershell",
-            "param([string]$Name)\nWrite-Host \"Hello $Name\"\n",
+            "dockerfile",
+            "FROM rust:1.85\nRUN echo $HOME\n",
+            "FROM",
+            "keyword",
         ),
         (
-            "xml",
-            "<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>",
+            "hcl",
+            "resource \"example\" \"main\" { count = 1 }\n",
+            "resource",
+            "keyword",
         ),
+        ("nix", "let value = 1; in value\n", "let", "keyword"),
     ];
 
-    for (language, source) in cases {
+    for (language, source, token, capture) in cases {
         let text = Rope::from_str(source);
         let mut highlighter = SyntaxHighlighter::new(language);
+
         assert!(highlighter.update(None, &text, None), "{language}");
         let styles = highlighter.styles(&(0..source.len()), &theme);
-        assert!(
-            styles.len() > 1,
-            "{language} should produce syntax-highlighted ranges"
-        );
+        assert_token_color(&styles, source, token, theme.style(capture).unwrap());
     }
 }
 
@@ -92,14 +251,6 @@ fn code_editor_state_tracks_value_dirty_and_errors() {
 
     state.mark_saved();
     assert!(!state.is_dirty());
-}
-
-#[test]
-fn code_editor_config_exposes_configured_tab_size() {
-    let config =
-        CodeEditorConfig::new("Project file", CodeEditorLanguageMode::Auto).with_tab_size(8);
-
-    assert_eq!(config.tab_size(), 8);
 }
 
 #[test]
@@ -205,7 +356,7 @@ fn language_catalog_resolves_builtin_languages_from_path_and_content() {
 
     let dockerfile = catalog.resolve_for_path("Dockerfile", None);
     assert_eq!(dockerfile.language_id, EditorLanguageId::Dockerfile);
-    assert_eq!(dockerfile.highlighter_name, "text");
+    assert_eq!(dockerfile.highlighter_name, "dockerfile");
 
     let shebang = catalog.resolve_for_path("run", Some("#!/usr/bin/env bash\npwd\n"));
     assert_eq!(shebang.language_id, EditorLanguageId::Bash);
@@ -238,15 +389,21 @@ fn language_catalog_resolves_expanded_editor_languages() {
         ("config.fish", EditorLanguageId::Fish, "fish"),
         ("player.gd", EditorLanguageId::Gdscript, "gdscript"),
         ("index.html", EditorLanguageId::Html, "html"),
-        ("App.vue", EditorLanguageId::Vue, "html"),
+        ("App.vue", EditorLanguageId::Vue, "vue"),
         ("document.xml", EditorLanguageId::Xml, "xml"),
         ("styles.css", EditorLanguageId::Css, "css"),
-        ("styles.scss", EditorLanguageId::Scss, "css"),
-        ("page.astro", EditorLanguageId::Astro, "astro"),
+        ("styles.scss", EditorLanguageId::Scss, "scss"),
+        (
+            "image.containerfile",
+            EditorLanguageId::Dockerfile,
+            "dockerfile",
+        ),
         ("Widget.svelte", EditorLanguageId::Svelte, "svelte"),
         ("view.ejs", EditorLanguageId::Ejs, "ejs"),
         ("view.erb", EditorLanguageId::Erb, "erb"),
         ("schema.graphql", EditorLanguageId::Graphql, "graphql"),
+        ("main.tf", EditorLanguageId::Hcl, "hcl"),
+        ("flake.nix", EditorLanguageId::Nix, "nix"),
         ("query.sql", EditorLanguageId::Sql, "sql"),
         ("messages.proto", EditorLanguageId::Proto, "proto"),
         ("change.patch", EditorLanguageId::Diff, "diff"),

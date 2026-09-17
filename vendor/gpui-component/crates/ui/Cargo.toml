@@ -25,7 +25,7 @@ tree-sitter-languages = [
     "tree-sitter-c",
     "tree-sitter-cmake",
     "tree-sitter-cpp",
-    "tree-sitter-csharp",
+    "tree-sitter-containerfile",
     "tree-sitter-css",
     "tree-sitter-diff",
     "tree-sitter-ejs",
@@ -33,6 +33,7 @@ tree-sitter-languages = [
     "tree-sitter-erb",
     "tree-sitter-go",
     "tree-sitter-graphql",
+    "tree-sitter-hcl",
     "tree-sitter-html",
     "tree-sitter-java",
     "tree-sitter-javascript",
@@ -41,18 +42,21 @@ tree-sitter-languages = [
     "tree-sitter-lua",
     "tree-sitter-make",
     "tree-sitter-markdown",
+    "tree-sitter-nix",
     "tree-sitter-php",
     "tree-sitter-proto",
     "tree-sitter-python",
     "tree-sitter-ruby",
     "tree-sitter-rust",
     "tree-sitter-scala",
+    "tree-sitter-scss",
     "tree-sitter-sql",
     "tree-sitter-svelte",
     "tree-sitter-swift",
     "tree-sitter-toml",
     "tree-sitter-tsx",
     "tree-sitter-typescript",
+    "tree-sitter-vue",
     "tree-sitter-yaml",
     "tree-sitter-zig",
 ]
@@ -60,6 +64,7 @@ tree-sitter-astro = ["dep:tree-sitter-astro-next"]
 tree-sitter-bash = ["dep:tree-sitter-bash"]
 tree-sitter-c = ["dep:tree-sitter-c"]
 tree-sitter-cmake = ["dep:tree-sitter-cmake"]
+tree-sitter-containerfile = ["dep:tree-sitter-containerfile"]
 tree-sitter-cpp = ["dep:tree-sitter-cpp"]
 tree-sitter-csharp = ["dep:tree-sitter-c-sharp"]
 tree-sitter-css = ["dep:tree-sitter-css"]
@@ -70,6 +75,7 @@ tree-sitter-erb = ["dep:tree-sitter-embedded-template"]
 tree-sitter-go = ["dep:tree-sitter-go"]
 tree-sitter-graphql = ["dep:tree-sitter-graphql"]
 tree-sitter-html = ["dep:tree-sitter-html"]
+tree-sitter-hcl = ["dep:tree-sitter-hcl"]
 tree-sitter-java = ["dep:tree-sitter-java"]
 tree-sitter-javascript = ["dep:tree-sitter-javascript"]
 tree-sitter-jsdoc = ["dep:tree-sitter-jsdoc"]
@@ -81,6 +87,7 @@ tree-sitter-markdown-inline = ["tree-sitter-markdown"]
 tree-sitter-php = ["dep:tree-sitter-php"]
 tree-sitter-proto = ["dep:tree-sitter-proto"]
 tree-sitter-python = ["dep:tree-sitter-python"]
+tree-sitter-nix = ["dep:tree-sitter-nix"]
 tree-sitter-ruby = ["dep:tree-sitter-ruby"]
 tree-sitter-rust = ["dep:tree-sitter-rust"]
 tree-sitter-scala = ["dep:tree-sitter-scala"]
@@ -88,10 +95,12 @@ tree-sitter-sql = ["dep:tree-sitter-sequel"]
 tree-sitter-svelte = ["dep:tree-sitter-svelte-next"]
 tree-sitter-swift = ["dep:tree-sitter-swift"]
 tree-sitter-toml = ["dep:tree-sitter-toml-ng"]
+tree-sitter-scss = ["dep:arborium-scss"]
 tree-sitter-tsx = ["dep:tree-sitter-typescript"]
 tree-sitter-typescript = ["dep:tree-sitter-typescript"]
 tree-sitter-yaml = ["dep:tree-sitter-yaml"]
 tree-sitter-zig = ["dep:tree-sitter-zig"]
+tree-sitter-vue = ["dep:tree-sitter-vue-next"]
 
 [dependencies]
 anyhow = "1"
@@ -150,6 +159,7 @@ smol = "2"
 tree-sitter = "0.26"
 tree-sitter-astro-next = { version="0.1.1", optional = true }
 tree-sitter-bash = { version = "0.23.3", optional = true }
+arborium-scss = { version = "2.18.2", optional = true }
 tree-sitter-c = { version = "0.24.1", optional = true }
 tree-sitter-c-sharp = { version = "0.23.1", optional = true }
 tree-sitter-cmake = { version = "0.7.1", optional = true }
@@ -157,6 +167,7 @@ tree-sitter-cpp = { version = "0.23.4", optional = true }
 tree-sitter-css = { version = "0.23.2", optional = true }
 tree-sitter-diff = { version = "0.1.0", optional = true }
 tree-sitter-elixir = { version = "0.3", optional = true }
+tree-sitter-containerfile = { version = "0.9.2", optional = true }
 tree-sitter-embedded-template = { version = "0.23.0", optional = true }
 tree-sitter-go = { version = "0.23.4", optional = true }
 tree-sitter-graphql = { version = "0.1.0", optional = true }
@@ -167,6 +178,7 @@ tree-sitter-jsdoc = { version = "0.23.2", optional = true }
 tree-sitter-json = "0.24.8"
 tree-sitter-kotlin-sg = { version = "0.4.0", optional = true }
 tree-sitter-lua = { version = "0.4.1", optional = true }
+tree-sitter-hcl = { version = "1.1.0", optional = true }
 tree-sitter-make = { version = "1.1.1", optional = true }
 tree-sitter-md = { version = "0.5.1", optional = true }
 tree-sitter-php = { version = "0.24.2", optional = true }
@@ -174,6 +186,7 @@ tree-sitter-proto = { version = "0.2.0", optional = true }
 tree-sitter-python = { version = "0.23.6", optional = true }
 tree-sitter-ruby = { version = "0.23.1", optional = true }
 tree-sitter-rust = { version = "0.24.0", optional = true }
+tree-sitter-nix = { version = "0.3.0", optional = true }
 tree-sitter-scala = { version = "0.23.4", optional = true }
 tree-sitter-sequel = { version = "0.3.8", optional = true }
 tree-sitter-svelte-next = { version = "0.1.1", optional = true }
@@ -182,6 +195,7 @@ tree-sitter-toml-ng = { version = "0.7.0", optional = true }
 tree-sitter-typescript = { version = "0.23.2", optional = true }
 tree-sitter-yaml = { version = "0.7.1", optional = true }
 tree-sitter-zig = { version = "1.1.2", optional = true }
+tree-sitter-vue-next = { version = "0.1.0", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-text = "=21.0.0"

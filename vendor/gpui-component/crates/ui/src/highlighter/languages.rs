@@ -2,6 +2,20 @@ use gpui::SharedString;
 
 use crate::highlighter::LanguageConfig;
 
+#[cfg(feature = "tree-sitter-javascript")]
+const JAVASCRIPT_HIGHLIGHTS: &str = concat!(
+    include_str!("languages/javascript/highlights.scm"),
+    "\n",
+    include_str!("languages/tsx/highlights.scm"),
+);
+
+#[cfg(feature = "tree-sitter-tsx")]
+const TSX_HIGHLIGHTS: &str = concat!(
+    include_str!("languages/typescript/highlights.scm"),
+    "\n",
+    include_str!("languages/tsx/highlights.scm"),
+);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, enum_iterator::Sequence)]
 pub enum Language {
     Json,
@@ -22,6 +36,8 @@ pub enum Language {
     Css,
     #[cfg(feature = "tree-sitter-diff")]
     Diff,
+    #[cfg(feature = "tree-sitter-containerfile")]
+    Dockerfile,
     #[cfg(feature = "tree-sitter-ejs")]
     Ejs,
     #[cfg(feature = "tree-sitter-elixir")]
@@ -32,6 +48,8 @@ pub enum Language {
     Go,
     #[cfg(feature = "tree-sitter-graphql")]
     GraphQL,
+    #[cfg(feature = "tree-sitter-hcl")]
+    Hcl,
     #[cfg(feature = "tree-sitter-html")]
     Html,
     #[cfg(feature = "tree-sitter-java")]
@@ -50,6 +68,8 @@ pub enum Language {
     Markdown,
     #[cfg(feature = "tree-sitter-markdown")]
     MarkdownInline,
+    #[cfg(feature = "tree-sitter-nix")]
+    Nix,
     #[cfg(feature = "tree-sitter-php")]
     Php,
     #[cfg(feature = "tree-sitter-proto")]
@@ -62,6 +82,8 @@ pub enum Language {
     Rust,
     #[cfg(feature = "tree-sitter-scala")]
     Scala,
+    #[cfg(feature = "tree-sitter-scss")]
+    Scss,
     #[cfg(feature = "tree-sitter-sql")]
     Sql,
     #[cfg(feature = "tree-sitter-svelte")]
@@ -74,6 +96,8 @@ pub enum Language {
     Tsx,
     #[cfg(feature = "tree-sitter-typescript")]
     TypeScript,
+    #[cfg(feature = "tree-sitter-vue")]
+    Vue,
     #[cfg(feature = "tree-sitter-yaml")]
     Yaml,
     #[cfg(feature = "tree-sitter-zig")]
@@ -111,6 +135,8 @@ impl Language {
             Self::Css => "css",
             #[cfg(feature = "tree-sitter-diff")]
             Self::Diff => "diff",
+            #[cfg(feature = "tree-sitter-containerfile")]
+            Self::Dockerfile => "dockerfile",
             #[cfg(feature = "tree-sitter-ejs")]
             Self::Ejs => "ejs",
             #[cfg(feature = "tree-sitter-elixir")]
@@ -121,6 +147,8 @@ impl Language {
             Self::Go => "go",
             #[cfg(feature = "tree-sitter-graphql")]
             Self::GraphQL => "graphql",
+            #[cfg(feature = "tree-sitter-hcl")]
+            Self::Hcl => "hcl",
             #[cfg(feature = "tree-sitter-html")]
             Self::Html => "html",
             #[cfg(feature = "tree-sitter-java")]
@@ -139,6 +167,8 @@ impl Language {
             Self::Markdown => "markdown",
             #[cfg(feature = "tree-sitter-markdown")]
             Self::MarkdownInline => "markdown_inline",
+            #[cfg(feature = "tree-sitter-nix")]
+            Self::Nix => "nix",
             #[cfg(feature = "tree-sitter-php")]
             Self::Php => "php",
             #[cfg(feature = "tree-sitter-proto")]
@@ -151,6 +181,8 @@ impl Language {
             Self::Rust => "rust",
             #[cfg(feature = "tree-sitter-scala")]
             Self::Scala => "scala",
+            #[cfg(feature = "tree-sitter-scss")]
+            Self::Scss => "scss",
             #[cfg(feature = "tree-sitter-sql")]
             Self::Sql => "sql",
             #[cfg(feature = "tree-sitter-svelte")]
@@ -163,6 +195,8 @@ impl Language {
             Self::Tsx => "tsx",
             #[cfg(feature = "tree-sitter-typescript")]
             Self::TypeScript => "typescript",
+            #[cfg(feature = "tree-sitter-vue")]
+            Self::Vue => "vue",
             #[cfg(feature = "tree-sitter-yaml")]
             Self::Yaml => "yaml",
             #[cfg(feature = "tree-sitter-zig")]
@@ -192,7 +226,9 @@ impl Language {
             #[cfg(feature = "tree-sitter-csharp")]
             "csharp" | "cs" => Some(Self::CSharp),
             #[cfg(feature = "tree-sitter-css")]
-            "css" | "scss" => Some(Self::Css),
+            "css" => Some(Self::Css),
+            #[cfg(feature = "tree-sitter-containerfile")]
+            "dockerfile" | "containerfile" => Some(Self::Dockerfile),
             #[cfg(feature = "tree-sitter-diff")]
             "diff" => Some(Self::Diff),
             #[cfg(feature = "tree-sitter-ejs")]
@@ -205,6 +241,8 @@ impl Language {
             "go" => Some(Self::Go),
             #[cfg(feature = "tree-sitter-graphql")]
             "graphql" => Some(Self::GraphQL),
+            #[cfg(feature = "tree-sitter-hcl")]
+            "hcl" | "terraform" | "tf" => Some(Self::Hcl),
             #[cfg(feature = "tree-sitter-html")]
             "html" => Some(Self::Html),
             #[cfg(feature = "tree-sitter-java")]
@@ -223,6 +261,8 @@ impl Language {
             "markdown" | "md" | "mdx" => Some(Self::Markdown),
             #[cfg(feature = "tree-sitter-markdown")]
             "markdown_inline" | "markdown-inline" => Some(Self::MarkdownInline),
+            #[cfg(feature = "tree-sitter-nix")]
+            "nix" => Some(Self::Nix),
             #[cfg(feature = "tree-sitter-php")]
             "php" | "php3" | "php4" | "php5" | "phtml" => Some(Self::Php),
             #[cfg(feature = "tree-sitter-proto")]
@@ -235,6 +275,8 @@ impl Language {
             "rust" | "rs" => Some(Self::Rust),
             #[cfg(feature = "tree-sitter-scala")]
             "scala" => Some(Self::Scala),
+            #[cfg(feature = "tree-sitter-scss")]
+            "scss" => Some(Self::Scss),
             #[cfg(feature = "tree-sitter-sql")]
             "sql" => Some(Self::Sql),
             #[cfg(feature = "tree-sitter-svelte")]
@@ -247,6 +289,8 @@ impl Language {
             "tsx" => Some(Self::Tsx),
             #[cfg(feature = "tree-sitter-typescript")]
             "typescript" | "ts" => Some(Self::TypeScript),
+            #[cfg(feature = "tree-sitter-vue")]
+            "vue" => Some(Self::Vue),
             #[cfg(feature = "tree-sitter-yaml")]
             "yaml" | "yml" => Some(Self::Yaml),
             #[cfg(feature = "tree-sitter-zig")]
@@ -323,6 +367,40 @@ impl Language {
                 #[cfg(feature = "tree-sitter-graphql")]
                 languages.push("graphql");
             }
+            #[cfg(feature = "tree-sitter-tsx")]
+            Self::Tsx => {
+                #[cfg(feature = "tree-sitter-jsdoc")]
+                languages.push("jsdoc");
+                languages.push("json");
+                #[cfg(feature = "tree-sitter-css")]
+                languages.push("css");
+                #[cfg(feature = "tree-sitter-html")]
+                languages.push("html");
+                #[cfg(feature = "tree-sitter-sql")]
+                languages.push("sql");
+                #[cfg(feature = "tree-sitter-typescript")]
+                languages.push("typescript");
+                #[cfg(feature = "tree-sitter-javascript")]
+                languages.push("javascript");
+                languages.push("tsx");
+                #[cfg(feature = "tree-sitter-yaml")]
+                languages.push("yaml");
+                #[cfg(feature = "tree-sitter-graphql")]
+                languages.push("graphql");
+            }
+            #[cfg(feature = "tree-sitter-vue")]
+            Self::Vue => {
+                #[cfg(feature = "tree-sitter-javascript")]
+                languages.push("javascript");
+                #[cfg(feature = "tree-sitter-typescript")]
+                languages.push("typescript");
+                #[cfg(feature = "tree-sitter-tsx")]
+                languages.push("tsx");
+                #[cfg(feature = "tree-sitter-css")]
+                languages.push("css");
+                #[cfg(feature = "tree-sitter-scss")]
+                languages.push("scss");
+            }
             #[cfg(feature = "tree-sitter-astro")]
             Self::Astro => {
                 #[cfg(feature = "tree-sitter-html")]
@@ -358,6 +436,11 @@ impl Language {
                 languages.push("css");
                 #[cfg(feature = "tree-sitter-typescript")]
                 languages.push("typescript");
+            }
+            #[cfg(feature = "tree-sitter-nix")]
+            Self::Nix => {
+                #[cfg(feature = "tree-sitter-bash")]
+                languages.push("bash");
             }
             _ => {}
         }
@@ -419,6 +502,13 @@ impl Language {
                 "",
                 "",
             ),
+            #[cfg(feature = "tree-sitter-nix")]
+            Self::Nix => (
+                tree_sitter_nix::LANGUAGE,
+                tree_sitter_nix::HIGHLIGHTS_QUERY,
+                tree_sitter_nix::INJECTIONS_QUERY,
+                "",
+            ),
             #[cfg(feature = "tree-sitter-c")]
             Self::C => (
                 tree_sitter_c::LANGUAGE,
@@ -436,7 +526,7 @@ impl Language {
             #[cfg(feature = "tree-sitter-javascript")]
             Self::JavaScript => (
                 tree_sitter_javascript::LANGUAGE,
-                include_str!("languages/javascript/highlights.scm"),
+                JAVASCRIPT_HIGHLIGHTS,
                 include_str!("languages/javascript/injections.scm"),
                 tree_sitter_javascript::LOCALS_QUERY,
             ),
@@ -444,6 +534,13 @@ impl Language {
             Self::JsDoc => (
                 tree_sitter_jsdoc::LANGUAGE,
                 tree_sitter_jsdoc::HIGHLIGHTS_QUERY,
+                "",
+                "",
+            ),
+            #[cfg(feature = "tree-sitter-hcl")]
+            Self::Hcl => (
+                tree_sitter_hcl::LANGUAGE,
+                include_str!("languages/hcl/highlights.scm"),
                 "",
                 "",
             ),
@@ -505,6 +602,13 @@ impl Language {
                 "",
                 tree_sitter_scala::LOCALS_QUERY,
             ),
+            #[cfg(feature = "tree-sitter-scss")]
+            Self::Scss => (
+                arborium_scss::language(),
+                arborium_scss::HIGHLIGHTS_QUERY.as_str(),
+                "",
+                "",
+            ),
             #[cfg(feature = "tree-sitter-sql")]
             Self::Sql => (
                 tree_sitter_sequel::LANGUAGE,
@@ -537,14 +641,28 @@ impl Language {
             #[cfg(feature = "tree-sitter-tsx")]
             Self::Tsx => (
                 tree_sitter_typescript::LANGUAGE_TSX,
-                tree_sitter_typescript::HIGHLIGHTS_QUERY,
-                "",
+                TSX_HIGHLIGHTS,
+                include_str!("languages/javascript/injections.scm"),
                 tree_sitter_typescript::LOCALS_QUERY,
+            ),
+            #[cfg(feature = "tree-sitter-vue")]
+            Self::Vue => (
+                tree_sitter_vue_next::LANGUAGE,
+                include_str!("languages/vue/highlights.scm"),
+                include_str!("languages/vue/injections.scm"),
+                "",
             ),
             #[cfg(feature = "tree-sitter-diff")]
             Self::Diff => (
                 tree_sitter_diff::LANGUAGE,
                 tree_sitter_diff::HIGHLIGHTS_QUERY,
+                "",
+                "",
+            ),
+            #[cfg(feature = "tree-sitter-containerfile")]
+            Self::Dockerfile => (
+                tree_sitter_containerfile::LANGUAGE,
+                include_str!("languages/dockerfile/highlights.scm"),
                 "",
                 "",
             ),

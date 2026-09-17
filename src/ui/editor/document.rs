@@ -1,13 +1,13 @@
-use std::{ops::Range, sync::Arc};
+use std::{ops::Range, sync::Arc, time::Duration};
 
 use gpui::{
     AnyElement, AppContext as _, Context, Entity, EventEmitter, Focusable as _,
     InteractiveElement as _, IntoElement, KeystrokeEvent, MouseButton, ParentElement as _, Render,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div,
 };
 use gpui_component::{
     ActiveTheme as _, IconName,
-    input::{InputEvent, InputState, Position, Search},
+    input::{InputEvent, InputState, Position, Rope, Search},
 };
 use gpui_markdown_editor::{
     MarkdownEditor, MarkdownEditorEnvironment, MarkdownEditorEvent, MarkdownEditorMode,
@@ -24,8 +24,9 @@ use crate::{
 };
 
 use super::{
-    CodeEditorState, DiskFingerprint, DocumentId, EditorSymbol, breadcrumbs_at,
-    code_editor_input_state, document_symbols, styled_code_editor_input,
+    CodeEditorState, DiskFingerprint, DocumentId, EditorLanguageId, EditorSymbol,
+    breadcrumbs::document_symbols_from_rope,
+    breadcrumbs_at, code_editor_input_state, styled_code_editor_input,
     vim::{
         DeleteCharacters, EnterInsert, Escape as VimEscape, MoveAction, Number, Paste as VimPaste,
         PushOperator, Redo as VimRedo, ReplaceCharacters, SearchForward, SearchNext,
@@ -341,6 +342,16 @@ impl Default for MarkdownDocumentConfig {
     }
 }
 
+const BREADCRUMB_PARSE_DEBOUNCE: Duration = Duration::from_millis(50);
+
+#[derive(Clone)]
+struct BreadcrumbParseRequest {
+    epoch: u64,
+    generation: u64,
+    language: EditorLanguageId,
+    source: Rope,
+}
+
 enum ProjectEditorSurface {
     Code {
         input: Entity<InputState>,
@@ -362,6 +373,10 @@ pub struct ProjectEditorDocument {
     symbols: Vec<EditorSymbol>,
     breadcrumbs: Vec<EditorSymbol>,
     breadcrumb_cursor_line: usize,
+    breadcrumb_parse_epoch: u64,
+    breadcrumb_parse_request: Option<BreadcrumbParseRequest>,
+    breadcrumb_parse_task: Option<Task<()>>,
+    breadcrumb_parse_task_epoch: Option<u64>,
     bar_selection: Option<EditorSelectionInfo>,
     markdown_selection_range: Option<Range<usize>>,
     vim_enabled: bool,
@@ -393,32 +408,31 @@ impl ProjectEditorDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let is_markdown = model.editor().language_id() == super::EditorLanguageId::Markdown;
-        let symbols = if is_markdown {
-            Vec::new()
-        } else {
-            document_symbols(model.editor().language_id(), model.value())
-        };
         let breadcrumb_header = model.editor().config().title().to_string();
-        let breadcrumbs = breadcrumbs_at(&symbols, 0);
         let surface = Self::new_surface(&model, &appearance, &markdown_config, window, cx);
         let vim_keystroke_subscription = cx.observe_keystrokes(Self::observe_vim_keystrokes);
-        Self {
+        let mut document = Self {
             model,
             surface,
             appearance,
             markdown_config,
             breadcrumb_header,
-            symbols,
-            breadcrumbs,
+            symbols: Vec::new(),
+            breadcrumbs: Vec::new(),
             breadcrumb_cursor_line: 0,
+            breadcrumb_parse_epoch: 0,
+            breadcrumb_parse_request: None,
+            breadcrumb_parse_task: None,
+            breadcrumb_parse_task_epoch: None,
             bar_selection: None,
             markdown_selection_range: None,
             vim_enabled: false,
             vim: None,
             _vim_keystroke_subscription: vim_keystroke_subscription,
             read_only_preview: None,
-        }
+        };
+        document.request_breadcrumb_parse(0, cx);
+        document
     }
     pub fn with_vim_mode(
         mut self,
@@ -571,6 +585,7 @@ impl ProjectEditorDocument {
         cx: &mut Context<Self>,
     ) {
         let was_markdown = self.is_markdown();
+        let previous_language = self.model.editor().language_id();
         let markdown = match &self.surface {
             ProjectEditorSurface::Markdown { editor, .. } => Some(editor.read(cx).markdown(cx)),
             ProjectEditorSurface::Code { .. } => None,
@@ -624,7 +639,10 @@ impl ProjectEditorDocument {
             }
         }
 
-        self.refresh_breadcrumbs(self.breadcrumb_cursor_line);
+        if previous_language != self.model.editor().language_id() {
+            self.invalidate_breadcrumbs();
+        }
+        self.request_breadcrumb_parse(self.breadcrumb_cursor_line, cx);
         cx.notify();
     }
 
@@ -749,15 +767,14 @@ impl ProjectEditorDocument {
                     input.set_value(value, window, input_cx);
                     input.set_selection(anchor, head, input_cx);
                 });
-                self.refresh_breadcrumbs(0);
+                self.invalidate_breadcrumbs();
+                self.request_breadcrumb_parse(0, cx);
             }
             ProjectEditorSurface::Markdown { editor, .. } => {
                 editor.update(cx, |editor, editor_cx| {
                     editor.replace_markdown(value, editor_cx);
                 });
-                self.symbols.clear();
-                self.breadcrumbs.clear();
-                self.breadcrumb_cursor_line = 0;
+                self.clear_breadcrumbs();
             }
         }
         cx.notify();
@@ -788,15 +805,14 @@ impl ProjectEditorDocument {
                 input.update(cx, |input, input_cx| {
                     input.set_value(value, window, input_cx)
                 });
-                self.refresh_breadcrumbs(0);
+                self.invalidate_breadcrumbs();
+                self.request_breadcrumb_parse(0, cx);
             }
             ProjectEditorSurface::Markdown { editor, .. } => {
                 editor.update(cx, |editor, editor_cx| {
                     editor.replace_markdown(value, editor_cx);
                 });
-                self.symbols.clear();
-                self.breadcrumbs.clear();
-                self.breadcrumb_cursor_line = 0;
+                self.clear_breadcrumbs();
             }
         }
         cx.notify();
@@ -827,12 +843,12 @@ impl ProjectEditorDocument {
             InputEvent::Change => {
                 let input = input.read(cx);
                 let selection_changed = self.update_code_bar_selection(input);
-                let value = input.value().to_string();
+                let source = input.text().clone();
                 let cursor_line = input.cursor_position().line as usize;
                 let previous_generation = self.model.generation();
-                let generation = self.model.on_input_changed(value);
+                let generation = self.model.on_input_changed(source.to_string());
                 if generation != previous_generation {
-                    self.refresh_breadcrumbs(cursor_line);
+                    self.queue_breadcrumb_parse(source, cursor_line, cx);
                     cx.emit(ProjectEditorDocumentEvent::Changed { generation });
                     cx.notify();
                 } else if selection_changed {
@@ -966,15 +982,110 @@ impl ProjectEditorDocument {
         true
     }
 
-    fn refresh_breadcrumbs(&mut self, cursor_line: usize) {
-        self.breadcrumb_cursor_line = cursor_line;
+    fn request_breadcrumb_parse(&mut self, cursor_line: usize, cx: &mut Context<Self>) {
         if self.is_markdown() {
-            self.symbols.clear();
-            self.breadcrumbs.clear();
-        } else {
-            self.symbols = document_symbols(self.model.editor().language_id(), self.model.value());
-            self.breadcrumbs = breadcrumbs_at(&self.symbols, cursor_line);
+            self.clear_breadcrumbs();
+            return;
         }
+        let Some(input) = self.code_input() else {
+            self.clear_breadcrumbs();
+            return;
+        };
+        self.queue_breadcrumb_parse(input.read(cx).text().clone(), cursor_line, cx);
+    }
+
+    fn queue_breadcrumb_parse(&mut self, source: Rope, cursor_line: usize, cx: &mut Context<Self>) {
+        self.breadcrumb_cursor_line = cursor_line;
+        self.breadcrumbs = breadcrumbs_at(&self.symbols, cursor_line);
+        self.breadcrumb_parse_epoch = self.breadcrumb_parse_epoch.wrapping_add(1);
+        self.breadcrumb_parse_request = Some(BreadcrumbParseRequest {
+            epoch: self.breadcrumb_parse_epoch,
+            generation: self.model.generation(),
+            language: self.model.editor().language_id(),
+            source,
+        });
+        self.start_breadcrumb_parse(cx);
+    }
+
+    fn invalidate_breadcrumbs(&mut self) {
+        self.breadcrumb_parse_epoch = self.breadcrumb_parse_epoch.wrapping_add(1);
+        self.symbols.clear();
+        self.breadcrumbs.clear();
+        self.breadcrumb_cursor_line = 0;
+    }
+
+    fn clear_breadcrumbs(&mut self) {
+        self.invalidate_breadcrumbs();
+        self.breadcrumb_parse_request = None;
+        self.breadcrumb_parse_task = None;
+        self.breadcrumb_parse_task_epoch = None;
+    }
+
+    fn start_breadcrumb_parse(&mut self, cx: &mut Context<Self>) {
+        if self.breadcrumb_parse_task.is_some() {
+            return;
+        }
+        let Some(task_epoch) = self
+            .breadcrumb_parse_request
+            .as_ref()
+            .map(|request| request.epoch)
+        else {
+            return;
+        };
+        self.breadcrumb_parse_task_epoch = Some(task_epoch);
+        self.breadcrumb_parse_task = Some(cx.spawn(async move |this, cx| {
+            let request = loop {
+                let Some(request) = this
+                    .update(cx, |document, _| document.breadcrumb_parse_request.clone())
+                    .ok()
+                    .flatten()
+                else {
+                    return;
+                };
+                cx.background_executor()
+                    .timer(BREADCRUMB_PARSE_DEBOUNCE)
+                    .await;
+                let Some(latest_request) = this
+                    .update(cx, |document, _| document.breadcrumb_parse_request.clone())
+                    .ok()
+                    .flatten()
+                else {
+                    return;
+                };
+                if latest_request.epoch == request.epoch {
+                    break request;
+                }
+            };
+            let language = request.language;
+            let source = request.source.clone();
+            let symbols = cx
+                .background_spawn(async move { document_symbols_from_rope(language, &source) })
+                .await;
+
+            let _ = this.update(cx, move |document, cx| {
+                let request_is_current = document.breadcrumb_parse_epoch == request.epoch
+                    && document.model.generation() == request.generation
+                    && document.model.editor().language_id() == request.language
+                    && !document.is_markdown();
+                if request_is_current {
+                    document.symbols = symbols;
+                    document.breadcrumbs =
+                        breadcrumbs_at(&document.symbols, document.breadcrumb_cursor_line);
+                    document.breadcrumb_parse_request = None;
+                }
+
+                if document.breadcrumb_parse_task_epoch == Some(task_epoch) {
+                    document.breadcrumb_parse_task = None;
+                    document.breadcrumb_parse_task_epoch = None;
+                    if document.breadcrumb_parse_request.is_some() {
+                        document.start_breadcrumb_parse(cx);
+                    }
+                }
+                if request_is_current {
+                    cx.notify();
+                }
+            });
+        }));
     }
 
     fn observe_vim_keystrokes(

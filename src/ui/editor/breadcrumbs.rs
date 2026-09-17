@@ -1,5 +1,9 @@
+use std::borrow::Cow;
+
+use gpui_component::input::Rope;
+use tree_sitter::{Language, Node, Parser, Tree};
+
 use super::EditorLanguageId;
-use tree_sitter::{Language, Node, Parser};
 
 /// A named declaration that can appear in the editor breadcrumb bar.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,20 +39,52 @@ impl EditorSymbolKind {
 /// Symbols are flat because their source ranges encode containment. Use
 /// [`breadcrumbs_at`] to derive the outer-to-inner path for a cursor line.
 pub fn document_symbols(language_id: EditorLanguageId, source: &str) -> Vec<EditorSymbol> {
-    let Some(language) = parser_language(language_id) else {
+    let Some(mut parser) = configured_parser(language_id) else {
         return Vec::new();
     };
-
-    let mut parser = Parser::new();
-    if parser.set_language(&language).is_err() {
-        return Vec::new();
-    }
     let Some(tree) = parser.parse(source, None) else {
         return Vec::new();
     };
 
+    symbols_from_tree(tree, SymbolSource::String(source))
+}
+
+/// Extracts navigable declarations from a cheaply cloneable editor snapshot.
+pub(super) fn document_symbols_from_rope(
+    language_id: EditorLanguageId,
+    source: &Rope,
+) -> Vec<EditorSymbol> {
+    let Some(mut parser) = configured_parser(language_id) else {
+        return Vec::new();
+    };
+    let Some(tree) = parser.parse_with_options(
+        &mut |offset, _| {
+            if offset >= source.len() {
+                ""
+            } else {
+                let (chunk, chunk_byte_offset) = source.chunk(offset);
+                &chunk[offset - chunk_byte_offset..]
+            }
+        },
+        None,
+        None,
+    ) else {
+        return Vec::new();
+    };
+
+    symbols_from_tree(tree, SymbolSource::Rope(source))
+}
+
+fn configured_parser(language_id: EditorLanguageId) -> Option<Parser> {
+    let language = parser_language(language_id)?;
+    let mut parser = Parser::new();
+    parser.set_language(&language).ok()?;
+    Some(parser)
+}
+
+fn symbols_from_tree(tree: Tree, source: SymbolSource<'_>) -> Vec<EditorSymbol> {
     let mut symbols = Vec::new();
-    collect_symbols(tree.root_node(), source, &mut symbols);
+    collect_symbols(tree.root_node(), &source, &mut symbols);
     symbols.sort_unstable_by(|left, right| {
         left.start_line
             .cmp(&right.start_line)
@@ -74,7 +110,21 @@ pub fn breadcrumbs_at(symbols: &[EditorSymbol], line: usize) -> Vec<EditorSymbol
     breadcrumbs
 }
 
-fn collect_symbols(node: Node<'_>, source: &str, symbols: &mut Vec<EditorSymbol>) {
+enum SymbolSource<'a> {
+    String(&'a str),
+    Rope(&'a Rope),
+}
+
+impl SymbolSource<'_> {
+    fn node_text(&self, node: Node<'_>) -> Option<Cow<'_, str>> {
+        match self {
+            Self::String(source) => node.utf8_text(source.as_bytes()).ok().map(Cow::Borrowed),
+            Self::Rope(source) => Some(Cow::Owned(source.slice(node.byte_range()).to_string())),
+        }
+    }
+}
+
+fn collect_symbols(node: Node<'_>, source: &SymbolSource<'_>, symbols: &mut Vec<EditorSymbol>) {
     if symbols.len() == 256 {
         return;
     }
@@ -144,13 +194,19 @@ fn symbol_kind(node_kind: &str) -> Option<EditorSymbolKind> {
     }
 }
 
-fn symbol_name(node: Node<'_>, source: &str) -> Option<String> {
+fn symbol_name(node: Node<'_>, source: &SymbolSource<'_>) -> Option<String> {
     node.child_by_field_name("name")
         .or_else(|| first_identifier_child(node))
-        .and_then(|name| name.utf8_text(source.as_bytes()).ok())
-        .map(str::trim)
+        .and_then(|name| source.node_text(name))
+        .map(|name| {
+            let trimmed = name.trim();
+            if trimmed.len() == name.len() {
+                name.into_owned()
+            } else {
+                trimmed.to_owned()
+            }
+        })
         .filter(|name| !name.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn first_identifier_child(node: Node<'_>) -> Option<Node<'_>> {
@@ -200,6 +256,8 @@ fn parser_language(language_id: EditorLanguageId) -> Option<Language> {
         | EditorLanguageId::Proto
         | EditorLanguageId::Diff
         | EditorLanguageId::CMake
+        | EditorLanguageId::Hcl
+        | EditorLanguageId::Nix
         | EditorLanguageId::Powershell
         | EditorLanguageId::Make
         | EditorLanguageId::Dockerfile => return None,

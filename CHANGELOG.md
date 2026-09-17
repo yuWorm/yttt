@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### 中文
+
+- 修复编辑器横向滚动时正文穿透行号区域的问题；正文与行号独立裁剪，保留窗口透明度设置。
+- 将面包屑符号解析移出逐键输入路径：使用 Rope 快照、50 ms 防抖和后台解析，合并连续编辑，
+  并丢弃编辑、语言切换或磁盘重载后过期的解析结果。
+- 补齐 Vue 单文件组件及其 JS／TS／JSX／TSX、CSS／SCSS 嵌入高亮，修复 TSX／JSX 标签和
+  组件高亮；新增独立 SCSS、Dockerfile／Containerfile、HCL／Terraform 与 Nix 语法支持。
+
+### English
+
+- Fixed horizontally scrolled editor content bleeding into the line-number gutter. Separate
+  content and gutter clipping preserves the configured window opacity.
+- Moved breadcrumb symbol parsing off the per-keystroke input path using Rope snapshots,
+  a 50 ms debounce, and background parsing. Consecutive edits are coalesced, and stale results
+  after edits, language changes, or disk reloads are discarded.
+- Added Vue single-file component highlighting with embedded JS/TS/JSX/TSX and CSS/SCSS,
+  fixed TSX/JSX tag and component highlighting, and added dedicated SCSS,
+  Dockerfile/Containerfile, HCL/Terraform, and Nix grammars.
+
 ## 0.3.0 - 2026-09-16
 
 ### 中文
