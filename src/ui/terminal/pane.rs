@@ -11,8 +11,8 @@ use std::{
 
 use crate::{
     host_runtime::{
-        DesktopHostRuntime, HostRuntimeGlobal, TerminalPaneHostEvent, TerminalStartAttempt,
-        TerminalStartIntent,
+        DesktopHostRuntime, HostRuntimeGlobal, TerminalPaneHostEvent, TerminalRecoveryError,
+        TerminalStartAttempt, TerminalStartIntent,
     },
     model::layout::{PaneConfig, PaneKind, ProcessExitBehavior, TerminalExecutionMode},
     runtime::{
@@ -174,6 +174,8 @@ enum TerminalStartAttemptError {
     Failed(String),
     #[error("{0}")]
     Uncertain(String),
+    #[error("{0}")]
+    Unavailable(String),
 }
 
 #[derive(Clone)]
@@ -975,7 +977,13 @@ impl TerminalPaneView {
                         request_start.intent,
                         &request_start.attempt,
                     )
-                    .map_err(|error| TerminalStartAttemptError::Failed(error.to_string()))?;
+                    .map_err(|error| match error {
+                        TerminalRecoveryError::MissingObservedSession(_)
+                        | TerminalRecoveryError::ControlRequired(_) => {
+                            TerminalStartAttemptError::Unavailable(error.to_string())
+                        }
+                        error => TerminalStartAttemptError::Failed(error.to_string()),
+                    })?;
                 let response = request_runtime
                     .request(request)
                     .recv_async()
@@ -1086,6 +1094,9 @@ impl TerminalPaneView {
                         } else {
                             pane.set_spawn_failure(message, cx);
                         }
+                    }
+                    Err(TerminalStartAttemptError::Unavailable(message)) => {
+                        pane.set_terminal_lost(message, cx);
                     }
                     Err(TerminalStartAttemptError::Failed(message)) => {
                         if request_start.intent == TerminalStartIntent::Attach {
@@ -1322,6 +1333,11 @@ impl TerminalPaneView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if matches!(self.lifecycle, PaneLifecycle::Lost { .. }) {
+            // A missing session stays stopped, but control/catalog changes can
+            // change the explicit recovery action available to the user.
+            cx.notify();
+        }
         let control_changed = runtime.shared_editing_enabled()
             && runtime.control_status().is_some_and(|status| {
                 self.host_control_epoch != Some(status.context.control_epoch)
@@ -1382,6 +1398,47 @@ impl TerminalPaneView {
         self.host_session_id = None;
         self.host_epoch = None;
         self.host_session_epoch = None;
+    }
+
+    fn recovery_intent(&self) -> Option<TerminalStartIntent> {
+        if !matches!(self.lifecycle, PaneLifecycle::Lost { .. }) {
+            return Some(TerminalStartIntent::Fresh);
+        }
+        let Some(runtime) = self.host_runtime.as_ref() else {
+            return Some(TerminalStartIntent::Attach);
+        };
+        let ConnectionState::Ready { host_epoch, .. } = runtime.state() else {
+            return Some(TerminalStartIntent::Attach);
+        };
+        let Some(catalog) = runtime
+            .resource_catalog()
+            .filter(|catalog| catalog.host_epoch == host_epoch)
+        else {
+            return Some(TerminalStartIntent::Attach);
+        };
+        let Some(session_id) = self.host_session_id.as_ref() else {
+            return Some(TerminalStartIntent::Attach);
+        };
+        if catalog
+            .terminals
+            .iter()
+            .any(|terminal| &terminal.session_id == session_id)
+        {
+            return Some(TerminalStartIntent::Attach);
+        }
+        // Only an explicit user action may replace a confirmed missing process.
+        // Restore still attaches by stable identity if the session reappears.
+        runtime
+            .shared_editing_enabled()
+            .then_some(TerminalStartIntent::Restore)
+    }
+
+    fn retry_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(intent) = self.recovery_intent() else {
+            cx.notify();
+            return;
+        };
+        self.start_host_terminal(window, cx, intent);
     }
 
     pub(crate) fn start_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -1759,6 +1816,8 @@ impl Render for TerminalPaneView {
         let body = if let Some(terminal) = &self.terminal {
             div().flex().flex_1().child(terminal.clone())
         } else {
+            let recovery_intent = self.recovery_intent();
+            let lost = matches!(self.lifecycle, PaneLifecycle::Lost { .. });
             let lines = match &self.lifecycle {
                 PaneLifecycle::SpawnFailed { .. } => spawn_failure_lines(&TerminalSpawnFailure {
                     command: self.command.clone(),
@@ -1769,7 +1828,15 @@ impl Render for TerminalPaneView {
                     "Terminal session unavailable".to_string(),
                     format!("command: {}", self.command),
                     format!("cwd: {}", self.project_path.display()),
-                    format!("status: {message}"),
+                    match recovery_intent {
+                        Some(TerminalStartIntent::Restore) => {
+                            "The previous process is no longer available. Nothing will be restarted until you choose to continue.".to_string()
+                        }
+                        None => {
+                            "The previous process is no longer available. Take workspace control and wait for any transfer to finish before starting it.".to_string()
+                        }
+                        _ => format!("status: {message}"),
+                    },
                 ],
                 PaneLifecycle::Reconciling { message } => vec![
                     "Terminal launch outcome is being reconciled".to_string(),
@@ -1783,11 +1850,23 @@ impl Render for TerminalPaneView {
                     format!("cwd: {}", self.project_path.display()),
                 ],
             };
-            let can_restart = self.exit_behavior != ProcessExitBehavior::Close
-                || matches!(self.lifecycle, PaneLifecycle::Lost { .. });
+            let can_restart = recovery_intent.is_some()
+                && (self.exit_behavior != ProcessExitBehavior::Close || lost);
             let restart_id = SharedString::from(format!("restart-pane-{}", self.pane_id));
-            let restart_label = if matches!(&self.lifecycle, PaneLifecycle::Lost { .. }) {
-                "Reconnect"
+            let restart_label = if lost {
+                if recovery_intent == Some(TerminalStartIntent::Restore) {
+                    if self
+                        .agent_launch
+                        .as_ref()
+                        .is_some_and(AgentPaneLaunch::is_resuming_session)
+                    {
+                        "Resume saved session"
+                    } else {
+                        "Start a new process"
+                    }
+                } else {
+                    "Reconnect"
+                }
             } else if matches!(&self.lifecycle, PaneLifecycle::Reconciling { .. }) {
                 "Retry"
             } else {
@@ -1802,7 +1881,11 @@ impl Render for TerminalPaneView {
                 .items_center()
                 .justify_center()
                 .bg(self.theme.terminal_background)
-                .text_color(self.theme.danger)
+                .text_color(if lost {
+                    self.theme.text
+                } else {
+                    self.theme.danger
+                })
                 .children(lines)
                 .when(can_restart, |body| {
                     body.child(
@@ -1817,16 +1900,14 @@ impl Render for TerminalPaneView {
                             .py(ui_style.spacing.xs)
                             .text_color(self.theme.text)
                             .hover(|button| button.bg(ui_style.hover_background(self.theme)))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if matches!(this.lifecycle, PaneLifecycle::Lost { .. }) {
-                                    this.start_host_terminal(
-                                        window,
-                                        cx,
-                                        TerminalStartIntent::Attach,
-                                    );
-                                } else {
-                                    this.start_terminal(window, cx);
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                // A button rendered as Reconnect must never turn
+                                // into permission to spawn when the catalog changes.
+                                if this.recovery_intent() != recovery_intent {
+                                    cx.notify();
+                                    return;
                                 }
+                                this.retry_terminal(window, cx);
                             }))
                             .child(restart_label),
                     )

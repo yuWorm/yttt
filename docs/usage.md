@@ -79,8 +79,13 @@ new attempt. Ordinary confirmed failures and exits use **Restart** instead.
 
 If an attached session disappears from the Host catalog, the pane shows **Terminal session
 unavailable**, not a launch failure. **Reconnect** only attaches to an existing session; it never
-starts another shell or Agent. The pane keeps listening and reconnects when the same session
-address becomes available again.
+starts another shell or Agent. Once the connected Host confirms that the session is absent,
+the controlling Client instead offers **Resume saved session** when a saved Agent resume command
+is prepared, or **Start a new process** otherwise. Both require an explicit click. Observers
+see a prompt to take workspace control; taking control alone never replays a command.
+The pane keeps listening and reconnects when the same session address becomes available again.
+Recovery rechecks the Host catalog before starting, so a process that reappears is attached
+rather than duplicated.
 
 The legacy `terminal-placements.json` file is no longer read or written and can be left untouched.
 Its contents or revision cannot block terminal startup. Resource protocol v11 requires matching

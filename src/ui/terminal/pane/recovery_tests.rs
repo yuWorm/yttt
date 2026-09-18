@@ -371,3 +371,130 @@ fn unavailable_pane_reconnects_when_session_reappears_without_spawning(cx: &mut 
     });
     runtime.shutdown_client();
 }
+
+#[gpui::test]
+fn missing_terminal_can_be_explicitly_started_from_recovery(cx: &mut TestAppContext) {
+    let host = RecoveryHost::start();
+    let runtime = host.client("first");
+    let (pane, cx) = open_pane(cx, runtime.clone(), host.root.path());
+    pump_until(cx, "initial terminal", |cx| {
+        cx.read(|app| pane.read(app).is_running()) && host.root.path().join("starts").exists()
+    });
+    let original = catalog(&runtime).terminals.remove(0);
+    runtime
+        .terminate_many_confirmed(vec![original.session_id.clone()])
+        .unwrap();
+    pump_until(cx, "unavailable pane", |cx| {
+        cx.read(|app| matches!(pane.read(app).lifecycle, PaneLifecycle::Lost { .. }))
+    });
+    assert!(catalog(&runtime).terminals.is_empty());
+    assert_eq!(
+        fs::read_to_string(host.root.path().join("starts")).unwrap(),
+        "start\n"
+    );
+
+    cx.update(|window, cx| pane.update(cx, |pane, cx| pane.retry_terminal(window, cx)));
+    pump_until(cx, "explicit replacement terminal", |cx| {
+        cx.read(|app| pane.read(app).is_running())
+            && fs::read_to_string(host.root.path().join("starts"))
+                .ok()
+                .as_deref()
+                == Some("start\nstart\n")
+    });
+    let replacement = catalog(&runtime).terminals.remove(0);
+    assert_eq!(replacement.session_id, original.session_id);
+    assert_ne!(replacement.session_epoch, original.session_epoch);
+    send_input(&pane, cx);
+    pump_until(cx, "replacement accepts input", |_| {
+        fs::read_to_string(host.root.path().join("inputs"))
+            .ok()
+            .as_deref()
+            == Some("x\n")
+    });
+    runtime
+        .terminate_many_confirmed(vec![original.session_id])
+        .unwrap();
+    pump_until(cx, "replacement closed", |cx| {
+        cx.read(|app| matches!(pane.read(app).lifecycle, PaneLifecycle::Lost { .. }))
+    });
+    runtime.shutdown_client();
+}
+
+#[gpui::test]
+fn missing_terminal_waits_for_control_without_automatically_replaying(cx: &mut TestAppContext) {
+    let host = RecoveryHost::start();
+    let runtime = host.client("first");
+    let (pane, cx) = open_pane(cx, runtime.clone(), host.root.path());
+    pump_until(cx, "initial terminal", |cx| {
+        cx.read(|app| pane.read(app).is_running()) && host.root.path().join("starts").exists()
+    });
+    let original = catalog(&runtime).terminals.remove(0);
+    runtime
+        .terminate_many_confirmed(vec![original.session_id.clone()])
+        .unwrap();
+    pump_until(cx, "unavailable pane", |cx| {
+        cx.read(|app| matches!(pane.read(app).lifecycle, PaneLifecycle::Lost { .. }))
+    });
+    let controller = host.client("second");
+    controller
+        .request_blocking_typed(Request::ProfileControl(
+            ProfileControlRequest::RequestControl,
+        ))
+        .unwrap();
+    pump_until(cx, "control transferred", |_| {
+        controller.shared_editing_enabled() && !runtime.shared_editing_enabled()
+    });
+
+    // A restoration that races control transfer must remain recoverable.
+    cx.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.start_restored_terminal(window, cx, false);
+        })
+    });
+    pump_until(cx, "restoration settles", |cx| {
+        cx.read(|app| {
+            matches!(
+                pane.read(app).lifecycle,
+                PaneLifecycle::Lost { .. } | PaneLifecycle::SpawnFailed { .. }
+            )
+        })
+    });
+    cx.read(|app| {
+        assert!(matches!(
+            pane.read(app).lifecycle,
+            PaneLifecycle::Lost { .. }
+        ))
+    });
+    cx.update(|window, cx| pane.update(cx, |pane, cx| pane.retry_terminal(window, cx)));
+    cx.run_until_parked();
+    assert!(catalog(&runtime).terminals.is_empty());
+    runtime
+        .request_blocking_typed(Request::ProfileControl(
+            ProfileControlRequest::RequestControl,
+        ))
+        .unwrap();
+    pump_until(cx, "control reclaimed", |_| {
+        runtime.shared_editing_enabled()
+    });
+    cx.run_until_parked();
+    assert!(
+        catalog(&runtime).terminals.is_empty(),
+        "taking control is not consent to replay a command"
+    );
+    cx.update(|window, cx| pane.update(cx, |pane, cx| pane.retry_terminal(window, cx)));
+    pump_until(cx, "explicit replacement", |cx| {
+        cx.read(|app| pane.read(app).is_running())
+            && fs::read_to_string(host.root.path().join("starts"))
+                .ok()
+                .as_deref()
+                == Some("start\nstart\n")
+    });
+    runtime
+        .terminate_many_confirmed(vec![original.session_id])
+        .unwrap();
+    pump_until(cx, "replacement closed", |cx| {
+        cx.read(|app| matches!(pane.read(app).lifecycle, PaneLifecycle::Lost { .. }))
+    });
+    controller.shutdown_client();
+    runtime.shutdown_client();
+}

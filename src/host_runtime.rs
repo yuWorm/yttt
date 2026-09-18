@@ -631,9 +631,7 @@ impl DesktopHostRuntime {
                 .terminals
                 .iter()
                 .find(|placement| placement.session_id == spec.session_id)
-                .ok_or_else(|| {
-                    TerminalRecoveryError::MissingObservedSession(spec.session_id.clone())
-                })?;
+                .ok_or_else(|| TerminalRecoveryError::ControlRequired(spec.session_id.clone()))?;
             validate_terminal_placement(&spec, placement, intent)?;
             return Ok(terminal_attach_request(
                 &spec,
@@ -760,8 +758,10 @@ pub enum TerminalRecoveryError {
         expected: u64,
         actual: u64,
     },
-    #[error("terminal {0} is not running; only the controller can explicitly start it")]
+    #[error("terminal {0} is no longer available on the Host")]
     MissingObservedSession(TerminalSessionId),
+    #[error("starting terminal {0} requires workspace control and no control transfer in progress")]
+    ControlRequired(TerminalSessionId),
     #[error("Host is not connected to reconcile the terminal start")]
     HostUnavailable,
     #[error(

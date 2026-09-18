@@ -4,6 +4,9 @@
 
 ### 中文
 
+- 修复窗口恢复后旧终端已消失却只能反复点击 Reconnect 的问题：确认会话缺失后，
+  控制端可明确恢复已准备的 Agent 会话或启动新进程；观察端提示先取得控制权。
+  区分会话缺失与控制权不足，接管本身不自动执行命令，重现的旧会话仍直接重连。
 - 新增 Sixel 终端图片：图片随单元格滚动和裁剪，通过 Host 语义快照恢复，支持重新连接。
   图片资源池限制为 16 MiB 解码 RGBA／128 个资源，超限淘汰旧图。
 - 补全 Kitty graphics：RGB/RGBA/PNG、分块与 zlib、查询、复用／删除、裁剪与层级、
@@ -22,7 +25,7 @@
 - 启动响应丢失时保留同一次启动标识并核对 Host 状态，不自动重复执行命令；
   UI 区分结果待确认与明确启动失败。关闭请求校验 Host/session epoch，防止旧请求结束新进程。
 - 修复控制权取回后终端仍持有失效租约、无法输入或关闭的问题：重新附着已有进程并更新输入上下文。
-  会话暂时缺失时保留恢复监听，重新出现后自动连接；丢失状态改为“Reconnect”，不再误报启动失败或重跑 Agent。
+  会话暂时缺失时保留恢复监听，重新出现后自动连接；重连仅附着已有进程，不重跑 Agent。
 - 修复终端查看历史时被状态轮询或资源目录刷新拉回底部、随后输入输出延迟的问题：
   目录刷新只补齐缺失或 session epoch 已变化的镜像，重新同步与数据通道重连保留已有附着的滚动位置。
   同时修复滚动条拖动在 Host 尚未确认位置时重复累加偏移、意外跳到底部的问题。
@@ -36,6 +39,10 @@
 
 ### English
 
+- Fixed restored panes offering only an ineffective **Reconnect** after the old terminal disappeared.
+  Controllers can explicitly resume a prepared saved Agent session or start a new process;
+  observers are prompted to take control. Missing sessions and insufficient control are reported
+  separately. Taking control does not replay commands, and returning sessions are reattached.
 - Added Sixel terminal images with cell clipping, scrollback, and Host snapshot/reconnect recovery.
   The image store is bounded to 16 MiB decoded RGBA / 128 assets, evicting oldest images when needed.
 - Added Kitty graphics: RGB/RGBA/PNG, chunking/zlib, queries, reuse/deletion, clipping/layers,
