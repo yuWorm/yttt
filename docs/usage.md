@@ -77,6 +77,11 @@ terminal is present. If the result can no longer be established, the pane remain
 A changed Host epoch ends the old attempt without replaying it; a subsequent explicit start is a
 new attempt. Ordinary confirmed failures and exits use **Restart** instead.
 
+If an attached session disappears from the Host catalog, the pane shows **Terminal session
+unavailable**, not a launch failure. **Reconnect** only attaches to an existing session; it never
+starts another shell or Agent. The pane keeps listening and reconnects when the same session
+address becomes available again.
+
 The legacy `terminal-placements.json` file is no longer read or written and can be left untouched.
 Its contents or revision cannot block terminal startup. Resource protocol v9 requires matching
 client and Host updates. A Host retains at most 4,096 launch-attempt records for its lifetime;
@@ -234,6 +239,9 @@ A workspace or settings save failure cancels handoff.
 The five-second deadline never automatically grants control: **Force takeover** explicitly chooses
 the last durable state. The former controller remains an observer; reconnecting does not replay
 old mutations or automatically regain input authority.
+After an explicit control handoff back to this Client, existing terminal panes reacquire their
+input leases and refresh their writer contexts by reattaching. The running processes are not
+restarted, and input and terminal-close operations use the renewed authority.
 
 **Recovery limits.** Draft bodies are separate from layout manifests: up to 6 MiB per document,
 64 MiB per workspace and 1 MiB per manifest. An oversized or failed publication remains an error;

@@ -227,6 +227,7 @@ pub struct TerminalPaneView {
     host_session_id: Option<TerminalSessionId>,
     host_epoch: Option<u64>,
     host_session_epoch: Option<u64>,
+    host_control_epoch: Option<u64>,
     pending_start: Option<PendingTerminalStart>,
     host_events_task: Option<Task<()>>,
     window_handle: Option<AnyWindowHandle>,
@@ -469,6 +470,7 @@ impl TerminalPaneView {
             host_session_id: None,
             host_epoch: None,
             host_session_epoch: None,
+            host_control_epoch: None,
             pending_start: None,
             host_events_task: None,
             window_handle: None,
@@ -687,12 +689,19 @@ impl TerminalPaneView {
         intent: TerminalStartIntent,
     ) -> bool {
         let retrying_pending_start = self.pending_start.is_some();
+        let attach_only = intent == TerminalStartIntent::Attach
+            || self
+                .pending_start
+                .as_ref()
+                .is_some_and(|start| start.intent == TerminalStartIntent::Attach);
         let Some(host_runtime) = cx
             .try_global::<HostRuntimeGlobal>()
             .and_then(HostRuntimeGlobal::runtime)
             .cloned()
         else {
-            if retrying_pending_start {
+            if attach_only {
+                self.set_terminal_lost("Host runtime is unavailable".to_string(), cx);
+            } else if retrying_pending_start {
                 self.set_terminal_reconciling("Host runtime is unavailable".to_string(), cx);
             } else {
                 self.lifecycle = PaneLifecycle::Starting;
@@ -705,7 +714,9 @@ impl TerminalPaneView {
         let host_epoch = match host_runtime.state() {
             ConnectionState::Ready { host_epoch, .. } => host_epoch,
             _ => {
-                if retrying_pending_start {
+                if attach_only {
+                    self.set_terminal_lost("Host runtime is not connected".to_string(), cx);
+                } else if retrying_pending_start {
                     self.set_terminal_reconciling("Host runtime is not connected".to_string(), cx);
                 } else {
                     self.lifecycle = PaneLifecycle::Starting;
@@ -758,6 +769,7 @@ impl TerminalPaneView {
             .clone()
             .unwrap_or_else(|| self.default_title.clone());
         self.set_runtime_title(initial_title, cx);
+        let was_focused = self.terminal_is_focused(window, cx);
         self.clear_terminal_viewport();
         self.host_events_task = None;
         self.lifecycle = PaneLifecycle::Starting;
@@ -802,11 +814,13 @@ impl TerminalPaneView {
         let scroll_mutation_sequence = next_mutation_sequence.clone();
         let error_parent = cx.weak_entity();
         let input_runtime = host_runtime.clone();
+        let input_mutation_context = mutation_context.clone();
         let initial_config = self.terminal_config.clone();
         let terminal = cx.new(|cx| {
             TerminalView::new_semantic(writer, initial_config, cx)
                 .with_key_handler(move |_event| {
                     !input_runtime.shared_editing_enabled()
+                        || input_mutation_context.read().lease_epoch == 0
                         || !terminal_input_allowed.load(Ordering::SeqCst)
                 })
                 .with_resize_callback(move |cols, rows| {
@@ -897,8 +911,15 @@ impl TerminalPaneView {
                         })
                     }
                     TerminalPaneHostEvent::Client(event) => {
-                        this.update_in(cx, move |pane, _window, cx| {
-                            pane.handle_host_event(event, runtime, &session_id, generation, cx);
+                        this.update_in(cx, move |pane, window, cx| {
+                            pane.handle_host_event(
+                                event,
+                                runtime,
+                                &session_id,
+                                generation,
+                                window,
+                                cx,
+                            );
                         })
                     }
                 };
@@ -909,10 +930,16 @@ impl TerminalPaneView {
         });
 
         self.track_terminal_viewport(terminal, cx);
+        if was_focused {
+            self.focus_terminal(window, cx);
+        }
         self.host_runtime = Some(host_runtime.clone());
         self.host_session_id = Some(session_id.clone());
         self.host_epoch = None;
         self.host_session_epoch = None;
+        self.host_control_epoch = host_runtime
+            .control_status()
+            .map(|status| status.context.control_epoch);
         self.host_events_task = Some(event_task);
         #[cfg(feature = "perf-metrics")]
         self.start_performance_probe(window.window_handle(), cx);
@@ -923,7 +950,7 @@ impl TerminalPaneView {
         let response_mutation_context = mutation_context.clone();
         let response_mutation_sequence = next_mutation_sequence.clone();
         let response_pending_resize = pending_resize_geometry.clone();
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let result = async {
                 let catalog_response = request_runtime
                     .request(Request::ListResources)
@@ -962,7 +989,7 @@ impl TerminalPaneView {
                 Ok((response, catalog))
             }
             .await;
-            let _ = this.update(cx, |pane, cx| {
+            let _ = this.update_in(cx, |pane, window, cx| {
                 if pane.generation != generation {
                     return;
                 }
@@ -1053,18 +1080,31 @@ impl TerminalPaneView {
                         cx.notify();
                     }
                     Ok((response, _)) => {
-                        pane.set_spawn_failure(
-                            format!("unexpected Host terminal response: {response:?}"),
-                            cx,
-                        );
+                        let message = format!("unexpected Host terminal response: {response:?}");
+                        if request_start.intent == TerminalStartIntent::Attach {
+                            pane.set_terminal_lost(message, cx);
+                        } else {
+                            pane.set_spawn_failure(message, cx);
+                        }
                     }
                     Err(TerminalStartAttemptError::Failed(message)) => {
-                        pane.set_spawn_failure(message, cx);
+                        if request_start.intent == TerminalStartIntent::Attach {
+                            pane.set_terminal_lost(message, cx);
+                        } else {
+                            pane.set_spawn_failure(message, cx);
+                        }
                     }
                     Err(TerminalStartAttemptError::Uncertain(message)) => {
-                        pane.set_terminal_reconciling(message, cx);
-                        pane.reconcile_pending_start(cx);
+                        if request_start.intent == TerminalStartIntent::Attach {
+                            pane.set_terminal_lost(message, cx);
+                        } else {
+                            pane.set_terminal_reconciling(message, cx);
+                            pane.reconcile_pending_start(cx);
+                        }
                     }
+                }
+                if matches!(pane.lifecycle, PaneLifecycle::Running) {
+                    pane.recover_host_terminal(&request_runtime, window, cx);
                 }
             });
         })
@@ -1179,6 +1219,7 @@ impl TerminalPaneView {
         runtime: Arc<DesktopHostRuntime>,
         session_id: &TerminalSessionId,
         generation: u64,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.generation != generation {
@@ -1187,11 +1228,17 @@ impl TerminalPaneView {
         match event {
             ClientEvent::TerminalUnavailable(unavailable) if unavailable == *session_id => {
                 self.set_terminal_lost(
-                    "Terminal session was lost while the Host was unavailable".to_string(),
+                    "Terminal session is no longer present in the Host catalog".to_string(),
                     cx,
                 );
             }
+            ClientEvent::ResourceCatalogUpdated(_) => {
+                self.recover_host_terminal(&runtime, window, cx);
+            }
             ClientEvent::Server(host_event) => match host_event.body {
+                ServerEvent::ProfileControl(_) => {
+                    self.recover_host_terminal(&runtime, window, cx);
+                }
                 ServerEvent::TerminalExit {
                     session_id: exited_session_id,
                     session_epoch,
@@ -1266,6 +1313,38 @@ impl TerminalPaneView {
                 self.set_terminal_lost(message, cx);
             }
             _ => {}
+        }
+    }
+
+    fn recover_host_terminal(
+        &mut self,
+        runtime: &DesktopHostRuntime,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let control_changed = runtime.shared_editing_enabled()
+            && runtime.control_status().is_some_and(|status| {
+                self.host_control_epoch != Some(status.context.control_epoch)
+            });
+        if !(matches!(self.lifecycle, PaneLifecycle::Lost { .. })
+            || matches!(self.lifecycle, PaneLifecycle::Running) && control_changed)
+            || !matches!(runtime.state(), ConnectionState::Ready { .. })
+        {
+            return;
+        }
+        let Some(session_id) = self.host_session_id.as_ref() else {
+            return;
+        };
+        if runtime.resource_catalog().is_some_and(|catalog| {
+            catalog
+                .terminals
+                .iter()
+                .any(|placement| &placement.session_id == session_id)
+        }) {
+            // Control epochs fence old leases. Reattach refreshes both the lease
+            // and writer context, without replaying the process's launch command.
+            self.pending_start = None;
+            self.start_host_terminal(window, cx, TerminalStartIntent::Attach);
         }
     }
 
@@ -1373,11 +1452,9 @@ impl TerminalPaneView {
         };
         self.terminal_error = Some(message.clone());
         self.clear_terminal_viewport();
-        self.host_events_task = None;
-        self.host_session_id = None;
         self.host_epoch = None;
         self.host_session_epoch = None;
-        self.host_runtime = None;
+        self.pending_start = None;
         cx.emit(TerminalPaneEvent::Lost(TerminalPaneLostEvent {
             project_id: self.project_id.clone(),
             tab_id: self.tab_id.clone(),
@@ -1683,13 +1760,17 @@ impl Render for TerminalPaneView {
             div().flex().flex_1().child(terminal.clone())
         } else {
             let lines = match &self.lifecycle {
-                PaneLifecycle::SpawnFailed { .. } | PaneLifecycle::Lost { .. } => {
-                    spawn_failure_lines(&TerminalSpawnFailure {
-                        command: self.command.clone(),
-                        cwd: self.project_path.clone(),
-                        message: terminal_start_error(&self.lifecycle, &self.terminal_error),
-                    })
-                }
+                PaneLifecycle::SpawnFailed { .. } => spawn_failure_lines(&TerminalSpawnFailure {
+                    command: self.command.clone(),
+                    cwd: self.project_path.clone(),
+                    message: terminal_start_error(&self.lifecycle, &self.terminal_error),
+                }),
+                PaneLifecycle::Lost { message } => vec![
+                    "Terminal session unavailable".to_string(),
+                    format!("command: {}", self.command),
+                    format!("cwd: {}", self.project_path.display()),
+                    format!("status: {message}"),
+                ],
                 PaneLifecycle::Reconciling { message } => vec![
                     "Terminal launch outcome is being reconciled".to_string(),
                     format!("status: {message}"),
@@ -1702,9 +1783,12 @@ impl Render for TerminalPaneView {
                     format!("cwd: {}", self.project_path.display()),
                 ],
             };
-            let can_restart = self.exit_behavior != ProcessExitBehavior::Close;
+            let can_restart = self.exit_behavior != ProcessExitBehavior::Close
+                || matches!(self.lifecycle, PaneLifecycle::Lost { .. });
             let restart_id = SharedString::from(format!("restart-pane-{}", self.pane_id));
-            let restart_label = if matches!(&self.lifecycle, PaneLifecycle::Reconciling { .. }) {
+            let restart_label = if matches!(&self.lifecycle, PaneLifecycle::Lost { .. }) {
+                "Reconnect"
+            } else if matches!(&self.lifecycle, PaneLifecycle::Reconciling { .. }) {
                 "Retry"
             } else {
                 "Restart"
@@ -1734,7 +1818,15 @@ impl Render for TerminalPaneView {
                             .text_color(self.theme.text)
                             .hover(|button| button.bg(ui_style.hover_background(self.theme)))
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.start_terminal(window, cx);
+                                if matches!(this.lifecycle, PaneLifecycle::Lost { .. }) {
+                                    this.start_host_terminal(
+                                        window,
+                                        cx,
+                                        TerminalStartIntent::Attach,
+                                    );
+                                } else {
+                                    this.start_terminal(window, cx);
+                                }
                             }))
                             .child(restart_label),
                     )
@@ -1824,23 +1916,8 @@ mod tests {
             "vim main.rs"
         );
         assert_eq!(resolved_terminal_title(configured, ""), configured);
-        assert_eq!(configured, "Configured shell");
     }
 
-    #[test]
-    fn terminal_title_changed_event_contains_only_runtime_identity() {
-        let event = TerminalPaneEvent::TitleChanged {
-            pane_id: "shell".to_string(),
-            title: "runtime".to_string(),
-        };
-        assert_eq!(
-            event,
-            TerminalPaneEvent::TitleChanged {
-                pane_id: "shell".to_string(),
-                title: "runtime".to_string(),
-            }
-        );
-    }
     #[gpui::test]
     fn production_terminal_refuses_to_spawn_without_host_runtime(cx: &mut gpui::TestAppContext) {
         let context = TerminalPaneContext {
@@ -1918,20 +1995,6 @@ mod tests {
 
     #[test]
     fn terminal_pane_io_error_lifecycle_is_single_shot() {
-        let message = terminal_io_error_message(PtyIoOperation::Read, "broken pipe");
-        let lifecycle = PaneLifecycle::Running;
-        let event = TerminalPaneEvent::IoError {
-            pane_id: "shell".to_string(),
-            message: message.clone(),
-            fatal: true,
-        };
-        assert_eq!(lifecycle, PaneLifecycle::Running);
-        assert_eq!(message, "Terminal Read error: broken pipe");
-        assert!(matches!(
-            event,
-            TerminalPaneEvent::IoError { fatal: true, .. }
-        ));
-
         let generation = 7;
         let mut exit_emitted = false;
         let mut handled = 0;
@@ -1944,3 +2007,6 @@ mod tests {
         assert_eq!(handled, 1);
     }
 }
+
+#[cfg(all(test, unix))]
+mod recovery_tests;

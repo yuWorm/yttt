@@ -49,8 +49,10 @@ impl From<&TerminalMirrorMetadata> for TerminalPaneMetadataKey {
 fn terminal_client_event_matches(event: &ClientEvent, session_id: &TerminalSessionId) -> bool {
     match event {
         ClientEvent::TerminalUnavailable(unavailable) => unavailable == session_id,
+        ClientEvent::ResourceCatalogUpdated(_) => true,
         ClientEvent::Connection(ConnectionState::HostLost { .. }) => true,
         ClientEvent::Server(event) => match &event.body {
+            yttt_protocol::ServerEvent::ProfileControl(_) => true,
             yttt_protocol::ServerEvent::TerminalExit {
                 session_id: event_session_id,
                 ..

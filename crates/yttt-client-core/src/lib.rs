@@ -64,6 +64,7 @@ pub enum ClientEvent {
     Server(HostEvent),
     TerminalUpdated(Arc<TerminalStreamUpdate>),
     TerminalUnavailable(TerminalSessionId),
+    ResourceCatalogUpdated(Arc<ResourceCatalog>),
     AgentSnapshotUpdated(Box<AgentSnapshotUpdate>),
 }
 
@@ -1135,6 +1136,7 @@ fn handle_response(
             for session_id in removed {
                 let _ = events.send(ClientEvent::TerminalUnavailable(session_id));
             }
+            let _ = events.send(ClientEvent::ResourceCatalogUpdated(resources));
             sessions
         }
     }
