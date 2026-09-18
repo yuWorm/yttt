@@ -2237,6 +2237,8 @@ impl TerminalView {
         let thumb_top = (y - track_top - drag.pointer_offset).clamp(0.0, travel);
         let progress_from_top = thumb_top / travel;
         let desired_offset = ((1.0 - progress_from_top) * history_size as f32).round() as usize;
+        // Drag positions are absolute; do not add a delta based on an older Host acknowledgement.
+        let display_offset = self.semantic_scroll_offset.unwrap_or(display_offset as u64);
         let delta = desired_offset as i64 - display_offset as i64;
         self.scroll_display(Scroll::Delta(
             delta.clamp(i32::MIN as i64, i32::MAX as i64) as i32
@@ -4524,6 +4526,46 @@ mod tests {
         });
 
         assert_eq!(&*requested_offsets.lock(), &[3, 27]);
+    }
+
+    #[gpui::test]
+    fn semantic_scrollbar_drag_keeps_an_absolute_target_before_ack(cx: &mut TestAppContext) {
+        let requested = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let captured = requested.clone();
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new_semantic(RecordingWriter::default(), TerminalConfig::default(), cx)
+                .with_semantic_scroll_callback(move |offset| captured.lock().push(offset))
+        });
+        terminal.update(cx, |terminal, cx| {
+            let mut viewport = semantic_viewport(1);
+            viewport.history_size = 100;
+            viewport.display_offset = 80;
+            terminal.set_semantic_viewport(viewport, cx);
+        });
+        cx.run_until_parked();
+        let (thumb, target) = cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            let viewport = terminal.viewport.lock().unwrap();
+            let (top, height, thumb_top, thumb_height, _, _) =
+                terminal.scrollbar_geometry().unwrap();
+            let x = viewport.bounds.origin.x + viewport.bounds.size.width - px(2.0);
+            (
+                point(x, px(thumb_top + thumb_height / 2.0)),
+                point(
+                    x,
+                    px(top + (height - thumb_height) * 0.7 + thumb_height / 2.0),
+                ),
+            )
+        });
+        cx.simulate_mouse_down(thumb, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(target, Some(MouseButton::Left), Modifiers::none());
+        cx.simulate_mouse_move(target, Some(MouseButton::Left), Modifiers::none());
+        cx.simulate_mouse_up(target, MouseButton::Left, Modifiers::none());
+        assert_eq!(
+            &*requested.lock(),
+            &[30],
+            "stationary pointer must not request the bottom"
+        );
     }
 
     #[gpui::test]

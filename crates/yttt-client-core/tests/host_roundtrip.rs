@@ -2330,6 +2330,42 @@ async fn multiple_clients_keep_independent_viewports_and_a_single_input_owner() 
         0
     );
 
+    let Response::TerminalCheckpoint(checkpoint) = owner
+        .request(Request::RequestCheckpoint {
+            session_id: session_id.clone(),
+            after_sequence: None,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected owner checkpoint");
+    };
+    assert_eq!(
+        checkpoint.viewport.display_offset,
+        scrolled.viewport.display_offset
+    );
+    let mut reconnected_data =
+        raw_terminal_data_client(&host, "viewport-owner", session_id.clone()).await;
+    let snapshot = tokio::time::timeout(
+        Duration::from_secs(5),
+        receive_control(&mut reconnected_data),
+    )
+    .await
+    .expect("reconnected data snapshot timeout")
+    .unwrap();
+    let ControlMessage::Event(yttt_protocol::HostEvent {
+        body:
+            yttt_protocol::ServerEvent::Terminal(
+                yttt_protocol::terminal::TerminalStreamUpdate::Snapshot(viewport),
+            ),
+        ..
+    }) = snapshot
+    else {
+        panic!("expected reconnected data snapshot");
+    };
+    assert_eq!(viewport.display_offset, scrolled.viewport.display_offset);
+    drop(reconnected_data);
+
     assert_eq!(
         owner
             .request(Request::TerminalInput(TerminalInput {
@@ -4034,6 +4070,132 @@ async fn project_file_limit_is_frame_safe_and_oversized_files_return_resource_li
             .await,
         LifecycleResponse::Draining
     );
+    tokio::time::timeout(Duration::from_secs(5), host.task)
+        .await
+        .expect("Host shutdown timeout")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn catalog_refresh_and_status_poll_preserve_history_and_live_input() {
+    let host = RunningHost::start().await;
+    let client = host.client("scroll-refresh-owner").await;
+    let mut spec = spawn_spec();
+    spec.execution = TerminalExecutionSpec::Command {
+        shell: "/bin/sh".into(),
+        program: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            concat!(
+                "i=0; while [ \"$i\" -lt 100 ]; do printf 'line-%s\\n' \"$i\"; i=$((i+1)); done; ",
+                "printf 'scroll-ready\\n'; ",
+                "while IFS= read -r line; do printf 'live-output:%s\\n' \"$line\"; done"
+            )
+            .into(),
+        ],
+        return_to_shell: false,
+    };
+    let session_id = spec.session_id.clone();
+    let Response::TerminalSpawned {
+        lease,
+        session_epoch,
+    } = client
+        .request(spawn_request(spec, host.host_epoch()))
+        .await
+        .unwrap()
+    else {
+        panic!("expected spawned terminal");
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !client
+            .terminal_snapshot(&session_id)
+            .is_some_and(|viewport| viewport_text(&viewport).contains("scroll-ready"))
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("initial terminal output timeout");
+    client
+        .request(Request::ScrollTerminal(ScrollTerminal {
+            session_id: session_id.clone(),
+            context: mutation_context(&client, session_epoch, lease.lease_epoch, 1, 1),
+            display_offset: 30,
+        }))
+        .await
+        .unwrap();
+
+    // Exercise both the tray's read-only query and a genuine catalog change.
+    host.lifecycle_request(LifecycleRequest::Status, false)
+        .await;
+    let mut events = client.subscribe_events();
+    let mut other = spawn_spec();
+    other.session_id = TerminalSessionId::new("catalog-change");
+    let other_id = other.session_id.clone();
+    client
+        .request(spawn_request(other, host.host_epoch()))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let ClientEvent::ResourceCatalogUpdated(catalog) = events.recv().await.unwrap()
+                && catalog
+                    .terminals
+                    .iter()
+                    .any(|terminal| terminal.session_id == other_id)
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("catalog refresh timeout");
+    // The control response is a barrier behind checkpoint requests from that catalog.
+    client
+        .request(Request::Ping { sent_millis: 0 })
+        .await
+        .unwrap();
+    let viewport = client.terminal_snapshot(&session_id).unwrap();
+    assert_eq!(
+        viewport.display_offset, 30,
+        "catalog refresh reset the historical viewport"
+    );
+
+    // Like the UI, typing returns to live output only when the mirror says it is scrolled.
+    if viewport.display_offset != 0 {
+        client
+            .request(Request::ScrollTerminal(ScrollTerminal {
+                session_id: session_id.clone(),
+                context: mutation_context(&client, session_epoch, lease.lease_epoch, 1, 2),
+                display_offset: 0,
+            }))
+            .await
+            .unwrap();
+    }
+    client
+        .request(Request::TerminalInput(TerminalInput {
+            session_id: session_id.clone(),
+            context: mutation_context(&client, session_epoch, lease.lease_epoch, 1, 3),
+            bytes: b"after-scroll\r".to_vec(),
+        }))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !client
+            .terminal_snapshot(&session_id)
+            .is_some_and(|viewport| {
+                viewport.display_offset == 0
+                    && viewport_text(&viewport).contains("live-output:after-scroll")
+            })
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("typing did not restore live terminal output");
+    host.lifecycle_request(LifecycleRequest::ForceStop, true)
+        .await;
     tokio::time::timeout(Duration::from_secs(5), host.task)
         .await
         .expect("Host shutdown timeout")

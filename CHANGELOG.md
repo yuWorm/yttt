@@ -15,6 +15,9 @@
   UI 区分结果待确认与明确启动失败。关闭请求校验 Host/session epoch，防止旧请求结束新进程。
 - 修复控制权取回后终端仍持有失效租约、无法输入或关闭的问题：重新附着已有进程并更新输入上下文。
   会话暂时缺失时保留恢复监听，重新出现后自动连接；丢失状态改为“Reconnect”，不再误报启动失败或重跑 Agent。
+- 修复终端查看历史时被状态轮询或资源目录刷新拉回底部、随后输入输出延迟的问题：
+  目录刷新只补齐缺失或 session epoch 已变化的镜像，重新同步与数据通道重连保留已有附着的滚动位置。
+  同时修复滚动条拖动在 Host 尚未确认位置时重复累加偏移、意外跳到底部的问题。
 - 资源协议升级至 v9，客户端与 Host 需要同步更新。Host 在同一 epoch 内保留最多 4,096 次
   启动记录，达到上限会拒绝新启动而非遗忘旧记录后重复执行；不会自动重启 Host。
 - 修复编辑器横向滚动时正文穿透行号区域的问题；正文与行号独立裁剪，保留窗口透明度设置。
@@ -34,6 +37,10 @@
 - Fixed terminal input and close failures after reclaiming profile control by reattaching existing
   processes with renewed leases and writer contexts. Unavailable panes retain recovery subscriptions
   and reconnect when their session returns; **Reconnect** never launches another shell or Agent.
+- Fixed terminal history unexpectedly jumping to the bottom after status polling or resource
+  catalog refreshes, leaving live output delayed. Catalog refreshes only bootstrap missing or
+  new-epoch mirrors; resynchronization and data-channel reconnects preserve existing attachment
+  offsets. Scrollbar dragging no longer compounds offsets while waiting for Host acknowledgements.
 - Fixed horizontally scrolled editor content bleeding into the line-number gutter. Separate
   content and gutter clipping preserves the configured window opacity.
 - Moved breadcrumb symbol parsing off the per-keystroke input path using Rope snapshots,

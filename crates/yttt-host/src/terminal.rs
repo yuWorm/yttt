@@ -763,6 +763,37 @@ impl HostedTerminal {
         Some(checkpoint)
     }
 
+    pub(crate) fn control_checkpoint_for_offset(
+        &self,
+        display_offset: u64,
+    ) -> Option<TerminalCheckpoint> {
+        if display_offset == 0 {
+            return self.control_checkpoint();
+        }
+        let raw_tail_start_sequence = self.inner.raw_replay.lock().available_from();
+        let viewport = {
+            let context = self.inner.metadata.lock().capture_context();
+            let state = self.inner.state.lock();
+            let mut snapshots = self.inner.snapshots.lock();
+            let scrollback_epoch = snapshots.latest_viewport()?.scrollback_epoch;
+            snapshots
+                .read_viewport(
+                    &state,
+                    &context,
+                    scrollback_epoch,
+                    TerminalViewportAnchor::DisplayOffset(display_offset),
+                )
+                .ok()?
+        };
+        let checkpoint = TerminalCheckpoint {
+            viewport,
+            raw_replay_tail: Vec::new(),
+            raw_tail_start_sequence,
+        };
+        self.record_control_checkpoint_encode(&checkpoint);
+        Some(checkpoint)
+    }
+
     pub fn raw_replay_available_from(&self) -> u64 {
         self.inner.raw_replay.lock().available_from()
     }

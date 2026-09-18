@@ -911,7 +911,9 @@ async fn serve_connection(
         yttt_protocol::ConnectionChannel::DesktopOwner => unreachable!(),
     };
     context.lifecycle.client_disconnected();
-    context.lifecycle.resource_changed();
+    if authenticated.channel == yttt_protocol::ConnectionChannel::Control {
+        context.lifecycle.resource_changed();
+    }
     result
 }
 
@@ -1785,7 +1787,9 @@ async fn serve_terminal_data_connection(
     let mut terminal_events = terminal.subscribe();
     let output = TerminalDataWriter::new(stream, runtime.new_attachment_queue_diagnostics());
     let mut output_failure = output.subscribe_failure();
-    let checkpoint = terminal.control_checkpoint().ok_or(())?;
+    let checkpoint = terminal
+        .control_checkpoint_for_offset(attachment_state.display_offset)
+        .ok_or(())?;
     output
         .enqueue(
             host_sequence,
@@ -1831,7 +1835,9 @@ async fn serve_terminal_data_connection(
         }
     }
     if terminal.is_exited() {
-        let checkpoint = terminal.control_checkpoint().ok_or(())?;
+        let checkpoint = terminal
+            .control_checkpoint_for_offset(attachment_state.display_offset)
+            .ok_or(())?;
         output
             .enqueue(
                 host_sequence,
@@ -1878,7 +1884,9 @@ async fn serve_terminal_data_connection(
                         session_id: exited_session_id,
                         ..
                     }) if exited_session_id == session_id => {
-                        let checkpoint = terminal.control_checkpoint().ok_or(())?;
+                        let checkpoint = terminal
+                            .control_checkpoint_for_offset(attachment_state.display_offset)
+                            .ok_or(())?;
                         output
                             .enqueue(
                                 host_sequence,
@@ -2342,8 +2350,11 @@ async fn handle_request(
                 terminal.raw_replay_chunks(after_sequence)?;
                 runtime.set_pending_raw_after(&session_id, client_id, Some(after_sequence));
             }
+            let display_offset = attachments
+                .get(&session_id)
+                .map_or(0, |attachment| attachment.display_offset);
             terminal
-                .control_checkpoint()
+                .control_checkpoint_for_offset(display_offset)
                 .map(Response::TerminalCheckpoint)
                 .ok_or(HostRuntimeError::NotFound(session_id))
         })()
@@ -2750,8 +2761,11 @@ fn attach_terminal(
             terminal.resize(attach.geometry, attach.geometry_epoch)?;
         }
     }
+    let display_offset = runtime
+        .attachment_receiver(terminal.session_id(), client_id)
+        .map_or(0, |attachment| attachment.borrow().display_offset);
     let checkpoint = terminal
-        .control_checkpoint()
+        .control_checkpoint_for_offset(display_offset)
         .ok_or_else(|| HostRuntimeError::NotFound(terminal.session_id().clone()))?;
     Ok(Response::TerminalAttached { lease, checkpoint })
 }

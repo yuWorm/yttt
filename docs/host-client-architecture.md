@@ -226,11 +226,13 @@ Desktop 的 Agent snapshot bridge 必须按 `terminal_session_id` 和 `(host_epo
 
 连接成功或重连成功后，`ClientCore` 第一项内部请求是 `ListResources`。此后 Host 只发送
 `ResourceCatalogChanged` invalidation；Client 合并重复通知并异步刷新一次 catalog。
+只读 lifecycle 状态查询的连接关闭不发布资源目录变更；control 连接关闭释放资源控制权时仍发布。
 终端启动、重试与批量关闭另行读取权威 catalog，避免根据过期缓存决定创建或关闭的目标。
 对账规则：
 
 1. catalog 中存在的 session 建立独立 terminal-data connection；initial snapshot 建立或替换 mirror。
 2. data sequence gap、epoch 变化或 `ResyncRequired` 触发 checkpoint。
+   catalog 刷新本身只为缺失或 session epoch 已变化的 mirror 请求 checkpoint，不覆盖同代现有视口。
 3. Client cache 中存在但 catalog 不存在时，删除 mirror 并发布 `TerminalUnavailable`。
 4. UI 收到当前 pane 的 `TerminalUnavailable` 后结束旧 generation；AutoRestart pane 以新 session generation 重建。
 
@@ -357,9 +359,14 @@ visible line identity make the endpoints ambiguous.
 - `TerminalInput`：`client_sequence` 必须单调；Host 在写 PTY 前验证 Interactive lease。
 - `ResizeTerminal`：`geometry_epoch` 必须递增；旧 resize 被拒绝。
 - `ScrollTerminal`：请求绝对 `display_offset`；Host 将其转换为当前 authoritative grid 的受限 delta，并返回实际 offset。
+  滚动条拖动以指针位置计算绝对目标；Host 尚未确认上次请求时，增量换算使用待确认目标，而非旧视口偏移。
 - palette query：Client 发送当前可见主题 RGB 和 revision，Host 才能正确回答 OSC color query。
 
 UI 不得在 GPUI 线程等待 Host response。输入经有界 writer queue；resize/scroll 发出异步请求。GPUI 的 render/layout/prepaint 热路径也不得执行 shell PATH 探测或其他文件系统 I/O；shell 候选在 Workbench 初始化时探测一次，后续 terminal 创建和设置 UI 只读取缓存。
+
+已有 attachment 的按需 checkpoint、重复 attach、terminal-data 重连及退出快照按其
+`display_offset` 投影视口；未附着客户端的初始 checkpoint 使用底部。历史视口暂停实时数据推送，
+因此不能只把 Client mirror 重置为底部而保留 Host 的历史偏移；显式回底后才恢复实时输出。
 
 ### 7.4 lease
 

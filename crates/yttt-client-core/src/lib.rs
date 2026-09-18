@@ -1125,14 +1125,21 @@ fn handle_response(
                 *known = active.clone();
                 removed
             };
-            mirrors
-                .write()
-                .retain(|session_id, _| active.contains(session_id));
-            let sessions = resources
-                .terminals
-                .iter()
-                .map(|placement| placement.session_id.clone())
-                .collect::<Vec<_>>();
+            let sessions = {
+                let mut mirrors = mirrors.write();
+                mirrors.retain(|session_id, _| active.contains(session_id));
+                // Catalog refreshes discover sessions; they must not navigate an existing view.
+                resources
+                    .terminals
+                    .iter()
+                    .filter(|placement| {
+                        mirrors.get(&placement.session_id).is_none_or(|mirror| {
+                            mirror.viewport().session_epoch != placement.session_epoch
+                        })
+                    })
+                    .map(|placement| placement.session_id.clone())
+                    .collect::<Vec<_>>()
+            };
             for session_id in removed {
                 let _ = events.send(ClientEvent::TerminalUnavailable(session_id));
             }
