@@ -33,7 +33,7 @@ impl ProjectConfigStore {
                 (ProjectConfigPolicy::ReadOnly, PathBuf::new())
             }
             WorkspaceProjectConfig::Overlay { root } => {
-                (ProjectConfigPolicy::Overlay, root.to_path()?)
+                (ProjectConfigPolicy::Overlay, root.to_client_path()?)
             }
         };
         Ok(Self::new(policy, overlay_root))

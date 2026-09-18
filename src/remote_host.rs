@@ -470,7 +470,7 @@ fn initialize_environment(
     }
     let config_root = environment
         .config_root
-        .to_path()
+        .to_client_path()
         .map_err(|error| error.to_string())?;
     let storage = Arc::new(HostStorage::new(
         client.clone(),
@@ -485,7 +485,7 @@ fn initialize_environment(
             .map_err(|error| error.to_string())?;
     let home = environment
         .home
-        .to_path()
+        .to_client_path()
         .map_err(|error| error.to_string())?;
     let host = DesktopHostRuntime::from_remote(
         runtime,

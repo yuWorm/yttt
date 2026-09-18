@@ -48,7 +48,7 @@ impl WorkbenchView {
         let home = environment.home.clone();
         self.open_ssh_project_picker();
         self.ssh.project_picker.home_path = home
-            .to_path()
+            .to_client_path()
             .ok()
             .and_then(|path| RemotePathBuf::new(path.to_string_lossy().into_owned()).ok());
         self.load_remote_host_directory(home, cx);
@@ -72,7 +72,7 @@ impl WorkbenchView {
                 return;
             }
         };
-        if let Err(error) = yttt_protocol::HostPath::from_path(&path) {
+        if let Err(error) = yttt_protocol::HostPath::from_client_path(&path) {
             self.ssh.project_picker.error = Some(error.to_string());
             cx.notify();
             return;
@@ -94,7 +94,7 @@ impl WorkbenchView {
                 }
                 root.ssh.project_picker.loading = false;
                 match result {
-                    Ok(path) => match yttt_protocol::HostPath::from_path(&path) {
+                    Ok(path) => match yttt_protocol::HostPath::from_client_path(&path) {
                         Ok(path) => root.load_remote_host_directory(path, cx),
                         Err(error) => root.ssh.project_picker.error = Some(error.to_string()),
                     },
@@ -114,21 +114,20 @@ impl WorkbenchView {
         let Some(runtime) = self.terminal.host_runtime.clone() else {
             return;
         };
-        let current_path =
-            match path
-                .to_path()
-                .map_err(|error| error.to_string())
-                .and_then(|path| {
-                    RemotePathBuf::new(path.to_string_lossy().into_owned())
-                        .map_err(|error| error.to_string())
-                }) {
-                Ok(path) => path,
-                Err(error) => {
-                    self.ssh.project_picker.error = Some(error);
-                    cx.notify();
-                    return;
-                }
-            };
+        let current_path = match path
+            .to_client_path()
+            .map_err(|error| error.to_string())
+            .and_then(|path| {
+                RemotePathBuf::new(path.to_string_lossy().into_owned())
+                    .map_err(|error| error.to_string())
+            }) {
+            Ok(path) => path,
+            Err(error) => {
+                self.ssh.project_picker.error = Some(error);
+                cx.notify();
+                return;
+            }
+        };
         self.ssh.project_picker.current_path = Some(current_path);
         self.ssh.project_picker.directory_prefix.clear();
         self.ssh.project_picker.preserve_path_input = false;
@@ -162,7 +161,7 @@ impl WorkbenchView {
                     Ok(yttt_protocol::workspace::WorkspaceResponse::Directory(directory)) => {
                         let result = directory
                             .path
-                            .to_path()
+                            .to_client_path()
                             .map_err(|error| error.to_string())
                             .and_then(|path| {
                                 RemotePathBuf::new(path.to_string_lossy().into_owned())
@@ -190,7 +189,12 @@ impl WorkbenchView {
                                 Some(SshProjectDirectory {
                                     name: entry.name.to_os_string().to_string_lossy().into_owned(),
                                     path: RemotePathBuf::new(
-                                        entry.path.to_path().ok()?.to_string_lossy().into_owned(),
+                                        entry
+                                            .path
+                                            .to_client_path()
+                                            .ok()?
+                                            .to_string_lossy()
+                                            .into_owned(),
                                     )
                                     .ok()?,
                                 })
@@ -728,7 +732,7 @@ impl WorkbenchView {
             .as_ref()
             .is_some_and(|runtime| runtime.is_remote())
         {
-            match yttt_protocol::HostPath::from_path(Path::new(path.as_str())) {
+            match yttt_protocol::HostPath::from_client_path(Path::new(path.as_str())) {
                 Ok(path) => self.load_remote_host_directory(path, cx),
                 Err(error) => self.ssh.project_picker.error = Some(error.to_string()),
             }

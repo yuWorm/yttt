@@ -88,7 +88,7 @@ pub fn scan_remote_agent_sessions(
     use yttt_protocol::workspace::{WorkspaceRequest, WorkspaceResponse};
     let response = runtime.workspace_request(WorkspaceRequest::AgentSessions {
         providers: agents.iter().map(|agent| agent.id().to_string()).collect(),
-        project_root: yttt_protocol::HostPath::from_path(project_path)
+        project_root: yttt_protocol::HostPath::from_client_path(project_path)
             .map_err(|error| error.to_string())?,
     })?;
     let WorkspaceResponse::AgentSessions(sessions) = response else {
@@ -106,7 +106,7 @@ pub fn scan_remote_agent_sessions(
                 updated_at_ms: session.updated_at_ms,
                 transcript_path: session
                     .transcript_path
-                    .map(|path| path.to_path())
+                    .map(|path| path.to_client_path())
                     .transpose()
                     .map_err(|error| error.to_string())?,
             })

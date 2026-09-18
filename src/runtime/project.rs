@@ -255,7 +255,8 @@ impl HostProjectServices {
                 &self.view_id,
                 ProjectRequest::Register {
                     project_id: self.project_id.clone(),
-                    root: path_to_platform(&self.root)?,
+                    root: HostPath::from_client_path(&self.root)
+                        .map_err(|error| error.to_string())?,
                     view_id: self.view_id.clone(),
                 },
             )
@@ -353,7 +354,7 @@ impl ProjectServices {
             &view_id,
             ProjectRequest::Register {
                 project_id: project_id.clone(),
-                root: path_to_platform(&root)?,
+                root: HostPath::from_client_path(&root).map_err(|error| error.to_string())?,
                 view_id: view_id.clone(),
             },
         )

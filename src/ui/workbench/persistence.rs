@@ -2004,7 +2004,7 @@ impl WorkbenchView {
                             let draft = DraftContentRevision {
                                 revision: generation,
                                 base: DraftBase::File {
-                                    path: HostPath::from_path(&document_id.canonical_path)
+                                    path: HostPath::from_client_path(&document_id.canonical_path)
                                         .map_err(|error| error.to_string())?,
                                     base_fingerprint: disk_fingerprint_to_host(
                                         document.model().disk_fingerprint(),
@@ -2402,7 +2402,7 @@ fn draft_matches_document(draft: &DraftContentRevision, document: &ProjectEditor
     else {
         return false;
     };
-    HostPath::from_path(&document.model().document_id().canonical_path)
+    HostPath::from_client_path(&document.model().document_id().canonical_path)
         .ok()
         .as_ref()
         == Some(path)

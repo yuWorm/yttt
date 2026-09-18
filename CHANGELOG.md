@@ -4,6 +4,9 @@
 
 ### 中文
 
+- 修复 Windows 客户端连接 Linux/macOS Host 时出现 `path is not valid on this Host`：
+  客户端使用远端路径转换处理配置、目录浏览、项目和草稿，不再要求 Unix 路径带 Windows 盘符；
+  Host 本机文件访问仍保留平台校验。
 - 修复恢复工作区时已退出的 Agent 被当作普通命令拦截的问题：有保存会话时恢复原会话，
   包括 shell 内启动的 Agent；恢复失败保留会话，无保存会话的已退出进程仍保持停止。
 - 终端启动、重试和关闭改由 Host 统一维护，不再读写旧的 `terminal-placements.json`；
@@ -20,6 +23,9 @@
 
 ### English
 
+- Fixed `path is not valid on this Host` when a Windows Client connects to a Linux/macOS
+  Host. Client configuration, directory browsing, projects, and drafts now preserve Unix
+  Host paths without requiring a Windows drive; native Host filesystem validation stays strict.
 - Fixed workspace restoration leaving exited Agents stopped despite a saved session.
   Saved sessions now resume, including Agents launched inside shells; failed resumes retain
   the session, and exited processes without saved sessions remain stopped.

@@ -249,6 +249,13 @@ HostBootstrap 显式传入原 `config_root`，不根据 Server descriptor 猜路
 设备远程访问偏好与登录启动授权留在私有状态域；普通配置测试必须显式选择临时文件 backend，
 生产绑定缺失不回退到本地文件系统。
 
+Client 中用于呈现、拼接及回传的 Host 路径使用 `HostPath::to_client_path` /
+`HostPath::from_client_path` 转换，不能调用要求当前操作系统格式的本机路径转换。
+Windows Client 接收 Linux/macOS Host 路径时保留 `/` 根和正斜杠；在 Client 内拼接产生的
+Windows 分隔符会在回传时重新拆为协议 segments，不附加本机盘符。该规则覆盖配置及 overlay、
+目录浏览、项目注册、Agent 会话记录和文件草稿。本机文件访问及 desktop-shell 本机入口
+继续使用 `HostPath::to_path` / `HostPath::from_path`，不得把远端路径当作本机路径访问。
+
 每个 workspace 有原子 CAS manifest（最大 1 MiB）和独立不可变草稿正文。正文每份最大 6 MiB，
 每 workspace 最大 64 MiB；先持久化正文，再提交引用它的 manifest，最后确认幂等操作结果。
 启动只回收未引用正文。旧 `default`/内联草稿迁移在新 manifest 确认前保留原文件。

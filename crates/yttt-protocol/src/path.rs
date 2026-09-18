@@ -170,6 +170,15 @@ impl HostPath {
         if !path.is_absolute() {
             return Err(ProjectPathError::NotAbsolute);
         }
+        Self::from_client_path(path)
+    }
+
+    /// Encode a lexical Client path for the owning Host, not for local filesystem access.
+    /// On Windows, a rooted path without a drive represents a Unix Host path.
+    pub fn from_client_path(path: &Path) -> Result<Self, ProjectPathError> {
+        if !path.has_root() {
+            return Err(ProjectPathError::NotAbsolute);
+        }
         let mut volume = None;
         let mut segments = Vec::new();
         for component in path.components() {
@@ -183,6 +192,30 @@ impl HostPath {
             }
         }
         Ok(Self { volume, segments })
+    }
+
+    /// Decode a path for Client-side navigation and Host requests only.
+    /// Unix paths retain forward slashes even on Windows, where they are not native
+    /// absolute paths. Use `to_path` instead when accessing the local filesystem.
+    pub fn to_client_path(&self) -> Result<PathBuf, ProjectPathError> {
+        if self.volume.is_some() {
+            return self.to_path();
+        }
+        let mut path = OsString::from("/");
+        for (index, segment) in self.segments.iter().enumerate() {
+            if index > 0 {
+                path.push("/");
+            }
+            #[cfg(not(unix))]
+            if let PathSegment::Bytes(bytes) = segment {
+                path.push(
+                    std::str::from_utf8(bytes).map_err(|_| ProjectPathError::InvalidSegment)?,
+                );
+                continue;
+            }
+            path.push(segment.to_os_string());
+        }
+        Ok(PathBuf::from(path))
     }
 
     pub fn to_path(&self) -> Result<PathBuf, ProjectPathError> {
@@ -332,5 +365,76 @@ mod tests {
         let path = std::env::temp_dir();
         let encoded = HostPath::from_path(&path).unwrap();
         assert_eq!(encoded.to_path().unwrap(), path);
+    }
+
+    #[test]
+    fn client_preserves_unix_host_paths_through_navigation() {
+        let host = HostPath {
+            volume: None,
+            segments: ["home", "alice", "项目"]
+                .into_iter()
+                .map(|part| PathSegment::utf8(part).unwrap())
+                .collect(),
+        };
+        let client = host
+            .to_client_path()
+            .expect("Client must accept a Unix Host path");
+        assert_eq!(client.to_str(), Some("/home/alice/项目"));
+        let file = client.join("src").join("main.rs");
+        let request = HostPath::from_client_path(&file).unwrap();
+        assert_eq!(request.volume, None);
+        assert_eq!(
+            request.segments,
+            ["home", "alice", "项目", "src", "main.rs"]
+                .into_iter()
+                .map(|part| PathSegment::utf8(part).unwrap())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            request.to_client_path().unwrap().to_str(),
+            Some("/home/alice/项目/src/main.rs")
+        );
+        assert_eq!(
+            ProjectRelativePath::from_path(file.strip_prefix(&client).unwrap())
+                .unwrap()
+                .to_utf8()
+                .unwrap(),
+            "src/main.rs"
+        );
+    }
+
+    #[test]
+    fn client_path_conversion_rejects_relative_and_parent_paths() {
+        for path in ["home/alice", "C:relative", ""] {
+            assert_eq!(
+                HostPath::from_client_path(std::path::Path::new(path)),
+                Err(ProjectPathError::NotAbsolute)
+            );
+        }
+        assert_eq!(
+            HostPath::from_client_path(std::path::Path::new("/home/../secret")),
+            Err(ProjectPathError::ParentTraversal)
+        );
+        let root = HostPath::default().to_client_path().unwrap();
+        assert_eq!(root.to_str(), Some("/"));
+        assert_eq!(
+            HostPath::from_client_path(&root).unwrap(),
+            HostPath::default()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn client_unix_paths_do_not_relax_native_windows_path_validation() {
+        let host = HostPath::default();
+        assert_eq!(host.to_path(), Err(ProjectPathError::UnsupportedPlatform));
+        assert_eq!(
+            HostPath::from_path(&host.to_client_path().unwrap()),
+            Err(ProjectPathError::NotAbsolute)
+        );
+        let native = std::path::Path::new(r"C:\Users\alice\project");
+        let host = HostPath::from_client_path(native).unwrap();
+        assert_eq!(host.to_client_path().unwrap(), native);
+        assert_eq!(host.to_path().unwrap(), native);
     }
 }

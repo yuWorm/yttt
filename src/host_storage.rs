@@ -113,7 +113,7 @@ impl HostStorage {
     }
     fn browse(&self, path: &Path) -> io::Result<yttt_protocol::workspace::WorkspaceDirectory> {
         match self.workspace(WorkspaceRequest::Browse {
-            path: HostPath::from_path(path).map_err(io::Error::other)?,
+            path: HostPath::from_client_path(path).map_err(io::Error::other)?,
             include_hidden: true,
         })? {
             WorkspaceResponse::Directory(directory) => Ok(directory),
@@ -141,7 +141,7 @@ impl HostStorage {
             .parent()
             .ok_or_else(|| io::Error::other("remote configuration path has no project root"))?;
         let directory = self.browse(parent)?;
-        let root = directory.path.to_path().map_err(io::Error::other)?;
+        let root = directory.path.to_client_path().map_err(io::Error::other)?;
         self.register(state, root.clone())?;
         self.location(state, &root.join(path.file_name().ok_or_else(unexpected)?))
     }
@@ -157,7 +157,7 @@ impl HostStorage {
             registration_epoch, ..
         } = self.project(ProjectRequest::Register {
             project_id: id.clone(),
-            root: HostPath::from_path(&root).map_err(io::Error::other)?,
+            root: HostPath::from_client_path(&root).map_err(io::Error::other)?,
             view_id: "configuration".to_string(),
         })?
         else {
@@ -234,7 +234,7 @@ impl ConfigStorage for HostStorage {
             state.project_config_targets.insert(
                 path.to_path_buf(),
                 (
-                    HostPath::from_path(project_root).map_err(io::Error::other)?,
+                    HostPath::from_client_path(project_root).map_err(io::Error::other)?,
                     file,
                 ),
             );
@@ -412,7 +412,7 @@ impl ConfigStorage for HostStorage {
         let path = self
             .browse(path)?
             .path
-            .to_path()
+            .to_client_path()
             .map_err(io::Error::other)?;
         Ok(path)
     }
