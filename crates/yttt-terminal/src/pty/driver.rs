@@ -1,8 +1,7 @@
-use crate::event::{GpuiEventProxy, TerminalEventMailbox};
+use crate::event::TerminalEventMailbox;
 use crate::perf::{InputPerformanceSample, TerminalPerformanceHandle};
+use crate::terminal::TerminalState;
 
-use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::Term;
 use bytes::Bytes;
 use parking_lot::{Condvar, Mutex, RwLock};
 use smallvec::SmallVec;
@@ -12,7 +11,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(any(test, debug_assertions))]
 use std::sync::atomic::{AtomicU64, AtomicUsize};
-use yttt_terminal_core::TerminalParser;
 
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -25,6 +23,7 @@ pub const MAX_USER_COMMANDS: usize = 768;
 pub const MAX_WRITE_CHUNK_BYTES: usize = 64 * 1024;
 pub const MAX_QUEUED_INPUT_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_QUEUED_REPLY_BYTES: usize = 2 * 1024 * 1024;
+const MIN_GRAPHICS_TICK_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PtyIoOperation {
@@ -46,7 +45,7 @@ pub enum PtyEvent {
     },
 }
 
-pub type ResizeCallback = Arc<dyn Fn(u16, u16) -> Result<(), String> + Send + Sync>;
+pub type ResizeCallback = Arc<dyn Fn(u16, u16, u16, u16) -> Result<(), String> + Send + Sync>;
 
 #[derive(Debug)]
 pub(crate) struct QueuedInput {
@@ -88,7 +87,12 @@ pub(crate) enum PtyCommand {
     WriteInput(QueuedInput),
 
     WriteReply(Bytes),
-    Resize { cols: u16, rows: u16 },
+    Resize {
+        cols: u16,
+        rows: u16,
+        cell_width: u16,
+        cell_height: u16,
+    },
     Shutdown,
 }
 
@@ -311,7 +315,13 @@ impl PtyCommandQueue {
         Ok(())
     }
 
-    pub(crate) fn enqueue_resize(&self, cols: u16, rows: u16) -> Result<(), String> {
+    pub(crate) fn enqueue_resize(
+        &self,
+        cols: u16,
+        rows: u16,
+        cell_width: u16,
+        cell_height: u16,
+    ) -> Result<(), String> {
         let mut state = self.state.lock();
         if state.closed {
             return Err("PTY command queue is closed".to_string());
@@ -319,16 +329,25 @@ impl PtyCommandQueue {
         if let Some(PtyCommand::Resize {
             cols: queued_cols,
             rows: queued_rows,
+            cell_width: queued_cell_width,
+            cell_height: queued_cell_height,
         }) = state.commands.back_mut()
         {
             *queued_cols = cols;
             *queued_rows = rows;
+            *queued_cell_width = cell_width;
+            *queued_cell_height = cell_height;
             return Ok(());
         }
         if state.commands.len() >= MAX_COMMANDS {
             return Err("PTY command queue capacity exceeded".to_string());
         }
-        state.commands.push_back(PtyCommand::Resize { cols, rows });
+        state.commands.push_back(PtyCommand::Resize {
+            cols,
+            rows,
+            cell_width,
+            cell_height,
+        });
         self.diagnostics.record_command_queue(state.commands.len());
 
         self.ready.notify_one();
@@ -436,9 +455,15 @@ impl PtyIoHandle {
         })
     }
 
-    pub(crate) fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
+    pub(crate) fn resize(
+        &self,
+        cols: u16,
+        rows: u16,
+        cell_width: u16,
+        cell_height: u16,
+    ) -> Result<(), String> {
         self.queue
-            .enqueue_resize(cols, rows)
+            .enqueue_resize(cols, rows, cell_width, cell_height)
             .inspect_err(|message| {
                 self.mailbox.push_pty_event(PtyEvent::IoError {
                     operation: PtyIoOperation::Resize,
@@ -471,7 +496,7 @@ impl PtyIoDriver {
     pub(crate) fn start<W, R>(
         writer: W,
         reader: R,
-        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+        state: TerminalState,
         mailbox: Arc<TerminalEventMailbox>,
     ) -> Self
     where
@@ -481,7 +506,7 @@ impl PtyIoDriver {
         Self::start_with_performance(
             writer,
             reader,
-            term,
+            state,
             mailbox,
             TerminalPerformanceHandle::new(),
         )
@@ -490,7 +515,7 @@ impl PtyIoDriver {
     pub(crate) fn start_with_performance<W, R>(
         writer: W,
         reader: R,
-        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+        state: TerminalState,
         mailbox: Arc<TerminalEventMailbox>,
         performance: TerminalPerformanceHandle,
     ) -> Self
@@ -530,7 +555,7 @@ impl PtyIoDriver {
             performance.clone(),
         );
         let parser_thread = spawn_parser(
-            term,
+            state,
             read_rx,
             buffer_tx,
             cancelled.clone(),
@@ -661,7 +686,7 @@ fn spawn_reader<R: Read + Send + 'static>(
 }
 
 fn spawn_parser(
-    term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+    state: TerminalState,
     read_rx: flume::Receiver<PtyReadMessage>,
     buffer_tx: flume::Sender<Box<[u8; READ_BUFFER_BYTES]>>,
     cancelled: Arc<AtomicBool>,
@@ -672,17 +697,26 @@ fn spawn_parser(
     thread::Builder::new()
         .name("yttt-pty-parser".to_string())
         .spawn(move || {
-            let mut processor = TerminalParser::new(term);
+            let mut processor = state.parser();
+            let mut next_graphics_tick = None;
             loop {
                 if cancelled.load(Ordering::Acquire) {
                     break;
                 }
-                let message = if let Some(deadline) = processor.sync_deadline() {
-                    read_rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                } else {
-                    read_rx
+                let now = Instant::now();
+                let graphics_deadline = processor
+                    .graphics_deadline()
+                    .map(|deadline| deadline.max(next_graphics_tick.unwrap_or(now)));
+                let message = match (processor.sync_deadline(), graphics_deadline) {
+                    (Some(sync), Some(graphics)) => {
+                        read_rx.recv_timeout(sync.min(graphics).saturating_duration_since(now))
+                    }
+                    (Some(deadline), None) | (None, Some(deadline)) => {
+                        read_rx.recv_timeout(deadline.saturating_duration_since(now))
+                    }
+                    (None, None) => read_rx
                         .recv()
-                        .map_err(|_| flume::RecvTimeoutError::Disconnected)
+                        .map_err(|_| flume::RecvTimeoutError::Disconnected),
                 };
                 performance.set_read_queue_depth(read_rx.len());
 
@@ -713,6 +747,19 @@ fn spawn_parser(
                             mailbox.request_redraw();
                         }
                         let _ = buffer_tx.send(batch.buffer);
+                        let graphics_due = processor
+                            .graphics_deadline()
+                            .is_some_and(|deadline| deadline <= completed_at)
+                            && next_graphics_tick.is_none_or(|tick| tick <= completed_at);
+                        let graphics_changed = if graphics_due {
+                            next_graphics_tick = Some(completed_at + MIN_GRAPHICS_TICK_INTERVAL);
+                            processor.advance_graphics(completed_at)
+                        } else {
+                            false
+                        };
+                        if graphics_changed {
+                            mailbox.request_redraw();
+                        }
                     }
 
                     Ok(PtyReadMessage::Eof) => {
@@ -731,8 +778,26 @@ fn spawn_parser(
                         break;
                     }
                     Err(flume::RecvTimeoutError::Timeout) => {
-                        processor.stop_sync();
-                        mailbox.request_redraw();
+                        let now = Instant::now();
+                        let sync_expired = processor
+                            .sync_deadline()
+                            .is_some_and(|deadline| deadline <= now);
+                        let graphics_due = processor
+                            .graphics_deadline()
+                            .is_some_and(|deadline| deadline <= now)
+                            && next_graphics_tick.is_none_or(|tick| tick <= now);
+                        let graphics_changed = if graphics_due {
+                            next_graphics_tick = Some(now + MIN_GRAPHICS_TICK_INTERVAL);
+                            processor.advance_graphics(now)
+                        } else {
+                            false
+                        };
+                        if sync_expired {
+                            processor.stop_sync();
+                        }
+                        if sync_expired || graphics_changed {
+                            mailbox.request_redraw();
+                        }
                     }
                 }
             }
@@ -783,10 +848,15 @@ fn spawn_writer<W: Write + Send + 'static>(
                         }
                     }
 
-                    PtyCommand::Resize { cols, rows } => {
+                    PtyCommand::Resize {
+                        cols,
+                        rows,
+                        cell_width,
+                        cell_height,
+                    } => {
                         let callback = resize_callback.read().clone();
                         if let Some(callback) = callback
-                            && let Err(message) = callback(cols, rows)
+                            && let Err(message) = callback(cols, rows, cell_width, cell_height)
                         {
                             mailbox.push_pty_event(PtyEvent::IoError {
                                 operation: PtyIoOperation::Resize,
@@ -848,8 +918,7 @@ fn write_pty_bytes<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::TerminalEvent;
-    use crate::terminal::TerminalState;
+    use crate::event::{GpuiEventProxy, TerminalEvent};
     use crate::test_support::{ReadStep, RecordingWriter, ScriptedReader, WriteStep};
     use alacritty_terminal::index::{Column, Line};
 
@@ -922,7 +991,7 @@ mod tests {
     #[test]
     fn pty_driver_prioritizes_terminal_replies() {
         let queue = queue();
-        queue.enqueue_resize(10, 10).unwrap();
+        queue.enqueue_resize(10, 10, 8, 16).unwrap();
         queue.enqueue_input(Bytes::from_static(b"input")).unwrap();
         queue.enqueue_reply(Bytes::from_static(b"reply")).unwrap();
         let commands = queue.drain_for_test();
@@ -964,19 +1033,29 @@ mod tests {
     #[test]
     fn pty_driver_coalesces_adjacent_resize() {
         let queue = queue();
-        queue.enqueue_resize(10, 10).unwrap();
-        queue.enqueue_resize(20, 20).unwrap();
+        queue.enqueue_resize(10, 10, 8, 16).unwrap();
+        queue.enqueue_resize(20, 20, 9, 17).unwrap();
         queue.enqueue_input(Bytes::from_static(b"x")).unwrap();
-        queue.enqueue_resize(30, 30).unwrap();
+        queue.enqueue_resize(30, 30, 10, 18).unwrap();
         let commands = queue.drain_for_test();
         assert_eq!(commands.len(), 3);
         assert!(matches!(
             commands[0],
-            PtyCommand::Resize { cols: 20, rows: 20 }
+            PtyCommand::Resize {
+                cols: 20,
+                rows: 20,
+                cell_width: 9,
+                cell_height: 17,
+            }
         ));
         assert!(matches!(
             commands[2],
-            PtyCommand::Resize { cols: 30, rows: 30 }
+            PtyCommand::Resize {
+                cols: 30,
+                rows: 30,
+                cell_width: 10,
+                cell_height: 18,
+            }
         ));
     }
 
@@ -1043,7 +1122,7 @@ mod tests {
         let queue = queue();
         queue.enqueue_input(Bytes::from_static(b"a")).unwrap();
         queue.enqueue_input(Bytes::from_static(b"b")).unwrap();
-        queue.enqueue_resize(80, 24).unwrap();
+        queue.enqueue_resize(80, 24, 8, 16).unwrap();
         queue.enqueue_input(Bytes::from_static(b"c")).unwrap();
         let events = Arc::new(Mutex::new(Vec::new()));
         let writer = ReplyInjectingWriter {
@@ -1052,7 +1131,7 @@ mod tests {
             injected: false,
         };
         let resize_events = events.clone();
-        let resize_callback: ResizeCallback = Arc::new(move |_, _| {
+        let resize_callback: ResizeCallback = Arc::new(move |_, _, _, _| {
             resize_events.lock().push(b"<resize>".to_vec());
             Ok(())
         });
@@ -1084,7 +1163,7 @@ mod tests {
     fn pty_driver_does_not_preempt_resize_after_final_input_chunk() {
         let queue = queue();
         queue.enqueue_input(Bytes::from_static(b"a")).unwrap();
-        queue.enqueue_resize(80, 24).unwrap();
+        queue.enqueue_resize(80, 24, 8, 16).unwrap();
         queue.enqueue_input(Bytes::from_static(b"c")).unwrap();
         let events = Arc::new(Mutex::new(Vec::new()));
         let writer = ReplyInjectingWriter {
@@ -1093,7 +1172,7 @@ mod tests {
             injected: false,
         };
         let resize_events = events.clone();
-        let resize_callback: ResizeCallback = Arc::new(move |_, _| {
+        let resize_callback: ResizeCallback = Arc::new(move |_, _, _, _| {
             resize_events.lock().push(b"<resize>".to_vec());
             Ok(())
         });
@@ -1127,7 +1206,7 @@ mod tests {
         let driver = PtyIoDriver::start(
             RecordingWriter::default(),
             ScriptedReader::new([ReadStep::Eof]),
-            state.term_arc(),
+            state.clone(),
             mailbox.clone(),
         );
         let events = wait_for_events(&mailbox, |events| {
@@ -1160,7 +1239,7 @@ mod tests {
         let driver = PtyIoDriver::start(
             RecordingWriter::default(),
             ScriptedReader::new([ReadStep::Error(io::ErrorKind::BrokenPipe)]),
-            state.term_arc(),
+            state.clone(),
             mailbox.clone(),
         );
         let events = wait_for_events(&mailbox, |events| {
@@ -1202,7 +1281,7 @@ mod tests {
                 ReadStep::Data(b" world".to_vec()),
                 ReadStep::Eof,
             ]),
-            state.term_arc(),
+            state.clone(),
             mailbox.clone(),
         );
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -1243,7 +1322,7 @@ mod tests {
                 ReadStep::Sleep(Duration::from_millis(300)),
                 ReadStep::Eof,
             ]),
-            state.term_arc(),
+            state.clone(),
             mailbox,
         );
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -1266,7 +1345,7 @@ mod tests {
         let driver = PtyIoDriver::start(
             RecordingWriter::scripted([WriteStep::Error(io::ErrorKind::BrokenPipe)]),
             ScriptedReader::new([ReadStep::Sleep(Duration::from_millis(200)), ReadStep::Eof]),
-            state.term_arc(),
+            state.clone(),
             mailbox.clone(),
         );
         driver
@@ -1295,17 +1374,19 @@ mod tests {
         let driver = PtyIoDriver::start(
             RecordingWriter::default(),
             ScriptedReader::new([ReadStep::Sleep(Duration::from_millis(200)), ReadStep::Eof]),
-            state.term_arc(),
+            state.clone(),
             mailbox.clone(),
         );
         let (thread_tx, thread_rx) = std::sync::mpsc::channel();
-        driver.handle().set_resize_callback(Arc::new(move |_, _| {
-            thread_tx
-                .send(thread::current().name().unwrap_or_default().to_string())
-                .unwrap();
-            Err("resize failed".to_string())
-        }));
-        driver.handle().resize(10, 4).unwrap();
+        driver
+            .handle()
+            .set_resize_callback(Arc::new(move |_, _, _, _| {
+                thread_tx
+                    .send(thread::current().name().unwrap_or_default().to_string())
+                    .unwrap();
+                Err("resize failed".to_string())
+            }));
+        driver.handle().resize(10, 4, 8, 16).unwrap();
         assert_eq!(
             thread_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
             "yttt-pty-writer"
@@ -1343,7 +1424,7 @@ mod tests {
         let driver = PtyIoDriver::start(
             writer,
             ScriptedReader::new([ReadStep::Sleep(Duration::from_millis(100)), ReadStep::Eof]),
-            state.term_arc(),
+            state.clone(),
             mailbox,
         );
         driver.shutdown();

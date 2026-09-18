@@ -1,7 +1,31 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use yttt_core::model::ids::{ProjectId, TerminalSessionId};
 
 use crate::path::ProjectRelativePath;
+
+mod arc_bytes {
+    use std::sync::Arc;
+
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(bytes: &Arc<Vec<u8>>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serde_bytes::serialize(bytes.as_ref().as_slice(), serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Arc<Vec<u8>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        serde_bytes::ByteBuf::deserialize(deserializer)
+            .map(serde_bytes::ByteBuf::into_vec)
+            .map(Arc::new)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalGeometry {
@@ -96,10 +120,49 @@ pub struct SemanticSpan {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalImage {
+    pub id: u64,
+    pub width: u16,
+    pub height: u16,
+    #[serde(with = "arc_bytes")]
+    pub rgba: Arc<Vec<u8>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SemanticGraphicCell {
+    pub column: u16,
+    pub image_id: u64,
+    pub offset_x: u16,
+    pub offset_y: u16,
+    pub cell_height: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SemanticImagePlacement {
+    pub image_id: u64,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub source_x: u32,
+    pub source_y: u32,
+    pub source_width: u32,
+    pub source_height: u32,
+    pub clip_x: i32,
+    pub clip_y: i32,
+    pub clip_width: u32,
+    pub clip_height: u32,
+    pub z_index: i32,
+    pub order: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SemanticRow {
     pub line_id: u64,
     pub viewport_row: u16,
     pub spans: Vec<SemanticSpan>,
+    #[serde(default)]
+    pub graphics: Vec<SemanticGraphicCell>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,6 +218,10 @@ pub struct SemanticViewport {
     pub modes: TerminalModes,
     pub palette: TerminalPalette,
     pub process_state: TerminalProcessState,
+    #[serde(default)]
+    pub images: Vec<Arc<TerminalImage>>,
+    #[serde(default)]
+    pub placements: Vec<SemanticImagePlacement>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,6 +239,10 @@ pub struct SemanticDelta {
     pub modes: Option<TerminalModes>,
     pub palette: Option<TerminalPalette>,
     pub process_state: Option<TerminalProcessState>,
+    #[serde(default)]
+    pub images: Option<Vec<Arc<TerminalImage>>>,
+    #[serde(default)]
+    pub placements: Option<Vec<SemanticImagePlacement>>,
 }
 
 impl SemanticDelta {
@@ -210,6 +281,12 @@ impl SemanticDelta {
         }
         if next.process_state.is_some() {
             self.process_state = next.process_state;
+        }
+        if next.images.is_some() {
+            self.images = next.images.take();
+        }
+        if next.placements.is_some() {
+            self.placements = next.placements.take();
         }
         true
     }
@@ -319,7 +396,9 @@ impl SemanticViewport {
         let full_damage = delta.geometry_epoch != self.geometry_epoch
             || delta.scrollback_epoch != self.scrollback_epoch
             || delta.display_offset != self.display_offset
-            || delta.palette.is_some();
+            || delta.palette.is_some()
+            || delta.images.is_some()
+            || delta.placements.is_some();
         let previous_cursor = self.cursor;
         let mut damaged_rows = delta
             .changed_rows
@@ -355,6 +434,12 @@ impl SemanticViewport {
         if let Some(process_state) = delta.process_state {
             self.process_state = process_state;
         }
+        if let Some(images) = &delta.images {
+            self.images.clone_from(images);
+        }
+        if let Some(placements) = &delta.placements {
+            self.placements.clone_from(placements);
+        }
 
         if full_damage {
             return TerminalStreamApply::Updated(TerminalStreamDamage::Full);
@@ -382,7 +467,9 @@ impl SemanticViewport {
         let full_damage = delta.geometry_epoch != self.geometry_epoch
             || delta.scrollback_epoch != self.scrollback_epoch
             || delta.display_offset != self.display_offset
-            || delta.palette.is_some();
+            || delta.palette.is_some()
+            || delta.images.is_some()
+            || delta.placements.is_some();
         let previous_cursor = self.cursor;
         let mut damaged_rows = delta
             .changed_rows
@@ -417,6 +504,12 @@ impl SemanticViewport {
         }
         if let Some(process_state) = delta.process_state {
             self.process_state = process_state;
+        }
+        if let Some(images) = delta.images {
+            self.images = images;
+        }
+        if let Some(placements) = delta.placements {
+            self.placements = placements;
         }
 
         if full_damage {
@@ -576,6 +669,7 @@ mod tests {
             line_id,
             viewport_row,
             spans: Vec::new(),
+            graphics: Vec::new(),
         }
     }
 
@@ -594,6 +688,75 @@ mod tests {
             modes: None,
             palette: None,
             process_state: None,
+            images: None,
+            placements: None,
+        }
+    }
+
+    fn image(id: u64) -> Arc<TerminalImage> {
+        Arc::new(TerminalImage {
+            id,
+            width: 1,
+            height: 1,
+            rgba: Arc::new(vec![u8::try_from(id).unwrap_or(u8::MAX), 0, 0, u8::MAX]),
+        })
+    }
+
+    fn placement(image_id: u64, x: i32) -> SemanticImagePlacement {
+        SemanticImagePlacement {
+            image_id,
+            x,
+            y: 0,
+            width: 8,
+            height: 16,
+            source_x: 0,
+            source_y: 0,
+            source_width: 1,
+            source_height: 1,
+            clip_x: 0,
+            clip_y: 0,
+            clip_width: 8,
+            clip_height: 16,
+            z_index: 0,
+            order: 0,
+        }
+    }
+
+    fn viewport() -> SemanticViewport {
+        SemanticViewport {
+            session_id: TerminalSessionId::new("session"),
+            session_epoch: 1,
+            sequence: 1,
+            geometry: TerminalGeometry {
+                cols: 1,
+                rows: 1,
+                cell_width: 8,
+                cell_height: 16,
+            },
+            geometry_epoch: 1,
+            scrollback_epoch: 1,
+            history_size: 0,
+            display_offset: 0,
+            rows: vec![row(0, 1)],
+            cursor: SemanticCursor {
+                row: 0,
+                column: 0,
+                shape: CursorShape::Block,
+                visible: true,
+                blinking: false,
+            },
+            modes: TerminalModes {
+                bits: 0,
+                title: None,
+                cwd: None,
+            },
+            palette: TerminalPalette {
+                colors: Vec::new(),
+                revision: 0,
+            },
+            process_state: TerminalProcessState::Running,
+            images: vec![image(1)],
+            placements: Vec::new(),
         }
     }
 
@@ -621,6 +784,59 @@ mod tests {
         assert_eq!(merged.changed_rows, vec![row(0, 3), row(1, 4)]);
         assert_eq!(merged.cursor.unwrap().column, 2);
         assert_eq!(merged.modes.unwrap().title.as_deref(), Some("latest"));
+    }
+
+    #[test]
+    fn coalesced_image_replacement_forces_full_redraw_with_final_assets() {
+        let mut first = delta(1, 2, Vec::new());
+        first.images = Some(vec![image(2)]);
+        let mut second = delta(2, 3, Vec::new());
+        second.images = Some(vec![image(3)]);
+
+        assert!(first.merge_contiguous(second));
+        let mut reconstructed = viewport();
+        assert_eq!(
+            reconstructed.apply_stream_update(TerminalStreamUpdate::Delta(first)),
+            TerminalStreamApply::Updated(TerminalStreamDamage::Full)
+        );
+        assert_eq!(
+            reconstructed
+                .images
+                .iter()
+                .map(|image| image.id)
+                .collect::<Vec<_>>(),
+            vec![3]
+        );
+    }
+
+    #[test]
+    fn coalesced_placement_replacement_forces_full_redraw_with_final_scene() {
+        let mut first = delta(1, 2, Vec::new());
+        first.placements = Some(vec![placement(1, 0)]);
+        let mut second = delta(2, 3, Vec::new());
+        second.placements = Some(Vec::new());
+
+        assert!(first.merge_contiguous(second));
+        let mut reconstructed = viewport();
+        reconstructed.placements = vec![placement(1, 8)];
+        assert_eq!(
+            reconstructed.apply_stream_update(TerminalStreamUpdate::Delta(first)),
+            TerminalStreamApply::Updated(TerminalStreamDamage::Full)
+        );
+        assert!(reconstructed.placements.is_empty());
+    }
+
+    #[test]
+    fn image_clear_replaces_the_renderable_asset_set() {
+        let mut reconstructed = viewport();
+        let mut clear = delta(1, 2, Vec::new());
+        clear.images = Some(Vec::new());
+
+        assert_eq!(
+            reconstructed.apply_stream_update(TerminalStreamUpdate::Delta(clear)),
+            TerminalStreamApply::Updated(TerminalStreamDamage::Full)
+        );
+        assert!(reconstructed.images.is_empty());
     }
 
     #[test]

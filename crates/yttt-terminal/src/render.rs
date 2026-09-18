@@ -18,11 +18,13 @@ use crate::colors::ColorPalette;
 use crate::terminal::TerminalScrollbarMetrics;
 use alacritty_terminal::vte::ansi::CursorShape;
 use gpui::{
-    App, Bounds, Edges, Font, FontFeatures, FontStyle, FontWeight, Hsla, Pixels, Point, ShapedLine,
-    SharedString, Size, TextAlign, TextRun, UnderlineStyle, Window, px, quad, transparent_black,
+    App, Bounds, ContentMask, Corners, Edges, Font, FontFeatures, FontStyle, FontWeight, Hsla,
+    Pixels, Point, RenderImage, ShapedLine, SharedString, Size, TextAlign, TextRun, UnderlineStyle,
+    Window, px, quad, transparent_black,
 };
+use image::{Frame, RgbaImage};
 use parking_lot::Mutex;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -191,9 +193,24 @@ struct CachedRowDisplay {
     decoration_spans: Arc<[DecorationSpan]>,
 }
 
+#[derive(Clone)]
+struct PreparedTerminalImage {
+    image: Arc<RenderImage>,
+    width: u16,
+    height: u16,
+}
+
+struct GraphicPaintPlan {
+    image: Arc<RenderImage>,
+    bounds: Bounds<Pixels>,
+    fragment: Bounds<Pixels>,
+}
+
 pub(crate) struct PreparedTerminalFrame {
     snapshot: Arc<TerminalRenderSnapshot>,
     rows: Vec<CachedRowDisplay>,
+    images: HashMap<u64, PreparedTerminalImage>,
+    retired_images: Vec<Arc<RenderImage>>,
 }
 
 impl PreparedTerminalFrame {
@@ -208,10 +225,82 @@ pub(crate) struct PreparedImeText {
     shaped: ShapedLine,
 }
 
+const MAX_TERMINAL_IMAGE_BYTES: usize = alacritty_terminal::graphics::MAX_GRAPHIC_BYTES;
+const KITTY_ABOVE_DEFAULT_BACKGROUND_Z_INDEX: i32 = -1_073_741_824;
+
+struct CachedTerminalImage {
+    // Keep the source alive so this cache's Arc identity cannot be recycled for a
+    // different session asset.
+    _source: Arc<yttt_protocol::terminal::TerminalImage>,
+    image: Arc<RenderImage>,
+}
+
+fn terminal_image_key(image: &Arc<yttt_protocol::terminal::TerminalImage>) -> usize {
+    Arc::as_ptr(image) as usize
+}
+
+fn render_terminal_image(
+    image: &yttt_protocol::terminal::TerminalImage,
+) -> Option<Arc<RenderImage>> {
+    let byte_count = usize::from(image.width)
+        .checked_mul(usize::from(image.height))?
+        .checked_mul(4)?;
+    if byte_count == 0 || byte_count > MAX_TERMINAL_IMAGE_BYTES || image.rgba.len() != byte_count {
+        return None;
+    }
+
+    // GPUI samples a shared atlas with linear filtering. Extrude the edge
+    // texels so enlarged images never interpolate neighbouring atlas entries.
+    let width = usize::from(image.width);
+    let height = usize::from(image.height);
+    let stride = (width + 2) * 4;
+    let mut bgra = vec![0; stride * (height + 2)];
+    for y in 0..height {
+        let source = &image.rgba[y * width * 4..(y + 1) * width * 4];
+        let row = &mut bgra[(y + 1) * stride..(y + 2) * stride];
+        for (rgba, pixel) in source
+            .chunks_exact(4)
+            .zip(row[4..4 + width * 4].chunks_exact_mut(4))
+        {
+            pixel.copy_from_slice(&[rgba[2], rgba[1], rgba[0], rgba[3]]);
+        }
+        row.copy_within(4..8, 0);
+        row.copy_within(width * 4..(width + 1) * 4, (width + 1) * 4);
+    }
+    bgra.copy_within(stride..2 * stride, 0);
+    bgra.copy_within(
+        height * stride..(height + 1) * stride,
+        (height + 1) * stride,
+    );
+    let frame = Frame::new(RgbaImage::from_raw(
+        u32::from(image.width) + 2,
+        u32::from(image.height) + 2,
+        bgra,
+    )?);
+    Some(Arc::new(RenderImage::new(smallvec::smallvec![frame])))
+}
+
+fn padded_image_bounds(bounds: Bounds<Pixels>, width: u16, height: u16) -> Bounds<Pixels> {
+    let pixel_width = bounds.size.width / f32::from(width);
+    let pixel_height = bounds.size.height / f32::from(height);
+    Bounds {
+        origin: Point {
+            x: bounds.origin.x - pixel_width,
+            y: bounds.origin.y - pixel_height,
+        },
+        size: Size {
+            width: bounds.size.width + pixel_width * 2.0,
+            height: bounds.size.height + pixel_height * 2.0,
+        },
+    }
+}
+
 struct RendererShared {
     metrics_key: Option<FontMetricsKey>,
     metrics: Option<TerminalFontMetrics>,
     rows: HashMap<usize, CachedRowDisplay>,
+    images: HashMap<usize, CachedTerminalImage>,
+    image_scope: Option<(yttt_core::model::ids::TerminalSessionId, u64)>,
     #[cfg(test)]
     shaping_hook: Option<Arc<dyn Fn() + Send + Sync>>,
 }
@@ -222,9 +311,59 @@ impl RendererShared {
             metrics_key: None,
             metrics: None,
             rows: HashMap::new(),
+            images: HashMap::new(),
+            image_scope: None,
             #[cfg(test)]
             shaping_hook: None,
         }
+    }
+
+    fn cached_images(
+        &mut self,
+        sources: &[Arc<yttt_protocol::terminal::TerminalImage>],
+        image_scope: &Option<(yttt_core::model::ids::TerminalSessionId, u64)>,
+    ) -> (HashMap<u64, PreparedTerminalImage>, Vec<Arc<RenderImage>>) {
+        let active = sources
+            .iter()
+            .map(terminal_image_key)
+            .collect::<HashSet<_>>();
+        let scope_changed = self.image_scope != *image_scope;
+        let stale = self
+            .images
+            .keys()
+            .copied()
+            .filter(|key| scope_changed || !active.contains(key))
+            .collect::<Vec<_>>();
+        let retired_images = stale
+            .into_iter()
+            .filter_map(|key| self.images.remove(&key).map(|cached| cached.image))
+            .collect();
+        self.image_scope.clone_from(image_scope);
+        let mut prepared = HashMap::with_capacity(sources.len());
+        for source in sources {
+            let key = terminal_image_key(source);
+            if !self.images.contains_key(&key)
+                && let Some(image) = render_terminal_image(source)
+            {
+                self.images.insert(
+                    key,
+                    CachedTerminalImage {
+                        _source: Arc::clone(source),
+                        image,
+                    },
+                );
+            }
+            if let Some(cached) = self.images.get(&key) {
+                prepared
+                    .entry(source.id)
+                    .or_insert_with(|| PreparedTerminalImage {
+                        image: Arc::clone(&cached.image),
+                        width: source.width,
+                        height: source.height,
+                    });
+            }
+        }
+        (prepared, retired_images)
     }
 }
 
@@ -444,6 +583,20 @@ impl TerminalRenderer {
         self.shared.lock().rows.clear();
     }
 
+    pub(crate) fn release_images(&self, window: &mut Window) {
+        let images = {
+            let mut shared = self.shared.lock();
+            shared.image_scope = None;
+            std::mem::take(&mut shared.images)
+                .into_values()
+                .map(|cached| cached.image)
+                .collect::<Vec<_>>()
+        };
+        for image in images {
+            let _ = window.drop_image(image);
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn set_shaping_hook(&self, hook: Option<Arc<dyn Fn() + Send + Sync>>) {
         self.shared.lock().shaping_hook = hook;
@@ -565,6 +718,10 @@ impl TerminalRenderer {
         snapshot: Arc<TerminalRenderSnapshot>,
         window: &mut Window,
     ) -> PreparedTerminalFrame {
+        let (images, retired_images) = self
+            .shared
+            .lock()
+            .cached_images(&snapshot.images, &snapshot.image_scope);
         let reusable_semantic_rows = self
             .shared
             .lock()
@@ -583,7 +740,12 @@ impl TerminalRenderer {
                 self.prepared_row(row_index, row, &reusable_semantic_rows, window)
             })
             .collect();
-        PreparedTerminalFrame { snapshot, rows }
+        PreparedTerminalFrame {
+            snapshot,
+            rows,
+            images,
+            retired_images,
+        }
     }
 
     pub(crate) fn record_term_lock(&self, nanos: u64) {
@@ -881,6 +1043,195 @@ impl TerminalRenderer {
         });
     }
 
+    fn paint_graphics(
+        &self,
+        bounds: Bounds<Pixels>,
+        origin: Point<Pixels>,
+        prepared: &PreparedTerminalFrame,
+        window: &mut Window,
+    ) {
+        let snapshot = prepared.snapshot();
+        let content_bounds = Bounds {
+            origin,
+            size: Size {
+                width: self.cell_width * snapshot.cols as f32,
+                height: self.cell_height * snapshot.screen_lines as f32,
+            },
+        }
+        .intersect(&bounds);
+        if content_bounds.size.width <= px(0.0) || content_bounds.size.height <= px(0.0) {
+            return;
+        }
+
+        let current_cell_height: f32 = self.cell_height.into();
+        let mut plans = BTreeMap::<u64, Vec<GraphicPaintPlan>>::new();
+        for (row_index, row) in snapshot.rows.iter().enumerate() {
+            for graphic in &row.graphics {
+                let Some(image) = prepared.images.get(&graphic.image_id) else {
+                    continue;
+                };
+                let scale = current_cell_height / f32::from(graphic.cell_height.max(1));
+                let image_bounds = Bounds {
+                    origin: Point {
+                        x: origin.x + self.cell_width * graphic.column as f32
+                            - px(f32::from(graphic.offset_x) * scale),
+                        y: origin.y + self.cell_height * row_index as f32
+                            - px(f32::from(graphic.offset_y) * scale),
+                    },
+                    size: Size {
+                        width: px(f32::from(image.width) * scale),
+                        height: px(f32::from(image.height) * scale),
+                    },
+                };
+                let fragment = Bounds {
+                    origin: Point {
+                        x: origin.x + self.cell_width * graphic.column as f32,
+                        y: origin.y + self.cell_height * row_index as f32,
+                    },
+                    size: Size {
+                        width: self.cell_width,
+                        height: self.cell_height,
+                    },
+                }
+                .intersect(&content_bounds)
+                .intersect(&image_bounds);
+                if fragment.size.width <= px(0.0) || fragment.size.height <= px(0.0) {
+                    continue;
+                }
+
+                plans
+                    .entry(graphic.image_id)
+                    .or_default()
+                    .push(GraphicPaintPlan {
+                        image: Arc::clone(&image.image),
+                        bounds: padded_image_bounds(image_bounds, image.width, image.height),
+                        fragment,
+                    });
+            }
+        }
+
+        for plans in plans.into_values() {
+            for plan in plans {
+                window.with_content_mask(
+                    Some(ContentMask {
+                        bounds: plan.fragment,
+                    }),
+                    |window| {
+                        let _ = window.paint_image(
+                            plan.bounds,
+                            Corners::default(),
+                            plan.image,
+                            0,
+                            false,
+                        );
+                    },
+                );
+            }
+        }
+    }
+    fn paint_kitty_graphics(
+        &self,
+        bounds: Bounds<Pixels>,
+        origin: Point<Pixels>,
+        prepared: &PreparedTerminalFrame,
+        z_visible: impl Fn(i32) -> bool,
+        window: &mut Window,
+    ) {
+        let snapshot = prepared.snapshot();
+        let content_bounds = Bounds {
+            origin,
+            size: Size {
+                width: self.cell_width * snapshot.cols as f32,
+                height: self.cell_height * snapshot.screen_lines as f32,
+            },
+        }
+        .intersect(&bounds);
+        if content_bounds.size.width <= px(0.0) || content_bounds.size.height <= px(0.0) {
+            return;
+        }
+
+        let logical_cell_width: f32 = self.cell_width.into();
+        let logical_cell_height: f32 = self.cell_height.into();
+        let scale_x = logical_cell_width / f32::from(snapshot.reference_cell_width.max(1));
+        let scale_y = logical_cell_height / f32::from(snapshot.reference_cell_height.max(1));
+        for placement in snapshot
+            .kitty_placements
+            .iter()
+            .filter(|placement| z_visible(placement.z_index))
+        {
+            let Some(image) = prepared.images.get(&placement.image_id) else {
+                continue;
+            };
+            let Some(source_right) = placement.source_x.checked_add(placement.source_width) else {
+                continue;
+            };
+            let Some(source_bottom) = placement.source_y.checked_add(placement.source_height)
+            else {
+                continue;
+            };
+            if placement.width == 0
+                || placement.height == 0
+                || placement.source_width == 0
+                || placement.source_height == 0
+                || placement.clip_width == 0
+                || placement.clip_height == 0
+                || source_right > u32::from(image.width)
+                || source_bottom > u32::from(image.height)
+            {
+                continue;
+            }
+
+            let destination_bounds = Bounds {
+                origin: Point {
+                    x: origin.x + px(placement.x as f32 * scale_x),
+                    y: origin.y + px(placement.y as f32 * scale_y),
+                },
+                size: Size {
+                    width: px(placement.width as f32 * scale_x),
+                    height: px(placement.height as f32 * scale_y),
+                },
+            };
+            let clip_bounds = Bounds {
+                origin: Point {
+                    x: origin.x + px(placement.clip_x as f32 * scale_x),
+                    y: origin.y + px(placement.clip_y as f32 * scale_y),
+                },
+                size: Size {
+                    width: px(placement.clip_width as f32 * scale_x),
+                    height: px(placement.clip_height as f32 * scale_y),
+                },
+            };
+            let fragment = destination_bounds
+                .intersect(&clip_bounds)
+                .intersect(&content_bounds);
+            if fragment.size.width <= px(0.0) || fragment.size.height <= px(0.0) {
+                continue;
+            }
+
+            let source_scale_x = destination_bounds.size.width / placement.source_width as f32;
+            let source_scale_y = destination_bounds.size.height / placement.source_height as f32;
+            let image_bounds = Bounds {
+                origin: Point {
+                    x: destination_bounds.origin.x - source_scale_x * placement.source_x as f32,
+                    y: destination_bounds.origin.y - source_scale_y * placement.source_y as f32,
+                },
+                size: Size {
+                    width: source_scale_x * f32::from(image.width),
+                    height: source_scale_y * f32::from(image.height),
+                },
+            };
+            window.with_content_mask(Some(ContentMask { bounds: fragment }), |window| {
+                let _ = window.paint_image(
+                    padded_image_bounds(image_bounds, image.width, image.height),
+                    Corners::default(),
+                    Arc::clone(&image.image),
+                    0,
+                    false,
+                );
+            });
+        }
+    }
+
     pub(crate) fn paint(
         &self,
         bounds: Bounds<Pixels>,
@@ -900,12 +1251,19 @@ impl TerminalRenderer {
             transparent_black(),
             Default::default(),
         ));
+        self.paint_kitty_graphics(
+            bounds,
+            origin,
+            prepared,
+            |z_index| z_index < KITTY_ABOVE_DEFAULT_BACKGROUND_Z_INDEX,
+            window,
+        );
 
-        let vertical_offset = self.text_vertical_offset();
+        for retired_image in &prepared.retired_images {
+            let _ = window.drop_image(Arc::clone(retired_image));
+        }
 
-        let mut painted_text_runs = 0_u64;
-        let mut painted_text_cells = 0_u64;
-        for (row_index, row) in prepared.rows.iter().enumerate() {
+        for row in &prepared.rows {
             for span in row.background_spans.iter() {
                 if span.color == snapshot.default_background {
                     continue;
@@ -928,7 +1286,20 @@ impl TerminalRenderer {
                     Default::default(),
                 ));
             }
+        }
+        self.paint_kitty_graphics(
+            bounds,
+            origin,
+            prepared,
+            |z_index| (KITTY_ABOVE_DEFAULT_BACKGROUND_Z_INDEX..0).contains(&z_index),
+            window,
+        );
+        self.paint_graphics(bounds, origin, prepared, window);
 
+        let vertical_offset = self.text_vertical_offset();
+        let mut painted_text_runs = 0_u64;
+        let mut painted_text_cells = 0_u64;
+        for (row_index, row) in prepared.rows.iter().enumerate() {
             for text_run in row.text_runs.iter() {
                 let text_origin = Point {
                     x: origin.x + self.cell_width * text_run.column as f32,
@@ -959,6 +1330,7 @@ impl TerminalRenderer {
                 .flat_map(|row| row.decoration_spans.iter()),
             window,
         );
+        self.paint_kitty_graphics(bounds, origin, prepared, |z_index| z_index >= 0, window);
 
         self.paint_cursor(origin, snapshot.cursor, window);
         if let Some(padding) = scrollbar_padding {
@@ -1219,6 +1591,7 @@ mod tests {
         fixture.terminal.with_term_mut(|term| {
             TerminalRenderSnapshot::build(
                 term,
+                &BTreeMap::new(),
                 &ColorPalette::default(),
                 TerminalRenderOptions {
                     overlays: &RenderOverlayState::default(),
@@ -1282,6 +1655,21 @@ mod tests {
         assert_eq!(cells[2].width, TerminalCellWidth::Wide);
         assert_eq!(cells[3].width, TerminalCellWidth::Spacer);
         assert_eq!(cells[4].text.as_slice(), &['e', '\u{301}']);
+    }
+
+    #[test]
+    fn render_snapshot_hides_kitty_placeholder_and_its_combining_protocol_mark() {
+        let mut fixture = TerminalFixture::new(4, 1);
+        fixture.feed("\u{10eeee}\u{0305}".as_bytes());
+
+        let snapshot = snapshot(&fixture);
+
+        assert!(snapshot.rows[0].cells[0].text.is_empty());
+        assert_eq!(snapshot.rows[0].cells[0].width, TerminalCellWidth::Single);
+        assert!(
+            snapshot.rows[0].cells[0].decorations == RenderDecorationFlags::default(),
+            "the placeholder's protocol colors must not turn into text decoration"
+        );
     }
 
     #[test]

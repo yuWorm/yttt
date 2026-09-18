@@ -1,6 +1,7 @@
 use std::{
-    collections::{BTreeMap, hash_map::DefaultHasher},
+    collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
+    sync::Arc,
 };
 
 use alacritty_terminal::{
@@ -17,10 +18,11 @@ use yttt_core::model::ids::TerminalSessionId;
 use yttt_protocol::terminal::SemanticColor::{Indexed, Named, Rgb as SemanticRgb};
 use yttt_protocol::terminal::TerminalStreamUpdate::{Delta, Snapshot};
 use yttt_protocol::terminal::{
-    CursorShape, DynamicColor, SemanticColor, SemanticCursor, SemanticDelta, SemanticRow,
-    SemanticSpan, SemanticStyle, SemanticViewport, TerminalCheckpoint, TerminalGeometry,
-    TerminalModes, TerminalPalette, TerminalProcessState, TerminalSearchMatch,
-    TerminalSearchResults, TerminalStreamUpdate, TerminalViewportAnchor,
+    CursorShape, DynamicColor, SemanticColor, SemanticCursor, SemanticDelta, SemanticGraphicCell,
+    SemanticImagePlacement, SemanticRow, SemanticSpan, SemanticStyle, SemanticViewport,
+    TerminalCheckpoint, TerminalGeometry, TerminalImage, TerminalModes, TerminalPalette,
+    TerminalProcessState, TerminalSearchMatch, TerminalSearchResults, TerminalStreamUpdate,
+    TerminalViewportAnchor,
 };
 
 use crate::TerminalState;
@@ -104,7 +106,7 @@ impl SemanticSnapshotter {
         state: &TerminalState<L>,
         context: &SemanticCaptureContext,
     ) -> TerminalStreamUpdate {
-        let captured = state.with_term_mut(capture_term);
+        let captured = state.with_render_state(capture_term);
         self.finish_full_capture(captured, context)
     }
 
@@ -113,7 +115,7 @@ impl SemanticSnapshotter {
         state: &TerminalState<L>,
         context: &SemanticCaptureContext,
     ) -> TerminalStreamUpdate {
-        let (captured, full_damage) = state.with_term_mut(capture_term_damage);
+        let (captured, full_damage) = state.with_render_state(capture_term_damage);
         let geometry_changed = self
             .previous_geometry_epoch
             .is_some_and(|epoch| epoch != context.geometry_epoch);
@@ -135,7 +137,7 @@ impl SemanticSnapshotter {
             let captured = if captured.rows.len() == captured.screen_lines {
                 captured
             } else {
-                state.with_term_mut(capture_term)
+                state.with_render_state(capture_term)
             };
             return self.finish_full_capture(captured, context);
         }
@@ -225,6 +227,7 @@ impl SemanticSnapshotter {
                 line_id: self.line_id_for_key(key),
                 viewport_row: raw.viewport_row,
                 spans: raw.spans,
+                graphics: raw.graphics,
             };
             if let Some(current) = viewport
                 .rows
@@ -238,6 +241,16 @@ impl SemanticSnapshotter {
             changed_rows.push(row);
         }
         viewport.rows.sort_unstable_by_key(|row| row.viewport_row);
+        let images = visible_images(
+            &viewport.rows,
+            &captured.placements,
+            &captured.kitty_image_ids,
+            &captured.images,
+        );
+        let images_changed = !same_image_ids(&viewport.images, &images);
+        let placements_changed = viewport.placements != captured.placements;
+        viewport.images = images;
+        viewport.placements = captured.placements;
         viewport.sequence = self.sequence;
         viewport.history_size = captured.history_size as u64;
         viewport.display_offset = captured.display_offset as u64;
@@ -280,6 +293,8 @@ impl SemanticSnapshotter {
             palette: (previous_palette != viewport.palette).then(|| viewport.palette.clone()),
             process_state: (previous_process_state != viewport.process_state)
                 .then_some(viewport.process_state),
+            images: images_changed.then(|| viewport.images.clone()),
+            placements: placements_changed.then(|| viewport.placements.clone()),
         });
         self.previous = Some(viewport);
         update
@@ -325,9 +340,10 @@ impl SemanticSnapshotter {
                     .min(history_size)
             }
         };
-        let captured = state.with_term_mut(|term| {
+        let captured = state.with_render_state(|term, images| {
             capture_term_with_offset(
                 term,
+                images,
                 Some(usize::try_from(display_offset).unwrap_or(usize::MAX)),
             )
         });
@@ -431,6 +447,7 @@ impl SemanticSnapshotter {
                 line_id: self.line_id_for_key(key),
                 viewport_row: raw.viewport_row,
                 spans: raw.spans,
+                graphics: raw.graphics,
             });
         }
         self.prune_line_ids(captured.history_size, captured.screen_lines);
@@ -438,6 +455,12 @@ impl SemanticSnapshotter {
         let mut geometry = context.geometry;
         geometry.cols = u16::try_from(captured.columns).unwrap_or(u16::MAX);
         geometry.rows = u16::try_from(captured.screen_lines).unwrap_or(u16::MAX);
+        let images = visible_images(
+            &rows,
+            &captured.placements,
+            &captured.kitty_image_ids,
+            &captured.images,
+        );
         SemanticViewport {
             session_id: self.session_id.clone(),
             session_epoch: self.session_epoch,
@@ -459,6 +482,8 @@ impl SemanticSnapshotter {
                 revision: context.palette_revision,
             },
             process_state: context.process_state,
+            images,
+            placements: captured.placements,
         }
     }
 
@@ -492,39 +517,51 @@ struct CapturedTerminal {
     mode_bits: u32,
     alt_screen: bool,
     palette: Vec<DynamicColor>,
+    images: BTreeMap<u64, Arc<TerminalImage>>,
+    placements: Vec<SemanticImagePlacement>,
+    kitty_image_ids: BTreeSet<u64>,
 }
 
 struct RawSemanticRow {
     grid_line: i32,
     viewport_row: u16,
     spans: Vec<SemanticSpan>,
+    graphics: Vec<SemanticGraphicCell>,
 }
 
-fn capture_term<L: EventListener>(term: &mut Term<L>) -> CapturedTerminal {
-    capture_term_with_offset(term, None)
+fn capture_term<L: EventListener>(
+    term: &mut Term<L>,
+    images: &BTreeMap<u64, Arc<TerminalImage>>,
+) -> CapturedTerminal {
+    capture_term_with_offset(term, images, None)
 }
 
-fn capture_term_damage<L: EventListener>(term: &mut Term<L>) -> (CapturedTerminal, bool) {
+fn capture_term_damage<L: EventListener>(
+    term: &mut Term<L>,
+    images: &BTreeMap<u64, Arc<TerminalImage>>,
+) -> (CapturedTerminal, bool) {
     let (damaged_rows, full_damage) = match term.damage() {
         TermDamage::Full => (None, true),
         TermDamage::Partial(lines) => {
             (Some(lines.map(|line| line.line).collect::<Vec<_>>()), false)
         }
     };
-    let captured = capture_term_rows(term, None, damaged_rows.as_deref());
+    let captured = capture_term_rows(term, images, None, damaged_rows.as_deref());
     term.reset_damage();
     (captured, full_damage)
 }
 
 fn capture_term_with_offset<L: EventListener>(
     term: &mut Term<L>,
+    images: &BTreeMap<u64, Arc<TerminalImage>>,
     requested_display_offset: Option<usize>,
 ) -> CapturedTerminal {
-    capture_term_rows(term, requested_display_offset, None)
+    capture_term_rows(term, images, requested_display_offset, None)
 }
 
 fn capture_term_rows<L: EventListener>(
     term: &mut Term<L>,
+    images: &BTreeMap<u64, Arc<TerminalImage>>,
     requested_display_offset: Option<usize>,
     selected_rows: Option<&[usize]>,
 ) -> CapturedTerminal {
@@ -543,6 +580,30 @@ fn capture_term_rows<L: EventListener>(
     let display_offset = requested_display_offset
         .unwrap_or(canonical_display_offset)
         .min(history_size);
+    let scene = term.kitty_scene(display_offset);
+    let kitty_image_ids = scene.image_ids.into_iter().collect();
+    let placements = scene
+        .placements
+        .into_iter()
+        .filter(|placement| images.contains_key(&placement.image_id))
+        .map(|placement| SemanticImagePlacement {
+            image_id: placement.image_id,
+            x: placement.x,
+            y: placement.y,
+            width: placement.width,
+            height: placement.height,
+            source_x: placement.source_x,
+            source_y: placement.source_y,
+            source_width: placement.source_width,
+            source_height: placement.source_height,
+            clip_x: placement.clip_x,
+            clip_y: placement.clip_y,
+            clip_width: placement.clip_width,
+            clip_height: placement.clip_height,
+            z_index: placement.z_index,
+            order: placement.order,
+        })
+        .collect();
     let cursor_viewport = term::point_to_viewport(display_offset, cursor.point);
     let cursor = SemanticCursor {
         row: cursor_viewport
@@ -566,6 +627,7 @@ fn capture_term_rows<L: EventListener>(
         }
         let line = Line(viewport_row as i32 - display_offset as i32);
         let mut spans = Vec::new();
+        let mut graphics = Vec::new();
         for column in 0..columns {
             let point = Point::new(line, Column(column));
             let cell = &grid[point];
@@ -573,12 +635,14 @@ fn capture_term_rows<L: EventListener>(
                 continue;
             }
             append_semantic_cell(&mut spans, column, cell);
+            append_semantic_graphics(&mut graphics, column, cell, images);
         }
-        fingerprints.push(fingerprint_spans(&spans));
+        fingerprints.push(fingerprint_row(&spans, &graphics));
         rows.push(RawSemanticRow {
             grid_line: line.0,
             viewport_row: u16::try_from(viewport_row).unwrap_or(u16::MAX),
             spans,
+            graphics,
         });
     };
     if let Some(selected_rows) = selected_rows {
@@ -602,6 +666,9 @@ fn capture_term_rows<L: EventListener>(
         mode_bits: mode.bits(),
         alt_screen: mode.contains(TermMode::ALT_SCREEN),
         palette: dynamic_palette(&colors),
+        images: images.clone(),
+        placements,
+        kitty_image_ids,
     }
 }
 
@@ -625,6 +692,7 @@ fn append_semantic_cell(spans: &mut Vec<SemanticSpan>, column: usize, cell: &Cel
         1
     };
     let style = semantic_style(cell);
+
     let hyperlink = cell.hyperlink();
     let hyperlink_uri = hyperlink.as_ref().map(|hyperlink| hyperlink.uri());
     if let Some(previous) = spans.last_mut()
@@ -645,9 +713,33 @@ fn append_semantic_cell(spans: &mut Vec<SemanticSpan>, column: usize, cell: &Cel
         hyperlink: hyperlink_uri.map(str::to_owned),
     });
 }
+fn append_semantic_graphics(
+    graphics: &mut Vec<SemanticGraphicCell>,
+    column: usize,
+    cell: &Cell,
+    images: &BTreeMap<u64, Arc<TerminalImage>>,
+) {
+    graphics.extend(
+        cell.graphics()
+            .into_iter()
+            .flat_map(|graphics| graphics.iter())
+            .filter_map(|graphic| {
+                let image_id = graphic.texture.id.get();
+                images
+                    .contains_key(&image_id)
+                    .then_some(SemanticGraphicCell {
+                        column: u16::try_from(column).unwrap_or(u16::MAX),
+                        image_id,
+                        offset_x: graphic.offset_x,
+                        offset_y: graphic.offset_y,
+                        cell_height: u16::try_from(graphic.texture.cell_height).unwrap_or(u16::MAX),
+                    })
+            }),
+    );
+}
 
 fn append_cell_text(text: &mut String, cell: &Cell) {
-    if cell.flags.contains(Flags::HIDDEN) || cell.c == '\0' {
+    if cell.flags.contains(Flags::HIDDEN) || cell.c == '\0' || cell.c == '\u{10EEEE}' {
         text.push(' ');
     } else {
         text.push(cell.c);
@@ -739,7 +831,7 @@ fn dynamic_palette(colors: &alacritty_terminal::term::color::Colors) -> Vec<Dyna
     dynamic
 }
 
-fn fingerprint_spans(spans: &[SemanticSpan]) -> u64 {
+fn fingerprint_row(spans: &[SemanticSpan], graphics: &[SemanticGraphicCell]) -> u64 {
     let mut hasher = DefaultHasher::new();
     for span in spans {
         span.start_column.hash(&mut hasher);
@@ -751,7 +843,35 @@ fn fingerprint_spans(spans: &[SemanticSpan]) -> u64 {
         color_hash(span.style.underline_color, &mut hasher);
         span.hyperlink.hash(&mut hasher);
     }
+    graphics.hash(&mut hasher);
     hasher.finish()
+}
+
+fn same_image_ids(left: &[Arc<TerminalImage>], right: &[Arc<TerminalImage>]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| left.id == right.id)
+}
+
+fn visible_images(
+    rows: &[SemanticRow],
+    placements: &[SemanticImagePlacement],
+    kitty_image_ids: &BTreeSet<u64>,
+    available: &BTreeMap<u64, Arc<TerminalImage>>,
+) -> Vec<Arc<TerminalImage>> {
+    let referenced = rows
+        .iter()
+        .flat_map(|row| row.graphics.iter().map(|graphic| graphic.image_id))
+        .chain(placements.iter().map(|placement| placement.image_id))
+        .chain(kitty_image_ids.iter().copied())
+        .collect::<BTreeSet<_>>();
+    available
+        .iter()
+        .filter(|(id, _)| referenced.contains(id))
+        .map(|(_, image)| Arc::clone(image))
+        .collect()
 }
 
 fn color_hash(color: SemanticColor, hasher: &mut impl Hasher) {
@@ -808,5 +928,8 @@ fn delta_between(previous: &SemanticViewport, current: &SemanticViewport) -> Sem
         palette: (previous.palette != current.palette).then(|| current.palette.clone()),
         process_state: (previous.process_state != current.process_state)
             .then_some(current.process_state),
+        images: (!same_image_ids(&previous.images, &current.images))
+            .then(|| current.images.clone()),
+        placements: (previous.placements != current.placements).then(|| current.placements.clone()),
     }
 }

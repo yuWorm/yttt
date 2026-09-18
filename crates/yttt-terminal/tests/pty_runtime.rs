@@ -188,15 +188,49 @@ fn real_runtime_runs_short_command_to_exit() {
     ));
 }
 
+#[cfg(unix)]
 #[test]
-#[ignore = "spawns a real PTY process"]
-fn real_session_exposes_io_and_resize_handle() {
-    let mut session =
-        spawn_portable_pty_session(TerminalSpawnRequest::for_shell("probe", "sh", "printf ok"))
-            .unwrap();
+#[ignore = "spawns a real PTY and requires python3"]
+fn resized_pty_reports_cell_and_pixel_dimensions_to_its_process() {
+    use std::io::{Read, Write};
+    use std::time::Duration;
 
-    let io = session.take_io().unwrap();
-    session.resize(100, 30).unwrap();
-    drop(io);
-    session.finish(ExitReason::KilledByUser).unwrap();
+    let command = "import fcntl,struct,termios; input(); print('WINSIZE',*struct.unpack('HHHH',fcntl.ioctl(0,termios.TIOCGWINSZ,b'\\0'*8)),flush=True)";
+    let mut session = spawn_portable_pty_session(TerminalSpawnRequest::for_command(
+        "geometry",
+        "sh",
+        "python3",
+        vec!["-c".into(), command.into()],
+    ))
+    .unwrap();
+    let mut io = session.take_io().unwrap();
+    session.resize(100, 30, 9, 18).unwrap();
+    io.writer.write_all(b"\n").unwrap();
+    io.writer.flush().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut buffer = [0; 1024];
+        loop {
+            match io.reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(length) => output.extend_from_slice(&buffer[..length]),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+            if output
+                .windows(24)
+                .any(|bytes| bytes == b"WINSIZE 30 100 900 540\r\n")
+            {
+                break;
+            }
+        }
+        let _ = tx.send(output);
+    });
+    let output = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(
+        String::from_utf8_lossy(&output).contains("WINSIZE 30 100 900 540"),
+        "{output:?}"
+    );
+    session.finish(ExitReason::Completed).unwrap();
 }

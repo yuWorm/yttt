@@ -40,6 +40,8 @@
 //!   focus-aware OSC 52 policy enforcement.
 //! - Dynamic color and size queries, cursor style/blinking, IME preedit, search, URL/hyperlink
 //!   hints, Vi navigation/selection, and an interactive scrollbar.
+//! - Sixel and Kitty graphics: chunked RGB/RGBA/PNG, zlib, placeholders, relative placements,
+//!   layers, animation/compositing, and Host checkpoint/reconnect recovery.
 //!
 //! ## Portable PTY quick start
 //!
@@ -63,9 +65,9 @@
 //!
 //! let terminal = cx.new(|cx| {
 //!     TerminalView::new(io.writer, io.reader, TerminalConfig::default(), cx)
-//!         .with_resize_callback(move |cols, rows| {
+//!         .with_resize_callback(move |cols, rows, cell_width, cell_height| {
 //!             resize
-//!                 .resize(cols as usize, rows as usize)
+//!                 .resize(cols as usize, rows as usize, cell_width, cell_height)
 //!                 .map_err(|error| error.to_string())
 //!         })
 //!         .with_title_callback(|_cx, title| {

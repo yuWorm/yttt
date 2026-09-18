@@ -143,9 +143,9 @@ fn main() -> Result<()> {
                 ..TerminalConfig::default()
             };
 
-            let resize_callback = move |cols: u16, rows: u16| {
+            let resize_callback = move |cols: u16, rows: u16, cell_width: u16, cell_height: u16| {
                 resize_handle
-                    .resize(cols as usize, rows as usize)
+                    .resize(cols as usize, rows as usize, cell_width, cell_height)
                     .map_err(|error| error.to_string())
             };
 

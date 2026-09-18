@@ -43,10 +43,11 @@ pub use project::{
 
 pub const PROTOCOL_MAGIC: [u8; 4] = *b"YTTT";
 pub const FRAME_FORMAT_VERSION: u16 = 1;
-pub const RESOURCE_PROTOCOL_VERSION: u16 = 9;
+pub const RESOURCE_PROTOCOL_VERSION: u16 = 11;
 pub const LIFECYCLE_PROTOCOL_VERSION: u16 = 3;
 pub const DESKTOP_SHELL_PROTOCOL_VERSION: u16 = 2;
 pub const MAX_DESKTOP_SHELL_FRAME_BYTES: usize = 256 * 1024;
 pub const MAX_DESKTOP_OPEN_PATHS: usize = 64;
 pub const HEADER_LEN: usize = 16;
-pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+/// Accommodates a complete 16 MiB terminal image store plus text and envelope data.
+pub const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;

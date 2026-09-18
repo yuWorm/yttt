@@ -121,16 +121,10 @@ impl AttachmentOutputQueue {
         let is_resync = matches!(update, TerminalStreamUpdate::ResyncRequired { .. });
         let message = terminal_message(host_sequence, update);
         let frame = Arc::<[u8]>::from(encode_message(FrameKind::Control, &message)?);
-        if frame.len() > MAX_ATTACHMENT_OUTPUT_BYTES {
-            self.enqueue_frame(
-                host_sequence,
-                session_id,
-                available_from_sequence,
-                is_resync,
-                frame,
-            );
-            return Ok(());
-        }
+        // Images can exceed the normal text backlog budget. Admit one such
+        // frame only after the queue (including its in-flight write) drains.
+        // encode_message has already enforced the hard wire frame limit.
+        let budget = MAX_ATTACHMENT_OUTPUT_BYTES.max(frame.len());
         loop {
             let notified = self.ready.notified();
             {
@@ -138,7 +132,8 @@ impl AttachmentOutputQueue {
                 if state.closed {
                     return Ok(());
                 }
-                if frame.len() <= MAX_ATTACHMENT_OUTPUT_BYTES.saturating_sub(state.bytes_in_use) {
+                if !state.resync_pending && frame.len() <= budget.saturating_sub(state.bytes_in_use)
+                {
                     drop(state);
                     self.enqueue_frame(
                         host_sequence,
@@ -202,7 +197,8 @@ impl AttachmentOutputQueue {
         if state.closed || state.resync_pending {
             return;
         }
-        if frame.len() <= MAX_ATTACHMENT_OUTPUT_BYTES.saturating_sub(state.bytes_in_use) {
+        let budget = MAX_ATTACHMENT_OUTPUT_BYTES.max(frame.len());
+        if frame.len() <= budget.saturating_sub(state.bytes_in_use) {
             state.bytes_in_use = state.bytes_in_use.saturating_add(frame.len());
             state.resync_pending = is_resync;
             state.frames.push_back(OutputFrame {

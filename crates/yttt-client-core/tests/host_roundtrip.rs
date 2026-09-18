@@ -1041,6 +1041,265 @@ async fn wait_for_mirror(client: &ClientCore, expected: &str) {
 }
 
 #[tokio::test]
+async fn sixel_pixels_survive_host_reattach_and_clear_through_the_semantic_stream() {
+    let host = RunningHost::start().await;
+    let first = host.client("sixel-first").await;
+    let mut spec = spawn_spec();
+    spec.execution = TerminalExecutionSpec::Command {
+        shell: "/bin/sh".to_string(),
+        program: "/bin/sh".to_string(),
+        args: vec![
+            "-lc".to_string(),
+            concat!(
+                "stty -echo; ",
+                "printf '\\033[2J\\033[H\\033Pq\"1;1;512;300#1;2;100;0;0'; ",
+                "i=0; while [ \"$i\" -lt 50 ]; do ",
+                "printf '!512~'; i=$((i+1)); ",
+                "if [ \"$i\" -lt 50 ]; then printf '%s' '-'; fi; done; ",
+                "printf '\\033\\134\\nsixel-ready\\n'; ",
+                "IFS= read -r line; ",
+                "printf '\\033[2J\\033[3J\\033[Hsixel-cleared\\n'; sleep 30"
+            )
+            .to_string(),
+        ],
+        return_to_shell: false,
+    };
+    let session_id = spec.session_id.clone();
+    let Response::TerminalSpawned { session_epoch, .. } = first
+        .request(spawn_request(spec, host.host_epoch()))
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected spawn response");
+    };
+    wait_for_mirror(&first, "sixel-ready").await;
+    let viewport = first.terminal_snapshot(&session_id).unwrap();
+    assert_eq!(viewport.images.len(), 1);
+    let image = viewport.images[0].clone();
+    // This image exceeds the data channel's 512 KiB text backlog budget.
+    assert_eq!((image.width, image.height), (512, 300));
+    assert_eq!(image.rgba.as_slice(), [255, 0, 0, 255].repeat(512 * 300));
+    let fragments = &viewport.rows[0].graphics;
+    assert_eq!(fragments.len(), 64);
+    assert_eq!((fragments[0].column, fragments[0].offset_x), (0, 0));
+    assert_eq!((fragments[1].column, fragments[1].offset_x), (1, 8));
+    assert!(fragments.iter().all(|fragment| {
+        fragment.image_id == image.id && fragment.offset_y == 0 && fragment.cell_height == 16
+    }));
+    first
+        .request(Request::DetachTerminal {
+            session_id: session_id.clone(),
+        })
+        .await
+        .unwrap();
+    first.shutdown().await;
+    drop(first);
+
+    let second = host.client("sixel-second").await;
+    let Response::TerminalAttached { checkpoint, lease } = second
+        .request(Request::AttachTerminal(AttachTerminal {
+            session_id: session_id.clone(),
+            known_session_epoch: Some(session_epoch),
+            after_sequence: None,
+            mode: TerminalLeaseMode::Interactive,
+            query_palette: Vec::new(),
+            palette_revision: 1,
+            geometry: geometry(),
+            geometry_epoch: 2,
+        }))
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected attach response");
+    };
+    assert!(checkpoint.raw_replay_tail.is_empty());
+    assert_eq!(checkpoint.viewport.images, vec![image]);
+    assert_eq!(checkpoint.viewport.rows[0].graphics, *fragments);
+    wait_for_mirror(&second, "sixel-ready").await;
+    second
+        .send_terminal_input(TerminalInput {
+            session_id: session_id.clone(),
+            context: mutation_context(&second, session_epoch, lease.lease_epoch, 2, 1),
+            bytes: b"clear\r".to_vec(),
+        })
+        .unwrap();
+    wait_for_mirror(&second, "sixel-cleared").await;
+    let cleared = second.terminal_snapshot(&session_id).unwrap();
+    assert!(cleared.images.is_empty());
+    assert!(cleared.rows.iter().all(|row| row.graphics.is_empty()));
+
+    let Response::TerminalTerminated(terminated) = second
+        .request(Request::TerminateTerminal {
+            session_id: session_id.clone(),
+            host_epoch: host.host_epoch(),
+            session_epoch,
+            mode: TerminationMode::Terminate,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected termination response");
+    };
+    second
+        .request(Request::AcknowledgeTerminalExit {
+            session_id,
+            session_epoch,
+            final_sequence: terminated.final_sequence,
+        })
+        .await
+        .unwrap();
+    second.shutdown().await;
+    assert_eq!(
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
+    );
+    tokio::time::timeout(Duration::from_secs(5), host.task)
+        .await
+        .expect("Host shutdown timeout")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn kitty_animation_advances_without_output_and_survives_reattach_until_deleted() {
+    let host = RunningHost::start().await;
+    let first = host.client("kitty-first").await;
+    let mut spec = spawn_spec();
+    spec.execution = TerminalExecutionSpec::Command {
+        shell: "/bin/sh".to_string(),
+        program: "/bin/sh".to_string(),
+        args: vec![
+            "-lc".to_string(),
+            concat!(
+                "stty -echo; ",
+                "printf '\\033[2J\\033[H'; ",
+                "printf '\\033_Ga=T,i=71,p=4,f=32,s=1,v=1,c=2,r=1,C=1,q=2;/wAA/w==\\033\\134'; ",
+                "printf '\\033_Ga=f,i=71,f=32,s=1,v=1,z=80,q=2;AP8A/w==\\033\\134'; ",
+                "printf '\\033_Ga=a,i=71,r=1,z=80,q=2\\033\\134'; ",
+                "printf '\\033_Ga=a,i=71,s=3,v=1,q=2\\033\\134'; ",
+                "printf '\\nkitty-ready\\n'; IFS= read -r line; ",
+                "printf '\\033_Ga=d,d=I,i=71,q=2\\033\\134kitty-cleared\\n'; sleep 30"
+            )
+            .to_string(),
+        ],
+        return_to_shell: false,
+    };
+    let session_id = spec.session_id.clone();
+    let Response::TerminalSpawned { session_epoch, .. } = first
+        .request(spawn_request(spec, host.host_epoch()))
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected spawn response");
+    };
+    wait_for_mirror(&first, "kitty-ready").await;
+    let initial = first.terminal_snapshot(&session_id).unwrap();
+    assert_eq!(initial.placements.len(), 1);
+    assert_eq!(initial.images.len(), 2);
+    let pixels: Vec<_> = initial
+        .images
+        .iter()
+        .map(|image| image.rgba.as_slice())
+        .collect();
+    assert!(pixels.contains(&[255, 0, 0, 255].as_slice()));
+    assert!(pixels.contains(&[0, 255, 0, 255].as_slice()));
+    let first_frame = initial.placements[0].image_id;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let viewport = first.terminal_snapshot(&session_id).unwrap();
+            if viewport.placements[0].image_id != first_frame {
+                assert_eq!(viewport.rows, initial.rows);
+                assert_eq!(viewport.images, initial.images);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("animation stopped when PTY output became idle");
+
+    first
+        .request(Request::DetachTerminal {
+            session_id: session_id.clone(),
+        })
+        .await
+        .unwrap();
+    first.shutdown().await;
+    drop(first);
+    // No viewers and no PTY bytes: the next attachment must catch up its clock.
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    let second = host.client("kitty-second").await;
+    let Response::TerminalAttached { checkpoint, lease } = second
+        .request(Request::AttachTerminal(AttachTerminal {
+            session_id: session_id.clone(),
+            known_session_epoch: Some(session_epoch),
+            after_sequence: None,
+            mode: TerminalLeaseMode::Interactive,
+            query_palette: Vec::new(),
+            palette_revision: 1,
+            geometry: geometry(),
+            geometry_epoch: 2,
+        }))
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected attach response");
+    };
+    assert_eq!(checkpoint.viewport.images, initial.images);
+    assert_eq!(checkpoint.viewport.placements.len(), 1);
+    assert!(
+        checkpoint
+            .viewport
+            .images
+            .iter()
+            .any(|image| image.id == checkpoint.viewport.placements[0].image_id)
+    );
+    second
+        .send_terminal_input(TerminalInput {
+            session_id: session_id.clone(),
+            context: mutation_context(&second, session_epoch, lease.lease_epoch, 2, 1),
+            bytes: b"clear\r".to_vec(),
+        })
+        .unwrap();
+    wait_for_mirror(&second, "kitty-cleared").await;
+    let cleared = second.terminal_snapshot(&session_id).unwrap();
+    assert!(cleared.placements.is_empty());
+    assert!(cleared.images.is_empty());
+    let Response::TerminalTerminated(terminated) = second
+        .request(Request::TerminateTerminal {
+            session_id: session_id.clone(),
+            host_epoch: host.host_epoch(),
+            session_epoch,
+            mode: TerminationMode::Terminate,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected termination response");
+    };
+    second
+        .request(Request::AcknowledgeTerminalExit {
+            session_id,
+            session_epoch,
+            final_sequence: terminated.final_sequence,
+        })
+        .await
+        .unwrap();
+    second.shutdown().await;
+    assert_eq!(
+        host.lifecycle_request(LifecycleRequest::BeginDrain, false)
+            .await,
+        LifecycleResponse::Draining
+    );
+    tokio::time::timeout(Duration::from_secs(5), host.task)
+        .await
+        .expect("Host shutdown timeout")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
 async fn force_capable_control_client_uses_restricted_terminal_data_channel_and_reattaches() {
     let host = RunningHost::start().await;
     let first = host.client("first-client").await;
@@ -3886,6 +4145,7 @@ async fn attach_and_checkpoint_omit_raw_replay_tail_and_recover_visible_output()
         })
         .await
         .unwrap();
+    first.shutdown().await;
     drop(first);
 
     let second = host.client("checkpoint-reattach").await;

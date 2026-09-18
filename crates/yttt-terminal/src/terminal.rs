@@ -58,10 +58,19 @@ mod tests {
 
         let events = mailbox.drain().events;
         assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, TerminalEvent::PtyWrite(data) if data == "\x1b[?6c")),
-            "expected primary device attributes response, got {events:?}",
+            events.iter().any(|event| match event {
+                TerminalEvent::PtyWrite(data) => data
+                    .strip_prefix("\x1b[?")
+                    .and_then(|parameters| parameters.strip_suffix('c'))
+                    .is_some_and(|parameters| {
+                        parameters
+                            .split(';')
+                            .skip(1)
+                            .any(|capability| capability == "4")
+                    }),
+                _ => false,
+            }),
+            "expected primary device attributes advertising Sixel, got {events:?}",
         );
     }
 

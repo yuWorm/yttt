@@ -8,7 +8,7 @@ use std::{
 use sha2::{Digest, Sha256};
 
 /// Frame-safe editor limit. Encoded `ProjectResponse::File` / `SaveFile` payloads
-/// must stay under `yttt_protocol::MAX_FRAME_BYTES` (8 MiB), so this is 6 MiB.
+/// must stay under `yttt_protocol::MAX_FRAME_BYTES`; the editor keeps its 6 MiB limit.
 pub const MAX_PROJECT_FILE_BYTES: u64 = 6 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

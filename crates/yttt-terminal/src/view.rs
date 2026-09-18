@@ -30,9 +30,14 @@
 //! let resize = session.resize_handle();
 //! let terminal = cx.new(|cx| {
 //!     TerminalView::new(pty_io.writer, pty_io.reader, TerminalConfig::default(), cx)
-//!         .with_resize_callback(move |cols, rows| {
+//!         .with_resize_callback(move |cols, rows, cell_width, cell_height| {
 //!             resize
-//!                 .resize(cols as usize, rows as usize)
+//!                 .resize(
+//!                     cols as usize,
+//!                     rows as usize,
+//!                     cell_width as usize,
+//!                     cell_height as usize,
+//!                 )
 //!                 .map_err(|error| error.to_string())
 //!         })
 //!         .with_io_error_callback(|_cx, operation, message, fatal| {
@@ -862,6 +867,8 @@ pub struct TerminalView {
     event_mailbox: Arc<TerminalEventMailbox>,
     /// Window currently rendering this terminal; used to wake the concrete surface from async I/O.
     window_handle: Option<AnyWindowHandle>,
+    /// Releases cached GPU images while the owning window is still valid.
+    _release_subscription: Option<Subscription>,
     /// Signal-driven mailbox consumer; remains active while hidden.
     #[allow(dead_code)]
     _event_task: Task<()>,
@@ -1000,6 +1007,11 @@ fn utf16_byte_offset(text: &str, target: usize) -> usize {
     text.len()
 }
 
+fn terminal_cell_size(value: Pixels) -> u16 {
+    let value: f32 = value.into();
+    value.round().clamp(1.0, f32::from(u16::MAX)) as u16
+}
+
 impl TerminalView {
     /// Create a new terminal with provided I/O streams.
     ///
@@ -1081,7 +1093,7 @@ impl TerminalView {
             PtyIoDriver::start_with_performance(
                 stdin_writer,
                 stdout_reader,
-                state.term_arc(),
+                state.clone(),
                 event_mailbox.clone(),
                 performance.clone(),
             )
@@ -1139,6 +1151,7 @@ impl TerminalView {
             io,
             event_mailbox,
             window_handle: None,
+            _release_subscription: None,
             _event_task: event_task,
             _semantic_event_task: None,
             config,
@@ -1272,15 +1285,15 @@ impl TerminalView {
 
     /// Set a callback to be invoked when the terminal is resized.
     ///
-    /// This callback should resize the underlying PTY to match the new dimensions.
-    /// The callback receives (cols, rows) as arguments.
+    /// This callback should resize the underlying PTY to match the terminal's
+    /// cell and native-pixel geometry.
     ///
     /// # Arguments
     ///
-    /// * `callback` - A function that will be called with (cols, rows) on resize
+    /// * `callback` - A function invoked with `(cols, rows, cell_width, cell_height)`.
     pub fn with_resize_callback(
         self,
-        callback: impl Fn(u16, u16) -> Result<(), String> + Send + Sync + 'static,
+        callback: impl Fn(u16, u16, u16, u16) -> Result<(), String> + Send + Sync + 'static,
     ) -> Self {
         self.io.set_resize_callback(Arc::new(callback));
         self
@@ -3219,13 +3232,29 @@ impl TerminalView {
     fn apply_viewport_size(&mut self, mut viewport: TerminalViewport, cx: &mut Context<Self>) {
         viewport.cols = viewport.cols.clamp(1, u16::MAX as usize);
         viewport.rows = viewport.rows.clamp(1, u16::MAX as usize);
+        let cell_width = terminal_cell_size(viewport.cell_width);
+        let cell_height = terminal_cell_size(viewport.cell_height);
         let dimensions_changed = self.dimensions() != (viewport.cols, viewport.rows);
+        let pty_geometry_changed = self.viewport.lock().as_ref().is_none_or(|current| {
+            current.cols != viewport.cols
+                || current.rows != viewport.rows
+                || terminal_cell_size(current.cell_width) != cell_width
+                || terminal_cell_size(current.cell_height) != cell_height
+        });
+        if pty_geometry_changed {
+            let _ = self.io.resize(
+                viewport.cols as u16,
+                viewport.rows as u16,
+                cell_width,
+                cell_height,
+            );
+        }
         if dimensions_changed {
-            let _ = self.io.resize(viewport.cols as u16, viewport.rows as u16);
-            self.state.resize(viewport.cols, viewport.rows);
             self.render_cache.lock().clear();
             self.renderer.invalidate_palette();
         }
+        self.state
+            .resize_with_cell_size(viewport.cols, viewport.rows, cell_width, cell_height);
         *self.viewport.lock() = Some(viewport);
         cx.notify();
     }
@@ -3236,14 +3265,22 @@ impl TerminalView {
     /// It updates the internal grid and notifies the terminal process of the new size.
     ///
     /// # Arguments
-    ///
-    /// * `cols` - New number of columns
-    /// * `rows` - New number of rows
     pub fn resize(&mut self, cols: usize, rows: usize) {
         let cols = cols.clamp(1, u16::MAX as usize);
         let rows = rows.clamp(1, u16::MAX as usize);
-        let _ = self.io.resize(cols as u16, rows as u16);
-        self.state.resize(cols, rows);
+        let (cell_width, cell_height) = self
+            .viewport
+            .lock()
+            .as_ref()
+            .map(|viewport| (viewport.cell_width, viewport.cell_height))
+            .unwrap_or((px(8.0), px(16.0)));
+        let cell_width = terminal_cell_size(cell_width);
+        let cell_height = terminal_cell_size(cell_height);
+        let _ = self
+            .io
+            .resize(cols as u16, rows as u16, cell_width, cell_height);
+        self.state
+            .resize_with_cell_size(cols, rows, cell_width, cell_height);
         self.render_cache.lock().clear();
         self.renderer.invalidate_palette();
     }
@@ -3659,12 +3696,19 @@ impl EntityInputHandler for TerminalView {
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.window_handle = Some(window.window_handle());
+        if self._release_subscription.is_none() {
+            let renderer = self.renderer.clone();
+            self._release_subscription =
+                Some(cx.on_release_in(window, move |_view, window, _cx| {
+                    renderer.release_images(window);
+                }));
+        }
         let focused = self.focus_handle.is_focused(window);
         self.handle_focus_change(focused, cx);
         self.refresh_visible_search_matches();
         self.refresh_hint_candidates();
 
-        let state_arc = self.state.term_arc();
+        let state = self.state.clone();
         let renderer = self.renderer.clone();
         let render_cache = self.render_cache.clone();
         let semantic_viewport = self.semantic_viewport.clone();
@@ -3856,39 +3900,41 @@ impl Render for TerminalView {
                             )
                         } else {
                             drop(semantic_state);
-                            let mut term = state_arc.lock();
-                            let (selection, cursor_row, display_offset, screen_lines) = {
-                                let content = term.renderable_content();
-                                (
-                                    content.selection,
-                                    alacritty_terminal::term::point_to_viewport(
+                            let snapshot = state.with_render_state(|term, images| {
+                                let (selection, cursor_row, display_offset, screen_lines) = {
+                                    let content = term.renderable_content();
+                                    (
+                                        content.selection,
+                                        alacritty_terminal::term::point_to_viewport(
+                                            content.display_offset,
+                                            content.cursor.point,
+                                        )
+                                        .map(|point| point.line),
                                         content.display_offset,
-                                        content.cursor.point,
+                                        term.screen_lines(),
                                     )
-                                    .map(|point| point.line),
-                                    content.display_offset,
-                                    term.screen_lines(),
+                                };
+                                let forced_rows = render_cache.lock().overlay_damage_rows(
+                                    selection,
+                                    cursor_row,
+                                    display_offset,
+                                    screen_lines,
+                                    &render_overlays,
+                                );
+                                TerminalRenderSnapshot::build(
+                                    term,
+                                    images,
+                                    &measured_renderer.palette,
+                                    TerminalRenderOptions {
+                                        overlays: &render_overlays,
+                                        focused,
+                                        cursor_unfocused_hollow,
+                                        cursor_visible,
+                                        forced_rows: &forced_rows,
+                                        generation: render_generation,
+                                    },
                                 )
-                            };
-                            let forced_rows = render_cache.lock().overlay_damage_rows(
-                                selection,
-                                cursor_row,
-                                display_offset,
-                                screen_lines,
-                                &render_overlays,
-                            );
-                            let snapshot = TerminalRenderSnapshot::build(
-                                &mut term,
-                                &measured_renderer.palette,
-                                TerminalRenderOptions {
-                                    overlays: &render_overlays,
-                                    focused,
-                                    cursor_unfocused_hollow,
-                                    cursor_visible,
-                                    forced_rows: &forced_rows,
-                                    generation: render_generation,
-                                },
-                            );
+                            });
                             let parser_generation = performance_for_prepaint.parser_generation();
                             (snapshot, parser_generation)
                         };
@@ -4090,6 +4136,8 @@ mod tests {
             history_size: 0,
             display_offset: 0,
             rows: Vec::new(),
+            images: Vec::new(),
+            placements: Vec::new(),
             cursor: SemanticCursor {
                 row: 0,
                 column: 0,
@@ -4126,6 +4174,7 @@ mod tests {
                 },
                 hyperlink: None,
             }],
+            graphics: Vec::new(),
         }
     }
 
@@ -4260,6 +4309,8 @@ mod tests {
                 history_size: 0,
                 display_offset: 0,
                 changed_rows: Vec::new(),
+                images: None,
+                placements: None,
                 cursor: None,
                 modes: None,
                 palette: None,
@@ -4395,6 +4446,8 @@ mod tests {
                     history_size: 0,
                     display_offset: 0,
                     changed_rows: vec![semantic_row(2, 0, "second"), semantic_row(3, 1, "third")],
+                    images: None,
+                    placements: None,
                     cursor: None,
                     modes: None,
                     palette: None,
@@ -4500,6 +4553,8 @@ mod tests {
                     history_size: 100,
                     display_offset: 0,
                     rows: Vec::new(),
+                    images: Vec::new(),
+                    placements: Vec::new(),
                     cursor: SemanticCursor {
                         row: 0,
                         column: 0,

@@ -187,14 +187,16 @@ pub fn write_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
     use yttt_core::model::ids::{ClientInstanceId, TerminalSessionId};
 
     use crate::{
         ControlMessage, FailureCode, HostResponse, ProtocolFailure, Response, TerminalLease,
         terminal::{
             CursorShape, SemanticCursor, SemanticViewport, TerminalCheckpoint, TerminalGeometry,
-            TerminalInput, TerminalLeaseMode, TerminalModes, TerminalMutationContext,
-            TerminalPalette, TerminalProcessState,
+            TerminalImage, TerminalInput, TerminalLeaseMode, TerminalModes,
+            TerminalMutationContext, TerminalPalette, TerminalProcessState,
         },
     };
 
@@ -214,6 +216,8 @@ mod tests {
             history_size: 0,
             display_offset: 0,
             rows: Vec::new(),
+            images: Vec::new(),
+            placements: Vec::new(),
             cursor: SemanticCursor {
                 row: 0,
                 column: 0,
@@ -266,6 +270,28 @@ mod tests {
         let encoded = encode_message(FrameKind::Control, &message).unwrap();
         let decoded: ControlMessage = decode_message(&decode_frame(&encoded).unwrap()).unwrap();
         assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn terminal_image_pixels_encode_as_cbor_bytes_and_round_trip_through_arc() {
+        let image = TerminalImage {
+            id: 1,
+            width: 1,
+            height: 1,
+            rgba: Arc::new(vec![0xde, 0xad, 0xbe, 0xef]),
+        };
+        let mut payload = Vec::new();
+        ciborium::into_writer(&image, &mut payload).expect("image must encode");
+
+        assert!(
+            payload
+                .windows(5)
+                .any(|bytes| bytes == [0x44, 0xde, 0xad, 0xbe, 0xef]),
+            "pixel payload must use the CBOR byte-string major type"
+        );
+        let decoded: TerminalImage =
+            ciborium::from_reader(payload.as_slice()).expect("image must decode");
+        assert_eq!(decoded, image);
     }
 
     #[test]

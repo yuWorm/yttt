@@ -9,11 +9,15 @@ use alacritty_terminal::term::{self, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 use gpui::Hsla;
 use smallvec::SmallVec;
+use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::ops::RangeInclusive;
+use std::sync::Arc;
 use unicode_width::UnicodeWidthChar as _;
+use yttt_core::model::ids::TerminalSessionId;
 use yttt_protocol::terminal::{
-    CursorShape as SemanticCursorShape, SemanticColor, SemanticStyle, SemanticViewport,
+    CursorShape as SemanticCursorShape, SemanticColor, SemanticGraphicCell, SemanticImagePlacement,
+    SemanticStyle, SemanticViewport, TerminalImage,
 };
 use yttt_terminal_core::semantic::{
     STYLE_BOLD, STYLE_DASHED_UNDERLINE, STYLE_DIM, STYLE_DOTTED_UNDERLINE, STYLE_DOUBLE_UNDERLINE,
@@ -93,17 +97,73 @@ pub(crate) struct RenderableCell {
     pub hyperlink: Option<Hyperlink>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct RenderableGraphicCell {
+    pub column: usize,
+    pub image_id: u64,
+    pub offset_x: u16,
+    pub offset_y: u16,
+    pub cell_height: u16,
+}
+
+/// A native Kitty placement expressed in the terminal's reference cell pixels.
+///
+/// Destination and clipping geometry is terminal-viewport relative, while the
+/// source rectangle is in immutable image pixels.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RenderableKittyPlacement {
+    pub image_id: u64,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub source_x: u32,
+    pub source_y: u32,
+    pub source_width: u32,
+    pub source_height: u32,
+    pub clip_x: i32,
+    pub clip_y: i32,
+    pub clip_width: u32,
+    pub clip_height: u32,
+    pub z_index: i32,
+    pub order: u32,
+}
+
+impl From<&SemanticImagePlacement> for RenderableKittyPlacement {
+    fn from(placement: &SemanticImagePlacement) -> Self {
+        Self {
+            image_id: placement.image_id,
+            x: placement.x,
+            y: placement.y,
+            width: placement.width,
+            height: placement.height,
+            source_x: placement.source_x,
+            source_y: placement.source_y,
+            source_width: placement.source_width,
+            source_height: placement.source_height,
+            clip_x: placement.clip_x,
+            clip_y: placement.clip_y,
+            clip_width: placement.clip_width,
+            clip_height: placement.clip_height,
+            z_index: placement.z_index,
+            order: placement.order,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RenderableRow {
     pub line: Line,
     pub semantic_line_id: Option<u64>,
     pub cells: Vec<RenderableCell>,
+    pub graphics: Vec<RenderableGraphicCell>,
     pub generation: u64,
 }
 
 impl RenderableRow {
     pub(crate) fn same_content(&self, other: &Self) -> bool {
         self.semantic_line_id == other.semantic_line_id
+            && self.graphics == other.graphics
             && self.cells.len() == other.cells.len()
             && self.cells.iter().zip(&other.cells).all(|(left, right)| {
                 left.point.column == right.point.column
@@ -145,6 +205,15 @@ pub(crate) enum RenderDamage {
 #[derive(Clone, Debug)]
 pub(crate) struct TerminalRenderSnapshot {
     pub rows: Vec<RenderableRow>,
+    /// Immutable image assets referenced by currently visible Sixel and Kitty graphics.
+    pub images: Vec<Arc<TerminalImage>>,
+    /// Host session that owns remote image IDs; local images use no scope.
+    pub image_scope: Option<(TerminalSessionId, u64)>,
+    /// Kitty placements in reference cell pixels, sorted by protocol paint order.
+    pub kitty_placements: Vec<RenderableKittyPlacement>,
+    /// Native cell-pixel metrics used to interpret Kitty placement geometry.
+    pub reference_cell_width: u16,
+    pub reference_cell_height: u16,
     pub cursor: RenderableCursor,
     pub display_offset: usize,
     pub cols: usize,
@@ -207,6 +276,7 @@ pub(crate) struct TerminalRenderOptions<'a> {
 impl TerminalRenderSnapshot {
     pub(crate) fn build(
         term: &mut Term<GpuiEventProxy>,
+        images: &BTreeMap<u64, Arc<TerminalImage>>,
         palette: &ColorPalette,
         options: TerminalRenderOptions<'_>,
     ) -> Self {
@@ -292,40 +362,91 @@ impl TerminalRenderSnapshot {
             cursor_shape = CursorShape::HollowBlock;
         }
 
+        let mut visible_images = BTreeMap::new();
+        let (reference_cell_width, reference_cell_height) = term.graphics_cell_size();
+        let kitty_scene = term.kitty_scene(display_offset);
+        let mut kitty_placements = kitty_scene
+            .placements
+            .into_iter()
+            .map(|placement| RenderableKittyPlacement {
+                image_id: placement.image_id,
+                x: placement.x,
+                y: placement.y,
+                width: placement.width,
+                height: placement.height,
+                source_x: placement.source_x,
+                source_y: placement.source_y,
+                source_width: placement.source_width,
+                source_height: placement.source_height,
+                clip_x: placement.clip_x,
+                clip_y: placement.clip_y,
+                clip_width: placement.clip_width,
+                clip_height: placement.clip_height,
+                z_index: placement.z_index,
+                order: placement.order,
+            })
+            .collect::<Vec<_>>();
+        kitty_placements.sort_by_key(|placement| (placement.z_index, placement.order));
+        for image_id in kitty_scene.image_ids {
+            if let Some(image) = images.get(&image_id) {
+                visible_images
+                    .entry(image_id)
+                    .or_insert_with(|| Arc::clone(image));
+            }
+        }
         let mut rows = Vec::with_capacity(damaged_rows.iter().filter(|damaged| **damaged).count());
         {
             let grid = term.grid();
             for (viewport_row, damaged) in damaged_rows.iter().copied().enumerate() {
-                if !damaged {
-                    continue;
-                }
-
                 let line = Line(viewport_row as i32 - display_offset as i32);
-                let mut row = RenderableRow {
-                    line,
-                    semantic_line_id: None,
-                    cells: Vec::with_capacity(cols),
-                    generation,
-                };
+                let mut graphics = Vec::new();
+                let mut cells = damaged.then(|| Vec::with_capacity(cols));
+
                 for column in 0..cols {
                     let point = AlacPoint::new(line, Column(column));
-                    row.cells.push(resolve_cell(
-                        Indexed {
-                            point,
-                            cell: &grid[point],
-                        },
-                        selection,
-                        cursor_grid_point,
-                        cursor_shape,
-                        mode,
-                        &colors,
-                        palette,
-                        overlays,
-                        default_foreground,
-                        default_background,
-                    ));
+                    let cell = &grid[point];
+                    for graphic in cell.graphics().into_iter().flatten() {
+                        let image_id = graphic.graphic_id().get();
+                        if let Some(image) = images.get(&image_id) {
+                            visible_images
+                                .entry(image_id)
+                                .or_insert_with(|| Arc::clone(image));
+                        }
+                        if damaged {
+                            graphics.push(RenderableGraphicCell {
+                                column,
+                                image_id,
+                                offset_x: graphic.offset_x,
+                                offset_y: graphic.offset_y,
+                                cell_height: u16::try_from(graphic.texture.cell_height)
+                                    .unwrap_or(u16::MAX),
+                            });
+                        }
+                    }
+                    if let Some(cells) = cells.as_mut() {
+                        cells.push(resolve_cell(
+                            Indexed { point, cell },
+                            selection,
+                            cursor_grid_point,
+                            cursor_shape,
+                            mode,
+                            &colors,
+                            palette,
+                            overlays,
+                            default_foreground,
+                            default_background,
+                        ));
+                    }
                 }
-                rows.push(row);
+                if let Some(cells) = cells {
+                    rows.push(RenderableRow {
+                        line,
+                        semantic_line_id: None,
+                        cells,
+                        graphics,
+                        generation,
+                    });
+                }
             }
         }
 
@@ -370,9 +491,13 @@ impl TerminalRenderSnapshot {
             }
         }
 
-        term.reset_damage();
         Self {
             rows,
+            images: visible_images.into_values().collect(),
+            image_scope: None,
+            kitty_placements,
+            reference_cell_width: reference_cell_width.max(1),
+            reference_cell_height: reference_cell_height.max(1),
             cursor: RenderableCursor {
                 point: cursor_point,
                 shape: cursor_shape,
@@ -450,6 +575,11 @@ impl TerminalRenderSnapshot {
                         )
                     })
                     .collect(),
+                graphics: semantic_row
+                    .graphics
+                    .iter()
+                    .map(renderable_graphic_cell)
+                    .collect(),
                 generation,
             };
             for span in &semantic_row.spans {
@@ -460,10 +590,12 @@ impl TerminalRenderSnapshot {
                 let mut column = span.start_column as usize;
                 let mut consumed_width = 0usize;
                 let mut previous_column: Option<usize> = None;
+                let mut previous_was_kitty_placeholder = false;
                 for character in span.text.chars() {
                     let width = character.width().unwrap_or(0);
                     if width == 0 {
-                        if let Some(previous_column) = previous_column
+                        if !previous_was_kitty_placeholder
+                            && let Some(previous_column) = previous_column
                             && let Some(cell) = row.cells.get_mut(previous_column)
                         {
                             cell.text.push(character);
@@ -478,6 +610,7 @@ impl TerminalRenderSnapshot {
                     } else {
                         TerminalCellWidth::Single
                     };
+                    let is_kitty_placeholder = is_kitty_placeholder(character);
                     row.cells[column] = semantic_render_cell(
                         AlacPoint::new(line, Column(column)),
                         Some(character),
@@ -490,6 +623,7 @@ impl TerminalRenderSnapshot {
                         default_foreground,
                         default_background,
                     );
+                    previous_was_kitty_placeholder = is_kitty_placeholder;
                     previous_column = Some(column);
                     if width >= 2 && column + 1 < cols {
                         row.cells[column + 1] = semantic_render_cell(
@@ -563,8 +697,19 @@ impl TerminalRenderSnapshot {
             )
         };
 
+        let mut kitty_placements = viewport
+            .placements
+            .iter()
+            .map(RenderableKittyPlacement::from)
+            .collect::<Vec<_>>();
+        kitty_placements.sort_by_key(|placement| (placement.z_index, placement.order));
         Self {
             rows,
+            images: viewport.images.clone(),
+            image_scope: Some((viewport.session_id.clone(), viewport.session_epoch)),
+            kitty_placements,
+            reference_cell_width: viewport.geometry.cell_width.max(1),
+            reference_cell_height: viewport.geometry.cell_height.max(1),
             cursor: RenderableCursor {
                 point: cursor_point,
                 shape: cursor_shape,
@@ -593,6 +738,20 @@ impl TerminalRenderSnapshot {
     }
 }
 
+fn renderable_graphic_cell(graphic: &SemanticGraphicCell) -> RenderableGraphicCell {
+    RenderableGraphicCell {
+        column: usize::from(graphic.column),
+        image_id: graphic.image_id,
+        offset_x: graphic.offset_x,
+        offset_y: graphic.offset_y,
+        cell_height: graphic.cell_height,
+    }
+}
+
+fn is_kitty_placeholder(character: char) -> bool {
+    character == '\u{10eeee}'
+}
+
 #[allow(clippy::too_many_arguments)]
 fn semantic_render_cell(
     point: AlacPoint,
@@ -619,8 +778,10 @@ fn semantic_render_cell(
         colors,
         palette,
     );
+    let is_kitty_placeholder = character.is_some_and(is_kitty_placeholder);
     let mut text = SmallVec::new();
-    if !flags.contains(Flags::HIDDEN)
+    if !is_kitty_placeholder
+        && !flags.contains(Flags::HIDDEN)
         && !matches!(
             width,
             TerminalCellWidth::Spacer | TerminalCellWidth::LeadingSpacer
@@ -636,7 +797,11 @@ fn semantic_render_cell(
             || width == TerminalCellWidth::Wide
                 && selection.contains(AlacPoint::new(point.line, point.column + 1))
     });
-    let mut decorations = RenderDecorationFlags::from_cell_flags(flags);
+    let mut decorations = if is_kitty_placeholder {
+        RenderDecorationFlags::default()
+    } else {
+        RenderDecorationFlags::from_cell_flags(flags)
+    };
     if let Some(hint) = overlays.hint_at(point) {
         let (hint_foreground, hint_background) = if hint.is_start {
             palette.hint_start_colors()
@@ -645,7 +810,7 @@ fn semantic_render_cell(
         };
         foreground = hint_foreground;
         background = hint_background;
-        if let Some(label) = hint.label {
+        if !is_kitty_placeholder && let Some(label) = hint.label {
             text.clear();
             text.push(label);
         }
@@ -663,7 +828,7 @@ fn semantic_render_cell(
             palette.search_colors()
         };
     }
-    if overlays.hyperlink_hovered(point) {
+    if !is_kitty_placeholder && overlays.hyperlink_hovered(point) {
         decorations.0 |= RenderDecorationFlags::UNDERLINE.0;
     }
     if foreground == background && !flags.contains(Flags::HIDDEN) {
@@ -821,8 +986,10 @@ fn resolve_cell(
         TerminalCellWidth::Single
     };
 
+    let is_kitty_placeholder = cell.c == '\u{10eeee}';
     let mut text = SmallVec::new();
-    if !flags.contains(Flags::HIDDEN)
+    if !is_kitty_placeholder
+        && !flags.contains(Flags::HIDDEN)
         && !matches!(
             width,
             TerminalCellWidth::Spacer | TerminalCellWidth::LeadingSpacer
@@ -843,8 +1010,12 @@ fn resolve_cell(
         resolve_foreground(color, flags, colors, palette)
     });
 
-    let mut decorations = RenderDecorationFlags::from_cell_flags(flags);
-    if overlays.hyperlink_hovered(indexed.point) {
+    let mut decorations = if is_kitty_placeholder {
+        RenderDecorationFlags::default()
+    } else {
+        RenderDecorationFlags::from_cell_flags(flags)
+    };
+    if !is_kitty_placeholder && overlays.hyperlink_hovered(indexed.point) {
         decorations.0 |= RenderDecorationFlags::UNDERLINE.0;
     }
 
@@ -925,8 +1096,8 @@ fn contrast(left: Hsla, right: Hsla) -> f64 {
 mod semantic_tests {
     use yttt_core::model::ids::TerminalSessionId;
     use yttt_protocol::terminal::{
-        CursorShape as SemanticCursorShape, SemanticCursor, SemanticRow, SemanticSpan,
-        TerminalGeometry, TerminalModes, TerminalPalette, TerminalProcessState,
+        CursorShape as SemanticCursorShape, SemanticCursor, SemanticImagePlacement, SemanticRow,
+        SemanticSpan, TerminalGeometry, TerminalModes, TerminalPalette, TerminalProcessState,
     };
 
     use super::*;
@@ -962,7 +1133,45 @@ mod semantic_tests {
                     },
                     hyperlink: Some("https://example.test".to_string()),
                 }],
+                graphics: Vec::new(),
             }],
+            images: Vec::new(),
+            placements: vec![
+                SemanticImagePlacement {
+                    image_id: 2,
+                    x: 8,
+                    y: 16,
+                    width: 16,
+                    height: 16,
+                    source_x: 2,
+                    source_y: 3,
+                    source_width: 4,
+                    source_height: 5,
+                    clip_x: 9,
+                    clip_y: 17,
+                    clip_width: 10,
+                    clip_height: 11,
+                    z_index: 0,
+                    order: 2,
+                },
+                SemanticImagePlacement {
+                    image_id: 1,
+                    x: -8,
+                    y: -16,
+                    width: 8,
+                    height: 16,
+                    source_x: 0,
+                    source_y: 0,
+                    source_width: 8,
+                    source_height: 16,
+                    clip_x: -8,
+                    clip_y: -16,
+                    clip_width: 8,
+                    clip_height: 16,
+                    z_index: -1,
+                    order: 1,
+                },
+            ],
             cursor: SemanticCursor {
                 row: 0,
                 column: 0,
@@ -1005,6 +1214,14 @@ mod semantic_tests {
                 .map(Hyperlink::uri),
             Some("https://example.test")
         );
+        assert_eq!(
+            frame
+                .kitty_placements
+                .iter()
+                .map(|placement| (placement.image_id, placement.z_index, placement.order))
+                .collect::<Vec<_>>(),
+            vec![(1, -1, 1), (2, 0, 2)]
+        );
 
         let mut partial_viewport = viewport.clone();
         partial_viewport.geometry.rows = 2;
@@ -1012,6 +1229,7 @@ mod semantic_tests {
             line_id: 2,
             viewport_row: 1,
             spans: Vec::new(),
+            graphics: Vec::new(),
         });
         let partial = TerminalRenderSnapshot::from_semantic(
             &partial_viewport,
@@ -1047,14 +1265,16 @@ mod semantic_tests {
                 line_id: 2,
                 viewport_row: 0,
                 spans: Vec::new(),
+                graphics: Vec::new(),
             },
             SemanticRow {
                 line_id: 3,
                 viewport_row: 1,
                 spans: Vec::new(),
+                graphics: Vec::new(),
             },
         ];
-        let shifted = TerminalRenderSnapshot::from_semantic(
+        let shifted_snapshot = TerminalRenderSnapshot::from_semantic(
             &shifted,
             &[0, 1],
             &ColorPalette::default(),
@@ -1064,7 +1284,7 @@ mod semantic_tests {
             true,
             4,
         );
-        assert_eq!(cache.merge(shifted), 1);
+        assert_eq!(cache.merge(shifted_snapshot), 1);
         let shifted_frame = cache.frame().unwrap();
         assert_eq!(shifted_frame.rows[0].generation, initial_generations[1]);
         assert_ne!(shifted_frame.rows[1].generation, initial_generations[1]);

@@ -9,6 +9,7 @@ use yttt_protocol::terminal::{SemanticRow, SemanticViewport};
 use yttt_terminal_core::semantic::STYLE_WRAPLINE;
 
 const BRACKET_PAIRS: [(char, char); 4] = [('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')];
+const KITTY_PLACEHOLDER: char = '\u{10eeee}';
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SelectionAnchor {
@@ -52,6 +53,7 @@ impl CachedRow {
                 .saturating_add(usize::from(span.width))
                 .min(columns);
             let mut last_text_column = None;
+            let mut last_was_kitty_placeholder = false;
 
             for character in span.text.chars() {
                 let width = if character == '\t' {
@@ -60,7 +62,8 @@ impl CachedRow {
                     unicode_width::UnicodeWidthChar::width(character).unwrap_or(1)
                 };
                 if width == 0 {
-                    if let Some(last_text_column) = last_text_column
+                    if !last_was_kitty_placeholder
+                        && let Some(last_text_column) = last_text_column
                         && let Some(CachedCell::Text { text, .. }) = cells.get_mut(last_text_column)
                     {
                         text.push(character);
@@ -72,13 +75,19 @@ impl CachedRow {
                 }
 
                 let width = width.min(span_end.saturating_sub(column)).max(1);
+                let is_kitty_placeholder = character == KITTY_PLACEHOLDER;
                 cells[column] = CachedCell::Text {
-                    text: character.to_string(),
+                    text: if is_kitty_placeholder {
+                        " ".to_string()
+                    } else {
+                        character.to_string()
+                    },
                     width,
                 };
                 for spacer in 1..width {
                     cells[column + spacer] = CachedCell::Spacer;
                 }
+                last_was_kitty_placeholder = is_kitty_placeholder;
                 last_text_column = Some(column);
                 column += width;
             }
@@ -645,6 +654,7 @@ mod tests {
                 },
                 hyperlink: None,
             }],
+            graphics: Vec::new(),
         }
     }
 
@@ -664,6 +674,8 @@ mod tests {
             history_size: 4,
             display_offset,
             rows,
+            images: Vec::new(),
+            placements: Vec::new(),
             cursor: SemanticCursor {
                 row: 0,
                 column: 0,
@@ -705,6 +717,28 @@ mod tests {
                 false,
             )
         );
+    }
+
+    #[test]
+    fn semantic_selection_replaces_kitty_placeholders_and_protocol_marks_with_space() {
+        let viewport = viewport(
+            1,
+            0,
+            vec![
+                row(1, 0, "A\u{10eeee}\u{0305}B", false),
+                row(2, 1, "", false),
+            ],
+        );
+        let mut selection = SemanticSelection::new(
+            &viewport,
+            Point::new(Line(0), Column(0)),
+            Side::Left,
+            SelectionType::Simple,
+        )
+        .unwrap();
+
+        assert!(selection.update(&viewport, Point::new(Line(0), Column(2)), Side::Right,));
+        assert_eq!(selection.text(" "), Some("A B".to_string()));
     }
 
     #[test]

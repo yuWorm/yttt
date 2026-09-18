@@ -231,8 +231,8 @@ impl TerminalRuntime for PortablePtyRuntime {
         let pair = pty_system.openpty(PtySize {
             rows: request.rows,
             cols: request.cols,
-            pixel_width: 0,
-            pixel_height: 0,
+            pixel_width: request.cols.saturating_mul(8),
+            pixel_height: request.rows.saturating_mul(16),
         })?;
         let portable_pty::PtyPair { slave, master } = pair;
         let command_builder = command_builder(
@@ -331,8 +331,8 @@ pub fn spawn_portable_pty_session(
     let pair = pty_system.openpty(PtySize {
         rows: request.rows,
         cols: request.cols,
-        pixel_width: 0,
-        pixel_height: 0,
+        pixel_width: request.cols.saturating_mul(8),
+        pixel_height: request.rows.saturating_mul(16),
     })?;
     let portable_pty::PtyPair { slave, master } = pair;
     let command_builder = command_builder(
@@ -429,8 +429,15 @@ impl PortablePtySession {
         }
     }
 
-    pub fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
-        self.resize_handle().resize(cols as usize, rows as usize)
+    pub fn resize(
+        &self,
+        cols: u16,
+        rows: u16,
+        cell_width: u16,
+        cell_height: u16,
+    ) -> anyhow::Result<()> {
+        self.resize_handle()
+            .resize(cols as usize, rows as usize, cell_width, cell_height)
     }
 
     pub fn kill(&mut self) -> anyhow::Result<()> {
@@ -481,16 +488,26 @@ impl Drop for PortablePtySession {
 }
 
 impl PortablePtyResizeHandle {
-    pub fn resize(&self, cols: usize, rows: usize) -> anyhow::Result<()> {
+    pub fn resize(
+        &self,
+        cols: usize,
+        rows: usize,
+        cell_width: u16,
+        cell_height: u16,
+    ) -> anyhow::Result<()> {
         let master = self
             .master
             .lock()
             .map_err(|_| anyhow::anyhow!("pty master lock poisoned"))?;
         master.resize(PtySize {
-            cols: cols as u16,
-            rows: rows as u16,
-            pixel_width: 0,
-            pixel_height: 0,
+            cols: cols.min(u16::MAX as usize) as u16,
+            rows: rows.min(u16::MAX as usize) as u16,
+            pixel_width: cols
+                .saturating_mul(usize::from(cell_width))
+                .min(u16::MAX as usize) as u16,
+            pixel_height: rows
+                .saturating_mul(usize::from(cell_height))
+                .min(u16::MAX as usize) as u16,
         })?;
         Ok(())
     }

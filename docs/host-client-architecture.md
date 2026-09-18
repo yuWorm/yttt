@@ -52,7 +52,7 @@ flowchart LR
 
 - Unix：profile runtime root 下的 Unix domain socket，目录权限 `0700`，socket 权限 `0600`，并验证 peer UID。
 - Windows：拒绝远程客户端的 named pipe，DACL 仅允许 SYSTEM 和 owner。
-- Wire：16-byte header、固定 magic/version/kind/length、最大 frame 8 MiB；header 在分配 payload 前验证。结构化消息使用带字段名的 CBOR；认证握手将连接固定为 control、terminal-interactive、terminal-data、state-events、lifecycle 或 desktop-owner 单一职责，连接建立后不得混用。演进规则见 [`wire-evolution.md`](./wire-evolution.md)。
+- Wire：16-byte header、固定 magic/version/kind/length、最大 frame 32 MiB；header 在分配 payload 前验证。结构化消息使用带字段名的 CBOR；认证握手将连接固定为 control、terminal-interactive、terminal-data、state-events、lifecycle 或 desktop-owner 单一职责，连接建立后不得混用。演进规则见 [`wire-evolution.md`](./wire-evolution.md)。
 
 桌面 Host 可动态开启 TLS 1.3 TCP listener，默认关闭、初始地址 `127.0.0.1:43123`。
 `ExistingHost` 只认证并附着此 Host，不启动第二个 Host 或桥接 daemon。导入证书按固定名称
@@ -150,7 +150,7 @@ control、terminal-interactive、state-event、lifecycle 和 desktop-shell；ter
 
 1. 读取固定 header。
 2. 校验 magic、version、kind。
-3. 检查 `payload_len <= 8 MiB`。
+3. 检查 `payload_len <= 32 MiB`。
 4. 分配并读取 payload。
 5. 按 kind 反序列化。
 
@@ -392,7 +392,7 @@ PTY child 退出后：
 
 | 边界 | 上限 |
 |---|---:|
-| wire frame | 8 MiB |
+| wire frame | 32 MiB |
 | Host terminal raw replay | 8 MiB / subscribed terminal；256 KiB / unsubscribed terminal |
 | Host terminal writer queue | 1024 commands |
 | Host terminal internal event queue | 256 events |

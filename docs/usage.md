@@ -83,7 +83,7 @@ starts another shell or Agent. The pane keeps listening and reconnects when the 
 address becomes available again.
 
 The legacy `terminal-placements.json` file is no longer read or written and can be left untouched.
-Its contents or revision cannot block terminal startup. Resource protocol v9 requires matching
+Its contents or revision cannot block terminal startup. Resource protocol v11 requires matching
 client and Host updates. A Host retains at most 4,096 launch-attempt records for its lifetime;
 at capacity it refuses new launches instead of forgetting old attempts and risking duplicate
 execution. It never restarts itself or interrupts active jobs to clear this limit.
@@ -97,6 +97,50 @@ YTTT_FORCE_ONBOARDING=1 cargo run
 `YTTT_FORCE_ONBOARDING` accepts `1`, `true`, `yes`, or `on` case-insensitively. The override does
 not clear the persisted completion marker; every normal launch remains forced only while the
 environment variable is enabled.
+
+## Terminal Images
+
+Terminal panes support **Sixel and Kitty graphics**, including Host-owned sessions.
+For example, with Chafa installed:
+
+```sh
+chafa --format=sixels --size=60x20 image.png
+```
+
+A dependency-free red rectangle can also verify the display path:
+
+```sh
+printf '\033Pq#1;2;100;0;0!120~-!120~-!120~-!120~\033\\\n'
+```
+
+Sixel images follow terminal cells through scrolling, partial overwrites, and clearing.
+Kitty graphics support RGB/RGBA/PNG, chunked and zlib-compressed uploads, image reuse/deletion,
+cropping, z-order, Unicode placeholders, relative placements, and animation/compositing.
+Animations advance even when the PTY is idle; exited sessions retain their final frame.
+Reconnecting to the same live Host restores images and placements from the semantic checkpoint;
+images are not persisted across a Host restart.
+
+Applications that do not recognize YTTT's image capabilities can select Kitty explicitly:
+
+```sh
+PI_IMAGE_PROTOCOL=kitty pi
+PI_FORCE_IMAGE_PROTOCOL=kitty PI_KITTY_PLACEHOLDERS=1 omp
+```
+
+Direct payloads work for local and SSH sessions. File, temporary-file, and shared-memory
+transfers are available for local PTYs and are resolved on the PTY-owning Host, not the Client.
+The Host-managed SSH backend rejects these local-media transfers. Files must be regular;
+pseudo-filesystems are rejected. Temporary-file deletion additionally requires a known
+temporary directory and a `tty-graphics-protocol` filename.
+
+Each terminal's canonical image store retains at most **16 MiB decoded RGBA / 128 assets**,
+shared by Sixel and Kitty animation frames. Oversized images are rejected; new images can evict
+retained assets, including scrollback. Evicting a Kitty frame removes its owning image.
+This does not cap total process or GPU memory. iTerm2 inline images remain unsupported.
+Update both Client and Host for resource protocol v11.
+The Host frame limit is 32 MiB so a complete image checkpoint fits without truncation.
+Building a worktree does not update an already installed application or a running Host:
+install and restart the matching Client and Host before checking image support.
 
 ## Desktop and Host Lifecycle
 

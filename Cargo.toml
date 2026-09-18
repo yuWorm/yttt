@@ -18,7 +18,7 @@ members = [
     "crates/yttt-terminal",
     "crates/yttt-ui",
 ]
-exclude = ["vendor/gpui-component", "vendor/gpui-markdown-editor"]
+exclude = ["vendor/gpui-component", "vendor/gpui-markdown-editor", "vendor/alacritty_terminal", "vendor/vte-graphics"]
 resolver = "3"
 
 [workspace.package]
@@ -133,3 +133,9 @@ winresource = "0.1"
 
 [dev-dependencies]
 gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = ["test-support"] }
+
+# Vendored Apache-2.0 Alacritty Terminal 0.25.1 with Sixel support from
+# https://github.com/alacritty/alacritty/pull/4763 at 3d658d2e280d3456ead5d73be9067ec587ddcc45.
+[patch.crates-io]
+alacritty_terminal = { path = "vendor/alacritty_terminal" }
+vte-graphics = { path = "vendor/vte-graphics" }

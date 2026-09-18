@@ -4,6 +4,14 @@
 
 ### 中文
 
+- 新增 Sixel 终端图片：图片随单元格滚动和裁剪，通过 Host 语义快照恢复，支持重新连接。
+  图片资源池限制为 16 MiB 解码 RGBA／128 个资源，超限淘汰旧图。
+- 补全 Kitty graphics：RGB/RGBA/PNG、分块与 zlib、查询、复用／删除、裁剪与层级、
+  Unicode 占位符、相对定位、动画与帧合成；支持本地文件／临时文件／共享内存传输，
+  Host 管理的 SSH 后端仅接受直接载荷。空闲动画、Host 重连和退出后的最终帧均可恢复。
+  修复图片历史滚动、页边距裁剪，以及小图放大时的图集边缘串色。iTerm2 图片仍不支持。
+- 修复普通手机截图超过旧 4 MiB 图片预算后静默消失：解码、资源池和 GPU 上传统一使用
+  16 MiB 预算，Host 帧上限提升至 32 MiB，支持多图重连快照，编辑器文件上限保持不变。
 - 修复 Windows 客户端连接 Linux/macOS Host 时出现 `path is not valid on this Host`：
   客户端使用远端路径转换处理配置、目录浏览、项目和草稿，不再要求 Unix 路径带 Windows 盘符；
   Host 本机文件访问仍保留平台校验。
@@ -18,7 +26,7 @@
 - 修复终端查看历史时被状态轮询或资源目录刷新拉回底部、随后输入输出延迟的问题：
   目录刷新只补齐缺失或 session epoch 已变化的镜像，重新同步与数据通道重连保留已有附着的滚动位置。
   同时修复滚动条拖动在 Host 尚未确认位置时重复累加偏移、意外跳到底部的问题。
-- 资源协议升级至 v9，客户端与 Host 需要同步更新。Host 在同一 epoch 内保留最多 4,096 次
+- 资源协议升级至 v11，客户端与 Host 需要同步更新。Host 在同一 epoch 内保留最多 4,096 次
   启动记录，达到上限会拒绝新启动而非遗忘旧记录后重复执行；不会自动重启 Host。
 - 修复编辑器横向滚动时正文穿透行号区域的问题；正文与行号独立裁剪，保留窗口透明度设置。
 - 将面包屑符号解析移出逐键输入路径：使用 Rope 快照、50 ms 防抖和后台解析，合并连续编辑，
@@ -28,6 +36,17 @@
 
 ### English
 
+- Added Sixel terminal images with cell clipping, scrollback, and Host snapshot/reconnect recovery.
+  The image store is bounded to 16 MiB decoded RGBA / 128 assets, evicting oldest images when needed.
+- Added Kitty graphics: RGB/RGBA/PNG, chunking/zlib, queries, reuse/deletion, clipping/layers,
+  Unicode placeholders, relative placements, animation/compositing, and local file/temp/shared-memory
+  transports. Host-managed SSH sessions accept direct payloads only. Idle animation and reconnect
+  preserve graphics; exited sessions freeze their final frame. Fixed scrollback/margin clipping and
+  atlas-edge bleeding when magnifying small images. iTerm2 inline images remain unsupported.
+  Client and Host must both use resource protocol v11.
+- Fixed phone screenshots disappearing above the old 4 MiB budget: decoding, image storage, and
+  GPU uploads now share a 16 MiB budget. Host frames allow 32 MiB for multi-image reconnect
+  checkpoints; editor file-size limits are unchanged.
 - Fixed `path is not valid on this Host` when a Windows Client connects to a Linux/macOS
   Host. Client configuration, directory browsing, projects, and drafts now preserve Unix
   Host paths without requiring a Windows drive; native Host filesystem validation stays strict.

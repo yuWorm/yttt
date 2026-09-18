@@ -823,15 +823,15 @@ impl TerminalPaneView {
                         || input_mutation_context.read().lease_epoch == 0
                         || !terminal_input_allowed.load(Ordering::SeqCst)
                 })
-                .with_resize_callback(move |cols, rows| {
+                .with_resize_callback(move |cols, rows, cell_width, cell_height| {
                     if !matches!(resize_runtime.state(), ConnectionState::Ready { .. }) {
                         return Err("Host terminal connection is not ready".to_string());
                     }
                     let geometry = TerminalGeometry {
                         cols,
                         rows,
-                        cell_width: 0,
-                        cell_height: 0,
+                        cell_width,
+                        cell_height,
                     };
                     if resize_mutation_context.read().lease_epoch == 0 {
                         *resize_pending_geometry.write() = Some(geometry);

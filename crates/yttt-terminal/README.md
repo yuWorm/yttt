@@ -20,6 +20,35 @@ A terminal emulator component for [GPUI](https://gpui.rs) applications. It deleg
 - Search, URL/hyperlink hints, Vi navigation/selection, scrollbar track paging and dragging
 - Wide cells, combining characters, all Alacritty underline styles, cursor blinking, and IME preedit
 - Runtime updates for fonts, colors, core terminal options, and interaction settings
+- Sixel and Kitty graphics, including animation, Unicode placeholders, relative placements, and Host checkpoint/reconnect recovery
+
+## Terminal images
+
+Sixel support is carried by the vendored Alacritty Terminal 0.25.1, with graphics code from
+[Alacritty PR #4763](https://github.com/alacritty/alacritty/pull/4763) pinned at
+`3d658d2e280d3456ead5d73be9067ec587ddcc45`. The local `vte-graphics` fork also streams Kitty APC commands.
+Kitty supports RGB/RGBA/PNG, chunking, zlib compression, queries, reuse/deletion, cropping,
+z-order, Unicode placeholders, relative placements, and animation/compositing. Animations
+continue without PTY output; an exited session retains its final frame.
+iTerm2 inline images are not supported. Kitty keyboard negotiation is independent.
+
+The canonical image store retains at most 16 MiB of decoded RGBA pixels and 128 assets per
+terminal, shared by Sixel images and Kitty animation frames. Oversized images are rejected;
+new images evict retained assets when needed, including images in scrollback. Evicting a
+Kitty frame invalidates its owning image rather than leaving dangling animation references.
+This is an image-store budget, not a total process/GPU memory limit. Snapshots share immutable
+pixels; GPUI caches retain all visible animation frames and release unused image textures.
+
+File, temporary-file, and shared-memory transfers are resolved by the process owning the PTY
+(the Host for Host-owned sessions), never by the viewing Client. The Host-managed SSH backend
+allows direct payloads only. Local transfers require regular files and reject pseudo-filesystems;
+temporary files are deleted only under known temporary directories with a
+`tty-graphics-protocol` name. Shared-memory handles are closed and POSIX objects unlinked.
+
+For example, run `chafa --format=sixels --size=60x20 image.png` inside the terminal.
+Host and Client both need resource protocol v11; reconnect restores images without raw PTY replay.
+For Pi, launch with `PI_IMAGE_PROTOCOL=kitty pi`; for OMP, use
+`PI_FORCE_IMAGE_PROTOCOL=kitty omp` (optionally `PI_KITTY_PLACEHOLDERS=1`).
 
 ## Portable PTY usage
 
@@ -43,9 +72,9 @@ let resize = session.resize_handle();
 
 let terminal = cx.new(|cx| {
     TerminalView::new(io.writer, io.reader, TerminalConfig::default(), cx)
-        .with_resize_callback(move |cols, rows| {
+        .with_resize_callback(move |cols, rows, cell_width, cell_height| {
             resize
-                .resize(cols as usize, rows as usize)
+                .resize(cols as usize, rows as usize, cell_width, cell_height)
                 .map_err(|error| error.to_string())
         })
         .with_title_callback(|_cx, title| {

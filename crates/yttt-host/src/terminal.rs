@@ -36,7 +36,7 @@ use yttt_ssh::{
     RemoteTerminalSession, TransportService,
 };
 use yttt_terminal_core::{
-    TerminalParser, TerminalState,
+    TerminalState,
     semantic::{SemanticAccessError, SemanticCaptureContext, SemanticSnapshotter},
 };
 
@@ -80,6 +80,7 @@ const SUBSCRIBER_CAPACITY: usize = 64;
 // Capture at most once per quarter frame so parser, IPC, and GPUI scheduling
 // still have time to reach the next 60 Hz presentation without busy-polling.
 const OUTPUT_CAPTURE_INTERVAL: Duration = Duration::from_millis(4);
+const GRAPHICS_FRAME_INTERVAL: Duration = Duration::from_millis(16);
 
 struct TerminalPipelineDiagnostics {
     subscribers: AtomicUsize,
@@ -474,8 +475,8 @@ impl HostedTerminal {
         let pair = pty_system.openpty(PtySize {
             rows: spec.geometry.rows,
             cols: spec.geometry.cols,
-            pixel_width: spec.geometry.cell_width,
-            pixel_height: spec.geometry.cell_height,
+            pixel_width: spec.geometry.cell_width.saturating_mul(spec.geometry.cols),
+            pixel_height: spec.geometry.cell_height.saturating_mul(spec.geometry.rows),
         })?;
         let cwd = cwd.unwrap_or_else(|| spec.cwd.join_under(&std::env::temp_dir()));
         let command = command_builder(&spec, &cwd)?;
@@ -579,11 +580,19 @@ impl HostedTerminal {
             events: terminal_event_tx,
             diagnostics: diagnostics.event_queue.clone(),
         };
-        let state = TerminalState::new_with_scrollback(
+        let mut state = TerminalState::new_with_scrollback(
             spec.geometry.cols as usize,
             spec.geometry.rows as usize,
             spec.scrollback_limit as usize,
             event_proxy,
+        );
+        // An SSH process names files on the remote machine, never on this Host.
+        state.set_kitty_file_transfers(matches!(&backend, TerminalBackend::Local { .. }));
+        state.resize_with_cell_size(
+            spec.geometry.cols as usize,
+            spec.geometry.rows as usize,
+            spec.geometry.cell_width,
+            spec.geometry.cell_height,
         );
         let (writer_tx, writer_rx) = flume::bounded(WRITER_QUEUE_CAPACITY);
         let (events, _) = broadcast::channel(SUBSCRIBER_CAPACITY);
@@ -716,10 +725,12 @@ impl HostedTerminal {
                 });
             }
             self.inner.backend.resize(geometry)?;
-            self.inner
-                .state
-                .lock()
-                .resize(geometry.cols as usize, geometry.rows as usize);
+            self.inner.state.lock().resize_with_cell_size(
+                geometry.cols as usize,
+                geometry.rows as usize,
+                geometry.cell_width,
+                geometry.cell_height,
+            );
             metadata.geometry = geometry;
             metadata.geometry_epoch = geometry_epoch;
         }
@@ -904,6 +915,7 @@ impl HostedTerminal {
         if self.inner.stopped.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
+        self.inner.capture_notify.notify_one();
         if self.inner.writer.try_send(WriterCommand::Shutdown).is_ok() {
             self.inner
                 .diagnostics
@@ -942,8 +954,8 @@ impl TerminalBackend {
             Self::Local { master, .. } => master.lock().resize(PtySize {
                 rows: geometry.rows,
                 cols: geometry.cols,
-                pixel_width: geometry.cell_width,
-                pixel_height: geometry.cell_height,
+                pixel_width: geometry.cell_width.saturating_mul(geometry.cols),
+                pixel_height: geometry.cell_height.saturating_mul(geometry.rows),
             })?,
             Self::Remote { resize, .. } => resize
                 .resize(geometry.cols as usize, geometry.rows as usize)
@@ -1020,6 +1032,8 @@ impl HostedTerminalInner {
             return;
         }
         self.stopped.store(true, Ordering::Release);
+        self.capture_notify.notify_one();
+        self.state.lock().freeze_graphics();
         self.exited_at_millis
             .store(now_millis().max(1), Ordering::Release);
         self.metadata.lock().process_state = TerminalProcessState::Exited { code };
@@ -1051,8 +1065,7 @@ fn spawn_reader(
     thread::Builder::new()
         .name(format!("yttt-host-pty-read-{}", inner.spec.session_id))
         .spawn(move || {
-            let term = inner.state.lock().term_arc();
-            let mut parser = TerminalParser::new(term);
+            let mut parser = inner.state.lock().parser();
             let mut buffer = vec![0_u8; u16::MAX as usize];
             loop {
                 match reader.read(&mut buffer) {
@@ -1092,10 +1105,37 @@ fn spawn_reader(
 fn spawn_output_publisher(inner: Arc<HostedTerminalInner>) {
     tokio::spawn(async move {
         let mut last_capture = Instant::now() - OUTPUT_CAPTURE_INTERVAL;
+        let mut last_graphics_tick = Instant::now() - GRAPHICS_FRAME_INTERVAL;
         loop {
-            inner.capture_notify.notified().await;
             if inner.stopped.load(Ordering::Acquire) {
                 break;
+            }
+            let graphics_deadline = if inner.diagnostics.subscribers.load(Ordering::Acquire) > 0 {
+                inner.state.lock().graphics_deadline()
+            } else {
+                None
+            };
+            let animation_due = if let Some(deadline) = graphics_deadline {
+                let deadline = deadline.max(last_graphics_tick + GRAPHICS_FRAME_INTERVAL);
+                tokio::select! {
+                    _ = inner.capture_notify.notified() => false,
+                    _ = tokio::time::sleep_until(deadline.into()) => true,
+                }
+            } else {
+                inner.capture_notify.notified().await;
+                false
+            };
+            if inner.stopped.load(Ordering::Acquire) {
+                break;
+            }
+            if animation_due {
+                last_graphics_tick = Instant::now();
+                if inner.state.lock().advance_graphics(last_graphics_tick) {
+                    inner.capture_requested.store(true, Ordering::Release);
+                }
+            }
+            if !inner.capture_requested.swap(false, Ordering::AcqRel) {
+                continue;
             }
             let elapsed = last_capture.elapsed();
             if elapsed < OUTPUT_CAPTURE_INTERVAL {
@@ -1103,9 +1143,6 @@ fn spawn_output_publisher(inner: Arc<HostedTerminalInner>) {
             }
             if inner.stopped.load(Ordering::Acquire) {
                 break;
-            }
-            if !inner.capture_requested.swap(false, Ordering::AcqRel) {
-                continue;
             }
             inner.capture_output_and_publish();
             last_capture = Instant::now();

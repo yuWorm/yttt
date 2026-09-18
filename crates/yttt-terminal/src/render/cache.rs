@@ -14,6 +14,21 @@ pub(crate) struct TerminalRenderCache {
     previous_interaction_rows: BTreeSet<usize>,
 }
 
+fn same_image_assets(
+    left: &[Arc<yttt_protocol::terminal::TerminalImage>],
+    left_scope: &Option<(yttt_core::model::ids::TerminalSessionId, u64)>,
+    right: &[Arc<yttt_protocol::terminal::TerminalImage>],
+    right_scope: &Option<(yttt_core::model::ids::TerminalSessionId, u64)>,
+) -> bool {
+    left_scope == right_scope
+        && left.len() == right.len()
+        && left.iter().all(|left| {
+            right
+                .iter()
+                .any(|right| left.id == right.id && Arc::ptr_eq(left, right))
+        })
+}
+
 impl TerminalRenderCache {
     pub(crate) fn overlay_damage_rows(
         &mut self,
@@ -118,10 +133,23 @@ impl TerminalRenderCache {
         });
 
         let mut rebuilt_rows = 0;
-
+        let images_changed = self.frame.as_ref().is_some_and(|frame| {
+            !same_image_assets(
+                &frame.images,
+                &frame.image_scope,
+                &update.images,
+                &update.image_scope,
+            )
+        });
+        let scene_changed = self.frame.as_ref().is_some_and(|frame| {
+            frame.kitty_placements != update.kitty_placements
+                || frame.reference_cell_width != update.reference_cell_width
+                || frame.reference_cell_height != update.reference_cell_height
+        });
         let Some(frame) = self.frame.as_mut().map(Arc::make_mut) else {
             return 0;
         };
+
         for mut row in update.rows {
             let viewport_row = row.line.0 + update.display_offset as i32;
             if viewport_row < 0 || viewport_row as usize >= frame.rows.len() {
@@ -142,6 +170,15 @@ impl TerminalRenderCache {
             row.generation = self.next_generation;
             *cached = row;
             rebuilt_rows += 1;
+        }
+        if images_changed {
+            frame.images = update.images;
+            frame.image_scope = update.image_scope;
+        }
+        if scene_changed {
+            frame.kitty_placements = update.kitty_placements;
+            frame.reference_cell_width = update.reference_cell_width;
+            frame.reference_cell_height = update.reference_cell_height;
         }
         frame.cursor = update.cursor;
         frame.default_background = update.default_background;
@@ -168,5 +205,38 @@ impl TerminalRenderCache {
             .as_ref()
             .map(|frame| frame.rows.iter().map(|row| row.generation).collect())
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn image_asset(id: u64, rgba: u8) -> Arc<yttt_protocol::terminal::TerminalImage> {
+        Arc::new(yttt_protocol::terminal::TerminalImage {
+            id,
+            width: 1,
+            height: 1,
+            rgba: Arc::new(vec![rgba, rgba, rgba, 255]),
+        })
+    }
+
+    #[test]
+    fn image_asset_replacement_with_the_same_id_invalidates_the_gpu_source() {
+        let original = image_asset(1, 0);
+        let replacement = image_asset(1, 255);
+
+        assert!(same_image_assets(
+            &[Arc::clone(&original)],
+            &None,
+            &[Arc::clone(&original)],
+            &None,
+        ));
+        assert!(!same_image_assets(
+            &[original],
+            &None,
+            &[replacement],
+            &None
+        ));
     }
 }
