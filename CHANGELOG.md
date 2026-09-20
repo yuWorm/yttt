@@ -2,38 +2,117 @@
 
 ## Unreleased
 
+## 0.3.3 - 2026-09-20
+
 ### 中文
 
-- 托盘图标提取现有应用图标的 Y／终端提示符／下划线主体，移除底板；macOS 使用随菜单栏配色变化的模板图标。
-  托盘菜单、Host 状态与资源计数支持中英文并跟随界面语言切换。窗口特效默认改为“无”，保留显式透明或磨砂玻璃配置。
-- 内置 Hack Nerd Font Mono 常规、粗体、斜体和粗斜体，未设置终端字体时直接使用，
-  无需系统安装。引导页检测到推荐等宽 Nerd Font 后自动选中并保存，保留已有配置与后续手动选择。
-- 修复窗口恢复后旧终端已消失却只能反复点击 Reconnect 的问题：确认会话缺失后，
-  控制端可明确恢复已准备的 Agent 会话或启动新进程；观察端提示先取得控制权。
-  区分会话缺失与控制权不足，接管本身不自动执行命令，重现的旧会话仍直接重连。
-- 新增 Sixel 终端图片：图片随单元格滚动和裁剪，通过 Host 语义快照恢复，支持重新连接。
-  图片资源池限制为 16 MiB 解码 RGBA／128 个资源，超限淘汰旧图。
-- 补全 Kitty graphics：RGB/RGBA/PNG、分块与 zlib、查询、复用／删除、裁剪与层级、
-  Unicode 占位符、相对定位、动画与帧合成；支持本地文件／临时文件／共享内存传输，
-  Host 管理的 SSH 后端仅接受直接载荷。空闲动画、Host 重连和退出后的最终帧均可恢复。
-  修复图片历史滚动、页边距裁剪，以及小图放大时的图集边缘串色。iTerm2 图片仍不支持。
-- 修复普通手机截图超过旧 4 MiB 图片预算后静默消失：解码、资源池和 GPU 上传统一使用
-  16 MiB 预算，Host 帧上限提升至 32 MiB，支持多图重连快照，编辑器文件上限保持不变。
-- 修复 Windows 客户端连接 Linux/macOS Host 时出现 `path is not valid on this Host`：
-  客户端使用远端路径转换处理配置、目录浏览、项目和草稿，不再要求 Unix 路径带 Windows 盘符；
-  Host 本机文件访问仍保留平台校验。
+本版以已发布的 [v0.3.2](https://github.com/yuWorm/yttt/releases/tag/v0.3.2) 为基线，
+包含其后的 7 个功能／修复提交，重点改善终端图片、会话重连和默认桌面体验。
+
+#### 新增与改进
+
+- **终端图片**：新增 Sixel，并补全 Kitty graphics 的 RGB/RGBA/PNG、分块与 zlib、查询、
+  图片复用／删除、裁剪与层级、Unicode 占位符、相对定位、动画与帧合成。图片随终端历史滚动，
+  支持 Host 快照及断线重连恢复；进程退出后保留最后一帧。修复页边距裁剪和小图放大时的图集串色。
+- **内置终端字体**：打包 Hack Nerd Font Mono 的常规、粗体、斜体和粗斜体，未配置字体时无需
+  系统安装即可使用。首次引导会自动选中检测到的推荐等宽 Nerd Font，保留已有配置和手动选择。
+- **托盘图标与国际化**：从应用图标提取 Y、终端提示符和下划线主体，移除底板；macOS 使用
+  自适应模板图标。托盘操作、Host 状态和资源计数支持中英文，并跟随界面语言切换。
+- **默认关闭窗口特效**：默认窗口改为“无特效”的不透明窗口；缺失或非法效果配置也回退为“无”。
+  已有的显式透明／磨砂玻璃设置不变，不透明度设置仍可在主动开启这两种模式后使用。
+
+#### 修复
+
+- **取回控制权后的终端输入**：重新附着存活进程并更新输入租约和上下文，修复接管后仍无法输入
+  或关闭终端的问题。暂时不可用的终端保留恢复监听，会话返回后自动重连，不重新执行 shell 或 Agent。
+- **丢失会话的明确恢复操作**：不再让已消失的终端只能反复点击 Reconnect。控制端可明确恢复已准备的
+  Agent 会话或启动新进程；观察端提示先取得控制权。区分会话缺失与权限不足，接管本身不启动命令。
+- **历史滚动与输出延迟**：状态轮询、资源目录刷新、重新同步和数据通道重连不再把已有终端拉回底部。
+  只为缺失或 epoch 已变化的镜像重新初始化；修复拖动滚动条时、Host 尚未确认导致偏移重复累加的问题。
+- **Windows 连接 Unix Host**：配置、目录浏览、项目和草稿路径正确保留 Linux/macOS 路径，修复
+  `path is not valid on this Host`，不再错误要求远端路径带 Windows 盘符；Host 本机校验仍保留。
+- **较大终端图片**：图片解码、资源存储和 GPU 上传统一支持 16 MiB 图片预算，避免普通手机截图超过
+  旧 4 MiB 预算后静默消失。Host 帧上限为 32 MiB，可容纳多图重连快照；编辑器文件上限不变。
+
+#### 升级与限制
+
+- **Client 与 Host 必须同步升级**：资源协议从 v0.3.2 的 v9 升至 **v11**，远端 Server 也需使用匹配构建。
+  请先保存工作并妥善结束任务，再重启旧 Host；不要为升级强制终止仍在运行的任务。
+- 每个终端的图片资源池上限为 **16 MiB 解码 RGBA／128 个资源**，与 Kitty 动画帧共享。
+  超大图片会被拒绝，新图片可能淘汰历史图片；这不是进程总内存或 GPU 内存的上限。
+- Kitty 本地会话支持文件、临时文件和共享内存载荷；Host 管理的 SSH 会话仅接受直接载荷。
+  **iTerm2 inline images 仍不支持**。
+- 桌面安装包提供 macOS arm64、Windows x86_64 和 Linux x86_64；同时提供 Linux/macOS 两种架构的
+  无界面 Server、更新清单及 SHA-256 校验和。macOS 包仍采用 ad-hoc 签名，未做 Developer ID 公证。
+
+### English
+
+Compared with the published [v0.3.2](https://github.com/yuWorm/yttt/releases/tag/v0.3.2),
+this release includes seven feature/fix commits focused on terminal graphics, session recovery,
+and the default desktop experience.
+
+#### Added and improved
+
+- **Terminal graphics:** added Sixel and expanded Kitty graphics with RGB/RGBA/PNG, chunking/zlib,
+  queries, image reuse/deletion, clipping/layers, Unicode placeholders, relative placement, and
+  animation/compositing. Images follow scrollback and survive Host snapshots and reconnects;
+  exited processes retain their final frame. Fixed margin clipping and atlas bleeding when scaling small images.
+- **Bundled terminal font:** Hack Nerd Font Mono ships in regular, bold, italic, and bold italic,
+  so unconfigured terminals need no system font installation. Onboarding automatically selects a detected
+  recommended monospaced Nerd Font while preserving existing preferences and manual choices.
+- **Tray icon and localization:** the tray uses the app icon's Y, prompt, and underscore foreground
+  without its tile, with an adaptive macOS template. Actions, Host states, and resource counts follow
+  the English or Chinese UI language.
+- **Opaque windows by default:** window effects now default to **None**, including missing or invalid
+  effect values. Existing explicit transparency/blur preferences are preserved; the opacity setting
+  remains available when either effect is selected.
+
+#### Fixed
+
+- **Terminal input after control handoff:** reattach surviving processes with renewed input leases
+  and writer contexts, fixing input and close failures after reclaiming control. Temporarily unavailable
+  panes keep recovery subscriptions and reconnect when their session returns, without rerunning commands.
+- **Explicit recovery for missing sessions:** panes no longer offer only an ineffective Reconnect.
+  Controllers can resume a prepared saved Agent session or start a new process; observers are prompted
+  to take control. Missing sessions and insufficient permissions are distinct, and takeover launches nothing.
+- **Scrollback and delayed output:** status polling, catalog refreshes, resynchronization, and data-channel
+  reconnects preserve existing scroll positions. Only missing or new-epoch mirrors bootstrap again;
+  scrollbar dragging no longer compounds offsets while awaiting Host acknowledgements.
+- **Windows Clients with Unix Hosts:** configuration, directory browsing, projects, and drafts retain
+  Linux/macOS paths, fixing `path is not valid on this Host` without weakening native Host path validation.
+- **Larger terminal images:** decoding, storage, and GPU uploads share a 16 MiB image budget instead of
+  silently dropping phone screenshots above the old 4 MiB budget. Host frames allow 32 MiB for multi-image
+  reconnect snapshots; editor file-size limits are unchanged.
+
+#### Upgrade notes and limits
+
+- **Upgrade Client and Host together:** the resource protocol changes from v0.3.2's v9 to **v11**;
+  remote Servers also need matching builds. Save work and finish tasks before restarting an old Host;
+  do not force-stop active work just to upgrade.
+- Each terminal retains at most **16 MiB decoded RGBA / 128 image assets**, shared with Kitty animation
+  frames. Oversized images are rejected and new images may evict scrollback assets. These limits do not
+  bound total process or GPU memory.
+- Local Kitty sessions support file, temporary-file, and shared-memory payloads; Host-managed SSH sessions
+  accept direct payloads only. **iTerm2 inline images remain unsupported.**
+- Desktop packages cover macOS arm64, Windows x86_64, and Linux x86_64, alongside Linux/macOS headless
+  Servers for both architectures, an update manifest, and SHA-256 checksums. macOS remains ad-hoc signed,
+  without Developer ID notarization.
+
+**完整提交对比 / Full comparison:** https://github.com/yuWorm/yttt/compare/v0.3.2...v0.3.3
+
+**使用文档 / Usage:** https://github.com/yuWorm/yttt/blob/v0.3.3/docs/usage.md
+
+## 0.3.2 - 2026-09-17
+
+### 中文
+
 - 修复恢复工作区时已退出的 Agent 被当作普通命令拦截的问题：有保存会话时恢复原会话，
   包括 shell 内启动的 Agent；恢复失败保留会话，无保存会话的已退出进程仍保持停止。
 - 终端启动、重试和关闭改由 Host 统一维护，不再读写旧的 `terminal-placements.json`；
   损坏文件和配置 revision 冲突不再阻断终端。旧文件保留原样。
 - 启动响应丢失时保留同一次启动标识并核对 Host 状态，不自动重复执行命令；
   UI 区分结果待确认与明确启动失败。关闭请求校验 Host/session epoch，防止旧请求结束新进程。
-- 修复控制权取回后终端仍持有失效租约、无法输入或关闭的问题：重新附着已有进程并更新输入上下文。
-  会话暂时缺失时保留恢复监听，重新出现后自动连接；重连仅附着已有进程，不重跑 Agent。
-- 修复终端查看历史时被状态轮询或资源目录刷新拉回底部、随后输入输出延迟的问题：
-  目录刷新只补齐缺失或 session epoch 已变化的镜像，重新同步与数据通道重连保留已有附着的滚动位置。
-  同时修复滚动条拖动在 Host 尚未确认位置时重复累加偏移、意外跳到底部的问题。
-- 资源协议升级至 v11，客户端与 Host 需要同步更新。Host 在同一 epoch 内保留最多 4,096 次
+- 资源协议升级至 v9，客户端与 Host 需要同步更新。Host 在同一 epoch 内保留最多 4,096 次
   启动记录，达到上限会拒绝新启动而非遗忘旧记录后重复执行；不会自动重启 Host。
 - 修复编辑器横向滚动时正文穿透行号区域的问题；正文与行号独立裁剪，保留窗口透明度设置。
 - 将面包屑符号解析移出逐键输入路径：使用 Rope 快照、50 ms 防抖和后台解析，合并连续编辑，
@@ -43,40 +122,18 @@
 
 ### English
 
-- Extracted the app icon's Y, terminal prompt, and underscore foreground for the tray, without its tile;
-  macOS uses an adaptive template icon. Tray actions, Host states, and resource counts now follow the
-  UI language in English or Chinese. Window effects default to None; explicit transparency or blur is preserved.
-- Bundled Hack Nerd Font Mono in regular, bold, italic, and bold italic as the default for
-  unconfigured terminals. Onboarding now selects and saves the detected recommended monospaced
-  Nerd Font automatically, without overwriting existing preferences or later manual choices.
-- Fixed restored panes offering only an ineffective **Reconnect** after the old terminal disappeared.
-  Controllers can explicitly resume a prepared saved Agent session or start a new process;
-  observers are prompted to take control. Missing sessions and insufficient control are reported
-  separately. Taking control does not replay commands, and returning sessions are reattached.
-- Added Sixel terminal images with cell clipping, scrollback, and Host snapshot/reconnect recovery.
-  The image store is bounded to 16 MiB decoded RGBA / 128 assets, evicting oldest images when needed.
-- Added Kitty graphics: RGB/RGBA/PNG, chunking/zlib, queries, reuse/deletion, clipping/layers,
-  Unicode placeholders, relative placements, animation/compositing, and local file/temp/shared-memory
-  transports. Host-managed SSH sessions accept direct payloads only. Idle animation and reconnect
-  preserve graphics; exited sessions freeze their final frame. Fixed scrollback/margin clipping and
-  atlas-edge bleeding when magnifying small images. iTerm2 inline images remain unsupported.
-  Client and Host must both use resource protocol v11.
-- Fixed phone screenshots disappearing above the old 4 MiB budget: decoding, image storage, and
-  GPU uploads now share a 16 MiB budget. Host frames allow 32 MiB for multi-image reconnect
-  checkpoints; editor file-size limits are unchanged.
-- Fixed `path is not valid on this Host` when a Windows Client connects to a Linux/macOS
-  Host. Client configuration, directory browsing, projects, and drafts now preserve Unix
-  Host paths without requiring a Windows drive; native Host filesystem validation stays strict.
 - Fixed workspace restoration leaving exited Agents stopped despite a saved session.
   Saved sessions now resume, including Agents launched inside shells; failed resumes retain
   the session, and exited processes without saved sessions remain stopped.
-- Fixed terminal input and close failures after reclaiming profile control by reattaching existing
-  processes with renewed leases and writer contexts. Unavailable panes retain recovery subscriptions
-  and reconnect when their session returns; **Reconnect** never launches another shell or Agent.
-- Fixed terminal history unexpectedly jumping to the bottom after status polling or resource
-  catalog refreshes, leaving live output delayed. Catalog refreshes only bootstrap missing or
-  new-epoch mirrors; resynchronization and data-channel reconnects preserve existing attachment
-  offsets. Scrollbar dragging no longer compounds offsets while waiting for Host acknowledgements.
+- Centralized terminal launch, retry, and shutdown in the Host, eliminating reads and writes
+  of the legacy `terminal-placements.json`. Malformed files and configuration revision conflicts
+  no longer block terminals; existing legacy files are retained unchanged.
+- When a launch response is lost, retain the same launch identifier and check Host state rather
+  than issuing the command again. The UI distinguishes a pending confirmation from an explicit
+  launch failure. Shutdown requests validate the Host and session epoch so stale requests cannot
+  end a newer process. Resource protocol v9 requires matching Client and Host builds; the Host
+  retains up to 4,096 launch records per epoch and rejects new launches at capacity rather than
+  discarding history and risking a duplicate command. It does not restart automatically.
 - Fixed horizontally scrolled editor content bleeding into the line-number gutter. Separate
   content and gutter clipping preserves the configured window opacity.
 - Moved breadcrumb symbol parsing off the per-keystroke input path using Rope snapshots,
