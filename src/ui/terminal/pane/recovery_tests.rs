@@ -381,6 +381,9 @@ fn missing_terminal_can_be_explicitly_started_after_exit_is_finalized(cx: &mut T
         cx.read(|app| pane.read(app).is_running()) && host.root.path().join("starts").exists()
     });
     let original = catalog(&runtime).terminals.remove(0);
+    pump_until(cx, "initial terminal metadata", |_| {
+        runtime.terminal_metadata(&original.session_id).is_some()
+    });
     let mut final_metadata = runtime.terminal_metadata(&original.session_id).unwrap();
     final_metadata.process_state = TerminalProcessState::Exited { code: Some(0) };
     runtime
