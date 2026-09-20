@@ -61,7 +61,7 @@ pub enum ConnectionState {
 #[derive(Clone, Debug)]
 pub enum ClientEvent {
     Connection(ConnectionState),
-    Server(HostEvent),
+    Server(Box<HostEvent>),
     TerminalUpdated(Arc<TerminalStreamUpdate>),
     TerminalUnavailable(TerminalSessionId),
     ResourceCatalogUpdated(Arc<ResourceCatalog>),
@@ -788,7 +788,7 @@ async fn connected_control_session(
                             && let Some(event) =
                                 context.deferred_terminal_events.lock().remove(&session_id)
                         {
-                            let _ = context.events.send(ClientEvent::Server(event));
+                            let _ = context.events.send(ClientEvent::Server(Box::new(event)));
                         }
                         for session_id in checkpoints {
                             if checkpoint_pending.insert(session_id.clone())
@@ -1013,7 +1013,7 @@ async fn connected_state_event_session(
                         .lock()
                         .insert(session_id.clone(), event);
                 } else {
-                    let _ = context.events.send(ClientEvent::Server(event));
+                    let _ = context.events.send(ClientEvent::Server(Box::new(event)));
                 }
                 if let Some(session_id) = checkpoint {
                     match context.checkpoint_requests.try_send(session_id) {

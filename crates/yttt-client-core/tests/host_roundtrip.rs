@@ -714,10 +714,8 @@ async fn blocked_project_request_does_not_delay_terminal_input() {
                 });
             tokio::select! {
                 event = events.recv() => {
-                    if let Ok(ClientEvent::Server(yttt_protocol::HostEvent {
-                        body: yttt_protocol::ServerEvent::ProjectChanged(change),
-                        ..
-                    })) = event
+                    if let Ok(ClientEvent::Server(event)) = event
+                        && let yttt_protocol::ServerEvent::ProjectChanged(change) = event.body
                     {
                         received_project_event |= change.project_id == project_id;
                     }

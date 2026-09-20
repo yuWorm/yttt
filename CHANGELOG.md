@@ -7,7 +7,7 @@
 ### 中文
 
 本版以已发布的 [v0.3.2](https://github.com/yuWorm/yttt/releases/tag/v0.3.2) 为基线，
-包含其后的 7 个功能／修复提交，重点改善终端图片、会话重连和默认桌面体验。
+重点改善终端图片、会话重连和默认桌面体验，并修正发布验证发现的客户端事件队列内存布局问题。
 
 #### 新增与改进
 
@@ -48,8 +48,8 @@
 ### English
 
 Compared with the published [v0.3.2](https://github.com/yuWorm/yttt/releases/tag/v0.3.2),
-this release includes seven feature/fix commits focused on terminal graphics, session recovery,
-and the default desktop experience.
+this release improves terminal graphics, session recovery, and the default desktop experience.
+It also fixes the oversized client-event representation found during release validation.
 
 #### Added and improved
 
