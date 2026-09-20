@@ -4,6 +4,8 @@
 
 ### 中文
 
+- 托盘图标提取现有应用图标的 Y／终端提示符／下划线主体，移除底板；macOS 使用随菜单栏配色变化的模板图标。
+  托盘菜单、Host 状态与资源计数支持中英文并跟随界面语言切换。窗口特效默认改为“无”，保留显式透明或磨砂玻璃配置。
 - 内置 Hack Nerd Font Mono 常规、粗体、斜体和粗斜体，未设置终端字体时直接使用，
   无需系统安装。引导页检测到推荐等宽 Nerd Font 后自动选中并保存，保留已有配置与后续手动选择。
 - 修复窗口恢复后旧终端已消失却只能反复点击 Reconnect 的问题：确认会话缺失后，
@@ -41,6 +43,9 @@
 
 ### English
 
+- Extracted the app icon's Y, terminal prompt, and underscore foreground for the tray, without its tile;
+  macOS uses an adaptive template icon. Tray actions, Host states, and resource counts now follow the
+  UI language in English or Chinese. Window effects default to None; explicit transparency or blur is preserved.
 - Bundled Hack Nerd Font Mono in regular, bold, italic, and bold italic as the default for
   unconfigured terminals. Onboarding now selects and saves the detected recommended monospaced
   Nerd Font automatically, without overwriting existing preferences or later manual choices.

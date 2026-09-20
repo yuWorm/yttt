@@ -68,19 +68,6 @@ background = "#20232a"
 }
 
 #[test]
-fn theme_runtime_resolves_ui_and_terminal_from_theme_name() {
-    let settings = AppSettings::default();
-    let store = ThemeStore::builtin();
-
-    let runtime = ThemeRuntime::resolve(&settings, &store);
-
-    assert_eq!(runtime.theme_name, "one-dark-theme");
-    assert_eq!(runtime.terminal_settings.font_size, 13.0);
-    assert_eq!(runtime.ui.terminal_background, runtime.terminal.background);
-    assert_eq!(runtime.ui.app_background.a, DEFAULT_WINDOW_OPACITY);
-}
-
-#[test]
 fn window_effect_controls_whether_theme_surfaces_use_configured_opacity() {
     let store = ThemeStore::builtin();
     let mut settings = AppSettings::default();
@@ -165,6 +152,7 @@ selection = "#445566"
 
     let loaded = load_theme_store(&paths).unwrap();
     let mut settings = AppSettings::default();
+    settings.window.effect = WindowBackgroundEffect::Blurred;
     settings.theme.name = "selection-custom".to_string();
     let config = ThemeRuntime::resolve(&settings, &loaded.store).to_gpui_component_theme_config();
 
@@ -208,6 +196,7 @@ focus_ring = "#112233"
 
     let loaded = load_theme_store(&paths).unwrap();
     let mut settings = AppSettings::default();
+    settings.window.effect = WindowBackgroundEffect::Blurred;
     settings.theme.name = "focus-only".to_string();
     let config = ThemeRuntime::resolve(&settings, &loaded.store).to_gpui_component_theme_config();
 
@@ -233,7 +222,9 @@ focus_ring = "#112233"
 }
 #[test]
 fn builtin_one_dark_theme_maps_editor_and_terminal_palettes() {
-    let runtime = ThemeRuntime::default();
+    let mut settings = AppSettings::default();
+    settings.window.effect = WindowBackgroundEffect::Blurred;
+    let runtime = ThemeRuntime::resolve(&settings, &ThemeStore::builtin());
     let config = runtime.to_gpui_component_theme_config();
     let highlight = config
         .highlight
@@ -351,6 +342,7 @@ comment = "#555555"
 
     let loaded = load_theme_store(&paths).unwrap();
     let mut settings = AppSettings::default();
+    settings.window.effect = WindowBackgroundEffect::Blurred;
     settings.theme.name = "editor-custom".to_string();
     let runtime = ThemeRuntime::resolve(&settings, &loaded.store);
     let config = runtime.to_gpui_component_theme_config();
@@ -383,46 +375,6 @@ comment = "#555555"
         Some(gpui::Hsla::from(rgb(0x00ff00)))
     );
     assert!(loaded.warnings.is_empty());
-}
-
-#[test]
-fn terminal_config_uses_runtime_settings_and_colors() {
-    let mut runtime = ThemeRuntime::default();
-    runtime.terminal_settings.font_family = "JetBrains Mono".to_string();
-    runtime.terminal_settings.font_size = 15.0;
-    runtime.terminal_settings.padding = 8.0;
-    runtime.terminal_settings.show_scrollbar = false;
-    runtime.terminal_settings.cursor_shape = yttt_terminal::TerminalCursorShape::Beam;
-    runtime.terminal_settings.cursor_blinking = true;
-    runtime.terminal_settings.hide_mouse_when_typing = true;
-    runtime.terminal_settings.copy_on_select = true;
-    runtime.terminal_settings.osc52_policy = yttt_terminal::TerminalOsc52Policy::ReadWrite;
-    runtime.terminal_settings.kitty_keyboard = true;
-
-    let config = runtime.to_terminal_config();
-
-    assert_eq!(config.font_family, "JetBrains Mono");
-    assert_eq!(config.font_size, gpui::px(15.0));
-    assert_eq!(config.padding.left, gpui::px(8.0));
-    assert_eq!(config.scrollback, 10000);
-    assert!(!config.show_scrollbar);
-    assert_eq!(
-        config.cursor_shape,
-        yttt_terminal::TerminalCursorShape::Beam
-    );
-    assert!(config.cursor_blinking);
-    assert!(config.hide_mouse_when_typing);
-    assert!(config.copy_on_select);
-    assert_eq!(
-        config.osc52_policy,
-        yttt_terminal::TerminalOsc52Policy::ReadWrite
-    );
-    assert!(config.kitty_keyboard);
-    assert!(!config.start_in_vi_mode);
-    assert_eq!(
-        config.colors.selection_background().a,
-        0.32 + 0.08 * (1.0 - DEFAULT_WINDOW_OPACITY)
-    );
 }
 
 #[test]

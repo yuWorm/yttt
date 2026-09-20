@@ -36,6 +36,7 @@ fi
 
 mkdir -p "$png_dir" "$macos_dir" "$windows_dir" "$(dirname "$iconset")"
 rsvg-convert --output "$source_png" "$source_svg"
+python3 "$repo_root/scripts/build-tray-icons.py"
 
 for size in 16 32 48 64 128 256 512 1024; do
   render_png "$size" "$png_dir/$size.png"

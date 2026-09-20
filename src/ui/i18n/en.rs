@@ -3,6 +3,25 @@ use super::UiTextKey;
 pub(super) fn text(key: UiTextKey) -> &'static str {
     match key {
         UiTextKey::AppName => "yttt",
+        UiTextKey::TrayOpen => "Open yttt",
+        UiTextKey::TrayNewWindow => "New Window",
+        UiTextKey::TrayOpenLogs => "Open Logs",
+        UiTextKey::TrayStartHost => "Start Host",
+        UiTextKey::TrayStopHost => "Stop Host If Idle",
+        UiTextKey::TrayRestartHost => "Restart Host If Idle",
+        UiTextKey::TrayQuitDesktop => "Quit Desktop",
+        UiTextKey::TrayQuitAll => "Quit All",
+        UiTextKey::TrayHost => "Host",
+        UiTextKey::TrayConnecting => "Connecting",
+        UiTextKey::TrayStopped => "Stopped",
+        UiTextKey::TrayUnavailable => "Unavailable",
+        UiTextKey::TrayRunning => "Running",
+        UiTextKey::TrayDraining => "Draining",
+        UiTextKey::TrayStopping => "Stopping",
+        UiTextKey::TrayUnexpectedResponse => "Unexpected response",
+        UiTextKey::TrayStatusSummary => {
+            "{host}: {state} · {terminals} terminals · {clients} clients · {jobs} jobs"
+        }
         UiTextKey::OnboardingTitle => "Welcome to yttt",
         UiTextKey::OnboardingSubtitle => {
             "Choose a language, terminal font, default layout, and coding agent, then optionally import themes from Zed."

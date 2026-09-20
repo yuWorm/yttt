@@ -163,6 +163,11 @@ an `Independent` Host. **Quit All** explicitly stops either kind. The confirmati
 consequences; cancellation leaves the desktop owner connected. Confirmed workspaces and drafts
 survive Host shutdown.
 
+The tray icon uses the application icon's foreground without its rounded tile; macOS renders it
+as a template that adapts to the menu bar. Menu actions, Host states, and resource counts use the
+desktop's English or Chinese UI language. Language changes are reflected on the next status refresh
+(normally within two seconds), and closing all windows retains the last selected language.
+
 Linux and environments without a usable tray retain the same control path through CLI commands:
 
 ```sh
@@ -513,6 +518,11 @@ its destination, application timing and any read-only restriction alongside the 
 | Local preferences | Appearance, themes/icons, fonts, keybindings, Vim, notifications, editor presentation/autosave, UI preferences | `<local-profile-config>/device`; editable by controllers and observers, including while disconnected |
 | Environment | Shells/environment, scrollback, keyboard protocol, new-tab commands, Agent defaults, editor language/tab defaults and LSP, default layouts | Owning Host profile, shared by its connected clients; requires a connected controller, with no transfer in progress |
 | Project | `editor.tab_size`, `editor.auto_detect_language`, `editor.default_language`; project layouts have their own existing format | `<project>/.yttt/settings.toml`, or the Host profile's isolated overlay; requires control and a writable project-config policy |
+
+Window effects default to **None** (`[window].effect = "none"`): the main window is opaque, with
+no transparency or frosted-glass effect. The opacity preference is only used when **Transparent**
+or **Frosted glass** is explicitly selected. Existing explicit effects are preserved; missing or
+invalid effect values fall back to **None**.
 
 Under an overridable Editor or Languages setting, the named project's summary shows whether it
 uses the environment default or a project value. **Customize for this project** expands a separate

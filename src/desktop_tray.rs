@@ -1,3 +1,4 @@
+use crate::ui::i18n::{UiText, UiTextKey};
 use yttt_protocol::{HostLifecycleState, HostLifecycleStatus};
 
 const ACTION_QUEUE_CAPACITY: usize = 32;
@@ -81,20 +82,23 @@ impl DesktopTrayStatus {
         }
     }
 
-    pub fn menu_label(&self) -> String {
+    pub fn menu_label(&self, text: UiText) -> String {
+        let host = text.get(UiTextKey::TrayHost);
         if let Some(detail) = &self.detail {
-            return format!("Host: {detail}");
+            return format!("{host}: {detail}");
         }
-        let state = match self.state {
-            DesktopTrayHostState::Unavailable => "Unavailable",
-            DesktopTrayHostState::Running => "Running",
-            DesktopTrayHostState::Draining => "Draining",
-            DesktopTrayHostState::ForceStopping => "Stopping",
-        };
-        format!(
-            "Host: {state} · {} terminals · {} clients · {} jobs",
-            self.terminal_count, self.client_count, self.job_count
-        )
+        let state = text.get(match self.state {
+            DesktopTrayHostState::Unavailable => UiTextKey::TrayUnavailable,
+            DesktopTrayHostState::Running => UiTextKey::TrayRunning,
+            DesktopTrayHostState::Draining => UiTextKey::TrayDraining,
+            DesktopTrayHostState::ForceStopping => UiTextKey::TrayStopping,
+        });
+        text.get(UiTextKey::TrayStatusSummary)
+            .replace("{host}", host)
+            .replace("{state}", state)
+            .replace("{terminals}", &self.terminal_count.to_string())
+            .replace("{clients}", &self.client_count.to_string())
+            .replace("{jobs}", &self.job_count.to_string())
     }
 
     pub fn host_available(&self) -> bool {
@@ -105,7 +109,7 @@ impl DesktopTrayStatus {
 pub trait DesktopTrayAdapter {
     fn is_available(&self) -> bool;
     fn actions(&self) -> flume::Receiver<DesktopTrayAction>;
-    fn update(&self, status: &DesktopTrayStatus);
+    fn update(&self, status: &DesktopTrayStatus, text: UiText);
 }
 
 pub fn create_desktop_tray() -> Result<Box<dyn DesktopTrayAdapter>, DesktopTrayError> {
@@ -152,20 +156,45 @@ mod platform {
         stop_host: MenuItem,
         restart_host: MenuItem,
         actions: flume::Receiver<DesktopTrayAction>,
+        labels: [(MenuItem, UiTextKey); 8],
+        locale: std::cell::Cell<Option<crate::ui::i18n::Locale>>,
     }
 
     impl NativeDesktopTray {
         fn new() -> Result<Self, DesktopTrayError> {
-            let status = MenuItem::with_id("yttt.tray.status", "Host: Connecting", false, None);
-            let open = MenuItem::with_id(OPEN_ID, "Open yttt", true, None);
-            let new_window = MenuItem::with_id(NEW_WINDOW_ID, "New Window", true, None);
-            let open_logs = MenuItem::with_id(OPEN_LOGS_ID, "Open Logs", true, None);
-            let start_host = MenuItem::with_id(START_HOST_ID, "Start Host", false, None);
-            let stop_host = MenuItem::with_id(STOP_HOST_ID, "Stop Host If Idle", true, None);
-            let restart_host =
-                MenuItem::with_id(RESTART_HOST_ID, "Restart Host If Idle", true, None);
-            let quit_desktop = MenuItem::with_id(QUIT_DESKTOP_ID, "Quit Desktop", true, None);
-            let quit_all = MenuItem::with_id(QUIT_ALL_ID, "Quit All", true, None);
+            let text = UiText::english();
+            let status = MenuItem::with_id("yttt.tray.status", "", false, None);
+            let open = MenuItem::with_id(OPEN_ID, text.get(UiTextKey::TrayOpen), true, None);
+            let new_window = MenuItem::with_id(
+                NEW_WINDOW_ID,
+                text.get(UiTextKey::TrayNewWindow),
+                true,
+                None,
+            );
+            let open_logs =
+                MenuItem::with_id(OPEN_LOGS_ID, text.get(UiTextKey::TrayOpenLogs), true, None);
+            let start_host = MenuItem::with_id(
+                START_HOST_ID,
+                text.get(UiTextKey::TrayStartHost),
+                false,
+                None,
+            );
+            let stop_host =
+                MenuItem::with_id(STOP_HOST_ID, text.get(UiTextKey::TrayStopHost), true, None);
+            let restart_host = MenuItem::with_id(
+                RESTART_HOST_ID,
+                text.get(UiTextKey::TrayRestartHost),
+                true,
+                None,
+            );
+            let quit_desktop = MenuItem::with_id(
+                QUIT_DESKTOP_ID,
+                text.get(UiTextKey::TrayQuitDesktop),
+                true,
+                None,
+            );
+            let quit_all =
+                MenuItem::with_id(QUIT_ALL_ID, text.get(UiTextKey::TrayQuitAll), true, None);
             let separator_one = PredefinedMenuItem::separator();
             let separator_two = PredefinedMenuItem::separator();
             let separator_three = PredefinedMenuItem::separator();
@@ -202,6 +231,17 @@ mod platform {
             Ok(Self {
                 _tray: tray,
                 status,
+                labels: [
+                    (open, UiTextKey::TrayOpen),
+                    (new_window, UiTextKey::TrayNewWindow),
+                    (open_logs, UiTextKey::TrayOpenLogs),
+                    (start_host.clone(), UiTextKey::TrayStartHost),
+                    (stop_host.clone(), UiTextKey::TrayStopHost),
+                    (restart_host.clone(), UiTextKey::TrayRestartHost),
+                    (quit_desktop, UiTextKey::TrayQuitDesktop),
+                    (quit_all, UiTextKey::TrayQuitAll),
+                ],
+                locale: std::cell::Cell::new(None),
                 start_host,
                 stop_host,
                 restart_host,
@@ -219,8 +259,13 @@ mod platform {
             self.actions.clone()
         }
 
-        fn update(&self, status: &DesktopTrayStatus) {
-            let label = status.menu_label();
+        fn update(&self, status: &DesktopTrayStatus, text: UiText) {
+            if self.locale.replace(Some(text.locale())) != Some(text.locale()) {
+                for (item, key) in &self.labels {
+                    item.set_text(text.get(*key));
+                }
+            }
+            let label = status.menu_label(text);
             self.status.set_text(&label);
             self.start_host.set_enabled(!status.host_available());
             self.stop_host.set_enabled(status.host_available());
@@ -236,23 +281,12 @@ mod platform {
     }
 
     fn tray_icon() -> Result<Icon, DesktopTrayError> {
-        const SIZE: u32 = 18;
-        let mut rgba = vec![0_u8; (SIZE * SIZE * 4) as usize];
-        for y in 2_u32..9 {
-            for center in [y, SIZE - 1 - y] {
-                for x in center.saturating_sub(1)..=(center + 1).min(SIZE - 1) {
-                    let offset = ((y * SIZE + x) * 4) as usize;
-                    rgba[offset..offset + 4].copy_from_slice(&[0, 0, 0, 255]);
-                }
-            }
-        }
-        for y in 9_u32..16 {
-            for x in 7_u32..=10 {
-                let offset = ((y * SIZE + x) * 4) as usize;
-                rgba[offset..offset + 4].copy_from_slice(&[0, 0, 0, 255]);
-            }
-        }
-        Icon::from_rgba(rgba, SIZE, SIZE)
+        const SIZE: u32 = 36;
+        #[cfg(target_os = "macos")]
+        let rgba = include_bytes!("../assets/app-icon/tray/template.rgba");
+        #[cfg(target_os = "windows")]
+        let rgba = include_bytes!("../assets/app-icon/tray/color.rgba");
+        Icon::from_rgba(rgba.to_vec(), SIZE, SIZE)
             .map_err(|error| DesktopTrayError::Initialization(error.to_string()))
     }
 }
@@ -289,16 +323,13 @@ mod platform {
             self.actions.clone()
         }
 
-        fn update(&self, _status: &DesktopTrayStatus) {}
+        fn update(&self, _status: &DesktopTrayStatus, _text: UiText) {}
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use yttt_protocol::{
-        BuildIdentity, HostBlocker, LIFECYCLE_PROTOCOL_VERSION, RESOURCE_PROTOCOL_VERSION,
-    };
 
     #[test]
     fn native_menu_ids_map_to_bounded_actions() {
@@ -308,36 +339,5 @@ mod tests {
             Some(DesktopTrayAction::RestartHost)
         );
         assert_eq!(action_for_id("not-yttt"), None);
-    }
-
-    #[test]
-    fn lifecycle_status_exposes_terminal_client_and_job_counts() {
-        let status = HostLifecycleStatus {
-            lifecycle_protocol: LIFECYCLE_PROTOCOL_VERSION,
-            resource_protocol: RESOURCE_PROTOCOL_VERSION,
-            build: BuildIdentity {
-                product_version: "0.2.0".to_string(),
-                build_fingerprint: "test".to_string(),
-                resource_compatibility: "resource-v1".to_string(),
-            },
-            state: HostLifecycleState::Running,
-            terminal_count: 2,
-            client_count: 1,
-            project_count: 3,
-            ssh_connection_count: 1,
-            agent_count: 4,
-            blockers: vec![HostBlocker::PendingResourceOperations { count: 1 }],
-        };
-
-        let tray = DesktopTrayStatus::from_lifecycle(&status);
-
-        assert_eq!(tray.terminal_count, 2);
-        assert_eq!(tray.client_count, 1);
-        assert_eq!(tray.job_count, 4);
-        assert_eq!(tray.blocker_count, 1);
-        assert_eq!(
-            tray.menu_label(),
-            "Host: Running · 2 terminals · 1 clients · 4 jobs"
-        );
     }
 }

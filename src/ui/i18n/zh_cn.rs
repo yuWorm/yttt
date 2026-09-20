@@ -3,6 +3,25 @@ use super::UiTextKey;
 pub(super) fn text(key: UiTextKey) -> &'static str {
     match key {
         UiTextKey::AppName => "yttt",
+        UiTextKey::TrayOpen => "打开 yttt",
+        UiTextKey::TrayNewWindow => "新建窗口",
+        UiTextKey::TrayOpenLogs => "打开日志",
+        UiTextKey::TrayStartHost => "启动 Host",
+        UiTextKey::TrayStopHost => "空闲时停止 Host",
+        UiTextKey::TrayRestartHost => "空闲时重启 Host",
+        UiTextKey::TrayQuitDesktop => "退出桌面端",
+        UiTextKey::TrayQuitAll => "全部退出",
+        UiTextKey::TrayHost => "Host",
+        UiTextKey::TrayConnecting => "正在连接",
+        UiTextKey::TrayStopped => "已停止",
+        UiTextKey::TrayUnavailable => "不可用",
+        UiTextKey::TrayRunning => "运行中",
+        UiTextKey::TrayDraining => "正在排空",
+        UiTextKey::TrayStopping => "正在停止",
+        UiTextKey::TrayUnexpectedResponse => "非预期响应",
+        UiTextKey::TrayStatusSummary => {
+            "{host}：{state} · {terminals} 个终端 · {clients} 个客户端 · {jobs} 个任务"
+        }
         UiTextKey::OnboardingTitle => "欢迎使用 yttt",
         UiTextKey::OnboardingSubtitle => {
             "选择语言、终端字体、默认布局和编程 Agent，然后可选择从 Zed 导入主题。"

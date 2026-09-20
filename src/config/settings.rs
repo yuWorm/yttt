@@ -141,9 +141,9 @@ pub const MAX_WINDOW_OPACITY: f32 = 1.0;
 #[serde(rename_all = "kebab-case")]
 #[derive(Default)]
 pub enum WindowBackgroundEffect {
+    #[default]
     None,
     Transparent,
-    #[default]
     Blurred,
 }
 
@@ -167,7 +167,7 @@ impl WindowSettings {
 impl Default for WindowSettings {
     fn default() -> Self {
         Self {
-            effect: WindowBackgroundEffect::Blurred,
+            effect: WindowBackgroundEffect::None,
             opacity: DEFAULT_WINDOW_OPACITY,
         }
     }
@@ -620,7 +620,7 @@ fn normalize_window_settings(value: &mut toml::Value, warnings: &mut Vec<Setting
 
     window.insert(
         "effect".to_string(),
-        toml::Value::String("blurred".to_string()),
+        toml::Value::String("none".to_string()),
     );
     warnings.push(SettingsLoadWarning::InvalidWindowValue { field: "effect" });
 }

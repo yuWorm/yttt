@@ -32,6 +32,7 @@ use crate::{
         app::startup::{
             FORCE_ONBOARDING_ENV, StartupMode, force_onboarding_from_env, startup_mode_from_fixture,
         },
+        i18n::{Locale, UiText, UiTextKey},
         interaction::actions::{
             bindable_registry, compiled_app_keybindings, load_app_keybindings,
             ui_action_for_command,
@@ -421,6 +422,18 @@ fn open_workbench_window(
             if should_check_for_updates {
                 view.update(cx, |view, cx| view.start_update_check(window, cx));
             }
+            if cx.has_global::<DesktopTrayGlobal>() {
+                let mut previous_locale = view.read(cx).ui_text().locale();
+                cx.global_mut::<DesktopTrayGlobal>().text = view.read(cx).ui_text();
+                cx.observe(&view, move |view, cx| {
+                    let text = view.read(cx).ui_text();
+                    if text.locale() != previous_locale {
+                        previous_locale = text.locale();
+                        cx.global_mut::<DesktopTrayGlobal>().text = text;
+                    }
+                })
+                .detach();
+            }
             register_workbench_keybinding_interceptor(cx, &view);
             register_workbench_focus_restore(window, cx, &view);
             register_workbench_close_guard(window, cx, &view);
@@ -434,6 +447,7 @@ fn open_workbench_window(
 
 struct DesktopTrayGlobal {
     adapter: Box<dyn DesktopTrayAdapter>,
+    text: UiText,
 }
 
 impl Global for DesktopTrayGlobal {}
@@ -449,9 +463,19 @@ fn install_desktop_tray(window_context: DesktopWindowContext, cx: &mut App) {
     if !tray.is_available() {
         return;
     }
-    tray.update(&DesktopTrayStatus::unavailable("Connecting"));
+    let text = UiText::new(match window_context.app_settings.general.language {
+        crate::config::settings::LanguageSetting::Chinese => Locale::Chinese,
+        _ => Locale::English,
+    });
+    tray.update(
+        &DesktopTrayStatus::unavailable(text.get(UiTextKey::TrayConnecting)),
+        text,
+    );
     let actions = tray.actions();
-    cx.set_global(DesktopTrayGlobal { adapter: tray });
+    cx.set_global(DesktopTrayGlobal {
+        adapter: tray,
+        text,
+    });
     start_desktop_tray_actions(actions, window_context, cx);
     start_desktop_tray_status_monitor(cx);
 }
@@ -658,26 +682,31 @@ fn replace_host_runtime(
 fn start_desktop_tray_status_monitor(cx: &mut App) {
     cx.spawn(async move |cx| {
         loop {
-            let response = cx.update(|cx| {
-                cx.global::<HostRuntimeGlobal>()
+            let (response, text) = cx.update(|cx| {
+                let response = cx
+                    .global::<HostRuntimeGlobal>()
                     .runtime()
-                    .map(|runtime| runtime.request_lifecycle(LifecycleRequest::Status, false))
+                    .map(|runtime| runtime.request_lifecycle(LifecycleRequest::Status, false));
+                (response, cx.global::<DesktopTrayGlobal>().text)
             });
             let status = match response {
                 Some(response) => match response.recv_async().await {
                     Ok(Ok(LifecycleResponse::Status(status))) => {
                         DesktopTrayStatus::from_lifecycle(&status)
                     }
-                    Ok(Ok(other)) => {
-                        DesktopTrayStatus::unavailable(format!("Unexpected response: {other:?}"))
-                    }
+                    Ok(Ok(other)) => DesktopTrayStatus::unavailable(format!(
+                        "{}: {other:?}",
+                        text.get(UiTextKey::TrayUnexpectedResponse)
+                    )),
                     Ok(Err(error)) => DesktopTrayStatus::unavailable(error.to_string()),
                     Err(error) => DesktopTrayStatus::unavailable(error.to_string()),
                 },
-                None => DesktopTrayStatus::unavailable("Stopped"),
+                None => DesktopTrayStatus::unavailable(text.get(UiTextKey::TrayStopped)),
             };
             cx.update(|cx| {
-                cx.global::<DesktopTrayGlobal>().adapter.update(&status);
+                cx.global::<DesktopTrayGlobal>()
+                    .adapter
+                    .update(&status, text);
             });
             cx.background_executor().timer(Duration::from_secs(2)).await;
         }

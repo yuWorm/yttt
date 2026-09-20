@@ -120,6 +120,33 @@ opacity = 0.42
 }
 
 #[test]
+fn opacity_alone_keeps_windows_opaque_but_explicit_blur_is_preserved() {
+    let dir = tempdir().unwrap();
+    let paths = AppConfigPaths::from_config_dir(dir.path());
+    let source = "[window]\nopacity = 0.42\n";
+    std::fs::write(paths.settings_file(), source).unwrap();
+    let loaded = load_settings(&paths).unwrap();
+    assert_eq!(loaded.settings.window.resolved_opacity(), 1.0);
+    assert_eq!(
+        std::fs::read_to_string(paths.settings_file()).unwrap(),
+        source
+    );
+
+    let explicit = format!("{source}effect = \"blurred\"\n");
+    std::fs::write(paths.settings_file(), &explicit).unwrap();
+    let loaded = load_settings(&paths).unwrap();
+    assert_eq!(
+        loaded.settings.window.effect,
+        WindowBackgroundEffect::Blurred
+    );
+    assert_eq!(loaded.settings.window.resolved_opacity(), 0.42);
+    assert_eq!(
+        std::fs::read_to_string(paths.settings_file()).unwrap(),
+        explicit
+    );
+}
+
+#[test]
 fn legacy_performance_metric_keys_load_and_are_omitted_from_device_saves() {
     let dir = tempdir().unwrap();
     let paths = AppConfigPaths::from_config_dir(dir.path());
@@ -512,10 +539,7 @@ project_sidebar_width = 1.0
     assert_eq!(loaded.settings.general.language, LanguageSetting::Chinese);
     assert_eq!(loaded.settings.general.ui_font_size, 16.0);
     assert_eq!(loaded.settings.general.ui_line_height, 1.618_034);
-    assert_eq!(
-        loaded.settings.window.effect,
-        WindowBackgroundEffect::Blurred
-    );
+    assert_eq!(loaded.settings.window.effect, WindowBackgroundEffect::None);
     assert_eq!(loaded.settings.window.opacity, 0.72);
     assert_eq!(loaded.settings.theme.ui_style, UiStyleId::Zed);
     assert_eq!(loaded.settings.terminal.font_size, 15.0);

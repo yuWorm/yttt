@@ -955,6 +955,10 @@ impl WorkbenchView {
         &mut self.workspace
     }
 
+    pub(crate) fn ui_text(&self) -> UiText {
+        self.ui_text
+    }
+
     pub fn onboarding_language(&self) -> Option<LanguageSetting> {
         self.onboarding
             .as_ref()
