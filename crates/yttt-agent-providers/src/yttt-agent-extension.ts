@@ -14,6 +14,27 @@ const DELIVERY_PROTOCOL = 1;
 const DELIVERY_STREAM_ID = randomUUID();
 const MIN_RETRY_DELAY_MS = 25;
 const MAX_RETRY_DELAY_MS = 1000;
+const TRANSPORT_SCOPE_OWNERS_KEY = Symbol.for("yttt-agent-status.transport-scope-owners");
+const globalTransportScopeOwners = globalThis as { [key: symbol]: Set<string> | undefined };
+const transportScopeOwners = (globalTransportScopeOwners[TRANSPORT_SCOPE_OWNERS_KEY] ??= new Set<string>());
+
+function reportingScope(): string | undefined {
+	const hookEndpoint = process.env.YTTT_AGENT_HOOK_ENDPOINT;
+	const hookToken = process.env.YTTT_AGENT_HOOK_TOKEN;
+	const hookScope = process.env.YTTT_AGENT_HOOK_SCOPE;
+	if (hookEndpoint && hookToken && hookScope) {
+		return JSON.stringify(["hook", hookEndpoint, hookToken, hookScope]);
+	}
+
+	const instanceId = process.env.YTTT_AGENT_INSTANCE_ID;
+	const token = process.env.YTTT_AGENT_TOKEN;
+	const generation = process.env.YTTT_AGENT_GENERATION;
+	if (instanceId && token && generation) {
+		return JSON.stringify(["osc", instanceId, token, generation]);
+	}
+}
+
+
 
 type HookDelivery = {
 	endpoint: string;
@@ -176,14 +197,21 @@ async function sendAndWait(
 }
 
 export default function (pi: ExtensionAPI) {
+	// Subagent sessions have their own EventBus but inherit the same reporting
+	// transport. The root receives their task lifecycle events, so it alone owns
+	// that transport's lifecycle stream.
+	const scope = reportingScope();
+	if (scope && transportScopeOwners.has(scope)) return;
+	if (scope) transportScopeOwners.add(scope);
+
 	let statusContext: StatusContext | undefined;
-	const trackContext = (ctx: StatusContext) => {
+	const trackContext = (ctx: StatusContext, event: "session_start" | "session_switch") => {
 		statusContext = ctx;
-		send("session_start", {}, ctx);
+		send(event, {}, ctx);
 	};
 
-	pi.on("session_start", (_event, ctx) => trackContext(ctx));
-	pi.on("session_switch", (_event, ctx) => trackContext(ctx));
+	pi.on("session_start", (_event, ctx) => trackContext(ctx, "session_start"));
+	pi.on("session_switch", (_event, ctx) => trackContext(ctx, "session_switch"));
 	pi.on("session_shutdown", async (_event, ctx) => {
 		await sendAndWait("session_shutdown", {}, ctx);
 	});

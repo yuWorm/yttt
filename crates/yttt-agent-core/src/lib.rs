@@ -199,11 +199,17 @@ mod tests {
     }
 
     #[test]
-    fn stale_activity_decays_to_idle_without_losing_history() {
+    fn stale_activity_becomes_unknown_without_losing_history() {
         let mut reducer = reducer();
         reducer.process_starting(1, 2);
         reducer.process_started(1, 3);
-        reducer.apply(1, AgentEventKind::Working, 4);
+        reducer.apply(
+            1,
+            AgentEventKind::TurnStarted {
+                task: AgentTask::new("Long-running task", AgentTaskSource::UserPromptHook),
+            },
+            4,
+        );
         reducer.apply(
             1,
             AgentEventKind::ChildStarted {
@@ -219,12 +225,117 @@ mod tests {
         let mut snapshot = reducer.snapshot().clone();
         assert!(!snapshot.decay_stale_activity(105, 100));
         assert!(snapshot.decay_stale_activity(106, 100));
-        assert_eq!(snapshot.view_state(), AgentViewState::Idle);
-        assert_eq!(snapshot.children[0].turn_state, AgentTurnState::Idle);
-        assert_eq!(snapshot.state_started_at, 106);
-        assert_eq!(snapshot.children[0].updated_at, 106);
-        assert_eq!(snapshot.updated_at, 5);
+        assert_eq!(snapshot.view_state(), AgentViewState::Stale);
+        assert_eq!(snapshot.children[0].turn_state, AgentTurnState::Unknown);
+        assert_eq!(snapshot.primary_text(), "Long-running task");
+        assert!(!snapshot.decay_stale_activity(107, 100));
     }
+
+    #[test]
+    fn stale_lead_is_not_revived_by_a_child_finishing() {
+        let mut reducer = reducer();
+        reducer.process_starting(1, 2);
+        reducer.process_started(1, 3);
+        reducer.apply(1, AgentEventKind::Working, 4);
+        reducer.apply(
+            1,
+            AgentEventKind::ChildStarted {
+                child: ChildAgentDescriptor {
+                    id: "child".to_string(),
+                    name: None,
+                    task: None,
+                },
+            },
+            5,
+        );
+        assert!(reducer.decay_stale_activity(106, 100));
+        reducer.apply(
+            1,
+            AgentEventKind::ChildFinished {
+                child_id: "child".to_string(),
+                outcome: TurnOutcome::Completed,
+            },
+            107,
+        );
+        assert_eq!(reducer.snapshot().view_state(), AgentViewState::Stale);
+        reducer.apply(1, AgentEventKind::Working, 108);
+        assert_eq!(reducer.snapshot().view_state(), AgentViewState::Working);
+    }
+
+    #[test]
+    fn stale_approval_is_unknown_until_an_authoritative_event_arrives() {
+        let mut reducer = reducer();
+        reducer.process_starting(1, 2);
+        reducer.process_started(1, 3);
+        reducer.apply(
+            1,
+            AgentEventKind::Waiting {
+                reason: WaitingReason::Approval,
+                message: Some("Approve deployment".to_string()),
+            },
+            4,
+        );
+        assert!(reducer.decay_stale_activity(105, 100));
+        assert_eq!(reducer.snapshot().view_state(), AgentViewState::Stale);
+        reducer.apply(
+            1,
+            AgentEventKind::TurnFinished {
+                outcome: TurnOutcome::Completed,
+            },
+            106,
+        );
+        assert_eq!(reducer.snapshot().view_state(), AgentViewState::Completed);
+        assert!(!reducer.decay_stale_activity(207, 100));
+    }
+
+    #[test]
+    fn stale_child_keeps_finished_lead_unknown_until_child_finishes() {
+        let mut reducer = reducer();
+        reducer.process_starting(1, 2);
+        reducer.process_started(1, 3);
+        reducer.apply(
+            1,
+            AgentEventKind::ChildStarted {
+                child: ChildAgentDescriptor {
+                    id: "child".to_string(),
+                    name: None,
+                    task: None,
+                },
+            },
+            4,
+        );
+        reducer.apply(
+            1,
+            AgentEventKind::TurnFinished {
+                outcome: TurnOutcome::Completed,
+            },
+            5,
+        );
+        assert!(reducer.decay_stale_activity(106, 100));
+        reducer.apply(
+            1,
+            AgentEventKind::ChildUpdated {
+                child_id: "child".to_string(),
+                update: ChildAgentUpdate {
+                    task: AgentTask::new("Still awaiting result", AgentTaskSource::External),
+                    current_action: None,
+                    turn_state: None,
+                },
+            },
+            107,
+        );
+        assert_eq!(reducer.snapshot().view_state(), AgentViewState::Stale);
+        reducer.apply(
+            1,
+            AgentEventKind::ChildFinished {
+                child_id: "child".to_string(),
+                outcome: TurnOutcome::Completed,
+            },
+            108,
+        );
+        assert_eq!(reducer.snapshot().view_state(), AgentViewState::Completed);
+    }
+
     #[test]
     fn reducer_generates_updates_and_restores_session_titles() {
         let mut reducer = reducer();

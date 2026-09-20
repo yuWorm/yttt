@@ -38,7 +38,7 @@ impl AgentProvider for OmpProvider {
     ) -> Result<Vec<AgentEventKind>, ProviderError> {
         let payload = event.payload;
         let events = match event.name {
-            "session_start" => vec![AgentEventKind::SessionStarted {
+            "session_start" | "session_switch" => vec![AgentEventKind::SessionStarted {
                 metadata: session_metadata(payload),
             }],
             "session_updated" => vec![AgentEventKind::SessionUpdated {
@@ -284,6 +284,22 @@ mod tests {
             })
             .unwrap();
         assert_eq!(events, vec![AgentEventKind::SessionEnded]);
+    }
+
+    #[test]
+    fn normalizes_explicit_session_switch_as_new_root_session() {
+        let payload = json!({ "sessionId": "resumed-root" });
+        let events = OmpProvider
+            .normalize_hook(ProviderHookEvent {
+                name: "session_switch",
+                payload: &payload,
+            })
+            .unwrap();
+        assert!(matches!(
+            &events[0],
+            AgentEventKind::SessionStarted { metadata }
+                if metadata.session_id.as_deref() == Some("resumed-root")
+        ));
     }
 
     #[test]

@@ -700,24 +700,26 @@ mod tests {
         ));
     }
     #[test]
-    fn pi_session_hook_captures_the_resume_file() {
+    fn pi_session_start_and_explicit_switch_capture_the_resume_file() {
         let payload = json!({
             "sessionId": "pi-session-1",
             "sessionFile": "/tmp/pi-session.jsonl",
             "model": "model-1"
         });
-        let events = PiProvider
-            .normalize_hook(ProviderHookEvent {
-                name: "session_start",
-                payload: &payload,
-            })
-            .unwrap();
-        assert!(matches!(
-            &events[0],
-            AgentEventKind::SessionStarted { metadata }
-                if metadata.session_id.as_deref() == Some("pi-session-1")
-                    && metadata.transcript_path.as_deref() == Some("/tmp/pi-session.jsonl")
-                    && metadata.model.as_deref() == Some("model-1")
-        ));
+        for name in ["session_start", "session_switch"] {
+            let events = PiProvider
+                .normalize_hook(ProviderHookEvent {
+                    name,
+                    payload: &payload,
+                })
+                .unwrap();
+            assert!(matches!(
+                &events[0],
+                AgentEventKind::SessionStarted { metadata }
+                    if metadata.session_id.as_deref() == Some("pi-session-1")
+                        && metadata.transcript_path.as_deref() == Some("/tmp/pi-session.jsonl")
+                        && metadata.model.as_deref() == Some("model-1")
+            ));
+        }
     }
 }

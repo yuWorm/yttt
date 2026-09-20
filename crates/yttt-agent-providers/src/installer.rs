@@ -426,7 +426,15 @@ if [ -z "$provider" ] || [ -z "$YTTT_AGENT_HOOK_ENDPOINT" ] || [ -z "$YTTT_AGENT
   command -p cat >/dev/null 2>&1 || :
   exit 0
 fi
-body=$(command -p cat) || exit 0
+umask 077
+body_file=$(mktemp "${TMPDIR:-/tmp}/yttt-agent-hook.XXXXXX") || {
+  command -p cat >/dev/null 2>&1 || :
+  printf '%s\n' 'yttt agent hook delivery failed' >&2
+  exit 0
+}
+trap 'command -p rm -f "$body_file"' 0 1 2 15
+command -p cat > "$body_file" || exit 0
+body=$(command -p cat "$body_file") || exit 0
 if [ "$provider" = "claude" ]; then
   case "$body" in
     '{"hookEventName":'*)
@@ -436,11 +444,31 @@ if [ "$provider" = "claude" ]; then
       ;;
   esac
 fi
-printf '%s' "$body" | curl --silent --show-error --max-time 2 --request POST \
-  --header "Content-Type: application/json" \
-  --header "X-Yttt-Agent-Hook-Token: $YTTT_AGENT_HOOK_TOKEN" \
-  --header "X-Yttt-Agent-Hook-Scope: $YTTT_AGENT_HOOK_SCOPE" \
-  --data-binary @- "$YTTT_AGENT_HOOK_ENDPOINT/hook/$provider" >/dev/null 2>&1 || :
+delivery_id=${body_file##*/}
+attempt=1
+while [ "$attempt" -le 3 ]; do
+  status=$(curl --silent --max-time 2 --request POST \
+    --header "Content-Type: application/json" \
+    --header "X-Yttt-Agent-Hook-Token: $YTTT_AGENT_HOOK_TOKEN" \
+    --header "X-Yttt-Agent-Hook-Scope: $YTTT_AGENT_HOOK_SCOPE" \
+    --header "X-Yttt-Agent-Hook-Delivery-Id: $delivery_id" \
+    --data-binary "@$body_file" \
+    --write-out '%{http_code}' \
+    --output /dev/null "$YTTT_AGENT_HOOK_ENDPOINT/hook/$provider" 2>/dev/null)
+  case "$status" in
+    2??) exit 0 ;;
+    429|5??|000|'') ;;
+    *)
+      printf '%s\n' 'yttt agent hook delivery failed' >&2
+      exit 0
+      ;;
+  esac
+  if [ "$attempt" -lt 3 ]; then
+    sleep 1
+  fi
+  attempt=$((attempt + 1))
+done
+printf '%s\n' 'yttt agent hook delivery failed' >&2
 exit 0
 "#;
 
@@ -448,10 +476,45 @@ exit 0
 const WINDOWS_HOOK_SOURCE: &str = r#"param([string]$Provider)
 if (-not $Provider -or -not $env:YTTT_AGENT_HOOK_ENDPOINT -or -not $env:YTTT_AGENT_HOOK_TOKEN -or -not $env:YTTT_AGENT_HOOK_SCOPE) { [Console]::In.ReadToEnd() | Out-Null; exit 0 }
 try {
-  $body = [Console]::In.ReadToEnd()
+  $stdin = [Console]::OpenStandardInput()
+  $bodyStream = New-Object System.IO.MemoryStream
+  try {
+    $stdin.CopyTo($bodyStream)
+    $bodyBytes = $bodyStream.ToArray()
+  } finally {
+    $bodyStream.Dispose()
+  }
+  $body = [System.Text.Encoding]::UTF8.GetString($bodyBytes)
   if ($Provider -eq "claude" -and $body -match '^\s*\{\s*"hookEventName"\s*:' -and $body -match '"hook_event_name"\s*:') { exit 0 }
-  Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Method Post -Uri "$env:YTTT_AGENT_HOOK_ENDPOINT/hook/$Provider" -Headers @{ "X-Yttt-Agent-Hook-Token" = $env:YTTT_AGENT_HOOK_TOKEN; "X-Yttt-Agent-Hook-Scope" = $env:YTTT_AGENT_HOOK_SCOPE } -ContentType "application/json" -Body $body | Out-Null
+  $headers = @{
+    "X-Yttt-Agent-Hook-Token" = $env:YTTT_AGENT_HOOK_TOKEN
+    "X-Yttt-Agent-Hook-Scope" = $env:YTTT_AGENT_HOOK_SCOPE
+    "X-Yttt-Agent-Hook-Delivery-Id" = [Guid]::NewGuid().ToString("N")
+  }
+  $attempt = 1
+  while ($attempt -le 3) {
+    $statusCode = $null
+    try {
+      $response = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Method Post -Uri "$env:YTTT_AGENT_HOOK_ENDPOINT/hook/$Provider" -Headers $headers -ContentType "application/json" -Body $bodyBytes -ErrorAction Stop
+      $statusCode = [int]$response.StatusCode
+    } catch {
+      if ($_.Exception.Response) {
+        try {
+          $statusCode = [int]$_.Exception.Response.StatusCode
+        } catch {}
+      }
+    }
+    if ($statusCode -ge 200 -and $statusCode -lt 300) { exit 0 }
+    $retryable = ($null -eq $statusCode) -or $statusCode -eq 429 -or ($statusCode -ge 500 -and $statusCode -lt 600)
+    if (-not $retryable) {
+      [Console]::Error.WriteLine("yttt agent hook delivery failed")
+      exit 0
+    }
+    if ($attempt -lt 3) { Start-Sleep -Seconds 1 }
+    $attempt++
+  }
 } catch {}
+[Console]::Error.WriteLine("yttt agent hook delivery failed")
 exit 0
 "#;
 
@@ -461,9 +524,12 @@ mod tests {
 
     #[cfg(unix)]
     use std::{
-        io::Write as _,
+        io::{self, Read as _, Write as _},
+        net::{TcpListener, TcpStream},
         os::unix::fs::{MetadataExt as _, PermissionsExt as _},
-        process::{Command, Stdio},
+        process::{Command, Output, Stdio},
+        thread,
+        time::{Duration, Instant},
     };
 
     use super::*;
@@ -488,6 +554,212 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[derive(Debug)]
+    struct HookRequest {
+        delivery_id: String,
+        body: Vec<u8>,
+    }
+
+    #[cfg(unix)]
+    enum HookResponse {
+        Status(u16),
+        Close,
+    }
+
+    #[cfg(unix)]
+    fn header_end(bytes: &[u8]) -> Option<usize> {
+        bytes
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .map(|position| position + 4)
+    }
+
+    #[cfg(unix)]
+    fn header_value<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
+        headers.lines().skip(1).find_map(|line| {
+            let (field, value) = line.split_once(':')?;
+            field.eq_ignore_ascii_case(name).then_some(value.trim())
+        })
+    }
+
+    #[cfg(unix)]
+    fn read_hook_request(stream: &mut TcpStream) -> io::Result<HookRequest> {
+        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+        let mut bytes = Vec::new();
+        let mut chunk = [0; 4096];
+        let header_end = loop {
+            if let Some(header_end) = header_end(&bytes) {
+                break header_end;
+            }
+            if bytes.len() >= 64 * 1024 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "hook request headers exceeded 64 KiB",
+                ));
+            }
+            let read = stream.read(&mut chunk)?;
+            if read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "hook request ended before headers",
+                ));
+            }
+            bytes.extend_from_slice(&chunk[..read]);
+        };
+        let headers = std::str::from_utf8(&bytes[..header_end])
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let content_length = header_value(headers, "content-length")
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing content length"))?
+            .parse::<usize>()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let delivery_id = header_value(headers, "x-yttt-agent-hook-delivery-id")
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing delivery id"))?
+            .to_owned();
+        while bytes.len() < header_end + content_length {
+            let read = stream.read(&mut chunk)?;
+            if read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "hook request ended before its body",
+                ));
+            }
+            bytes.extend_from_slice(&chunk[..read]);
+        }
+        Ok(HookRequest {
+            delivery_id,
+            body: bytes[header_end..header_end + content_length].to_vec(),
+        })
+    }
+
+    #[cfg(unix)]
+    fn start_hook_server(
+        responses: Vec<HookResponse>,
+    ) -> (String, thread::JoinHandle<io::Result<Vec<HookRequest>>>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            listener.set_nonblocking(true)?;
+            let mut requests = Vec::with_capacity(responses.len());
+            for response in responses {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            if Instant::now() >= deadline {
+                                return Err(io::Error::new(
+                                    io::ErrorKind::TimedOut,
+                                    "timed out waiting for hook request",
+                                ));
+                            }
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => return Err(error),
+                    }
+                };
+                requests.push(read_hook_request(&mut stream)?);
+                if let HookResponse::Status(status) = response {
+                    write!(
+                        stream,
+                        "HTTP/1.1 {status} Status\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )?;
+                    stream.flush()?;
+                }
+            }
+            Ok(requests)
+        });
+        (endpoint, server)
+    }
+
+    #[cfg(unix)]
+    fn run_posix_adapter(script: &Path, endpoint: &str, payload: &[u8]) -> Output {
+        let mut child = Command::new("/bin/sh")
+            .arg(script)
+            .arg("claude")
+            .env("YTTT_AGENT_HOOK_ENDPOINT", endpoint)
+            .env("YTTT_AGENT_HOOK_TOKEN", "token-that-must-not-leak")
+            .env("YTTT_AGENT_HOOK_SCOPE", "scope")
+            .env_remove("HTTP_PROXY")
+            .env_remove("HTTPS_PROXY")
+            .env_remove("ALL_PROXY")
+            .env_remove("http_proxy")
+            .env_remove("https_proxy")
+            .env_remove("all_proxy")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(payload).unwrap();
+        drop(stdin);
+        child.wait_with_output().unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn posix_adapter_retries_transient_delivery_with_a_stable_id() {
+        let temp = TempDir::new().unwrap();
+        let script = temp.path().join(MANAGED_HOOK_FILE_NAME);
+        write_executable(&script, managed_hook_source().as_bytes()).unwrap();
+        let (endpoint, server) = start_hook_server(vec![
+            HookResponse::Status(503),
+            HookResponse::Status(200),
+            HookResponse::Close,
+            HookResponse::Status(200),
+            HookResponse::Status(429),
+            HookResponse::Status(200),
+            HookResponse::Status(401),
+            HookResponse::Status(503),
+            HookResponse::Status(503),
+            HookResponse::Status(503),
+        ]);
+        let payload =
+            b"{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"session-1\",\"input\":\"line\\nvalue\"}\n";
+
+        let transient = run_posix_adapter(&script, &endpoint, payload);
+        assert!(transient.status.success());
+        assert!(transient.stderr.is_empty());
+        let lost_response = run_posix_adapter(&script, &endpoint, payload);
+        assert!(lost_response.status.success());
+        assert!(lost_response.stderr.is_empty());
+        let throttled = run_posix_adapter(&script, &endpoint, payload);
+        assert!(throttled.status.success());
+        assert!(throttled.stderr.is_empty());
+        let permanent = run_posix_adapter(&script, &endpoint, payload);
+        assert!(permanent.status.success());
+        assert_eq!(permanent.stderr, b"yttt agent hook delivery failed\n");
+        let final_failure = run_posix_adapter(&script, &endpoint, payload);
+        assert!(final_failure.status.success());
+        assert_eq!(
+            final_failure.stderr, b"yttt agent hook delivery failed\n",
+            "final delivery failure must be observable without exposing request data"
+        );
+        assert!(
+            final_failure.stdout.is_empty(),
+            "delivery diagnostics must not go to stdout"
+        );
+        let final_stderr = String::from_utf8(final_failure.stderr).unwrap();
+        assert!(!final_stderr.contains("token-that-must-not-leak"));
+        assert!(!final_stderr.contains(&endpoint));
+        assert!(!final_stderr.contains("session-1"));
+
+        let requests = server.join().unwrap().unwrap();
+        assert_eq!(requests.len(), 10, "a 401 must not be retried");
+        assert_eq!(requests[0].delivery_id, requests[1].delivery_id);
+        assert_eq!(requests[2].delivery_id, requests[3].delivery_id);
+        assert_eq!(requests[4].delivery_id, requests[5].delivery_id);
+        assert_eq!(requests[7].delivery_id, requests[8].delivery_id);
+        assert_eq!(requests[8].delivery_id, requests[9].delivery_id);
+        for request in &requests {
+            assert!(!request.delivery_id.is_empty());
+            assert!(request.delivery_id.len() <= 128);
+            assert!(request.delivery_id.is_ascii());
+            assert_eq!(request.body, payload);
+        }
+    }
+
+    #[cfg(unix)]
     #[test]
     fn posix_adapter_ignores_claude_hooks_reexported_by_grok() {
         let temp = TempDir::new().unwrap();
@@ -498,7 +770,7 @@ mod tests {
         let fake_curl = bin.join("curl");
         fs::write(
             &fake_curl,
-            "#!/bin/sh\ncommand -p cat > \"$YTTT_TEST_CAPTURE\"\n",
+            "#!/bin/sh\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    @*) command -p cat \"${arg#@}\" > \"$YTTT_TEST_CAPTURE\" ;;\n  esac\ndone\nprintf '204'\n",
         )
         .unwrap();
         fs::set_permissions(&fake_curl, fs::Permissions::from_mode(0o700)).unwrap();

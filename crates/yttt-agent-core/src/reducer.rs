@@ -89,7 +89,7 @@ impl AgentSnapshot {
             self.turn_state,
             AgentTurnState::Working | AgentTurnState::Waiting
         ) {
-            self.turn_state = AgentTurnState::Idle;
+            self.turn_state = AgentTurnState::Unknown;
             self.current_action = None;
             self.waiting_reason = None;
             self.waiting_message = None;
@@ -101,7 +101,7 @@ impl AgentSnapshot {
                 child.turn_state,
                 AgentTurnState::Working | AgentTurnState::Waiting
             ) {
-                child.turn_state = AgentTurnState::Idle;
+                child.turn_state = AgentTurnState::Unknown;
                 child.current_action = None;
                 child.updated_at = now;
                 changed = true;
@@ -179,7 +179,16 @@ impl AgentReducer {
         &self.snapshot
     }
     pub fn decay_stale_activity(&mut self, now: u64, stale_after_millis: u64) -> bool {
-        self.snapshot.decay_stale_activity(now, stale_after_millis)
+        if !self.snapshot.decay_stale_activity(now, stale_after_millis) {
+            return false;
+        }
+        if matches!(
+            self.lead_turn_state,
+            AgentTurnState::Working | AgentTurnState::Waiting
+        ) {
+            self.lead_turn_state = AgentTurnState::Unknown;
+        }
+        true
     }
 
     pub fn process_starting(&mut self, generation: u64, now: u64) {
@@ -436,12 +445,20 @@ impl AgentReducer {
                 AgentTurnState::Working | AgentTurnState::Waiting
             )
         });
-        let state = if child_is_active
-            && !matches!(
-                self.lead_turn_state,
-                AgentTurnState::Working | AgentTurnState::Waiting
-            ) {
+        let lead_is_active = matches!(
+            self.lead_turn_state,
+            AgentTurnState::Working | AgentTurnState::Waiting
+        );
+        let state = if child_is_active && !lead_is_active {
             AgentTurnState::Working
+        } else if !lead_is_active
+            && self
+                .snapshot
+                .children
+                .iter()
+                .any(|child| child.turn_state == AgentTurnState::Unknown)
+        {
+            AgentTurnState::Unknown
         } else {
             self.lead_turn_state
         };

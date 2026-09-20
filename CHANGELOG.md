@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- 修复 OMP 全局／显式扩展重复加载及进程内子任务共用终端状态通道的问题：
+  每个通道仅由主会话上报生命周期，避免子任务结束清除主 Agent 状态或抢占状态流。
+  更新后需让新启动的 OMP 加载新版扩展；已运行的会话不会自动替换扩展代码。
+- Fix OMP status reporting when ambient/explicit extension copies or in-process
+  task sessions share a terminal transport. Only the root reporter owns its lifecycle
+  stream, preventing child shutdown from clearing the root agent and competing streams
+  from blocking updates. Existing OMP processes must be restarted to load the new extension.
+- 修复 OpenCode 子会话事件覆盖主会话状态，并处理已有运行中会话的附着、真实会话切换
+  与异步发现结果晚到；Pi 按终端通道隔离重复扩展及子会话，保留重载、恢复和 OSC 上报。
+- Host 在按序应用事件时校验会话归属；无关子会话流不会挤掉主会话流，脚本重试可去重。
+  Pi/OpenCode 的临时投递失败保留队首重试；命令型 hook 最多尝试三次并报告最终失败。
+- 超过 30 分钟无更新的活动状态显示为未知（`stale`），不再误报空闲或完成。
+  请在任务结束后更新 Host、重新初始化托管 hook，再启动 Agent 以加载新版适配器。
+- Isolate OpenCode child events and late discovery from the selected root session; preserve
+  Pi duplicate-load protection across reload, resume, and OSC delivery. Host validates session
+  ownership at ordered application time and deduplicates command-hook retries.
+- Keep transient Pi/OpenCode delivery failures at the queue head; command hooks make at most
+  three attempts and report terminal failures. After 30 minutes without an update, active
+  status becomes unknown (`stale`), not idle or completed. Update the Host and provision hooks
+  before starting new Agent processes; do not interrupt active work just to reload adapters.
+
 ## 0.3.3 - 2026-09-20
 
 ### 中文

@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     io::{self, Read as _, Write as _},
     net::{TcpListener, TcpStream},
     sync::{
@@ -41,10 +41,12 @@ const MAX_AGENT_RECORDS: usize = 256;
 const AGENT_PROCESS_MISSED_SAMPLES_BEFORE_EXIT: u8 = 2;
 const MAX_PENDING_DELIVERIES: usize = 256;
 const MAX_RETIRED_DELIVERY_STREAMS: usize = 4;
+const MAX_SCRIPT_DELIVERY_IDS: usize = 256;
 const CONNECTION_WORKERS: usize = 4;
 const CONNECTION_QUEUE_CAPACITY: usize = 64;
 const TOKEN_HEADER: &str = "x-yttt-agent-hook-token";
 const SCOPE_HEADER: &str = "x-yttt-agent-hook-scope";
+const SCRIPT_DELIVERY_ID_HEADER: &str = "x-yttt-agent-hook-delivery-id";
 const ENVIRONMENT_VARIABLES: [&str; 3] = [
     "YTTT_AGENT_HOOK_ENDPOINT",
     "YTTT_AGENT_HOOK_TOKEN",
@@ -74,6 +76,8 @@ struct AgentRecord {
     sequence: u64,
     reducer: AgentReducer,
     delivery: Option<AgentDeliveryState>,
+    provider_session_id: Option<String>,
+    script_delivery_ids: VecDeque<String>,
     terminal_exited: bool,
 }
 
@@ -100,13 +104,28 @@ enum AgentProcessAction {
 struct AgentDeliveryState {
     stream_id: String,
     accepted_sequence: u64,
-    pending: BTreeMap<u64, Vec<AgentEventKind>>,
+    pending: BTreeMap<u64, HookApplication>,
     retired: Vec<(String, u64)>,
+    ignored: Vec<IgnoredDeliveryStream>,
+    active_stream_validated: bool,
+}
+
+struct IgnoredDeliveryStream {
+    stream_id: String,
+    accepted_sequence: u64,
+    pending: BTreeSet<u64>,
 }
 
 struct HookDeliveryMetadata {
     stream_id: String,
     sequence: u64,
+}
+
+struct HookApplication {
+    provider_id: ProviderId,
+    events: Vec<AgentEventKind>,
+    session_id: Option<String>,
+    explicit_child_session: bool,
 }
 
 struct AgentState {
@@ -388,6 +407,11 @@ impl HostAgentHookRuntime {
                         .get(&address)
                         .map(|record| record.sequence)
                         .unwrap_or_default();
+                    let script_delivery_ids = records
+                        .get(&address)
+                        .filter(|record| record.scope == scope)
+                        .map(|record| record.script_delivery_ids.clone())
+                        .unwrap_or_default();
                     if !records.contains_key(&address) && records.len() >= MAX_AGENT_RECORDS {
                         let oldest = records
                             .iter()
@@ -409,6 +433,8 @@ impl HostAgentHookRuntime {
                             sequence: prior_sequence,
                             reducer,
                             delivery: None,
+                            provider_session_id: None,
+                            script_delivery_ids,
                             terminal_exited: false,
                         },
                     );
@@ -589,9 +615,15 @@ enum HookIngestOutcome {
 }
 
 struct DeliveryApplication {
-    events: Vec<AgentEventKind>,
+    applications: Vec<HookApplication>,
     acknowledgement: AgentHookAcknowledgement,
     pending: bool,
+    new_stream_id: Option<String>,
+}
+
+enum HookApplicationOutcome {
+    Applied(bool),
+    Ignored,
 }
 
 fn handle_connection(mut stream: TcpStream, state: &AgentState) {
@@ -642,12 +674,12 @@ struct DecodedHookRequest {
     event: String,
     payload: Value,
     delivery: Option<HookDeliveryMetadata>,
+    script_delivery_id: Option<String>,
 }
 
 fn incoming_provider_is_compatibility_duplicate(current: &str, incoming: &str) -> bool {
     current == GROK_PROVIDER_ID && incoming == CLAUDE_PROVIDER_ID
 }
-
 fn ingest_request(
     state: &AgentState,
     request: DecodedHookRequest,
@@ -662,19 +694,20 @@ fn ingest_request(
         .providers
         .get(&request.source)
         .ok_or(HttpRequestError::NotFound)?;
-    let provider_id = provider.descriptor().id;
     let normalized = provider
         .normalize_hook(yttt_agent_core::ProviderHookEvent {
             name: &request.event,
             payload: &request.payload,
         })
         .map_err(|_| HttpRequestError::Invalid)?;
-    let starts_session = normalized
-        .iter()
-        .any(|event| matches!(event, AgentEventKind::SessionStarted { .. }));
+    let application = HookApplication {
+        provider_id: provider.descriptor().id,
+        session_id: hook_session_id(&request.payload, &normalized),
+        explicit_child_session: payload_has_parent_session(&request.payload),
+        events: normalized,
+    };
     let address = AgentAddress::from(&request.scope);
-    let terminal_exits = state.terminal_exits.lock();
-    let terminal_exit = terminal_exits.get(&request.scope).copied();
+    let terminal_exit = state.terminal_exits.lock().get(&request.scope).copied();
     let now = now_millis();
     let (update, outcome) = {
         let mut records = state.records.lock();
@@ -684,34 +717,13 @@ fn ingest_request(
         {
             return Err(HttpRequestError::Unauthorized);
         }
-        let (same_scope, replace_record, compatibility_duplicate) = match records.get(&address) {
-            Some(record) if record.scope == request.scope => {
-                let snapshot = record.reducer.snapshot();
-                let current_provider = snapshot.provider_id.as_str();
-                let compatibility_duplicate = incoming_provider_is_compatibility_duplicate(
-                    current_provider,
-                    provider_id.as_str(),
-                ) && !(starts_session
-                    && snapshot.process_state == AgentProcessState::Exited);
-                (
-                    true,
-                    starts_session
-                        && !compatibility_duplicate
-                        && (snapshot.process_state == AgentProcessState::Exited
-                            || snapshot.provider_id != provider_id),
-                    compatibility_duplicate,
-                )
-            }
-            _ => (false, false, false),
-        };
-        if compatibility_duplicate {
-            return Ok(HookIngestOutcome::Unsequenced);
+        if records
+            .get(&address)
+            .is_some_and(|record| record.scope != request.scope)
+        {
+            records.remove(&address);
         }
-        if !same_scope || replace_record {
-            let prior_sequence = records
-                .get(&address)
-                .map(|record| record.sequence)
-                .unwrap_or_default();
+        if !records.contains_key(&address) {
             if records.len() >= MAX_AGENT_RECORDS {
                 let oldest = records
                     .iter()
@@ -721,44 +733,64 @@ fn ingest_request(
                     records.remove(&oldest);
                 }
             }
-            let mut reducer =
-                AgentReducer::new(AgentInstanceId::random(), provider_id.clone(), now);
-            reducer.process_starting(request.scope.generation, now);
-            reducer.process_started(request.scope.generation, now);
-            if let Some(exit) = terminal_exit {
-                reducer.process_exited(request.scope.generation, exit, now);
-            }
             records.insert(
                 address.clone(),
-                AgentRecord {
-                    scope: request.scope.clone(),
+                new_hook_record(
+                    request.scope.clone(),
                     terminal_session_id,
-                    sequence: prior_sequence,
-                    reducer,
-                    delivery: None,
-                    terminal_exited: terminal_exit.is_some(),
-                },
+                    application.provider_id.clone(),
+                    terminal_exit,
+                    now,
+                ),
             );
         }
         let record = records
             .get_mut(&address)
             .expect("Agent record was inserted");
-        let (events, outcome) = if let Some(delivery) = request.delivery {
-            let application = queue_delivery(&mut record.delivery, delivery, normalized)?;
+        if let Some(delivery_id) = request.script_delivery_id {
+            if !remember_script_delivery(record, delivery_id) {
+                return Ok(HookIngestOutcome::Unsequenced);
+            }
+        }
+        let (applications, outcome, new_stream_id) = if let Some(delivery) = request.delivery {
+            let delivery = queue_delivery(&mut record.delivery, delivery, application)?;
             (
-                application.events,
+                delivery.applications,
                 HookIngestOutcome::Sequenced {
-                    acknowledgement: application.acknowledgement,
-                    pending: application.pending,
+                    acknowledgement: delivery.acknowledgement,
+                    pending: delivery.pending,
                 },
+                delivery.new_stream_id,
             )
         } else {
-            (normalized, HookIngestOutcome::Unsequenced)
+            (vec![application], HookIngestOutcome::Unsequenced, None)
         };
         let mut changed = false;
-        if !record.terminal_exited {
-            for event in events {
-                changed |= record.reducer.apply(request.scope.generation, event, now);
+        let mut has_accepted_application = false;
+        for application in applications {
+            match apply_hook_application(
+                record,
+                request.scope.generation,
+                application,
+                terminal_exit,
+                now,
+            ) {
+                HookApplicationOutcome::Applied(applied) => {
+                    has_accepted_application = true;
+                    changed |= applied;
+                }
+                HookApplicationOutcome::Ignored => {}
+            }
+        }
+        if let Some(stream_id) = new_stream_id {
+            let delivery_state = record
+                .delivery
+                .as_mut()
+                .expect("new delivery stream has delivery state");
+            if has_accepted_application {
+                activate_delivery_stream(delivery_state, stream_id);
+            } else {
+                remember_ignored_stream(delivery_state, stream_id);
             }
         }
         (
@@ -772,91 +804,349 @@ fn ingest_request(
     Ok(outcome)
 }
 
+fn new_hook_record(
+    scope: AgentHookScope,
+    terminal_session_id: TerminalSessionId,
+    provider_id: ProviderId,
+    terminal_exit: Option<AgentProcessExit>,
+    now: u64,
+) -> AgentRecord {
+    let mut reducer = AgentReducer::new(AgentInstanceId::random(), provider_id, now);
+    reducer.process_starting(scope.generation, now);
+    reducer.process_started(scope.generation, now);
+    if let Some(exit) = terminal_exit {
+        reducer.process_exited(scope.generation, exit, now);
+    }
+    AgentRecord {
+        scope,
+        terminal_session_id,
+        sequence: 0,
+        reducer,
+        delivery: None,
+        provider_session_id: None,
+        script_delivery_ids: VecDeque::new(),
+        terminal_exited: terminal_exit.is_some(),
+    }
+}
+
+fn remember_script_delivery(record: &mut AgentRecord, delivery_id: String) -> bool {
+    if record
+        .script_delivery_ids
+        .iter()
+        .any(|accepted| accepted == &delivery_id)
+    {
+        return false;
+    }
+    if record.script_delivery_ids.len() >= MAX_SCRIPT_DELIVERY_IDS {
+        record.script_delivery_ids.pop_front();
+    }
+    record.script_delivery_ids.push_back(delivery_id);
+    true
+}
+
+fn hook_session_id(payload: &Value, events: &[AgentEventKind]) -> Option<String> {
+    events
+        .iter()
+        .find_map(|event| match event {
+            AgentEventKind::SessionStarted { metadata }
+            | AgentEventKind::SessionUpdated { metadata } => metadata.session_id.as_deref(),
+            _ => None,
+        })
+        .and_then(non_empty_session_id)
+        .or_else(|| payload_string(payload, &["sessionId", "sessionID", "session_id"]))
+}
+
+fn payload_has_parent_session(payload: &Value) -> bool {
+    payload_string(
+        payload,
+        &[
+            "parentID",
+            "parentId",
+            "parent_id",
+            "parentSessionId",
+            "parentSessionID",
+            "parent_session_id",
+        ],
+    )
+    .is_some()
+}
+
+fn payload_string(payload: &Value, names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| {
+        payload
+            .get(name)
+            .and_then(Value::as_str)
+            .and_then(non_empty_session_id)
+    })
+}
+
+fn non_empty_session_id(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn is_child_event(event: &AgentEventKind) -> bool {
+    matches!(
+        event,
+        AgentEventKind::ChildStarted { .. }
+            | AgentEventKind::ChildUpdated { .. }
+            | AgentEventKind::ChildFinished { .. }
+    )
+}
+
+fn apply_hook_application(
+    record: &mut AgentRecord,
+    generation: u64,
+    application: HookApplication,
+    terminal_exit: Option<AgentProcessExit>,
+    now: u64,
+) -> HookApplicationOutcome {
+    let root_session_started = application
+        .events
+        .iter()
+        .any(|event| matches!(event, AgentEventKind::SessionStarted { .. }));
+    let contains_root_event = application
+        .events
+        .iter()
+        .any(|event| !is_child_event(event));
+    if application.explicit_child_session && contains_root_event {
+        return HookApplicationOutcome::Ignored;
+    }
+    if !root_session_started && contains_root_event {
+        if let (Some(root_session_id), Some(event_session_id)) = (
+            record.provider_session_id.as_deref(),
+            application.session_id.as_deref(),
+        ) {
+            if root_session_id != event_session_id {
+                return HookApplicationOutcome::Ignored;
+            }
+        }
+    }
+    if record.terminal_exited {
+        return HookApplicationOutcome::Applied(false);
+    }
+
+    let current_provider_id = record.reducer.snapshot().provider_id.clone();
+    let process_exited = record.reducer.snapshot().process_state == AgentProcessState::Exited;
+    if !root_session_started
+        && contains_root_event
+        && current_provider_id != application.provider_id
+    {
+        return HookApplicationOutcome::Ignored;
+    }
+    if incoming_provider_is_compatibility_duplicate(
+        current_provider_id.as_str(),
+        application.provider_id.as_str(),
+    ) && !(root_session_started && process_exited)
+    {
+        return HookApplicationOutcome::Ignored;
+    }
+    if root_session_started {
+        let session_switched = application.session_id.as_deref().is_some_and(|session_id| {
+            record
+                .provider_session_id
+                .as_deref()
+                .is_some_and(|current| current != session_id)
+        });
+        if process_exited || current_provider_id != application.provider_id || session_switched {
+            restart_hook_record(record, application.provider_id.clone(), terminal_exit, now);
+        }
+        if let Some(session_id) = application.session_id.as_ref() {
+            record.provider_session_id = Some(session_id.clone());
+        }
+    } else if contains_root_event && record.provider_session_id.is_none() {
+        record.provider_session_id = application.session_id.clone();
+    }
+    HookApplicationOutcome::Applied(
+        application
+            .events
+            .into_iter()
+            .fold(false, |changed, event| {
+                changed | record.reducer.apply(generation, event, now)
+            }),
+    )
+}
+
+fn restart_hook_record(
+    record: &mut AgentRecord,
+    provider_id: ProviderId,
+    terminal_exit: Option<AgentProcessExit>,
+    now: u64,
+) {
+    let mut reducer = AgentReducer::new(AgentInstanceId::random(), provider_id, now);
+    reducer.process_starting(record.scope.generation, now);
+    reducer.process_started(record.scope.generation, now);
+    if let Some(exit) = terminal_exit {
+        reducer.process_exited(record.scope.generation, exit, now);
+    }
+    record.reducer = reducer;
+    record.provider_session_id = None;
+    record.terminal_exited = terminal_exit.is_some();
+}
+
 fn queue_delivery(
     delivery_state: &mut Option<AgentDeliveryState>,
     delivery: HookDeliveryMetadata,
-    events: Vec<AgentEventKind>,
+    application: HookApplication,
 ) -> Result<DeliveryApplication, HttpRequestError> {
     let state = delivery_state.get_or_insert_with(|| AgentDeliveryState {
         stream_id: delivery.stream_id.clone(),
         accepted_sequence: 0,
         pending: BTreeMap::new(),
         retired: Vec::new(),
+        ignored: Vec::new(),
+        active_stream_validated: false,
     });
+    if let Some(ignored) = state
+        .ignored
+        .iter_mut()
+        .find(|ignored| ignored.stream_id == delivery.stream_id)
+    {
+        return queue_ignored_stream(ignored, delivery.sequence);
+    }
     if state.stream_id != delivery.stream_id {
         if let Some((_, accepted_sequence)) = state
             .retired
             .iter()
             .find(|(stream_id, _)| stream_id == &delivery.stream_id)
         {
-            let acknowledgement = AgentHookAcknowledgement {
-                accepted_sequence: *accepted_sequence,
-                next_sequence: accepted_sequence.saturating_add(1),
-            };
+            let acknowledgement = acknowledgement(*accepted_sequence);
             if delivery.sequence <= *accepted_sequence {
                 return Ok(DeliveryApplication {
-                    events: Vec::new(),
+                    applications: Vec::new(),
                     acknowledgement,
                     pending: false,
+                    new_stream_id: None,
                 });
             }
             return Err(HttpRequestError::Conflict(acknowledgement));
         }
         if delivery.sequence != 1 {
-            return Err(HttpRequestError::Conflict(AgentHookAcknowledgement {
-                accepted_sequence: 0,
-                next_sequence: 1,
-            }));
+            return Err(HttpRequestError::Conflict(acknowledgement(0)));
         }
-        if state.retired.len() >= MAX_RETIRED_DELIVERY_STREAMS {
-            state.retired.remove(0);
-        }
-        state.retired.push((
-            std::mem::take(&mut state.stream_id),
-            state.accepted_sequence,
-        ));
-        state.stream_id = delivery.stream_id.clone();
-        state.accepted_sequence = 0;
-        state.pending.clear();
+        return Ok(DeliveryApplication {
+            applications: vec![application],
+            acknowledgement: acknowledgement(1),
+            pending: false,
+            new_stream_id: Some(delivery.stream_id),
+        });
     }
 
     if delivery.sequence <= state.accepted_sequence {
         return Ok(DeliveryApplication {
-            events: Vec::new(),
-            acknowledgement: AgentHookAcknowledgement {
-                accepted_sequence: state.accepted_sequence,
-                next_sequence: state.accepted_sequence.saturating_add(1),
-            },
+            applications: Vec::new(),
+            acknowledgement: acknowledgement(state.accepted_sequence),
             pending: false,
+            new_stream_id: None,
         });
     }
     if !state.pending.contains_key(&delivery.sequence) {
         if state.pending.len() >= MAX_PENDING_DELIVERIES {
-            return Err(HttpRequestError::Conflict(AgentHookAcknowledgement {
-                accepted_sequence: state.accepted_sequence,
-                next_sequence: state.accepted_sequence.saturating_add(1),
-            }));
+            return Err(HttpRequestError::Conflict(acknowledgement(
+                state.accepted_sequence,
+            )));
         }
-        state.pending.insert(delivery.sequence, events);
+        state.pending.insert(delivery.sequence, application);
     }
 
     let requested_sequence = delivery.sequence;
-    let mut accepted_events = Vec::new();
-    while let Some(events) = state
+    let mut accepted_applications = Vec::new();
+    while let Some(application) = state
         .pending
         .remove(&state.accepted_sequence.saturating_add(1))
     {
         state.accepted_sequence = state.accepted_sequence.saturating_add(1);
-        accepted_events.extend(events);
+        accepted_applications.push(application);
     }
     Ok(DeliveryApplication {
-        events: accepted_events,
-        acknowledgement: AgentHookAcknowledgement {
-            accepted_sequence: state.accepted_sequence,
-            next_sequence: state.accepted_sequence.saturating_add(1),
-        },
+        applications: accepted_applications,
+        acknowledgement: acknowledgement(state.accepted_sequence),
         pending: state.accepted_sequence < requested_sequence,
+        new_stream_id: (!state.active_stream_validated && state.accepted_sequence > 0)
+            .then(|| state.stream_id.clone()),
     })
+}
+
+fn acknowledgement(accepted_sequence: u64) -> AgentHookAcknowledgement {
+    AgentHookAcknowledgement {
+        accepted_sequence,
+        next_sequence: accepted_sequence.saturating_add(1),
+    }
+}
+
+fn queue_ignored_stream(
+    ignored: &mut IgnoredDeliveryStream,
+    sequence: u64,
+) -> Result<DeliveryApplication, HttpRequestError> {
+    if sequence <= ignored.accepted_sequence {
+        return Ok(DeliveryApplication {
+            applications: Vec::new(),
+            acknowledgement: acknowledgement(ignored.accepted_sequence),
+            pending: false,
+            new_stream_id: None,
+        });
+    }
+    if !ignored.pending.contains(&sequence) {
+        if ignored.pending.len() >= MAX_PENDING_DELIVERIES {
+            return Err(HttpRequestError::Conflict(acknowledgement(
+                ignored.accepted_sequence,
+            )));
+        }
+        ignored.pending.insert(sequence);
+    }
+    let requested_sequence = sequence;
+    while ignored
+        .pending
+        .remove(&ignored.accepted_sequence.saturating_add(1))
+    {
+        ignored.accepted_sequence = ignored.accepted_sequence.saturating_add(1);
+    }
+    Ok(DeliveryApplication {
+        applications: Vec::new(),
+        acknowledgement: acknowledgement(ignored.accepted_sequence),
+        pending: ignored.accepted_sequence < requested_sequence,
+        new_stream_id: None,
+    })
+}
+
+fn activate_delivery_stream(state: &mut AgentDeliveryState, stream_id: String) {
+    if state.stream_id != stream_id {
+        if state.retired.len() >= MAX_RETIRED_DELIVERY_STREAMS {
+            state.retired.remove(0);
+        }
+        state.retired.push((
+            std::mem::replace(&mut state.stream_id, stream_id),
+            state.accepted_sequence,
+        ));
+        state.accepted_sequence = 1;
+        state.pending.clear();
+    }
+    state.active_stream_validated = true;
+}
+
+fn remember_ignored_stream(state: &mut AgentDeliveryState, stream_id: String) {
+    if state
+        .ignored
+        .iter()
+        .any(|ignored| ignored.stream_id == stream_id)
+    {
+        return;
+    }
+    let active_stream = state.stream_id == stream_id;
+    let accepted_sequence = active_stream
+        .then_some(state.accepted_sequence)
+        .unwrap_or(1);
+    if state.ignored.len() >= MAX_RETIRED_DELIVERY_STREAMS {
+        state.ignored.remove(0);
+    }
+    state.ignored.push(IgnoredDeliveryStream {
+        stream_id,
+        accepted_sequence,
+        pending: BTreeSet::new(),
+    });
+    if active_stream {
+        state.active_stream_validated = true;
+    }
 }
 
 struct HttpRequest {
@@ -1010,12 +1300,22 @@ fn decode_request(
         let (event, payload) = provider_event(raw)?;
         (event, payload, None)
     };
+    let script_delivery_id = if delivery.is_none() {
+        request
+            .headers
+            .get(SCRIPT_DELIVERY_ID_HEADER)
+            .map(|delivery_id| valid_script_delivery_id(delivery_id))
+            .transpose()?
+    } else {
+        None
+    };
     Ok(DecodedHookRequest {
         scope,
         source: source.to_string(),
         event,
         payload,
         delivery,
+        script_delivery_id,
     })
 }
 
@@ -1038,6 +1338,13 @@ fn non_empty_event(event: &str) -> Result<String, HttpRequestError> {
         return Err(HttpRequestError::Invalid);
     }
     Ok(event.to_string())
+}
+
+fn valid_script_delivery_id(delivery_id: &str) -> Result<String, HttpRequestError> {
+    if delivery_id.is_empty() || delivery_id.len() > 128 || !delivery_id.is_ascii() {
+        return Err(HttpRequestError::Invalid);
+    }
+    Ok(delivery_id.to_string())
 }
 
 fn scope_token(secret: &[u8; 32], scope: &str) -> String {
@@ -1126,15 +1433,26 @@ mod tests {
         event: &str,
         payload: Value,
     ) -> DecodedHookRequest {
+        sequenced_request_for_stream(scope, "test-stream", sequence, event, payload)
+    }
+
+    fn sequenced_request_for_stream(
+        scope: &AgentHookScope,
+        stream_id: &str,
+        sequence: u64,
+        event: &str,
+        payload: Value,
+    ) -> DecodedHookRequest {
         DecodedHookRequest {
             scope: scope.clone(),
             source: "omp".to_string(),
             event: event.to_string(),
             payload,
             delivery: Some(HookDeliveryMetadata {
-                stream_id: "test-stream".to_string(),
+                stream_id: stream_id.to_string(),
                 sequence,
             }),
+            script_delivery_id: None,
         }
     }
 
@@ -1150,7 +1468,23 @@ mod tests {
             event: event.to_string(),
             payload,
             delivery: None,
+            script_delivery_id: None,
         }
+    }
+
+    fn session_payload(session_id: &str) -> Value {
+        serde_json::json!({ "sessionId": session_id })
+    }
+
+    fn script_request(
+        scope: &AgentHookScope,
+        event: &str,
+        payload: Value,
+        delivery_id: &str,
+    ) -> DecodedHookRequest {
+        let mut request = unsequenced_request(scope, "omp", event, payload);
+        request.script_delivery_id = Some(delivery_id.to_string());
+        request
     }
 
     #[test]
@@ -1238,6 +1572,54 @@ mod tests {
             decoded.payload.get("sessionId").and_then(Value::as_str),
             Some("grok-session")
         );
+    }
+
+    #[test]
+    fn decodes_bounded_ascii_script_delivery_ids() {
+        let secret = [3_u8; 32];
+        let scope = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&AgentHookScope {
+                project_id: "project".to_string(),
+                tab_id: "tab".to_string(),
+                pane_id: "script-delivery".to_string(),
+                generation: 1,
+            })
+            .unwrap(),
+        );
+        let headers = |delivery_id: String| {
+            BTreeMap::from([
+                (SCOPE_HEADER.to_string(), scope.clone()),
+                (TOKEN_HEADER.to_string(), scope_token(&secret, &scope)),
+                (SCRIPT_DELIVERY_ID_HEADER.to_string(), delivery_id),
+            ])
+        };
+        let request = HttpRequest {
+            path: "/hook/omp".to_string(),
+            headers: headers("retry-1".to_string()),
+            body: br#"{"event":"agent_start","payload":{}}"#.to_vec(),
+        };
+        let decoded = decode_request(request, &secret).unwrap();
+        assert_eq!(decoded.script_delivery_id.as_deref(), Some("retry-1"));
+
+        let oversized = HttpRequest {
+            path: "/hook/omp".to_string(),
+            headers: headers("x".repeat(129)),
+            body: br#"{"event":"agent_start","payload":{}}"#.to_vec(),
+        };
+        assert!(matches!(
+            decode_request(oversized, &secret),
+            Err(HttpRequestError::Invalid)
+        ));
+
+        let non_ascii = HttpRequest {
+            path: "/hook/omp".to_string(),
+            headers: headers("retry-\u{2603}".to_string()),
+            body: br#"{"event":"agent_start","payload":{}}"#.to_vec(),
+        };
+        assert!(matches!(
+            decode_request(non_ascii, &secret),
+            Err(HttpRequestError::Invalid)
+        ));
     }
 
     #[test]
@@ -1387,6 +1769,76 @@ mod tests {
     }
 
     #[test]
+    fn process_restart_preserves_script_delivery_dedup_for_the_same_scope() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("process-script-retry", "process-script-retry");
+        let session_id = terminal.session_id.clone();
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+        let roots = vec![(session_id.clone(), 10)];
+
+        ingest_request(
+            &runtime.state,
+            script_request(
+                &scope,
+                "session_start",
+                session_payload("first-session"),
+                "first-root",
+            ),
+        )
+        .unwrap();
+        ingest_request(
+            &runtime.state,
+            script_request(&scope, "agent_end", Value::Null, "first-stop"),
+        )
+        .unwrap();
+
+        runtime.reconcile_process_scan(
+            &roots,
+            &HashMap::from([(
+                session_id.clone(),
+                DetectedAgentProcess {
+                    pid: 20,
+                    provider_id: ProviderId::from_static("omp"),
+                },
+            )]),
+        );
+        runtime.reconcile_process_scan(&roots, &HashMap::new());
+        runtime.reconcile_process_scan(&roots, &HashMap::new());
+        runtime.reconcile_process_scan(
+            &roots,
+            &HashMap::from([(
+                session_id,
+                DetectedAgentProcess {
+                    pid: 21,
+                    provider_id: ProviderId::from_static("omp"),
+                },
+            )]),
+        );
+
+        ingest_request(
+            &runtime.state,
+            script_request(
+                &scope,
+                "agent_start",
+                session_payload("second-session"),
+                "later-work",
+            ),
+        )
+        .unwrap();
+        let later = runtime.snapshots_after(&[]).remove(0);
+        assert_eq!(later.snapshot.view_state(), AgentViewState::Working);
+
+        ingest_request(
+            &runtime.state,
+            script_request(&scope, "agent_end", Value::Null, "first-stop"),
+        )
+        .unwrap();
+        let current = runtime.snapshots_after(&[]).remove(0);
+        assert_eq!(current.sequence, later.sequence);
+        assert_eq!(current.snapshot.view_state(), AgentViewState::Working);
+    }
+
+    #[test]
     fn sequenced_hooks_buffer_gaps_and_ignore_retries() {
         let runtime = HostAgentHookRuntime::start(7).unwrap();
         let mut terminal = spec("ordered", "ordered");
@@ -1452,6 +1904,75 @@ mod tests {
         assert_eq!(
             runtime.snapshots_after(&[])[0].snapshot.view_state(),
             AgentViewState::Completed
+        );
+    }
+
+    #[test]
+    fn initial_stream_with_a_valid_root_batch_is_not_discarded_for_later_foreign_events() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("mixed-initial-stream", "mixed-initial-stream");
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+
+        let pending = ingest_request(
+            &runtime.state,
+            sequenced_request_for_stream(
+                &scope,
+                "root-stream",
+                2,
+                "agent_end",
+                session_payload("foreign-session"),
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            pending,
+            HookIngestOutcome::Sequenced { pending: true, .. }
+        ));
+        let accepted = ingest_request(
+            &runtime.state,
+            sequenced_request_for_stream(
+                &scope,
+                "root-stream",
+                1,
+                "session_start",
+                session_payload("root-session"),
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            accepted,
+            HookIngestOutcome::Sequenced {
+                acknowledgement: AgentHookAcknowledgement {
+                    accepted_sequence: 2,
+                    next_sequence: 3,
+                },
+                pending: false,
+            }
+        ));
+        let root_continues = ingest_request(
+            &runtime.state,
+            sequenced_request_for_stream(
+                &scope,
+                "root-stream",
+                3,
+                "agent_start",
+                session_payload("root-session"),
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            root_continues,
+            HookIngestOutcome::Sequenced {
+                acknowledgement: AgentHookAcknowledgement {
+                    accepted_sequence: 3,
+                    next_sequence: 4,
+                },
+                pending: false,
+            }
+        ));
+        assert_eq!(
+            runtime.snapshots_after(&[])[0].snapshot.view_state(),
+            AgentViewState::Working
         );
     }
 
@@ -1588,5 +2109,481 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
         assert!(response.contains("\"acceptedSequence\":1"), "{response}");
         drop(stalled);
+    }
+
+    #[test]
+    fn foreign_child_lifecycle_and_activity_do_not_mutate_the_root_session() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("root-ownership", "root-ownership");
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(
+                &scope,
+                "omp",
+                "session_start",
+                session_payload("root-session"),
+            ),
+        )
+        .unwrap();
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(
+                &scope,
+                "omp",
+                "agent_start",
+                session_payload("root-session"),
+            ),
+        )
+        .unwrap();
+        let active = runtime.snapshots_after(&[]).remove(0);
+
+        for (event, payload) in [
+            (
+                "session_start",
+                serde_json::json!({
+                    "sessionId": "child-session",
+                    "parentSessionId": "root-session",
+                }),
+            ),
+            (
+                "session_shutdown",
+                serde_json::json!({
+                    "sessionId": "child-session",
+                    "parentSessionId": "root-session",
+                }),
+            ),
+            (
+                "tool_call",
+                serde_json::json!({
+                    "sessionId": "child-session",
+                    "toolName": "Bash",
+                }),
+            ),
+            ("agent_end", session_payload("child-session")),
+        ] {
+            ingest_request(
+                &runtime.state,
+                unsequenced_request(&scope, "omp", event, payload),
+            )
+            .unwrap();
+        }
+
+        let current = runtime.snapshots_after(&[]).remove(0);
+        assert_eq!(current.sequence, active.sequence);
+        assert_eq!(current.snapshot.instance_id, active.snapshot.instance_id);
+        assert_eq!(
+            current
+                .snapshot
+                .session
+                .as_ref()
+                .and_then(|metadata| metadata.session_id.as_deref()),
+            Some("root-session")
+        );
+        assert_eq!(current.snapshot.view_state(), AgentViewState::Working);
+    }
+
+    #[test]
+    fn foreign_idle_does_not_complete_an_active_root_session() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("foreign-idle", "foreign-idle");
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(
+                &scope,
+                "opencode",
+                "session_start",
+                serde_json::json!({ "sessionID": "root-session" }),
+            ),
+        )
+        .unwrap();
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(
+                &scope,
+                "opencode",
+                "session_busy",
+                serde_json::json!({ "sessionID": "root-session" }),
+            ),
+        )
+        .unwrap();
+        let active = runtime.snapshots_after(&[]).remove(0);
+
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(
+                &scope,
+                "opencode",
+                "session_idle",
+                serde_json::json!({ "sessionID": "foreign-session" }),
+            ),
+        )
+        .unwrap();
+
+        let current = runtime.snapshots_after(&[]).remove(0);
+        assert_eq!(current.sequence, active.sequence);
+        assert_eq!(
+            current
+                .snapshot
+                .session
+                .as_ref()
+                .and_then(|metadata| metadata.session_id.as_deref()),
+            Some("root-session")
+        );
+        assert_eq!(current.snapshot.view_state(), AgentViewState::Working);
+    }
+
+    #[test]
+    fn root_session_switch_and_resume_update_ownership() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("session-switch", "session-switch");
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+
+        for (event, session_id) in [
+            ("session_start", "first-session"),
+            ("agent_start", "first-session"),
+            ("session_switch", "second-session"),
+            ("agent_start", "second-session"),
+            ("session_start", "second-session"),
+        ] {
+            ingest_request(
+                &runtime.state,
+                unsequenced_request(&scope, "omp", event, session_payload(session_id)),
+            )
+            .unwrap();
+        }
+
+        let current = runtime.snapshots_after(&[]).remove(0);
+        assert_eq!(
+            current
+                .snapshot
+                .session
+                .as_ref()
+                .and_then(|metadata| metadata.session_id.as_deref()),
+            Some("second-session")
+        );
+        assert_eq!(current.snapshot.view_state(), AgentViewState::Working);
+    }
+
+    #[test]
+    fn sequenced_events_are_gated_after_a_reordered_session_switch() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("ordered-switch", "ordered-switch");
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+
+        ingest_request(
+            &runtime.state,
+            sequenced_request(&scope, 1, "session_start", session_payload("first-session")),
+        )
+        .unwrap();
+        let fourth = ingest_request(
+            &runtime.state,
+            sequenced_request(&scope, 4, "agent_start", session_payload("second-session")),
+        )
+        .unwrap();
+        assert!(matches!(
+            fourth,
+            HookIngestOutcome::Sequenced { pending: true, .. }
+        ));
+        let third = ingest_request(
+            &runtime.state,
+            sequenced_request(
+                &scope,
+                3,
+                "session_switch",
+                session_payload("second-session"),
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            third,
+            HookIngestOutcome::Sequenced { pending: true, .. }
+        ));
+        let accepted = ingest_request(
+            &runtime.state,
+            sequenced_request(&scope, 2, "agent_end", session_payload("first-session")),
+        )
+        .unwrap();
+        assert!(matches!(
+            accepted,
+            HookIngestOutcome::Sequenced {
+                acknowledgement: AgentHookAcknowledgement {
+                    accepted_sequence: 4,
+                    next_sequence: 5,
+                },
+                pending: false,
+            }
+        ));
+
+        let current = runtime.snapshots_after(&[]).remove(0);
+        assert_eq!(
+            current
+                .snapshot
+                .session
+                .as_ref()
+                .and_then(|metadata| metadata.session_id.as_deref()),
+            Some("second-session")
+        );
+        assert_eq!(current.snapshot.view_state(), AgentViewState::Working);
+    }
+
+    #[test]
+    fn ignored_sequenced_foreign_events_still_advance_acknowledgement() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("sequenced-foreign", "sequenced-foreign");
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+
+        for (sequence, event) in [(1, "session_start"), (2, "agent_start")] {
+            ingest_request(
+                &runtime.state,
+                sequenced_request(&scope, sequence, event, session_payload("root-session")),
+            )
+            .unwrap();
+        }
+        let active = runtime.snapshots_after(&[]).remove(0);
+
+        let ignored = ingest_request(
+            &runtime.state,
+            sequenced_request(&scope, 3, "agent_end", session_payload("foreign-session")),
+        )
+        .unwrap();
+        assert!(matches!(
+            ignored,
+            HookIngestOutcome::Sequenced {
+                acknowledgement: AgentHookAcknowledgement {
+                    accepted_sequence: 3,
+                    next_sequence: 4,
+                },
+                pending: false,
+            }
+        ));
+        let current = runtime.snapshots_after(&[]).remove(0);
+        assert_eq!(current.sequence, active.sequence);
+        assert_eq!(current.snapshot.view_state(), AgentViewState::Working);
+    }
+
+    #[test]
+    fn ignored_child_stream_does_not_retire_the_active_root_stream() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("isolated-streams", "isolated-streams");
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+
+        for (sequence, event) in [(1, "session_start"), (2, "agent_start")] {
+            ingest_request(
+                &runtime.state,
+                sequenced_request_for_stream(
+                    &scope,
+                    "root-stream",
+                    sequence,
+                    event,
+                    session_payload("root-session"),
+                ),
+            )
+            .unwrap();
+        }
+        let child_started = ingest_request(
+            &runtime.state,
+            sequenced_request_for_stream(
+                &scope,
+                "child-stream",
+                1,
+                "session_start",
+                serde_json::json!({
+                    "sessionId": "child-session",
+                    "parentSessionId": "root-session",
+                }),
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            child_started,
+            HookIngestOutcome::Sequenced {
+                acknowledgement: AgentHookAcknowledgement {
+                    accepted_sequence: 1,
+                    next_sequence: 2,
+                },
+                pending: false,
+            }
+        ));
+        let child_stopped = ingest_request(
+            &runtime.state,
+            sequenced_request_for_stream(
+                &scope,
+                "child-stream",
+                2,
+                "session_shutdown",
+                serde_json::json!({
+                    "sessionId": "child-session",
+                    "parentSessionId": "root-session",
+                }),
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            child_stopped,
+            HookIngestOutcome::Sequenced {
+                acknowledgement: AgentHookAcknowledgement {
+                    accepted_sequence: 2,
+                    next_sequence: 3,
+                },
+                pending: false,
+            }
+        ));
+        let root_continues = ingest_request(
+            &runtime.state,
+            sequenced_request_for_stream(
+                &scope,
+                "root-stream",
+                3,
+                "tool_call",
+                serde_json::json!({
+                    "sessionId": "root-session",
+                    "toolName": "Bash",
+                }),
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            root_continues,
+            HookIngestOutcome::Sequenced {
+                acknowledgement: AgentHookAcknowledgement {
+                    accepted_sequence: 3,
+                    next_sequence: 4,
+                },
+                pending: false,
+            }
+        ));
+        assert_eq!(
+            runtime.snapshots_after(&[])[0].snapshot.view_state(),
+            AgentViewState::Working
+        );
+    }
+
+    #[test]
+    fn idless_legacy_hooks_and_explicit_subagent_events_remain_supported() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("legacy-hooks", "legacy-hooks");
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+
+        for event in ["session_start", "agent_start", "agent_end"] {
+            ingest_request(
+                &runtime.state,
+                unsequenced_request(&scope, "omp", event, Value::Null),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            runtime.snapshots_after(&[])[0].snapshot.view_state(),
+            AgentViewState::Completed
+        );
+
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(
+                &scope,
+                "claude",
+                "SessionStart",
+                session_payload("root-session"),
+            ),
+        )
+        .unwrap();
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(
+                &scope,
+                "claude",
+                "SubagentStart",
+                serde_json::json!({
+                    "session_id": "child-session",
+                    "parentSessionId": "root-session",
+                    "agent_id": "child",
+                }),
+            ),
+        )
+        .unwrap();
+        assert_eq!(runtime.snapshots_after(&[])[0].snapshot.children.len(), 1);
+        ingest_request(
+            &runtime.state,
+            unsequenced_request(
+                &scope,
+                "claude",
+                "SubagentStop",
+                serde_json::json!({
+                    "session_id": "child-session",
+                    "parentSessionId": "root-session",
+                    "agent_id": "child",
+                }),
+            ),
+        )
+        .unwrap();
+        assert!(runtime.snapshots_after(&[])[0].snapshot.children.is_empty());
+    }
+
+    #[test]
+    fn duplicate_script_delivery_survives_same_scope_lifecycle_restart() {
+        let runtime = HostAgentHookRuntime::start(7).unwrap();
+        let mut terminal = spec("script-retry", "script-retry");
+        let scope = runtime.secure_terminal_environment(&mut terminal);
+
+        ingest_request(
+            &runtime.state,
+            script_request(
+                &scope,
+                "session_start",
+                session_payload("first-session"),
+                "first-root",
+            ),
+        )
+        .unwrap();
+        ingest_request(
+            &runtime.state,
+            script_request(
+                &scope,
+                "agent_start",
+                session_payload("first-session"),
+                "first-work",
+            ),
+        )
+        .unwrap();
+        ingest_request(
+            &runtime.state,
+            script_request(&scope, "session_shutdown", Value::Null, "first-shutdown"),
+        )
+        .unwrap();
+        ingest_request(
+            &runtime.state,
+            script_request(
+                &scope,
+                "session_start",
+                session_payload("second-session"),
+                "second-root",
+            ),
+        )
+        .unwrap();
+        ingest_request(
+            &runtime.state,
+            script_request(
+                &scope,
+                "agent_start",
+                session_payload("second-session"),
+                "later-work",
+            ),
+        )
+        .unwrap();
+        let later = runtime.snapshots_after(&[]).remove(0);
+        assert_eq!(later.snapshot.view_state(), AgentViewState::Working);
+
+        ingest_request(
+            &runtime.state,
+            script_request(&scope, "session_shutdown", Value::Null, "first-shutdown"),
+        )
+        .unwrap();
+
+        let current = runtime.snapshots_after(&[]).remove(0);
+        assert_eq!(current.sequence, later.sequence);
+        assert_eq!(current.snapshot.view_state(), AgentViewState::Working);
     }
 }

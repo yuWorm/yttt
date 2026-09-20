@@ -1173,6 +1173,24 @@ active task, tool action, waiting reason, turn completion, and child-agent lifec
 discovery and start/exit events remain the fallback for startup, interruption, failure, and
 manually launched Agents in either environment.
 
+Agent session identity is separate from the terminal scope. OpenCode child sessions do not select
+or finish the root session; an existing uniquely busy root can be attached, and a new root or
+user prompt can select a different session. Late discovery and prior-session idle events cannot
+overwrite that selection. Pi and OMP duplicate extension copies share one reporter per terminal
+transport. Pi releases ownership on session shutdown so `/reload` can register the replacement;
+late callbacks from the previous reporter cannot finish the new session.
+
+The Host validates session identity when applying ordered events, acknowledges ignored foreign
+events without handing them the root's stream, and still accepts explicit root starts/switches
+and legacy hooks without session IDs. Pi and OpenCode retry transient delivery failures without
+skipping sequence numbers; permanent HTTP rejection stops that stream with a safe diagnostic.
+Claude, Codex, and Grok command hooks retry network errors, HTTP 429, and HTTP 5xx at most three
+times within their hook timeout. A stable delivery ID lets the Host ignore retries after a lost
+response. This does not impose a global order on independently spawned command-hook processes.
+
+Adapter updates do not replace extension code already loaded in a running Agent. After active
+tasks finish, update the Host, complete managed-hook initialization, and restart the Agent.
+
 The normalized status model includes:
 
 - `starting`
@@ -1183,6 +1201,11 @@ The normalized status model includes:
 - `failed`
 - `interrupted`
 - `stale`
+
+After more than 30 minutes without a status update, `working` and `waiting` become `stale`
+(unknown), not `idle`. This does not prove the process stopped or the task completed. A subsequent
+authoritative work/wait/completion event restores the known state; child metadata or a child
+finishing cannot by itself revive an unknown parent.
 
 The project sidebar groups compact one-line Agent rows below each project. Each row shows a
 status icon, an Agent-type icon, and `pane name — current task · current action`; overflow is
@@ -1199,9 +1222,11 @@ An explicit provider session title is preferred, otherwise the first prompt supp
 bounded title. The title survives restoration, while a custom pane title remains authoritative.
 Normal CLI exit still removes a detected shell Agent instead of retaining it for restoration.
 
-The managed transport never persists or logs the launch token or complete tool payload. Session
-identity, model, resume path, title, and prompt summary are bounded before persistence. Unknown
-instances, stale generations, and invalid tokens are rejected before provider event normalization.
+The managed transport does not log the launch token or complete tool payload. POSIX command hooks
+buffer stdin in a private, permission-restricted temporary file and remove it on normal exit.
+Session identity, model, resume path, title, and prompt summary are bounded before persistence.
+Unknown instances, stale generations, and invalid tokens are rejected before provider event
+normalization.
 
 In-app toast is always produced for agent exit events when `notify_on_exit = true`.
 `settings.notifications` persists the intended native-notification preference, but the
