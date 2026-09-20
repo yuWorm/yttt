@@ -373,7 +373,7 @@ fn unavailable_pane_reconnects_when_session_reappears_without_spawning(cx: &mut 
 }
 
 #[gpui::test]
-fn missing_terminal_can_be_explicitly_started_from_recovery(cx: &mut TestAppContext) {
+fn missing_terminal_can_be_explicitly_started_after_exit_is_finalized(cx: &mut TestAppContext) {
     let host = RecoveryHost::start();
     let runtime = host.client("first");
     let (pane, cx) = open_pane(cx, runtime.clone(), host.root.path());
@@ -381,9 +381,36 @@ fn missing_terminal_can_be_explicitly_started_from_recovery(cx: &mut TestAppCont
         cx.read(|app| pane.read(app).is_running()) && host.root.path().join("starts").exists()
     });
     let original = catalog(&runtime).terminals.remove(0);
+    pump_until(cx, "initial terminal metadata", |_| {
+        runtime.terminal_metadata(&original.session_id).is_some()
+    });
+    let mut final_metadata = runtime.terminal_metadata(&original.session_id).unwrap();
+    final_metadata.process_state = TerminalProcessState::Exited { code: Some(0) };
     runtime
         .terminate_many_confirmed(vec![original.session_id.clone()])
         .unwrap();
+    // Replay the exit-before-removal ordering deterministically instead of relying
+    // on the relative scheduling of the Host's metadata and catalog channels.
+    cx.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            let generation = pane.generation;
+            pane.handle_host_viewport_metadata(
+                &final_metadata,
+                &runtime,
+                &original.session_id,
+                generation,
+                cx,
+            );
+            pane.handle_host_event(
+                ClientEvent::TerminalUnavailable(original.session_id.clone()),
+                runtime.clone(),
+                &original.session_id,
+                generation,
+                window,
+                cx,
+            );
+        });
+    });
     pump_until(cx, "unavailable pane", |cx| {
         cx.read(|app| matches!(pane.read(app).lifecycle, PaneLifecycle::Lost { .. }))
     });

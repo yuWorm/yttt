@@ -23,12 +23,15 @@
   status becomes unknown (`stale`), not idle or completed. Update the Host and provision hooks
   before starting new Agent processes; do not interrupt active work just to reload adapters.
 
-## 0.3.3 - 2026-09-20
+## 0.3.4 - 2026-09-20
 
 ### 中文
 
 本版以已发布的 [v0.3.2](https://github.com/yuWorm/yttt/releases/tag/v0.3.2) 为基线，
 重点改善终端图片、会话重连和默认桌面体验，并修正发布验证发现的客户端事件队列内存布局问题。
+
+v0.3.3 仅创建标签；正式发布验证发现终端恢复时序问题，未生成 GitHub Release。该问题已修复，
+保留原标签并以 v0.3.4 发布。
 
 #### 新增与改进
 
@@ -48,6 +51,7 @@
   或关闭终端的问题。暂时不可用的终端保留恢复监听，会话返回后自动重连，不重新执行 shell 或 Agent。
 - **丢失会话的明确恢复操作**：不再让已消失的终端只能反复点击 Reconnect。控制端可明确恢复已准备的
   Agent 会话或启动新进程；观察端提示先取得控制权。区分会话缺失与权限不足，接管本身不启动命令。
+  退出事件先于目录移除到达时也保留逻辑会话标识，修复随后显式恢复无法创建替代终端的竞态。
 - **历史滚动与输出延迟**：状态轮询、资源目录刷新、重新同步和数据通道重连不再把已有终端拉回底部。
   只为缺失或 epoch 已变化的镜像重新初始化；修复拖动滚动条时、Host 尚未确认导致偏移重复累加的问题。
 - **Windows 连接 Unix Host**：配置、目录浏览、项目和草稿路径正确保留 Linux/macOS 路径，修复
@@ -96,6 +100,8 @@ It also fixes the oversized client-event representation found during release val
 - **Explicit recovery for missing sessions:** panes no longer offer only an ineffective Reconnect.
   Controllers can resume a prepared saved Agent session or start a new process; observers are prompted
   to take control. Missing sessions and insufficient permissions are distinct, and takeover launches nothing.
+  Preserve the logical session identity when exit arrives before catalog removal, fixing a race that
+  prevented an explicit recovery from creating the replacement terminal.
 - **Scrollback and delayed output:** status polling, catalog refreshes, resynchronization, and data-channel
   reconnects preserve existing scroll positions. Only missing or new-epoch mirrors bootstrap again;
   scrollbar dragging no longer compounds offsets while awaiting Host acknowledgements.
@@ -118,10 +124,19 @@ It also fixes the oversized client-event representation found during release val
 - Desktop packages cover macOS arm64, Windows x86_64, and Linux x86_64, alongside Linux/macOS headless
   Servers for both architectures, an update manifest, and SHA-256 checksums. macOS remains ad-hoc signed,
   without Developer ID notarization.
+- v0.3.3 was tagged but not published: release validation exposed the terminal-recovery ordering race.
+  The tag is retained unchanged; v0.3.4 includes its fix.
 
-**完整提交对比 / Full comparison:** https://github.com/yuWorm/yttt/compare/v0.3.2...v0.3.3
+**完整提交对比 / Full comparison:** https://github.com/yuWorm/yttt/compare/v0.3.2...v0.3.4
 
-**使用文档 / Usage:** https://github.com/yuWorm/yttt/blob/v0.3.3/docs/usage.md
+**使用文档 / Usage:** https://github.com/yuWorm/yttt/blob/v0.3.4/docs/usage.md
+
+## 0.3.3 - 2026-09-20
+
+- 中文：仅创建标签；Linux 发布验证暴露丢失终端恢复的时序问题，未发布 GitHub Release。
+  修复和完整更新内容随 0.3.4 发布。
+- English: tagged only; Linux release validation exposed a missing-terminal recovery ordering race.
+  No GitHub Release was published. The fix and complete notes are included in 0.3.4.
 
 ## 0.3.2 - 2026-09-17
 
