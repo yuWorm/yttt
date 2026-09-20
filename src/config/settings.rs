@@ -21,6 +21,8 @@ use yttt_terminal::{
     TerminalCursorShape, TerminalHintConfig, TerminalOsc52Policy, is_valid_hint_alphabet,
 };
 
+pub const DEFAULT_TERMINAL_FONT_FAMILY: &str = "Hack Nerd Font Mono";
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 #[derive(Default)]

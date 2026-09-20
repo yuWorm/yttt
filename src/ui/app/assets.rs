@@ -166,6 +166,31 @@ pub(crate) fn load_ui_fonts(cx: &gpui::App) {
                 )
                 .as_slice(),
             ),
+            // Nerd Fonts v3.4.0 (Hack 3.003); licenses accompany the bundled font files.
+            Cow::Borrowed(
+                include_bytes!(
+                    "../../../assets/fonts/hack-nerd-font-mono/HackNerdFontMono-Regular.ttf"
+                )
+                .as_slice(),
+            ),
+            Cow::Borrowed(
+                include_bytes!(
+                    "../../../assets/fonts/hack-nerd-font-mono/HackNerdFontMono-Bold.ttf"
+                )
+                .as_slice(),
+            ),
+            Cow::Borrowed(
+                include_bytes!(
+                    "../../../assets/fonts/hack-nerd-font-mono/HackNerdFontMono-Italic.ttf"
+                )
+                .as_slice(),
+            ),
+            Cow::Borrowed(
+                include_bytes!(
+                    "../../../assets/fonts/hack-nerd-font-mono/HackNerdFontMono-BoldItalic.ttf"
+                )
+                .as_slice(),
+            ),
         ])
-        .expect("bundled IBM Plex Sans fonts must be valid");
+        .expect("bundled UI and terminal fonts must be valid");
 }

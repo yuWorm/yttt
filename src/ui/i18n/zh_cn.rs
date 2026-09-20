@@ -13,13 +13,13 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::OnboardingFontHeading => "选择终端字体",
         UiTextKey::OnboardingFontSubtitle => {
-            "为所有终端选择一个已安装的字体，之后也可以在设置中修改。"
+            "终端默认使用内置的 Hack Nerd Font Mono。未配置字体时，会自动选中检测到的等宽 Nerd Font；你可以在这里或之后的设置中修改。"
         }
         UiTextKey::OnboardingFontRecommendation => {
-            "未检测到已安装的等宽 Nerd Font。Alacritty 对非等宽字体支持较差，建议安装 Maple Mono NF："
+            "终端默认使用内置的 Hack Nerd Font Mono。也可以安装其他等宽 Nerd Font，例如 Maple Mono NF："
         }
         UiTextKey::OnboardingFontDetectedRecommendation => {
-            "已从系统字体中为你推荐了最适合终端的等宽 Nerd Font："
+            "检测到推荐的等宽 Nerd Font（已有选择会保留）："
         }
         UiTextKey::OnboardingAgentHeading => "选择编程 Agent",
         UiTextKey::OnboardingAgentSubtitle => "所选 Agent 将用于刚才选择的默认布局。",
@@ -881,7 +881,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsEnvironmentValuePlaceholder => "值",
         UiTextKey::SettingsSetEnvironmentVariable => "添加或更新",
         UiTextKey::SettingsFontFamily => "字体族",
-        UiTextKey::SettingsFontFamilyDescription => "终端字体族。",
+        UiTextKey::SettingsFontFamilyDescription => {
+            "终端字体族。System default 使用内置的 Hack Nerd Font Mono。"
+        }
         UiTextKey::SettingsSearchFont => "搜索字体...",
         UiTextKey::SettingsFontSize => "字体大小",
         UiTextKey::SettingsFontSizeDescription => "终端字体像素大小。",

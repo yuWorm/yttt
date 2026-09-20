@@ -62,12 +62,7 @@ impl Render for WorkbenchView {
                 recommend_installed_monospace_nerd_font(&system_fonts, |font_family| {
                     font_family_has_fixed_ascii_width(window, font_family)
                 });
-            self.onboarding
-                .as_mut()
-                .expect("onboarding must exist while detecting terminal fonts")
-                .font_detection = recommendation
-                .map(OnboardingFontDetection::Recommended)
-                .unwrap_or(OnboardingFontDetection::Missing);
+            self.apply_onboarding_font_detection(recommendation, window, cx);
         }
 
         let onboarding_terminal_font_select = self

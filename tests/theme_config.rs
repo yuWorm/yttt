@@ -426,14 +426,17 @@ fn terminal_config_uses_runtime_settings_and_colors() {
 }
 
 #[test]
-fn terminal_config_uses_upstream_default_font_when_setting_is_empty() {
+fn terminal_config_resolves_empty_fonts_to_bundled_hack_without_overriding_explicit_fonts() {
     let mut runtime = ThemeRuntime::default();
-    runtime.terminal_settings.font_family = String::new();
-
-    let config = runtime.to_terminal_config();
-
-    assert_eq!(
-        config.font_family,
-        yttt_terminal::TerminalConfig::default().font_family
-    );
+    for setting in ["", "   ", "Custom Mono"] {
+        runtime.terminal_settings.font_family = setting.to_string();
+        assert_eq!(
+            runtime.to_terminal_config().font_family,
+            if setting.trim().is_empty() {
+                "Hack Nerd Font Mono"
+            } else {
+                setting
+            }
+        );
+    }
 }

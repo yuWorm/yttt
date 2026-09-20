@@ -13,13 +13,13 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         }
         UiTextKey::OnboardingFontHeading => "Choose a terminal font",
         UiTextKey::OnboardingFontSubtitle => {
-            "Select an installed font for every terminal. You can change it later in Settings."
+            "The default terminal font is bundled Hack Nerd Font Mono. When no font is configured, a detected monospaced Nerd Font is selected automatically. You can change it here or later in Settings."
         }
         UiTextKey::OnboardingFontRecommendation => {
-            "No installed monospaced Nerd Font was detected. Alacritty renders proportional fonts poorly. We recommend installing Maple Mono NF:"
+            "The terminal uses bundled Hack Nerd Font Mono by default. You can also install another monospaced Nerd Font, such as Maple Mono NF:"
         }
         UiTextKey::OnboardingFontDetectedRecommendation => {
-            "We found and recommend the best installed monospaced Nerd Font for your terminal:"
+            "Detected recommended monospaced Nerd Font (your existing selection is kept):"
         }
         UiTextKey::OnboardingAgentHeading => "Choose a coding agent",
         UiTextKey::OnboardingAgentSubtitle => "This agent will be used in the layout you selected.",
@@ -1037,7 +1037,9 @@ pub(super) fn text(key: UiTextKey) -> &'static str {
         UiTextKey::SettingsEnvironmentValuePlaceholder => "Value",
         UiTextKey::SettingsSetEnvironmentVariable => "Add or update",
         UiTextKey::SettingsFontFamily => "Font family",
-        UiTextKey::SettingsFontFamilyDescription => "Terminal font family.",
+        UiTextKey::SettingsFontFamilyDescription => {
+            "Terminal font family. System default uses bundled Hack Nerd Font Mono."
+        }
         UiTextKey::SettingsSearchFont => "Search font...",
         UiTextKey::SettingsFontSize => "Font size",
         UiTextKey::SettingsFontSizeDescription => "Terminal font size in pixels.",

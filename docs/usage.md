@@ -845,6 +845,13 @@ UI controls and picker geometry scale with `general.ui_font_size`. In the Zed st
 row height is `terminal.font_size × terminal.line_height`; Rounded retains font-metric-based
 row height. Terminal grid origins are snapped to device pixels in the Zed style.
 
+An empty `terminal.font_family` (the **System default** option) uses bundled **Hack Nerd Font Mono**,
+independently of the UI style and installed system fonts. Regular, bold, italic, and bold italic
+faces are included from [Nerd Fonts v3.4.0](https://github.com/ryanoasis/nerd-fonts/tree/v3.4.0/patched-fonts/Hack)
+(Hack 3.003); their licenses are in `assets/fonts/hack-nerd-font-mono/`.
+Onboarding automatically selects and saves the recommended detected monospaced Nerd Font when
+no terminal font is configured. Existing preferences and subsequent manual choices are preserved.
+
 Imported Zed themes resolve missing or `null` color roles from Zed's dark/light defaults.
 Muted, placeholder, disabled, and icon colors remain independent, as do the title bar,
 inactive title bar, toolbar, and status bar surfaces.

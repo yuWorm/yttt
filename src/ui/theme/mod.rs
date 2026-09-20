@@ -15,7 +15,10 @@ pub use yttt_ui::style::{UiStyle, UiStyleId};
 pub use yttt_ui::theme::WorkbenchTheme;
 
 use crate::config::{
-    settings::{AppSettings, TerminalSettings, WindowBackgroundEffect, WindowSettings},
+    settings::{
+        AppSettings, DEFAULT_TERMINAL_FONT_FAMILY, TerminalSettings, WindowBackgroundEffect,
+        WindowSettings,
+    },
     theme::ThemeStore,
 };
 
@@ -519,9 +522,8 @@ impl ThemeRuntime {
     }
 
     pub fn to_terminal_config(&self) -> TerminalConfig {
-        let default_config = TerminalConfig::default();
         let font_family = if self.terminal_settings.font_family.trim().is_empty() {
-            default_config.font_family
+            DEFAULT_TERMINAL_FONT_FAMILY.to_string()
         } else {
             self.terminal_settings.font_family.clone()
         };

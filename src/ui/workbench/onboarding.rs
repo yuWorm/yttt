@@ -55,6 +55,39 @@ impl Default for OnboardingState {
     }
 }
 
+impl WorkbenchView {
+    pub(super) fn apply_onboarding_font_detection(
+        &mut self,
+        recommendation: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let onboarding = self
+            .onboarding
+            .as_ref()
+            .expect("onboarding must exist while detecting terminal fonts");
+        if onboarding.font_detection != OnboardingFontDetection::Pending {
+            return;
+        }
+        if self.app_settings.terminal.font_family.trim().is_empty()
+            && let Some(font_family) = recommendation.as_deref()
+        {
+            if let Err(error) = self.set_terminal_font_family(font_family) {
+                self.load_error = Some(error.to_string());
+            }
+            self.settings.settings_font_family_select = None;
+            self.settings.settings_font_family_select_subscription = None;
+            self.apply_appearance_change(window, cx);
+        }
+        self.onboarding
+            .as_mut()
+            .expect("onboarding must exist while detecting terminal fonts")
+            .font_detection = recommendation
+            .map(OnboardingFontDetection::Recommended)
+            .unwrap_or(OnboardingFontDetection::Missing);
+    }
+}
+
 pub(super) fn onboarding_view(
     cx: &mut Context<WorkbenchView>,
     state: &OnboardingState,
@@ -1045,10 +1078,11 @@ mod tests {
     use super::*;
 
     #[gpui::test]
-    fn detected_font_still_shows_the_recommended_family(cx: &mut gpui::TestAppContext) {
+    fn detected_font_is_selected_persisted_and_not_reapplied(cx: &mut gpui::TestAppContext) {
         cx.update(gpui_component::init);
         let temp = tempdir().unwrap();
         let paths = AppConfigPaths::from_config_dir(temp.path().join("config"));
+        let saved_paths = paths.clone();
         let root_slot = Rc::new(RefCell::new(None));
         let root_slot_for_window = root_slot.clone();
         let (_component_root, cx) = cx.add_window_view(move |window, cx| {
@@ -1058,11 +1092,16 @@ mod tests {
         });
         let root = root_slot.borrow_mut().take().unwrap();
 
-        root.update(cx, |root, cx| {
+        root.update_in(cx, |root, window, cx| {
+            root.settings_font_family_select(window, cx);
             let onboarding = root.onboarding.as_mut().expect("onboarding must be active");
             onboarding.step = OnboardingStep::Font;
-            onboarding.font_detection =
-                OnboardingFontDetection::Recommended("Maple Mono NF CN".to_string());
+            onboarding.font_detection = OnboardingFontDetection::Pending;
+            root.apply_onboarding_font_detection(
+                Some("Hack Nerd Font Mono".to_string()),
+                window,
+                cx,
+            );
             cx.notify();
         });
         cx.run_until_parked();
@@ -1080,14 +1119,95 @@ mod tests {
                 .is_none()
         );
         cx.read(|app| {
+            let root = root.read(app);
+            let Some(OnboardingFontDetection::Recommended(font)) =
+                root.onboarding.as_ref().map(|state| &state.font_detection)
+            else {
+                panic!("bundled monospace Nerd Font must be detected");
+            };
+            let select = root.settings.settings_font_family_select.as_ref().unwrap();
             assert_eq!(
-                root.read(app)
-                    .onboarding
-                    .as_ref()
-                    .map(|state| &state.font_detection),
-                Some(&OnboardingFontDetection::Recommended(
-                    "Maple Mono NF CN".to_string()
-                ))
+                select
+                    .read(app)
+                    .selected_value()
+                    .map(|value| value.as_ref()),
+                Some(font.as_str())
+            );
+            assert_eq!(
+                root.appearance.runtime().to_terminal_config().font_family,
+                *font
+            );
+            assert_eq!(
+                load_settings(&saved_paths)
+                    .unwrap()
+                    .settings
+                    .terminal
+                    .font_family,
+                *font
+            );
+        });
+
+        root.update_in(cx, |root, window, cx| {
+            root.set_terminal_font_family("").unwrap();
+            root.settings.settings_font_family_select = None;
+            root.settings.settings_font_family_select_subscription = None;
+            root.settings_font_family_select(window, cx);
+            cx.notify();
+            root.apply_onboarding_font_detection(Some("Maple Mono NF".to_string()), window, cx);
+        });
+        cx.run_until_parked();
+        cx.read(|app| {
+            let root = root.read(app);
+            assert!(root.app_settings.terminal.font_family.is_empty());
+            assert_eq!(
+                root.appearance.runtime().to_terminal_config().font_family,
+                "Hack Nerd Font Mono"
+            );
+            assert!(
+                load_settings(&saved_paths)
+                    .unwrap()
+                    .settings
+                    .terminal
+                    .font_family
+                    .is_empty()
+            );
+        });
+
+        root.update_in(cx, |root, window, cx| {
+            root.set_terminal_font_family("User Mono").unwrap();
+            root.settings.settings_font_family_select = None;
+            root.settings.settings_font_family_select_subscription = None;
+            root.settings_font_family_select(window, cx);
+            root.onboarding.as_mut().unwrap().font_detection = OnboardingFontDetection::Pending;
+            root.apply_onboarding_font_detection(
+                Some("Hack Nerd Font Mono".to_string()),
+                window,
+                cx,
+            );
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.read(|app| {
+            let root = root.read(app);
+            let select = root.settings.settings_font_family_select.as_ref().unwrap();
+            assert_eq!(
+                select
+                    .read(app)
+                    .selected_value()
+                    .map(|value| value.as_ref()),
+                Some("User Mono")
+            );
+            assert_eq!(
+                root.appearance.runtime().to_terminal_config().font_family,
+                "User Mono"
+            );
+            assert_eq!(
+                load_settings(&saved_paths)
+                    .unwrap()
+                    .settings
+                    .terminal
+                    .font_family,
+                "User Mono"
             );
         });
     }

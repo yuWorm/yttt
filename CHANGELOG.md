@@ -4,6 +4,8 @@
 
 ### 中文
 
+- 内置 Hack Nerd Font Mono 常规、粗体、斜体和粗斜体，未设置终端字体时直接使用，
+  无需系统安装。引导页检测到推荐等宽 Nerd Font 后自动选中并保存，保留已有配置与后续手动选择。
 - 修复窗口恢复后旧终端已消失却只能反复点击 Reconnect 的问题：确认会话缺失后，
   控制端可明确恢复已准备的 Agent 会话或启动新进程；观察端提示先取得控制权。
   区分会话缺失与控制权不足，接管本身不自动执行命令，重现的旧会话仍直接重连。
@@ -39,6 +41,9 @@
 
 ### English
 
+- Bundled Hack Nerd Font Mono in regular, bold, italic, and bold italic as the default for
+  unconfigured terminals. Onboarding now selects and saves the detected recommended monospaced
+  Nerd Font automatically, without overwriting existing preferences or later manual choices.
 - Fixed restored panes offering only an ineffective **Reconnect** after the old terminal disappeared.
   Controllers can explicitly resume a prepared saved Agent session or start a new process;
   observers are prompted to take control. Missing sessions and insufficient control are reported
