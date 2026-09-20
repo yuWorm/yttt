@@ -22,7 +22,7 @@ exclude = ["vendor/gpui-component", "vendor/gpui-markdown-editor", "vendor/alacr
 resolver = "3"
 
 [workspace.package]
-version = "0.3.3"
+version = "0.3.4"
 edition = "2024"
 
 [package]

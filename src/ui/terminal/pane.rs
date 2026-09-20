@@ -1509,6 +1509,11 @@ impl TerminalPaneView {
         };
         self.terminal_error = Some(message.clone());
         self.clear_terminal_viewport();
+        // Exit finalization may have cleared the live binding before catalog removal.
+        // A lost pane still needs its stable identity to recover or replace that session.
+        if self.host_session_id.is_none() {
+            self.host_session_id = Some(self.host_session_id());
+        }
         self.host_epoch = None;
         self.host_session_epoch = None;
         self.pending_start = None;
