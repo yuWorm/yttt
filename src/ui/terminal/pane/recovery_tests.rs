@@ -18,14 +18,14 @@ use yttt_transport_local::{
 
 const COMMAND: &str = "printf 'start\\n' >> starts; while IFS= read -r line; do printf '%s\\n' \"$line\" >> inputs; done";
 
-struct RecoveryHost {
+pub(crate) struct RecoveryHost {
     _runtime: tokio::runtime::Runtime,
-    root: tempfile::TempDir,
+    pub(crate) root: tempfile::TempDir,
     bootstrap: HostBootstrap,
 }
 
 impl RecoveryHost {
-    fn start() -> Self {
+    pub(crate) fn start() -> Self {
         let root = tempfile::tempdir().unwrap();
         let runtime_root = root.path().join("runtime");
         fs::create_dir_all(&runtime_root).unwrap();
@@ -73,7 +73,7 @@ impl RecoveryHost {
         }
     }
 
-    fn client(&self, id: &str) -> Arc<DesktopHostRuntime> {
+    pub(crate) fn client(&self, id: &str) -> Arc<DesktopHostRuntime> {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let connector =
             yttt_transport::SharedConnector::new(LocalConnector::new(LocalEndpoint::for_profile(
@@ -523,5 +523,41 @@ fn missing_terminal_waits_for_control_without_automatically_replaying(cx: &mut T
         cx.read(|app| matches!(pane.read(app).lifecycle, PaneLifecycle::Lost { .. }))
     });
     controller.shutdown_client();
+    runtime.shutdown_client();
+}
+
+#[gpui::test]
+fn rejected_input_during_publication_recovers_without_restarting_process(cx: &mut TestAppContext) {
+    let host = RecoveryHost::start();
+    let runtime = host.client("controller");
+    let (pane, cx) = open_pane(cx, runtime.clone(), host.root.path());
+    pump_until(cx, "initial terminal", |cx| {
+        cx.read(|app| pane.read(app).is_running()) && host.root.path().join("starts").exists()
+    });
+    let original = catalog(&runtime).terminals.remove(0);
+    runtime.begin_exit_publication();
+    send_input(&pane, cx);
+    pump_until(cx, "input rejection", |cx| {
+        cx.read(|app| pane.read(app).terminal_error.is_some())
+    });
+    runtime.cancel_exit_publication();
+    send_input(&pane, cx);
+    pump_until(cx, "input after publication cancelled", |_| {
+        fs::read_to_string(host.root.path().join("inputs"))
+            .ok()
+            .as_deref()
+            == Some("x\n")
+    });
+    assert_eq!(
+        fs::read_to_string(host.root.path().join("starts")).unwrap(),
+        "start\n"
+    );
+    assert_eq!(
+        catalog(&runtime).terminals[0].session_epoch,
+        original.session_epoch
+    );
+    runtime
+        .terminate_many_confirmed(vec![original.session_id])
+        .unwrap();
     runtime.shutdown_client();
 }

@@ -198,14 +198,9 @@ pub fn run_remote(launch: crate::remote_launch::RemoteLaunch) {
             if let Err(error) = remote_connect::open(
                 launch,
                 move |remote, cx| {
-                    let pending_workspaces = remote.runtime.pending_workspace_count().max(1);
+                    let workspace_count = remote.runtime.pending_workspace_count().max(1);
                     cx.set_global(HostRuntimeGlobal::ready(remote.runtime));
                     let (app_settings, theme_runtime) = load_app_runtime(&remote.config_paths);
-                    let workspace_count = if app_settings.general.restore_last_session {
-                        pending_workspaces
-                    } else {
-                        1
-                    };
                     let appearance = AppearanceState::new(theme_runtime);
                     Theme::global_mut(cx).apply_config(&Rc::new(
                         appearance.runtime().to_gpui_component_theme_config(),
@@ -355,10 +350,15 @@ fn open_workbench_window(
     let startup_mode = window_context.startup_mode;
     let login_startup = window_context.login_startup.clone();
     let workbenches = window_context.workbenches.clone();
+    let remote = cx
+        .global::<HostRuntimeGlobal>()
+        .runtime()
+        .is_some_and(|runtime| runtime.is_remote());
     let restore_existing = matches!(intent, WindowIntent::Restore)
-        && load_settings(&config_paths)
-            .map(|loaded| loaded.settings.general.restore_last_session)
-            .unwrap_or(false);
+        && (remote
+            || load_settings(&config_paths)
+                .map(|loaded| loaded.settings.general.restore_last_session)
+                .unwrap_or(false));
     let has_host_snapshot = cx
         .global::<HostRuntimeGlobal>()
         .runtime()
@@ -945,6 +945,117 @@ pub fn window_background_appearance(effect: WindowBackgroundEffect) -> WindowBac
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[gpui::test]
+    fn remote_window_opens_host_project_when_startup_restore_is_disabled(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::config::profile::{
+            EnvironmentKind, HostConnectPolicy, ProfilePersistence, ProjectConfigPolicy,
+        };
+        use crate::model::{
+            ids::ProjectId,
+            project::{ProjectDescriptor, ProjectLocation},
+            workspace::Workspace,
+        };
+        use crate::ui::terminal::pane::recovery_tests::RecoveryHost;
+        use yttt_protocol::workspace::{
+            WorkspaceId, WorkspaceOperationId, WorkspaceRequest, WorkspaceSnapshot,
+        };
+
+        let host = RecoveryHost::start();
+        let source = host.client("source");
+        let project_id = ProjectId::new("already-open");
+        let mut workspace = Workspace::new();
+        workspace
+            .open_project(
+                ProjectDescriptor::new(
+                    project_id.clone(),
+                    ProjectLocation::local(host.root.path().to_path_buf()),
+                ),
+                crate::config::default_layout::DefaultLayoutTemplate::builtin()
+                    .materialize("Already open"),
+            )
+            .unwrap();
+        let workspace_id = WorkspaceId::new("existing-window").unwrap();
+        let mut editor = crate::ui::editor::ProjectEditorWorkspaceState::default();
+        editor.open_project(
+            project_id.clone(),
+            host.root.path(),
+            Some("shell".into()),
+            true,
+            240.0,
+        );
+        source
+            .workspace_request(WorkspaceRequest::Register {
+                workspace_id: workspace_id.clone(),
+                name: "Existing window".into(),
+            })
+            .unwrap();
+        source
+            .workspace_request(WorkspaceRequest::Commit {
+                workspace_id,
+                expected_revision: 0,
+                operation_id: WorkspaceOperationId::new("seed").unwrap(),
+                snapshot: WorkspaceSnapshot::new(serde_json::json!({
+                    "schema_version": 1,
+                    "workspace": workspace.persisted_state(),
+                    "editor": editor.snapshot(),
+                    "documents": [],
+                }))
+                .unwrap(),
+                drafts: vec![],
+            })
+            .unwrap();
+        let remote = host.client("remote");
+        let profile = AppProfile::scoped(
+            yttt_core::model::ids::ProfileId::new("remote-window-test"),
+            EnvironmentKind::Test,
+            ProfilePersistence::Ephemeral,
+            host.root.path().join("client"),
+            ProjectConfigPolicy::Overlay,
+            HostConnectPolicy::ProfileDiscovery,
+        );
+        let config_paths = AppConfigPaths::from_config_dir(profile.paths().config.clone());
+        std::fs::create_dir_all(config_paths.config_dir()).unwrap();
+        std::fs::write(config_paths.settings_file(),
+            "[general]\nonboarding_completed = true\nauto_check_updates = false\nrestore_last_session = false\n").unwrap();
+        let (app_settings, theme_runtime) = load_app_runtime(&config_paths);
+        let appearance = AppearanceState::new(theme_runtime);
+        let context = DesktopWindowContext {
+            profile,
+            config_paths,
+            app_settings,
+            login_startup: None,
+            appearance: appearance.clone(),
+            startup_mode: StartupMode::Normal,
+            workbenches: Rc::new(RefCell::new(Vec::new())),
+        };
+        cx.background_executor.allow_parking();
+        cx.skip_drawing();
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            yttt_terminal::init(cx);
+            cx.set_global(appearance);
+            cx.set_global(HostRuntimeGlobal::ready(remote));
+            open_workbench_window(&context, WindowIntent::Restore, cx).unwrap();
+        });
+        let view = context.workbenches.borrow()[0].upgrade().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            cx.run_until_parked();
+            if cx.read(|cx| view.read(cx).workspace().selected_project_id() == Some(&project_id)) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "remote connection stayed on the empty dashboard: {:?}",
+                cx.read(|cx| view.read(cx).visible_error_message().map(str::to_owned))
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 
     #[test]
     fn production_desktop_remains_running_after_the_last_window_closes() {

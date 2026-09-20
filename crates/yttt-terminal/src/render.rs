@@ -298,6 +298,7 @@ fn padded_image_bounds(bounds: Bounds<Pixels>, width: u16, height: u16) -> Bound
 struct RendererShared {
     metrics_key: Option<FontMetricsKey>,
     metrics: Option<TerminalFontMetrics>,
+    render_scale: f32,
     rows: HashMap<usize, CachedRowDisplay>,
     images: HashMap<usize, CachedTerminalImage>,
     image_scope: Option<(yttt_core::model::ids::TerminalSessionId, u64)>,
@@ -311,6 +312,7 @@ impl RendererShared {
             metrics_key: None,
             metrics: None,
             rows: HashMap::new(),
+            render_scale: 1.0,
             images: HashMap::new(),
             image_scope: None,
             #[cfg(test)]
@@ -524,6 +526,19 @@ impl TerminalRenderer {
         shared.metrics = Some(metrics);
         shared.rows.clear();
         metrics
+    }
+
+    /// Scale a measured frame while retaining unscaled metrics for the next layout.
+    /// Row shaping is invalidated only when the presentation scale changes.
+    pub(crate) fn scale_frame(&mut self, scale: f32) {
+        self.font_size *= scale;
+        self.cell_width *= scale;
+        self.cell_height *= scale;
+        let mut shared = self.shared.lock();
+        if shared.render_scale != scale {
+            shared.render_scale = scale;
+            shared.rows.clear();
+        }
     }
     pub(crate) fn grid_origin(
         &self,

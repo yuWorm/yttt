@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- 只读观察端按本地可用空间等比缩小远端终端网格，保持底行、光标和选择坐标可见且一致，
+  不改变控制端 PTY 尺寸；历史滚动使用当前快照的几何版本，避免远端调整尺寸后滚动失效。
+- 修复 Windows 空 IME 预编辑状态吞掉后续按键并隐藏光标的问题。远端输入被临时拒绝后，
+  后续输入仍可恢复；被拒绝的输入不会自动重放，也不会因此重启进程。
+- 连接远端时恢复 Host 已有窗口和项目，不再受本机“恢复上次会话”启动偏好限制；
+  本地启动和显式新建空窗口的行为不变。
+- Fit the authoritative terminal grid within read-only observers without resizing the controlling
+  PTY; keep cursor/selection coordinates aligned and use current geometry epochs for history scrolling.
+- Clear empty IME preedit state so Windows keys and cursors recover. Remote write rejections no
+  longer permanently stop later input; rejected input is not replayed and the process is not restarted.
+- Restore existing Host windows and projects on remote connection regardless of the local startup
+  restore preference. Local startup and explicitly empty windows keep their existing behavior.
 - 修复 OMP 全局／显式扩展重复加载及进程内子任务共用终端状态通道的问题：
   每个通道仅由主会话上报生命周期，避免子任务结束清除主 Agent 状态或抢占状态流。
   更新后需让新启动的 OMP 加载新版扩展；已运行的会话不会自动替换扩展代码。

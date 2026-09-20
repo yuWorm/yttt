@@ -384,7 +384,14 @@ impl Write for HostTerminalWriter {
                 context,
                 bytes: bytes.to_vec(),
             })
-            .map_err(|error| io::Error::new(io::ErrorKind::WouldBlock, error.to_string()))?;
+            .map_err(|error| {
+                let kind = match error {
+                    ClientCoreError::Backpressure => io::ErrorKind::WouldBlock,
+                    ClientCoreError::NotConnected => io::ErrorKind::NotConnected,
+                    _ => io::ErrorKind::BrokenPipe,
+                };
+                io::Error::new(kind, error.to_string())
+            })?;
         Ok(bytes.len())
     }
 
@@ -850,13 +857,14 @@ impl TerminalPaneView {
                     );
                     Ok(())
                 })
-                .with_semantic_scroll_callback(move |display_offset| {
+                .with_semantic_scroll_callback(move |display_offset, geometry_epoch| {
                     if matches!(scroll_runtime.state(), ConnectionState::Ready { .. }) {
-                        let context = next_mutation_context(
+                        let mut context = next_mutation_context(
                             &scroll_mutation_context,
                             &scroll_mutation_sequence,
                             None,
                         );
+                        context.geometry_epoch = geometry_epoch;
                         let _ = scroll_runtime.request(Request::ScrollTerminal(ScrollTerminal {
                             session_id: scroll_session_id.clone(),
                             context,
@@ -890,6 +898,7 @@ impl TerminalPaneView {
         }
         let terminal_updates = host_runtime.terminal_updates(session_id.clone());
         terminal.update(cx, |terminal, cx| {
+            terminal.set_read_only(!host_runtime.is_controller(), cx);
             terminal.attach_semantic_viewport_stream(terminal_updates, cx);
         });
 
@@ -1235,6 +1244,11 @@ impl TerminalPaneView {
     ) {
         if self.generation != generation {
             return;
+        }
+        if let Some(terminal) = &self.terminal {
+            terminal.update(cx, |terminal, cx| {
+                terminal.set_read_only(!runtime.is_controller(), cx);
+            });
         }
         match event {
             ClientEvent::TerminalUnavailable(unavailable) if unavailable == *session_id => {
@@ -2095,4 +2109,4 @@ mod tests {
 }
 
 #[cfg(all(test, unix))]
-mod recovery_tests;
+pub(crate) mod recovery_tests;

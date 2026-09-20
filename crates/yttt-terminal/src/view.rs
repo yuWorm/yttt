@@ -720,6 +720,7 @@ struct SemanticInputSnapshot {
     history_size: u64,
     rows: u64,
     display_offset: u64,
+    geometry_epoch: u64,
 }
 
 impl SemanticInputSnapshot {
@@ -729,6 +730,7 @@ impl SemanticInputSnapshot {
         self.history_size = viewport.history_size;
         self.rows = u64::from(viewport.geometry.rows);
         self.display_offset = viewport.display_offset;
+        self.geometry_epoch = viewport.geometry_epoch;
     }
 }
 
@@ -851,7 +853,7 @@ pub struct TerminalView {
     semantic_viewport: Arc<parking_lot::Mutex<SemanticViewportState>>,
     semantic_updates: Arc<SemanticUpdateMailbox>,
     semantic_input: SemanticInputSnapshot,
-    semantic_scroll_callback: Option<Arc<dyn Fn(u64) + Send + Sync>>,
+    semantic_scroll_callback: Option<Arc<dyn Fn(u64, u64) + Send + Sync>>,
     semantic_scroll_offset: Option<u64>,
     semantic_selection: Option<SemanticSelection>,
     performance: TerminalPerformanceHandle,
@@ -879,6 +881,8 @@ pub struct TerminalView {
 
     /// Optional callback to intercept key events before terminal processing
     key_handler: Option<Arc<KeyHandler>>,
+    /// Observers render the Host grid without resizing it or sending terminal input.
+    read_only: bool,
     pressed_keys: HashSet<TerminalKey>,
     pointer_hidden: bool,
 
@@ -969,6 +973,10 @@ impl TerminalImeState {
         text: &str,
         selected_range_utf16: Option<std::ops::Range<usize>>,
     ) {
+        if text.is_empty() {
+            self.clear_marked_text();
+            return;
+        }
         let len = text.encode_utf16().count();
         let selected = selected_range_utf16.unwrap_or(len..len);
         let start = selected.start.min(len);
@@ -1156,6 +1164,7 @@ impl TerminalView {
             _semantic_event_task: None,
             config,
             key_handler: None,
+            read_only: false,
             pressed_keys: HashSet::new(),
             pointer_hidden: false,
             bell_callback: None,
@@ -1186,6 +1195,20 @@ impl TerminalView {
             cursor_visible: true,
             last_focused: false,
         }
+    }
+
+    /// Change observation mode without changing the authoritative terminal geometry.
+    pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
+        if self.read_only == read_only {
+            return;
+        }
+        self.read_only = read_only;
+        self.ime_state.clear_marked_text();
+        self.pressed_keys.clear();
+        self.held_mouse_button = None;
+        self.viewport.lock().take();
+        self.restart_cursor_blink(cx);
+        cx.notify();
     }
 
     fn observe_semantic_selection(&mut self, viewport: &SemanticViewport) {
@@ -1231,9 +1254,10 @@ impl TerminalView {
         }));
     }
 
+    /// Reports the absolute history offset and the geometry epoch it was computed against.
     pub fn with_semantic_scroll_callback(
         mut self,
-        callback: impl Fn(u64) + Send + Sync + 'static,
+        callback: impl Fn(u64, u64) + Send + Sync + 'static,
     ) -> Self {
         self.semantic_scroll_callback = Some(Arc::new(callback));
         self
@@ -1279,7 +1303,7 @@ impl TerminalView {
         if target != current
             && let Some(callback) = &self.semantic_scroll_callback
         {
-            callback(target);
+            callback(target, self.semantic_input.geometry_epoch);
         }
     }
 
@@ -1491,11 +1515,11 @@ impl TerminalView {
     }
 
     fn enqueue_protocol(&self, bytes: Bytes) -> bool {
-        self.io.write_input(bytes).is_ok()
+        !self.read_only && self.io.write_input(bytes).is_ok()
     }
 
     fn enqueue_input(&mut self, bytes: Bytes, cx: &mut Context<Self>) -> bool {
-        if bytes.is_empty() {
+        if self.read_only || bytes.is_empty() {
             return false;
         }
         if let Err(message) = self.io.write_input(bytes) {
@@ -2944,7 +2968,7 @@ impl TerminalView {
 
         let mode = self.mode();
         let modifiers = Self::terminal_modifiers(event.modifiers);
-        if !modifiers.shift && Self::mouse_reporting(mode) {
+        if !self.read_only && !modifiers.shift && Self::mouse_reporting(mode) {
             let mut reports = BytesMut::with_capacity(
                 (lines.unsigned_abs() + columns.unsigned_abs()) as usize * 12,
             );
@@ -2989,7 +3013,7 @@ impl TerminalView {
             return;
         }
 
-        if mode.contains(TermMode::ALT_SCREEN) {
+        if !self.read_only && mode.contains(TermMode::ALT_SCREEN) {
             if mode.contains(TermMode::ALTERNATE_SCROLL) && !modifiers.shift && lines != 0 {
                 let sequence = if lines > 0 { b"\x1bOA" } else { b"\x1bOB" };
                 let mut input =
@@ -3241,7 +3265,7 @@ impl TerminalView {
                 || terminal_cell_size(current.cell_width) != cell_width
                 || terminal_cell_size(current.cell_height) != cell_height
         });
-        if pty_geometry_changed {
+        if pty_geometry_changed && !self.read_only {
             let _ = self.io.resize(
                 viewport.cols as u16,
                 viewport.rows as u16,
@@ -3251,6 +3275,7 @@ impl TerminalView {
         }
         if dimensions_changed {
             self.render_cache.lock().clear();
+            self.semantic_viewport.lock().full_damage = true;
             self.renderer.invalidate_palette();
         }
         self.state
@@ -3313,7 +3338,7 @@ impl TerminalView {
     }
 
     fn platform_text_input_allowed(&self) -> bool {
-        !self.is_vi_mode() || self.search.active
+        self.search.active || (!self.read_only && !self.is_vi_mode())
     }
 
     /// Enter or leave terminal Vi cursor mode without synthesizing a key event.
@@ -3734,6 +3759,7 @@ impl Render for TerminalView {
         );
         let render_overlays = self.render_overlays();
         let render_generation = self.render_generation.load(Ordering::Acquire);
+        let read_only = self.read_only;
         let hint_active = self.hint.active;
         let key_context = if self.search.active {
             "YtttTerminal YtttTerminalSearch"
@@ -3805,7 +3831,7 @@ impl Render for TerminalView {
                         let prepaint_started = Instant::now();
 
                         let mut measured_renderer = renderer;
-                        let metrics = measured_renderer.ensure_metrics(window);
+                        let mut metrics = measured_renderer.ensure_metrics(window);
                         let effective_padding = if show_scrollbar {
                             Edges {
                                 right: padding.right.max(scrollbar_gutter),
@@ -3825,6 +3851,33 @@ impl Render for TerminalView {
                         let available_height: f32 =
                             (bounds.size.height - effective_padding.top - effective_padding.bottom)
                                 .into();
+                        let scale = if read_only && available_width > 0.0 && available_height > 0.0
+                        {
+                            semantic_viewport
+                                .lock()
+                                .viewport
+                                .as_ref()
+                                .map_or(1.0, |host| {
+                                    let width = f32::from(metrics.cell_width)
+                                        * f32::from(host.geometry.cols.max(1));
+                                    let height = f32::from(metrics.cell_height)
+                                        * f32::from(host.geometry.rows.max(1));
+                                    (available_width / width)
+                                        .min(available_height / height)
+                                        .min(1.0)
+                                })
+                        } else {
+                            1.0
+                        };
+                        // Round inward so the last cell cannot overflow through f32 rounding.
+                        let scale = if scale < 1.0 {
+                            scale.next_down()
+                        } else {
+                            scale
+                        };
+                        measured_renderer.scale_frame(scale);
+                        metrics.cell_width = measured_renderer.cell_width;
+                        metrics.cell_height = measured_renderer.cell_height;
                         let cell_width: f32 = metrics.cell_width.into();
                         let cell_height: f32 = metrics.cell_height.into();
                         let cols = ((available_width.max(0.0) / cell_width) as usize).max(1);
@@ -4176,6 +4229,93 @@ mod tests {
             }],
             graphics: Vec::new(),
         }
+    }
+
+    #[gpui::test]
+    fn observer_keeps_bottom_right_cell_visible_without_resizing_host(cx: &mut TestAppContext) {
+        let resizes = Arc::new(AtomicUsize::new(0));
+        let observed_resizes = resizes.clone();
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            let mut terminal =
+                TerminalView::new_semantic(io::sink(), TerminalConfig::default(), cx)
+                    .with_resize_callback(move |_, _, _, _| {
+                        observed_resizes.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    });
+            terminal.set_read_only(true, cx);
+            terminal
+        });
+        let mut host = semantic_viewport(1);
+        host.geometry.cols = 240;
+        host.geometry.rows = 120;
+        host.cursor.row = 119;
+        host.cursor.column = 239;
+        let mut last = semantic_row(120, 119, "X");
+        last.spans[0].start_column = 239;
+        host.rows = vec![last];
+        terminal.update(cx, |terminal, cx| {
+            terminal.set_read_only(true, cx);
+            terminal.set_semantic_viewport(host, cx);
+        });
+        cx.refresh().unwrap();
+        cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            let viewport = terminal.viewport.lock().unwrap();
+            let cursor = viewport.cursor_bounds.unwrap();
+            assert!(
+                cursor.bottom() <= viewport.bounds.bottom() - viewport.padding.bottom,
+                "cursor={cursor:?} bounds={:?} padding={:?} cell_height={:?}",
+                viewport.bounds,
+                viewport.padding,
+                viewport.cell_height
+            );
+            assert!(cursor.right() <= viewport.bounds.right() - viewport.padding.right);
+            assert_eq!(
+                terminal.point_for_position(cursor.center()).unwrap(),
+                AlacPoint::new(Line(119), Column(239))
+            );
+        });
+        assert_eq!(resizes.load(Ordering::SeqCst), 0);
+    }
+
+    #[gpui::test]
+    fn semantic_input_recovers_after_write_rejection_without_replaying_input(
+        cx: &mut TestAppContext,
+    ) {
+        cx.background_executor.allow_parking();
+        let recorded = RecordingWriter::scripted([
+            crate::test_support::WriteStep::Accept(usize::MAX),
+            crate::test_support::WriteStep::Error(io::ErrorKind::PermissionDenied),
+        ]);
+        let writer = recorded.clone();
+        let errors = Arc::new(AtomicUsize::new(0));
+        let reported = errors.clone();
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new_semantic(writer, TerminalConfig::default(), cx)
+                .with_io_error_callback(move |_, _, _, _| {
+                    reported.fetch_add(1, Ordering::SeqCst);
+                })
+        });
+        terminal.update_in(cx, |terminal, window, cx| {
+            terminal.set_semantic_viewport(semantic_viewport(1), cx);
+            terminal.focus_handle().focus(window, cx);
+            terminal.replace_text_in_range(None, "a", window, cx);
+        });
+        wait_for_bytes(&recorded, b"a");
+        terminal.update_in(cx, |terminal, window, cx| {
+            terminal.replace_text_in_range(None, "b", window, cx);
+        });
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while errors.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+            cx.run_until_parked();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(errors.load(Ordering::SeqCst), 1);
+        terminal.update_in(cx, |terminal, window, cx| {
+            terminal.set_semantic_viewport(semantic_viewport(2), cx);
+            terminal.replace_text_in_range(None, "c", window, cx);
+        });
+        wait_for_bytes(&recorded, b"ac");
     }
 
     #[test]
@@ -4534,7 +4674,9 @@ mod tests {
         let captured_offsets = requested_offsets.clone();
         let (terminal, cx) = cx.add_window_view(|_, cx| {
             TerminalView::new_semantic(RecordingWriter::default(), TerminalConfig::default(), cx)
-                .with_semantic_scroll_callback(move |offset| captured_offsets.lock().push(offset))
+                .with_semantic_scroll_callback(move |offset, epoch| {
+                    captured_offsets.lock().push((offset, epoch))
+                })
         });
         terminal.update(cx, |terminal, cx| {
             terminal.set_semantic_viewport(
@@ -4578,9 +4720,16 @@ mod tests {
             assert!(terminal.mode().contains(TermMode::BRACKETED_PASTE));
             terminal.scroll_display(Scroll::Delta(3));
             terminal.scroll_display(Scroll::PageUp);
+            let mut resized = semantic_viewport(2);
+            resized.geometry_epoch = 2;
+            resized.geometry.rows = 48;
+            resized.history_size = 100;
+            resized.display_offset = 27;
+            terminal.set_semantic_viewport(resized, cx);
+            terminal.scroll_display(Scroll::PageUp);
         });
 
-        assert_eq!(&*requested_offsets.lock(), &[3, 27]);
+        assert_eq!(&*requested_offsets.lock(), &[(3, 1), (27, 1), (75, 2)]);
     }
 
     #[gpui::test]
@@ -4589,7 +4738,7 @@ mod tests {
         let captured = requested.clone();
         let (terminal, cx) = cx.add_window_view(|_, cx| {
             TerminalView::new_semantic(RecordingWriter::default(), TerminalConfig::default(), cx)
-                .with_semantic_scroll_callback(move |offset| captured.lock().push(offset))
+                .with_semantic_scroll_callback(move |offset, _| captured.lock().push(offset))
         });
         terminal.update(cx, |terminal, cx| {
             let mut viewport = semantic_viewport(1);
@@ -5135,6 +5284,32 @@ mod tests {
             terminal.unmark_text(window, cx);
         });
         assert_eq!(recorded.bytes(), "中文".as_bytes());
+    }
+
+    #[gpui::test]
+    fn empty_ime_preedit_restores_terminal_keys_and_cursor(cx: &mut TestAppContext) {
+        let recorded = RecordingWriter::default();
+        let writer = recorded.clone();
+        let (terminal, cx) = cx.add_window_view(|_, cx| {
+            TerminalView::new_semantic(writer, TerminalConfig::default(), cx)
+        });
+        terminal.update_in(cx, |terminal, window, cx| {
+            terminal.set_semantic_viewport(semantic_viewport(1), cx);
+            terminal.focus_handle().focus(window, cx);
+            terminal.replace_and_mark_text_in_range(None, "中", Some(1..1), window, cx);
+            // Windows may send an empty GCS_COMPSTR without a separate unmark callback.
+            terminal.replace_and_mark_text_in_range(None, "", None, window, cx);
+            terminal.on_key_down(tab_key_down_event(false), window, cx);
+        });
+        wait_for_bytes(&recorded, b"\t");
+        cx.refresh().unwrap();
+        cx.read(|cx| {
+            let terminal = terminal.read(cx);
+            assert_ne!(
+                terminal.render_cache.lock().frame().unwrap().cursor.shape,
+                alacritty_terminal::vte::ansi::CursorShape::Hidden,
+            );
+        });
     }
 
     #[gpui::test]

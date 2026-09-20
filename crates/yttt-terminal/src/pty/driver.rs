@@ -563,7 +563,8 @@ impl PtyIoDriver {
             diagnostics.clone(),
             performance.clone(),
         );
-        let writer_thread = spawn_writer(writer, queue, resize_callback, mailbox, performance);
+        let writer_thread =
+            spawn_writer(writer, queue, resize_callback, mailbox, performance, true);
 
         Self {
             handle,
@@ -594,7 +595,9 @@ impl PtyIoDriver {
         };
         let cancelled = Arc::new(AtomicBool::new(false));
         let (read_tx, _read_rx) = flume::bounded(1);
-        let writer_thread = spawn_writer(writer, queue, resize_callback, mailbox, performance);
+        // Remote input rejection does not mean the Host's process has exited.
+        let writer_thread =
+            spawn_writer(writer, queue, resize_callback, mailbox, performance, false);
 
         Self {
             handle,
@@ -811,6 +814,7 @@ fn spawn_writer<W: Write + Send + 'static>(
     resize_callback: Arc<RwLock<Option<ResizeCallback>>>,
     mailbox: Arc<TerminalEventMailbox>,
     performance: TerminalPerformanceHandle,
+    fatal_write_errors: bool,
 ) -> JoinHandle<()> {
     thread::Builder::new()
         .name("yttt-pty-writer".to_string())
@@ -822,8 +826,21 @@ fn spawn_writer<W: Write + Send + 'static>(
                         let mut samples = input.performance_samples.into_iter().peekable();
                         let chunk_count = input.chunks.len();
                         for (chunk_index, bytes) in input.chunks.iter().enumerate() {
-                            if !write_pty_bytes(&mut writer, bytes, &queue, &mailbox) {
-                                return;
+                            if !write_pty_bytes(
+                                &mut writer,
+                                bytes,
+                                &queue,
+                                &mailbox,
+                                fatal_write_errors,
+                            ) {
+                                for (_, sample) in samples {
+                                    performance.cancel_input(sample);
+                                }
+                                if fatal_write_errors {
+                                    return;
+                                }
+                                // Do not replay a rejected or partially delivered input batch.
+                                break;
                             }
                             completed_bytes += bytes.len();
                             while samples
@@ -835,7 +852,14 @@ fn spawn_writer<W: Write + Send + 'static>(
                             }
                             if chunk_index + 1 < chunk_count {
                                 while let Some(reply) = queue.try_pop_reply() {
-                                    if !write_pty_bytes(&mut writer, &reply, &queue, &mailbox) {
+                                    if !write_pty_bytes(
+                                        &mut writer,
+                                        &reply,
+                                        &queue,
+                                        &mailbox,
+                                        fatal_write_errors,
+                                    ) && fatal_write_errors
+                                    {
                                         return;
                                     }
                                 }
@@ -843,7 +867,14 @@ fn spawn_writer<W: Write + Send + 'static>(
                         }
                     }
                     PtyCommand::WriteReply(bytes) => {
-                        if !write_pty_bytes(&mut writer, &bytes, &queue, &mailbox) {
+                        if !write_pty_bytes(
+                            &mut writer,
+                            &bytes,
+                            &queue,
+                            &mailbox,
+                            fatal_write_errors,
+                        ) && fatal_write_errors
+                        {
                             return;
                         }
                     }
@@ -879,6 +910,7 @@ fn write_pty_bytes<W: Write>(
     bytes: &Bytes,
     queue: &PtyCommandQueue,
     mailbox: &TerminalEventMailbox,
+    fatal_write_errors: bool,
 ) -> bool {
     let mut offset = 0;
     let mut backoff = Duration::from_millis(1);
@@ -905,9 +937,11 @@ fn write_pty_bytes<W: Write>(
                 mailbox.push_pty_event(PtyEvent::IoError {
                     operation: PtyIoOperation::Write,
                     message: error.to_string(),
-                    fatal: true,
+                    fatal: fatal_write_errors,
                 });
-                queue.shutdown();
+                if fatal_write_errors {
+                    queue.shutdown();
+                }
                 return false;
             }
         }
@@ -1077,6 +1111,7 @@ mod tests {
             Arc::new(RwLock::new(None)),
             mailbox,
             TerminalPerformanceHandle::new(),
+            true,
         );
         queue.enqueue_input(Bytes::from_static(b"abcdef")).unwrap();
         let deadline = Instant::now() + Duration::from_secs(1);
@@ -1105,6 +1140,7 @@ mod tests {
             Arc::new(RwLock::new(None)),
             TerminalEventMailbox::new().0,
             TerminalPerformanceHandle::new(),
+            true,
         );
         let expected = vec![b"a".to_vec(), b"R".to_vec(), b"b".to_vec()];
 
@@ -1141,6 +1177,7 @@ mod tests {
             Arc::new(RwLock::new(Some(resize_callback))),
             TerminalEventMailbox::new().0,
             TerminalPerformanceHandle::new(),
+            true,
         );
         let expected = vec![
             b"a".to_vec(),
@@ -1182,6 +1219,7 @@ mod tests {
             Arc::new(RwLock::new(Some(resize_callback))),
             TerminalEventMailbox::new().0,
             TerminalPerformanceHandle::new(),
+            true,
         );
         let expected = vec![
             b"a".to_vec(),
