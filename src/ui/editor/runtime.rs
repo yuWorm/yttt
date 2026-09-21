@@ -19,6 +19,8 @@ pub struct ProjectFileLoadRequest {
 pub struct ProjectEditorRuntime {
     workspace: ProjectEditorWorkspaceState,
     documents: HashMap<DocumentId, Entity<ProjectEditorDocument>>,
+    previews: HashMap<DocumentId, Entity<super::preview::FilePreview>>,
+    preview_subscriptions: HashMap<DocumentId, Subscription>,
     document_subscriptions: HashMap<DocumentId, Subscription>,
     trees: HashMap<ProjectId, Entity<ProjectTreeView>>,
     tree_subscriptions: HashMap<ProjectId, Subscription>,
@@ -57,6 +59,9 @@ impl ProjectEditorRuntime {
 
     pub fn close_project(&mut self, project_id: &ProjectId) -> Option<ProjectWorkItemSession> {
         let session = self.workspace.close_project(project_id);
+        self.previews.retain(|id, _| &id.project_id != project_id);
+        self.preview_subscriptions
+            .retain(|id, _| &id.project_id != project_id);
         self.documents
             .retain(|document_id, _| &document_id.project_id != project_id);
         self.document_subscriptions
@@ -77,6 +82,68 @@ impl ProjectEditorRuntime {
         self.documents.get(document_id)
     }
 
+    pub(crate) fn preview(&self, id: &DocumentId) -> Option<&Entity<super::preview::FilePreview>> {
+        self.previews.get(id)
+    }
+
+    pub(crate) fn previews_for_project(
+        &self,
+        project: &ProjectId,
+    ) -> impl Iterator<Item = (&DocumentId, &Entity<super::preview::FilePreview>)> {
+        self.previews
+            .iter()
+            .filter(move |(id, _)| &id.project_id == project)
+    }
+
+    pub(crate) fn insert_preview(
+        &mut self,
+        id: DocumentId,
+        preview: Entity<super::preview::FilePreview>,
+        subscription: Subscription,
+    ) {
+        self.preview_subscriptions.insert(id.clone(), subscription);
+        self.previews.insert(id, preview);
+    }
+
+    pub(crate) fn remove_preview(&mut self, id: &DocumentId) {
+        self.previews.remove(id);
+        self.preview_subscriptions.remove(id);
+        self.pending_file_generations.remove(id);
+    }
+
+    pub(crate) fn preview_id(
+        &self,
+        preview: &Entity<super::preview::FilePreview>,
+    ) -> Option<DocumentId> {
+        self.previews
+            .iter()
+            .find(|(_, entity)| *entity == preview)
+            .map(|(id, _)| id.clone())
+    }
+
+    pub(crate) fn begin_preview_load(&mut self, id: DocumentId) -> u64 {
+        self.next_file_generation = self.next_file_generation.wrapping_add(1).max(1);
+        let generation = self.next_file_generation;
+        self.pending_file_generations.insert(id, generation);
+        generation
+    }
+
+    pub(crate) fn relocate_preview(&mut self, old: &DocumentId, new: DocumentId) -> bool {
+        if self.previews.contains_key(&new) || !self.previews.contains_key(old) {
+            return false;
+        }
+        self.workspace.relocate_file(old, new.clone());
+        let Some(preview) = self.previews.remove(old) else {
+            return false;
+        };
+        self.previews.insert(new.clone(), preview);
+        if let Some(subscription) = self.preview_subscriptions.remove(old) {
+            self.preview_subscriptions.insert(new, subscription);
+        }
+        self.pending_file_generations.remove(old);
+        true
+    }
+
     pub fn insert_document(
         &mut self,
         document_id: DocumentId,
@@ -93,6 +160,7 @@ impl ProjectEditorRuntime {
         document_id: &DocumentId,
     ) -> Option<Entity<ProjectEditorDocument>> {
         self.document_subscriptions.remove(document_id);
+        self.remove_preview(document_id);
         self.pending_file_generations.remove(document_id);
         self.autosave_tasks.remove(document_id);
         self.follow_up_autosaves.remove(document_id);

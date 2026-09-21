@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- 新增图片文件标签页预览：适应窗口、原始尺寸、缩放和平移，支持 GIF/WebP 动画，
+  SVG 可在源码与预览之间切换。未支持格式和预览失败页保留默认应用打开入口。
+- 文件树右键菜单支持使用系统默认应用打开任意文件；远端文件分块下载为本地临时副本，
+  外部修改不会自动回写。资源协议升级至 v12，桌面端与 Host 需同步更新。
+- Preview images in file tabs with fit/actual-size controls, zoom, pan, GIF/WebP animation,
+  and SVG source/preview switching. Unsupported files and preview errors retain an external-open action.
+- Open files with their system default application from the project tree. Remote files stream into
+  local temporary copies; external edits are not uploaded. Resource protocol v12 requires matching
+  desktop and Host updates.
+
 - 只读观察端按本地可用空间等比缩小远端终端网格，保持底行、光标和选择坐标可见且一致，
   不改变控制端 PTY 尺寸；历史滚动使用当前快照的几何版本，避免远端调整尺寸后滚动失效。
 - 修复 Windows 空 IME 预编辑状态吞掉后续按键并隐藏光标的问题。远端输入被临时拒绝后，

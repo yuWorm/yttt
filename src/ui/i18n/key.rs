@@ -1,6 +1,17 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UiTextKey {
     AppName,
+    FileOpen,
+    FileOpenExternal,
+    FileDownloadOpen,
+    FileDownloadedCopy,
+    FilePreview,
+    FilePreviewLoading,
+    FilePreviewUnavailable,
+    FilePreviewFit,
+    FilePreviewActualSize,
+    FilePreviewSource,
+    FilePreviewReload,
     TrayOpen,
     TrayNewWindow,
     TrayOpenLogs,

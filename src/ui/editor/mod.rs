@@ -3,6 +3,7 @@ mod document;
 mod file_io;
 mod language;
 mod language_catalog;
+pub(crate) mod preview;
 mod readonly_code_view;
 mod runtime;
 mod state;

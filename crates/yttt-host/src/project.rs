@@ -516,6 +516,27 @@ impl HostProjectRuntime {
                         .collect::<Result<Vec<_>, String>>()?,
                 }))
             }
+            ProjectRequest::ReadFileChunk {
+                project_id,
+                relative_path,
+                offset,
+            } => {
+                let root = self.local_root(&project_id)?;
+                let (bytes, total_bytes, modified_nanos) =
+                    yttt_project_core::file::read_project_file_chunk(
+                        &root,
+                        &relative_os_path(relative_path),
+                        offset,
+                        yttt_protocol::project::PROJECT_FILE_CHUNK_BYTES,
+                    )?;
+                Ok(ProjectResponse::FileChunk(
+                    yttt_protocol::project::ProjectFileChunk {
+                        bytes,
+                        total_bytes,
+                        modified_nanos,
+                    },
+                ))
+            }
             ProjectRequest::ReadFile {
                 project_id,
                 relative_path,

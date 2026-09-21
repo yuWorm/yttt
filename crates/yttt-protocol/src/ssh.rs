@@ -233,6 +233,11 @@ pub enum RemoteFileRequest {
         project_id: ProjectId,
         relative_path: String,
     },
+    ReadChunk {
+        project_id: ProjectId,
+        relative_path: String,
+        offset: u64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -243,6 +248,7 @@ pub enum RemoteFileResponse {
     Save(RemoteSaveResult),
     Mutation(RemoteEntryMutation),
     Deleted,
+    Chunk(crate::project::ProjectFileChunk),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -280,7 +286,8 @@ impl RemoteFileRequest {
             Self::ResolveHome { .. }
             | Self::BrowseDirectory { .. }
             | Self::ScanDirectory { .. }
-            | Self::Read { .. } => crate::Capability::ProjectRead,
+            | Self::Read { .. }
+            | Self::ReadChunk { .. } => crate::Capability::ProjectRead,
             Self::Save { .. } | Self::Create { .. } | Self::Rename { .. } | Self::Delete { .. } => {
                 crate::Capability::ProjectMutate
             }

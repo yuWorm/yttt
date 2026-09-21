@@ -32,6 +32,7 @@ mod bars;
 mod dialogs;
 mod document_lifecycle;
 mod file_finder;
+mod file_previews;
 mod git;
 mod helpers;
 pub mod layout_editor;

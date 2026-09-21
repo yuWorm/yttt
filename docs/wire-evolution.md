@@ -14,7 +14,12 @@
 ## 当前版本
 
 - 帧头：`FRAME_FORMAT_VERSION = 1`
-- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 11`。v11 增加 Kitty 语义布局：
+- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 12`。v12 追加项目 `ReadFileChunk` / `FileChunk`
+  和 SSH `ReadChunk` / `Chunk`，以最多 1 MiB 的 CBOR 字节串传输二进制文件；
+  响应包含总字节数和修改时间，客户端流式下载时检查文件是否变化。
+  文件预览、远程默认应用打开不再借用 UTF-8 文本响应，也不提高单帧上限。
+  桌面端与 Host 需同步更新；版本无交集时仍拒绝连接。
+  v11 增加 Kitty 语义布局：
   `SemanticViewport.placements` 保存像素位置、尺寸、源裁剪、独立裁剪区域及绘制顺序。
   `SemanticDelta.placements = None` 表示布局未变，`Some(...)` 完整替换，空集合清除。
   可见动画的全部帧资源随快照保留，动画 tick 只切换 placement 的资源引用，

@@ -86,6 +86,10 @@ pub(crate) enum SftpOperation {
         relative_path: RemoteRelativePathBuf,
         max_bytes: u64,
     },
+    ReadChunk {
+        relative_path: RemoteRelativePathBuf,
+        offset: u64,
+    },
     SaveFile {
         relative_path: RemoteRelativePathBuf,
         bytes: Vec<u8>,
@@ -111,6 +115,7 @@ pub(crate) enum SftpResponse {
     Path(RemotePathBuf),
     Directory(RemoteDirectorySnapshot),
     File(RemoteLoadedFile),
+    Chunk(yttt_protocol::project::ProjectFileChunk),
     Save(RemoteSaveOutcome),
     Mutation(RemoteEntryMutation),
     Deleted,
@@ -135,6 +140,12 @@ pub(crate) async fn execute(
         } => read_file(sftp, root, relative_path, max_bytes)
             .await
             .map(SftpResponse::File),
+        SftpOperation::ReadChunk {
+            relative_path,
+            offset,
+        } => read_chunk(sftp, root, relative_path, offset)
+            .await
+            .map(SftpResponse::Chunk),
         SftpOperation::SaveFile {
             relative_path,
             bytes,
@@ -246,6 +257,42 @@ async fn read_file(
         relative_path,
         bytes,
         fingerprint,
+    })
+}
+
+async fn read_chunk(
+    sftp: &SftpSession,
+    root: &RemotePathBuf,
+    relative_path: RemoteRelativePathBuf,
+    offset: u64,
+) -> Result<yttt_protocol::project::ProjectFileChunk, SftpError> {
+    use tokio::io::AsyncSeekExt;
+    let canonical_path = resolve_existing(sftp, root, &relative_path, false).await?;
+    let metadata = sftp
+        .metadata(canonical_path.as_str())
+        .await
+        .map_err(protocol_error)?;
+    if !metadata.is_regular() {
+        return Err(SftpError::NotFile(relative_path));
+    }
+    let mut file = sftp
+        .open(canonical_path.as_str())
+        .await
+        .map_err(protocol_error)?;
+    file.seek(std::io::SeekFrom::Start(offset))
+        .await
+        .map_err(|error| SftpError::Protocol(error.to_string()))?;
+    let mut bytes = Vec::new();
+    file.take(yttt_protocol::project::PROJECT_FILE_CHUNK_BYTES as u64)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|error| SftpError::Protocol(error.to_string()))?;
+    Ok(yttt_protocol::project::ProjectFileChunk {
+        bytes,
+        total_bytes: metadata.len(),
+        modified_nanos: metadata
+            .mtime
+            .map(|seconds| seconds as u128 * 1_000_000_000),
     })
 }
 

@@ -306,6 +306,7 @@ fn remote_file_resource(request: &RemoteFileRequest) -> String {
         | RemoteFileRequest::BrowseDirectory { connection_id, .. } => connection_id.clone(),
         RemoteFileRequest::ScanDirectory { project_id, .. }
         | RemoteFileRequest::Read { project_id, .. }
+        | RemoteFileRequest::ReadChunk { project_id, .. }
         | RemoteFileRequest::Save { project_id, .. }
         | RemoteFileRequest::Create { project_id, .. }
         | RemoteFileRequest::Rename { project_id, .. }
@@ -321,6 +322,7 @@ fn project_resource(request: &ProjectRequest) -> String {
         | ProjectRequest::Close { project_id, .. }
         | ProjectRequest::ScanDirectory { project_id, .. }
         | ProjectRequest::ReadFile { project_id, .. }
+        | ProjectRequest::ReadFileChunk { project_id, .. }
         | ProjectRequest::SaveFile { project_id, .. }
         | ProjectRequest::CreateEntry { project_id, .. }
         | ProjectRequest::RenameEntry { project_id, .. }

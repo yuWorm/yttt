@@ -990,6 +990,14 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if document.draft.is_none()
+            && crate::ui::editor::preview::is_image_path(&document.relative_path)
+            && !crate::ui::editor::preview::is_svg_path(&document.relative_path)
+        {
+            self.open_file_preview(document.project_id, document.relative_path, window, cx);
+            self.finish_remote_document_restore(cx);
+            return;
+        }
         let Some(request) =
             self.begin_project_file_open(&document.project_id, &document.relative_path)
         else {
@@ -1009,27 +1017,18 @@ impl WorkbenchView {
             self.finish_remote_document_restore(cx);
             return;
         };
-        let Some(project_path) = self
+        let project_path = self
             .workspace
             .project(&document.project_id)
             .and_then(|project| project.location.local_path())
-            .cloned()
-        else {
-            self.cancel_project_file_open(&request);
-            self.set_workspace_persistence_error(format!(
-                "Restored project has no Host configuration path for {}",
-                document.relative_path.display()
-            ));
-            self.finish_remote_document_restore(cx);
-            return;
-        };
+            .cloned();
         let config_paths = self.config_paths.clone();
         let relative_path = request.relative_path.clone();
         let load_task = cx.background_spawn(async move {
             super::project_files::load_project_document_with_overrides(
                 &services,
                 &config_paths,
-                &project_path,
+                project_path.as_deref(),
                 &relative_path,
             )
         });
@@ -1061,10 +1060,7 @@ impl WorkbenchView {
                         if document.draft.is_some() {
                             root.restore_missing_remote_draft(&document, window, cx);
                         } else {
-                            root.set_workspace_persistence_error(format!(
-                                "Restored editor file {} is unavailable: {error}",
-                                document.relative_path.display()
-                            ));
+                            root.open_unavailable_file(&request, error, window, cx);
                         }
                     }
                 }
@@ -1961,12 +1957,10 @@ impl WorkbenchView {
                 .is_some_and(|document| document.read(cx).model().is_dirty())
         });
         for project in self.workspace.opened_projects() {
-            let root = project.location.local_path().ok_or_else(|| {
-                format!(
-                    "remote workspace project {} does not have a Host filesystem root",
-                    project.id.as_str()
-                )
-            })?;
+            let root = match &project.location {
+                ProjectLocation::Local { path } => path.as_path(),
+                ProjectLocation::Ssh { root, .. } => Path::new(root.as_str()),
+            };
             let session = self
                 .project
                 .project_editor_runtime

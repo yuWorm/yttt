@@ -8,6 +8,8 @@ struct ProjectFileRefreshBatch {
     tree_directories: BTreeSet<PathBuf>,
     refresh_all_expanded: bool,
     refresh_status: bool,
+    preview_paths: BTreeSet<PathBuf>,
+    refresh_all_previews: bool,
 }
 
 impl ProjectFileRefreshBatch {
@@ -15,11 +17,26 @@ impl ProjectFileRefreshBatch {
         Self {
             refresh_all_expanded: true,
             refresh_status: true,
+            refresh_all_previews: true,
             ..Self::default()
         }
     }
 
     fn record_change(&mut self, change: ProjectChange) -> bool {
+        if change.refresh_all || change.relative_paths.is_empty() {
+            self.refresh_all_previews = true;
+            self.preview_paths.clear();
+        } else if !self.refresh_all_previews {
+            for path in &change.relative_paths {
+                self.preview_paths
+                    .insert(crate::runtime::project::relative_os_path(path.clone()));
+                if self.preview_paths.len() > MAX_INCREMENTAL_PROJECT_TREE_DIRECTORIES {
+                    self.refresh_all_previews = true;
+                    self.preview_paths.clear();
+                    break;
+                }
+            }
+        }
         if !change.refresh_status {
             return false;
         }
@@ -66,7 +83,7 @@ pub(super) enum ProjectDocumentLoadError {
 pub(super) fn load_project_document_with_overrides(
     services: &ProjectServices,
     config_paths: &AppConfigPaths,
-    project_path: &Path,
+    project_path: Option<&Path>,
     relative_path: &Path,
 ) -> Result<
     (
@@ -78,9 +95,12 @@ pub(super) fn load_project_document_with_overrides(
     let loaded = services
         .read_file(relative_path)
         .map_err(ProjectDocumentLoadError::File)?;
-    let overrides =
-        crate::config::project_settings::load_project_overrides(config_paths, project_path)
-            .map_err(ProjectDocumentLoadError::ProjectSettings)?;
+    let overrides = match project_path {
+        Some(path) => crate::config::project_settings::load_project_overrides(config_paths, path)
+            .map_err(ProjectDocumentLoadError::ProjectSettings)?,
+        // SSH roots are not paths in the Host configuration filesystem.
+        None => crate::config::project_settings::ProjectEditorOverrides::default(),
+    };
     Ok((loaded, overrides))
 }
 
@@ -284,6 +304,23 @@ impl WorkbenchView {
                         ) {
                             return false;
                         }
+                        let previews = root
+                            .project
+                            .project_editor_runtime
+                            .previews_for_project(&watched_project_id)
+                            .filter_map(|(_, preview)| {
+                                let path = &preview.read(cx).relative_path;
+                                (refresh.refresh_all_previews
+                                    || refresh
+                                        .preview_paths
+                                        .iter()
+                                        .any(|changed| path.starts_with(changed)))
+                                .then(|| path.clone())
+                            })
+                            .collect::<Vec<_>>();
+                        for path in previews {
+                            root.open_file_preview(watched_project_id.clone(), path, window, cx);
+                        }
                         let tree_load_queued = if refresh.refresh_all_expanded {
                             root.queue_project_tree_refresh(watched_project_id.clone())
                         } else if !refresh.tree_directories.is_empty() {
@@ -418,6 +455,22 @@ impl WorkbenchView {
 
     fn project_tree_interaction_text(&self) -> ProjectTreeInteractionText {
         ProjectTreeInteractionText {
+            open: self.ui_text.get(UiTextKey::FileOpen).into(),
+            open_external: self
+                .ui_text
+                .get(
+                    if self
+                        .workspace
+                        .selected_project_id()
+                        .and_then(|id| self.project.services.get(id))
+                        .is_some_and(ProjectServices::requires_download)
+                    {
+                        UiTextKey::FileDownloadOpen
+                    } else {
+                        UiTextKey::FileOpenExternal
+                    },
+                )
+                .into(),
             new_file: self.ui_text.get(UiTextKey::ProjectFilesNewFile).to_string(),
             new_directory: self
                 .ui_text
@@ -567,6 +620,9 @@ impl WorkbenchView {
                 }
                 self.spawn_project_file_open(project_id.clone(), path.clone(), window, cx);
             }
+            ProjectTreeViewEvent::OpenExternal(path) => {
+                self.open_project_file_external(project_id.clone(), path.clone(), window, cx);
+            }
             ProjectTreeViewEvent::CreateEntry { parent, input } => {
                 if self.require_shared_mutation_control() {
                     self.spawn_project_entry_create(
@@ -662,6 +718,23 @@ impl WorkbenchView {
         else {
             return;
         };
+        let preview_migrations = self
+            .project
+            .project_editor_runtime
+            .previews_for_project(source_project_id)
+            .filter_map(|(id, preview)| {
+                let suffix = id.canonical_path.strip_prefix(&source_base).ok()?;
+                Some((
+                    id.clone(),
+                    crate::ui::editor::DocumentId {
+                        project_id: destination_project_id.clone(),
+                        canonical_path: destination_base.join(suffix),
+                    },
+                    destination_relative_path.join(suffix),
+                    preview.clone(),
+                ))
+            })
+            .collect::<Vec<_>>();
         let migrations = self
             .project
             .project_editor_runtime
@@ -698,6 +771,20 @@ impl WorkbenchView {
                 );
             });
             self.relocate_pending_document_id(&old_document_id, &new_document_id);
+        }
+        for (old, new, relative_path, preview) in preview_migrations {
+            if self
+                .project
+                .project_editor_runtime
+                .relocate_preview(&old, new.clone())
+            {
+                preview.update(cx, |preview, cx| {
+                    preview.relative_path = relative_path.clone();
+                    cx.notify();
+                });
+                self.relocate_pending_document_id(&old, &new);
+                self.open_file_preview(new.project_id, relative_path, window, cx);
+            }
         }
     }
 
@@ -1417,12 +1504,17 @@ impl WorkbenchView {
                 || self
                     .project
                     .project_editor_runtime
-                    .workspace()
-                    .session(&project_id)
-                    .is_some_and(|session| session.file_ids().contains(&document_id)))
+                    .preview(&document_id)
+                    .is_some())
         {
             let _ = self.select_work_item(WorkItemId::File(document_id));
             cx.notify();
+            return;
+        }
+        if crate::ui::editor::preview::is_image_path(&relative_path)
+            && !crate::ui::editor::preview::is_svg_path(&relative_path)
+        {
+            self.open_file_preview(project_id, relative_path, window, cx);
             return;
         }
         let Some(request) = self.begin_project_file_open(&project_id, &relative_path) else {
@@ -1432,23 +1524,18 @@ impl WorkbenchView {
             self.cancel_project_file_open(&request);
             return;
         };
-        let Some(project_path) = self
+        let project_path = self
             .workspace
             .project(&project_id)
             .and_then(|project| project.location.local_path())
-            .cloned()
-        else {
-            self.cancel_project_file_open(&request);
-            self.load_error = Some("The project has no Host configuration path.".to_string());
-            return;
-        };
+            .cloned();
         let config_paths = self.config_paths.clone();
         let read_relative_path = request.relative_path.clone();
         let io_task = cx.background_spawn(async move {
             load_project_document_with_overrides(
                 &services,
                 &config_paths,
-                &project_path,
+                project_path.as_deref(),
                 &read_relative_path,
             )
         });
@@ -1463,7 +1550,9 @@ impl WorkbenchView {
                     }
                     Err(ProjectDocumentLoadError::File(error)) => {
                         let message = root.localized_project_file_error(&error);
-                        root.apply_project_file_open_error(&request, message);
+                        if root.cancel_project_file_open(&request) {
+                            root.open_unavailable_file(&request, message, window, cx);
+                        }
                     }
                     Err(ProjectDocumentLoadError::ProjectSettings(error)) => {
                         root.apply_project_file_open_error(&request, error.to_string());

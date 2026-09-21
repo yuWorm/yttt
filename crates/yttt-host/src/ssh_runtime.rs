@@ -433,6 +433,18 @@ impl HostSshRuntime {
                     ),
                 })
             }
+            RemoteFileRequest::ReadChunk {
+                project_id,
+                relative_path,
+                offset,
+            } => {
+                let project = self.project(projects.ssh_project(&project_id)?);
+                RemoteFileResponse::Chunk(
+                    project
+                        .read_chunk(remote_relative(relative_path)?, offset)
+                        .map_err(sftp_project_error)?,
+                )
+            }
             RemoteFileRequest::Save {
                 project_id,
                 relative_path,

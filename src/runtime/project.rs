@@ -58,6 +58,9 @@ use crate::ui::{
 trait ProjectHostTransport: Send + Sync {
     fn request(&self, request: Request) -> Result<Response, ClientCoreError>;
     fn detach(&self, request: Request);
+    fn is_remote(&self) -> bool {
+        true
+    }
 }
 
 impl ProjectHostTransport for DesktopHostRuntime {
@@ -66,6 +69,9 @@ impl ProjectHostTransport for DesktopHostRuntime {
     }
     fn detach(&self, request: Request) {
         drop(DesktopHostRuntime::request(self, request));
+    }
+    fn is_remote(&self) -> bool {
+        DesktopHostRuntime::is_remote(self)
     }
 }
 
@@ -521,6 +527,119 @@ impl ProjectServices {
             ProjectBackend::Host(_) => searchable_remote_files(self, show_hidden),
             ProjectBackend::Ssh(_) => searchable_remote_files(self, show_hidden),
         }
+    }
+
+    pub fn requires_download(&self) -> bool {
+        match self.backend.as_ref() {
+            ProjectBackend::Host(host) => host.runtime.is_remote(),
+            ProjectBackend::Local(_) => false,
+            ProjectBackend::Ssh(_) => true,
+        }
+    }
+
+    pub fn read_file_chunk(
+        &self,
+        relative_path: &Path,
+        offset: u64,
+    ) -> Result<yttt_protocol::project::ProjectFileChunk, String> {
+        use yttt_protocol::project::{PROJECT_FILE_CHUNK_BYTES, ProjectFileChunk};
+        match self.backend.as_ref() {
+            ProjectBackend::Local(local) => {
+                let (bytes, total_bytes, modified_nanos) =
+                    yttt_project_core::file::read_project_file_chunk(
+                        &local.root,
+                        relative_path,
+                        offset,
+                        PROJECT_FILE_CHUNK_BYTES,
+                    )
+                    .map_err(|error| error.to_string())?;
+                Ok(ProjectFileChunk {
+                    bytes,
+                    total_bytes,
+                    modified_nanos,
+                })
+            }
+            ProjectBackend::Host(host) => match host.request(ProjectRequest::ReadFileChunk {
+                project_id: host.project_id.clone(),
+                relative_path: path_to_relative(relative_path)?,
+                offset,
+            })? {
+                ProjectResponse::FileChunk(chunk) => Ok(chunk),
+                _ => Err("Host returned an unexpected binary file response".into()),
+            },
+            ProjectBackend::Ssh(project) => {
+                match project.remote_file(RemoteFileRequest::ReadChunk {
+                    project_id: project.project_id.clone(),
+                    relative_path: remote_relative(relative_path)?.as_str().to_string(),
+                    offset,
+                })? {
+                    RemoteFileResponse::Chunk(chunk) => Ok(chunk),
+                    _ => Err("Host returned an unexpected binary file response".into()),
+                }
+            }
+        }
+    }
+
+    /// Streams a size/mtime snapshot without holding the whole file in memory.
+    pub fn copy_file_to(
+        &self,
+        path: &Path,
+        output: &mut impl std::io::Write,
+        limit: u64,
+    ) -> Result<u64, String> {
+        let mut offset = 0;
+        let mut snapshot = None;
+        loop {
+            let chunk = self.read_file_chunk(path, offset)?;
+            let current = (chunk.total_bytes, chunk.modified_nanos);
+            if chunk.total_bytes > limit {
+                return Err(format!(
+                    "File exceeds the {} MiB limit",
+                    limit / 1024 / 1024
+                ));
+            }
+            if snapshot.is_some_and(|previous| previous != current) {
+                return Err("File changed while being read; open it again".into());
+            }
+            snapshot = Some(current);
+            if chunk.bytes.len() > yttt_protocol::project::PROJECT_FILE_CHUNK_BYTES
+                || offset + chunk.bytes.len() as u64 > chunk.total_bytes
+                || (chunk.bytes.is_empty() && offset != chunk.total_bytes)
+            {
+                return Err("Incomplete binary file response".into());
+            }
+            output
+                .write_all(&chunk.bytes)
+                .map_err(|error| error.to_string())?;
+            offset += chunk.bytes.len() as u64;
+            if offset == chunk.total_bytes {
+                return Ok(offset);
+            }
+        }
+    }
+
+    pub fn prepare_external_file(&self, relative_path: &Path) -> Result<PathBuf, String> {
+        if !self.requires_download() {
+            let root = match self.backend.as_ref() {
+                ProjectBackend::Local(local) => &local.root,
+                ProjectBackend::Host(host) => &host.root,
+                ProjectBackend::Ssh(_) => unreachable!(),
+            };
+            return yttt_project_core::file::resolve_project_file(root, relative_path)
+                .map_err(|error| error.to_string());
+        }
+        let name = relative_path.file_name().ok_or("File has no name")?;
+        let directory = tempfile::Builder::new()
+            .prefix("yttt-open-")
+            .tempdir()
+            .map_err(|error| error.to_string())?;
+        let path = directory.path().join(name);
+        let mut output = fs::File::create(&path).map_err(|error| error.to_string())?;
+        self.copy_file_to(relative_path, &mut output, u64::MAX)?;
+        output.sync_all().map_err(|error| error.to_string())?;
+        // External applications may open lazily or outlive yttt. The OS temporary
+        // directory owns these copies; closing a tab must not delete them.
+        Ok(directory.keep().join(name))
     }
 
     pub fn read_file(&self, relative_path: &Path) -> Result<LoadedProjectFile, ProjectFileIoError> {
@@ -1348,6 +1467,53 @@ fn entry_remote_error(path: &Path, message: String) -> ProjectEntryFsError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn binary_transfer_crosses_text_limit_and_preserves_original_for_external_open() {
+        let root = tempfile::tempdir().unwrap();
+        let bytes = (0..7 * 1024 * 1024 + 31)
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        fs::write(root.path().join("binary file.bin"), &bytes).unwrap();
+        let services = ProjectServices::local_for_test(root.path());
+        let mut output = Vec::new();
+        services
+            .copy_file_to(Path::new("binary file.bin"), &mut output, 8 * 1024 * 1024)
+            .unwrap();
+        assert_eq!(output, bytes);
+        assert!(
+            services
+                .copy_file_to(Path::new("binary file.bin"), &mut Vec::new(), 1024)
+                .is_err()
+        );
+        let path = services
+            .prepare_external_file(Path::new("binary file.bin"))
+            .unwrap();
+        assert_eq!(
+            path,
+            fs::canonicalize(root.path().join("binary file.bin")).unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn binary_preview_and_external_open_reject_symlink_escape() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("outside")).unwrap();
+        let services = ProjectServices::local_for_test(root.path());
+        assert!(services.read_file_chunk(Path::new("outside"), 0).is_err());
+        assert!(
+            services
+                .prepare_external_file(Path::new("outside"))
+                .is_err()
+        );
+        assert!(
+            services
+                .prepare_external_file(Path::new("../outside"))
+                .is_err()
+        );
+    }
 
     #[test]
     fn remote_relative_paths_use_posix_components() {

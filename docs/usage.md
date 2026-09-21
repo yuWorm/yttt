@@ -430,6 +430,34 @@ Use the **Find** toolbar button, `⌘F` on macOS, or `Ctrl+F` elsewhere to open 
 search control. Search matches are highlighted and the current match can be traversed with
 the control's navigation buttons.
 
+### Image previews and external applications
+
+Opening a supported image creates a file tab rather than passing binary data to the text editor.
+PNG, JPEG, WebP, GIF, BMP, ICO and TIFF use the built-in image decoder; other image formats depend
+on decoder support. GIF and animated WebP retain their animation. Use **Fit**, **Actual Size**,
+the zoom buttons, scrolling or a pinch gesture to zoom, and drag to pan. Transparency uses a
+checkerboard background; the footer shows pixel dimensions, format and file size.
+
+SVG files initially open as source. **Preview** renders the current source, including unsaved
+changes; **Source** returns to the same editor document without discarding edits. SVG image
+references (embedded or external) are not resolved by the preview: open these SVGs externally.
+
+The project-tree context menu offers **Open with Default Application** for every file.
+Image previews and unsupported-file pages also provide this action. Failure to decode an image
+does not automatically launch another application. Use **Reload** to retry a failed preview.
+
+For a remote Host or SSH project, the action is **Download and Open with Default Application…**.
+The file is transferred in 1 MiB chunks and opened on the client, not on the remote machine.
+Each download has its own temporary directory and retains the original filename/extension.
+It is a local copy: edits made in the external application are **not uploaded**. Copies survive
+tab/app closure so external applications can keep using them; the operating system's temporary
+directory policy governs their retention. Local files open in place.
+
+Image previews limit input to 32 MiB, each dimension to 16,384 pixels, and retained decoded pixels
+to 128 MiB / 256 animation frames. These are preview limits, not a process/GPU memory ceiling.
+Oversized or unsupported files can still be opened externally; remote external opens stream to
+disk rather than loading the whole file into memory. Text editing retains its separate 6 MiB limit.
+
 ### Saving and external changes
 
 `file.save` saves the active file. Autosave modes are:
@@ -450,8 +478,8 @@ Discard and Continue, or Cancel. A save failure leaves the file, project, or win
 
 ### File editing limits
 
-- Only regular UTF-8 text files are opened.
-- The maximum file size is 6 MiB.
+- Only regular UTF-8 text files are editable.
+- The maximum editable text file size is 6 MiB; image previews have the separate limits above.
 - Canonical paths must remain inside the local or configured remote project root.
 - Directory symlinks can be expanded when their targets remain inside the project root.
   The tree keeps the link-relative paths; ancestor cycles and broken targets report an error

@@ -831,6 +831,20 @@ impl SftpProject {
         }
     }
 
+    pub fn read_chunk(
+        &self,
+        relative_path: RemoteRelativePathBuf,
+        offset: u64,
+    ) -> Result<yttt_protocol::project::ProjectFileChunk, SftpError> {
+        match self.request(SftpOperation::ReadChunk {
+            relative_path,
+            offset,
+        })? {
+            SftpResponse::Chunk(chunk) => Ok(chunk),
+            _ => Err(SftpError::UnexpectedResponse),
+        }
+    }
+
     pub fn save_file(
         &self,
         relative_path: RemoteRelativePathBuf,
@@ -932,6 +946,7 @@ fn host_sftp_request(
             show_hidden,
         },
         SftpOperation::ReadFile { .. }
+        | SftpOperation::ReadChunk { .. }
         | SftpOperation::SaveFile { .. }
         | SftpOperation::CreateEntry { .. }
         | SftpOperation::RenameEntry { .. }

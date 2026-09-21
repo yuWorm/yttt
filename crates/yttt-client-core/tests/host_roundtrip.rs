@@ -3404,6 +3404,33 @@ async fn host_owns_project_files_and_publishes_watcher_events() {
     };
     assert_eq!(file.text, "before");
 
+    let binary = (0..2 * 1024 * 1024 + 37)
+        .map(|index| (index % 251) as u8)
+        .collect::<Vec<_>>();
+    fs::write(project_root.join("preview.bin"), &binary).unwrap();
+    let mut downloaded = Vec::new();
+    while downloaded.len() < binary.len() {
+        let Response::Project(ProjectResponse::FileChunk(chunk)) = client
+            .request(Request::Project(ProjectRequest::ReadFileChunk {
+                project_id: project_id.clone(),
+                relative_path: rel_path(std::path::Path::new("preview.bin")),
+                offset: downloaded.len() as u64,
+            }))
+            .await
+            .unwrap()
+        else {
+            panic!("expected binary chunk");
+        };
+        assert_eq!(chunk.total_bytes, binary.len() as u64);
+        assert!(
+            !chunk.bytes.is_empty()
+                && chunk.bytes.len() <= yttt_protocol::project::PROJECT_FILE_CHUNK_BYTES
+        );
+        downloaded.extend(chunk.bytes);
+    }
+    assert_eq!(downloaded, binary);
+    fs::remove_file(project_root.join("preview.bin")).unwrap();
+
     let Response::Project(ProjectResponse::Save(ProjectSaveResult::Saved(saved))) = client
         .request(Request::Project(ProjectRequest::SaveFile {
             project_id: project_id.clone(),
@@ -3808,6 +3835,42 @@ async fn host_ssh_product_smoke_covers_host_key_sftp_git_and_terminal() {
         panic!("unexpected remote file response");
     };
     assert_eq!(saved.bytes, note);
+
+    let binary = (0..2 * 1024 * 1024 + 37)
+        .map(|index| (index % 251) as u8)
+        .collect::<Vec<_>>();
+    client
+        .request(Request::RemoteFile(RemoteFileRequest::Save {
+            project_id: project_id.clone(),
+            relative_path: "yttt-smoke/repo/preview.bin".into(),
+            expected: None,
+            force: true,
+            maximum_bytes: binary.len() as u64,
+            bytes: binary.clone(),
+        }))
+        .await
+        .unwrap();
+    let mut downloaded = Vec::new();
+    while downloaded.len() < binary.len() {
+        let Response::RemoteFile(RemoteFileResponse::Chunk(chunk)) = client
+            .request(Request::RemoteFile(RemoteFileRequest::ReadChunk {
+                project_id: project_id.clone(),
+                relative_path: "yttt-smoke/repo/preview.bin".into(),
+                offset: downloaded.len() as u64,
+            }))
+            .await
+            .unwrap()
+        else {
+            panic!("expected SFTP binary chunk");
+        };
+        assert_eq!(chunk.total_bytes, binary.len() as u64);
+        assert!(
+            !chunk.bytes.is_empty()
+                && chunk.bytes.len() <= yttt_protocol::project::PROJECT_FILE_CHUNK_BYTES
+        );
+        downloaded.extend(chunk.bytes);
+    }
+    assert_eq!(downloaded, binary);
 
     let Response::RemoteCommand(status) = client
         .request(Request::RemoteCommand(RemoteCommandRequest {

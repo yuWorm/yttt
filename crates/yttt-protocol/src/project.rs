@@ -501,6 +501,11 @@ pub enum ProjectRequest {
         project_id: ProjectId,
         operation: ProjectGitOperation,
     },
+    ReadFileChunk {
+        project_id: ProjectId,
+        relative_path: ProjectRelativePath,
+        offset: u64,
+    },
 }
 
 impl ProjectRequest {
@@ -508,6 +513,7 @@ impl ProjectRequest {
         match self {
             Self::ScanDirectory { .. }
             | Self::ReadFile { .. }
+            | Self::ReadFileChunk { .. }
             | Self::Observe { .. }
             | Self::Close { .. } => crate::Capability::ProjectRead,
             Self::Git { operation, .. } => match operation.access() {
@@ -539,4 +545,16 @@ pub enum ProjectResponse {
     Mutation(ProjectEntryMutation),
     Deleted,
     Git(ProjectGitOutput),
+    FileChunk(ProjectFileChunk),
+}
+
+/// Bounded binary transfer, independent of the editor's UTF-8 and size limits.
+pub const PROJECT_FILE_CHUNK_BYTES: usize = 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectFileChunk {
+    #[serde(with = "serde_bytes")]
+    pub bytes: Vec<u8>,
+    pub total_bytes: u64,
+    pub modified_nanos: Option<u128>,
 }

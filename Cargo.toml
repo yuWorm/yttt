@@ -46,6 +46,8 @@ gpui-component = { path = "vendor/gpui-component/crates/ui", features = ["tree-s
 gpui-component-assets = { path = "vendor/gpui-component/crates/assets" }
 gpui-markdown-editor = { path = "vendor/gpui-markdown-editor" }
 ignore = "0.4"
+image = "0.25.10"
+resvg = "0.45.1"
 yttt-agent-core = { path = "crates/yttt-agent-core" }
 yttt-agent-providers = { path = "crates/yttt-agent-providers" }
 yttt-agent-runtime = { path = "crates/yttt-agent-runtime" }

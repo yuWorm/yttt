@@ -11,6 +11,61 @@ use sha2::{Digest, Sha256};
 /// must stay under `yttt_protocol::MAX_FRAME_BYTES`; the editor keeps its 6 MiB limit.
 pub const MAX_PROJECT_FILE_BYTES: u64 = 6 * 1024 * 1024;
 
+/// Resolves a regular file without allowing symlinks to escape the project.
+pub fn resolve_project_file(
+    root: &Path,
+    relative_path: &Path,
+) -> Result<PathBuf, ProjectFileIoError> {
+    let relative_path = normalize_relative_path(relative_path)?;
+    let resolve = || -> std::io::Result<(PathBuf, PathBuf)> {
+        let root = fs::canonicalize(root)?;
+        Ok((root.clone(), fs::canonicalize(root.join(&relative_path))?))
+    };
+    let (root, path) = resolve().map_err(|source| ProjectFileIoError::Io {
+        path: relative_path.clone(),
+        source,
+    })?;
+    if !path.starts_with(root) {
+        return Err(ProjectFileIoError::PathOutsideProject {
+            path: relative_path,
+        });
+    }
+    if !path.is_file() {
+        return Err(ProjectFileIoError::NotAFile {
+            path: relative_path,
+        });
+    }
+    Ok(path)
+}
+
+pub fn read_project_file_chunk(
+    root: &Path,
+    relative_path: &Path,
+    offset: u64,
+    chunk_bytes: usize,
+) -> Result<(Vec<u8>, u64, Option<u128>), ProjectFileIoError> {
+    use std::io::{Seek, SeekFrom};
+    let path = resolve_project_file(root, relative_path)?;
+    let read = || -> std::io::Result<_> {
+        let mut file = File::open(&path)?;
+        let metadata = file.metadata()?;
+        file.seek(SeekFrom::Start(offset))?;
+        let mut bytes =
+            Vec::with_capacity(chunk_bytes.min(metadata.len().saturating_sub(offset) as usize));
+        file.take(chunk_bytes as u64).read_to_end(&mut bytes)?;
+        Ok((
+            bytes,
+            metadata.len(),
+            metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos()),
+        ))
+    };
+    read().map_err(|source| ProjectFileIoError::Io { path, source })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiskFingerprint {
     pub exists: bool,

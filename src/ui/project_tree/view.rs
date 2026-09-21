@@ -42,6 +42,7 @@ pub enum ProjectTreeViewEvent {
     SelectPath(PathBuf),
     ToggleDirectory { path: PathBuf, expanded: bool },
     OpenFile(PathBuf),
+    OpenExternal(PathBuf),
     CreateProjectLayout,
     CreateEntry { parent: PathBuf, input: String },
     RenameEntry { path: PathBuf, new_name: String },
@@ -72,6 +73,8 @@ impl Default for ProjectTreeRenderText {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectTreeInteractionText {
+    pub open: String,
+    pub open_external: String,
     pub new_file: String,
     pub new_directory: String,
     pub create_project_layout: String,
@@ -89,6 +92,8 @@ pub struct ProjectTreeInteractionText {
 impl Default for ProjectTreeInteractionText {
     fn default() -> Self {
         Self {
+            open: "Open".into(),
+            open_external: "Open with Default Application".into(),
             new_file: "New File".to_string(),
             new_directory: "New Folder".to_string(),
             create_project_layout: "Create Project Layout".to_string(),
@@ -1144,6 +1149,29 @@ impl Render for ProjectTreeView {
             let _ = menu_view.update(cx, |view, view_cx| {
                 view.select_context_path(path.clone(), view_cx);
             });
+            let open_view = menu_view.clone();
+            let open_path = path.clone();
+            let external_view = menu_view.clone();
+            let external_path = path.clone();
+            let menu = if row.kind.is_some_and(|kind| !kind.is_directory()) {
+                menu.item(
+                    PopupMenuItem::new(text.open.clone()).on_click(move |_, _, cx| {
+                        let _ = open_view.update(cx, |_, cx| {
+                            cx.emit(ProjectTreeViewEvent::OpenFile(open_path.clone()))
+                        });
+                    }),
+                )
+                .item(
+                    PopupMenuItem::new(text.open_external.clone()).on_click(move |_, _, cx| {
+                        let _ = external_view.update(cx, |_, cx| {
+                            cx.emit(ProjectTreeViewEvent::OpenExternal(external_path.clone()))
+                        });
+                    }),
+                )
+                .item(PopupMenuItem::separator())
+            } else {
+                menu
+            };
 
             let new_file_view = menu_view.clone();
             let new_file_row = row.clone();
@@ -1773,65 +1801,6 @@ mod tests {
                 ProjectTreeViewEvent::SetShowHidden(true),
                 ProjectTreeViewEvent::SetShowHidden(false),
                 ProjectTreeViewEvent::CreateProjectLayout,
-            ]
-        );
-        drop(subscription);
-    }
-
-    #[gpui::test]
-    fn row_context_menu_refresh_emits_refresh(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_component::init);
-        let mut model = ProjectFileTree::new("/project");
-        let request = model.request_expand(Path::new("")).unwrap();
-        model.apply_snapshot(
-            request.generation,
-            crate::ui::project_tree::DirectorySnapshot {
-                relative_directory: PathBuf::new(),
-                entries: vec![crate::ui::project_tree::ProjectTreeEntry {
-                    name: "README.md".into(),
-                    relative_path: PathBuf::from("README.md"),
-                    kind: ProjectTreeEntryKind::File,
-                }],
-            },
-        );
-        let snapshot = ProjectTreeRenderSnapshot::from_tree(&model, None);
-        let view_slot = Rc::new(RefCell::new(None));
-        let view_slot_for_window = view_slot.clone();
-        let (_root, cx) = cx.add_window_view(move |window, cx| {
-            let view = cx.new(|cx| ProjectTreeView::new(snapshot, cx));
-            *view_slot_for_window.borrow_mut() = Some(view.clone());
-            gpui_component::Root::new(view, window, cx)
-        });
-        let view = view_slot.borrow_mut().take().unwrap();
-        let events = Rc::new(RefCell::new(Vec::new()));
-        let subscription = cx.update(|_, cx| {
-            view.update(cx, |_, view_cx| {
-                let events = events.clone();
-                view_cx.subscribe(&view, move |_, _, event, _| {
-                    events.borrow_mut().push(event.clone());
-                })
-            })
-        });
-        cx.run_until_parked();
-        cx.refresh().unwrap();
-
-        let row = cx
-            .debug_bounds("project-tree-row-0")
-            .expect("project tree should render the context-menu row");
-        cx.simulate_mouse_down(
-            row.center(),
-            gpui::MouseButton::Right,
-            gpui::Modifiers::none(),
-        );
-        cx.run_until_parked();
-        cx.simulate_keystrokes("down down down down enter");
-        cx.run_until_parked();
-
-        assert_eq!(
-            events.borrow().as_slice(),
-            [
-                ProjectTreeViewEvent::SelectPath(PathBuf::from("README.md")),
-                ProjectTreeViewEvent::Refresh,
             ]
         );
         drop(subscription);

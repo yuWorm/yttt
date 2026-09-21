@@ -96,6 +96,33 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
+        if let Some(preview) = self
+            .project
+            .project_editor_runtime
+            .preview(document_id)
+            .cloned()
+        {
+            let download = self
+                .project
+                .services
+                .get(&document_id.project_id)
+                .is_some_and(ProjectServices::requires_download);
+            preview.update(cx, |preview, _| preview.set_text(self.ui_text, download));
+            if group_active
+                && self.project.pending_editor_focus_document_id.as_ref() == Some(document_id)
+                && self.foreground_input_owner_kind() == InputOwnerKind::Editor
+            {
+                window.focus(&preview.focus_handle(cx), cx);
+                self.project.pending_editor_focus_document_id = None;
+            }
+            return div()
+                .flex()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .bg(self.theme_runtime().editor.background)
+                .child(preview);
+        }
         let document = self
             .project
             .project_editor_runtime
@@ -122,6 +149,36 @@ impl WorkbenchView {
             .flex_1()
             .min_h_0()
             .bg(self.theme_runtime().editor.background)
+            .when(
+                crate::ui::editor::preview::is_svg_path(&document_id.canonical_path),
+                |body| {
+                    let id = document_id.clone();
+                    body.child(
+                        yttt_button(
+                            "svg-preview",
+                            self.ui_text.get(UiTextKey::FilePreview),
+                            YtttButtonVariant::Secondary,
+                            self.theme_runtime().ui,
+                            self.theme_runtime().style,
+                            cx,
+                        )
+                        .on_click(cx.listener(
+                            move |root, _, window, cx| {
+                                if let Some(path) = root
+                                    .project
+                                    .services
+                                    .get(&id.project_id)
+                                    .and_then(|services| {
+                                        services.relative_path_for_document(&id.canonical_path).ok()
+                                    })
+                                {
+                                    root.open_file_preview(id.project_id.clone(), path, window, cx);
+                                }
+                            },
+                        )),
+                    )
+                },
+            )
             .child(div().flex_1().min_h_0().children(document))
     }
 

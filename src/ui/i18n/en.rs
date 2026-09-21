@@ -3,6 +3,17 @@ use super::UiTextKey;
 pub(super) fn text(key: UiTextKey) -> &'static str {
     match key {
         UiTextKey::AppName => "yttt",
+        UiTextKey::FileOpen => "Open",
+        UiTextKey::FileOpenExternal => "Open with Default Application",
+        UiTextKey::FileDownloadOpen => "Download and Open with Default Application…",
+        UiTextKey::FileDownloadedCopy => "Opens a local copy. External changes are not uploaded.",
+        UiTextKey::FilePreview => "Preview",
+        UiTextKey::FilePreviewLoading => "Loading preview…",
+        UiTextKey::FilePreviewUnavailable => "Preview unavailable",
+        UiTextKey::FilePreviewFit => "Fit",
+        UiTextKey::FilePreviewActualSize => "Actual Size",
+        UiTextKey::FilePreviewSource => "Source",
+        UiTextKey::FilePreviewReload => "Reload",
         UiTextKey::TrayOpen => "Open yttt",
         UiTextKey::TrayNewWindow => "New Window",
         UiTextKey::TrayOpenLogs => "Open Logs",

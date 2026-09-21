@@ -3,6 +3,17 @@ use super::UiTextKey;
 pub(super) fn text(key: UiTextKey) -> &'static str {
     match key {
         UiTextKey::AppName => "yttt",
+        UiTextKey::FileOpen => "打开",
+        UiTextKey::FileOpenExternal => "使用默认应用打开",
+        UiTextKey::FileDownloadOpen => "下载并使用默认应用打开…",
+        UiTextKey::FileDownloadedCopy => "打开的是本地副本，外部修改不会上传。",
+        UiTextKey::FilePreview => "预览",
+        UiTextKey::FilePreviewLoading => "正在加载预览…",
+        UiTextKey::FilePreviewUnavailable => "无法预览",
+        UiTextKey::FilePreviewFit => "适应窗口",
+        UiTextKey::FilePreviewActualSize => "原始尺寸",
+        UiTextKey::FilePreviewSource => "源码",
+        UiTextKey::FilePreviewReload => "重新加载",
         UiTextKey::TrayOpen => "打开 yttt",
         UiTextKey::TrayNewWindow => "新建窗口",
         UiTextKey::TrayOpenLogs => "打开日志",
