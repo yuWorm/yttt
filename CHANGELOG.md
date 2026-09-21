@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- 修复本机恢复控制后远端新增标签页未同步、需要手动新增标签页才刷新的问题：
+  即使界面错过中间的控制权切换，也会按控制权版本重新同步工作区；未发布的本地编辑仍保留。
+- Resync workspace tabs when reclaiming control, even if the UI missed the intervening handoff.
+  Unpublished local edits remain protected instead of being overwritten by the Host snapshot.
+
 - 新增图片文件标签页预览：适应窗口、原始尺寸、缩放和平移，支持 GIF/WebP 动画，
   SVG 可在源码与预览之间切换。未支持格式和预览失败页保留默认应用打开入口。
 - 文件树右键菜单支持使用系统默认应用打开任意文件；远端文件分块下载为本地临时副本，

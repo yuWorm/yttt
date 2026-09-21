@@ -19,6 +19,7 @@ use yttt_core::model::{
 use yttt_protocol::{
     HostPath,
     project::{ContentRevision, ProjectFileFingerprint},
+    session::ControlContext,
     workspace::{
         DraftBase, DraftContentRevision, DraftRef, MAX_DRAFT_CONTENT_BYTES,
         MAX_WORKSPACE_DRAFT_BYTES, WorkspaceId, WorkspaceOperationId, WorkspaceRequest,
@@ -74,6 +75,8 @@ pub(super) struct WorkspacePersistenceState {
     mode: WorkspacePersistenceMode,
     revision: Option<u64>,
     host_epoch: Option<u64>,
+    // The UI can miss an entire handoff while suspended; ownership alone is insufficient.
+    control_context: Option<ControlContext>,
     initial_project: Option<PathBuf>,
     pub(super) startup_projects: Vec<PathBuf>,
     pub(super) available_terminal_sessions: HashSet<String>,
@@ -103,6 +106,7 @@ impl Default for WorkspacePersistenceState {
             mode: WorkspacePersistenceMode::Inactive,
             revision: None,
             host_epoch: None,
+            control_context: None,
             initial_project: None,
             startup_projects: Vec::new(),
             available_terminal_sessions: HashSet::new(),
@@ -679,7 +683,9 @@ impl WorkbenchView {
             cx.notify();
         }
         if self.workspace_persistence.mode == WorkspacePersistenceMode::Active
-            && self.workspace_persistence.host_epoch != Some(host_epoch)
+            && (self.workspace_persistence.host_epoch != Some(host_epoch)
+                || self.workspace_persistence.control_context
+                    != runtime.control_status().map(|status| status.context))
         {
             self.workspace_persistence.pending_commit = None;
             if self.has_unpublished_workspace_snapshot(cx) {
@@ -687,7 +693,7 @@ impl WorkbenchView {
                 self.preserve_unpublished_workspace_drafts(
                     &runtime,
                     &workspace_id,
-                    "Remote Host epoch changed before local edits were published",
+                    "Host or workspace control epoch changed before local edits were published",
                     cx,
                 );
                 return;
@@ -757,6 +763,7 @@ impl WorkbenchView {
         }
         let known_revision = self.workspace_persistence.revision;
         let known_epoch = self.workspace_persistence.host_epoch;
+        let requested_control_context = runtime.control_status().map(|status| status.context);
         let preserve_local = self.workspace_persistence.mode != WorkspacePersistenceMode::Observer
             && known_revision.is_some()
             && self.has_unpublished_workspace_snapshot(cx);
@@ -791,6 +798,21 @@ impl WorkbenchView {
             let result = open_task.await;
             let _ = this.update_in(cx, |root, window, cx| {
                 root.workspace_persistence.control_request_in_flight = false;
+                if result.is_ok() {
+                    let current_control_context = root
+                        .terminal
+                        .host_runtime
+                        .as_ref()
+                        .and_then(|runtime| runtime.control_status())
+                        .map(|status| status.context);
+                    if requested_control_context != current_control_context {
+                        root.workspace_persistence.mode = WorkspacePersistenceMode::AwaitingControl;
+                        root.workspace_persistence.pending_commit = None;
+                        cx.notify();
+                        return;
+                    }
+                    root.workspace_persistence.control_context = requested_control_context;
+                }
                 match result {
                     Ok(None)
                         if !mutation_belongs_to_current_host(
@@ -2454,6 +2476,185 @@ fn is_remote_connection_error(error: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[gpui::test]
+    fn reclaim_after_missed_control_transfer_restores_remote_tabs(cx: &mut gpui::TestAppContext) {
+        use crate::ui::terminal::pane::recovery_tests::RecoveryHost;
+        use yttt_protocol::{Request, session::ProfileControlRequest};
+
+        cx.update(gpui_component::init);
+        cx.background_executor.allow_parking();
+        cx.skip_drawing();
+        let host = RecoveryHost::start();
+        let local = host.client("local");
+        let remote = host.client("remote");
+        let paths = AppConfigPaths::from_config_dir(host.root.path().join("ui-config"));
+        let mut workspace = Workspace::new();
+        let project_id = workspace
+            .open_project(
+                ProjectDescriptor::new(
+                    ProjectId::new("resume-project"),
+                    ProjectLocation::local(host.root.path().to_path_buf()),
+                ),
+                dev_fixture_layout(),
+            )
+            .unwrap();
+        let source = cx.new(|_| {
+            WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths.clone())
+        });
+        let initial = source.update(cx, |root, cx| {
+            root.reconcile_project_work_area(&project_id);
+            root.build_remote_workspace_snapshot(cx).unwrap().0
+        });
+        let lease = local.claim_workspace_view(false).unwrap();
+        let workspace_id = lease.id().clone();
+        local
+            .workspace_request(WorkspaceRequest::Register {
+                workspace_id: workspace_id.clone(),
+                name: "Resume regression".into(),
+            })
+            .unwrap();
+        let commit = |runtime: &Arc<crate::host_runtime::DesktopHostRuntime>, revision, value| {
+            runtime
+                .workspace_request(WorkspaceRequest::Commit {
+                    workspace_id: workspace_id.clone(),
+                    expected_revision: revision,
+                    operation_id: WorkspaceOperationId::new(format!("resume-{revision}")).unwrap(),
+                    snapshot: WorkspaceSnapshot::new(value).unwrap(),
+                    drafts: Vec::new(),
+                })
+                .unwrap()
+        };
+        commit(&local, 0, initial);
+        let (target, cx) =
+            cx.add_window_view(|_, _| WorkbenchView::with_config_paths_for_test(paths));
+        target.update_in(cx, |root, window, cx| {
+            root.terminal.host_runtime = Some(local.clone());
+            root.workspace_persistence.view = Some(lease);
+            root.request_workspace_control_and_open(
+                local.clone(),
+                workspace_id.clone(),
+                window,
+                cx,
+            );
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            cx.run_until_parked();
+            if target.read_with(cx, |root, _| {
+                root.workspace_persistence.mode == WorkspacePersistenceMode::Active
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "initial workspace restore timed out"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        target.update(cx, |root, cx| {
+            assert_eq!(
+                root.build_remote_workspace_snapshot(cx).unwrap().0,
+                *root
+                    .workspace_persistence
+                    .last_committed_snapshot
+                    .as_ref()
+                    .unwrap(),
+                "the local view must be clean before transferring control"
+            );
+        });
+        let transfer = |from: &Arc<crate::host_runtime::DesktopHostRuntime>,
+                        to: &Arc<crate::host_runtime::DesktopHostRuntime>| {
+            from.request_blocking_typed(Request::ProfileControl(ProfileControlRequest::Release))
+                .unwrap();
+            to.request_blocking_typed(Request::ProfileControl(
+                ProfileControlRequest::RequestControl,
+            ))
+            .unwrap();
+        };
+        // The UI is suspended while the Host continues serving the remote client.
+        transfer(&local, &remote);
+        let (updated, added_tab) = source.update(cx, |root, cx| {
+            let tab = root.workspace.create_shell_tab().unwrap();
+            root.reconcile_project_work_area(&project_id);
+            (root.build_remote_workspace_snapshot(cx).unwrap().0, tab)
+        });
+        commit(&remote, 1, updated);
+        transfer(&remote, &local);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            target.update_in(cx, |root, window, cx| {
+                root.tick_workspace_persistence(window, cx);
+            });
+            cx.run_until_parked();
+            if target.read_with(cx, |root, _| {
+                root.workspace
+                    .project(&project_id)
+                    .unwrap()
+                    .layout
+                    .tabs
+                    .iter()
+                    .any(|tab| tab.id == added_tab)
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "reclaim must show the remotely added tab without a local TabNew command: {:?}",
+                target.read_with(cx, |root, _| (
+                    root.workspace_persistence.mode,
+                    root.workspace_persistence.last_error.clone(),
+                    root.workspace_persistence.control_context,
+                    local.control_status(),
+                ))
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        target.read_with(cx, |root, _| {
+            let session = root
+                .project
+                .project_editor_runtime
+                .workspace()
+                .session(&project_id)
+                .unwrap();
+            assert!(
+                session
+                    .group_items_containing(&WorkItemId::Terminal(added_tab))
+                    .is_some()
+            );
+        });
+
+        // A subsequent missed handoff must not overwrite unpublished local changes.
+        let local_tab = target.update(cx, |root, _| {
+            let tab = root.workspace.create_shell_tab().unwrap();
+            root.reconcile_project_work_area(&project_id);
+            tab
+        });
+        transfer(&local, &remote);
+        transfer(&remote, &local);
+        target.update_in(cx, |root, window, cx| {
+            root.tick_workspace_persistence(window, cx);
+            assert_eq!(
+                root.workspace_persistence.mode,
+                WorkspacePersistenceMode::ControlLost
+            );
+            assert!(
+                root.workspace
+                    .project(&project_id)
+                    .unwrap()
+                    .layout
+                    .tabs
+                    .iter()
+                    .any(|tab| tab.id == local_tab)
+            );
+        });
+        let (_, revision) = acquire_control_and_open(&local, workspace_id.clone()).unwrap();
+        assert_eq!(
+            revision, 2,
+            "stale local changes must not be published over the remote snapshot"
+        );
+    }
     #[gpui::test]
     fn cold_workspace_restore_preserves_mixed_tabs_and_file_contents(
         cx: &mut gpui::TestAppContext,
