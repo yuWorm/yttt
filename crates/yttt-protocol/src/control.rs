@@ -234,6 +234,7 @@ impl Request {
                 | WorkspaceRequest::ReadProjectConfig { .. }
                 | WorkspaceRequest::ListConfig { .. }
                 | WorkspaceRequest::AgentSessions { .. }
+                | WorkspaceRequest::OmpSessionExists { .. }
                 | WorkspaceRequest::Open { .. }
                 | WorkspaceRequest::GetDraft { .. } => Capability::WorkspaceRead,
                 _ => Capability::WorkspaceMutate,

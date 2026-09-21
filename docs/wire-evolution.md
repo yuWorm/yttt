@@ -14,7 +14,9 @@
 ## 当前版本
 
 - 帧头：`FRAME_FORMAT_VERSION = 1`
-- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 12`。v12 追加项目 `ReadFileChunk` / `FileChunk`
+- 资源/控制：`RESOURCE_PROTOCOL_VERSION = 13`。v13 追加工作区 `OmpSessionExists`
+  请求／响应，由执行 Host 查询完整 OMP 会话存储；确认不存在时恢复流程自动新建会话，
+  查询错误不当作不存在。v12 追加项目 `ReadFileChunk` / `FileChunk`
   和 SSH `ReadChunk` / `Chunk`，以最多 1 MiB 的 CBOR 字节串传输二进制文件；
   响应包含总字节数和修改时间，客户端流式下载时检查文件是否变化。
   文件预览、远程默认应用打开不再借用 UTF-8 文本响应，也不提高单帧上限。

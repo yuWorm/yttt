@@ -66,8 +66,10 @@ running shells are recreated without replaying their startup commands, and saved
 use the provider's resume command, including previously started lazy tabs. Workspace restoration
 also resumes saved Agent sessions whose panes were already marked exited, including Agents
 started inside a shell. This happens during Host resource reconciliation, not immediately on
-process exit. Failed or unavailable resume retains the original session and tab rather than
-silently starting a fresh conversation; exited Agents without a saved session remain stopped.
+process exit. If the Host confirms that a saved OMP session no longer exists, restoration
+starts a new OMP conversation in the same pane, including OMP previously started inside a shell.
+Session lookup errors and other resume failures retain the saved session rather than silently
+replacing it. Exited Agents without a saved session remain stopped.
 Other command processes remain stopped until explicitly started; observers never spawn them.
 
 If a terminal launch loses its response, the pane shows **Reconciling** with **Retry**, rather
@@ -88,7 +90,7 @@ Recovery rechecks the Host catalog before starting, so a process that reappears 
 rather than duplicated.
 
 The legacy `terminal-placements.json` file is no longer read or written and can be left untouched.
-Its contents or revision cannot block terminal startup. Resource protocol v11 requires matching
+Its contents or revision cannot block terminal startup. Resource protocol v13 requires matching
 client and Host updates. A Host retains at most 4,096 launch-attempt records for its lifetime;
 at capacity it refuses new launches instead of forgetting old attempts and risking duplicate
 execution. It never restarts itself or interrupts active jobs to clear this limit.

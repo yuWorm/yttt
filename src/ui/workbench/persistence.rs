@@ -2344,6 +2344,36 @@ fn prepare_remote_restore(
         .collect::<HashSet<_>>();
     let losses = workspace.reconcile_host_resources(&available_terminal_sessions);
     snapshot.workspace = workspace.persisted_state();
+    // Check on the execution Host, never against the observing client's filesystem.
+    // Existing terminals must still attach even if their history file was removed.
+    for project in &mut snapshot.workspace.opened_projects {
+        for tab in &mut project.tab_states {
+            for pane in &mut tab.pane_states {
+                if pane.process_state != crate::model::workspace::PaneProcessState::Restoring {
+                    continue;
+                }
+                let Some(agent) = pane.agent_snapshot.as_mut() else {
+                    continue;
+                };
+                if agent.provider_id.as_str() != yttt_agent_providers::OMP_PROVIDER_ID {
+                    continue;
+                }
+                let Some(session_id) = agent
+                    .session
+                    .as_ref()
+                    .and_then(|session| session.session_id.clone())
+                else {
+                    continue;
+                };
+                if matches!(
+                    runtime.workspace_request(WorkspaceRequest::OmpSessionExists { session_id }),
+                    Ok(WorkspaceResponse::OmpSessionExists(false))
+                ) {
+                    agent.session = None;
+                }
+            }
+        }
+    }
 
     let mut services = HashMap::new();
     for project in &snapshot.workspace.opened_projects {
@@ -2476,6 +2506,76 @@ fn is_remote_connection_error(error: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[gpui::test]
+    fn cold_restore_starts_fresh_when_host_confirms_omp_history_missing(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::ui::terminal::pane::recovery_tests::RecoveryHost;
+        use yttt_agent_core::{AgentInstanceId, AgentReducer, AgentSessionMetadata, ProviderId};
+
+        cx.update(gpui_component::init);
+        cx.background_executor.allow_parking();
+        cx.skip_drawing();
+        let host = RecoveryHost::start();
+        let runtime = host.client("missing-session");
+        let lease = runtime.claim_workspace_view(false).unwrap();
+        let paths = AppConfigPaths::from_config_dir(host.root.path().join("ui-config"));
+        let mut workspace = Workspace::new();
+        let project_id = workspace
+            .open_project(
+                ProjectDescriptor::new(
+                    ProjectId::new("missing-session-project"),
+                    ProjectLocation::local(host.root.path().to_path_buf()),
+                ),
+                dev_fixture_layout(),
+            )
+            .unwrap();
+        workspace
+            .mark_pane_running(&project_id, "dev", "shell")
+            .unwrap();
+        let mut agent =
+            AgentReducer::new(AgentInstanceId::random(), ProviderId::from_static("omp"), 1)
+                .snapshot()
+                .clone();
+        agent.session = Some(AgentSessionMetadata {
+            session_id: Some(uuid::Uuid::new_v4().to_string()),
+            ..Default::default()
+        });
+        workspace
+            .record_agent_snapshot(&project_id, "dev", "shell", agent)
+            .unwrap();
+        let source = cx.new(|_| {
+            WorkbenchView::with_workspace_for_test_and_config_paths(workspace, paths.clone())
+        });
+        let saved = source.update(cx, |root, cx| {
+            root.build_remote_workspace_snapshot(cx).unwrap().0
+        });
+        let prepared = prepare_remote_restore(&runtime, lease.id(), saved, 1).unwrap();
+        let pane = prepared.snapshot.workspace.opened_projects[0]
+            .tab_states
+            .iter()
+            .find(|tab| tab.tab_id == "dev")
+            .unwrap()
+            .pane_states
+            .iter()
+            .find(|pane| pane.pane_id == "shell")
+            .unwrap();
+        assert_eq!(
+            pane.process_state,
+            crate::model::workspace::PaneProcessState::Restoring
+        );
+        let snapshot = pane.agent_snapshot.clone().unwrap();
+        assert!(snapshot.session.is_none());
+        let address = AgentPaneAddress::new(project_id.as_str(), "dev", "shell");
+        let mut manager = crate::runtime::agent_manager::AgentManager::new(&paths);
+        manager.reset_for_host_restore(vec![(address.clone(), snapshot)]);
+        let (launch, restored) = manager.prepare_pane(address, "", false).unwrap();
+        assert_eq!(launch.program_override(), Some("omp"));
+        assert!(!launch.is_resuming_session());
+        assert!(restored.is_none());
+    }
 
     #[cfg(unix)]
     #[gpui::test]

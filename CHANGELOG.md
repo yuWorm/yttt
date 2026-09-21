@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- 修复重启恢复工作区时 OMP 历史会话已丢失却仍反复 resume 的问题：Host 确认会话
+  不存在后，在原标签页自动启动新 OMP；存活终端仍只重连，查询错误不触发新建。
+- Start a fresh OMP conversation during workspace restoration when the Host confirms that
+  saved history is missing. Preserve live terminals and do not treat lookup errors as absence.
+  Resource protocol v13 requires matching desktop and Host updates.
+
 - 修复本机恢复控制后远端新增标签页未同步、需要手动新增标签页才刷新的问题：
   即使界面错过中间的控制权切换，也会按控制权版本重新同步工作区；未发布的本地编辑仍保留。
 - Resync workspace tabs when reclaiming control, even if the UI missed the intervening handoff.

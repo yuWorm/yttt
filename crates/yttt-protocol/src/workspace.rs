@@ -388,6 +388,10 @@ pub enum WorkspaceRequest {
         workspace_id: WorkspaceId,
         reference: DraftRef,
     },
+    /// Checks a saved OMP ID on the Host, independently of bounded history listings.
+    OmpSessionExists {
+        session_id: String,
+    },
 }
 
 impl WorkspaceRequest {
@@ -397,6 +401,7 @@ impl WorkspaceRequest {
             Self::Environment
                 | Self::List
                 | Self::AgentSessions { .. }
+                | Self::OmpSessionExists { .. }
                 | Self::Browse { .. }
                 | Self::ReadConfig { .. }
                 | Self::ReadProjectConfig { .. }
@@ -449,6 +454,7 @@ pub enum WorkspaceResponse {
         #[serde(with = "serde_bytes")]
         content: Vec<u8>,
     },
+    OmpSessionExists(bool),
 }
 
 /// Validation failures raised while constructing strongly validated workspace wire values.

@@ -69,6 +69,7 @@ pub struct AgentPaneLaunch {
     additional_args: Vec<String>,
     remote_extension_base64: Option<Arc<str>>,
     resuming_session: bool,
+    fresh_program: Option<&'static str>,
 }
 
 impl AgentPaneLaunch {
@@ -89,7 +90,8 @@ impl AgentPaneLaunch {
     }
 
     pub fn program_override(&self) -> Option<&str> {
-        self.prepared.program_override()
+        self.fresh_program
+            .or_else(|| self.prepared.program_override())
     }
 
     pub fn restored_title_for(&self, default_title: &str) -> Option<&str> {
@@ -473,12 +475,24 @@ impl AgentManager {
             .contains(&address.project_id)
             .then(|| self.retained_snapshots.get(&address).cloned())
             .flatten();
+        let fresh_omp = restored.as_ref().is_some_and(|snapshot| {
+            snapshot.provider_id.as_str() == OMP_PROVIDER_ID && snapshot.session.is_none()
+        });
+        let fresh_program = (fresh_omp
+            && !yttt_agent_core::AgentProvider::matches_command(
+                &yttt_agent_providers::OmpProvider,
+                command,
+            ))
+        .then_some(OMP_PROVIDER_ID);
         let (prepared, _) = self.runtime.prepare_launch_with_snapshot(
-            command,
+            fresh_program.unwrap_or(command),
             address.scope_key(),
-            restored.as_ref(),
+            restored.as_ref().filter(|_| !fresh_omp),
         )?;
-        let restored_for_view = restored.as_ref().map(disconnected_snapshot);
+        let restored_for_view = restored
+            .as_ref()
+            .filter(|_| !fresh_omp)
+            .map(disconnected_snapshot);
         let mut additional_args = prepared.resume_arguments().to_vec();
         let resuming_session = !prepared.resume_arguments().is_empty();
         let is_omp = prepared.provider_id.as_str() == OMP_PROVIDER_ID;
@@ -491,7 +505,11 @@ impl AgentManager {
             additional_args,
             remote_extension_base64: (is_omp && remote).then(|| self.omp_extension_base64.clone()),
             resuming_session,
+            fresh_program,
         };
+        if fresh_omp {
+            self.retained_snapshots.remove(&address);
+        }
         self.addresses_by_instance
             .insert(launch.instance_id().clone(), address.clone());
         self.launches_by_address.insert(address, launch.clone());
@@ -628,6 +646,24 @@ mod tests {
                 .is_none()
         );
         assert!(manager.has_retained_snapshot(&address));
+    }
+
+    #[test]
+    fn missing_omp_session_starts_new_agent_even_in_a_shell_pane() {
+        let temp = TempDir::new().unwrap();
+        let paths = AppConfigPaths::from_config_dir(temp.path());
+        let mut manager = AgentManager::new(&paths);
+        let address = AgentPaneAddress::new("project", "shell", "shell");
+        let reducer =
+            AgentReducer::new(AgentInstanceId::random(), ProviderId::from_static("omp"), 1);
+        let mut snapshot = reducer.snapshot().clone();
+        snapshot.process_state = AgentProcessState::Exited;
+        manager.reset_for_host_restore(vec![(address.clone(), snapshot)]);
+        let (launch, restored) = manager.prepare_pane(address, "", false).unwrap();
+        assert_eq!(launch.program_override(), Some("omp"));
+        assert!(!launch.is_resuming_session());
+        assert!(!launch.additional_args().iter().any(|arg| arg == "--resume"));
+        assert!(restored.is_none());
     }
 
     #[test]

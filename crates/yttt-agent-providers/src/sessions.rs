@@ -87,6 +87,38 @@ impl AgentSessionRoots {
     }
 }
 
+/// Checks OMP's ID-based session store without the history picker's result limits.
+/// I/O errors are not evidence that a conversation is missing.
+pub fn omp_session_exists(root: &Path, session_id: &str) -> io::Result<bool> {
+    if session_id.is_empty() || session_id.contains(['/', '\\']) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid OMP session ID",
+        ));
+    }
+    let suffix = format!("_{session_id}.jsonl");
+    let mut directories = vec![root.to_path_buf()];
+    while let Some(directory) = directories.pop() {
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound && directory == root => continue,
+            Err(error) => return Err(error),
+        };
+        for entry in entries {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                directories.push(entry.path());
+            } else if entry.file_name().to_string_lossy().ends_with(&suffix)
+                && entry.metadata()?.is_file()
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 const MAX_SESSION_FILES: usize = 5_000;
 const MAX_SESSION_RESULTS: usize = 100;
 const MAX_TRANSCRIPT_BYTES: u64 = 512 * 1024;
@@ -718,6 +750,22 @@ fn system_time_millis(time: SystemTime) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn omp_session_lookup_distinguishes_missing_history_from_scan_errors() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("sessions");
+        assert!(!omp_session_exists(&root, "saved").unwrap());
+        fs::create_dir_all(root.join("moved-project")).unwrap();
+        fs::write(root.join("moved-project/date_saved.jsonl"), "{}\n").unwrap();
+        assert!(omp_session_exists(&root, "saved").unwrap());
+        assert!(!omp_session_exists(&root, "save").unwrap());
+        fs::remove_file(root.join("moved-project/date_saved.jsonl")).unwrap();
+        assert!(!omp_session_exists(&root, "saved").unwrap());
+        let not_a_directory = temp.path().join("blocked");
+        fs::write(&not_a_directory, "").unwrap();
+        assert!(omp_session_exists(&not_a_directory, "saved").is_err());
+    }
 
     fn roots(root: &Path) -> AgentSessionRoots {
         AgentSessionRoots {

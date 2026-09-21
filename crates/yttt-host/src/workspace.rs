@@ -306,11 +306,29 @@ impl WorkspaceService {
                 providers,
                 project_root,
             } => return scan_agent_history(providers, project_root),
+            WorkspaceRequest::OmpSessionExists { session_id } => {
+                let roots = yttt_agent_providers::sessions::AgentSessionRoots::native()
+                    .ok_or_else(|| {
+                        failure(
+                            FailureCode::Internal,
+                            "Host home directory is unavailable",
+                            false,
+                        )
+                    })?;
+                let exists =
+                    yttt_agent_providers::sessions::omp_session_exists(&roots.omp, &session_id)
+                        .map_err(|error| {
+                            failure(FailureCode::Internal, error.to_string(), false)
+                        })?;
+                return Ok(WorkspaceResponse::OmpSessionExists(exists));
+            }
             request => request,
         };
         let mut state = self.state.lock();
         match request {
-            WorkspaceRequest::AgentSessions { .. } => unreachable!("handled before the state lock"),
+            WorkspaceRequest::AgentSessions { .. } | WorkspaceRequest::OmpSessionExists { .. } => {
+                unreachable!("handled before the state lock")
+            }
             WorkspaceRequest::InstallAgentHooks => {
                 let home = environment(
                     &self.environment_id,
