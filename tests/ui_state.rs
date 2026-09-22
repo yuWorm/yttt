@@ -1197,6 +1197,8 @@ fn project_panel_uses_compact_local_tabs_without_legacy_actions(cx: &mut gpui::T
 
     for width in [960.0, 1600.0] {
         cx.simulate_resize(size(px(width), px(720.0)));
+        cx.run_until_parked();
+        cx.refresh().unwrap();
         for (tab, page) in [
             (
                 "project-panel-tab-agent-sessions",
